@@ -9,7 +9,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/coreos/go-oidc/v3/oidc"
 
@@ -17,6 +20,9 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/authn"
 	authevents "github.com/Shubham04-oss/oryxa-go/auth/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/oauthflow"
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/passwordflow"
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/serviceconfig"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 )
@@ -35,19 +41,66 @@ func main() {
 		log.Fatalf("discover Cognito issuer: %v", err)
 	}
 	verifier := authn.New(provider, config.CognitoClientID)
+	store, err := postgres.Open(ctx, config.DatabaseURL)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer store.Close()
+	if config.AutoMigrate {
+		if err := store.Migrate(ctx); err != nil {
+			log.Fatal(err)
+		}
+	}
+	service := application.NewWithConfig(store, application.Config{
+		InvitationAcceptURL:  config.InvitationAcceptURL,
+		EmailVerificationURL: config.EmailVerificationURL,
+		PasswordResetURL:     config.PasswordResetURL,
+	})
+	oauth, err := oauthflow.New(oauthflow.Config{
+		CognitoDomain:   config.CognitoDomain,
+		ClientID:        config.CognitoClientID,
+		CallbackURL:     config.CognitoCallbackURL,
+		AllowedReturnTo: config.AllowedReturnURLs,
+	}, service, verifier)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	awsConfig, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(config.AWSRegion))
 	if err != nil {
 		log.Fatalf("load AWS configuration: %v", err)
 	}
-	publisher := authevents.NewPublisher(eventbridge.NewFromConfig(awsConfig), config.EventBusName, autheventsv1.Source)
-	_ = application.New(publisher)
+	passwords, err := passwordflow.New(
+		cognitoidentityprovider.NewFromConfig(awsConfig),
+		service,
+		verifier,
+		passwordflow.Config{UserPoolID: config.CognitoUserPoolID, ClientID: config.CognitoClientID},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	eventBridgeConfig := awsConfig
+	if config.EventBridgeEndpoint != "" {
+		eventBridgeConfig.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
+	}
+	eventBridge := eventbridge.NewFromConfig(eventBridgeConfig, func(options *eventbridge.Options) {
+		if config.EventBridgeEndpoint != "" {
+			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
+		}
+	})
+	publisher := authevents.NewPublisher(eventBridge, config.EventBusName, autheventsv1.Source)
+	dispatcher := authevents.NewDispatcher(store, publisher)
+	go dispatcher.Run(ctx)
 
 	server := &http.Server{
 		Addr: config.Address,
-		Handler: httpserver.New(verifier, httpserver.Config{
-			CognitoDomain:   config.CognitoDomain,
-			CognitoClientID: config.CognitoClientID,
+		Handler: httpserver.New(verifier, oauth, passwords, service, httpserver.Config{
+			CognitoDomain:      config.CognitoDomain,
+			CognitoClientID:    config.CognitoClientID,
+			CognitoCallbackURL: config.CognitoCallbackURL,
+			AllowedOrigins:     config.AllowedReturnURLs,
+			CookieDomain:       config.CookieDomain,
+			CookieSecure:       config.CookieSecure,
 		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

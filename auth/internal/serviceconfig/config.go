@@ -2,32 +2,75 @@ package serviceconfig
 
 import (
 	"errors"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
 const defaultRegion = "ap-south-1"
 
 type Config struct {
-	Address         string
-	AWSRegion       string
-	CognitoIssuer   string
-	CognitoClientID string
-	CognitoDomain   string
-	EventBusName    string
+	Address              string
+	AWSRegion            string
+	CognitoIssuer        string
+	CognitoUserPoolID    string
+	CognitoClientID      string
+	CognitoDomain        string
+	CognitoCallbackURL   string
+	EventBusName         string
+	EventBridgeEndpoint  string
+	DatabaseURL          string
+	InvitationAcceptURL  string
+	EmailVerificationURL string
+	PasswordResetURL     string
+	AllowedReturnURLs    []string
+	CookieDomain         string
+	CookieSecure         bool
+	AutoMigrate          bool
 }
 
 func FromEnv() (Config, error) {
-	config := Config{
-		Address:         valueOrDefault("AUTH_ADDRESS", ":8080"),
-		AWSRegion:       valueOrDefault("AWS_REGION", defaultRegion),
-		CognitoIssuer:   strings.TrimSpace(os.Getenv("COGNITO_ISSUER")),
-		CognitoClientID: strings.TrimSpace(os.Getenv("COGNITO_CLIENT_ID")),
-		CognitoDomain:   strings.TrimRight(strings.TrimSpace(os.Getenv("COGNITO_DOMAIN")), "/"),
-		EventBusName:    valueOrDefault("EVENT_BUS_NAME", "default"),
+	cookieSecure, err := boolValue("AUTH_COOKIE_SECURE", true)
+	if err != nil {
+		return Config{}, err
 	}
-	if config.CognitoIssuer == "" || config.CognitoClientID == "" || config.CognitoDomain == "" {
-		return Config{}, errors.New("COGNITO_ISSUER, COGNITO_CLIENT_ID, and COGNITO_DOMAIN are required")
+	autoMigrate, err := boolValue("AUTH_AUTO_MIGRATE", true)
+	if err != nil {
+		return Config{}, err
+	}
+	config := Config{
+		Address:              valueOrDefault("AUTH_ADDRESS", ":8080"),
+		AWSRegion:            valueOrDefault("AWS_REGION", defaultRegion),
+		CognitoIssuer:        strings.TrimSpace(os.Getenv("COGNITO_ISSUER")),
+		CognitoUserPoolID:    strings.TrimSpace(os.Getenv("COGNITO_USER_POOL_ID")),
+		CognitoClientID:      strings.TrimSpace(os.Getenv("COGNITO_CLIENT_ID")),
+		CognitoDomain:        strings.TrimRight(strings.TrimSpace(os.Getenv("COGNITO_DOMAIN")), "/"),
+		CognitoCallbackURL:   strings.TrimSpace(os.Getenv("COGNITO_CALLBACK_URL")),
+		EventBusName:         valueOrDefault("EVENT_BUS_NAME", "default"),
+		EventBridgeEndpoint:  strings.TrimRight(strings.TrimSpace(os.Getenv("EVENTBRIDGE_ENDPOINT")), "/"),
+		DatabaseURL:          strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		InvitationAcceptURL:  strings.TrimSpace(os.Getenv("INVITATION_ACCEPT_URL")),
+		EmailVerificationURL: strings.TrimSpace(os.Getenv("EMAIL_VERIFICATION_URL")),
+		PasswordResetURL:     strings.TrimSpace(os.Getenv("PASSWORD_RESET_URL")),
+		AllowedReturnURLs:    splitList(os.Getenv("AUTH_RETURN_URLS")),
+		CookieDomain:         strings.TrimSpace(os.Getenv("AUTH_COOKIE_DOMAIN")),
+		CookieSecure:         cookieSecure,
+		AutoMigrate:          autoMigrate,
+	}
+	if config.CognitoIssuer == "" || config.CognitoUserPoolID == "" || config.CognitoClientID == "" || config.CognitoDomain == "" || config.CognitoCallbackURL == "" {
+		return Config{}, errors.New("COGNITO_ISSUER, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, COGNITO_DOMAIN, and COGNITO_CALLBACK_URL are required")
+	}
+	if config.DatabaseURL == "" || config.InvitationAcceptURL == "" || config.EmailVerificationURL == "" || config.PasswordResetURL == "" || len(config.AllowedReturnURLs) == 0 {
+		return Config{}, errors.New("DATABASE_URL, INVITATION_ACCEPT_URL, EMAIL_VERIFICATION_URL, PASSWORD_RESET_URL, and AUTH_RETURN_URLS are required")
+	}
+	urls := append([]string{}, config.AllowedReturnURLs...)
+	urls = append(urls, config.CognitoCallbackURL, config.InvitationAcceptURL, config.EmailVerificationURL, config.PasswordResetURL)
+	for _, value := range urls {
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return Config{}, errors.New("auth callback, return, invitation, verification, and reset URLs must be absolute")
+		}
 	}
 	return config, nil
 }
@@ -37,4 +80,26 @@ func valueOrDefault(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func splitList(value string) []string {
+	var result []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func boolValue(name string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, errors.New(name + " must be true or false")
+	}
+	return parsed, nil
 }

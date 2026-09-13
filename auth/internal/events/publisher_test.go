@@ -9,6 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
+
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 )
 
 type fakeEventBridge struct {
@@ -17,40 +19,40 @@ type fakeEventBridge struct {
 	err    error
 }
 
-func (f *fakeEventBridge) PutEvents(_ context.Context, input *eventbridge.PutEventsInput, _ ...func(*eventbridge.Options)) (*eventbridge.PutEventsOutput, error) {
-	f.input = input
-	return f.output, f.err
+func (fake *fakeEventBridge) PutEvents(_ context.Context, input *eventbridge.PutEventsInput, _ ...func(*eventbridge.Options)) (*eventbridge.PutEventsOutput, error) {
+	fake.input = input
+	return fake.output, fake.err
 }
 
-func TestPublisherPublishesVersionedEnvelope(t *testing.T) {
+func TestPublishEventPreservesDomainEventIdentity(t *testing.T) {
 	client := &fakeEventBridge{output: &eventbridge.PutEventsOutput{}}
-	publisher := NewPublisher(client, "oryxa", "oryxa.auth")
-	publisher.now = func() time.Time {
-		return time.Date(2026, time.September, 13, 12, 0, 0, 0, time.UTC)
+	publisher := NewPublisher(client, "default", "oryxa.auth")
+	occurredAt := time.Date(2026, time.September, 13, 12, 0, 0, 0, time.UTC)
+
+	err := publisher.PublishEvent(context.Background(), domain.Event{
+		ID:         "evt_1",
+		DetailType: "auth.user.registered.v1",
+		OccurredAt: occurredAt,
+		Data:       json.RawMessage(`{"user_id":"user-1"}`),
+	})
+	if err != nil {
+		t.Fatalf("PublishEvent() error = %v", err)
 	}
 
-	if err := publisher.Publish(context.Background(), "auth.user.registered.v1", map[string]string{"user_id": "user-1"}); err != nil {
-		t.Fatalf("Publish() error = %v", err)
-	}
-
-	if got := len(client.input.Entries); got != 1 {
-		t.Fatalf("entry count = %d, want 1", got)
-	}
 	entry := client.input.Entries[0]
-	if got := aws.ToString(entry.EventBusName); got != "oryxa" {
-		t.Fatalf("bus = %q, want oryxa", got)
+	if got := aws.ToString(entry.EventBusName); got != "default" {
+		t.Fatalf("event bus = %q, want default", got)
 	}
-
 	var detail envelope
 	if err := json.Unmarshal([]byte(aws.ToString(entry.Detail)), &detail); err != nil {
-		t.Fatalf("decode detail: %v", err)
+		t.Fatalf("decode event detail: %v", err)
 	}
-	if detail.EventID == "" || detail.Version != 1 || detail.OccurredAt != "2026-09-13T12:00:00Z" {
-		t.Fatalf("unexpected envelope: %+v", detail)
+	if detail.EventID != "evt_1" || detail.OccurredAt != "2026-09-13T12:00:00Z" {
+		t.Fatalf("unexpected event envelope: %+v", detail)
 	}
 }
 
-func TestPublisherReturnsRejectedEntry(t *testing.T) {
+func TestPublishEventReportsRejectedEntry(t *testing.T) {
 	client := &fakeEventBridge{output: &eventbridge.PutEventsOutput{
 		FailedEntryCount: 1,
 		Entries: []types.PutEventsResultEntry{{
@@ -58,9 +60,15 @@ func TestPublisherReturnsRejectedEntry(t *testing.T) {
 			ErrorMessage: aws.String("rejected"),
 		}},
 	}}
-	publisher := NewPublisher(client, "oryxa", "oryxa.auth")
+	publisher := NewPublisher(client, "default", "oryxa.auth")
 
-	if err := publisher.Publish(context.Background(), "auth.user.registered.v1", struct{}{}); err == nil {
-		t.Fatal("Publish() error = nil, want rejected entry error")
+	err := publisher.PublishEvent(context.Background(), domain.Event{
+		ID:         "evt_1",
+		DetailType: "auth.user.registered.v1",
+		OccurredAt: time.Now(),
+		Data:       json.RawMessage(`{}`),
+	})
+	if err == nil {
+		t.Fatal("PublishEvent() error = nil, want rejected entry error")
 	}
 }

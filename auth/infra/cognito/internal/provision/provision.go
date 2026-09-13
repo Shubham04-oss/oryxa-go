@@ -63,7 +63,11 @@ func ensureUserPool(ctx context.Context, client *cognitoidentityprovider.Client,
 		}
 		for _, pool := range output.UserPools {
 			if aws.ToString(pool.Name) == config.PoolName {
-				return aws.ToString(pool.Id), nil
+				poolID := aws.ToString(pool.Id)
+				if err := updateUserPool(ctx, client, poolID, config.PoolName); err != nil {
+					return "", err
+				}
+				return poolID, nil
 			}
 		}
 		if output.NextToken == nil {
@@ -75,10 +79,22 @@ func ensureUserPool(ctx context.Context, client *cognitoidentityprovider.Client,
 	output, err := client.CreateUserPool(ctx, &cognitoidentityprovider.CreateUserPoolInput{
 		PoolName:              aws.String(config.PoolName),
 		AdminCreateUserConfig: &types.AdminCreateUserConfigType{AllowAdminCreateUserOnly: true},
+		AccountRecoverySetting: &types.AccountRecoverySettingType{RecoveryMechanisms: []types.RecoveryOptionType{{
+			Name:     types.RecoveryOptionNameTypeVerifiedEmail,
+			Priority: aws.Int32(1),
+		}}},
 		AutoVerifiedAttributes: []types.VerifiedAttributeType{
 			types.VerifiedAttributeTypeEmail,
 		},
 		DeletionProtection: types.DeletionProtectionTypeActive,
+		Policies: &types.UserPoolPolicyType{PasswordPolicy: &types.PasswordPolicyType{
+			MinimumLength:                 aws.Int32(12),
+			RequireLowercase:              true,
+			RequireNumbers:                true,
+			RequireSymbols:                true,
+			RequireUppercase:              true,
+			TemporaryPasswordValidityDays: 1,
+		}},
 		Schema: []types.SchemaAttributeType{{
 			AttributeDataType: types.AttributeDataTypeString,
 			Mutable:           aws.Bool(true),
@@ -99,6 +115,33 @@ func ensureUserPool(ctx context.Context, client *cognitoidentityprovider.Client,
 		return "", fmt.Errorf("create Cognito user pool: %w", err)
 	}
 	return aws.ToString(output.UserPool.Id), nil
+}
+
+func updateUserPool(ctx context.Context, client *cognitoidentityprovider.Client, poolID, poolName string) error {
+	_, err := client.UpdateUserPool(ctx, &cognitoidentityprovider.UpdateUserPoolInput{
+		UserPoolId:            aws.String(poolID),
+		PoolName:              aws.String(poolName),
+		AdminCreateUserConfig: &types.AdminCreateUserConfigType{AllowAdminCreateUserOnly: true},
+		AccountRecoverySetting: &types.AccountRecoverySettingType{RecoveryMechanisms: []types.RecoveryOptionType{{
+			Name:     types.RecoveryOptionNameTypeVerifiedEmail,
+			Priority: aws.Int32(1),
+		}}},
+		AutoVerifiedAttributes: []types.VerifiedAttributeType{types.VerifiedAttributeTypeEmail},
+		DeletionProtection:     types.DeletionProtectionTypeActive,
+		Policies: &types.UserPoolPolicyType{PasswordPolicy: &types.PasswordPolicyType{
+			MinimumLength:                 aws.Int32(12),
+			RequireLowercase:              true,
+			RequireNumbers:                true,
+			RequireSymbols:                true,
+			RequireUppercase:              true,
+			TemporaryPasswordValidityDays: 1,
+		}},
+		UserPoolTier: types.UserPoolTierTypeEssentials,
+	})
+	if err != nil {
+		return fmt.Errorf("update Cognito user pool: %w", err)
+	}
+	return nil
 }
 
 func ensureDomain(ctx context.Context, client *cognitoidentityprovider.Client, poolID, prefix string) error {
@@ -205,6 +248,8 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 			UserPoolId:                      aws.String(poolID),
 			ClientName:                      aws.String(config.AppClientName),
 			GenerateSecret:                  false,
+			AccessTokenValidity:             aws.Int32(15),
+			IdTokenValidity:                 aws.Int32(15),
 			AllowedOAuthFlowsUserPoolClient: true,
 			AllowedOAuthFlows:               base.allowedFlows,
 			AllowedOAuthScopes:              base.allowedScopes,
@@ -213,11 +258,17 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 			EnableTokenRevocation:           aws.Bool(true),
 			LogoutURLs:                      config.LogoutURLs,
 			PreventUserExistenceErrors:      types.PreventUserExistenceErrorTypesEnabled,
+			ExplicitAuthFlows:               base.explicitAuthFlows,
 			ReadAttributes:                  base.attributes,
 			RefreshTokenRotation:            base.refreshTokenRotation,
 			RefreshTokenValidity:            30,
-			SupportedIdentityProviders:      []string{googleProviderName},
-			WriteAttributes:                 base.attributes,
+			TokenValidityUnits: &types.TokenValidityUnitsType{
+				AccessToken:  types.TimeUnitsTypeMinutes,
+				IdToken:      types.TimeUnitsTypeMinutes,
+				RefreshToken: types.TimeUnitsTypeDays,
+			},
+			SupportedIdentityProviders: []string{"COGNITO", googleProviderName},
+			WriteAttributes:            base.attributes,
 		})
 		if err != nil {
 			return "", fmt.Errorf("create Cognito app client: %w", err)
@@ -229,6 +280,8 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 		UserPoolId:                      aws.String(poolID),
 		ClientId:                        aws.String(existingID),
 		ClientName:                      aws.String(config.AppClientName),
+		AccessTokenValidity:             aws.Int32(15),
+		IdTokenValidity:                 aws.Int32(15),
 		AllowedOAuthFlowsUserPoolClient: true,
 		AllowedOAuthFlows:               base.allowedFlows,
 		AllowedOAuthScopes:              base.allowedScopes,
@@ -237,11 +290,17 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 		EnableTokenRevocation:           aws.Bool(true),
 		LogoutURLs:                      config.LogoutURLs,
 		PreventUserExistenceErrors:      types.PreventUserExistenceErrorTypesEnabled,
+		ExplicitAuthFlows:               base.explicitAuthFlows,
 		ReadAttributes:                  base.attributes,
 		RefreshTokenRotation:            base.refreshTokenRotation,
 		RefreshTokenValidity:            30,
-		SupportedIdentityProviders:      []string{googleProviderName},
-		WriteAttributes:                 base.attributes,
+		TokenValidityUnits: &types.TokenValidityUnitsType{
+			AccessToken:  types.TimeUnitsTypeMinutes,
+			IdToken:      types.TimeUnitsTypeMinutes,
+			RefreshToken: types.TimeUnitsTypeDays,
+		},
+		SupportedIdentityProviders: []string{"COGNITO", googleProviderName},
+		WriteAttributes:            base.attributes,
 	})
 	if err != nil {
 		return "", fmt.Errorf("update Cognito app client: %w", err)
@@ -253,6 +312,7 @@ type clientSettings struct {
 	allowedFlows         []types.OAuthFlowType
 	allowedScopes        []string
 	attributes           []string
+	explicitAuthFlows    []types.ExplicitAuthFlowsType
 	refreshTokenRotation *types.RefreshTokenRotationType
 }
 
@@ -261,6 +321,9 @@ func appClientSettings(_ Config) clientSettings {
 		allowedFlows:  []types.OAuthFlowType{types.OAuthFlowTypeCode},
 		allowedScopes: []string{"openid", "email", "profile"},
 		attributes:    []string{"email", "family_name", "given_name", "name", "picture"},
+		explicitAuthFlows: []types.ExplicitAuthFlowsType{
+			types.ExplicitAuthFlowsTypeAllowUserPasswordAuth,
+		},
 		refreshTokenRotation: &types.RefreshTokenRotationType{
 			Feature:                 types.FeatureTypeEnabled,
 			RetryGracePeriodSeconds: aws.Int32(10),

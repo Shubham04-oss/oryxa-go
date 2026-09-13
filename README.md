@@ -27,4 +27,4 @@ Every service follows the same internal shape once it is created:
 
 Keep service boundaries explicit: a service owns its API, data, AWS resources, and deployment configuration. Avoid a generic `common` directory. Shared Go packages belong in `/pkg` only after they have a stable, genuinely cross-service contract.
 
-No service directories have been created yet; this README is the convention that will guide their introduction.
+`/auth` is the first implemented service. It owns Cognito-based Google and email/password sign-in, PostgreSQL-backed verification/reset actions and users/organizations/memberships, and transactional EventBridge publishing. `/email` remains a delivery boundary: it consumes auth delivery-requested events but never performs auth transitions.
