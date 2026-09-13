@@ -1,0 +1,6 @@
+{{define "content"}}
+<h1 style="margin:0 0 16px;font-size:22px;line-height:30px;font-weight:600;">Join {{.OrganizationName}} on Oryxa</h1>
+<p style="margin:0;">You've been invited to join {{.OrganizationName}} with the {{.Role}} role.</p>
+{{template "action" .}}
+<p style="margin:0;font-size:13px;line-height:20px;color:#78716c;">The invitation expires in {{.ExpiresIn}}. If you weren't expecting it, you can ignore this email.</p>
+{{end}}

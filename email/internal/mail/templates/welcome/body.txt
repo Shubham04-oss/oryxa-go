@@ -1,0 +1,5 @@
+Hi{{with .Name}} {{.}}{{end}},
+
+Welcome to Oryxa. Your account is ready.
+
+You're receiving this email because an Oryxa account was created with this address.

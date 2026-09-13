@@ -1,0 +1,6 @@
+{{define "content"}}
+<h1 style="margin:0 0 16px;font-size:22px;line-height:30px;font-weight:600;">Confirm your email address</h1>
+<p style="margin:0;">Confirm {{.Email}} to finish setting up your Oryxa account.</p>
+{{template "action" .}}
+<p style="margin:0;font-size:13px;line-height:20px;color:#78716c;">The link expires in {{.ExpiresIn}}. If you didn't sign up for Oryxa, you can ignore this email.</p>
+{{end}}

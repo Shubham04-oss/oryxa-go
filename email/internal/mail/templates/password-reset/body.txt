@@ -1,0 +1,7 @@
+Reset your Oryxa password
+
+We received a request to reset the password for the Oryxa account {{.Email}}. Open this link to choose a new one:
+
+{{.ActionURL}}
+
+The link expires in {{.ExpiresIn}}. If you didn't ask for this, ignore this email: your password stays the same.
