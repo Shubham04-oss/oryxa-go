@@ -14,10 +14,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/coreos/go-oidc/v3/oidc"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/authn"
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/billingevents"
 	authevents "github.com/Shubham04-oss/oryxa-go/auth/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/oauthflow"
@@ -91,6 +93,21 @@ func main() {
 	publisher := authevents.NewPublisher(eventBridge, config.EventBusName, autheventsv1.Source)
 	dispatcher := authevents.NewDispatcher(store, publisher)
 	go dispatcher.Run(ctx)
+
+	if config.EventsQueueURL != "" {
+		sqsConfig := awsConfig
+		if config.SQSEndpoint != "" {
+			sqsConfig.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
+		}
+		queue := sqs.NewFromConfig(sqsConfig, func(options *sqs.Options) {
+			if config.SQSEndpoint != "" {
+				options.BaseEndpoint = aws.String(config.SQSEndpoint)
+			}
+		})
+		go billingevents.NewConsumer(service).Poll(ctx, queue, config.EventsQueueURL)
+	} else {
+		log.Printf("AUTH_EVENTS_QUEUE_URL is not set: billing entitlements are not applied, so organizations have no member limits")
+	}
 
 	server := &http.Server{
 		Addr: config.Address,

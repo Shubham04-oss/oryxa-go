@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 )
 
 type fakeStore struct {
@@ -25,6 +27,8 @@ type fakeStore struct {
 	revokedInviteID  string
 	action           domain.ActionToken
 	completedAction  domain.ActionPurpose
+
+	appliedEntitlements []string
 }
 
 func (fake *fakeStore) UpsertFederatedUser(_ context.Context, user domain.User, registered, signedIn domain.Event) (bool, error) {
@@ -96,6 +100,18 @@ func (fake *fakeStore) ChangeMemberRole(_ context.Context, _, _ string, _, _ dom
 func (fake *fakeStore) RemoveMember(_ context.Context, _, _ string, _ domain.Role, event domain.Event) error {
 	fake.events = append(fake.events, event)
 	return nil
+}
+
+func (fake *fakeStore) ApplyEntitlements(_ context.Context, organizationID string, revision int64, memberLimit *int, _ time.Time) error {
+	fake.appliedEntitlements = append(fake.appliedEntitlements, fmt.Sprintf("%s r%d limit=%v", organizationID, revision, describeLimit(memberLimit)))
+	return nil
+}
+
+func describeLimit(limit *int) string {
+	if limit == nil {
+		return "none"
+	}
+	return fmt.Sprint(*limit)
 }
 
 func (fake *fakeStore) InvitationByID(_ context.Context, _, _ string) (domain.Invitation, error) {
@@ -409,6 +425,36 @@ func TestPasswordResetCompletionPublishesAuthFact(t *testing.T) {
 	}
 	if store.completedAction != domain.ActionPasswordReset || store.events[0].DetailType != autheventsv1.PasswordResetDetailType {
 		t.Fatalf("unexpected completion: store=%+v", store)
+	}
+}
+
+func TestApplyBillingEntitlements(t *testing.T) {
+	store := &fakeStore{}
+	service := New(store, "https://app.example.com/invitations/accept")
+	limit, zero := 25, 0
+
+	valid := []billingeventsv1.EntitlementsChanged{
+		{OrganizationID: "org-1", Revision: 2, MemberLimit: &limit, ChangedAt: fixedTime()},
+		{OrganizationID: "org-1", Revision: 3, ChangedAt: fixedTime()},
+	}
+	for _, entitlements := range valid {
+		if err := service.ApplyBillingEntitlements(context.Background(), entitlements); err != nil {
+			t.Fatalf("ApplyBillingEntitlements(%+v) error = %v", entitlements, err)
+		}
+	}
+	if strings.Join(store.appliedEntitlements, "; ") != "org-1 r2 limit=25; org-1 r3 limit=none" {
+		t.Fatalf("applied = %v", store.appliedEntitlements)
+	}
+
+	invalid := []billingeventsv1.EntitlementsChanged{
+		{Revision: 1},
+		{OrganizationID: "org-1"},
+		{OrganizationID: "org-1", Revision: 4, MemberLimit: &zero},
+	}
+	for _, entitlements := range invalid {
+		if err := service.ApplyBillingEntitlements(context.Background(), entitlements); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("ApplyBillingEntitlements(%+v) error = %v, want invalid", entitlements, err)
+		}
 	}
 }
 

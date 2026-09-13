@@ -36,6 +36,7 @@ type Store interface {
 	AcceptInvitation(context.Context, string, domain.User, domain.Membership, domain.Event) error
 	ChangeMemberRole(context.Context, string, string, domain.Role, domain.Role, domain.Event) error
 	RemoveMember(context.Context, string, string, domain.Role, domain.Event) error
+	ApplyEntitlements(ctx context.Context, organizationID string, revision int64, memberLimit *int, changedAt time.Time) error
 
 	EnqueueEvent(context.Context, domain.Event) error
 	ClaimOutbox(context.Context, int) ([]domain.OutboxEvent, error)

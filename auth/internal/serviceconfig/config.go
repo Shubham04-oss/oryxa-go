@@ -11,15 +11,19 @@ import (
 const defaultRegion = "ap-south-1"
 
 type Config struct {
-	Address              string
-	AWSRegion            string
-	CognitoIssuer        string
-	CognitoUserPoolID    string
-	CognitoClientID      string
-	CognitoDomain        string
-	CognitoCallbackURL   string
-	EventBusName         string
-	EventBridgeEndpoint  string
+	Address             string
+	AWSRegion           string
+	CognitoIssuer       string
+	CognitoUserPoolID   string
+	CognitoClientID     string
+	CognitoDomain       string
+	CognitoCallbackURL  string
+	EventBusName        string
+	EventBridgeEndpoint string
+	// EventsQueueURL is the queue billing's entitlements arrive on. Without
+	// it no member limits are applied.
+	EventsQueueURL       string
+	SQSEndpoint          string
 	DatabaseURL          string
 	InvitationAcceptURL  string
 	EmailVerificationURL string
@@ -49,6 +53,8 @@ func FromEnv() (Config, error) {
 		CognitoCallbackURL:   strings.TrimSpace(os.Getenv("COGNITO_CALLBACK_URL")),
 		EventBusName:         valueOrDefault("EVENT_BUS_NAME", "default"),
 		EventBridgeEndpoint:  strings.TrimRight(strings.TrimSpace(os.Getenv("EVENTBRIDGE_ENDPOINT")), "/"),
+		EventsQueueURL:       strings.TrimSpace(os.Getenv("AUTH_EVENTS_QUEUE_URL")),
+		SQSEndpoint:          strings.TrimRight(strings.TrimSpace(os.Getenv("SQS_ENDPOINT")), "/"),
 		DatabaseURL:          strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		InvitationAcceptURL:  strings.TrimSpace(os.Getenv("INVITATION_ACCEPT_URL")),
 		EmailVerificationURL: strings.TrimSpace(os.Getenv("EMAIL_VERIFICATION_URL")),

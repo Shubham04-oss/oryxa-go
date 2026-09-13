@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 )
@@ -235,6 +236,10 @@ func (store *Store) CreateInvitation(ctx context.Context, invitation domain.Invi
 		return fmt.Errorf("begin invitation transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// Locked so concurrent invitations can't together pass the member limit.
+	if err := lockOrganization(ctx, tx, invitation.OrganizationID); err != nil {
+		return err
+	}
 
 	_, err = tx.Exec(ctx, `
 		UPDATE auth_invitations
@@ -244,6 +249,9 @@ func (store *Store) CreateInvitation(ctx context.Context, invitation domain.Invi
 		invitation.OrganizationID, invitation.Email, invitation.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("expire prior invitations: %w", err)
+	}
+	if err := checkMemberLimit(ctx, tx, invitation.OrganizationID, &invitation.CreatedAt); err != nil {
+		return err
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO auth_invitations
@@ -361,6 +369,21 @@ func (store *Store) AcceptInvitation(ctx context.Context, tokenHash string, user
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	// Lock the organization before the invitation, in the order deleting an
+	// organization takes them, and so concurrent acceptances can't together
+	// pass the member limit.
+	var organizationID string
+	err = tx.QueryRow(ctx, `SELECT organization_id FROM auth_invitations WHERE token_hash = $1`, tokenHash).Scan(&organizationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("find invitation: %w", err)
+	}
+	if err := lockOrganization(ctx, tx, organizationID); err != nil {
+		return err
+	}
+
 	var email string
 	var status domain.InvitationStatus
 	var expiresAt time.Time
@@ -389,6 +412,9 @@ func (store *Store) AcceptInvitation(ctx context.Context, tokenHash string, user
 	}
 	if normalizeEmail(email) != normalizeEmail(user.Email) {
 		return domain.ErrForbidden
+	}
+	if err := checkMemberLimit(ctx, tx, organizationID, nil); err != nil {
+		return err
 	}
 
 	_, err = tx.Exec(ctx, `
@@ -514,6 +540,66 @@ func scanInvitation(row rowScanner) (domain.Invitation, error) {
 		return domain.Invitation{}, err
 	}
 	return invitation, nil
+}
+
+// checkMemberLimit refuses one more member when the organization is at the
+// limit billing set for it. Inviting counts pending invitations toward the
+// limit, given the time they are judged at; accepting counts only members, as
+// the invitation being accepted was counted when it was sent.
+func checkMemberLimit(ctx context.Context, tx pgx.Tx, organizationID string, pendingAt *time.Time) error {
+	var limit *int
+	err := tx.QueryRow(ctx, `SELECT member_limit FROM auth_organization_entitlements WHERE organization_id = $1`, organizationID).Scan(&limit)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read member limit: %w", err)
+	}
+	if limit == nil {
+		return nil
+	}
+
+	var used int
+	if pendingAt == nil {
+		err = tx.QueryRow(ctx, `SELECT count(*) FROM auth_memberships WHERE organization_id = $1`, organizationID).Scan(&used)
+	} else {
+		err = tx.QueryRow(ctx, `
+			SELECT (SELECT count(*) FROM auth_memberships WHERE organization_id = $1)
+			     + (SELECT count(*) FROM auth_invitations
+			        WHERE organization_id = $1 AND status = 'pending' AND expires_at > $2)`,
+			organizationID, *pendingAt).Scan(&used)
+	}
+	if err != nil {
+		return fmt.Errorf("count members: %w", err)
+	}
+	if used >= *limit {
+		return domain.ErrLimitReached
+	}
+	return nil
+}
+
+// ApplyEntitlements records the member limit billing set for an organization.
+// A revision no newer than the stored one changes nothing, and entitlements
+// for an organization that no longer exists are dropped.
+func (store *Store) ApplyEntitlements(ctx context.Context, organizationID string, revision int64, memberLimit *int, changedAt time.Time) error {
+	_, err := store.pool.Exec(ctx, `
+		INSERT INTO auth_organization_entitlements (organization_id, revision, member_limit, updated_at)
+		SELECT $1, $2, $3, $4
+		WHERE EXISTS (SELECT 1 FROM auth_organizations WHERE id = $1)
+		ON CONFLICT (organization_id) DO UPDATE
+		SET revision = EXCLUDED.revision,
+		    member_limit = EXCLUDED.member_limit,
+		    updated_at = EXCLUDED.updated_at
+		WHERE auth_organization_entitlements.revision < EXCLUDED.revision`,
+		organizationID, revision, memberLimit, changedAt)
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) && postgresError.Code == "23503" {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("apply entitlements: %w", err)
+	}
+	return nil
 }
 
 func lockOrganization(ctx context.Context, tx pgx.Tx, organizationID string) error {

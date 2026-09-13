@@ -43,6 +43,8 @@ Access JWTs are verified locally against Cognito's signed OIDC keys. The auth st
 
 Owners can update/delete organizations and change any member role. Owners and admins can list invitations and invite/remove members; admins cannot manage owners/admins or create admin invitations. The final owner cannot be demoted or removed, including under concurrent requests.
 
+Inviting and accepting answer `402 Payment Required` when the organization is at the member limit its plan allows; see [Member limits](#member-limits).
+
 ## Provision Cognito
 
 Copy `.env.example` to the ignored `auth/.env`, provide a globally unique Cognito domain prefix, Google OAuth credentials, and the exact public callback/logout URLs. Authenticate the AWS SDK default credential chain and run:
@@ -55,12 +57,11 @@ The repeatable provisioner creates or updates an Essentials-tier user pool in `a
 
 ## PostgreSQL and local runtime
 
-The embedded migration is at `internal/postgres/migrations/001_auth.sql` and can be applied automatically with `AUTH_AUTO_MIGRATE=true`. To apply it explicitly to the existing mini container:
+The embedded migrations are in `internal/postgres/migrations/` and are applied in name order automatically with `AUTH_AUTO_MIGRATE=true`; each is safe to run again. To apply them explicitly to the existing mini container:
 
 ```sh
-docker --context mac-mini exec -i oryxa-go-postgres-1 \
-  sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' \
-  < auth/internal/postgres/migrations/001_auth.sql
+cat auth/internal/postgres/migrations/*.sql | docker --context mac-mini exec -i oryxa-go-postgres-1 \
+  sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 ```
 
 After filling `auth/.env`, build or start auth on the shared `oryxa-go_default` network:
@@ -72,7 +73,24 @@ docker --context mac-mini compose -f compose.auth.yaml up -d auth
 
 `DATABASE_URL` should address `oryxa-go-postgres-1:5432`; `EVENTBRIDGE_ENDPOINT` should address `oryxa-go-eventbridge-1:4566` for the local EventBridge emulator.
 
-The runtime AWS identity needs `cognito-idp:AdminCreateUser`, `AdminDeleteUser`, `AdminSetUserPassword`, `AdminDisableUser`, `AdminEnableUser`, `AdminGetUser`, `AdminUpdateUserAttributes`, and `AdminUserGlobalSignOut` on the configured user pool. Production should use a task role. On the mini, provide short-lived AWS credentials through the ignored runtime environment; the LocalStack EventBridge client uses isolated dummy signing credentials internally and does not replace the Cognito credentials.
+The runtime AWS identity needs `cognito-idp:AdminCreateUser`, `AdminDeleteUser`, `AdminSetUserPassword`, `AdminDisableUser`, `AdminEnableUser`, `AdminGetUser`, `AdminUpdateUserAttributes`, and `AdminUserGlobalSignOut` on the configured user pool, and `sqs:ReceiveMessage` and `sqs:DeleteMessage` on its events queue. Production should use a task role. On the mini, provide short-lived AWS credentials through the ignored runtime environment; the LocalStack EventBridge and SQS clients use isolated dummy signing credentials internally, when `EVENTBRIDGE_ENDPOINT` and `SQS_ENDPOINT` are set, and do not replace the Cognito credentials.
+
+## Member limits
+
+Billing decides how many members each organization's plan allows and publishes it as `billing.entitlements.changed.v1`. Auth consumes those events from its own queue and keeps the latest revision per organization; a revision no newer than the stored one changes nothing.
+
+- Inviting counts members and unexpired pending invitations, so the invitations out can't together exceed the limit.
+- Accepting counts only members, since the invitation being accepted was counted when it was sent. A limit lowered in between refuses the acceptance and leaves the invitation pending.
+- Both checks lock the organization first, so concurrent requests can't pass the limit together. Existing members are never removed when a limit drops.
+- An organization billing has published nothing for, or whose plan sets no limit, has no limit. So does every organization when `AUTH_EVENTS_QUEUE_URL` is unset.
+
+Provision the queue the entitlements arrive on, then set `AUTH_EVENTS_QUEUE_URL` to the printed `queue_url`:
+
+```sh
+go run ./auth/infra/events/cmd/provision
+```
+
+The command is repeatable. It creates or updates the `auth-events` queue with its dead-letter queue, and an `auth-billing-entitlements` rule on `EVENT_BUS_NAME` whose target is the queue and which the queue policy admits alone. Against the local emulators, run it with `AWS_ENDPOINT_URL=http://localhost:4566` and dummy credentials, and give auth `SQS_ENDPOINT=http://oryxa-go-eventbridge-1:4566`.
 
 ## Domain events
 
@@ -108,5 +126,7 @@ EventBridge detail uses a stable envelope:
 Consumers must deduplicate by `event_id`, because outbox delivery is at least once. No password, access token, refresh token, provider secret, or AWS credential is emitted.
 
 Every ended membership emits `auth.member.removed.v1`, whose `reason` is `left`, `removed`, or `organization_deleted`: deleting an organization emits one for each member in the same transaction, so consumers never have to expand `auth.organization.deleted.v1` themselves. Membership events carry the member's `email` and the `organization_name`, which is enough to notify someone without reading auth's data.
+
+Billing consumes `auth.organization.created.v1`, `auth.organization.updated.v1` and `auth.organization.deleted.v1`: it announces each new organization's first entitlements and cancels a deleted organization's subscription. See `billing/README.md`.
 
 Email consumes `auth.user.registered.v1` (welcome), the delivery requests `auth.user.email-verification.delivery-requested.v1`, `auth.user.password-reset.delivery-requested.v1` and `auth.member.invited.v1` (it sends the supplied action URL and never executes auth state transitions), and `auth.member.invitation-revoked.v1`, `auth.member.role-changed.v1` and `auth.member.removed.v1` (notices to the affected member). See `email/README.md`.

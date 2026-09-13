@@ -3,11 +3,13 @@ package httpserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/authn"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/passwordflow"
@@ -64,6 +66,10 @@ func (fake *fakeAuthService) SignOut(_ context.Context, userID string) error {
 	return fake.err
 }
 
+func (fake *fakeAuthService) InviteMember(_ context.Context, _, _ string, _ application.InviteMemberInput) (domain.Invitation, string, error) {
+	return domain.Invitation{}, "", fake.err
+}
+
 func testHandler(verifier fakeVerifier, flow *fakeAuthFlow, service *fakeAuthService) http.Handler {
 	return New(verifier, flow, &fakePasswordAuth{}, service, Config{
 		AllowedOrigins:  []string{"https://app.example.com"},
@@ -96,6 +102,22 @@ func TestMeReturnsPersistedUser(t *testing.T) {
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	}
+}
+
+func TestInvitationBeyondMemberLimitNeedsPayment(t *testing.T) {
+	handler := testHandler(
+		fakeVerifier{claims: authn.Claims{Subject: "user-1"}},
+		&fakeAuthFlow{},
+		&fakeAuthService{err: fmt.Errorf("create invitation: %w", domain.ErrLimitReached)},
+	)
+	request := httptest.NewRequest(http.MethodPost, "/v1/organizations/org-1/invitations", strings.NewReader(`{"email":"new@example.com","role":"member"}`))
+	request.Header.Set("Authorization", "Bearer token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusPaymentRequired || !strings.Contains(response.Body.String(), "member limit") {
+		t.Fatalf("status = %d, body = %s; want 402 naming the member limit", response.Code, response.Body)
 	}
 }
 

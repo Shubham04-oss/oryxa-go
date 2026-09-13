@@ -17,6 +17,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 )
 
 var nonSlugCharacters = regexp.MustCompile(`[^a-z0-9]+`)
@@ -674,6 +675,18 @@ func (service *Service) RemoveMember(ctx context.Context, actorID, organizationI
 		return err
 	}
 	return service.store.RemoveMember(ctx, organizationID, userID, target.Role, event)
+}
+
+// ApplyBillingEntitlements records the member limit billing set for an
+// organization, which invitations and acceptances are then held to.
+func (service *Service) ApplyBillingEntitlements(ctx context.Context, entitlements billingeventsv1.EntitlementsChanged) error {
+	if entitlements.OrganizationID == "" || entitlements.Revision < 1 {
+		return fmt.Errorf("entitlements need an organization and a revision: %w", domain.ErrInvalid)
+	}
+	if entitlements.MemberLimit != nil && *entitlements.MemberLimit < 1 {
+		return fmt.Errorf("member limit must be at least 1: %w", domain.ErrInvalid)
+	}
+	return service.store.ApplyEntitlements(ctx, entitlements.OrganizationID, entitlements.Revision, entitlements.MemberLimit, entitlements.ChangedAt)
 }
 
 func newEvent(detailType string, data any, occurredAt time.Time) (domain.Event, error) {

@@ -695,6 +695,8 @@ func (server *Server) handleError(writer http.ResponseWriter, err error) {
 		writeError(writer, http.StatusConflict, "resource state conflicts with the request")
 	case errors.Is(err, domain.ErrExpired):
 		writeError(writer, http.StatusGone, "action has expired")
+	case errors.Is(err, domain.ErrLimitReached):
+		writeError(writer, http.StatusPaymentRequired, "organization has reached its member limit")
 	case errors.Is(err, domain.ErrRateLimited):
 		writer.Header().Set("Retry-After", "60")
 		writeError(writer, http.StatusTooManyRequests, "too many authentication attempts")
