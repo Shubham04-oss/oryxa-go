@@ -1,0 +1,5 @@
+{{.TeamName}} was called in {{.OrganizationName}}
+
+The {{.TeamName}} team in {{.OrganizationName}} was called on Oryxa. You are a member of that team, so you are being told.
+
+If you do not want these notices, turn them off for {{.TeamName}} in Oryxa.

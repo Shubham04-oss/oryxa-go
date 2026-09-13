@@ -13,6 +13,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
+	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
 )
 
@@ -32,6 +33,7 @@ const (
 	paymentFailedData   = `{"organization_id":"org_1","organization_name":"Acme","subscription_id":"sub_1","billing_email":"billing@example.com","grace_ends_at":"2026-09-16T12:00:00Z","billing_url":"http://localhost:3000/settings/billing?organization_id=org_1","failed_at":"2026-09-13T12:00:00Z"}`
 	endedData           = `{"organization_id":"org_1","organization_name":"Acme","subscription_id":"sub_1","billing_email":"billing@example.com","reason":"cancelled","billing_url":"http://localhost:3000/settings/billing?organization_id=org_1","ended_at":"2026-09-13T12:00:00Z"}`
 	renewalUpcomingData = `{"organization_id":"org_1","organization_name":"Acme","subscription_id":"sub_1","billing_email":"billing@example.com","plan":"team","renews_at":"2026-09-20T12:00:00Z","billing_url":"http://localhost:3000/settings/billing?organization_id=org_1"}`
+	memberPingedData    = `{"team_id":"team_1","team_name":"Engineering","organization_id":"org_1","organization_name":"Acme","user_id":"user-2","email":"ravi@example.com","role":"member","tool":"call_team","notify_email":true,"called_by":"user-1","called_at":"2026-09-13T12:00:00Z"}`
 )
 
 type fakeApplication struct {
@@ -45,6 +47,7 @@ type fakeApplication struct {
 	failures      []billingeventsv1.SubscriptionPaymentFailed
 	endings       []billingeventsv1.SubscriptionEnded
 	renewals      []billingeventsv1.SubscriptionRenewalUpcoming
+	pings         []teamseventsv1.MemberPinged
 	refs          []delivery.EventRef
 	feedback      []delivery.Feedback
 	err           error
@@ -97,6 +100,23 @@ func TestHandleSQSDispatchesBillingEvents(t *testing.T) {
 	}
 }
 
+func TestHandleSQSDispatchesTeamEvents(t *testing.T) {
+	app := &fakeApplication{}
+	consumer := NewConsumer(app, slog.New(slog.DiscardHandler))
+	response, err := consumer.HandleSQS(context.Background(), batchOf(map[string]string{
+		"1-ping": eventBody(teamseventsv1.Source, teamseventsv1.MemberPingedDetailType, `{"event_id":"evt_teams_1","version":1,"occurred_at":"2026-09-13T12:00:00Z","data":`+memberPingedData+`}`),
+	}))
+	if err != nil {
+		t.Fatalf("HandleSQS() error = %v", err)
+	}
+	if len(response.BatchItemFailures) != 0 || len(app.pings) != 1 {
+		t.Fatalf("failures = %+v, pings = %d", response.BatchItemFailures, len(app.pings))
+	}
+	if got := app.pings[0]; got.Email != "ravi@example.com" || !got.NotifyEmail || got.Tool != teamseventsv1.ToolCallTeam || got.TeamName != "Engineering" {
+		t.Fatalf("decoded ping = %+v", got)
+	}
+}
+
 func (f *fakeApplication) MemberInvitationRevoked(_ context.Context, ref delivery.EventRef, data autheventsv1.MemberInvitationRevoked) error {
 	f.refs = append(f.refs, ref)
 	f.revocations = append(f.revocations, data)
@@ -136,6 +156,12 @@ func (f *fakeApplication) PasswordResetRequested(_ context.Context, ref delivery
 func (f *fakeApplication) MemberInvited(_ context.Context, ref delivery.EventRef, data autheventsv1.MemberInvited) error {
 	f.refs = append(f.refs, ref)
 	f.invitations = append(f.invitations, data)
+	return f.err
+}
+
+func (f *fakeApplication) MemberPinged(_ context.Context, ref delivery.EventRef, data teamseventsv1.MemberPinged) error {
+	f.refs = append(f.refs, ref)
+	f.pings = append(f.pings, data)
 	return f.err
 }
 

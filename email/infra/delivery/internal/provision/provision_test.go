@@ -7,6 +7,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
+	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/events"
 )
 
@@ -32,6 +33,9 @@ func TestEventPatternMatchesSubscribedAuthEvents(t *testing.T) {
 			"`+billingeventsv1.SubscriptionEndedDetailType+`",
 			"`+billingeventsv1.SubscriptionPaymentFailedDetailType+`",
 			"`+billingeventsv1.SubscriptionRenewalUpcomingDetailType+`"
+		]},
+		{"source":["`+teamseventsv1.Source+`"],"detail-type":[
+			"`+teamseventsv1.MemberPingedDetailType+`"
 		]}
 	]}`)
 }

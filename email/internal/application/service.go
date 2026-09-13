@@ -10,6 +10,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
+	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/mail"
 )
@@ -122,6 +123,26 @@ func (s *Service) MemberRemoved(ctx context.Context, event delivery.EventRef, da
 
 // MemberInvitationRevoked tells an invitee that their invitation's link no
 // longer works.
+// MemberPinged emails a team member that their team was called, when they
+// asked for those notices. Teams owns the notify_email switch. Listing is
+// not mailed — it is too noisy — and the person who ran the tool already
+// knows.
+func (s *Service) MemberPinged(ctx context.Context, event delivery.EventRef, data teamseventsv1.MemberPinged) error {
+	if !data.NotifyEmail || data.CalledBy == data.UserID {
+		return nil
+	}
+	if data.Tool != teamseventsv1.ToolCallTeam && data.Tool != teamseventsv1.ToolCallTeamMembers {
+		return nil
+	}
+	if data.TeamName == "" {
+		return errors.New("event has no team_name")
+	}
+	return s.deliverNotice(ctx, event, "team-called", data.Email, notice{
+		OrganizationName: data.OrganizationName,
+		TeamName:         data.TeamName,
+	})
+}
+
 func (s *Service) MemberInvitationRevoked(ctx context.Context, event delivery.EventRef, data autheventsv1.MemberInvitationRevoked) error {
 	return s.deliverNotice(ctx, event, "invitation-revoked", data.Email, notice{OrganizationName: data.OrganizationName})
 }
@@ -129,6 +150,7 @@ func (s *Service) MemberInvitationRevoked(ctx context.Context, event delivery.Ev
 // notice is what the organization emails render with.
 type notice struct {
 	OrganizationName string
+	TeamName         string
 	Role             string
 	PreviousRole     string
 }
