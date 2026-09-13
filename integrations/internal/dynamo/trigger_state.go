@@ -17,11 +17,24 @@ import (
 type TriggerStateAPI interface {
 	GetItem(context.Context, *dynamodb.GetItemInput, ...func(*dynamodb.Options)) (*dynamodb.GetItemOutput, error)
 	PutItem(context.Context, *dynamodb.PutItemInput, ...func(*dynamodb.Options)) (*dynamodb.PutItemOutput, error)
+	DeleteItem(context.Context, *dynamodb.DeleteItemInput, ...func(*dynamodb.Options)) (*dynamodb.DeleteItemOutput, error)
 }
 
 type TriggerState struct {
 	Client    TriggerStateAPI
 	TableName string
+}
+
+// DeleteTriggerState compensates a failed provider-trigger creation before a
+// durable trigger exists. A missing state item is already the desired state.
+func (s TriggerState) DeleteTriggerState(ctx context.Context, organizationID, triggerID string) error {
+	if s.Client == nil || s.TableName == "" || organizationID == "" || triggerID == "" {
+		return errors.New("trigger state store is not configured")
+	}
+	if _, err := s.Client.DeleteItem(ctx, &dynamodb.DeleteItemInput{TableName: aws.String(s.TableName), Key: triggerStateKey(organizationID, triggerID)}); err != nil {
+		return fmt.Errorf("delete trigger state: %w", err)
+	}
+	return nil
 }
 
 func (s TriggerState) LoadTriggerState(ctx context.Context, organizationID, triggerID string) (map[string]any, int64, error) {

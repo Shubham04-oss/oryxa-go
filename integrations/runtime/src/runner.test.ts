@@ -44,6 +44,21 @@ const googlePieces = {
   },
 } as const
 
+const microsoftPieces = {
+  outlook: {
+    invocationId: 'invocation-microsoft-outlook', organizationId: 'org-1',
+    pieceName: '@activepieces/piece-microsoft-outlook', pieceVersion: '0.5.3',
+  },
+  calendar: {
+    invocationId: 'invocation-microsoft-calendar', organizationId: 'org-1',
+    pieceName: '@activepieces/piece-microsoft-outlook-calendar', pieceVersion: '0.2.8',
+  },
+  oneDrive: {
+    invocationId: 'invocation-microsoft-onedrive', organizationId: 'org-1',
+    pieceName: '@activepieces/piece-microsoft-onedrive', pieceVersion: '0.4.7',
+  },
+} as const
+
 test('catalog exposes only explicitly allowed operations', async () => {
   const response = await execute({ ...base, operation: 'catalog.metadata' })
   const output = response.output as { actions: Record<string, unknown>; triggers: Record<string, unknown> }
@@ -209,6 +224,78 @@ test('reviewed Google Workspace actions execute the real pinned piece code', asy
     props: { file_id: 'file-1' },
   })
   assert.equal((file.output as { id: string }).id, 'file-1')
+})
+
+test('reviewed Microsoft 365 actions execute the real pinned piece code', async (t) => {
+  const expectedActions = [
+    [microsoftPieces.outlook, ['send-email']],
+    [microsoftPieces.calendar, ['create_event', 'list_events']],
+    [microsoftPieces.oneDrive, ['list_files']],
+  ] as const
+  for (const [piece, actions] of expectedActions) {
+    const metadata = await execute({ ...piece, operation: 'catalog.metadata' })
+    const exposed = metadata.output as { actions: Record<string, unknown>; triggers: Record<string, unknown> }
+    assert.deepEqual(Object.keys(exposed.actions).sort(), [...actions].sort())
+    assert.deepEqual(Object.keys(exposed.triggers), [])
+  }
+
+  nock.disableNetConnect()
+  const graph = nock('https://graph.microsoft.com')
+    .post(/\/me\/sendMail$/, (body) => body.message.subject === 'Planning update')
+    .reply(202)
+    .post('/v1.0/me/calendars/calendar-1/events', (body) => body.subject === 'Planning')
+    .reply(201, {
+      id: 'event-1', subject: 'Planning',
+      start: { dateTime: '2026-09-14T09:00:00', timeZone: 'UTC' },
+    })
+    .get('/v1.0/me/calendars/calendar-1/events')
+    .query({ '$filter': "subject eq 'Planning'" })
+    .reply(200, { value: [{ id: 'event-1', subject: 'Planning' }] })
+    .get('/v1.0/me/drive/items/root/children')
+    .reply(200, {
+      value: [
+        { id: 'file-1', name: 'report.pdf', file: { mimeType: 'application/pdf' } },
+        { id: 'folder-1', name: 'Archive', folder: {} },
+      ],
+    })
+  t.after(() => {
+    nock.enableNetConnect()
+    nock.cleanAll()
+  })
+
+  const auth = { access_token: 'microsoft-runtime-only', props: { cloud: 'login.microsoftonline.com' } }
+  const sent = await execute({
+    ...microsoftPieces.outlook, operation: 'action.run', actionName: 'send-email', auth,
+    props: {
+      recipients: ['member@example.test'], ccRecipients: [], bccRecipients: [],
+      subject: 'Planning update', bodyFormat: 'text', body: 'The plan is ready.', attachments: [],
+    },
+  })
+  assert.deepEqual(sent.output, {})
+
+  const created = await execute({
+    ...microsoftPieces.calendar, operation: 'action.run', actionName: 'create_event', auth,
+    props: {
+      calendarId: 'calendar-1', title: 'Planning', start: '2026-09-14T09:00:00Z',
+      end: '2026-09-14T09:30:00Z', timezone: 'UTC', location: 'Remote',
+    },
+  })
+  assert.equal((created.output as { id: string }).id, 'event-1')
+
+  const events = await execute({
+    ...microsoftPieces.calendar, operation: 'action.run', actionName: 'list_events', auth,
+    props: { calendarId: 'calendar-1', filter: "subject eq 'Planning'" },
+  })
+  assert.equal((events.output as { value: Array<{ id: string }> }).value[0]?.id, 'event-1')
+
+  const files = await execute({
+    ...microsoftPieces.oneDrive, operation: 'action.run', actionName: 'list_files', auth,
+    props: { parentFolder: undefined },
+  })
+  assert.deepEqual(files.output, [{
+    id: 'file-1', name: 'report.pdf', file: { mimeType: 'application/pdf' },
+  }])
+  assert.equal(graph.isDone(), true)
 })
 
 test('exact piece versions are mandatory', async () => {

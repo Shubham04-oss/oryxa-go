@@ -3,6 +3,9 @@ import { github } from '@activepieces/piece-github'
 import { gmail } from '@activepieces/piece-gmail'
 import { googleCalendar } from '@activepieces/piece-google-calendar'
 import { googleDrive } from '@activepieces/piece-google-drive'
+import { microsoftOutlook } from '@activepieces/piece-microsoft-outlook'
+import { microsoftOutlookCalendar } from '@activepieces/piece-microsoft-outlook-calendar'
+import { microsoftOneDrive } from '@activepieces/piece-microsoft-onedrive'
 
 export interface CatalogEntry {
   piece: any
@@ -84,6 +87,43 @@ export const catalog: Catalog = new Map<string, CatalogEntry>([
       piece: googleDrive,
       version: '0.9.1',
       actions: new Set(['drive_list_files', 'drive_get_file']),
+      triggers: new Set<string>(),
+      eventHooks: false,
+    },
+  ],
+  [
+    '@activepieces/piece-microsoft-outlook',
+    {
+      piece: microsoftOutlook,
+      version: '0.5.3',
+      actions: new Set(['send-email']),
+      triggers: new Set<string>(),
+      eventHooks: false,
+      // Microsoft Graph returns a 202 response with an empty body. The Graph
+      // SDK surfaces that empty response as a stream, which is unsuitable for
+      // the JSON runner protocol and carries no result data.
+      projectActionOutput: () => ({}),
+    },
+  ],
+  [
+    '@activepieces/piece-microsoft-outlook-calendar',
+    {
+      piece: microsoftOutlookCalendar,
+      version: '0.2.8',
+      // The piece calls these create_event and list_events. Public API action
+      // aliases, if any, are owned by the Go integration registry; the runtime
+      // intentionally exposes upstream operation names only.
+      actions: new Set(['create_event', 'list_events']),
+      triggers: new Set<string>(),
+      eventHooks: false,
+    },
+  ],
+  [
+    '@activepieces/piece-microsoft-onedrive',
+    {
+      piece: microsoftOneDrive,
+      version: '0.4.7',
+      actions: new Set(['list_files']),
       triggers: new Set<string>(),
       eventHooks: false,
     },

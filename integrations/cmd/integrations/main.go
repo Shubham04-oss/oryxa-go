@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os/signal"
 	"strings"
@@ -25,6 +26,8 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/postgres"
 	githubprovider "github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/github"
 	googleprovider "github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/google"
+	microsoftprovider "github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/microsoft"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/microsoftgraph"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/slack"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/queue"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/secrets"
@@ -41,11 +44,25 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/coreos/go-oidc/v3/oidc"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	telemetryShutdown, err := observability.Setup(ctx, observability.Config{ServiceName: "oryxa-integrations"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := telemetryShutdown(shutdownContext); err != nil {
+			slog.Error("shutdown telemetry", "error", err)
+		}
+	}()
 	config, err := serviceconfig.FromEnv()
 	if err != nil {
 		log.Fatal(err)
@@ -54,11 +71,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("discover Cognito issuer: %v", err)
 	}
-	store, err := postgres.Open(ctx, config.DatabaseURL)
+	store, err := postgres.Open(ctx, config.DatabaseURL, config.PostgresExtensions...)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer store.Close()
+	slog.Info("postgres connected", "extensions", store.ExtensionVersions())
 	if config.AutoMigrate {
 		if err := store.Migrate(ctx); err != nil {
 			log.Fatal(err)
@@ -73,6 +91,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load AWS configuration: %v", err)
 	}
+	otelaws.AppendMiddlewares(&awsConfig.APIOptions)
 	dynamoClient := dynamodb.NewFromConfig(awsConfig, func(options *dynamodb.Options) {
 		if config.DynamoEndpoint != "" {
 			options.BaseEndpoint = aws.String(config.DynamoEndpoint)
@@ -109,6 +128,7 @@ func main() {
 	secretBox := secrets.Envelope{Keys: secrets.KMSDataKeys{Client: kmsClient, KeyID: config.KMSKeyID}, KeyID: config.KMSKeyID}
 	providerRegistry := oauthflow.StaticProviders{
 		"slack": slack.OAuth{}, "github": githubprovider.OAuth{}, "google": googleprovider.OAuth{},
+		"microsoft": microsoftprovider.OAuth{},
 	}
 	credentialSource := credentials.Manager{Store: store, Secrets: secretBox,
 		Providers: providerRegistry, IDs: ids}
@@ -116,6 +136,7 @@ func main() {
 	routes := dynamo.Routes{Client: dynamoClient, TableName: config.DynamoTable}
 	state := dynamo.TriggerState{Client: dynamoClient, TableName: config.DynamoTable}
 	runner := piecerunner.Client{Lambda: lambdaClient, FunctionName: config.PieceRunnerFunction}
+	graphClient := microsoftgraph.Client{}
 	oauth := oauthflow.Service{Catalog: catalog, Authorizer: store, Profiles: store,
 		States: dynamo.OAuthStates{Client: dynamoClient, TableName: config.DynamoTable}, Connections: store,
 		Secrets: secretBox, Providers: providerRegistry,
@@ -124,8 +145,10 @@ func main() {
 		Routes: routes, Secrets: secretBox, PublicURL: strings.TrimRight(config.PublicBaseURL, "/")}
 	triggerService := triggerflow.Service{Catalog: catalog, Authorizer: store, Connections: store,
 		Routes: routes, Store: store, State: state, Secrets: secretBox, Credentials: credentialSource, Runner: runner,
-		IDs: ids, PublicURL: strings.TrimRight(config.PublicBaseURL, "/")}
-	webhookService := webhooks.Service{Routes: routes, Secrets: secretBox, Runner: runner,
+		MicrosoftGraph: graphClient,
+		IDs:            ids, PublicURL: strings.TrimRight(config.PublicBaseURL, "/")}
+	webhookService := webhooks.Service{Routes: routes, Secrets: secretBox,
+		Runner: microsoftgraph.WebhookRunner{Fallback: runner},
 		Claims: dynamo.Claims{Client: dynamoClient, TableName: config.DynamoTable, IDs: ids},
 		Queue:  queue.WebhookQueue{Client: sqsClient, QueueURL: config.WebhookQueueURL}, IDs: ids}
 	executor := execution.Service{Store: store, State: state, Secrets: secretBox, Credentials: credentialSource, Runner: runner,
@@ -133,20 +156,27 @@ func main() {
 	actions := actionflow.Service{Catalog: catalog, Authorizer: store, Connections: store,
 		Store: store, Credentials: credentialSource, Runner: runner,
 		Mapper: actionflow.DomainMapper{}, IDs: ids, PublicURL: strings.TrimRight(config.PublicBaseURL, "/")}
+	renewals := triggerflow.RenewalWorker{References: store, Renewer: triggerService, Lease: store,
+		ReportError: func(err error) { slog.Error("renew Microsoft Graph trigger", "error", err) }}
+	graphCleanup := triggerflow.MicrosoftGraphCleanupWorker{Jobs: store, Routes: routes, State: state,
+		Secrets: secretBox, Graph: graphClient,
+		ReportError: func(err error) { slog.Error("clean Microsoft Graph trigger", "error", err) }}
 	go (queue.Consumer{Client: sqsClient, QueueURL: config.WebhookQueueURL, Processor: executor}).Run(ctx)
 	go (intevents.Dispatcher{Store: store, Publisher: intevents.Publisher{Client: eventClient, BusName: config.EventBusName}}).Run(ctx)
+	go renewals.Run(ctx)
+	go graphCleanup.Run(ctx)
 
-	handler := httpserver.NewAPI(httpserver.Dependencies{Authenticator: authn.BearerAuthenticator{Verifier: authn.New(provider, config.CognitoClientID)}, Catalog: oauth, OAuth: oauth, WebhookRoutes: webhookRouteService, Triggers: triggerService, Webhooks: webhookService, Actions: actions})
+	handler := observability.HTTPHandler("oryxa-integrations", httpserver.NewAPI(httpserver.Dependencies{Authenticator: authn.BearerAuthenticator{Verifier: authn.New(provider, config.CognitoClientID)}, Catalog: oauth, OAuth: oauth, WebhookRoutes: webhookRouteService, Triggers: triggerService, Webhooks: webhookService, Actions: actions}))
 	server := &http.Server{Addr: config.Address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdown); err != nil {
-			log.Printf("shutdown integrations: %v", err)
+			slog.Error("shutdown integrations", "error", err)
 		}
 	}()
-	log.Printf("integrations listening on %s", config.Address)
+	slog.Info("integrations listening", "address", config.Address)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -19,23 +20,29 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
+// Keep integrations schema installation atomic across concurrently starting
+// broker replicas. PostgreSQL's IF NOT EXISTS checks do not serialize catalog
+// creation by themselves, so two first boots can otherwise collide in pg_type.
+const integrationsMigrationsAdvisoryLock int64 = 4815162341
+
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	database *postgreskit.Database
 }
 
-func Open(ctx context.Context, databaseURL string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+func Open(ctx context.Context, databaseURL string, requiredExtensions ...string) (*Store, error) {
+	database, err := postgreskit.Open(ctx, postgreskit.Config{
+		URL: databaseURL, ApplicationName: "oryxa-integrations", RequiredExtensions: requiredExtensions,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("configure integrations postgres: %w", err)
+		return nil, fmt.Errorf("open integrations postgres: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("connect integrations postgres: %w", err)
-	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: database.Pool, database: database}, nil
 }
 
-func (s *Store) Close() { s.pool.Close() }
+func (s *Store) Close() { s.database.Close() }
+
+func (s *Store) ExtensionVersions() map[string]string { return s.database.ExtensionVersions() }
 
 func (s *Store) Migrate(ctx context.Context) error {
 	entries, err := fs.Glob(migrations, "migrations/*.sql")
@@ -43,14 +50,25 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("list integrations migrations: %w", err)
 	}
 	sort.Strings(entries)
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin integrations migrations: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, integrationsMigrationsAdvisoryLock); err != nil {
+		return fmt.Errorf("lock integrations migrations: %w", err)
+	}
 	for _, entry := range entries {
 		contents, err := migrations.ReadFile(entry)
 		if err != nil {
 			return fmt.Errorf("read integrations migration %s: %w", entry, err)
 		}
-		if _, err := s.pool.Exec(ctx, string(contents)); err != nil {
+		if _, err := tx.Exec(ctx, string(contents)); err != nil {
 			return fmt.Errorf("apply integrations migration %s: %w", entry, err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit integrations migrations: %w", err)
 	}
 	return nil
 }
@@ -162,6 +180,9 @@ func (s *Store) DisableOAuthAppWithEvent(ctx context.Context, organizationID, pr
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound
+	}
+	if err := enqueueMicrosoftGraphCleanupForProfile(ctx, tx, organizationID, profileID, now); err != nil {
+		return err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE integrations_triggers
 		SET status='disabled', version=version+1, updated_at=$3
@@ -279,6 +300,9 @@ func (s *Store) DisconnectConnectionWithEvent(ctx context.Context, organizationI
 	if tag.RowsAffected() == 0 {
 		return domain.ErrNotFound
 	}
+	if err := enqueueMicrosoftGraphCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
+		return err
+	}
 	// A disconnected connection must stop all its trigger fan-out in the same
 	// transaction; provider webhook routes may remain shared by other members.
 	if _, err := tx.Exec(ctx, `UPDATE integrations_triggers SET status='disabled',version=version+1,updated_at=$2 WHERE organization_id=$1 AND connection_id=$3 AND status='active'`, organizationID, now, connectionID); err != nil {
@@ -289,6 +313,46 @@ func (s *Store) DisconnectConnectionWithEvent(ctx context.Context, organizationI
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit integration disconnect: %w", err)
+	}
+	return nil
+}
+
+type sqlExecutor interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+// enqueueMicrosoftGraphCleanupForProfile snapshots the active native Graph
+// triggers before their profile-wide disable update. It is deliberately part
+// of the caller's transaction, so no external cleanup instruction can be lost
+// between local disable and a process crash.
+func enqueueMicrosoftGraphCleanupForProfile(ctx context.Context, executor sqlExecutor, organizationID, profileID string, now time.Time) error {
+	return enqueueMicrosoftGraphCleanup(ctx, executor, `profile_id = $2`, organizationID, profileID, now)
+}
+
+func enqueueMicrosoftGraphCleanupForConnection(ctx context.Context, executor sqlExecutor, organizationID, connectionID string, now time.Time) error {
+	return enqueueMicrosoftGraphCleanup(ctx, executor, `connection_id = $2`, organizationID, connectionID, now)
+}
+
+func enqueueMicrosoftGraphCleanupForTrigger(ctx context.Context, executor sqlExecutor, organizationID, triggerID string, now time.Time) error {
+	return enqueueMicrosoftGraphCleanup(ctx, executor, `id = $2`, organizationID, triggerID, now)
+}
+
+func enqueueMicrosoftGraphCleanup(ctx context.Context, executor sqlExecutor, selector, organizationID, selectorID string, now time.Time) error {
+	// These are the only reviewed native Graph subscription triggers. Other
+	// Microsoft Activepieces operations are not Graph webhooks and must never
+	// enter this external-deletion queue.
+	query := `INSERT INTO integrations_microsoft_graph_cleanup (
+		organization_id, trigger_id, connection_id, profile_id, trigger_name,
+		created_at, available_at
+	)
+	SELECT organization_id, id, connection_id, profile_id, trigger_name, $3, $3
+	FROM integrations_triggers
+	WHERE organization_id = $1 AND ` + selector + `
+	  AND status = 'active' AND provider = 'microsoft'
+	  AND trigger_name IN ('new-email', 'calendar-event-changed')
+	ON CONFLICT (organization_id, trigger_id) DO NOTHING`
+	if _, err := executor.Exec(ctx, query, organizationID, selectorID, now); err != nil {
+		return fmt.Errorf("enqueue Microsoft Graph cleanup: %w", err)
 	}
 	return nil
 }
@@ -315,13 +379,17 @@ func (s *Store) ActiveConnection(ctx context.Context, organizationID, memberID, 
 
 func (s *Store) ConnectionForExecution(ctx context.Context, organizationID, connectionID string) (domain.Connection, error) {
 	return s.connection(ctx, `
-		SELECT id, organization_id, member_id, profile_id, provider, piece_name,
-		       piece_version, provider_subject_id, provider_account_id,
-		       provider_account_name, provider_tenant_id, provider_tenant_name,
-		       granted_scopes, encrypted_credentials, status, version,
-		       created_at, updated_at
-		FROM integrations_connections
-		WHERE organization_id = $1 AND id = $2 AND status = 'active'`, organizationID, connectionID)
+		SELECT c.id, c.organization_id, c.member_id, c.profile_id, c.provider,
+		       c.piece_name, c.piece_version, c.provider_subject_id,
+		       c.provider_account_id, c.provider_account_name,
+		       c.provider_tenant_id, c.provider_tenant_name, c.granted_scopes,
+		       c.encrypted_credentials, c.status, c.version, c.created_at,
+		       c.updated_at
+		FROM integrations_connections c
+		JOIN integrations_oauth_apps p
+		  ON p.organization_id = c.organization_id AND p.id = c.profile_id
+		WHERE c.organization_id = $1 AND c.id = $2
+		  AND c.status = 'active' AND p.status = 'active'`, organizationID, connectionID)
 }
 
 func (s *Store) connection(ctx context.Context, query string, arguments ...any) (domain.Connection, error) {

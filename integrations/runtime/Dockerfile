@@ -2,6 +2,7 @@ FROM public.ecr.aws/lambda/nodejs:22 AS build
 
 WORKDIR /build
 COPY package.json package-lock.json tsconfig.json ./
+COPY scripts ./scripts
 RUN npm ci
 COPY src ./src
 RUN ./node_modules/.bin/tsc --outDir dist --declaration false

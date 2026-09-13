@@ -73,6 +73,49 @@ docker --context mac-mini compose -f compose.auth.yaml up -d auth
 
 `DATABASE_URL` should address `oryxa-go-postgres-1:5432`; `EVENTBRIDGE_ENDPOINT` should address `oryxa-go-eventbridge-1:4566` for the local EventBridge emulator.
 
+### PostgreSQL client and extensions
+
+Auth uses the module-private PostgreSQL boundary in `/internal/postgreskit`.
+The process owns one native `pgxpool`, and its `sqlx` handle shares that pool
+through pgx's `database/sql` adapter rather than opening a second set of
+connections. Migrations use a transaction-scoped PostgreSQL advisory lock, so
+multiple replicas can start with `AUTH_AUTO_MIGRATE=true` safely.
+
+Startup discovers the installed versions of `ltree`, `pg_trgm`, pgvector and
+pgGraph. Their PostgreSQL extension names are `ltree`, `pg_trgm`, `vector`, and
+`graph` respectively. If pgvector is installed, its pgx codecs are registered
+on every newly opened connection. The service does not install or upgrade
+extensions itself.
+
+Set the following after the database image or managed control plane contains
+all four extensions:
+
+```env
+POSTGRES_REQUIRED_EXTENSIONS=ltree,pg_trgm,vector,graph
+```
+
+This makes a missing capability a startup error. Product-name aliases such as
+`pgvector`, `pgGraph`, `pg_graph`, and `pg graph` are normalized to their SQL
+extension names. In particular, a pgvector PostgreSQL image does not imply
+that pgGraph is installed; the database image must bundle both when both are
+required.
+
+### Observability
+
+Logs are structured JSON and carry `service`, `service_version`, and
+`environment`. HTTP access logs use normalized Go route patterns and omit URL
+queries, provider payloads, credentials, and forwarded client request IDs.
+`/healthz` is excluded from access logs and server spans.
+
+W3C trace context flows through the Cloudflare-fronted public HTTP endpoint.
+The service records HTTP, AWS SDK, privacy-safe pgx, pool, and Go runtime
+telemetry. Export uses OTLP/gRPC when `OTEL_EXPORTER_OTLP_ENDPOINT`,
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or
+`OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` is set. Leave them unset for local
+structured-logs-only mode. `DEPLOYMENT_ENVIRONMENT`, `LOG_LEVEL`,
+`LOG_ADD_SOURCE`, and the standard OTLP TLS/header variables configure the
+resource and transport.
+
 The runtime AWS identity needs `cognito-idp:AdminCreateUser`, `AdminDeleteUser`, `AdminSetUserPassword`, `AdminDisableUser`, `AdminEnableUser`, `AdminGetUser`, `AdminUpdateUserAttributes`, and `AdminUserGlobalSignOut` on the configured user pool, and `sqs:ReceiveMessage` and `sqs:DeleteMessage` on its events queue. Production should use a task role. On the mini, provide short-lived AWS credentials through the ignored runtime environment; the LocalStack EventBridge and SQS clients use isolated dummy signing credentials internally, when `EVENTBRIDGE_ENDPOINT` and `SQS_ENDPOINT` are set, and do not replace the Cognito credentials.
 
 ## Member limits

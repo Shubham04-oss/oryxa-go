@@ -85,6 +85,9 @@ func (s *Store) MarkConnectionReauthorizationWithEvent(ctx context.Context, orga
 	if tag.RowsAffected() == 0 {
 		return domain.ErrConflict
 	}
+	if err := enqueueMicrosoftGraphCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE integrations_triggers
 		SET status='disabled', version=version+1, updated_at=$3

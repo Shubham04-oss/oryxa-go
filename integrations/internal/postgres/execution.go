@@ -12,7 +12,7 @@ import (
 )
 
 func (s *Store) CreateTriggerWithEvent(ctx context.Context, trigger domain.Trigger, event domain.Event) error {
-	if trigger.ID == "" || trigger.OrganizationID == "" || event.EventID == "" || event.OrganizationID != trigger.OrganizationID {
+	if trigger.ID == "" || trigger.OrganizationID == "" || trigger.MemberID == "" || trigger.ConnectionID == "" || trigger.ProfileID == "" || event.EventID == "" || event.OrganizationID != trigger.OrganizationID {
 		return errors.New("trigger and matching event identity are required")
 	}
 	props := trigger.Props
@@ -28,6 +28,25 @@ func (s *Store) CreateTriggerWithEvent(ctx context.Context, trigger domain.Trigg
 		return fmt.Errorf("begin trigger transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// Lock the exact connection and its OAuth profile before inserting. This
+	// serializes trigger creation with disconnect and OAuth-profile disable: if
+	// either transition commits first, no active row is visible; if this insert
+	// commits first, their existing transactional trigger-disable update sees it.
+	var locked int
+	err = tx.QueryRow(ctx, `
+		SELECT 1
+		FROM integrations_connections c
+		JOIN integrations_oauth_apps p
+		  ON p.id = c.profile_id AND p.organization_id = c.organization_id
+		WHERE c.organization_id = $1 AND c.id = $2 AND c.member_id = $3
+		  AND c.profile_id = $4 AND c.status = 'active' AND p.status = 'active'
+		FOR UPDATE OF c, p`, trigger.OrganizationID, trigger.ConnectionID, trigger.MemberID, trigger.ProfileID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock active trigger connection and OAuth profile: %w", err)
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO integrations_triggers (
 			id, organization_id, member_id, connection_id, profile_id, provider,
@@ -62,6 +81,9 @@ func (s *Store) DisableTriggerWithEvent(ctx context.Context, organizationID, mem
 		return fmt.Errorf("begin disable trigger transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := enqueueMicrosoftGraphCleanupForTrigger(ctx, tx, organizationID, triggerID, now); err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE integrations_triggers
 		SET status = 'disabled', version = version + 1, updated_at = $4
@@ -101,9 +123,11 @@ func (s *Store) RunnableTriggers(ctx context.Context, organizationID, profileID,
 		FROM integrations_triggers t
 		JOIN integrations_connections c
 		  ON c.id = t.connection_id AND c.organization_id = t.organization_id
+		JOIN integrations_oauth_apps p
+		  ON p.id = c.profile_id AND p.organization_id = c.organization_id
 		WHERE t.organization_id = $1 AND t.profile_id = $2
 		  AND t.piece_name = $3 AND t.piece_version = $4 AND t.trigger_name = $5
-		  AND t.status = 'active' AND c.status = 'active'
+		  AND t.status = 'active' AND c.status = 'active' AND p.status = 'active'
 		  AND ($6 = '' OR t.connection_id = $6)
 		  AND ($7 = '' OR t.provider_identifier = $7)
 		ORDER BY t.id`, organizationID, profileID, pieceName, pieceVersion, triggerName, connectionID, providerIdentifier)

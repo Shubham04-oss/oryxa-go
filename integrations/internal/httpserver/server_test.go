@@ -30,6 +30,16 @@ type testCatalog struct {
 	err            error
 }
 
+func TestHealthDoesNotRequireRuntimeDependencies(t *testing.T) {
+	t.Parallel()
+	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	response := httptest.NewRecorder()
+	NewAPI(Dependencies{}).ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || response.Body.Len() != 0 {
+		t.Fatalf("health response = %d %q", response.Code, response.Body.String())
+	}
+}
+
 func (c *testCatalog) MemberIntegrations(_ context.Context, organizationID, memberID string) ([]domain.MemberIntegration, error) {
 	c.organizationID = organizationID
 	c.memberID = memberID

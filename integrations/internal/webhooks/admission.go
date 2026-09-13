@@ -217,6 +217,16 @@ func (s Service) Admit(ctx context.Context, request Request) (Decision, error) {
 		RawBody:         append([]byte(nil), request.RawBody...),
 		ReceivedAt:      now,
 	}
+	// Native Graph triggers publish a content-free signal and never run the
+	// provider piece downstream. Verification and dedupe have already consumed
+	// the notification, so do not copy mailbox/calendar content or transport
+	// headers into SQS merely to discard them in the worker.
+	if route.Provider == "microsoft" && route.Mode == domain.WebhookRoutePerConnection && result.Event == "change-notification" {
+		envelope.Headers = map[string]string{}
+		envelope.Query = map[string]string{}
+		envelope.Body = nil
+		envelope.RawBody = nil
+	}
 	if err := s.Queue.EnqueueWebhook(ctx, envelope); err != nil {
 		releaseErr := s.Claims.Release(ctx, claimKey, claimToken)
 		return Decision{Status: 503}, errors.Join(fmt.Errorf("%w: %v", ErrQueueUnavailable, err), releaseErr)

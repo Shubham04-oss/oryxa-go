@@ -8,14 +8,10 @@ export async function handler(request: RunnerRequest): Promise<unknown> {
     if (error instanceof RunnerError) {
       return { ok: false, error: { code: error.code, message: error.message } }
     }
-    return { ok: false, error: { code: 'piece_failed', message: safeMessage(error) } }
+    // Pinned pieces and their HTTP clients can attach request bodies, Graph
+    // response bodies, and bearer-token-bearing URLs to Error instances. The
+    // broker already has the invocation ID for correlation; no provider error
+    // detail is safe to return across this boundary.
+    return { ok: false, error: { code: 'piece_failed', message: 'piece execution failed' } }
   }
-}
-
-function safeMessage(error: unknown): string {
-  if (!(error instanceof Error)) return 'piece execution failed'
-  // Connector errors may contain query strings or credentials. The Go broker
-  // logs the category and invocation ID; this message is returned only to it.
-  const withoutURLs = error.message.replace(/https?:\/\/\S+/gi, '[redacted-url]')
-  return withoutURLs.slice(0, 500)
 }

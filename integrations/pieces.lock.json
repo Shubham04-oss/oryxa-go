@@ -9,6 +9,10 @@
     "usage": "development-only compatibility fixtures",
     "integrity": "sha512-sAJRjGEKbdqBXHP9eiffm3CM3iijt355gh6aDvhnh4/wa0T10W0I5dtXbQpkbMdIsY5ZpeNV092C8+k94nMyEA=="
   },
+  "runtimeHardening": {
+    "script": "runtime/scripts/harden-dependencies.mjs",
+    "rule": "force TLS certificate verification and remove provider request/response error logging in each pinned bundle"
+  },
   "pieces": [
     {
       "package": "@activepieces/piece-slack",
@@ -47,6 +51,30 @@
       "version": "0.9.1",
       "integrity": "sha512-ncBooHtSmgSv7wYIHYpCnosX2pD3TXwmpx+r1ZLDMLRAAQ0HQkPiP+NsIJKDYUqVR7NLKmPDhxcaV6mlI8rOyg==",
       "actions": ["drive_list_files", "drive_get_file"],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-microsoft-outlook",
+      "version": "0.5.3",
+      "integrity": "sha512-a1dldIy2Fula2r+BXiKwu8zvwI4hrIaOhYy31EI4OtNeminbwZ7X2sfs8EwNDh2f2O7IDS0x/6ibe1gOqqY0AQ==",
+      "actions": ["send-email"],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-microsoft-outlook-calendar",
+      "version": "0.2.8",
+      "integrity": "sha512-12gzOoOv3AdXgJLOW0xMwWf1Ve6v6sm/WjObkcYbTCUpWwjvsaepScKZC/PFqv8oxRXCDZjk+FYrSHivv1tjjA==",
+      "actions": ["create_event", "list_events"],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-microsoft-onedrive",
+      "version": "0.4.7",
+      "integrity": "sha512-iHLwgwG9htPAx/kptE8owcxhxgIhZTIBDaahJlXbGrw10mDvbBjvbiO1QceE24anB/A3NG6vHGaw9PSSXku1iQ==",
+      "actions": ["list_files"],
       "triggers": [],
       "eventHooks": false
     }

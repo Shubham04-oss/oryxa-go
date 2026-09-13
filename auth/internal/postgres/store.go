@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"slices"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -14,30 +14,34 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	database *postgreskit.Database
 }
 
-func Open(ctx context.Context, databaseURL string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+const authMigrationsAdvisoryLock int64 = 1123581321
+
+func Open(ctx context.Context, databaseURL string, requiredExtensions ...string) (*Store, error) {
+	database, err := postgreskit.Open(ctx, postgreskit.Config{
+		URL: databaseURL, ApplicationName: "oryxa-auth", RequiredExtensions: requiredExtensions,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("configure postgres: %w", err)
+		return nil, fmt.Errorf("open auth postgres: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("connect postgres: %w", err)
-	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: database.Pool, database: database}, nil
 }
 
 func (store *Store) Close() {
-	store.pool.Close()
+	store.database.Close()
 }
+
+func (store *Store) ExtensionVersions() map[string]string { return store.database.ExtensionVersions() }
 
 // Migrate applies every migration in name order. Each is written to be safe to
 // run again.
@@ -46,15 +50,26 @@ func (store *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list auth migrations: %w", err)
 	}
-	slices.Sort(names)
+	sort.Strings(names)
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin auth migrations: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, authMigrationsAdvisoryLock); err != nil {
+		return fmt.Errorf("lock auth migrations: %w", err)
+	}
 	for _, name := range names {
 		contents, err := migrations.ReadFile(name)
 		if err != nil {
 			return fmt.Errorf("read auth migration %s: %w", name, err)
 		}
-		if _, err := store.pool.Exec(ctx, string(contents)); err != nil {
+		if _, err := tx.Exec(ctx, string(contents)); err != nil {
 			return fmt.Errorf("apply auth migration %s: %w", name, err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit auth migrations: %w", err)
 	}
 	return nil
 }

@@ -7,12 +7,14 @@ func TestFromEnvLoadsRuntimeConfiguration(t *testing.T) {
 	t.Setenv("AUTH_COOKIE_SECURE", "false")
 	t.Setenv("AUTH_AUTO_MIGRATE", "true")
 	t.Setenv("AUTH_RETURN_URLS", "https://app.example.com, https://admin.example.com")
+	t.Setenv("POSTGRES_REQUIRED_EXTENSIONS", "ltree, pg_trgm, pgvector, graph")
 
 	config, err := FromEnv()
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.AWSRegion != "ap-south-1" || config.CookieSecure || len(config.AllowedReturnURLs) != 2 {
+	if config.AWSRegion != "ap-south-1" || config.CookieSecure || len(config.AllowedReturnURLs) != 2 ||
+		len(config.PostgresExtensions) != 4 || config.PostgresExtensions[2] != "pgvector" {
 		t.Fatalf("unexpected config: %+v", config)
 	}
 }
@@ -57,4 +59,5 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("AUTH_AUTO_MIGRATE", "")
 	t.Setenv("AUTH_EVENTS_QUEUE_URL", "")
 	t.Setenv("SQS_ENDPOINT", "")
+	t.Setenv("POSTGRES_REQUIRED_EXTENSIONS", "")
 }

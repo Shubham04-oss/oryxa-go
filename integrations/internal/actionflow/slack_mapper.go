@@ -16,6 +16,9 @@ func (DomainMapper) Map(request MapRequest) (MappedResult, error) {
 	if request.Connection.Provider == "google" {
 		return mapGoogle(request)
 	}
+	if request.Connection.Provider == "microsoft" {
+		return mapMicrosoft(request)
+	}
 	if request.Connection.Provider != "slack" {
 		return MappedResult{}, fmt.Errorf("%w: unsupported provider", ErrPieceOutputInvalid)
 	}

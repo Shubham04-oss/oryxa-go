@@ -13,6 +13,40 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
 )
 
+func TestMigrateSerializesConcurrentCallers(t *testing.T) {
+	databaseURL := os.Getenv("INTEGRATIONS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("INTEGRATIONS_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	first, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, store := range []*Store{first, second} {
+		go func(store *Store) {
+			<-start
+			results <- store.Migrate(ctx)
+		}(store)
+	}
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent migration: %v", err)
+		}
+	}
+}
+
 func TestStoreMemberConnectionLifecycle(t *testing.T) {
 	databaseURL := os.Getenv("INTEGRATIONS_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -186,5 +220,178 @@ func TestStoreMemberConnectionLifecycle(t *testing.T) {
 	againAvailable, err := store.ListMemberIntegrations(ctx, organizationID, memberID)
 	if err != nil || len(againAvailable) != 1 || againAvailable[0].State != domain.MemberIntegrationAvailable {
 		t.Fatalf("catalog after disconnect/error = %+v/%v", againAvailable, err)
+	}
+}
+
+func TestStorePersistsMicrosoftGraphCleanupWithConnectionAndProfileDisable(t *testing.T) {
+	databaseURL := os.Getenv("INTEGRATIONS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("INTEGRATIONS_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	organizationID := "cleanup-org-" + suffix
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_microsoft_graph_cleanup WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_triggers WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_outbox WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_connections WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_oauth_apps WHERE organization_id = $1`, organizationID)
+	}()
+
+	create := func(profileID, connectionID, triggerID, triggerName string) {
+		profile := domain.OAuthAppProfile{ID: profileID, OrganizationID: organizationID, Provider: "microsoft",
+			PieceName: "@activepieces/piece-microsoft-outlook", PieceVersion: "0.5.3", Mode: domain.OAuthAppModeBYOC,
+			ClientID: "client", EncryptedSecret: testSealed(1), Scopes: []string{"Mail.Read"}, Status: domain.OAuthAppStatusActive,
+			CreatedBy: "admin", CreatedAt: now, UpdatedAt: now, CredentialRevision: 1}
+		if err := store.CreateOAuthApp(ctx, profile); err != nil {
+			t.Fatalf("create profile: %v", err)
+		}
+		connection := domain.Connection{ID: connectionID, OrganizationID: organizationID, MemberID: "member", ProfileID: profileID,
+			Provider: "microsoft", PieceName: profile.PieceName, PieceVersion: profile.PieceVersion,
+			Identity: domain.ProviderIdentity{SubjectID: "subject", TenantID: "tenant"}, GrantedScopes: []string{"Mail.Read"},
+			EncryptedCredentials: testSealed(2), Status: domain.ConnectionStatusActive, CreatedAt: now, UpdatedAt: now, Version: 1}
+		connected := domain.Event{EventID: "connected-" + triggerID, Source: integrationevents.Source, DetailType: integrationevents.ConnectionConnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionConnected{ConnectionID: connectionID}}
+		if err := store.CreateConnectionWithEvent(ctx, connection, connected); err != nil {
+			t.Fatalf("create connection: %v", err)
+		}
+		trigger := domain.Trigger{ID: triggerID, OrganizationID: organizationID, MemberID: "member", ConnectionID: connectionID, ProfileID: profileID,
+			Provider: "microsoft", PieceName: profile.PieceName, PieceVersion: profile.PieceVersion, TriggerName: triggerName,
+			ProviderIdentifier: connectionID, Status: domain.TriggerStatusActive, Version: 1, CreatedAt: now, UpdatedAt: now}
+		enabled := domain.Event{EventID: "enabled-" + triggerID, Source: integrationevents.Source, DetailType: integrationevents.TriggerEnabledDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.TriggerEnabled{TriggerID: triggerID, ConnectionID: connectionID}}
+		if err := store.CreateTriggerWithEvent(ctx, trigger, enabled); err != nil {
+			t.Fatalf("create trigger: %v", err)
+		}
+	}
+
+	profileOne, connectionOne := "cleanup-profile-one-"+suffix, "cleanup-connection-one-"+suffix
+	profileTwo, connectionTwo := "cleanup-profile-two-"+suffix, "cleanup-connection-two-"+suffix
+	create(profileOne, connectionOne, "cleanup-trigger-email-"+suffix, "new-email")
+	create(profileTwo, connectionTwo, "cleanup-trigger-calendar-"+suffix, "calendar-event-changed")
+	// A Microsoft action/polling trigger name is disabled locally but is never
+	// queued for Graph subscription deletion.
+	trigger := domain.Trigger{ID: "cleanup-trigger-other-" + suffix, OrganizationID: organizationID, MemberID: "member", ConnectionID: connectionOne, ProfileID: profileOne,
+		Provider: "microsoft", PieceName: "@activepieces/piece-microsoft-outlook", PieceVersion: "0.5.3", TriggerName: "not-a-graph-trigger", ProviderIdentifier: connectionOne,
+		Status: domain.TriggerStatusActive, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateTriggerWithEvent(ctx, trigger, domain.Event{EventID: "enabled-other-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.TriggerEnabledDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.TriggerEnabled{TriggerID: trigger.ID, ConnectionID: connectionOne}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.DisconnectConnectionWithEvent(ctx, organizationID, "member", connectionOne, now, domain.Event{EventID: "disconnected-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionDisconnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionDisconnected{ConnectionID: connectionOne}}); err != nil {
+		t.Fatalf("disconnect connection: %v", err)
+	}
+	if err := store.DisableOAuthAppWithEvent(ctx, organizationID, profileTwo, now, domain.Event{EventID: "profile-disabled-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.OAuthAppDisabledDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.OAuthAppDisabled{ProfileID: profileTwo}}); err != nil {
+		t.Fatalf("disable profile: %v", err)
+	}
+	rows, err := store.pool.Query(ctx, `SELECT connection_id, profile_id, trigger_name FROM integrations_microsoft_graph_cleanup WHERE organization_id = $1 ORDER BY trigger_name`, organizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var jobs [][3]string
+	for rows.Next() {
+		var job [3]string
+		if err := rows.Scan(&job[0], &job[1], &job[2]); err != nil {
+			t.Fatal(err)
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 2 || jobs[0][0] != connectionTwo || jobs[0][1] != profileTwo || jobs[0][2] != "calendar-event-changed" ||
+		jobs[1][0] != connectionOne || jobs[1][1] != profileOne || jobs[1][2] != "new-email" {
+		t.Fatalf("cleanup jobs = %#v", jobs)
+	}
+	claimed, err := store.ClaimMicrosoftGraphCleanup(ctx, 10, "lease-one-"+suffix, now, now.Add(time.Minute))
+	if err != nil || len(claimed) != 2 {
+		t.Fatalf("claim cleanup jobs = %#v/%v", claimed, err)
+	}
+	var emailJob, calendarJob domain.MicrosoftGraphCleanupJob
+	for _, job := range claimed {
+		if job.OrganizationID != organizationID || job.Connection.OrganizationID != organizationID || job.Connection.EncryptedCredentials.Version == 0 {
+			t.Fatalf("claimed job crossed tenant or lost sealed grant: %+v", job)
+		}
+		switch job.TriggerName {
+		case "new-email":
+			emailJob = job
+		case "calendar-event-changed":
+			calendarJob = job
+		}
+	}
+	wrongTenant := emailJob
+	wrongTenant.OrganizationID = "other-org"
+	if err := store.CompleteMicrosoftGraphCleanup(ctx, wrongTenant, now); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cross-tenant complete error = %v, want conflict", err)
+	}
+	if err := store.RetryMicrosoftGraphCleanup(ctx, emailJob, now, "cleanup_failed"); err != nil {
+		t.Fatalf("retry cleanup job: %v", err)
+	}
+	// The calendar job remains protected by its first lease. Only the retried
+	// email job is claimable, proving retry and lease isolation.
+	reclaimed, err := store.ClaimMicrosoftGraphCleanup(ctx, 10, "lease-two-"+suffix, now, now.Add(time.Minute))
+	if err != nil || len(reclaimed) != 1 || reclaimed[0].TriggerID != emailJob.TriggerID || reclaimed[0].Attempt != 2 {
+		t.Fatalf("reclaim cleanup job = %#v/%v", reclaimed, err)
+	}
+	if err := store.CompleteMicrosoftGraphCleanup(ctx, reclaimed[0], now); err != nil {
+		t.Fatalf("complete retried cleanup job: %v", err)
+	}
+	if err := store.CompleteMicrosoftGraphCleanup(ctx, calendarJob, now); err != nil {
+		t.Fatalf("complete leased cleanup job: %v", err)
+	}
+	empty, err := store.ClaimMicrosoftGraphCleanup(ctx, 10, "lease-three-"+suffix, now.Add(2*time.Minute), now.Add(3*time.Minute))
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("completed cleanup jobs reclaimed = %#v/%v", empty, err)
+	}
+
+	// A permanent OAuth refresh rejection follows the same durable teardown
+	// path as an explicit disconnect. The cleanup instruction and trigger
+	// disable must commit with the reauthorization transition.
+	profileThree, connectionThree, triggerThree := "cleanup-profile-three-"+suffix, "cleanup-connection-three-"+suffix, "cleanup-trigger-reauth-"+suffix
+	create(profileThree, connectionThree, triggerThree, "new-email")
+	refreshLease := "refresh-reauth-" + suffix
+	if acquired, err := store.AcquireConnectionRefreshLease(ctx, organizationID, connectionThree, 1, refreshLease, now, now.Add(time.Minute)); err != nil || !acquired {
+		t.Fatalf("acquire reauthorization lease = %v/%v", acquired, err)
+	}
+	reauthorization := domain.Event{EventID: "reauthorization-" + suffix, Source: integrationevents.Source,
+		DetailType: integrationevents.ConnectionReauthorizationRequiredDetailType, Version: 1,
+		OrganizationID: organizationID, OccurredAt: now,
+		Data: integrationevents.ConnectionReauthorizationRequired{ConnectionID: connectionThree, Provider: "microsoft", Reason: "invalid_grant", RequiredAt: now}}
+	if err := store.MarkConnectionReauthorizationWithEvent(ctx, organizationID, connectionThree, refreshLease, 1, now, reauthorization); err != nil {
+		t.Fatalf("mark connection for reauthorization: %v", err)
+	}
+	var cleanupCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM integrations_microsoft_graph_cleanup WHERE organization_id=$1 AND connection_id=$2 AND trigger_id=$3 AND completed_at IS NULL`, organizationID, connectionThree, triggerThree).Scan(&cleanupCount); err != nil || cleanupCount != 1 {
+		t.Fatalf("reauthorization cleanup row = %d/%v", cleanupCount, err)
+	}
+	loaded, err := store.Trigger(ctx, organizationID, triggerThree)
+	if err != nil || loaded.Status != domain.TriggerStatusDisabled {
+		t.Fatalf("reauthorization trigger state = %+v/%v", loaded, err)
+	}
+
+	profileFour, connectionFour, triggerFour := "cleanup-profile-four-"+suffix, "cleanup-connection-four-"+suffix, "cleanup-trigger-disabled-"+suffix
+	create(profileFour, connectionFour, triggerFour, "calendar-event-changed")
+	manualDisable := domain.Event{EventID: "manual-disable-" + suffix, Source: integrationevents.Source,
+		DetailType: integrationevents.TriggerDisabledDetailType, Version: 1,
+		OrganizationID: organizationID, OccurredAt: now,
+		Data: integrationevents.TriggerDisabled{TriggerID: triggerFour, ConnectionID: connectionFour, Provider: "microsoft", DisabledBy: "member", DisabledAt: now}}
+	if err := store.DisableTriggerWithEvent(ctx, organizationID, "member", triggerFour, now, manualDisable); err != nil {
+		t.Fatalf("disable Microsoft Graph trigger: %v", err)
+	}
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM integrations_microsoft_graph_cleanup WHERE organization_id=$1 AND connection_id=$2 AND trigger_id=$3 AND completed_at IS NULL`, organizationID, connectionFour, triggerFour).Scan(&cleanupCount); err != nil || cleanupCount != 1 {
+		t.Fatalf("manual disable cleanup row = %d/%v", cleanupCount, err)
 	}
 }

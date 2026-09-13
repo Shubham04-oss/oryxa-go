@@ -139,7 +139,7 @@ func (s Service) Run(ctx context.Context, request RunRequest) (RunResult, error)
 	if definition.ValidateProps == nil || definition.ValidateProps(props) != nil {
 		return RunResult{}, ErrInvalidInput
 	}
-	if missing := missingScopes(definition.RequiredScopes, connection.GrantedScopes); len(missing) > 0 {
+	if missing := missingScopes(connection.Provider, definition.RequiredScopes, connection.GrantedScopes); len(missing) > 0 {
 		return RunResult{}, fmt.Errorf("%w: %s", ErrRequiredScope, strings.Join(missing, ","))
 	}
 	executionID, err := s.newID("act")
@@ -253,14 +253,19 @@ func validIdempotencyKey(value string) bool {
 	return true
 }
 
-func missingScopes(required, actual []string) []string {
+func missingScopes(provider string, required, actual []string) []string {
 	set := make(map[string]struct{}, len(actual))
 	for _, value := range actual {
 		set[value] = struct{}{}
 	}
 	var missing []string
 	for _, value := range required {
-		if _, ok := set[value]; !ok {
+		_, granted := set[value]
+		if provider == "microsoft" && value == "Calendars.Read" {
+			_, implied := set["Calendars.ReadWrite"]
+			granted = granted || implied
+		}
+		if !granted {
 			missing = append(missing, value)
 		}
 	}

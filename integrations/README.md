@@ -2,17 +2,55 @@
 
 Status: the connection, action, refresh, and webhook execution foundations are
 implemented. Slack has outbound actions plus its app-level `new-message`
-trigger; GitHub and Google Workspace have reviewed outbound action slices.
-The deterministic suite runs the real pinned piece code against mocked
-provider endpoints, and the combined lifecycle runs against PostgreSQL and
-LocalStack on the mini. Live Cognito, KMS, Lambda, and provider sandbox
-validation remains an AWS staging concern; no real customer credentials are
-used by the local suite.
+trigger; GitHub and Google Workspace have reviewed outbound action slices;
+Microsoft 365 has reviewed Outlook, Calendar, and OneDrive actions plus native
+Graph webhook subscriptions for new mail and calendar changes. The
+deterministic suite runs the real pinned piece code against mocked provider
+endpoints, and the combined lifecycle runs against PostgreSQL and LocalStack on
+the mini. Live Cognito, KMS, Lambda, and provider sandbox validation remains an
+AWS staging concern; no real customer credentials are used by the local suite.
 
 The integrations service connects an Oryxa organization to third-party
 products. It reuses the MIT-licensed Activepieces piece framework and selected
 community pieces as connector code without deploying the Activepieces app,
 database, Redis queue, UI, workers or workflow engine.
+
+## PostgreSQL and observability boundary
+
+The Go process uses `/internal/postgreskit` and owns one instrumented native
+`pgxpool`. Its `sqlx` facade shares that pool through pgx's `database/sql`
+adapter rather than opening another connection budget. Native pgx remains the
+transaction and repository API; sqlx is available for named/struct-oriented
+queries where it is useful.
+
+PostgreSQL capability discovery uses the actual SQL extension names:
+
+| Product | Extension name | Integrations behavior |
+| --- | --- | --- |
+| ltree | `ltree` | Discover version; optionally require at startup |
+| pg_trgm | `pg_trgm` | Discover version; optionally require at startup |
+| pgvector | `vector` | Register pgx codecs on every pooled connection |
+| [pgGraph](https://github.com/evokoa/pggraph) | `graph` | Discover version; optionally require at startup |
+
+Set `POSTGRES_REQUIRED_EXTENSIONS=ltree,pg_trgm,vector,graph` to enforce the
+full set. The aliases `pgvector`, `pgGraph`, `pg_graph`, and `pg graph` are
+normalized to the corresponding SQL names. Extension installation and upgrades
+remain database provisioning concerns; application migrations never run
+`CREATE EXTENSION`. A pgvector-based image does not automatically include
+pgGraph, so the production and mini images must explicitly provide both.
+
+Observability includes JSON access/application logs, W3C trace propagation,
+Cloudflare public-endpoint HTTP spans and metrics, AWS SDK spans, privacy-safe
+pgx spans, pool metrics, and Go runtime metrics. Access logs use normalized
+route patterns and do not record provider payloads, query strings, credentials,
+or inbound client request IDs. `/healthz` is excluded from access logs and
+server spans.
+
+OTLP/gRPC export is enabled by `OTEL_EXPORTER_OTLP_ENDPOINT` or the standard
+signal-specific trace/metric endpoint variables. Without an endpoint the
+service keeps structured logs and uses no telemetry exporter. Use
+`DEPLOYMENT_ENVIRONMENT`, `LOG_LEVEL`, `LOG_ADD_SOURCE`, and the standard OTLP
+TLS/header variables for resource and transport configuration.
 
 ## Decision
 
@@ -54,13 +92,19 @@ The current implementation includes:
   `@activepieces/piece-slack@0.17.10`,
   `@activepieces/piece-github@0.8.11`,
   `@activepieces/piece-gmail@0.15.0`,
-  `@activepieces/piece-google-calendar@0.10.3`, and
-  `@activepieces/piece-google-drive@0.9.1`;
+  `@activepieces/piece-google-calendar@0.10.3`,
+  `@activepieces/piece-google-drive@0.9.1`,
+  `@activepieces/piece-microsoft-outlook@0.5.3`,
+  `@activepieces/piece-microsoft-outlook-calendar@0.2.8`, and
+  `@activepieces/piece-microsoft-onedrive@0.4.7`;
 - admin-only BYOC registration and member authorization application logic,
   with one-use hashed state, fixed callbacks, bounded return URLs, encrypted
   PKCE verifiers, exact scope checks and a domain-shaped connected event;
 - an actual Slack OAuth v2 adapter for authorization URL creation, code
   exchange and authorizing user/workspace identity extraction;
+- a Microsoft identity-platform OAuth adapter using the tenant-scoped
+  `organizations` endpoint, PKCE, offline access, refresh-token rotation, and
+  Graph-backed user/tenant identity projection;
 - AES-256-GCM envelope encryption using a fresh KMS data key and authenticated
   organization/resource binding, plus an AWS KMS adapter;
 - a webhook admission core that checks route state, body size and timestamp,
@@ -87,6 +131,12 @@ The current implementation includes:
 - a Go SQS consumer that fans an authenticated app-level delivery only to
   active registrations for the same organization, profile and Slack workspace,
   invokes `trigger.run`, and maps output to a stable Slack message event;
+- a native Microsoft Graph subscription controller that creates opaque
+  per-connection callback routes, seals each subscription's `clientState`,
+  validates notification batches, strips verified mail/calendar content before
+  SQS, renews leases, and durably cleans them up on disconnect, profile disable,
+  explicit trigger/connection/profile disable, or permanent reauthorization
+  failure;
 - an EventBridge outbox dispatcher, deployable Go and Lambda-runner images,
   and a minimal CloudFormation data-plane template.
 
@@ -97,14 +147,32 @@ The reviewed action surface is deliberately small:
   requests;
 - Google Workspace: send via Gmail, create/list Calendar events, and list/get
   Drive metadata. Attachments and Drive downloads remain disabled because the
-  runner intentionally has no file-storage capability.
+  runner intentionally has no file-storage capability;
+- Microsoft 365: send via Outlook, create/list Calendar events, and list
+  OneDrive files. OneDrive downloads remain disabled for the same file-storage
+  boundary.
+
+The reviewed trigger surface is equally explicit:
+
+- Slack `new-message` uses the organization app-level webhook and requires the
+  channel/private-channel history scopes configured by the profile;
+- Microsoft `new-email` creates a per-connection Graph subscription for new
+  Inbox messages and requires `Mail.Read`;
+- Microsoft `calendar-event-changed` creates a per-connection Graph
+  subscription for created, updated, or deleted events and requires
+  `Calendars.Read`.
+
+GitHub and Google triggers are not enabled yet. Their future webhook or polling
+paths require separate provider-specific lifecycle and replay reviews; adding
+an Activepieces package to the lock file alone never exposes an operation.
 
 A connection belongs to a provider, not to one Activepieces package. One
 Google consent grant can therefore execute reviewed Gmail, Calendar, and Drive
-operations when the organization enabled and the member granted the required
-scopes. The action catalog selects the exact piece and version for each call;
-the member's encrypted provider grant remains the common authorization
-boundary.
+operations, and one Microsoft consent grant can execute reviewed Outlook,
+Calendar, and OneDrive operations, when the organization enabled and the
+member granted the required scopes. The action catalog selects the exact piece
+and version for each call; the member's encrypted provider grant remains the
+common authorization boundary.
 
 ## OAuth application modes
 
@@ -357,6 +425,12 @@ Provider webhook
   -> webhook SQS queue + DLQ
   -> Go dispatcher -> piece trigger.run
   -> map output to an Oryxa command or domain contract
+
+Microsoft Graph subscription
+  -> Go broker creates one opaque per-connection callback + sealed clientState
+  -> Graph validates the callback and delivers change notifications
+  -> hourly broker scan renews subscriptions approaching expiry
+  -> disconnect/profile disable durably queues Graph removal and local cleanup
 ```
 
 The TypeScript runner uses an AWS Lambda container image because approved
@@ -385,8 +459,10 @@ PostgreSQL cluster and observability. Integrations adds only:
 - one Go API/broker/dispatcher image, split into Lambda handlers later only if
   scaling or permissions require it;
 - one TypeScript piece-runner Lambda container and ECR repository;
-- EventBridge Scheduler later, when the first approved piece needs webhook
-  subscription renewal or polling;
+- an in-process hourly renewal scan and minute-level cleanup worker for the
+  current always-on Go broker; their bounded entry points can move to
+  EventBridge Scheduler when the broker is split into Lambda handlers;
+- EventBridge Scheduler later for approved polling triggers;
 - S3 only after an approved piece requires files or payloads too large for the
   normal invocation path.
 
@@ -403,6 +479,7 @@ integrations_connections      # successful member grants and encrypted tokens
 integrations_triggers         # durable member-owned trigger registrations
 integrations_trigger_executions # per-delivery/trigger retry and idempotency state
 integrations_action_executions # member action idempotency, safe result and audit state
+integrations_microsoft_graph_cleanup # leased subscription teardown jobs
 integrations_outbox           # domain event written with the state transition
 integrations_connection_catalog (view) # credential-free active connections
 ```
@@ -431,6 +508,7 @@ PK                                                   SK
 OAUTH_STATE#<state_hash>                             STATE
 WEBHOOK#<opaque_route>                               ROUTE
 WEBHOOK_PROFILE#<org>#<profile>#<trigger>            ROUTE
+WEBHOOK_CONNECTION#<org>#<profile>#<trigger>#<conn>  ROUTE
 TRIGGER_STATE#<org>#<trigger>                        STATE
 DEDUPE#webhook:<dedupe_hash>                         CLAIM
 ```
@@ -535,6 +613,10 @@ Connection and catalog lifecycle facts may use source `oryxa.integrations`:
 - `integrations.github.issue-comment-created.v1`;
 - `integrations.google.gmail-message-sent.v1`;
 - `integrations.google.calendar-event-created.v1`;
+- `integrations.microsoft.outlook-email-accepted.v1`;
+- `integrations.microsoft.calendar-event-created.v1`;
+- `integrations.microsoft.outlook-email-received.v1`;
+- `integrations.microsoft.calendar-event-changed.v1`;
 - `integrations.catalog.operation-enabled.v1`;
 - `integrations.catalog.operation-disabled.v1`.
 
@@ -587,10 +669,17 @@ timestamp and dedupe key remain authoritative, and direct access to the AWS
 origin is restricted independently.
 
 Slack V1 uses its app-level webhook configured by the organization admin, so
-there is no provider subscription lease to renew. When a later piece manages a
-per-connection subscription, its state will include the provider subscription
-ID, lease/expiry, exact piece version and last renewal result; only then will
-EventBridge Scheduler send renewal commands.
+there is no provider subscription lease to renew. Microsoft Graph uses one
+subscription and opaque route per connection/trigger. The random
+subscription `clientState` is encrypted with the route secret; the durable
+trigger state stores only the Graph subscription ID and expiry. An immediate
+and hourly broker scan renews subscriptions in their final 24 hours while a
+PostgreSQL advisory lease excludes duplicate scans across broker replicas.
+Trigger disable, profile disable, disconnect, and permanent refresh failure
+atomically enqueue cleanup with the PostgreSQL state transition; the cleanup
+worker closes ingress before attempting the idempotent provider deletion. If
+the disconnected grant can no longer authorize deletion, it retains the job
+until the maximum remote lease boundary rather than repeatedly calling Graph.
 
 ## Security and governance
 
@@ -599,6 +688,11 @@ Their MIT license permits reuse, but their position in the catalog is not a
 security approval.
 
 - Pin every package and transitive dependency with integrity hashes.
+- Run the checked-in install-time hardening rule that forces TLS certificate
+  verification and removes provider request/response logging from the bundled
+  Activepieces HTTP client; CI fails if any pinned piece retains either unsafe
+  upstream behavior. Provider failures returned to Go are opaque categories,
+  never upstream messages.
 - Generate an SBOM, scan dependencies and the image, and retain notices.
 - Review outbound hosts, OAuth scopes, logging and dynamic code use per
   operation.
@@ -657,7 +751,11 @@ organization/member connection ownership, trigger listener identity,
 cross-tenant trigger foreign keys, durable execution claims, Slack output
 mapping, action key/input idempotency conflicts, failed-write no-retry
 behavior, concurrent OAuth refresh leases, Google/GitHub provider exchange,
-provider-neutral action projections, EventBridge publication and SQS
+Microsoft authorization-code/refresh rotation and identity projection,
+provider-neutral action projections, Graph callback validation and
+`clientState` isolation, subscription compensation, renewal pagination,
+durable disconnect/profile-disable cleanup, create-vs-disable serialization,
+cross-replica renewal and migration exclusion, EventBridge publication and SQS
 redelivery idempotency.
 
 The combined mini test runs the HTTP registration and OAuth callback, member
@@ -703,17 +801,16 @@ and trigger/provider expansion rather than another architecture spike.
 - Register a real Slack BYOC app and validate Cognito discovery, KMS binding,
   Lambda invocation, DLQ redrive and provider-side retries with non-production
   credentials.
+- Register a Microsoft Entra multi-tenant BYOC app and validate Outlook,
+  Calendar, and OneDrive delegated scopes plus Graph notification create,
+  validation, renewal, delivery, and teardown using non-production accounts.
 - Add alarms for queue age, DLQ depth, outbox lag and execution failures.
 
 ### Catalog and trigger expansion
 
-- Add Microsoft 365 through the same provider-level connection and reviewed
-  Outlook/Calendar/OneDrive action model.
 - Add GitHub and Google webhook triggers only after their signature,
   installation/account routing, subscription lifecycle, and replay rules have
   provider-specific contract tests.
-- Add per-connection webhook creation, renewal and removal for a provider that
-  requires those hooks; Slack's current event route is app-level/shared.
 - Add EventBridge Scheduler only for approved polling triggers.
 - Add S3 only when a supported operation actually requires file handling.
 - Introduce Oryxa-managed one-click OAuth credentials only after BYOC staging
@@ -736,4 +833,8 @@ and trigger/provider expansion rather than another architecture spike.
 - [Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect)
 - [Gmail OAuth scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)
 - [Google Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
+- [Microsoft identity platform authorization-code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow)
+- [Microsoft Graph create subscription](https://learn.microsoft.com/en-us/graph/api/subscription-post-subscriptions?view=graph-rest-1.0)
+- [Microsoft Graph webhook delivery](https://learn.microsoft.com/en-us/graph/change-notifications-delivery-webhooks)
+- [Microsoft Graph change notification resource](https://learn.microsoft.com/en-us/graph/api/resources/changenotification?view=graph-rest-1.0)
 - [AWS KMS encryption-context controls](https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html)

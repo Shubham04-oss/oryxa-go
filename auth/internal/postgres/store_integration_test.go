@@ -11,6 +11,40 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 )
 
+func TestMigrateSerializesConcurrentCallers(t *testing.T) {
+	databaseURL := os.Getenv("AUTH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("AUTH_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	first, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, store := range []*Store{first, second} {
+		go func(store *Store) {
+			<-start
+			results <- store.Migrate(ctx)
+		}(store)
+	}
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent migration: %v", err)
+		}
+	}
+}
+
 func TestStoreLifecycle(t *testing.T) {
 	databaseURL := os.Getenv("AUTH_TEST_DATABASE_URL")
 	if databaseURL == "" {

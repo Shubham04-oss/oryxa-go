@@ -2,3 +2,4 @@
 .env
 **/.env
 **/*_test.go
+**/node_modules

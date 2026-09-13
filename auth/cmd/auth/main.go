@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/coreos/go-oidc/v3/oidc"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/authn"
@@ -27,11 +29,23 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/serviceconfig"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	telemetryShutdown, err := observability.Setup(ctx, observability.Config{ServiceName: "oryxa-auth"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := telemetryShutdown(shutdownContext); err != nil {
+			slog.Error("shutdown telemetry", "error", err)
+		}
+	}()
 
 	config, err := serviceconfig.FromEnv()
 	if err != nil {
@@ -43,11 +57,12 @@ func main() {
 		log.Fatalf("discover Cognito issuer: %v", err)
 	}
 	verifier := authn.New(provider, config.CognitoClientID)
-	store, err := postgres.Open(ctx, config.DatabaseURL)
+	store, err := postgres.Open(ctx, config.DatabaseURL, config.PostgresExtensions...)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer store.Close()
+	slog.Info("postgres connected", "extensions", store.ExtensionVersions())
 	if config.AutoMigrate {
 		if err := store.Migrate(ctx); err != nil {
 			log.Fatal(err)
@@ -72,6 +87,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load AWS configuration: %v", err)
 	}
+	otelaws.AppendMiddlewares(&awsConfig.APIOptions)
 	passwords, err := passwordflow.New(
 		cognitoidentityprovider.NewFromConfig(awsConfig),
 		service,
@@ -106,19 +122,19 @@ func main() {
 		})
 		go billingevents.NewConsumer(service).Poll(ctx, queue, config.EventsQueueURL)
 	} else {
-		log.Printf("AUTH_EVENTS_QUEUE_URL is not set: billing entitlements are not applied, so organizations have no member limits")
+		slog.Warn("billing entitlement events are disabled", "reason", "AUTH_EVENTS_QUEUE_URL is not set")
 	}
 
 	server := &http.Server{
 		Addr: config.Address,
-		Handler: httpserver.New(verifier, oauth, passwords, service, httpserver.Config{
+		Handler: observability.HTTPHandler("oryxa-auth", httpserver.New(verifier, oauth, passwords, service, httpserver.Config{
 			CognitoDomain:      config.CognitoDomain,
 			CognitoClientID:    config.CognitoClientID,
 			CognitoCallbackURL: config.CognitoCallbackURL,
 			AllowedOrigins:     config.AllowedReturnURLs,
 			CookieDomain:       config.CookieDomain,
 			CookieSecure:       config.CookieSecure,
-		}),
+		})),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -130,11 +146,11 @@ func main() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownContext); err != nil {
-			log.Printf("shutdown: %v", err)
+			slog.Error("shutdown auth", "error", err)
 		}
 	}()
 
-	log.Printf("auth listening on %s", config.Address)
+	slog.Info("auth listening", "address", config.Address)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

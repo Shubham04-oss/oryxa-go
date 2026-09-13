@@ -16,16 +16,22 @@ import (
 )
 
 const (
-	SlackPieceName             = "@activepieces/piece-slack"
-	SlackPieceVersion          = "0.17.10"
-	GitHubPieceName            = "@activepieces/piece-github"
-	GitHubPieceVersion         = "0.8.11"
-	GmailPieceName             = "@activepieces/piece-gmail"
-	GmailPieceVersion          = "0.15.0"
-	GoogleCalendarPieceName    = "@activepieces/piece-google-calendar"
-	GoogleCalendarPieceVersion = "0.10.3"
-	GoogleDrivePieceName       = "@activepieces/piece-google-drive"
-	GoogleDrivePieceVersion    = "0.9.1"
+	SlackPieceName                = "@activepieces/piece-slack"
+	SlackPieceVersion             = "0.17.10"
+	GitHubPieceName               = "@activepieces/piece-github"
+	GitHubPieceVersion            = "0.8.11"
+	GmailPieceName                = "@activepieces/piece-gmail"
+	GmailPieceVersion             = "0.15.0"
+	GoogleCalendarPieceName       = "@activepieces/piece-google-calendar"
+	GoogleCalendarPieceVersion    = "0.10.3"
+	GoogleDrivePieceName          = "@activepieces/piece-google-drive"
+	GoogleDrivePieceVersion       = "0.9.1"
+	MicrosoftOutlookPieceName     = "@activepieces/piece-microsoft-outlook"
+	MicrosoftOutlookPieceVersion  = "0.5.3"
+	MicrosoftCalendarPieceName    = "@activepieces/piece-microsoft-outlook-calendar"
+	MicrosoftCalendarPieceVersion = "0.2.8"
+	MicrosoftOneDrivePieceName    = "@activepieces/piece-microsoft-onedrive"
+	MicrosoftOneDrivePieceVersion = "0.4.7"
 )
 
 type Static struct {
@@ -41,6 +47,9 @@ func (c Static) ActionDefinition(provider, actionName string) (actionflow.Defini
 	}
 	if provider == "google" {
 		return googleActionDefinition(actionName)
+	}
+	if provider == "microsoft" {
+		return microsoftActionDefinition(actionName)
 	}
 	if provider != "slack" {
 		return actionflow.Definition{}, false
@@ -67,7 +76,34 @@ func (c Static) ActionDefinition(provider, actionName string) (actionflow.Defini
 }
 
 func (c Static) TriggerDefinition(provider, triggerName string) (triggerflow.Definition, bool) {
-	if c.PublicBaseURL == "" || provider != "slack" || triggerName != "new-message" {
+	if c.PublicBaseURL == "" {
+		return triggerflow.Definition{}, false
+	}
+	if provider == "microsoft" {
+		base := triggerflow.Definition{Provider: "microsoft", RouteMode: domain.WebhookRoutePerConnection,
+			Event: "change-notification", MaxBodyBytes: 128 * 1024, GraphTTL: 72 * time.Hour,
+			ValidateProps: func(raw json.RawMessage) error {
+				var props struct{}
+				if err := decodeStrict(raw, &props); err != nil {
+					return errors.New("Microsoft Graph trigger properties must be an empty object")
+				}
+				return nil
+			}}
+		switch triggerName {
+		case "new-email":
+			base.PieceName, base.PieceVersion = MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion
+			base.TriggerName, base.GraphResource, base.GraphChangeType = triggerName, "/me/mailFolders('Inbox')/messages", "created"
+			base.RequiredScopes = []string{"Mail.Read"}
+		case "calendar-event-changed":
+			base.PieceName, base.PieceVersion = MicrosoftCalendarPieceName, MicrosoftCalendarPieceVersion
+			base.TriggerName, base.GraphResource, base.GraphChangeType = triggerName, "/me/events", "created,updated,deleted"
+			base.RequiredScopes = []string{"Calendars.Read"}
+		default:
+			return triggerflow.Definition{}, false
+		}
+		return base, true
+	}
+	if provider != "slack" || triggerName != "new-message" {
 		return triggerflow.Definition{}, false
 	}
 	return triggerflow.Definition{
@@ -111,6 +147,21 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 				"https://www.googleapis.com/auth/gmail.send",
 			},
 			RequiredScopes: []string{"email", "openid", "profile"}, SupportsPKCE: true,
+		}, true
+	}
+	if provider == "microsoft" {
+		return oauthflow.Definition{
+			Provider: "microsoft", PieceName: MicrosoftOutlookPieceName, PieceVersion: MicrosoftOutlookPieceVersion,
+			RedirectURI: c.PublicBaseURL + "/v1/oauth/callback/microsoft",
+			AllowedScopes: []string{
+				"openid", "profile", "email", "offline_access", "User.Read",
+				"Mail.Send", "Mail.Read", "Calendars.ReadWrite", "Calendars.Read", "Files.Read",
+			},
+			// Microsoft may omit offline_access from the returned scope string even
+			// when it issued a refresh token. It is still requested by the OAuth
+			// adapter, but cannot be a persisted-grant authorization requirement.
+			RequiredScopes: []string{"openid", "profile", "User.Read"},
+			SupportsPKCE:   true,
 		}, true
 	}
 	if provider != "slack" {

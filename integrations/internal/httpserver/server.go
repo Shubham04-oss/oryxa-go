@@ -80,6 +80,9 @@ func New(authenticator Authenticator, catalog MemberCatalog) *Server {
 func NewAPI(dependencies Dependencies) *Server {
 	server := &Server{dependencies: dependencies}
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	})
 	mux.HandleFunc("GET /v1/organizations/{organizationID}/integrations", server.listMemberIntegrations)
 	mux.HandleFunc("POST /v1/organizations/{organizationID}/integration-apps", server.registerOAuthApp)
 	mux.HandleFunc("PATCH /v1/organizations/{organizationID}/integration-apps/{profileID}", server.rotateOAuthApp)

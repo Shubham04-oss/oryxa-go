@@ -149,8 +149,8 @@ func TestStoreTenantAuthorizationAndTriggerExecution(t *testing.T) {
 	crossTenant := trigger
 	crossTenant.ID = "exec-cross-" + suffix
 	crossTenant.OrganizationID = otherOrg
-	if err := store.CreateTriggerWithEvent(ctx, crossTenant, domain.Event{EventID: "exec-cross-event-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.TriggerEnabledDetailType, Version: 1, OrganizationID: otherOrg, OccurredAt: now}); !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("cross-tenant trigger FK = %v", err)
+	if err := store.CreateTriggerWithEvent(ctx, crossTenant, domain.Event{EventID: "exec-cross-event-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.TriggerEnabledDetailType, Version: 1, OrganizationID: otherOrg, OccurredAt: now}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("cross-tenant trigger lookup = %v", err)
 	}
 
 	execution, claimed, err := store.ClaimTriggerExecution(ctx, "exec-id-"+suffix, org, triggerID, "delivery-1", now, now.Add(-time.Minute))
@@ -175,6 +175,40 @@ func TestStoreTenantAuthorizationAndTriggerExecution(t *testing.T) {
 		if strings.Contains(detail, forbidden) {
 			t.Fatalf("output event contains %q: %s", forbidden, detail)
 		}
+	}
+
+	// Trigger creation takes row locks and re-checks both the exact connection
+	// and OAuth profile inside its insert transaction. These terminal states
+	// model the completion side of the disconnect/profile-disable races: once
+	// either operation wins, a new active trigger cannot be inserted.
+	inactiveTrigger := trigger
+	inactiveTrigger.ID = "exec-inactive-connection-" + suffix
+	if _, err := store.pool.Exec(ctx, `UPDATE integrations_connections SET status='disconnected' WHERE organization_id=$1 AND id=$2`, org, connectionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateTriggerWithEvent(ctx, inactiveTrigger, domain.Event{EventID: "exec-inactive-connection-event-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.TriggerEnabledDetailType, Version: 1, OrganizationID: org, OccurredAt: now}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("inactive connection trigger creation = %v", err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE integrations_connections SET status='active' WHERE organization_id=$1 AND id=$2`, org, connectionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.pool.Exec(ctx, `UPDATE integrations_oauth_apps SET status='disabled' WHERE organization_id=$1 AND id=$2`, org, profileID); err != nil {
+		t.Fatal(err)
+	}
+	inactiveTrigger.ID = "exec-inactive-profile-" + suffix
+	if err := store.CreateTriggerWithEvent(ctx, inactiveTrigger, domain.Event{EventID: "exec-inactive-profile-event-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.TriggerEnabledDetailType, Version: 1, OrganizationID: org, OccurredAt: now}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("inactive profile trigger creation = %v", err)
+	}
+	// An OAuth-profile disable is also an execution boundary. Existing
+	// connections retain their encrypted grant for the privileged Graph cleanup
+	// worker, but no normal action, trigger renewal, or webhook execution may
+	// retrieve it through ConnectionForExecution or RunnableTriggers.
+	if _, err := store.ConnectionForExecution(ctx, org, connectionID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("disabled profile connection remained executable: %v", err)
+	}
+	runnable, err = store.RunnableTriggers(ctx, org, profileID, "piece", "1", "hook", "", "T123")
+	if err != nil || len(runnable) != 0 {
+		t.Fatalf("disabled profile runnable triggers = %+v/%v", runnable, err)
 	}
 }
 

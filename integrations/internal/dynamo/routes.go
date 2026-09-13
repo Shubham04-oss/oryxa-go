@@ -52,7 +52,7 @@ func (s Routes) CreateWebhookRoute(ctx context.Context, route domain.WebhookRout
 		"credential_revision": &types.AttributeValueMemberN{Value: strconv.FormatInt(route.CredentialRevision, 10)},
 	}
 	indexItem := map[string]types.AttributeValue{
-		"PK":           &types.AttributeValueMemberS{Value: routeIndexPK(route.OrganizationID, route.ProfileID, route.TriggerName)},
+		"PK":           &types.AttributeValueMemberS{Value: routeIndexFor(route)},
 		"SK":           &types.AttributeValueMemberS{Value: "ROUTE"},
 		"opaque_route": &types.AttributeValueMemberS{Value: route.OpaqueRoute},
 	}
@@ -87,6 +87,58 @@ func (s Routes) ActiveWebhookRoute(ctx context.Context, organizationID, profileI
 		return domain.WebhookRoute{}, domain.ErrNotFound
 	}
 	return route, nil
+}
+
+// ActiveWebhookRouteForConnection resolves a route that is dedicated to one
+// connection. App-level Slack routes retain their existing profile-wide index.
+func (s Routes) ActiveWebhookRouteForConnection(ctx context.Context, organizationID, profileID, triggerName, connectionID string) (domain.WebhookRoute, error) {
+	if connectionID == "" {
+		return domain.WebhookRoute{}, domain.ErrNotFound
+	}
+	item, err := s.get(ctx, routeConnectionIndexPK(organizationID, profileID, triggerName, connectionID))
+	if err != nil {
+		return domain.WebhookRoute{}, err
+	}
+	route, err := s.WebhookRoute(ctx, stringAttribute(item, "opaque_route"))
+	if err != nil {
+		return domain.WebhookRoute{}, err
+	}
+	if route.OrganizationID != organizationID || route.ProfileID != profileID || route.TriggerName != triggerName ||
+		route.ConnectionID != connectionID || route.Mode != domain.WebhookRoutePerConnection || !route.Active {
+		return domain.WebhookRoute{}, domain.ErrNotFound
+	}
+	return route, nil
+}
+
+// DeactivateWebhookRoute removes the lookup index and closes the opaque ingress
+// route. Keeping the immutable route record supports safe in-flight reads while
+// making a later subscription attempt allocate a fresh opaque path.
+func (s Routes) DeactivateWebhookRoute(ctx context.Context, opaque string) error {
+	route, err := s.WebhookRoute(ctx, opaque)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	_, err = s.Client.TransactWriteItems(ctx, &dynamodb.TransactWriteItemsInput{TransactItems: []types.TransactWriteItem{
+		{Update: &types.Update{TableName: aws.String(s.TableName), Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: routePK(opaque)}, "SK": &types.AttributeValueMemberS{Value: "ROUTE"},
+		}, UpdateExpression: aws.String("SET active = :inactive"), ExpressionAttributeValues: map[string]types.AttributeValue{
+			":inactive": &types.AttributeValueMemberBOOL{Value: false},
+		}, ConditionExpression: aws.String("attribute_exists(PK)")}},
+		{Delete: &types.Delete{TableName: aws.String(s.TableName), Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: routeIndexFor(route)}, "SK": &types.AttributeValueMemberS{Value: "ROUTE"},
+		}}},
+	}})
+	if err != nil {
+		var canceled *types.TransactionCanceledException
+		if errors.As(err, &canceled) {
+			return domain.ErrConflict
+		}
+		return fmt.Errorf("deactivate webhook route: %w", err)
+	}
+	return nil
 }
 
 func (s Routes) webhookRoute(ctx context.Context, pk string) (domain.WebhookRoute, error) {
@@ -139,6 +191,15 @@ func (s Routes) get(ctx context.Context, pk string) (map[string]types.AttributeV
 func routePK(opaque string) string { return "WEBHOOK#" + opaque }
 func routeIndexPK(org, profile, trigger string) string {
 	return "WEBHOOK_PROFILE#" + org + "#" + profile + "#" + trigger
+}
+func routeConnectionIndexPK(org, profile, trigger, connection string) string {
+	return "WEBHOOK_CONNECTION#" + org + "#" + profile + "#" + trigger + "#" + connection
+}
+func routeIndexFor(route domain.WebhookRoute) string {
+	if route.Mode == domain.WebhookRoutePerConnection && route.ConnectionID != "" {
+		return routeConnectionIndexPK(route.OrganizationID, route.ProfileID, route.TriggerName, route.ConnectionID)
+	}
+	return routeIndexPK(route.OrganizationID, route.ProfileID, route.TriggerName)
 }
 func boolAttribute(item map[string]types.AttributeValue, key string) bool {
 	value, _ := item[key].(*types.AttributeValueMemberBOOL)

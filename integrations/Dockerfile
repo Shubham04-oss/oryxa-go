@@ -5,6 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY integrations ./integrations
 COPY contracts ./contracts
+COPY internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/integrations ./integrations/cmd/integrations
 
 FROM gcr.io/distroless/static-debian12:nonroot

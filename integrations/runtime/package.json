@@ -4,14 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/harden-dependencies.mjs",
+    "verify:dependencies": "node scripts/harden-dependencies.mjs --check",
     "build": "tsc --noEmit",
-    "test": "node --import tsx --test src/**/*.test.ts"
+    "test": "npm run verify:dependencies && node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@activepieces/piece-github": "0.8.11",
     "@activepieces/piece-gmail": "0.15.0",
     "@activepieces/piece-google-calendar": "0.10.3",
     "@activepieces/piece-google-drive": "0.9.1",
+    "@activepieces/piece-microsoft-onedrive": "0.4.7",
+    "@activepieces/piece-microsoft-outlook": "0.5.3",
+    "@activepieces/piece-microsoft-outlook-calendar": "0.2.8",
     "@activepieces/piece-slack": "0.17.10"
   },
   "devDependencies": {

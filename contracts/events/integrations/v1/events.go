@@ -23,6 +23,10 @@ const (
 	GitHubIssueCommentCreatedDetailType         = "integrations.github.issue-comment-created.v1"
 	GoogleGmailMessageSentDetailType            = "integrations.google.gmail-message-sent.v1"
 	GoogleCalendarEventCreatedDetailType        = "integrations.google.calendar-event-created.v1"
+	MicrosoftOutlookEmailAcceptedDetailType     = "integrations.microsoft.outlook-email-accepted.v1"
+	MicrosoftCalendarEventCreatedDetailType     = "integrations.microsoft.calendar-event-created.v1"
+	MicrosoftOutlookEmailReceivedDetailType     = "integrations.microsoft.outlook-email-received.v1"
+	MicrosoftCalendarEventChangedDetailType     = "integrations.microsoft.calendar-event-changed.v1"
 )
 
 type ProviderIdentity struct {
@@ -114,6 +118,26 @@ type TriggerDisabled struct {
 	DisabledAt   time.Time `json:"disabled_at"`
 }
 
+// MicrosoftOutlookEmailReceived is a content-free receipt for an Outlook
+// mailbox notification. Consumers must fetch mail content through a separate
+// explicitly authorized operation.
+type MicrosoftOutlookEmailReceived struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	DeliveryID   string    `json:"delivery_id"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+// MicrosoftCalendarEventChanged is a content-free receipt for an Outlook
+// calendar notification. Event titles, attendees, location, and body never
+// cross the integrations event boundary.
+type MicrosoftCalendarEventChanged struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	DeliveryID   string    `json:"delivery_id"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
 // SlackMessageReceived is the stable, credential-free domain projection of
 // Slack's message event. Raw webhook headers and provider tokens never cross
 // the integrations boundary.
@@ -193,6 +217,29 @@ type GoogleGmailMessageSent struct {
 // GoogleCalendarEventCreated omits title, description, location, and attendee
 // data so downstream services can react without receiving calendar content.
 type GoogleCalendarEventCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	CalendarID   string    `json:"calendar_id"`
+	EventID      string    `json:"event_id"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// MicrosoftOutlookEmailAccepted records Graph's accepted sendMail write. The
+// endpoint deliberately does not return a message ID, and recipients, subject,
+// and body must never leave the integrations boundary.
+type MicrosoftOutlookEmailAccepted struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	RequestedBy  string    `json:"requested_by"`
+	AcceptedAt   time.Time `json:"accepted_at"`
+}
+
+// MicrosoftCalendarEventCreated omits the event title, body, location, and
+// attendees. Downstream consumers receive only the durable identity and, when
+// Graph supplied one, its HTTPS web link.
+type MicrosoftCalendarEventCreated struct {
 	ExecutionID  string    `json:"execution_id"`
 	ConnectionID string    `json:"connection_id"`
 	CalendarID   string    `json:"calendar_id"`

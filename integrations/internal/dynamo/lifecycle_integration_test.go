@@ -71,6 +71,25 @@ func TestOAuthRoutesAndTriggerStateWithDynamoDB(t *testing.T) {
 	if err := routes.CreateWebhookRoute(ctx, route); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("duplicate route = %v", err)
 	}
+	graphRoute := domain.WebhookRoute{OpaqueRoute: "opaque-microsoft", OrganizationID: "org-1", ProfileID: "app-1", ConnectionID: "con-1",
+		Provider: "microsoft", PieceName: "outlook", PieceVersion: "1", TriggerName: "new-email", Mode: domain.WebhookRoutePerConnection,
+		SigningSecret: route.SigningSecret, MaxBodyBytes: 1234, Active: true, CredentialRevision: 1}
+	if err := routes.CreateWebhookRoute(ctx, graphRoute); err != nil {
+		t.Fatal(err)
+	}
+	byConnection, err := routes.ActiveWebhookRouteForConnection(ctx, "org-1", "app-1", "new-email", "con-1")
+	if err != nil || byConnection.OpaqueRoute != graphRoute.OpaqueRoute || byConnection.ConnectionID != "con-1" {
+		t.Fatalf("connection route/error = %+v/%v", byConnection, err)
+	}
+	if err := routes.DeactivateWebhookRoute(ctx, graphRoute.OpaqueRoute); err != nil {
+		t.Fatal(err)
+	}
+	if route, err := routes.WebhookRoute(ctx, graphRoute.OpaqueRoute); err != nil || route.Active {
+		t.Fatalf("deactivated route/error = %+v/%v", route, err)
+	}
+	if _, err := routes.ActiveWebhookRouteForConnection(ctx, "org-1", "app-1", "new-email", "con-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("inactive connection route = %v", err)
+	}
 
 	runtime := TriggerState{Client: client, TableName: tableName}
 	if err := runtime.ApplyTriggerState(ctx, "org-1", "trg-1", 0, []piece.StoreMutation{{Operation: "put", Key: "cursor", Value: "1"}}); err != nil {
@@ -82,5 +101,11 @@ func TestOAuthRoutesAndTriggerStateWithDynamoDB(t *testing.T) {
 	}
 	if err := runtime.ApplyTriggerState(ctx, "org-1", "trg-1", 0, []piece.StoreMutation{{Operation: "put", Key: "cursor", Value: "stale"}}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("stale state write = %v", err)
+	}
+	if err := runtime.DeleteTriggerState(ctx, "org-1", "trg-1"); err != nil {
+		t.Fatal(err)
+	}
+	if values, version, err := runtime.LoadTriggerState(ctx, "org-1", "trg-1"); err != nil || version != 0 || len(values) != 0 {
+		t.Fatalf("deleted runtime state = %+v/%d/%v", values, version, err)
 	}
 }

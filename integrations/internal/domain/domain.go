@@ -209,6 +209,26 @@ type Trigger struct {
 	Version            int64
 }
 
+// MicrosoftGraphCleanupJob is the durable, credential-free instruction to
+// remove an external Graph subscription after its local trigger is disabled.
+// The connection is populated only while a trusted worker holds the job; it
+// is never persisted in this struct or exposed outside the worker boundary.
+type MicrosoftGraphCleanupJob struct {
+	OrganizationID string
+	TriggerID      string
+	ConnectionID   string
+	ProfileID      string
+	TriggerName    string
+	// CreatedAt is the disable-time safety boundary. A renewal PATCH that was
+	// already in flight can have extended the remote subscription after local
+	// state stopped being updated, so cleanup must retain the job until the
+	// maximum possible remote lease from this point has elapsed.
+	CreatedAt  time.Time
+	Attempt    int
+	LeaseToken string
+	Connection Connection
+}
+
 type ExecutionStatus string
 
 const (

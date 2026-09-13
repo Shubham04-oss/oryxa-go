@@ -128,6 +128,20 @@ func (s Service) processTrigger(ctx context.Context, envelope webhooks.Envelope,
 		(envelope.IdentifierValue != "" && connection.Identity.TenantID != envelope.IdentifierValue) {
 		return fail("isolation_mismatch", ErrIsolationMismatch)
 	}
+	if isNativeGraphNotification(trigger, envelope) {
+		eventID, err := s.newID("evt")
+		if err != nil {
+			return fail("id_unavailable", err)
+		}
+		event, err := s.Mapper.Map(trigger.Provider, trigger, envelope, json.RawMessage(`{}`), eventID, s.now())
+		if err != nil {
+			return fail("output_mapping_failed", err)
+		}
+		if err := s.Store.CompleteTriggerExecutionWithEvent(ctx, execution, s.now(), event); err != nil {
+			return fail("completion_failed", err)
+		}
+		return nil
+	}
 	var auth []byte
 	if s.Credentials != nil {
 		auth, err = s.Credentials.ForExecution(ctx, connection)
@@ -183,6 +197,20 @@ func (s Service) processTrigger(ctx context.Context, envelope webhooks.Envelope,
 type DomainMapper struct{}
 
 func (DomainMapper) Map(provider string, trigger domain.Trigger, envelope webhooks.Envelope, output json.RawMessage, eventID string, now time.Time) (domain.Event, error) {
+	if provider == "microsoft" && trigger.TriggerName == "new-email" && envelope.Event == "change-notification" && len(output) == 2 && string(output) == "{}" {
+		return domain.Event{EventID: eventID, Source: integrationevents.Source,
+			DetailType: integrationevents.MicrosoftOutlookEmailReceivedDetailType, Version: 1,
+			OrganizationID: trigger.OrganizationID, OccurredAt: now,
+			Data: integrationevents.MicrosoftOutlookEmailReceived{TriggerID: trigger.ID,
+				ConnectionID: trigger.ConnectionID, DeliveryID: envelope.DeliveryID, ReceivedAt: envelope.ReceivedAt}}, nil
+	}
+	if provider == "microsoft" && trigger.TriggerName == "calendar-event-changed" && envelope.Event == "change-notification" && len(output) == 2 && string(output) == "{}" {
+		return domain.Event{EventID: eventID, Source: integrationevents.Source,
+			DetailType: integrationevents.MicrosoftCalendarEventChangedDetailType, Version: 1,
+			OrganizationID: trigger.OrganizationID, OccurredAt: now,
+			Data: integrationevents.MicrosoftCalendarEventChanged{TriggerID: trigger.ID,
+				ConnectionID: trigger.ConnectionID, DeliveryID: envelope.DeliveryID, ReceivedAt: envelope.ReceivedAt}}, nil
+	}
 	if provider != "slack" || trigger.TriggerName != "new-message" {
 		return domain.Event{}, fmt.Errorf("%w: unsupported trigger mapping", ErrOutputInvalid)
 	}
@@ -215,6 +243,11 @@ func (DomainMapper) Map(provider string, trigger domain.Trigger, envelope webhoo
 		Data: integrationevents.SlackMessageReceived{TriggerID: trigger.ID,
 			ConnectionID: trigger.ConnectionID, WorkspaceID: envelope.IdentifierValue,
 			Messages: messages, ReceivedAt: envelope.ReceivedAt}}, nil
+}
+
+func isNativeGraphNotification(trigger domain.Trigger, envelope webhooks.Envelope) bool {
+	return trigger.Provider == "microsoft" && envelope.Event == "change-notification" &&
+		(trigger.TriggerName == "new-email" || trigger.TriggerName == "calendar-event-changed")
 }
 
 func (s Service) now() time.Time {

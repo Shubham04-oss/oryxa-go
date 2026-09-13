@@ -152,3 +152,46 @@ func TestProcessWebhookRejectsConnectionTenantMismatchBeforeRunner(t *testing.T)
 		t.Fatalf("error/runner/failed = %v/%d/%+v", err, runner.calls, store.failed)
 	}
 }
+
+func TestProcessWebhookProjectsMicrosoftGraphNotificationWithoutRunningPollingPiece(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	trigger := domain.Trigger{ID: "trg-1", OrganizationID: "org-1", MemberID: "member-1", ConnectionID: "con-1", ProfileID: "app-1",
+		Provider: "microsoft", PieceName: "@activepieces/piece-microsoft-outlook", PieceVersion: "0.5.3", TriggerName: "new-email",
+		ProviderIdentifier: "con-1", Status: domain.TriggerStatusActive}
+	store := &executionStore{triggers: []domain.Trigger{trigger}, claimed: true,
+		connection: domain.Connection{ID: "con-1", OrganizationID: "org-1", ProfileID: "app-1", Provider: "microsoft",
+			PieceName: trigger.PieceName, PieceVersion: trigger.PieceVersion, Status: domain.ConnectionStatusActive}}
+	runner := &executionRunner{}
+	service := Service{Store: store, Runner: runner, Mapper: DomainMapper{}, Now: func() time.Time { return now }, IDs: func(prefix string) (string, error) { return prefix + "-1", nil }}
+	envelope := webhooks.Envelope{InvocationID: "whi-1", DeliveryID: "delivery-1", OrganizationID: "org-1", ProfileID: "app-1", ConnectionID: "con-1",
+		Provider: "microsoft", PieceName: trigger.PieceName, PieceVersion: trigger.PieceVersion, TriggerName: "new-email", Event: "change-notification",
+		RawBody: []byte(`{"value":[{"resourceData":{"subject":"must-not-escape"}}]}`), ReceivedAt: now}
+	if err := service.ProcessWebhook(context.Background(), envelope); err != nil {
+		t.Fatal(err)
+	}
+	if runner.calls != 0 || len(store.completed) != 1 || store.completed[0].DetailType != integrationevents.MicrosoftOutlookEmailReceivedDetailType {
+		t.Fatalf("runner/events = %d/%+v", runner.calls, store.completed)
+	}
+	data := store.completed[0].Data.(integrationevents.MicrosoftOutlookEmailReceived)
+	if data.TriggerID != "trg-1" || data.ConnectionID != "con-1" || data.DeliveryID != "delivery-1" {
+		t.Fatalf("notification projection = %+v", data)
+	}
+	encoded, _ := json.Marshal(data)
+	if strings.Contains(string(encoded), "must-not-escape") || strings.Contains(string(encoded), "resourceData") {
+		t.Fatalf("notification event leaked Graph content: %s", encoded)
+	}
+}
+
+func TestDomainMapperProjectsMicrosoftCalendarNotificationWithoutContent(t *testing.T) {
+	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	trigger := domain.Trigger{ID: "trg-calendar", OrganizationID: "org-1", ConnectionID: "con-1", Provider: "microsoft", TriggerName: "calendar-event-changed"}
+	event, err := (DomainMapper{}).Map("microsoft", trigger, webhooks.Envelope{DeliveryID: "delivery-calendar", Event: "change-notification", ReceivedAt: now}, json.RawMessage(`{}`), "evt-1", now)
+	if err != nil || event.DetailType != integrationevents.MicrosoftCalendarEventChangedDetailType {
+		t.Fatalf("calendar event/error = %+v/%v", event, err)
+	}
+	data := event.Data.(integrationevents.MicrosoftCalendarEventChanged)
+	if data.TriggerID != "trg-calendar" || data.ConnectionID != "con-1" || data.DeliveryID != "delivery-calendar" {
+		t.Fatalf("calendar projection = %+v", data)
+	}
+}

@@ -25,6 +25,7 @@ type Config struct {
 	EventsQueueURL       string
 	SQSEndpoint          string
 	DatabaseURL          string
+	PostgresExtensions   []string
 	InvitationAcceptURL  string
 	EmailVerificationURL string
 	PasswordResetURL     string
@@ -56,6 +57,7 @@ func FromEnv() (Config, error) {
 		EventsQueueURL:       strings.TrimSpace(os.Getenv("AUTH_EVENTS_QUEUE_URL")),
 		SQSEndpoint:          strings.TrimRight(strings.TrimSpace(os.Getenv("SQS_ENDPOINT")), "/"),
 		DatabaseURL:          strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		PostgresExtensions:   splitList(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
 		InvitationAcceptURL:  strings.TrimSpace(os.Getenv("INVITATION_ACCEPT_URL")),
 		EmailVerificationURL: strings.TrimSpace(os.Getenv("EMAIL_VERIFICATION_URL")),
 		PasswordResetURL:     strings.TrimSpace(os.Getenv("PASSWORD_RESET_URL")),

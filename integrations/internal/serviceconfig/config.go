@@ -12,6 +12,7 @@ type Config struct {
 	Address             string
 	AWSRegion           string
 	DatabaseURL         string
+	PostgresExtensions  []string
 	CognitoIssuer       string
 	CognitoClientID     string
 	PublicBaseURL       string
@@ -38,7 +39,8 @@ func FromEnv() (Config, error) {
 	config := Config{
 		Address: value("INTEGRATIONS_ADDRESS", ":8082"), AWSRegion: value("AWS_REGION", "ap-south-1"),
 		DatabaseURL: strings.TrimSpace(os.Getenv("DATABASE_URL")), CognitoIssuer: endpoint("COGNITO_ISSUER"),
-		CognitoClientID: strings.TrimSpace(os.Getenv("COGNITO_CLIENT_ID")), PublicBaseURL: endpoint("INTEGRATIONS_PUBLIC_BASE_URL"),
+		PostgresExtensions: split(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
+		CognitoClientID:    strings.TrimSpace(os.Getenv("COGNITO_CLIENT_ID")), PublicBaseURL: endpoint("INTEGRATIONS_PUBLIC_BASE_URL"),
 		AllowedReturnURLs: split(os.Getenv("INTEGRATIONS_RETURN_URLS")), DynamoTable: value("INTEGRATIONS_DYNAMO_TABLE", "oryxa-integrations"),
 		WebhookQueueURL: strings.TrimSpace(os.Getenv("INTEGRATIONS_WEBHOOK_QUEUE_URL")), PieceRunnerFunction: strings.TrimSpace(os.Getenv("INTEGRATIONS_PIECE_RUNNER_FUNCTION")),
 		KMSKeyID: strings.TrimSpace(os.Getenv("INTEGRATIONS_KMS_KEY_ID")), EventBusName: value("EVENT_BUS_NAME", "default"),

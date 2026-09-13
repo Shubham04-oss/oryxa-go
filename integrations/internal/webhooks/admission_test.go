@@ -142,6 +142,36 @@ func TestAdmitPreservesRawPayloadAndQueuesVerifiedDelivery(t *testing.T) {
 	}
 }
 
+func TestAdmitDropsVerifiedMicrosoftGraphContentBeforeQueue(t *testing.T) {
+	t.Parallel()
+	service, _, runner, _, queue, _ := newWebhookService()
+	routes := service.Routes.(testRoutes)
+	routes.route.Provider = "microsoft"
+	routes.route.ConnectionID = "con-1"
+	routes.route.TriggerName = "new-email"
+	routes.route.Mode = domain.WebhookRoutePerConnection
+	routes.route.TimestampHeader = ""
+	service.Routes = routes
+	runner.result = RunnerResult{Verified: true, Event: "change-notification", ProviderEventID: "sub-1:hash"}
+	raw := []byte(`{"value":[{"resourceData":{"subject":"must-not-reach-sqs"}}]}`)
+	decision, err := service.Admit(context.Background(), Request{
+		OpaqueRoute: "opaque-route", Method: "POST",
+		Headers: map[string]string{"authorization": "provider-transport-secret"},
+		Query:   map[string]string{"private": "value"}, Body: map[string]any{"private": "value"}, RawBody: raw,
+	})
+	if err != nil || decision.Status != 202 || len(queue.envelopes) != 1 {
+		t.Fatalf("decision/error/queued = %+v/%v/%d", decision, err, len(queue.envelopes))
+	}
+	if string(runner.request.RawBody) != string(raw) {
+		t.Fatal("Graph verifier did not receive the exact payload")
+	}
+	envelope := queue.envelopes[0]
+	if len(envelope.RawBody) != 0 || envelope.Body != nil || len(envelope.Headers) != 0 || len(envelope.Query) != 0 ||
+		envelope.ConnectionID != "con-1" || envelope.Event != "change-notification" || envelope.DeliveryID == "" {
+		t.Fatalf("queued Graph envelope retained content or lost routing: %+v", envelope)
+	}
+}
+
 func TestAdmitRejectsStaleTimestampBeforeOpeningSecretOrCallingRunner(t *testing.T) {
 	t.Parallel()
 	service, secretBox, runner, _, queue, now := newWebhookService()

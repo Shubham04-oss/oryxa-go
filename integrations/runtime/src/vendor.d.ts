@@ -30,3 +30,21 @@ declare module '@activepieces/piece-google-drive' {
 
   export const googleDrive: Piece<any>
 }
+
+declare module '@activepieces/piece-microsoft-outlook' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const microsoftOutlook: Piece<any>
+}
+
+declare module '@activepieces/piece-microsoft-outlook-calendar' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const microsoftOutlookCalendar: Piece<any>
+}
+
+declare module '@activepieces/piece-microsoft-onedrive' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const microsoftOneDrive: Piece<any>
+}
