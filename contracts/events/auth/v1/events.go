@@ -23,6 +23,13 @@ const (
 	MemberRemovedDetailType                      = "auth.member.removed.v1"
 )
 
+// Reasons a membership ends, as MemberRemoved.Reason.
+const (
+	MemberRemovedReasonLeft                = "left"
+	MemberRemovedReasonRemoved             = "removed"
+	MemberRemovedReasonOrganizationDeleted = "organization_deleted"
+)
+
 type UserRegistered struct {
 	UserID       string    `json:"user_id"`
 	Email        string    `json:"email"`
@@ -105,12 +112,13 @@ type MemberInvited struct {
 }
 
 type MemberInvitationRevoked struct {
-	InvitationID   string    `json:"invitation_id"`
-	OrganizationID string    `json:"organization_id"`
-	Email          string    `json:"email"`
-	Role           string    `json:"role"`
-	RevokedBy      string    `json:"revoked_by"`
-	RevokedAt      time.Time `json:"revoked_at"`
+	InvitationID     string    `json:"invitation_id"`
+	OrganizationID   string    `json:"organization_id"`
+	OrganizationName string    `json:"organization_name"`
+	Email            string    `json:"email"`
+	Role             string    `json:"role"`
+	RevokedBy        string    `json:"revoked_by"`
+	RevokedAt        time.Time `json:"revoked_at"`
 }
 
 type MemberJoined struct {
@@ -122,18 +130,25 @@ type MemberJoined struct {
 }
 
 type MemberRoleChanged struct {
-	OrganizationID string    `json:"organization_id"`
-	UserID         string    `json:"user_id"`
-	PreviousRole   string    `json:"previous_role"`
-	Role           string    `json:"role"`
-	ChangedBy      string    `json:"changed_by"`
-	ChangedAt      time.Time `json:"changed_at"`
+	OrganizationID   string    `json:"organization_id"`
+	OrganizationName string    `json:"organization_name"`
+	UserID           string    `json:"user_id"`
+	Email            string    `json:"email"`
+	PreviousRole     string    `json:"previous_role"`
+	Role             string    `json:"role"`
+	ChangedBy        string    `json:"changed_by"`
+	ChangedAt        time.Time `json:"changed_at"`
 }
 
+// MemberRemoved is emitted for every membership that ends: a member leaving,
+// being removed, or losing access because the organization was deleted.
 type MemberRemoved struct {
-	OrganizationID string    `json:"organization_id"`
-	UserID         string    `json:"user_id"`
-	PreviousRole   string    `json:"previous_role"`
-	RemovedBy      string    `json:"removed_by"`
-	RemovedAt      time.Time `json:"removed_at"`
+	OrganizationID   string    `json:"organization_id"`
+	OrganizationName string    `json:"organization_name"`
+	UserID           string    `json:"user_id"`
+	Email            string    `json:"email"`
+	PreviousRole     string    `json:"previous_role"`
+	Reason           string    `json:"reason"`
+	RemovedBy        string    `json:"removed_by"`
+	RemovedAt        time.Time `json:"removed_at"`
 }

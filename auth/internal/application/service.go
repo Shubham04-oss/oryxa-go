@@ -390,7 +390,7 @@ func (service *Service) DeleteOrganization(ctx context.Context, actorID, organiz
 		return err
 	}
 	now := service.now().UTC()
-	event, err := newEvent(autheventsv1.OrganizationDeletedDetailType, autheventsv1.OrganizationDeleted{
+	deleted, err := newEvent(autheventsv1.OrganizationDeletedDetailType, autheventsv1.OrganizationDeleted{
 		OrganizationID: organization.ID,
 		Name:           organization.Name,
 		Slug:           organization.Slug,
@@ -400,7 +400,21 @@ func (service *Service) DeleteOrganization(ctx context.Context, actorID, organiz
 	if err != nil {
 		return err
 	}
-	return service.store.DeleteOrganization(ctx, organizationID, event)
+	// Deleting an organization ends every membership in it, so each member
+	// gets the same removal event as if they had been removed one by one.
+	removed := func(member domain.Membership) (domain.Event, error) {
+		return newEvent(autheventsv1.MemberRemovedDetailType, autheventsv1.MemberRemoved{
+			OrganizationID:   organization.ID,
+			OrganizationName: organization.Name,
+			UserID:           member.UserID,
+			Email:            member.Email,
+			PreviousRole:     string(member.Role),
+			Reason:           autheventsv1.MemberRemovedReasonOrganizationDeleted,
+			RemovedBy:        actorID,
+			RemovedAt:        now,
+		}, now)
+	}
+	return service.store.DeleteOrganization(ctx, organizationID, deleted, removed)
 }
 
 func (service *Service) Organizations(ctx context.Context, actorID string) ([]domain.Organization, error) {
@@ -518,14 +532,19 @@ func (service *Service) RevokeInvitation(ctx context.Context, actorID, organizat
 	if invitation.Status != domain.InvitationPending {
 		return domain.ErrConflict
 	}
+	organization, err := service.store.OrganizationByID(ctx, organizationID)
+	if err != nil {
+		return err
+	}
 	now := service.now().UTC()
 	event, err := newEvent(autheventsv1.MemberInvitationRevokedDetailType, autheventsv1.MemberInvitationRevoked{
-		InvitationID:   invitation.ID,
-		OrganizationID: invitation.OrganizationID,
-		Email:          invitation.Email,
-		Role:           string(invitation.Role),
-		RevokedBy:      actorID,
-		RevokedAt:      now,
+		InvitationID:     invitation.ID,
+		OrganizationID:   invitation.OrganizationID,
+		OrganizationName: organization.Name,
+		Email:            invitation.Email,
+		Role:             string(invitation.Role),
+		RevokedBy:        actorID,
+		RevokedAt:        now,
 	}, now)
 	if err != nil {
 		return err
@@ -592,14 +611,20 @@ func (service *Service) ChangeMemberRole(ctx context.Context, actorID, organizat
 	if target.Role == replacement {
 		return target, nil
 	}
+	organization, err := service.store.OrganizationByID(ctx, organizationID)
+	if err != nil {
+		return domain.Membership{}, err
+	}
 	now := service.now().UTC()
 	event, err := newEvent(autheventsv1.MemberRoleChangedDetailType, autheventsv1.MemberRoleChanged{
-		OrganizationID: organizationID,
-		UserID:         userID,
-		PreviousRole:   string(target.Role),
-		Role:           string(replacement),
-		ChangedBy:      actorID,
-		ChangedAt:      now,
+		OrganizationID:   organizationID,
+		OrganizationName: organization.Name,
+		UserID:           userID,
+		Email:            target.Email,
+		PreviousRole:     string(target.Role),
+		Role:             string(replacement),
+		ChangedBy:        actorID,
+		ChangedAt:        now,
 	}, now)
 	if err != nil {
 		return domain.Membership{}, err
@@ -620,6 +645,7 @@ func (service *Service) RemoveMember(ctx context.Context, actorID, organizationI
 	if err != nil {
 		return err
 	}
+	reason := autheventsv1.MemberRemovedReasonLeft
 	if actorID != userID {
 		if !actor.Role.CanManageMembers() {
 			return domain.ErrForbidden
@@ -627,14 +653,22 @@ func (service *Service) RemoveMember(ctx context.Context, actorID, organizationI
 		if actor.Role == domain.RoleAdmin && target.Role != domain.RoleMember {
 			return domain.ErrForbidden
 		}
+		reason = autheventsv1.MemberRemovedReasonRemoved
+	}
+	organization, err := service.store.OrganizationByID(ctx, organizationID)
+	if err != nil {
+		return err
 	}
 	now := service.now().UTC()
 	event, err := newEvent(autheventsv1.MemberRemovedDetailType, autheventsv1.MemberRemoved{
-		OrganizationID: organizationID,
-		UserID:         userID,
-		PreviousRole:   string(target.Role),
-		RemovedBy:      actorID,
-		RemovedAt:      now,
+		OrganizationID:   organizationID,
+		OrganizationName: organization.Name,
+		UserID:           userID,
+		Email:            target.Email,
+		PreviousRole:     string(target.Role),
+		Reason:           reason,
+		RemovedBy:        actorID,
+		RemovedAt:        now,
 	}, now)
 	if err != nil {
 		return err

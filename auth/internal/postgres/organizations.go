@@ -121,12 +121,31 @@ func (store *Store) UpdateOrganization(ctx context.Context, organization domain.
 	return nil
 }
 
-func (store *Store) DeleteOrganization(ctx context.Context, organizationID string, event domain.Event) error {
+func (store *Store) DeleteOrganization(ctx context.Context, organizationID string, deleted domain.Event, removed func(domain.Membership) (domain.Event, error)) error {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin organization deletion: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	// The lock also holds off an invitation being accepted, whose membership
+	// insert needs this row, so the members read here are exactly the
+	// memberships the deletion ends.
+	if err := lockOrganization(ctx, tx, organizationID); err != nil {
+		return err
+	}
+	members, err := listMembers(ctx, tx, organizationID)
+	if err != nil {
+		return err
+	}
+	events := []domain.Event{deleted}
+	for _, member := range members {
+		event, err := removed(member)
+		if err != nil {
+			return err
+		}
+		events = append(events, event)
+	}
 
 	result, err := tx.Exec(ctx, `DELETE FROM auth_organizations WHERE id = $1`, organizationID)
 	if err != nil {
@@ -135,7 +154,7 @@ func (store *Store) DeleteOrganization(ctx context.Context, organizationID strin
 	if result.RowsAffected() == 0 {
 		return domain.ErrNotFound
 	}
-	if err := insertEvents(ctx, tx, []domain.Event{event}); err != nil {
+	if err := insertEvents(ctx, tx, events); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -169,7 +188,15 @@ func (store *Store) Membership(ctx context.Context, organizationID, userID strin
 }
 
 func (store *Store) Members(ctx context.Context, organizationID string) ([]domain.Membership, error) {
-	rows, err := store.pool.Query(ctx, `
+	return listMembers(ctx, store.pool, organizationID)
+}
+
+type queryer interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func listMembers(ctx context.Context, db queryer, organizationID string) ([]domain.Membership, error) {
+	rows, err := db.Query(ctx, `
 		SELECT m.organization_id, m.user_id, u.email, u.display_name, m.role, m.joined_at
 		FROM auth_memberships m
 		JOIN auth_users u ON u.id = m.user_id
