@@ -35,7 +35,7 @@ type Definition struct {
 }
 
 type Catalog interface {
-	TriggerDefinition(string, string, string) (Definition, bool)
+	TriggerDefinition(string, string) (Definition, bool)
 }
 
 type Authorizer interface {
@@ -65,6 +65,10 @@ type SecretBox interface {
 	Open(context.Context, secrets.Binding, domain.SealedData) ([]byte, error)
 }
 
+type CredentialSource interface {
+	ForExecution(context.Context, domain.Connection) ([]byte, error)
+}
+
 type CreateRequest struct {
 	OrganizationID string
 	MemberID       string
@@ -81,6 +85,7 @@ type Service struct {
 	Store       Store
 	State       RuntimeState
 	Secrets     SecretBox
+	Credentials CredentialSource
 	Runner      piece.TriggerRunner
 	Now         func() time.Time
 	IDs         func(string) (string, error)
@@ -107,7 +112,7 @@ func (s Service) Create(ctx context.Context, request CreateRequest) (domain.Trig
 	if connection.MemberID != request.MemberID {
 		return domain.Trigger{}, oauthflow.ErrForbidden
 	}
-	definition, ok := s.Catalog.TriggerDefinition(connection.PieceName, connection.PieceVersion, request.TriggerName)
+	definition, ok := s.Catalog.TriggerDefinition(connection.Provider, request.TriggerName)
 	if !ok || definition.Provider != connection.Provider {
 		return domain.Trigger{}, ErrOperationDisabled
 	}
@@ -117,7 +122,7 @@ func (s Service) Create(ctx context.Context, request CreateRequest) (domain.Trig
 		}
 	}
 	route, err := s.Routes.ActiveWebhookRoute(ctx, request.OrganizationID, connection.ProfileID, request.TriggerName)
-	if err != nil || !route.Active || route.Mode != definition.RouteMode || route.PieceName != connection.PieceName || route.PieceVersion != connection.PieceVersion {
+	if err != nil || !route.Active || route.Mode != definition.RouteMode || route.PieceName != definition.PieceName || route.PieceVersion != definition.PieceVersion {
 		return domain.Trigger{}, ErrRouteUnavailable
 	}
 	providerIdentifier := connection.Identity.TenantID
@@ -142,7 +147,7 @@ func (s Service) Create(ctx context.Context, request CreateRequest) (domain.Trig
 	}
 	enabled, err := s.Runner.RunTrigger(ctx, piece.TriggerInvocation{
 		InvocationID: triggerID + "-enable", OrganizationID: request.OrganizationID,
-		PieceName: connection.PieceName, PieceVersion: connection.PieceVersion,
+		PieceName: definition.PieceName, PieceVersion: definition.PieceVersion,
 		Operation: "trigger.enable", TriggerName: request.TriggerName,
 		Auth: auth, Props: request.Props, WebhookURL: s.PublicURL + "/v1/webhooks/" + route.OpaqueRoute,
 		PublicURL: s.PublicURL, InitialStore: initial,
@@ -160,7 +165,7 @@ func (s Service) Create(ctx context.Context, request CreateRequest) (domain.Trig
 	trigger := domain.Trigger{
 		ID: triggerID, OrganizationID: request.OrganizationID, MemberID: request.MemberID,
 		ConnectionID: connection.ID, ProfileID: connection.ProfileID, Provider: connection.Provider,
-		PieceName: connection.PieceName, PieceVersion: connection.PieceVersion,
+		PieceName: definition.PieceName, PieceVersion: definition.PieceVersion,
 		TriggerName: request.TriggerName, ProviderIdentifier: providerIdentifier,
 		Props: append(json.RawMessage(nil), request.Props...), Status: domain.TriggerStatusActive,
 		CreatedAt: now, UpdatedAt: now, Version: 1,
@@ -235,8 +240,14 @@ func (s Service) Disable(ctx context.Context, organizationID, memberID, triggerI
 }
 
 func (s Service) openConnection(ctx context.Context, connection domain.Connection) (json.RawMessage, error) {
-	plain, err := s.Secrets.Open(ctx, secrets.Binding{OrganizationID: connection.OrganizationID,
-		ResourceType: "connection", ResourceID: connection.ID}, connection.EncryptedCredentials)
+	var plain []byte
+	var err error
+	if s.Credentials != nil {
+		plain, err = s.Credentials.ForExecution(ctx, connection)
+	} else {
+		plain, err = s.Secrets.Open(ctx, secrets.Binding{OrganizationID: connection.OrganizationID,
+			ResourceType: "connection", ResourceID: connection.ID}, connection.EncryptedCredentials)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("open connection credential: %w", err)
 	}

@@ -25,11 +25,11 @@ func (c triggerConnections) ConnectionForExecution(context.Context, string, stri
 
 type triggerCatalog struct{}
 
-func (triggerCatalog) TriggerDefinition(pieceName, version, name string) (Definition, bool) {
-	if pieceName != "piece" || version != "1" || name != "hook" {
+func (triggerCatalog) TriggerDefinition(provider, name string) (Definition, bool) {
+	if provider != "slack" || name != "hook" {
 		return Definition{}, false
 	}
-	return Definition{Provider: "slack", PieceName: pieceName, PieceVersion: version, TriggerName: name, RouteMode: domain.WebhookRouteAppLevel, Event: "message", ValidateProps: func(raw json.RawMessage) error { var value map[string]any; return json.Unmarshal(raw, &value) }}, true
+	return Definition{Provider: provider, PieceName: "piece", PieceVersion: "1", TriggerName: name, RouteMode: domain.WebhookRouteAppLevel, Event: "message", ValidateProps: func(raw json.RawMessage) error { var value map[string]any; return json.Unmarshal(raw, &value) }}, true
 }
 
 type triggerRoutes struct {

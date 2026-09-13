@@ -113,6 +113,31 @@ type ExchangeRequest struct {
 	Scopes       []string
 }
 
+type RefreshRequest struct {
+	ClientID     string
+	ClientSecret string
+	RefreshToken string
+	Scopes       []string
+}
+
+// Refresher is optional because providers such as Slack may issue durable bot
+// tokens while Google and Microsoft issue expiring access tokens.
+type Refresher interface {
+	Refresh(context.Context, RefreshRequest) (Grant, error)
+}
+
+type RefreshError struct {
+	Code      string
+	Permanent bool
+}
+
+func (e RefreshError) Error() string {
+	if e.Code == "" {
+		return "provider credential refresh failed"
+	}
+	return "provider credential refresh failed: " + e.Code
+}
+
 type Grant struct {
 	AccessToken  string         `json:"access_token"`
 	RefreshToken string         `json:"refresh_token,omitempty"`

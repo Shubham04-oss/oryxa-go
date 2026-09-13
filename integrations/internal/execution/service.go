@@ -38,6 +38,10 @@ type SecretBox interface {
 	Open(context.Context, secrets.Binding, domain.SealedData) ([]byte, error)
 }
 
+type CredentialSource interface {
+	ForExecution(context.Context, domain.Connection) ([]byte, error)
+}
+
 type Mapper interface {
 	Map(string, domain.Trigger, webhooks.Envelope, json.RawMessage, string, time.Time) (domain.Event, error)
 }
@@ -46,6 +50,7 @@ type Service struct {
 	Store          Store
 	State          RuntimeState
 	Secrets        SecretBox
+	Credentials    CredentialSource
 	Runner         piece.TriggerRunner
 	Mapper         Mapper
 	Now            func() time.Time
@@ -118,13 +123,18 @@ func (s Service) processTrigger(ctx context.Context, envelope webhooks.Envelope,
 		return fail("connection_unavailable", err)
 	}
 	if connection.ID != trigger.ConnectionID || connection.ProfileID != trigger.ProfileID ||
-		connection.Provider != trigger.Provider || connection.PieceName != trigger.PieceName || connection.PieceVersion != trigger.PieceVersion ||
+		connection.Provider != trigger.Provider ||
 		connection.OrganizationID != trigger.OrganizationID || connection.Status != domain.ConnectionStatusActive ||
 		(envelope.IdentifierValue != "" && connection.Identity.TenantID != envelope.IdentifierValue) {
 		return fail("isolation_mismatch", ErrIsolationMismatch)
 	}
-	auth, err := s.Secrets.Open(ctx, secrets.Binding{OrganizationID: connection.OrganizationID,
-		ResourceType: "connection", ResourceID: connection.ID}, connection.EncryptedCredentials)
+	var auth []byte
+	if s.Credentials != nil {
+		auth, err = s.Credentials.ForExecution(ctx, connection)
+	} else {
+		auth, err = s.Secrets.Open(ctx, secrets.Binding{OrganizationID: connection.OrganizationID,
+			ResourceType: "connection", ResourceID: connection.ID}, connection.EncryptedCredentials)
+	}
 	if err != nil {
 		return fail("credential_unavailable", err)
 	}

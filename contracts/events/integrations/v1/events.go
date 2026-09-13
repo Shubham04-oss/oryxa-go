@@ -17,6 +17,12 @@ const (
 	TriggerEnabledDetailType                    = "integrations.trigger.enabled.v1"
 	TriggerDisabledDetailType                   = "integrations.trigger.disabled.v1"
 	SlackMessageReceivedDetailType              = "integrations.slack.message-received.v1"
+	SlackMessageSentDetailType                  = "integrations.slack.message-sent.v1"
+	SlackReactionAddedDetailType                = "integrations.slack.reaction-added.v1"
+	GitHubIssueCreatedDetailType                = "integrations.github.issue-created.v1"
+	GitHubIssueCommentCreatedDetailType         = "integrations.github.issue-comment-created.v1"
+	GoogleGmailMessageSentDetailType            = "integrations.google.gmail-message-sent.v1"
+	GoogleCalendarEventCreatedDetailType        = "integrations.google.calendar-event-created.v1"
 )
 
 type ProviderIdentity struct {
@@ -126,4 +132,72 @@ type SlackMessage struct {
 	Timestamp       string `json:"timestamp"`
 	ThreadTimestamp string `json:"thread_timestamp,omitempty"`
 	Subtype         string `json:"subtype,omitempty"`
+}
+
+// SlackMessageSent is emitted only after the provider confirms the write and
+// the durable action execution is completed. Message content is intentionally
+// omitted from the cross-service event.
+type SlackMessageSent struct {
+	ExecutionID    string    `json:"execution_id"`
+	ConnectionID   string    `json:"connection_id"`
+	ChannelID      string    `json:"channel_id"`
+	MessageTS      string    `json:"message_timestamp"`
+	ThreadTS       string    `json:"thread_timestamp,omitempty"`
+	RequestedBy    string    `json:"requested_by"`
+	ProviderSentAt time.Time `json:"provider_sent_at"`
+}
+
+type SlackReactionAdded struct {
+	ExecutionID      string    `json:"execution_id"`
+	ConnectionID     string    `json:"connection_id"`
+	ChannelID        string    `json:"channel_id"`
+	MessageTimestamp string    `json:"message_timestamp"`
+	Reaction         string    `json:"reaction"`
+	RequestedBy      string    `json:"requested_by"`
+	AddedAt          time.Time `json:"added_at"`
+}
+
+type GitHubIssueCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	IssueNumber  int64     `json:"issue_number"`
+	URL          string    `json:"url"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type GitHubIssueCommentCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	IssueNumber  int64     `json:"issue_number"`
+	CommentID    int64     `json:"comment_id"`
+	URL          string    `json:"url"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// GoogleGmailMessageSent deliberately excludes recipients, subject, and body.
+// Delivery services and other consumers only receive the domain fact that the
+// member-authorized provider accepted a message.
+type GoogleGmailMessageSent struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	MessageID    string    `json:"message_id"`
+	ThreadID     string    `json:"thread_id,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	SentAt       time.Time `json:"sent_at"`
+}
+
+// GoogleCalendarEventCreated omits title, description, location, and attendee
+// data so downstream services can react without receiving calendar content.
+type GoogleCalendarEventCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	CalendarID   string    `json:"calendar_id"`
+	EventID      string    `json:"event_id"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
 }

@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/actionflow"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/credentials"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/oauthflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/triggerflow"
@@ -51,6 +53,10 @@ type WebhookAdmission interface {
 	Admit(context.Context, webhooks.Request) (webhooks.Decision, error)
 }
 
+type ActionLifecycle interface {
+	Run(context.Context, actionflow.RunRequest) (actionflow.RunResult, error)
+}
+
 type Dependencies struct {
 	Authenticator Authenticator
 	Catalog       MemberCatalog
@@ -58,6 +64,7 @@ type Dependencies struct {
 	WebhookRoutes WebhookRouteLifecycle
 	Triggers      TriggerLifecycle
 	Webhooks      WebhookAdmission
+	Actions       ActionLifecycle
 }
 
 type Server struct {
@@ -83,6 +90,7 @@ func NewAPI(dependencies Dependencies) *Server {
 	mux.HandleFunc("DELETE /v1/organizations/{organizationID}/connections/{connectionID}", server.disconnect)
 	mux.HandleFunc("POST /v1/organizations/{organizationID}/triggers", server.createTrigger)
 	mux.HandleFunc("DELETE /v1/organizations/{organizationID}/triggers/{triggerID}", server.disableTrigger)
+	mux.HandleFunc("POST /v1/organizations/{organizationID}/connections/{connectionID}/actions/{actionName}", server.runAction)
 	mux.HandleFunc("POST /v1/webhooks/{opaqueRoute}", server.admitWebhook)
 	server.handler = mux
 	return server
@@ -338,6 +346,34 @@ func (s *Server) disableTrigger(writer http.ResponseWriter, request *http.Reques
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) runAction(writer http.ResponseWriter, request *http.Request) {
+	memberID, ok := s.authenticate(writer, request)
+	if !ok {
+		return
+	}
+	if s.dependencies.Actions == nil {
+		writeError(writer, 501, "not_configured", "endpoint is not configured")
+		return
+	}
+	var body struct {
+		Props json.RawMessage `json:"props"`
+	}
+	if err := decodeJSON(request, &body); err != nil {
+		writeError(writer, 400, "invalid_request", "request body is invalid")
+		return
+	}
+	result, err := s.dependencies.Actions.Run(request.Context(), actionflow.RunRequest{
+		OrganizationID: request.PathValue("organizationID"), MemberID: memberID,
+		ConnectionID: request.PathValue("connectionID"), ActionName: request.PathValue("actionName"),
+		IdempotencyKey: request.Header.Get("Idempotency-Key"), Props: body.Props,
+	})
+	if err != nil {
+		writeServiceError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
+}
+
 func (s *Server) admitWebhook(writer http.ResponseWriter, request *http.Request) {
 	if s.dependencies.Webhooks == nil {
 		writeError(writer, 501, "not_configured", "endpoint is not configured")
@@ -469,11 +505,19 @@ func writeServiceError(writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, oauthflow.ErrForbidden):
 		writeError(writer, 403, "forbidden", "organization permission is required")
+	case errors.Is(err, actionflow.ErrForbidden):
+		writeError(writer, 403, "forbidden", "connection permission is required")
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(writer, 404, "not_found", "resource was not found")
+	case errors.Is(err, actionflow.ErrIdempotencyConflict):
+		writeError(writer, 409, "idempotency_conflict", "idempotency key was already used with different input")
+	case errors.Is(err, actionflow.ErrActionInProgress):
+		writeError(writer, 409, "action_in_progress", "action execution is still in progress")
+	case errors.Is(err, actionflow.ErrActionPreviouslyFailed):
+		writeError(writer, 409, "action_failed", "use a new idempotency key to explicitly retry the action")
 	case errors.Is(err, domain.ErrConflict), errors.Is(err, oauthflow.ErrAlreadyConnected):
 		writeError(writer, 409, "conflict", "resource already exists")
-	case errors.Is(err, oauthflow.ErrInvalidInput), errors.Is(err, webhookroutes.ErrInvalidInput), errors.Is(err, triggerflow.ErrInvalidInput):
+	case errors.Is(err, oauthflow.ErrInvalidInput), errors.Is(err, webhookroutes.ErrInvalidInput), errors.Is(err, triggerflow.ErrInvalidInput), errors.Is(err, actionflow.ErrInvalidInput):
 		writeError(writer, 400, "invalid_request", "request is invalid")
 	case errors.Is(err, oauthflow.ErrStateExpired):
 		writeError(writer, 400, "state_expired", "authorization state expired")
@@ -483,6 +527,18 @@ func writeServiceError(writer http.ResponseWriter, err error) {
 		writeError(writer, 400, "provider_denied", "provider authorization was not completed")
 	case errors.Is(err, triggerflow.ErrOperationDisabled):
 		writeError(writer, 422, "operation_disabled", "integration operation is not enabled")
+	case errors.Is(err, actionflow.ErrOperationDisabled):
+		writeError(writer, 422, "operation_disabled", "integration action is not enabled")
+	case errors.Is(err, actionflow.ErrRequiredScope):
+		writeError(writer, 422, "scope_required", "connection requires additional authorization")
+	case errors.Is(err, actionflow.ErrExecutionFailed), errors.Is(err, actionflow.ErrPieceOutputInvalid):
+		writeError(writer, 502, "provider_execution_failed", "provider action could not be completed")
+	case errors.Is(err, credentials.ErrReauthorizationRequired):
+		writeError(writer, 409, "reauthorization_required", "connection requires fresh authorization")
+	case errors.Is(err, credentials.ErrRefreshInProgress):
+		writeError(writer, 409, "credential_refresh_in_progress", "connection credentials are being refreshed")
+	case errors.Is(err, credentials.ErrCredentialRefreshFailed):
+		writeError(writer, 502, "credential_refresh_failed", "connection credentials could not be refreshed")
 	case errors.Is(err, triggerflow.ErrRouteUnavailable):
 		writeError(writer, 409, "webhook_route_required", "webhook route must be configured first")
 	default:

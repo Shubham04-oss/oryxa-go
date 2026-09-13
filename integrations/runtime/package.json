@@ -8,11 +8,16 @@
     "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@activepieces/piece-github": "0.8.11",
+    "@activepieces/piece-gmail": "0.15.0",
+    "@activepieces/piece-google-calendar": "0.10.3",
+    "@activepieces/piece-google-drive": "0.9.1",
     "@activepieces/piece-slack": "0.17.10"
   },
   "devDependencies": {
     "@activepieces/pieces-framework": "0.32.0",
     "@types/node": "24.5.2",
+    "nock": "14.0.17",
     "tsx": "4.20.5",
     "typescript": "5.9.2"
   }

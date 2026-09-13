@@ -45,6 +45,7 @@ func TestStoreTenantAuthorizationAndTriggerExecution(t *testing.T) {
 		defer done()
 		_, _ = store.pool.Exec(cleanup, `DELETE FROM integrations_outbox WHERE organization_id IN ($1,$2)`, org, otherOrg)
 		_, _ = store.pool.Exec(cleanup, `DELETE FROM integrations_trigger_executions WHERE organization_id IN ($1,$2)`, org, otherOrg)
+		_, _ = store.pool.Exec(cleanup, `DELETE FROM integrations_action_executions WHERE organization_id IN ($1,$2)`, org, otherOrg)
 		_, _ = store.pool.Exec(cleanup, `DELETE FROM integrations_triggers WHERE organization_id IN ($1,$2)`, org, otherOrg)
 		_, _ = store.pool.Exec(cleanup, `DELETE FROM integrations_connections WHERE organization_id IN ($1,$2)`, org, otherOrg)
 		_, _ = store.pool.Exec(cleanup, `DELETE FROM integrations_oauth_apps WHERE organization_id IN ($1,$2)`, org, otherOrg)
@@ -86,6 +87,50 @@ func TestStoreTenantAuthorizationAndTriggerExecution(t *testing.T) {
 	connection := domain.Connection{ID: connectionID, OrganizationID: org, MemberID: member, ProfileID: profileID, Provider: "slack", PieceName: "piece", PieceVersion: "1", Identity: domain.ProviderIdentity{SubjectID: "U123", TenantID: "T123"}, GrantedScopes: []string{"scope"}, EncryptedCredentials: testSealed(2), Status: domain.ConnectionStatusActive, CreatedAt: now, UpdatedAt: now, Version: 1}
 	if err := store.CreateConnectionWithEvent(ctx, connection, domain.Event{EventID: "exec-connected-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionConnectedDetailType, Version: 1, OrganizationID: org, OccurredAt: now, Data: integrationevents.ConnectionConnected{ConnectionID: connectionID}}); err != nil {
 		t.Fatal(err)
+	}
+	action := domain.ActionExecution{ID: "exec-action-" + suffix, OrganizationID: org,
+		MemberID: member, ConnectionID: connectionID, Provider: "slack",
+		PieceName: "piece", PieceVersion: "1", ActionName: "post-message",
+		IdempotencyKeyHash: strings.Repeat("a", 64), InputHash: strings.Repeat("b", 64),
+		Status: domain.ExecutionStatusProcessing, Attempt: 1, StartedAt: now}
+	claimedAction, claimed, err := store.ClaimActionExecution(ctx, action)
+	if err != nil || !claimed || claimedAction.ID != action.ID {
+		t.Fatalf("action claim = %+v/%v/%v", claimedAction, claimed, err)
+	}
+	if existing, claimed, err := store.ClaimActionExecution(ctx, action); err != nil || claimed || existing.ID != action.ID {
+		t.Fatalf("duplicate action claim = %+v/%v/%v", existing, claimed, err)
+	}
+	actionEvent := domain.Event{EventID: "exec-action-event-" + suffix, Source: integrationevents.Source,
+		DetailType: integrationevents.SlackMessageSentDetailType, Version: 1,
+		OrganizationID: org, OccurredAt: now,
+		Data: integrationevents.SlackMessageSent{ExecutionID: action.ID, ConnectionID: connectionID,
+			ChannelID: "C123", MessageTS: "171.2", RequestedBy: member, ProviderSentAt: now}}
+	if err := store.CompleteActionExecutionWithEvent(ctx, claimedAction, json.RawMessage(`{"channel_id":"C123","message_timestamp":"171.2"}`), now, actionEvent); err != nil {
+		t.Fatal(err)
+	}
+	if existing, claimed, err := store.ClaimActionExecution(ctx, action); err != nil || claimed || existing.Status != domain.ExecutionStatusSucceeded || string(existing.SafeResult) == "" {
+		t.Fatalf("completed action replay = %+v/%v/%v", existing, claimed, err)
+	}
+	crossAction := action
+	crossAction.ID = "exec-cross-action-" + suffix
+	crossAction.OrganizationID = otherOrg
+	crossAction.IdempotencyKeyHash = strings.Repeat("c", 64)
+	if _, _, err := store.ClaimActionExecution(ctx, crossAction); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cross-tenant action FK = %v", err)
+	}
+	leaseToken := "refresh-lease-" + suffix
+	if acquired, err := store.AcquireConnectionRefreshLease(ctx, org, connectionID, 1, leaseToken, now, now.Add(time.Minute)); err != nil || !acquired {
+		t.Fatalf("refresh lease = %v/%v", acquired, err)
+	}
+	if acquired, err := store.AcquireConnectionRefreshLease(ctx, org, connectionID, 1, "other-lease", now, now.Add(time.Minute)); err != nil || acquired {
+		t.Fatalf("duplicate refresh lease = %v/%v", acquired, err)
+	}
+	if err := store.UpdateConnectionCredentials(ctx, org, connectionID, leaseToken, 1, testSealed(9), []string{"scope", "new-scope"}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	refreshedConnection, err := store.ConnectionForExecution(ctx, org, connectionID)
+	if err != nil || refreshedConnection.Version != 2 || len(refreshedConnection.GrantedScopes) != 2 {
+		t.Fatalf("refreshed connection = %+v/%v", refreshedConnection, err)
 	}
 	trigger := domain.Trigger{ID: triggerID, OrganizationID: org, MemberID: member, ConnectionID: connectionID, ProfileID: profileID, Provider: "slack", PieceName: "piece", PieceVersion: "1", TriggerName: "hook", ProviderIdentifier: "T123", Props: json.RawMessage(`{"ignoreBots":true}`), Status: domain.TriggerStatusActive, Version: 1, CreatedAt: now, UpdatedAt: now}
 	if err := store.CreateTriggerWithEvent(ctx, trigger, domain.Event{EventID: "exec-trigger-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.TriggerEnabledDetailType, Version: 1, OrganizationID: org, OccurredAt: now, Data: integrationevents.TriggerEnabled{TriggerID: triggerID}}); err != nil {

@@ -14,9 +14,41 @@
       "package": "@activepieces/piece-slack",
       "version": "0.17.10",
       "integrity": "sha512-VV1Gyyw7fW16OT775ghIdNv+tCb2mrMHsaIJlyqRsEl7r/ibhCigUEYBHuHh3GUzZnFSJoDhpfPc7JPA+aHiyg==",
-      "actions": [],
+      "actions": ["slack_post_message", "slack_add_reaction", "slack_find_channel"],
       "triggers": ["new-message"],
       "eventHooks": true
+    },
+    {
+      "package": "@activepieces/piece-github",
+      "version": "0.8.11",
+      "integrity": "sha512-QsKoAX5CU/lUnXsaMNX64FRQ09IjxTmvDfEfi3lJLfXIu6iE+hJYaZA8Y1Q/yIdW78vv86njzg4J72ooWZmVkw==",
+      "actions": ["create_issue_ai", "create_issue_comment_ai", "get_issue_ai", "list_pull_requests"],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-gmail",
+      "version": "0.15.0",
+      "integrity": "sha512-KZX+PV3lg3OuSlt0hwQJdWy/8vn0/stlGy2DSKybdG5jw/7LjQC0p/tDtloaGsvGCDPJAV1vIqPqjoNWrVgDAw==",
+      "actions": ["gmail_send_email"],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-google-calendar",
+      "version": "0.10.3",
+      "integrity": "sha512-F3wdJU1J6MagKgqrskCHCuFg6g1NMNiwtoi647vl1HZ7LJXnBrm83WnPum6ewm8mjfFUMKcADfylSuZu8ExyTA==",
+      "actions": ["google_calendar_create_event", "google_calendar_list_events"],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-google-drive",
+      "version": "0.9.1",
+      "integrity": "sha512-ncBooHtSmgSv7wYIHYpCnosX2pD3TXwmpx+r1ZLDMLRAAQ0HQkPiP+NsIJKDYUqVR7NLKmPDhxcaV6mlI8rOyg==",
+      "actions": ["drive_list_files", "drive_get_file"],
+      "triggers": [],
+      "eventHooks": false
     }
   ]
 }

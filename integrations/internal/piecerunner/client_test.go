@@ -42,6 +42,31 @@ func TestRunTriggerSendsOnlyScopedExecutionContext(t *testing.T) {
 	}
 }
 
+func TestRunActionSendsOnlyOneConnectionAndApprovedInput(t *testing.T) {
+	t.Parallel()
+	lambdaClient := &fakeLambda{outputs: [][]byte{[]byte(`{"ok":true,"result":{"output":{"ok":true,"channel":"C123","ts":"171.2"}}}`)}}
+	client := Client{Lambda: lambdaClient, FunctionName: "runner"}
+	result, err := client.RunAction(context.Background(), piece.ActionInvocation{
+		InvocationID: "act-1", OrganizationID: "org-1", PieceName: "piece", PieceVersion: "1",
+		ActionName: "slack_post_message", Auth: json.RawMessage(`{"access_token":"one-token"}`),
+		Props: json.RawMessage(`{"channel":"C123","text":"hello"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lambdaClient.requests) != 1 {
+		t.Fatalf("calls = %d", len(lambdaClient.requests))
+	}
+	request := lambdaClient.requests[0]
+	if request.Operation != "action.run" || request.ActionName != "slack_post_message" ||
+		string(request.Auth) != `{"access_token":"one-token"}` || string(request.Props) != `{"channel":"C123","text":"hello"}` {
+		t.Fatalf("request = %+v", request)
+	}
+	if string(result.Output) != `{"ok":true,"channel":"C123","ts":"171.2"}` {
+		t.Fatalf("result = %s", result.Output)
+	}
+}
+
 func (f *fakeLambda) Invoke(_ context.Context, input *lambda.InvokeInput, _ ...func(*lambda.Options)) (*lambda.InvokeOutput, error) {
 	var request runnerRequest
 	if err := json.Unmarshal(input.Payload, &request); err != nil {

@@ -93,7 +93,7 @@ func TestProcessWebhookRoutesOneWorkspaceAndPublishesDomainMessage(t *testing.T)
 	now := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
 	trigger := domain.Trigger{ID: "trg-1", OrganizationID: "org-1", MemberID: "member-1", ConnectionID: "con-1", ProfileID: "app-1", Provider: "slack", PieceName: "@activepieces/piece-slack", PieceVersion: "0.17.10", TriggerName: "new-message", ProviderIdentifier: "T123", Props: json.RawMessage(`{"ignoreBots":true}`), Status: domain.TriggerStatusActive}
 	store := &executionStore{triggers: []domain.Trigger{trigger, {ID: "other-workspace", OrganizationID: "org-1", ProfileID: "app-1", PieceName: trigger.PieceName, PieceVersion: trigger.PieceVersion, TriggerName: trigger.TriggerName, ProviderIdentifier: "T999", Status: domain.TriggerStatusActive}}, claimed: true,
-		connection: domain.Connection{ID: "con-1", OrganizationID: "org-1", ProfileID: "app-1", Provider: "slack", PieceName: trigger.PieceName, PieceVersion: trigger.PieceVersion, Identity: domain.ProviderIdentity{TenantID: "T123"}, Status: domain.ConnectionStatusActive}}
+		connection: domain.Connection{ID: "con-1", OrganizationID: "org-1", ProfileID: "app-1", Provider: "slack", PieceName: "provider-auth-adapter", PieceVersion: "1", Identity: domain.ProviderIdentity{TenantID: "T123"}, Status: domain.ConnectionStatusActive}}
 	state := &executionState{}
 	runner := &executionRunner{output: json.RawMessage(`[{"channel":"C123","user":"U123","text":"hello","ts":"1.23"}]`)}
 	service := Service{Store: store, State: state, Secrets: executionSecrets{}, Runner: runner, Mapper: DomainMapper{}, Now: func() time.Time { return now }, IDs: func(prefix string) (string, error) { return prefix + "-1", nil }}

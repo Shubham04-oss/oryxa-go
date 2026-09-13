@@ -227,3 +227,24 @@ type TriggerExecution struct {
 	StartedAt      time.Time
 	CompletedAt    *time.Time
 }
+
+// ActionExecution is the durable idempotency and audit boundary around a
+// connector action. Only the validated, provider-neutral result is persisted;
+// raw piece output and credentials remain inside the execution process.
+type ActionExecution struct {
+	ID                 string
+	OrganizationID     string
+	MemberID           string
+	ConnectionID       string
+	Provider           string
+	PieceName          string
+	PieceVersion       string
+	ActionName         string
+	IdempotencyKeyHash string
+	InputHash          string
+	Status             ExecutionStatus
+	Attempt            int
+	SafeResult         json.RawMessage
+	StartedAt          time.Time
+	CompletedAt        *time.Time
+}

@@ -1,9 +1,13 @@
 # Integrations service
 
-Status: the Slack Phase 1 lifecycle is implemented and tested from HTTP
-registration through queued trigger execution. Live Cognito, KMS, Lambda and
-Slack sandbox validation remains an AWS staging concern; no real customer
-credentials are used by the local suite.
+Status: the connection, action, refresh, and webhook execution foundations are
+implemented. Slack has outbound actions plus its app-level `new-message`
+trigger; GitHub and Google Workspace have reviewed outbound action slices.
+The deterministic suite runs the real pinned piece code against mocked
+provider endpoints, and the combined lifecycle runs against PostgreSQL and
+LocalStack on the mini. Live Cognito, KMS, Lambda, and provider sandbox
+validation remains an AWS staging concern; no real customer credentials are
+used by the local suite.
 
 The integrations service connects an Oryxa organization to third-party
 products. It reuses the MIT-licensed Activepieces piece framework and selected
@@ -38,7 +42,7 @@ The boundary is:
 - Pieces are connector adapters, not Oryxa domain services. Other services
   depend on Oryxa contracts and never import piece types.
 
-## Implemented vertical slice
+## Implemented slices
 
 Slack is the first compatibility target because it exercises a BYOC OAuth
 application, provider identity, an app-level webhook, raw-body HMAC
@@ -46,8 +50,12 @@ verification and trusted workspace routing.
 
 The current implementation includes:
 
-- a static Go catalog pinned to `@activepieces/piece-slack@0.17.10`, exposing
-  only the `new-message` trigger and only the scopes needed by that slice;
+- a static Go catalog with a closed, operation-level allowlist pinned to
+  `@activepieces/piece-slack@0.17.10`,
+  `@activepieces/piece-github@0.8.11`,
+  `@activepieces/piece-gmail@0.15.0`,
+  `@activepieces/piece-google-calendar@0.10.3`, and
+  `@activepieces/piece-google-drive@0.9.1`;
 - admin-only BYOC registration and member authorization application logic,
   with one-use hashed state, fixed callbacks, bounded return URLs, encrypted
   PKCE verifiers, exact scope checks and a domain-shaped connected event;
@@ -62,8 +70,8 @@ The current implementation includes:
 - DynamoDB conditional claim/lease and SQS webhook queue adapters, tested
   against LocalStack on the `mac-mini` context;
 - PostgreSQL persistence for org-enabled OAuth apps, successful connections
-  and durable trigger/execution state and their transactional outbox events,
-  plus a credential-free cross-service connection catalog;
+  and durable trigger/action execution state and their transactional outbox
+  events, plus a credential-free cross-service connection catalog;
 - Cognito bearer verification and PostgreSQL organization-role authorization;
 - HTTP endpoints for BYOC create/rotation/disable, member catalog and consent,
   OAuth callback, connection disconnect, app-level webhook setup, trigger
@@ -73,15 +81,30 @@ The current implementation includes:
 - an AWS Lambda broker client that gives the TypeScript runner the signing
   secret only for `events.verify`, not for parsing;
 - a TypeScript runtime with a closed operation protocol and static allowlist.
-  It imports the real published Slack piece for its signature and event
-  processors; unsupported Activepieces flow, file, waitpoint and scheduling
-  capabilities fail closed. The upstream license notice is retained beside
-  the runtime;
+  It imports the real published provider pieces; unsupported Activepieces
+  flow, file, waitpoint and scheduling capabilities fail closed. The upstream
+  license notice is retained beside the runtime;
 - a Go SQS consumer that fans an authenticated app-level delivery only to
   active registrations for the same organization, profile and Slack workspace,
   invokes `trigger.run`, and maps output to a stable Slack message event;
 - an EventBridge outbox dispatcher, deployable Go and Lambda-runner images,
   and a minimal CloudFormation data-plane template.
+
+The reviewed action surface is deliberately small:
+
+- Slack: post a message, add a reaction, and find a channel;
+- GitHub: create an issue, comment on an issue, get an issue, and list pull
+  requests;
+- Google Workspace: send via Gmail, create/list Calendar events, and list/get
+  Drive metadata. Attachments and Drive downloads remain disabled because the
+  runner intentionally has no file-storage capability.
+
+A connection belongs to a provider, not to one Activepieces package. One
+Google consent grant can therefore execute reviewed Gmail, Calendar, and Drive
+operations when the organization enabled and the member granted the required
+scopes. The action catalog selects the exact piece and version for each call;
+the member's encrypted provider grant remains the common authorization
+boundary.
 
 ## OAuth application modes
 
@@ -193,6 +216,7 @@ DELETE /v1/organizations/{org_id}/connections/{connection_id}
 POST   /v1/organizations/{org_id}/integration-apps/{profile_id}/webhook-routes
 POST   /v1/organizations/{org_id}/triggers
 DELETE /v1/organizations/{org_id}/triggers/{trigger_id}
+POST   /v1/organizations/{org_id}/connections/{connection_id}/actions/{action_name}
 POST   /v1/webhooks/{opaque_route}
 ```
 
@@ -378,6 +402,7 @@ integrations_oauth_apps       # org-enabled BYOC/managed profiles
 integrations_connections      # successful member grants and encrypted tokens
 integrations_triggers         # durable member-owned trigger registrations
 integrations_trigger_executions # per-delivery/trigger retry and idempotency state
+integrations_action_executions # member action idempotency, safe result and audit state
 integrations_outbox           # domain event written with the state transition
 integrations_connection_catalog (view) # credential-free active connections
 ```
@@ -423,15 +448,20 @@ and secrets live in Secrets Manager, one secret per provider/environment.
 Customer access/refresh tokens remain in the encrypted PostgreSQL connection
 record in either mode.
 
-Token refresh will use the existing conditional connection version when a
-provider with refresh tokens is enabled:
+Expiring grants use the existing conditional connection version:
 
 1. The Go broker takes a short refresh lease.
-2. It decrypts the current value and either performs a standard OAuth refresh
-   or invokes the piece's custom refresh hook.
+2. It decrypts the current value and performs the provider's standard OAuth
+   refresh using the same BYOC client that issued the grant.
 3. It conditionally updates PostgreSQL with `WHERE version = <old>` and
    increments the version.
 4. A competing invocation reloads the winner instead of overwriting it.
+
+Refresh occurs shortly before expiry. A permanent provider rejection marks
+the connection `reauthorization_required`, disables its triggers, and commits
+the state transition with a credential-free domain event. Access tokens,
+refresh tokens, OAuth client secrets, and raw provider errors never enter that
+event.
 
 ## Operations
 
@@ -460,6 +490,15 @@ path, JavaScript body or arbitrary export name.
 Responses contain structured output or a stable error category. Both sides
 redact configured secrets and token-shaped fields before logging. Raw action
 inputs and outputs are not logged by default.
+
+The public action endpoint requires an `Idempotency-Key`. PostgreSQL claims the
+key per organization, connection, and action, hashes both the key and canonical
+input, and persists only a provider-neutral result. A successful replay returns
+that result without calling the provider again. A failed or indeterminate
+side-effecting call is never retried automatically with the same key; the
+caller must make the risk explicit by supplying a new key. This prevents the
+broker from turning an uncertain provider response into a duplicate email,
+message, issue, or calendar event.
 
 ## Events and retries
 
@@ -490,6 +529,12 @@ Connection and catalog lifecycle facts may use source `oryxa.integrations`:
 - `integrations.trigger.enabled.v1`;
 - `integrations.trigger.disabled.v1`;
 - `integrations.slack.message-received.v1`;
+- `integrations.slack.message-sent.v1`;
+- `integrations.slack.reaction-added.v1`;
+- `integrations.github.issue-created.v1`;
+- `integrations.github.issue-comment-created.v1`;
+- `integrations.google.gmail-message-sent.v1`;
+- `integrations.google.calendar-event-created.v1`;
 - `integrations.catalog.operation-enabled.v1`;
 - `integrations.catalog.operation-disabled.v1`.
 
@@ -572,7 +617,7 @@ with a small reviewed allowlist, no AWS credentials, bounded time/memory and
 separate runner images for higher-risk pieces. Add controlled egress only when
 the catalog size or compliance requirements justify the supporting services.
 
-The published Slack piece is self-contained. `pieces-framework` is therefore a
+The published pieces are self-contained. `pieces-framework` is therefore a
 development-only dependency used for type and compatibility fixtures, not a
 production runtime dependency. At the pinned versions, a full development-tree
 `npm audit` reports transitive advisories in framework features this runner
@@ -590,7 +635,7 @@ go vet ./integrations/...
 go test -race ./integrations/...
 ```
 
-Run the real Activepieces/Slack compatibility checks:
+Run the real pinned-piece compatibility checks:
 
 ```sh
 cd integrations/runtime
@@ -610,12 +655,16 @@ inactive routes, SQS failure recovery, post-enqueue claim failures, member
 transactional connection/outbox rollback, Cognito bearer extraction,
 organization/member connection ownership, trigger listener identity,
 cross-tenant trigger foreign keys, durable execution claims, Slack output
-mapping, EventBridge publication and SQS redelivery idempotency.
+mapping, action key/input idempotency conflicts, failed-write no-retry
+behavior, concurrent OAuth refresh leases, Google/GitHub provider exchange,
+provider-neutral action projections, EventBridge publication and SQS
+redelivery idempotency.
 
 The combined mini test runs the HTTP registration and OAuth callback, member
 availability isolation, webhook-route registration, trigger enable, signed
 webhook admission, real Dynamo dedupe, real SQS transport, worker execution,
-PostgreSQL execution claim and one credential-free outbox result:
+PostgreSQL execution claims, action replay without a second provider call, and
+credential-free action/trigger outbox results:
 
 ```sh
 INTEGRATIONS_TEST_DATABASE_URL='postgresql://oryxa:oryxa-dev-password@192.168.1.4:5435/oryxa?sslmode=disable' \
@@ -641,9 +690,9 @@ INTEGRATIONS_TEST_AWS_ENDPOINT=http://192.168.1.4:4566 \
 
 ## Next delivery phases
 
-The implemented Slack slice establishes the control-plane, connection,
-app-level webhook and execution boundaries. The next work is deployment and
-provider expansion rather than another architecture spike.
+The implemented slices establish the control-plane, connection, action,
+refresh, app-level webhook, and execution boundaries. The next work is staging
+and trigger/provider expansion rather than another architecture spike.
 
 ### AWS staging
 
@@ -656,10 +705,13 @@ provider expansion rather than another architecture spike.
   credentials.
 - Add alarms for queue age, DLQ depth, outbox lag and execution failures.
 
-### Catalog expansion
+### Catalog and trigger expansion
 
-- Add a second reviewed piece only after its actions and auth model have an
-  explicit protocol capability report.
+- Add Microsoft 365 through the same provider-level connection and reviewed
+  Outlook/Calendar/OneDrive action model.
+- Add GitHub and Google webhook triggers only after their signature,
+  installation/account routing, subscription lifecycle, and replay rules have
+  provider-specific contract tests.
 - Add per-connection webhook creation, renewal and removal for a provider that
   requires those hooks; Slack's current event route is app-level/shared.
 - Add EventBridge Scheduler only for approved polling triggers.
@@ -678,4 +730,10 @@ provider expansion rather than another architecture spike.
 - [AWS Lambda with SQS](https://docs.aws.amazon.com/lambda/latest/dg/with-sqs.html)
 - [DynamoDB condition expressions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/Expressions.OperatorsAndFunctions.html)
 - [DynamoDB TTL](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html)
+- [GitHub OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps)
+- [GitHub OAuth scopes](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps)
+- [Google OAuth 2.0 web-server flow](https://developers.google.com/identity/protocols/oauth2/web-server)
+- [Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect)
+- [Gmail OAuth scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)
+- [Google Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
 - [AWS KMS encryption-context controls](https://docs.aws.amazon.com/kms/latest/developerguide/conditions-kms.html)

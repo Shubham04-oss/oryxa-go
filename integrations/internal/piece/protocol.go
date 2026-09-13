@@ -43,3 +43,22 @@ type TriggerResult struct {
 type TriggerRunner interface {
 	RunTrigger(context.Context, TriggerInvocation) (TriggerResult, error)
 }
+
+type ActionInvocation struct {
+	InvocationID   string
+	OrganizationID string
+	PieceName      string
+	PieceVersion   string
+	ActionName     string
+	Auth           json.RawMessage
+	Props          json.RawMessage
+	PublicURL      string
+}
+
+type ActionResult struct {
+	Output json.RawMessage
+}
+
+type ActionRunner interface {
+	RunAction(context.Context, ActionInvocation) (ActionResult, error)
+}

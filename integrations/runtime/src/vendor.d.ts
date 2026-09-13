@@ -6,3 +6,27 @@ declare module '@activepieces/piece-slack' {
   // strictly typed while upstream fixes its package metadata independently.
   export const slack: Piece<any>
 }
+
+declare module '@activepieces/piece-github' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const github: Piece<any>
+}
+
+declare module '@activepieces/piece-gmail' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const gmail: Piece<any>
+}
+
+declare module '@activepieces/piece-google-calendar' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const googleCalendar: Piece<any>
+}
+
+declare module '@activepieces/piece-google-drive' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const googleDrive: Piece<any>
+}

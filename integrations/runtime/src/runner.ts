@@ -163,7 +163,10 @@ async function runAction(
 ): Promise<RunnerResponse> {
   const action = allowedAction(entry, required(request.actionName, 'actionName'))
   const context = runtimeContext(request)
-  response.output = await action.run(context.value)
+  const output = await action.run(context.value)
+  response.output = entry.projectActionOutput
+    ? entry.projectActionOutput(request.actionName!, output)
+    : output
   response.storeMutations = context.storeMutations
   response.tags = context.tags
   const hookResponse = context.response()

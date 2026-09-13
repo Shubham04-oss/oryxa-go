@@ -27,6 +27,22 @@ type RunnerError struct {
 
 func (e RunnerError) Error() string { return "piece runner failed: " + e.Code }
 
+func (c Client) RunAction(ctx context.Context, invocation piece.ActionInvocation) (piece.ActionResult, error) {
+	if invocation.ActionName == "" {
+		return piece.ActionResult{}, errors.New("action name is required")
+	}
+	response, err := c.invoke(ctx, runnerRequest{
+		InvocationID: invocation.InvocationID, OrganizationID: invocation.OrganizationID,
+		PieceName: invocation.PieceName, PieceVersion: invocation.PieceVersion,
+		Operation: "action.run", ActionName: invocation.ActionName,
+		Auth: invocation.Auth, Props: invocation.Props, PublicURL: invocation.PublicURL,
+	})
+	if err != nil {
+		return piece.ActionResult{}, err
+	}
+	return piece.ActionResult{Output: append(json.RawMessage(nil), response.Result.Output...)}, nil
+}
+
 func (c Client) RunTrigger(ctx context.Context, invocation piece.TriggerInvocation) (piece.TriggerResult, error) {
 	if invocation.Operation != "trigger.enable" && invocation.Operation != "trigger.disable" &&
 		invocation.Operation != "trigger.renew" && invocation.Operation != "trigger.handshake" &&
@@ -158,6 +174,7 @@ type runnerRequest struct {
 	PieceName       string          `json:"pieceName"`
 	PieceVersion    string          `json:"pieceVersion"`
 	Operation       string          `json:"operation"`
+	ActionName      string          `json:"actionName,omitempty"`
 	TriggerName     string          `json:"triggerName,omitempty"`
 	Auth            json.RawMessage `json:"auth,omitempty"`
 	Props           json.RawMessage `json:"props,omitempty"`

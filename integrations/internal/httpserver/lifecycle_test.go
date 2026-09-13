@@ -2,12 +2,14 @@ package httpserver
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/actionflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/oauthflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/triggerflow"
@@ -68,13 +70,22 @@ func (w *httpWebhook) Admit(_ context.Context, request webhooks.Request) (webhoo
 	return webhooks.Decision{Status: 200, Accepted: true, Headers: map[string]string{"content-type": "text/plain", "connection": "close"}, Body: "challenge"}, nil
 }
 
+type httpActions struct{ request actionflow.RunRequest }
+
+func (a *httpActions) Run(_ context.Context, request actionflow.RunRequest) (actionflow.RunResult, error) {
+	a.request = request
+	return actionflow.RunResult{ExecutionID: "act-1", Status: actionflow.ExecutionSucceeded,
+		Result: json.RawMessage(`{"channel_id":"C123","message_timestamp":"171.2"}`)}, nil
+}
+
 func TestLifecycleHTTPRoutesKeepSecretsAtIngressAndPreserveWebhookBytes(t *testing.T) {
 	t.Parallel()
 	oauth := &httpOAuth{}
 	routes := &httpRoutes{}
 	triggers := &httpTriggers{}
 	webhook := &httpWebhook{}
-	server := NewAPI(Dependencies{Authenticator: testAuthenticator{memberID: "member-1"}, Catalog: &testCatalog{}, OAuth: oauth, WebhookRoutes: routes, Triggers: triggers, Webhooks: webhook})
+	actions := &httpActions{}
+	server := NewAPI(Dependencies{Authenticator: testAuthenticator{memberID: "member-1"}, Catalog: &testCatalog{}, OAuth: oauth, WebhookRoutes: routes, Triggers: triggers, Webhooks: webhook, Actions: actions})
 
 	response := perform(server, http.MethodPost, "/v1/organizations/org-1/integration-apps", `{"provider":"slack","client_id":"client","client_secret":"top-secret","scopes":["channels:history"]}`, nil)
 	if response.Code != http.StatusCreated || oauth.registered.ActorID != "member-1" || oauth.registered.OrganizationID != "org-1" {
@@ -118,6 +129,11 @@ func TestLifecycleHTTPRoutesKeepSecretsAtIngressAndPreserveWebhookBytes(t *testi
 	}
 	if response.Header().Get("connection") != "" {
 		t.Fatal("hop-by-hop response header was forwarded")
+	}
+
+	response = perform(server, http.MethodPost, "/v1/organizations/org-1/connections/con-1/actions/post-message", `{"props":{"channel":"C123","text":"hello"}}`, map[string]string{"Idempotency-Key": "request-123"})
+	if response.Code != http.StatusOK || actions.request.MemberID != "member-1" || actions.request.ConnectionID != "con-1" || actions.request.IdempotencyKey != "request-123" || strings.Contains(response.Body.String(), "hello") {
+		t.Fatalf("action response/request = %d/%s/%+v", response.Code, response.Body.String(), actions.request)
 	}
 }
 

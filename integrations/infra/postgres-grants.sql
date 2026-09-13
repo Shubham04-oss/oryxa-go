@@ -10,6 +10,7 @@ REVOKE ALL ON integrations_oauth_apps FROM PUBLIC;
 REVOKE ALL ON integrations_connections FROM PUBLIC;
 REVOKE ALL ON integrations_triggers FROM PUBLIC;
 REVOKE ALL ON integrations_trigger_executions FROM PUBLIC;
+REVOKE ALL ON integrations_action_executions FROM PUBLIC;
 REVOKE ALL ON integrations_outbox FROM PUBLIC;
 REVOKE ALL ON integrations_connection_catalog FROM PUBLIC;
 

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import test from 'node:test'
 
+import nock from 'nock'
+
 import {
   createAction,
   createPiece,
@@ -20,12 +22,193 @@ const base = {
   pieceVersion: '0.17.10',
 } as const
 
+const githubBase = {
+  invocationId: 'invocation-github',
+  organizationId: 'org-1',
+  pieceName: '@activepieces/piece-github',
+  pieceVersion: '0.8.11',
+} as const
+
+const googlePieces = {
+  gmail: {
+    invocationId: 'invocation-google-gmail', organizationId: 'org-1',
+    pieceName: '@activepieces/piece-gmail', pieceVersion: '0.15.0',
+  },
+  calendar: {
+    invocationId: 'invocation-google-calendar', organizationId: 'org-1',
+    pieceName: '@activepieces/piece-google-calendar', pieceVersion: '0.10.3',
+  },
+  drive: {
+    invocationId: 'invocation-google-drive', organizationId: 'org-1',
+    pieceName: '@activepieces/piece-google-drive', pieceVersion: '0.9.1',
+  },
+} as const
+
 test('catalog exposes only explicitly allowed operations', async () => {
   const response = await execute({ ...base, operation: 'catalog.metadata' })
   const output = response.output as { actions: Record<string, unknown>; triggers: Record<string, unknown> }
-  assert.deepEqual(Object.keys(output.actions), [])
+  assert.deepEqual(Object.keys(output.actions), [
+    'slack_post_message',
+    'slack_add_reaction',
+    'slack_find_channel',
+  ])
   assert.deepEqual(Object.keys(output.triggers), ['new-message'])
   assert.doesNotThrow(() => JSON.stringify(output))
+})
+
+test('reviewed Slack actions execute the real pinned piece code', async (t) => {
+  t.after(() => nock.cleanAll())
+  const auth = { access_token: 'xoxb-runtime-only' }
+
+  const post = nock('https://slack.com').post('/api/chat.postMessage').reply(200, {
+    ok: true,
+    channel: 'C123',
+    ts: '1710304378.475129',
+    message: { text: 'hello' },
+  })
+  const posted = await execute({
+    ...base,
+    operation: 'action.run',
+    actionName: 'slack_post_message',
+    auth,
+    props: { channel: 'C123', text: 'hello' },
+  })
+  assert.equal((posted.output as { ts: string }).ts, '1710304378.475129')
+  assert.equal(post.isDone(), true)
+
+  const reaction = nock('https://slack.com').post('/api/reactions.add').reply(200, { ok: true })
+  const reacted = await execute({
+    ...base,
+    operation: 'action.run',
+    actionName: 'slack_add_reaction',
+    auth,
+    props: {
+      channel: 'C123', ts: '1710304378.475129', reaction: 'thumbsup', reactAsUser: false,
+    },
+  })
+  assert.equal((reacted.output as { ok: boolean }).ok, true)
+  assert.equal(reaction.isDone(), true)
+
+  const channelLookup = nock('https://slack.com').post('/api/conversations.list').reply(200, {
+    ok: true,
+    channels: [{ id: 'C123', name: 'general', is_private: false }],
+    response_metadata: { next_cursor: '' },
+  })
+  const found = await execute({
+    ...base,
+    operation: 'action.run',
+    actionName: 'slack_find_channel',
+    auth,
+    props: { name: 'general', excludeArchived: true },
+  })
+  assert.deepEqual(found.output, { id: 'C123', name: 'general', is_private: false })
+  assert.equal(channelLookup.isDone(), true)
+})
+
+test('reviewed GitHub actions execute the real pinned piece code', async (t) => {
+  t.after(() => nock.cleanAll())
+  const metadata = await execute({ ...githubBase, operation: 'catalog.metadata' })
+  const exposed = metadata.output as { actions: Record<string, unknown>; triggers: Record<string, unknown> }
+  assert.deepEqual(Object.keys(exposed.actions).sort(), [
+    'create_issue_ai',
+    'create_issue_comment_ai',
+    'get_issue_ai',
+    'list_pull_requests',
+  ].sort())
+  assert.deepEqual(Object.keys(exposed.triggers), [])
+
+  const create = nock('https://api.github.com').post('/repos/oryxa/api/issues').reply(201, {
+    number: 42,
+    html_url: 'https://github.com/oryxa/api/issues/42',
+    title: 'Bug',
+    state: 'open',
+  })
+  const result = await execute({
+    ...githubBase,
+    operation: 'action.run',
+    actionName: 'create_issue_ai',
+    auth: { access_token: 'gho-runtime-only' },
+    props: { owner: 'oryxa', repo: 'api', title: 'Bug' },
+  })
+  assert.equal((result.output as { number: number }).number, 42)
+  assert.equal(create.isDone(), true)
+
+  const list = nock('https://api.github.com').get(/\/repos\/oryxa\/api\/pulls.*/).reply(200, [{
+    number: 7, html_url: 'https://github.com/oryxa/api/pull/7', title: 'Ready', state: 'open', draft: false,
+  }])
+  const pullRequests = await execute({
+    ...githubBase,
+    operation: 'action.run',
+    actionName: 'list_pull_requests',
+    auth: { access_token: 'gho-runtime-only' },
+    props: { owner: 'oryxa', repo: 'api', state: 'open' },
+  })
+  assert.equal((pullRequests.output as { count: number }).count, 1)
+  assert.equal(list.isDone(), true)
+})
+
+test('reviewed Google Workspace actions execute the real pinned piece code', async (t) => {
+  const expectedActions = [
+    [googlePieces.gmail, ['gmail_send_email']],
+    [googlePieces.calendar, ['google_calendar_create_event', 'google_calendar_list_events']],
+    [googlePieces.drive, ['drive_list_files', 'drive_get_file']],
+  ] as const
+  for (const [piece, actions] of expectedActions) {
+    const metadata = await execute({ ...piece, operation: 'catalog.metadata' })
+    const exposed = metadata.output as { actions: Record<string, unknown>; triggers: Record<string, unknown> }
+    assert.deepEqual(Object.keys(exposed.actions).sort(), [...actions].sort())
+    assert.deepEqual(Object.keys(exposed.triggers), [])
+  }
+
+  nock.disableNetConnect()
+  nock('https://gmail.googleapis.com').post('/gmail/v1/users/me/messages/send')
+    .reply(200, { id: 'message-1', threadId: 'thread-1' })
+  nock('https://www.googleapis.com').post(/\/calendar\/v3\/calendars\/primary\/events.*/).reply(200, {
+    id: 'event-1', status: 'confirmed', htmlLink: 'https://calendar.google.com/event?id=1',
+    summary: 'Planning', start: { dateTime: '2026-09-14T09:00:00Z' },
+    end: { dateTime: '2026-09-14T09:30:00Z' },
+  })
+  nock('https://www.googleapis.com').get(/\/drive\/v3\/files\/file-1.*/)
+    .reply(200, { id: 'file-1', name: 'report.pdf', mimeType: 'application/pdf' })
+  nock('https://www.googleapis.com').get(/\/drive\/v3\/files.*/).reply(200, {
+    kind: 'drive#fileList', files: [{ id: 'file-1', name: 'report.pdf', mimeType: 'application/pdf' }],
+  })
+  t.after(() => {
+    nock.enableNetConnect()
+    nock.cleanAll()
+  })
+
+  const auth = { access_token: 'google-runtime-only' }
+  const sent = await execute({
+    ...googlePieces.gmail, operation: 'action.run', actionName: 'gmail_send_email', auth,
+    props: {
+      receiver: ['member@example.test'], subject: 'Hello', body_type: 'plain_text',
+      body: 'Body', from: 'sender@example.test', draft: false,
+    },
+  })
+  assert.deepEqual(sent.output, { id: 'message-1', threadId: 'thread-1' })
+  assert.equal(JSON.stringify(sent.output).includes('google-runtime-only'), false)
+
+  const created = await execute({
+    ...googlePieces.calendar, operation: 'action.run', actionName: 'google_calendar_create_event', auth,
+    props: {
+      calendar_id: 'primary', title: 'Planning', start_date_time: '2026-09-14T09:00:00Z',
+      end_date_time: '2026-09-14T09:30:00Z', send_notifications: 'none',
+    },
+  })
+  assert.equal((created.output as { id: string }).id, 'event-1')
+
+  const listed = await execute({
+    ...googlePieces.drive, operation: 'action.run', actionName: 'drive_list_files', auth,
+    props: { folder_id: 'root', depth_level: 1, download_files: false },
+  })
+  assert.equal((listed.output as { files: Array<{ id: string }> }).files[0]?.id, 'file-1')
+
+  const file = await execute({
+    ...googlePieces.drive, operation: 'action.run', actionName: 'drive_get_file', auth,
+    props: { file_id: 'file-1' },
+  })
+  assert.equal((file.output as { id: string }).id, 'file-1')
 })
 
 test('exact piece versions are mandatory', async () => {

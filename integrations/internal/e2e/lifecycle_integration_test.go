@@ -18,7 +18,9 @@ import (
 	"time"
 
 	integrationevents "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/actionflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/catalog"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/credentials"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/dynamo"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/execution"
@@ -33,7 +35,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/webhooks"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
+	awscredentials "github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -82,6 +84,7 @@ func TestRegistrationWebhookAndExecutionLifecycleOnMini(t *testing.T) {
 		defer done()
 		_, _ = pool.Exec(cleanup, `DELETE FROM integrations_outbox WHERE organization_id=$1`, org)
 		_, _ = pool.Exec(cleanup, `DELETE FROM integrations_trigger_executions WHERE organization_id=$1`, org)
+		_, _ = pool.Exec(cleanup, `DELETE FROM integrations_action_executions WHERE organization_id=$1`, org)
 		_, _ = pool.Exec(cleanup, `DELETE FROM integrations_triggers WHERE organization_id=$1`, org)
 		_, _ = pool.Exec(cleanup, `DELETE FROM integrations_connections WHERE organization_id=$1`, org)
 		_, _ = pool.Exec(cleanup, `DELETE FROM integrations_oauth_apps WHERE organization_id=$1`, org)
@@ -90,7 +93,7 @@ func TestRegistrationWebhookAndExecutionLifecycleOnMini(t *testing.T) {
 		_, _ = pool.Exec(cleanup, `DELETE FROM auth_users WHERE id=ANY($1)`, []string{owner, member})
 	}()
 
-	awsConfig, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion("ap-south-1"), awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")))
+	awsConfig, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion("ap-south-1"), awsconfig.WithCredentialsProvider(awscredentials.NewStaticCredentialsProvider("test", "test", "")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,13 +122,18 @@ func TestRegistrationWebhookAndExecutionLifecycleOnMini(t *testing.T) {
 	routes := dynamo.Routes{Client: dynamoClient, TableName: table}
 	state := dynamo.TriggerState{Client: dynamoClient, TableName: table}
 	runner := &lifecycleRunner{}
-	oauth := oauthflow.Service{Catalog: staticCatalog, Authorizer: store, Profiles: store, States: dynamo.OAuthStates{Client: dynamoClient, TableName: table}, Connections: store, Secrets: box, Providers: oauthflow.StaticProviders{"slack": testProvider{}}, ReturnURLs: oauthflow.AllowedReturnURLs{"https://app.example.test"}, Now: func() time.Time { return now }, IDs: ids}
+	providerRegistry := oauthflow.StaticProviders{"slack": testProvider{}}
+	credentialSource := credentials.Manager{Store: store, Secrets: box, Providers: providerRegistry, Now: func() time.Time { return now }, IDs: ids}
+	oauth := oauthflow.Service{Catalog: staticCatalog, Authorizer: store, Profiles: store, States: dynamo.OAuthStates{Client: dynamoClient, TableName: table}, Connections: store, Secrets: box, Providers: providerRegistry, ReturnURLs: oauthflow.AllowedReturnURLs{"https://app.example.test"}, Now: func() time.Time { return now }, IDs: ids}
 	routeService := webhookroutes.Service{Authorizer: store, Profiles: store, Catalog: staticCatalog, Routes: routes, Secrets: box, PublicURL: "https://connect.example.test", Random: strings.NewReader(strings.Repeat("r", 64))}
-	triggerService := triggerflow.Service{Catalog: staticCatalog, Authorizer: store, Connections: store, Routes: routes, Store: store, State: state, Secrets: box, Runner: runner, Now: func() time.Time { return now }, IDs: ids, PublicURL: "https://connect.example.test"}
+	triggerService := triggerflow.Service{Catalog: staticCatalog, Authorizer: store, Connections: store, Routes: routes, Store: store, State: state, Secrets: box, Credentials: credentialSource, Runner: runner, Now: func() time.Time { return now }, IDs: ids, PublicURL: "https://connect.example.test"}
+	actionService := actionflow.Service{Catalog: staticCatalog, Authorizer: store, Connections: store,
+		Store: store, Credentials: credentialSource, Runner: runner,
+		Mapper: actionflow.DomainMapper{}, Now: func() time.Time { return now }, IDs: ids, PublicURL: "https://connect.example.test"}
 	webhookService := webhooks.Service{Routes: routes, Secrets: box, Runner: runner, Claims: dynamo.Claims{Client: dynamoClient, TableName: table, IDs: ids}, Queue: queue.WebhookQueue{Client: sqsClient, QueueURL: aws.ToString(createdQueue.QueueUrl)}, Now: func() time.Time { return now }, IDs: ids}
-	server := httpserver.NewAPI(httpserver.Dependencies{Authenticator: headerAuthenticator{}, Catalog: oauth, OAuth: oauth, WebhookRoutes: routeService, Triggers: triggerService, Webhooks: webhookService})
+	server := httpserver.NewAPI(httpserver.Dependencies{Authenticator: headerAuthenticator{}, Catalog: oauth, OAuth: oauth, WebhookRoutes: routeService, Triggers: triggerService, Webhooks: webhookService, Actions: actionService})
 
-	registration := call(t, server, owner, http.MethodPost, "/v1/organizations/"+org+"/integration-apps", `{"provider":"slack","client_id":"client-id","client_secret":"client-secret"}`, http.StatusCreated)
+	registration := call(t, server, owner, http.MethodPost, "/v1/organizations/"+org+"/integration-apps", `{"provider":"slack","client_id":"client-id","client_secret":"client-secret","scopes":["channels:history","channels:read","chat:write","groups:history","groups:read","reactions:write"]}`, http.StatusCreated)
 	var profile struct {
 		ID string `json:"id"`
 	}
@@ -175,6 +183,23 @@ func TestRegistrationWebhookAndExecutionLifecycleOnMini(t *testing.T) {
 	if trigger.ID == "" {
 		t.Fatal("trigger id missing")
 	}
+	actionPath := "/v1/organizations/" + org + "/connections/" + connectionID + "/actions/post-message"
+	actionResponse := callWithHeaders(t, server, owner, http.MethodPost, actionPath,
+		`{"props":{"channel":"C123","text":"private action content"}}`, http.StatusOK,
+		map[string]string{"Idempotency-Key": "e2e-action-123"})
+	if strings.Contains(actionResponse.Body.String(), "private action content") || !strings.Contains(actionResponse.Body.String(), `"message_timestamp":"171.2"`) {
+		t.Fatalf("safe action response = %s", actionResponse.Body.String())
+	}
+	replay := callWithHeaders(t, server, owner, http.MethodPost, actionPath,
+		`{"props":{"channel":"C123","text":"private action content"}}`, http.StatusOK,
+		map[string]string{"Idempotency-Key": "e2e-action-123"})
+	if !strings.Contains(replay.Body.String(), `"replayed":true`) || runner.actionCalls != 1 {
+		t.Fatalf("action replay/calls = %s/%d", replay.Body.String(), runner.actionCalls)
+	}
+	var actionEvents int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM integrations_outbox WHERE organization_id=$1 AND detail_type=$2`, org, integrationevents.SlackMessageSentDetailType).Scan(&actionEvents); err != nil || actionEvents != 1 {
+		t.Fatalf("action events = %d/%v", actionEvents, err)
+	}
 
 	raw := fmt.Sprintf(`{"event_id":"Ev123","team_id":"T123","event":{"type":"message","channel_type":"channel","channel":"C123","user":"U123","text":"hello","ts":"1.23"}}`)
 	timestamp := fmt.Sprint(now.Unix())
@@ -192,7 +217,7 @@ func TestRegistrationWebhookAndExecutionLifecycleOnMini(t *testing.T) {
 	if err != nil || len(received.Messages) != 1 {
 		t.Fatalf("receive webhook = %d/%v", len(received.Messages), err)
 	}
-	executor := execution.Service{Store: store, State: state, Secrets: box, Runner: runner, Mapper: execution.DomainMapper{}, Now: func() time.Time { return now }, IDs: ids, PublicURL: "https://connect.example.test"}
+	executor := execution.Service{Store: store, State: state, Secrets: box, Credentials: credentialSource, Runner: runner, Mapper: execution.DomainMapper{}, Now: func() time.Time { return now }, IDs: ids, PublicURL: "https://connect.example.test"}
 	consumer := queue.Consumer{Processor: executor}
 	messageBody := aws.ToString(received.Messages[0].Body)
 	if err := consumer.HandleMessage(ctx, messageBody); err != nil {
@@ -244,7 +269,7 @@ func (testProvider) AuthorizationURL(request oauthflow.AuthorizationRequest) (st
 	return "https://provider.example.test/authorize?" + values.Encode(), nil
 }
 func (testProvider) Exchange(context.Context, oauthflow.ExchangeRequest) (oauthflow.Grant, error) {
-	return oauthflow.Grant{AccessToken: "access-token", Scopes: []string{"channels:history", "groups:history"}, Data: map[string]any{"team": map[string]any{"id": "T123", "name": "Oryxa"}, "authed_user": map[string]any{"id": "U123"}}}, nil
+	return oauthflow.Grant{AccessToken: "access-token", Scopes: []string{"channels:history", "channels:read", "chat:write", "groups:history", "groups:read", "reactions:write"}, Data: map[string]any{"team": map[string]any{"id": "T123", "name": "Oryxa"}, "authed_user": map[string]any{"id": "U123"}}}, nil
 }
 func (testProvider) ResolveIdentity(context.Context, oauthflow.Grant) (domain.ProviderIdentity, error) {
 	return domain.ProviderIdentity{SubjectID: "U123", AccountID: "T123", TenantID: "T123", TenantName: "Oryxa"}, nil
@@ -274,7 +299,7 @@ func bytesOf(size int, value byte) []byte {
 	return result
 }
 
-type lifecycleRunner struct{}
+type lifecycleRunner struct{ actionCalls int }
 
 func (lifecycleRunner) VerifyAndParse(_ context.Context, request webhooks.RunnerRequest) (webhooks.RunnerResult, error) {
 	timestamp := request.Headers["x-slack-request-timestamp"]
@@ -298,6 +323,14 @@ func (lifecycleRunner) RunTrigger(_ context.Context, request piece.TriggerInvoca
 	return piece.TriggerResult{Output: output}, err
 }
 
+func (r *lifecycleRunner) RunAction(_ context.Context, request piece.ActionInvocation) (piece.ActionResult, error) {
+	r.actionCalls++
+	if request.ActionName != "slack_post_message" {
+		return piece.ActionResult{}, errors.New("unexpected action")
+	}
+	return piece.ActionResult{Output: json.RawMessage(`{"ok":true,"channel":"C123","ts":"171.2","message":{"text":"private action content"},"token":"must-not-leak"}`)}, nil
+}
+
 func hmacSHA256(key, message []byte) []byte {
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write(message)
@@ -305,6 +338,10 @@ func hmacSHA256(key, message []byte) []byte {
 }
 
 func call(t *testing.T, handler http.Handler, member, method, target, body string, want int) *httptest.ResponseRecorder {
+	return callWithHeaders(t, handler, member, method, target, body, want, nil)
+}
+
+func callWithHeaders(t *testing.T, handler http.Handler, member, method, target, body string, want int, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	request := httptest.NewRequest(method, target, strings.NewReader(body))
 	if body != "" {
@@ -312,6 +349,9 @@ func call(t *testing.T, handler http.Handler, member, method, target, body strin
 	}
 	if member != "" {
 		request.Header.Set("x-test-member", member)
+	}
+	for key, value := range headers {
+		request.Header.Set(key, value)
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
