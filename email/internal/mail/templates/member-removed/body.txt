@@ -1,0 +1,5 @@
+You were removed from {{.OrganizationName}}
+
+An owner or admin of {{.OrganizationName}} removed you, so you no longer have access to it on Oryxa.
+
+If you think this is a mistake, contact an owner of {{.OrganizationName}}.

@@ -21,6 +21,9 @@ const (
 	verificationData = `{"request_id":"act_1","user_id":"user-1","email":"asha@example.com","verification_url":"http://localhost:3000/auth/verify-email?token=verify","expires_at":"2026-09-14T12:00:00Z"}`
 	resetData        = `{"request_id":"act_2","user_id":"user-1","email":"asha@example.com","reset_url":"http://localhost:3000/auth/reset-password?token=reset","expires_at":"2026-09-13T12:30:00Z"}`
 	invitedData      = `{"invitation_id":"inv_1","organization_id":"org_1","organization_name":"Acme","email":"ravi@example.com","role":"admin","invited_by":"user-1","accept_url":"http://localhost:3000/invitations/accept?token=invite","expires_at":"2026-09-20T12:00:00Z"}`
+	revokedData      = `{"invitation_id":"inv_2","organization_id":"org_1","organization_name":"Acme","email":"sam@example.com","role":"member","revoked_by":"user-1","revoked_at":"2026-09-13T12:00:00Z"}`
+	roleChangedData  = `{"organization_id":"org_1","organization_name":"Acme","user_id":"user-2","email":"ravi@example.com","previous_role":"member","role":"admin","changed_by":"user-1","changed_at":"2026-09-13T12:00:00Z"}`
+	removedData      = `{"organization_id":"org_1","organization_name":"Acme","user_id":"user-2","email":"ravi@example.com","previous_role":"admin","reason":"organization_deleted","removed_by":"user-1","removed_at":"2026-09-13T12:00:00Z"}`
 )
 
 type fakeApplication struct {
@@ -28,9 +31,30 @@ type fakeApplication struct {
 	verifications []autheventsv1.EmailVerificationDeliveryRequested
 	resets        []autheventsv1.PasswordResetDeliveryRequested
 	invitations   []autheventsv1.MemberInvited
+	revocations   []autheventsv1.MemberInvitationRevoked
+	roleChanges   []autheventsv1.MemberRoleChanged
+	removals      []autheventsv1.MemberRemoved
 	refs          []delivery.EventRef
 	feedback      []delivery.Feedback
 	err           error
+}
+
+func (f *fakeApplication) MemberInvitationRevoked(_ context.Context, ref delivery.EventRef, data autheventsv1.MemberInvitationRevoked) error {
+	f.refs = append(f.refs, ref)
+	f.revocations = append(f.revocations, data)
+	return f.err
+}
+
+func (f *fakeApplication) MemberRoleChanged(_ context.Context, ref delivery.EventRef, data autheventsv1.MemberRoleChanged) error {
+	f.refs = append(f.refs, ref)
+	f.roleChanges = append(f.roleChanges, data)
+	return f.err
+}
+
+func (f *fakeApplication) MemberRemoved(_ context.Context, ref delivery.EventRef, data autheventsv1.MemberRemoved) error {
+	f.refs = append(f.refs, ref)
+	f.removals = append(f.removals, data)
+	return f.err
 }
 
 func (f *fakeApplication) UserRegistered(_ context.Context, ref delivery.EventRef, data autheventsv1.UserRegistered) error {
@@ -71,12 +95,28 @@ func TestHandleSQSDispatchesAuthEvents(t *testing.T) {
 		"2-reset":        domainBody(autheventsv1.PasswordResetDeliveryRequestedDetailType, 1, resetData),
 		"3-invitation":   domainBody(autheventsv1.MemberInvitedDetailType, 1, invitedData),
 		"4-registered":   domainBody(autheventsv1.UserRegisteredDetailType, 1, registeredData),
+		"5-revoked":      domainBody(autheventsv1.MemberInvitationRevokedDetailType, 1, revokedData),
+		"6-role-changed": domainBody(autheventsv1.MemberRoleChangedDetailType, 1, roleChangedData),
+		"7-removed":      domainBody(autheventsv1.MemberRemovedDetailType, 1, removedData),
 	}))
 	if err != nil {
 		t.Fatalf("HandleSQS() error = %v", err)
 	}
 	if len(response.BatchItemFailures) != 0 {
 		t.Fatalf("failures = %+v, want none", response.BatchItemFailures)
+	}
+
+	if len(app.revocations) != 1 || len(app.roleChanges) != 1 || len(app.removals) != 1 {
+		t.Fatalf("dispatched %d revocations, %d role changes, %d removals; want one each", len(app.revocations), len(app.roleChanges), len(app.removals))
+	}
+	if got := app.revocations[0]; got.OrganizationName != "Acme" || got.Email != "sam@example.com" || got.RevokedAt.IsZero() {
+		t.Fatalf("decoded revocation = %+v", got)
+	}
+	if got := app.roleChanges[0]; got.Email != "ravi@example.com" || got.PreviousRole != "member" || got.Role != "admin" || got.ChangedBy != "user-1" {
+		t.Fatalf("decoded role change = %+v", got)
+	}
+	if got := app.removals[0]; got.Reason != autheventsv1.MemberRemovedReasonOrganizationDeleted || got.Email != "ravi@example.com" || got.RemovedBy != "user-1" {
+		t.Fatalf("decoded removal = %+v", got)
 	}
 
 	if len(app.verifications) != 1 || len(app.resets) != 1 || len(app.invitations) != 1 || len(app.registrations) != 1 {

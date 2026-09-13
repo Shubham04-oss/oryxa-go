@@ -89,6 +89,64 @@ func (s *Service) MemberInvited(ctx context.Context, event delivery.EventRef, da
 	})
 }
 
+// MemberRoleChanged tells a member that an owner changed their role. A member
+// who changed their own role already knows.
+func (s *Service) MemberRoleChanged(ctx context.Context, event delivery.EventRef, data autheventsv1.MemberRoleChanged) error {
+	if data.ChangedBy == data.UserID {
+		return nil
+	}
+	if data.PreviousRole == "" || data.Role == "" {
+		return errors.New("role change has no roles")
+	}
+	return s.deliverNotice(ctx, event, "role-changed", data.Email, notice{
+		OrganizationName: data.OrganizationName,
+		Role:             data.Role,
+		PreviousRole:     data.PreviousRole,
+	})
+}
+
+// MemberRemoved tells a member they lost access to an organization because
+// someone removed them or deleted it. Nobody is emailed for leaving, or for
+// deleting an organization themselves.
+func (s *Service) MemberRemoved(ctx context.Context, event delivery.EventRef, data autheventsv1.MemberRemoved) error {
+	if data.RemovedBy == data.UserID || data.Reason == autheventsv1.MemberRemovedReasonLeft {
+		return nil
+	}
+	template := "member-removed"
+	if data.Reason == autheventsv1.MemberRemovedReasonOrganizationDeleted {
+		template = "organization-deleted"
+	}
+	return s.deliverNotice(ctx, event, template, data.Email, notice{OrganizationName: data.OrganizationName})
+}
+
+// MemberInvitationRevoked tells an invitee that their invitation's link no
+// longer works.
+func (s *Service) MemberInvitationRevoked(ctx context.Context, event delivery.EventRef, data autheventsv1.MemberInvitationRevoked) error {
+	return s.deliverNotice(ctx, event, "invitation-revoked", data.Email, notice{OrganizationName: data.OrganizationName})
+}
+
+// notice is what the organization emails render with.
+type notice struct {
+	OrganizationName string
+	Role             string
+	PreviousRole     string
+}
+
+func (s *Service) deliverNotice(ctx context.Context, event delivery.EventRef, template, recipient string, data notice) error {
+	if recipient == "" {
+		return errors.New("event has no email")
+	}
+	if data.OrganizationName == "" {
+		return errors.New("event has no organization_name")
+	}
+	message, err := s.templates.Render(template, data)
+	if err != nil {
+		return err
+	}
+	_, err = s.deliveries.Deliver(ctx, delivery.Request{Event: event, Recipient: recipient, Message: message})
+	return err
+}
+
 // SESFeedback records what SES reported about an email this service sent.
 func (s *Service) SESFeedback(ctx context.Context, feedback delivery.Feedback) error {
 	return s.deliveries.RecordFeedback(ctx, feedback)

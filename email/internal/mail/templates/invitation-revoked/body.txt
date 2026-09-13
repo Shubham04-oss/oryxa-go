@@ -1,0 +1,5 @@
+Your invitation was withdrawn
+
+Your invitation to join {{.OrganizationName}} on Oryxa was withdrawn, so its link no longer works.
+
+If you still need access, ask an owner or admin of {{.OrganizationName}} to invite you again.

@@ -1,0 +1,3 @@
+{{.OrganizationName}} was deleted
+
+An owner of {{.OrganizationName}} deleted it, so you no longer have access to it on Oryxa.

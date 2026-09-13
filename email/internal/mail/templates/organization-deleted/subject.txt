@@ -1,0 +1,1 @@
+{{.OrganizationName}} was deleted

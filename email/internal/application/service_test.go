@@ -148,6 +148,148 @@ func TestUserRegisteredRequiresEmail(t *testing.T) {
 	}
 }
 
+func TestOrganizationNoticesSendTheirEmail(t *testing.T) {
+	tests := []struct {
+		name      string
+		send      func(*Service) error
+		template  string
+		recipient string
+		mentions  string
+	}{
+		{
+			name: "role changed by an owner",
+			send: func(service *Service) error {
+				return service.MemberRoleChanged(context.Background(), ref(autheventsv1.MemberRoleChangedDetailType), autheventsv1.MemberRoleChanged{
+					OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-2", Email: "ravi@example.com",
+					PreviousRole: "member", Role: "admin", ChangedBy: "user-1", ChangedAt: testNow,
+				})
+			},
+			template: "role-changed", recipient: "ravi@example.com", mentions: "from member to admin",
+		},
+		{
+			name: "removed by an admin",
+			send: func(service *Service) error {
+				return service.MemberRemoved(context.Background(), ref(autheventsv1.MemberRemovedDetailType), autheventsv1.MemberRemoved{
+					OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-2", Email: "ravi@example.com",
+					PreviousRole: "member", Reason: autheventsv1.MemberRemovedReasonRemoved, RemovedBy: "user-1", RemovedAt: testNow,
+				})
+			},
+			template: "member-removed", recipient: "ravi@example.com", mentions: "removed you",
+		},
+		{
+			name: "organization deleted by another owner",
+			send: func(service *Service) error {
+				return service.MemberRemoved(context.Background(), ref(autheventsv1.MemberRemovedDetailType), autheventsv1.MemberRemoved{
+					OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-2", Email: "ravi@example.com",
+					PreviousRole: "admin", Reason: autheventsv1.MemberRemovedReasonOrganizationDeleted, RemovedBy: "user-1", RemovedAt: testNow,
+				})
+			},
+			template: "organization-deleted", recipient: "ravi@example.com", mentions: "deleted it",
+		},
+		{
+			name: "removal from an event without a reason",
+			send: func(service *Service) error {
+				return service.MemberRemoved(context.Background(), ref(autheventsv1.MemberRemovedDetailType), autheventsv1.MemberRemoved{
+					OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-2", Email: "ravi@example.com",
+					PreviousRole: "member", RemovedBy: "user-1", RemovedAt: testNow,
+				})
+			},
+			template: "member-removed", recipient: "ravi@example.com", mentions: "removed you",
+		},
+		{
+			name: "invitation revoked",
+			send: func(service *Service) error {
+				return service.MemberInvitationRevoked(context.Background(), ref(autheventsv1.MemberInvitationRevokedDetailType), autheventsv1.MemberInvitationRevoked{
+					InvitationID: "inv_1", OrganizationID: "org_1", OrganizationName: "Acme", Email: "sam@example.com",
+					Role: "member", RevokedBy: "user-1", RevokedAt: testNow,
+				})
+			},
+			template: "invitation-revoked", recipient: "sam@example.com", mentions: "no longer works",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, deliveries := newTestService(t)
+			if err := test.send(service); err != nil {
+				t.Fatalf("error = %v", err)
+			}
+			if len(deliveries.requests) != 1 {
+				t.Fatalf("deliveries = %d, want 1", len(deliveries.requests))
+			}
+			request := deliveries.requests[0]
+			if request.Message.Template != test.template || request.Recipient != test.recipient || !request.ExpiresAt.IsZero() {
+				t.Fatalf("delivery request = %+v, want %s to %s", request, test.template, test.recipient)
+			}
+			if !strings.Contains(request.Message.Text, "Acme") || !strings.Contains(request.Message.Text, test.mentions) {
+				t.Fatalf("email lacks the organization or %q:\n%s", test.mentions, request.Message.Text)
+			}
+		})
+	}
+}
+
+func TestOrganizationNoticesSkipWhatMembersDidThemselves(t *testing.T) {
+	tests := map[string]func(*Service) error{
+		"changed their own role": func(service *Service) error {
+			return service.MemberRoleChanged(context.Background(), ref(autheventsv1.MemberRoleChangedDetailType), autheventsv1.MemberRoleChanged{
+				OrganizationName: "Acme", UserID: "user-1", Email: "asha@example.com", PreviousRole: "owner", Role: "admin", ChangedBy: "user-1",
+			})
+		},
+		"left": func(service *Service) error {
+			return service.MemberRemoved(context.Background(), ref(autheventsv1.MemberRemovedDetailType), autheventsv1.MemberRemoved{
+				OrganizationName: "Acme", UserID: "user-1", Email: "asha@example.com", Reason: autheventsv1.MemberRemovedReasonLeft, RemovedBy: "user-1",
+			})
+		},
+		"deleted the organization": func(service *Service) error {
+			return service.MemberRemoved(context.Background(), ref(autheventsv1.MemberRemovedDetailType), autheventsv1.MemberRemoved{
+				OrganizationName: "Acme", UserID: "user-1", Email: "asha@example.com", Reason: autheventsv1.MemberRemovedReasonOrganizationDeleted, RemovedBy: "user-1",
+			})
+		},
+	}
+
+	for name, send := range tests {
+		t.Run(name, func(t *testing.T) {
+			service, deliveries := newTestService(t)
+			if err := send(service); err != nil {
+				t.Fatalf("error = %v, want the event skipped", err)
+			}
+			if len(deliveries.requests) != 0 {
+				t.Fatalf("deliveries = %d, want 0", len(deliveries.requests))
+			}
+		})
+	}
+}
+
+func TestOrganizationNoticesRejectEventsWithoutRecipientOrOrganization(t *testing.T) {
+	tests := map[string]func(*Service) error{
+		"no email": func(service *Service) error {
+			return service.MemberInvitationRevoked(context.Background(), ref(autheventsv1.MemberInvitationRevokedDetailType), autheventsv1.MemberInvitationRevoked{OrganizationName: "Acme"})
+		},
+		"no organization name": func(service *Service) error {
+			return service.MemberRemoved(context.Background(), ref(autheventsv1.MemberRemovedDetailType), autheventsv1.MemberRemoved{
+				UserID: "user-2", Email: "ravi@example.com", Reason: autheventsv1.MemberRemovedReasonRemoved, RemovedBy: "user-1",
+			})
+		},
+		"no roles": func(service *Service) error {
+			return service.MemberRoleChanged(context.Background(), ref(autheventsv1.MemberRoleChangedDetailType), autheventsv1.MemberRoleChanged{
+				OrganizationName: "Acme", UserID: "user-2", Email: "ravi@example.com", ChangedBy: "user-1",
+			})
+		},
+	}
+
+	for name, send := range tests {
+		t.Run(name, func(t *testing.T) {
+			service, deliveries := newTestService(t)
+			if err := send(service); err == nil {
+				t.Fatal("error = nil, want the event rejected")
+			}
+			if len(deliveries.requests) != 0 {
+				t.Fatalf("deliveries = %d, want 0", len(deliveries.requests))
+			}
+		})
+	}
+}
+
 func TestDeliveryRequestsRejectUnusableEvents(t *testing.T) {
 	valid := autheventsv1.PasswordResetDeliveryRequested{
 		RequestID: "act_1", UserID: "user-1", Email: "asha@example.com",
