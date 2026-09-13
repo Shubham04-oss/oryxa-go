@@ -1,0 +1,10 @@
+{{define "content"}}
+<h1 style="margin:0 0 16px;font-size:22px;line-height:30px;font-weight:600;">We couldn't renew {{.OrganizationName}}'s subscription</h1>
+<p style="margin:0 0 16px;">The payment to renew {{.OrganizationName}}'s Oryxa subscription failed.</p>
+{{if .GraceEndsAt}}
+<p style="margin:0;">Update the payment method by <strong>{{.GraceEndsAt}}</strong> to keep the plan. If the renewal is still unpaid then, {{.OrganizationName}} loses the plan until it is paid.</p>
+{{else}}
+<p style="margin:0;">{{.OrganizationName}} has lost its plan until the payment method is updated and the renewal is paid.</p>
+{{end}}
+{{template "action" .}}
+{{end}}

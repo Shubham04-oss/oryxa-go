@@ -1,0 +1,1 @@
+{{.OrganizationName}}'s Oryxa subscription renews on {{.RenewsOn}}

@@ -1,0 +1,11 @@
+We couldn't renew {{.OrganizationName}}'s Oryxa subscription
+
+The payment to renew {{.OrganizationName}}'s subscription failed.
+{{if .GraceEndsAt}}
+Update the payment method by {{.GraceEndsAt}} to keep the plan. If the renewal is still unpaid then, {{.OrganizationName}} loses the plan until it is paid.
+{{else}}
+{{.OrganizationName}} has lost its plan until the payment method is updated and the renewal is paid.
+{{end}}
+Update the payment method:
+
+{{.ActionURL}}
