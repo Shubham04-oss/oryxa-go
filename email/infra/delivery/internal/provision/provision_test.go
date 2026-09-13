@@ -15,9 +15,13 @@ func TestEventPatternMatchesSubscribedAuthEvents(t *testing.T) {
 		t.Fatalf("EventPattern() error = %v", err)
 	}
 
-	// Auth's delivery requests, plus registration for the welcome email.
+	// Registration, auth's delivery requests, and the membership changes, in
+	// the sorted order the pattern lists them.
 	assertJSONEqual(t, pattern, `{"source":["`+autheventsv1.Source+`"],"detail-type":[
+		"`+autheventsv1.MemberInvitationRevokedDetailType+`",
 		"`+autheventsv1.MemberInvitedDetailType+`",
+		"`+autheventsv1.MemberRemovedDetailType+`",
+		"`+autheventsv1.MemberRoleChangedDetailType+`",
 		"`+autheventsv1.EmailVerificationDeliveryRequestedDetailType+`",
 		"`+autheventsv1.PasswordResetDeliveryRequestedDetailType+`",
 		"`+autheventsv1.UserRegisteredDetailType+`"

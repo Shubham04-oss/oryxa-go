@@ -1,0 +1,5 @@
+Your role in {{.OrganizationName}} changed
+
+An owner of {{.OrganizationName}} changed your role on Oryxa from {{.PreviousRole}} to {{.Role}}.
+
+If you weren't expecting this, contact an owner of {{.OrganizationName}}.

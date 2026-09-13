@@ -20,20 +20,31 @@ type Subscription struct {
 }
 
 // The auth events the email service sends mail for: a welcome when a user
-// registers, and auth's delivery requests, whose links it carries without ever
-// changing auth's state.
+// registers; auth's delivery requests, whose links it carries without ever
+// changing auth's state; and changes to a member's place in an organization.
 var (
 	userRegistered             = Subscription{Source: autheventsv1.Source, DetailType: autheventsv1.UserRegisteredDetailType}
 	emailVerificationRequested = Subscription{Source: autheventsv1.Source, DetailType: autheventsv1.EmailVerificationDeliveryRequestedDetailType}
 	passwordResetRequested     = Subscription{Source: autheventsv1.Source, DetailType: autheventsv1.PasswordResetDeliveryRequestedDetailType}
 	memberInvited              = Subscription{Source: autheventsv1.Source, DetailType: autheventsv1.MemberInvitedDetailType}
+	memberInvitationRevoked    = Subscription{Source: autheventsv1.Source, DetailType: autheventsv1.MemberInvitationRevokedDetailType}
+	memberRoleChanged          = Subscription{Source: autheventsv1.Source, DetailType: autheventsv1.MemberRoleChangedDetailType}
+	memberRemoved              = Subscription{Source: autheventsv1.Source, DetailType: autheventsv1.MemberRemovedDetailType}
 )
 
 // Subscriptions is every Oryxa domain event NewConsumer sends mail for. The
 // subscriptions rule's event pattern is built from it, so an event missing
 // here never reaches the queue.
 func Subscriptions() []Subscription {
-	return []Subscription{userRegistered, emailVerificationRequested, passwordResetRequested, memberInvited}
+	return []Subscription{
+		userRegistered,
+		emailVerificationRequested,
+		passwordResetRequested,
+		memberInvited,
+		memberInvitationRevoked,
+		memberRoleChanged,
+		memberRemoved,
+	}
 }
 
 type application interface {
@@ -41,6 +52,9 @@ type application interface {
 	EmailVerificationRequested(context.Context, delivery.EventRef, autheventsv1.EmailVerificationDeliveryRequested) error
 	PasswordResetRequested(context.Context, delivery.EventRef, autheventsv1.PasswordResetDeliveryRequested) error
 	MemberInvited(context.Context, delivery.EventRef, autheventsv1.MemberInvited) error
+	MemberInvitationRevoked(context.Context, delivery.EventRef, autheventsv1.MemberInvitationRevoked) error
+	MemberRoleChanged(context.Context, delivery.EventRef, autheventsv1.MemberRoleChanged) error
+	MemberRemoved(context.Context, delivery.EventRef, autheventsv1.MemberRemoved) error
 	SESFeedback(context.Context, delivery.Feedback) error
 }
 
@@ -57,6 +71,9 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 		emailVerificationRequested: domainEvent(app.EmailVerificationRequested),
 		passwordResetRequested:     domainEvent(app.PasswordResetRequested),
 		memberInvited:              domainEvent(app.MemberInvited),
+		memberInvitationRevoked:    domainEvent(app.MemberInvitationRevoked),
+		memberRoleChanged:          domainEvent(app.MemberRoleChanged),
+		memberRemoved:              domainEvent(app.MemberRemoved),
 	}
 	for _, detailType := range SESFeedbackDetailTypes() {
 		handlers[Subscription{Source: SESSource, DetailType: detailType}] = sesFeedback(app.SESFeedback)

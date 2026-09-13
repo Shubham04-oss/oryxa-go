@@ -32,12 +32,60 @@ var actionSubjects = map[string]string{
 	"invitation":     "You're invited to join Acme & Sons on Oryxa",
 }
 
+// noticeSubjects covers the organization emails, which name the organization
+// and roles but carry no link.
+var noticeSubjects = map[string]string{
+	"role-changed":         "Your role in Acme & Sons changed",
+	"member-removed":       "You were removed from Acme & Sons",
+	"organization-deleted": "Acme & Sons was deleted",
+	"invitation-revoked":   "Your invitation to join Acme & Sons was withdrawn",
+}
+
+type noticeData struct {
+	OrganizationName string
+	Role             string
+	PreviousRole     string
+}
+
 func TestEveryTemplateIsTested(t *testing.T) {
 	templates := parseTemplates(t)
 	for name := range templates.byName {
-		if _, ok := actionSubjects[name]; !ok && name != "welcome" {
+		_, action := actionSubjects[name]
+		_, notice := noticeSubjects[name]
+		if !action && !notice && name != "welcome" {
 			t.Fatalf("template %q has no test", name)
 		}
+	}
+}
+
+func TestRenderNoticeTemplates(t *testing.T) {
+	templates := parseTemplates(t)
+	data := noticeData{OrganizationName: "Acme & Sons", Role: "admin", PreviousRole: "member"}
+
+	for name, subject := range noticeSubjects {
+		t.Run(name, func(t *testing.T) {
+			message, err := templates.Render(name, data)
+			if err != nil {
+				t.Fatalf("Render() error = %v", err)
+			}
+			if message.Subject != subject {
+				t.Fatalf("subject = %q, want %q", message.Subject, subject)
+			}
+			if !strings.Contains(message.Text, "Acme & Sons") || !strings.Contains(message.HTML, "Acme &amp; Sons") {
+				t.Fatalf("bodies do not name the organization:\n%s\n%s", message.Text, message.HTML)
+			}
+			if strings.Contains(message.HTML, "https://") {
+				t.Fatalf("notice links somewhere, but its event carries no link:\n%s", message.HTML)
+			}
+		})
+	}
+
+	message, err := templates.Render("role-changed", data)
+	if err != nil {
+		t.Fatalf("Render(role-changed) error = %v", err)
+	}
+	if !strings.Contains(message.Text, "from member to admin") {
+		t.Fatalf("role change does not say what changed:\n%s", message.Text)
 	}
 }
 
