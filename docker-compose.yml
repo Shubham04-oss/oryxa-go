@@ -1,6 +1,7 @@
 # Local dependencies for oryxa-go.
 #
-# Postgres holds service data. LocalStack stands in for EventBridge, SQS and
+# Postgres holds service data (pgvector/pgvector:0.8.6-pg17, with vector,
+# ltree and pg_trgm). LocalStack stands in for EventBridge, SQS and
 # DynamoDB, and Moto for SES, so an event can be published, routed to a queue,
 # turned into an email and logged without an AWS account.
 #
@@ -10,7 +11,11 @@ name: oryxa-go
 
 services:
   postgres:
-    image: postgres:17-alpine
+    # pgvector's Postgres 17 image, not alpine: it ships vector, and Debian
+    # contrib provides ltree and pg_trgm. Pin the pgvector version; the
+    # floating pg17 tag moves. A volume created on alpine 17 still works
+    # after this switch; CREATE EXTENSION runs from service migrations.
+    image: pgvector/pgvector:0.8.6-pg17
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-oryxa}
@@ -22,6 +27,7 @@ services:
       - "${POSTGRES_PORT:-5435}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
         [
@@ -95,6 +101,23 @@ services:
       - "${SES_PORT:-4567}:5000"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:5000/moto-api/ >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Catch mail the local email service sends. Open the UI at
+  # http://localhost:8025. SMTP is :1025; set EMAIL_SMTP_ADDR=localhost:1025.
+  mailpit:
+    image: axllent/mailpit:v1.27.4
+    restart: unless-stopped
+    ports:
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8025/api/v1/info"]
       interval: 5s
       timeout: 5s
       retries: 10

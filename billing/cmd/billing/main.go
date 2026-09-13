@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/authclient"
@@ -22,6 +24,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/serviceconfig"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 const (
@@ -33,14 +36,25 @@ const (
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(ctx, logger); err != nil {
-		logger.Error("billing stopped", "error", err)
+	telemetryShutdown, err := observability.Setup(ctx, observability.Config{ServiceName: "oryxa-billing"})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer func() {
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := telemetryShutdown(shutdownContext); err != nil {
+			slog.Error("shutdown telemetry", "error", err)
+		}
+	}()
+	if err := run(ctx); err != nil {
+		slog.Error("billing stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, logger *slog.Logger) error {
+func run(ctx context.Context) error {
+	logger := slog.Default()
 	config, err := serviceconfig.FromEnv()
 	if err != nil {
 		return err
@@ -49,11 +63,12 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	store, err := postgres.Open(ctx, config.DatabaseURL)
+	store, err := postgres.Open(ctx, config.DatabaseURL, config.PostgresExtensions...)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
+	slog.Info("postgres connected", "extensions", store.ExtensionVersions())
 	if config.AutoMigrate {
 		if err := store.Migrate(ctx); err != nil {
 			return err
@@ -80,6 +95,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	otelaws.AppendMiddlewares(&awsConfig.APIOptions)
 	dispatcher := events.NewDispatcher(store, events.NewPublisher(eventbridge.NewFromConfig(awsConfig), config.EventBusName), logger)
 	go dispatcher.Run(ctx)
 	if config.EventsQueueURL != "" {
@@ -97,7 +113,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 
 	server := &http.Server{
 		Addr:              config.Address,
-		Handler:           httpserver.New(service, webhooks, httpserver.Config{AllowedOrigins: config.AllowedOrigins}, logger),
+		Handler:           observability.HTTPHandler("oryxa-billing", httpserver.New(service, webhooks, httpserver.Config{AllowedOrigins: config.AllowedOrigins}, logger)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

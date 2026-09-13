@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -11,32 +12,38 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jmoiron/sqlx"
 
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
 
+// Store is billing's PostgreSQL access through the shared postgreskit
+// boundary: one instrumented pgx pool, with sqlx on that same pool.
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	db       *sqlx.DB
+	database *postgreskit.Database
 }
 
-func Open(ctx context.Context, databaseURL string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+func Open(ctx context.Context, databaseURL string, requiredExtensions ...string) (*Store, error) {
+	database, err := postgreskit.Open(ctx, postgreskit.Config{
+		URL: databaseURL, ApplicationName: "oryxa-billing", RequiredExtensions: requiredExtensions,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("configure postgres: %w", err)
+		return nil, fmt.Errorf("open billing postgres: %w", err)
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("connect postgres: %w", err)
-	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: database.Pool, db: database.SQLX, database: database}, nil
 }
 
 func (store *Store) Close() {
-	store.pool.Close()
+	store.database.Close()
 }
+
+func (store *Store) ExtensionVersions() map[string]string { return store.database.ExtensionVersions() }
 
 // Migrate applies every migration in name order. Each is written to be safe to
 // run again.
@@ -51,9 +58,32 @@ func (store *Store) Migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("read billing migration %s: %w", name, err)
 		}
-		if _, err := store.pool.Exec(ctx, string(contents)); err != nil {
+		if _, err := store.db.ExecContext(ctx, string(contents)); err != nil {
 			return fmt.Errorf("apply billing migration %s: %w", name, err)
 		}
+	}
+	return nil
+}
+
+type execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	GetContext(context.Context, any, string, ...any) error
+	SelectContext(context.Context, any, string, ...any) error
+	QueryRowxContext(context.Context, string, ...any) *sqlx.Row
+	QueryxContext(context.Context, string, ...any) (*sqlx.Rows, error)
+}
+
+func (store *Store) inTx(ctx context.Context, fn func(*sqlx.Tx) error) error {
+	tx, err := store.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -65,21 +95,17 @@ const subscriptionColumns = `subscription_id, organization_id, customer_id, cust
 	status, cancel_at_next_billing_date, next_billing_date, past_due_ends_at, billing_interval,
 	billing_interval_count, event_at`
 
-type queryer interface {
-	QueryRow(context.Context, string, ...any) pgx.Row
-}
-
 // Organization returns the organization and its current subscription.
 func (store *Store) Organization(ctx context.Context, organizationID string) (domain.Organization, *domain.Subscription, error) {
-	organization, err := scanOrganization(store.pool.QueryRow(ctx,
+	organization, err := scanOrganization(store.db.QueryRowxContext(ctx,
 		`SELECT `+organizationColumns+` FROM billing_organizations WHERE organization_id = $1`, organizationID))
-	if errors.Is(err, pgx.ErrNoRows) {
+	if isNoRows(err) {
 		return domain.Organization{}, nil, domain.ErrNotFound
 	}
 	if err != nil {
 		return domain.Organization{}, nil, fmt.Errorf("get organization: %w", err)
 	}
-	current, err := findSubscription(ctx, store.pool, organization.SubscriptionID, false)
+	current, err := findSubscription(ctx, store.db, organization.SubscriptionID, false)
 	if err != nil {
 		return domain.Organization{}, nil, err
 	}
@@ -89,108 +115,96 @@ func (store *Store) Organization(ctx context.Context, organizationID string) (do
 // UpdateOrganization reads the organization, creating it if billing hasn't
 // seen it, and writes back what update returns, all under a row lock.
 func (store *Store) UpdateOrganization(ctx context.Context, organizationID string, update func(domain.OrganizationState) (domain.Change, error)) error {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin organization update: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	organization, err := lockOrganization(ctx, tx, organizationID)
-	if err != nil {
-		return err
-	}
-	current, err := findSubscription(ctx, tx, organization.SubscriptionID, true)
-	if err != nil {
-		return err
-	}
-	change, err := update(domain.OrganizationState{Organization: organization, Subscription: current})
-	if err != nil {
-		return err
-	}
-	if err := writeChange(ctx, tx, change); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit organization update: %w", err)
-	}
-	return nil
+	return store.inTx(ctx, func(tx *sqlx.Tx) error {
+		organization, err := lockOrganization(ctx, tx, organizationID)
+		if err != nil {
+			return err
+		}
+		current, err := findSubscription(ctx, tx, organization.SubscriptionID, true)
+		if err != nil {
+			return err
+		}
+		change, err := update(domain.OrganizationState{Organization: organization, Subscription: current})
+		if err != nil {
+			return err
+		}
+		return writeChange(ctx, tx, change)
+	})
 }
 
 // ApplyWebhook records the delivery and applies it once. Retries of a
 // delivery already recorded change nothing.
 func (store *Store) ApplyWebhook(ctx context.Context, delivery domain.WebhookDelivery, incoming domain.Subscription, update func(domain.WebhookState) (domain.Change, error)) (domain.WebhookOutcome, error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return "", fmt.Errorf("begin webhook transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	recorded, err := tx.Exec(ctx, `
-		INSERT INTO billing_webhook_deliveries (webhook_id, event_type)
-		VALUES ($1, $2)
-		ON CONFLICT (webhook_id) DO NOTHING`, delivery.ID, delivery.Type)
-	if err != nil {
-		return "", fmt.Errorf("record webhook delivery: %w", err)
-	}
-	if recorded.RowsAffected() == 0 {
-		return domain.WebhookDuplicate, tx.Commit(ctx)
-	}
-
-	organizationID, err := webhookOrganization(ctx, tx, incoming)
-	if err != nil {
-		return "", err
-	}
-	if organizationID == "" {
-		if err := tx.Commit(ctx); err != nil {
-			return "", fmt.Errorf("commit unmatched webhook: %w", err)
+	var outcome domain.WebhookOutcome
+	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
+		recorded, err := tx.ExecContext(ctx, `
+			INSERT INTO billing_webhook_deliveries (webhook_id, event_type)
+			VALUES ($1, $2)
+			ON CONFLICT (webhook_id) DO NOTHING`, delivery.ID, delivery.Type)
+		if err != nil {
+			return fmt.Errorf("record webhook delivery: %w", err)
 		}
-		return domain.WebhookUnmatched, nil
-	}
-
-	organization, err := lockOrganization(ctx, tx, organizationID)
-	if err != nil {
-		return "", err
-	}
-	previous, err := findSubscription(ctx, tx, incoming.ID, true)
-	if err != nil {
-		return "", err
-	}
-	var current *domain.Subscription
-	if organization.SubscriptionID != incoming.ID {
-		if current, err = findSubscription(ctx, tx, organization.SubscriptionID, true); err != nil {
-			return "", err
+		if rows, _ := recorded.RowsAffected(); rows == 0 {
+			outcome = domain.WebhookDuplicate
+			return nil
 		}
-	}
-	change, err := update(domain.WebhookState{Organization: organization, Previous: previous, Current: current})
+
+		organizationID, err := webhookOrganization(ctx, tx, incoming)
+		if err != nil {
+			return err
+		}
+		if organizationID == "" {
+			outcome = domain.WebhookUnmatched
+			return nil
+		}
+
+		organization, err := lockOrganization(ctx, tx, organizationID)
+		if err != nil {
+			return err
+		}
+		previous, err := findSubscription(ctx, tx, incoming.ID, true)
+		if err != nil {
+			return err
+		}
+		var current *domain.Subscription
+		if organization.SubscriptionID != incoming.ID {
+			if current, err = findSubscription(ctx, tx, organization.SubscriptionID, true); err != nil {
+				return err
+			}
+		}
+		change, err := update(domain.WebhookState{Organization: organization, Previous: previous, Current: current})
+		if err != nil {
+			return err
+		}
+		if err := writeChange(ctx, tx, change); err != nil {
+			return err
+		}
+		outcome = domain.WebhookApplied
+		return nil
+	})
 	if err != nil {
 		return "", err
 	}
-	if err := writeChange(ctx, tx, change); err != nil {
-		return "", err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return "", fmt.Errorf("commit webhook transaction: %w", err)
-	}
-	return domain.WebhookApplied, nil
+	return outcome, nil
 }
 
 // webhookOrganization finds whose subscription this is: the organization it
 // is already recorded under, the one its metadata names, or the owner of its
 // customer.
-func webhookOrganization(ctx context.Context, tx pgx.Tx, incoming domain.Subscription) (string, error) {
+func webhookOrganization(ctx context.Context, tx execer, incoming domain.Subscription) (string, error) {
 	var organizationID string
-	err := tx.QueryRow(ctx, `SELECT organization_id FROM billing_subscriptions WHERE subscription_id = $1`, incoming.ID).Scan(&organizationID)
+	err := tx.GetContext(ctx, &organizationID, `SELECT organization_id FROM billing_subscriptions WHERE subscription_id = $1`, incoming.ID)
 	if err == nil {
 		return organizationID, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !isNoRows(err) {
 		return "", fmt.Errorf("find subscription organization: %w", err)
 	}
 	if incoming.OrganizationID != "" {
 		return incoming.OrganizationID, nil
 	}
-	err = tx.QueryRow(ctx, `SELECT organization_id FROM billing_organizations WHERE customer_id = $1`, incoming.CustomerID).Scan(&organizationID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	err = tx.GetContext(ctx, &organizationID, `SELECT organization_id FROM billing_organizations WHERE customer_id = $1`, incoming.CustomerID)
+	if isNoRows(err) {
 		return "", nil
 	}
 	if err != nil {
@@ -203,81 +217,78 @@ func webhookOrganization(ctx context.Context, tx pgx.Tx, incoming domain.Subscri
 // not been reminded about this renewal, records each event remind returns, and
 // marks them reminded. Concurrent callers claim different subscriptions.
 func (store *Store) ClaimRenewals(ctx context.Context, now time.Time, window time.Duration, intervals []string, limit int, remind func(domain.Renewal) (*domain.Event, error)) (int, error) {
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("begin renewal claim: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	rows, err := tx.Query(ctx, `
-		SELECT s.subscription_id, s.organization_id, s.customer_id, s.customer_email, s.product_id, s.quantity,
-		       s.status, s.cancel_at_next_billing_date, s.next_billing_date, s.past_due_ends_at, s.billing_interval,
-		       s.billing_interval_count, s.event_at, o.name
-		FROM billing_subscriptions s
-		JOIN billing_organizations o
-		  ON o.organization_id = s.organization_id AND o.subscription_id = s.subscription_id
-		WHERE s.status = 'active'
-		  AND NOT s.cancel_at_next_billing_date
-		  AND o.deleted_at IS NULL
-		  AND s.billing_interval = ANY($3)
-		  AND s.next_billing_date > $1 AND s.next_billing_date <= $2
-		  AND s.renewal_reminded_for IS DISTINCT FROM s.next_billing_date
-		ORDER BY s.next_billing_date
-		LIMIT $4
-		FOR UPDATE OF s SKIP LOCKED`, now, now.Add(window), intervals, limit)
-	if err != nil {
-		return 0, fmt.Errorf("find due renewals: %w", err)
-	}
-	var renewals []domain.Renewal
-	for rows.Next() {
-		var renewal domain.Renewal
-		subscription, err := scanSubscriptionFrom(rows, &renewal.OrganizationName)
+	var claimed int
+	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
+		rows, err := tx.QueryxContext(ctx, `
+			SELECT s.subscription_id, s.organization_id, s.customer_id, s.customer_email, s.product_id, s.quantity,
+			       s.status, s.cancel_at_next_billing_date, s.next_billing_date, s.past_due_ends_at, s.billing_interval,
+			       s.billing_interval_count, s.event_at, o.name
+			FROM billing_subscriptions s
+			JOIN billing_organizations o
+			  ON o.organization_id = s.organization_id AND o.subscription_id = s.subscription_id
+			WHERE s.status = 'active'
+			  AND NOT s.cancel_at_next_billing_date
+			  AND o.deleted_at IS NULL
+			  AND s.billing_interval = ANY($3)
+			  AND s.next_billing_date > $1 AND s.next_billing_date <= $2
+			  AND s.renewal_reminded_for IS DISTINCT FROM s.next_billing_date
+			ORDER BY s.next_billing_date
+			LIMIT $4
+			FOR UPDATE OF s SKIP LOCKED`, now, now.Add(window), intervals, limit)
 		if err != nil {
-			rows.Close()
-			return 0, fmt.Errorf("scan renewal: %w", err)
+			return fmt.Errorf("find due renewals: %w", err)
 		}
-		renewal.Subscription = subscription
-		renewals = append(renewals, renewal)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("iterate renewals: %w", err)
-	}
+		var renewals []domain.Renewal
+		for rows.Next() {
+			var renewal domain.Renewal
+			subscription, err := scanSubscriptionFrom(rows, &renewal.OrganizationName)
+			if err != nil {
+				_ = rows.Close()
+				return fmt.Errorf("scan renewal: %w", err)
+			}
+			renewal.Subscription = subscription
+			renewals = append(renewals, renewal)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close renewals: %w", err)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate renewals: %w", err)
+		}
 
-	for _, renewal := range renewals {
-		event, err := remind(renewal)
-		if err != nil {
-			return 0, err
-		}
-		if event != nil {
-			if err := insertEvents(ctx, tx, []domain.Event{*event}); err != nil {
-				return 0, err
+		for _, renewal := range renewals {
+			event, err := remind(renewal)
+			if err != nil {
+				return err
+			}
+			if event != nil {
+				if err := insertEvents(ctx, tx, []domain.Event{*event}); err != nil {
+					return err
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE billing_subscriptions
+				SET renewal_reminded_for = next_billing_date, updated_at = now()
+				WHERE subscription_id = $1`, renewal.Subscription.ID); err != nil {
+				return fmt.Errorf("mark renewal reminded: %w", err)
 			}
 		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE billing_subscriptions
-			SET renewal_reminded_for = next_billing_date, updated_at = now()
-			WHERE subscription_id = $1`, renewal.Subscription.ID); err != nil {
-			return 0, fmt.Errorf("mark renewal reminded: %w", err)
-		}
+		claimed = len(renewals)
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, fmt.Errorf("commit renewal claim: %w", err)
-	}
-	return len(renewals), nil
+	return claimed, nil
 }
 
 // OrganizationIDs lists every organization that has not been deleted.
 func (store *Store) OrganizationIDs(ctx context.Context) ([]string, error) {
-	rows, err := store.pool.Query(ctx, `
+	ids := make([]string, 0)
+	if err := store.db.SelectContext(ctx, &ids, `
 		SELECT organization_id FROM billing_organizations
 		WHERE deleted_at IS NULL
-		ORDER BY organization_id`)
-	if err != nil {
-		return nil, fmt.Errorf("list organizations: %w", err)
-	}
-	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
+		ORDER BY organization_id`); err != nil {
 		return nil, fmt.Errorf("list organizations: %w", err)
 	}
 	return ids, nil
@@ -286,20 +297,20 @@ func (store *Store) OrganizationIDs(ctx context.Context) ([]string, error) {
 // PruneWebhookDeliveries forgets deliveries received before cutoff, long after
 // Dodo stops retrying them.
 func (store *Store) PruneWebhookDeliveries(ctx context.Context, cutoff time.Time) error {
-	if _, err := store.pool.Exec(ctx, `DELETE FROM billing_webhook_deliveries WHERE received_at < $1`, cutoff); err != nil {
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM billing_webhook_deliveries WHERE received_at < $1`, cutoff); err != nil {
 		return fmt.Errorf("prune webhook deliveries: %w", err)
 	}
 	return nil
 }
 
-func lockOrganization(ctx context.Context, tx pgx.Tx, organizationID string) (domain.Organization, error) {
-	if _, err := tx.Exec(ctx, `
+func lockOrganization(ctx context.Context, tx execer, organizationID string) (domain.Organization, error) {
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO billing_organizations (organization_id)
 		VALUES ($1)
 		ON CONFLICT (organization_id) DO NOTHING`, organizationID); err != nil {
 		return domain.Organization{}, fmt.Errorf("record organization: %w", err)
 	}
-	organization, err := scanOrganization(tx.QueryRow(ctx,
+	organization, err := scanOrganization(tx.QueryRowxContext(ctx,
 		`SELECT `+organizationColumns+` FROM billing_organizations WHERE organization_id = $1 FOR UPDATE`, organizationID))
 	if err != nil {
 		return domain.Organization{}, fmt.Errorf("lock organization: %w", err)
@@ -307,7 +318,7 @@ func lockOrganization(ctx context.Context, tx pgx.Tx, organizationID string) (do
 	return organization, nil
 }
 
-func findSubscription(ctx context.Context, db queryer, subscriptionID string, lock bool) (*domain.Subscription, error) {
+func findSubscription(ctx context.Context, db execer, subscriptionID string, lock bool) (*domain.Subscription, error) {
 	if subscriptionID == "" {
 		return nil, nil
 	}
@@ -315,8 +326,8 @@ func findSubscription(ctx context.Context, db queryer, subscriptionID string, lo
 	if lock {
 		query += ` FOR UPDATE`
 	}
-	subscription, err := scanSubscriptionFrom(db.QueryRow(ctx, query, subscriptionID))
-	if errors.Is(err, pgx.ErrNoRows) {
+	subscription, err := scanSubscriptionFrom(db.QueryRowxContext(ctx, query, subscriptionID))
+	if isNoRows(err) {
 		return nil, nil
 	}
 	if err != nil {
@@ -325,9 +336,9 @@ func findSubscription(ctx context.Context, db queryer, subscriptionID string, lo
 	return &subscription, nil
 }
 
-func writeChange(ctx context.Context, tx pgx.Tx, change domain.Change) error {
+func writeChange(ctx context.Context, tx execer, change domain.Change) error {
 	if subscription := change.Subscription; subscription != nil {
-		_, err := tx.Exec(ctx, `
+		_, err := tx.ExecContext(ctx, `
 			INSERT INTO billing_subscriptions (
 			    subscription_id, organization_id, customer_id, customer_email, product_id, quantity, status,
 			    cancel_at_next_billing_date, next_billing_date, past_due_ends_at, billing_interval,
@@ -367,7 +378,7 @@ func writeChange(ctx context.Context, tx pgx.Tx, change domain.Change) error {
 
 	if organization := change.Organization; organization != nil {
 		entitlements := organization.Entitlements
-		_, err := tx.Exec(ctx, `
+		_, err := tx.ExecContext(ctx, `
 			UPDATE billing_organizations
 			SET name = CASE
 			        WHEN $2::timestamptz IS NULL OR name_updated_at IS NULL OR $2::timestamptz >= name_updated_at THEN $3
@@ -410,19 +421,22 @@ func writeChange(ctx context.Context, tx pgx.Tx, change domain.Change) error {
 	return insertEvents(ctx, tx, change.Events)
 }
 
-func insertEvents(ctx context.Context, tx pgx.Tx, events []domain.Event) error {
+func insertEvents(ctx context.Context, ext execer, events []domain.Event) error {
 	for _, event := range events {
-		_, err := tx.Exec(ctx, `
+		if _, err := ext.ExecContext(ctx, `
 			INSERT INTO billing_outbox (id, detail_type, detail, occurred_at)
-			VALUES ($1, $2, $3, $4)`, event.ID, event.DetailType, event.Data, event.OccurredAt)
-		if err != nil {
+			VALUES ($1, $2, $3, $4)`, event.ID, event.DetailType, event.Data, event.OccurredAt); err != nil {
 			return fmt.Errorf("insert outbox event: %w", err)
 		}
 	}
 	return nil
 }
 
-func scanOrganization(row pgx.Row) (domain.Organization, error) {
+type scanner interface {
+	Scan(dest ...any) error
+}
+
+func scanOrganization(row scanner) (domain.Organization, error) {
 	var organization domain.Organization
 	err := row.Scan(
 		&organization.ID,
@@ -442,7 +456,7 @@ func scanOrganization(row pgx.Row) (domain.Organization, error) {
 
 // scanSubscriptionFrom scans subscriptionColumns, then any extra columns the
 // query adds after them.
-func scanSubscriptionFrom(row pgx.Row, extra ...any) (domain.Subscription, error) {
+func scanSubscriptionFrom(row scanner, extra ...any) (domain.Subscription, error) {
 	var subscription domain.Subscription
 	var nextBillingDate *time.Time
 	destinations := []any{
@@ -485,4 +499,8 @@ func nullableTime(value time.Time) *time.Time {
 		return nil
 	}
 	return &value
+}
+
+func isNoRows(err error) bool {
+	return errors.Is(err, sql.ErrNoRows) || errors.Is(err, pgx.ErrNoRows)
 }

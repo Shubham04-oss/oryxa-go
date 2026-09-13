@@ -2,14 +2,24 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/domain"
 )
 
+type outboxRow struct {
+	ID         string          `db:"id"`
+	DetailType string          `db:"detail_type"`
+	Detail     json.RawMessage `db:"detail"`
+	OccurredAt time.Time       `db:"occurred_at"`
+	Attempts   int             `db:"attempts"`
+}
+
 func (store *Store) ClaimOutbox(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
-	rows, err := store.pool.Query(ctx, `
+	var rows []outboxRow
+	err := store.db.SelectContext(ctx, &rows, `
 		WITH picked AS (
 			SELECT id
 			FROM billing_outbox
@@ -28,24 +38,23 @@ func (store *Store) ClaimOutbox(ctx context.Context, limit int) ([]domain.Outbox
 	if err != nil {
 		return nil, fmt.Errorf("claim outbox: %w", err)
 	}
-	defer rows.Close()
-
-	events := make([]domain.OutboxEvent, 0)
-	for rows.Next() {
-		var event domain.OutboxEvent
-		if err := rows.Scan(&event.ID, &event.DetailType, &event.Data, &event.OccurredAt, &event.Attempts); err != nil {
-			return nil, fmt.Errorf("scan outbox event: %w", err)
-		}
-		events = append(events, event)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate outbox events: %w", err)
+	events := make([]domain.OutboxEvent, 0, len(rows))
+	for _, row := range rows {
+		events = append(events, domain.OutboxEvent{
+			Event: domain.Event{
+				ID:         row.ID,
+				DetailType: row.DetailType,
+				OccurredAt: row.OccurredAt,
+				Data:       row.Detail,
+			},
+			Attempts: row.Attempts,
+		})
 	}
 	return events, nil
 }
 
 func (store *Store) MarkOutboxPublished(ctx context.Context, eventID string) error {
-	_, err := store.pool.Exec(ctx, `
+	_, err := store.db.ExecContext(ctx, `
 		UPDATE billing_outbox
 		SET published_at = now(), locked_until = NULL, last_error = NULL
 		WHERE id = $1`, eventID)
@@ -56,7 +65,7 @@ func (store *Store) MarkOutboxPublished(ctx context.Context, eventID string) err
 }
 
 func (store *Store) MarkOutboxFailed(ctx context.Context, eventID string, retryAfter time.Duration, message string) error {
-	_, err := store.pool.Exec(ctx, `
+	_, err := store.db.ExecContext(ctx, `
 		UPDATE billing_outbox
 		SET attempts = attempts + 1,
 		    available_at = now() + ($2 * interval '1 millisecond'),

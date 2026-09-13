@@ -1,11 +1,11 @@
 # Email service
 
-The email service sends Oryxa's system email. It has no API of its own: it subscribes to auth's and billing's events on Amazon EventBridge, renders a template for each, and sends it with Amazon SES (API v2). That is a welcome when a user registers; auth's delivery requests — email verification, password reset and organization invitations — each built around the link auth supplied; notices when a member's place in an organization changes; and billing notices to an organization's billing contact. It never verifies an account, resets a password, accepts an invitation or touches a subscription; auth and billing own those.
+The email service sends Oryxa's system email. It has no API of its own: it subscribes to auth's, billing's and teams' events on Amazon EventBridge, renders a template for each, and sends it with Amazon SES (API v2). That is a welcome when a user registers; auth's delivery requests — email verification, password reset and organization invitations — each built around the link auth supplied; notices when a member's place in an organization changes; billing notices to an organization's billing contact; and a team-call notice when teams pings a member who asked for those emails. It never verifies an account, resets a password, accepts an invitation, touches a subscription, or flips a member's notify_email switch; auth, billing and teams own those.
 
 It sends each email at most once per event, keeps a log of every email and what became of it, and stops emailing addresses that bounce permanently or complain.
 
 ```text
-auth, billing ── events ────▶ email-subscriptions rule ─┐
+auth, billing, teams ── events ─▶ email-subscriptions rule ─┐
                                                         ├─▶ email-events queue ─▶ email ─▶ SES
 SES ─── aws.ses events ─────▶ email-ses-feedback rule ──┘                          │
                                                                                    ▼
@@ -28,6 +28,7 @@ The service consumes the queue through one handler, run by Lambda in AWS and by 
 | `oryxa.billing` | `billing.subscription.payment-failed.v1` | Sends `payment-failed` to `data.billing_email`, with the grace deadline when `data.grace_ends_at` is set |
 | `oryxa.billing` | `billing.subscription.ended.v1` | Sends `subscription-ended` to `data.billing_email` |
 | `oryxa.billing` | `billing.subscription.renewal-upcoming.v1` | Sends `renewal-upcoming` to `data.billing_email`, unless handled after `data.renews_at` |
+| `oryxa.teams` | `teams.member.pinged.v1` | Sends `team-called` to `data.email` when `data.notify_email` is true and `data.tool` is `call_team` or `call_team_members` — not for `list_teams`, and not to the person who ran the tool |
 | `aws.ses` | `Email Delivered`, `Email Delivery Delayed`, `Email Rejected` | Records the status |
 | `aws.ses` | `Email Bounced` | Records the status; suppresses the address if the bounce is `Permanent` |
 | `aws.ses` | `Email Complaint Received` | Records the status; suppresses the address unless the feedback type is `not-spam` |
@@ -37,6 +38,8 @@ Auth emits `auth.user.registered.v1` once per user, when the user first signs in
 Deleting an organization makes auth emit `auth.member.removed.v1` for every member, which is how each of them hears about it; `auth.organization.deleted.v1` itself sends nothing. Membership notices go only to the member affected, never to the people who acted.
 
 Billing notices go to the billing contact Dodo Payments holds for the organization, and link to the app's billing page (`data.billing_url`), which must be HTTPS outside `localhost`. Dates are written in UTC. Receipts and invoices come from Dodo, not from this service.
+
+Teams pings every affected member on EventBridge. Mail is a separate switch on that membership (`notify_email`, on by default). A member turns it off with `PATCH /v1/organizations/{organizationID}/teams/{teamID}/notification`. This service reads the flag on the ping; it does not store preferences.
 
 A domain event's `detail` must be the publisher envelope (`event_id`, `version` 1, `occurred_at`, `data`), with `data` decoded as the matching type in `contracts/events`. The feedback rule only forwards SES events for mail sent through this service's configuration set.
 
@@ -114,6 +117,8 @@ docker compose up -d
 (set -a && . email/.env && go run ./email/cmd/email)
 ```
 
+Locally, `EMAIL_SMTP_ADDR=localhost:1025` sends through Mailpit instead of SES. The UI is [http://localhost:8025](http://localhost:8025).
+
 The emulators forget everything when they restart, so re-run the provisioner after one. Auth running against the same emulators delivers its requests on its own; to publish one by hand, as auth's outbox would:
 
 ```sh
@@ -150,6 +155,10 @@ The store's conditional writes have their own tests against a real DynamoDB, whi
 ```sh
 EMAIL_DYNAMODB_TEST_ENDPOINT=http://localhost:4566 go test ./email/internal/store
 ```
+
+## Observability
+
+Logs are structured JSON from `/internal/observability` and carry `service`, `service_version`, and `environment`. AWS SDK calls (SQS, DynamoDB, SES) are spanned when an OTLP endpoint is set. There is no HTTP surface, so there are no access logs. Export uses OTLP/gRPC when `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, or `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` is set.
 
 ## Deploy
 
