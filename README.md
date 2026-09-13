@@ -4,13 +4,15 @@ Oryxa is an AWS-backed Go monorepo. It starts with a single Go module and will g
 
 ## Service layout
 
-Each service owns a lowercase, hyphen-free directory at the repository root. Known examples are `/auth` and `/email`; create additional service directories only when their domain and deployment boundary are clear.
+Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/auth`, `/billing`, `/email` and `/integrations`; create additional service directories only when their domain and deployment boundary are clear.
 
 ```text
 /
 ├── auth/                  # Identity and access service
+├── billing/               # Subscriptions and entitlements
 ├── email/                 # Email delivery service
 ├── integrations/          # Third-party connection and automation control plane
+├── contracts/             # Versioned event contracts services publish
 └── <service>/             # One directory per future service
 ```
 
@@ -28,4 +30,6 @@ Every service follows the same internal shape once it is created:
 
 Keep service boundaries explicit: a service owns its API, data, AWS resources, and deployment configuration. Avoid a generic `common` directory. Shared Go packages belong in `/pkg` only after they have a stable, genuinely cross-service contract.
 
-`/auth` owns Cognito-based Google and email/password sign-in, PostgreSQL-backed verification/reset actions and users/organizations/memberships, and transactional EventBridge publishing. `/email` remains a delivery boundary: it consumes auth delivery-requested events but never performs auth transitions. `/integrations` contains the Go control plane, webhook worker, and lightweight TypeScript connector runtime built from approved Activepieces pieces. Successful connections, trigger registrations, execution claims, and domain outbox events are durable PostgreSQL records; other services receive only the credential-free connection catalog. The full Activepieces platform is not deployed.
+`/auth` owns Cognito-based Google and email/password sign-in, PostgreSQL-backed verification/reset actions and users/organizations/memberships, and transactional EventBridge publishing. `/billing` owns organizations' Dodo Payments subscriptions and the entitlements they grant, which auth enforces as member limits. `/email` remains a delivery boundary: it sends what auth and billing events call for but never performs their transitions. `/integrations` contains the Go control plane, webhook worker, and lightweight TypeScript connector runtime built from approved Activepieces pieces. Successful connections, trigger registrations, execution claims, and domain outbox events are durable PostgreSQL records; other services receive only the credential-free connection catalog. The full Activepieces platform is not deployed.
+
+Services talk through EventBridge, each consuming what it needs from its own SQS queue. `docker-compose.yml` runs the shared local dependencies; each service's README covers provisioning and running it.

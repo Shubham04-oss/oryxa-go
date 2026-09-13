@@ -1,0 +1,18 @@
+{
+  "unpaid": {
+    "member_limit": 3
+  },
+  "plans": [
+    {
+      "key": "team",
+      "product_id": "pdt_replace_with_team_product",
+      "member_limit": 25
+    },
+    {
+      "key": "seats",
+      "product_id": "pdt_replace_with_seat_product",
+      "member_limit_per_unit": 1,
+      "min_quantity": 5
+    }
+  ]
+}
