@@ -11,4 +11,3 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/auth /auth
 EXPOSE 8080
 ENTRYPOINT ["/auth"]
-

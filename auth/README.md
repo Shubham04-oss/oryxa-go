@@ -43,4 +43,3 @@ Auth publishes to `EVENT_BUS_NAME` with source `oryxa.auth`. The first email-fac
 ```
 
 No access token, refresh token, provider secret, or AWS credential is included in an event.
-
