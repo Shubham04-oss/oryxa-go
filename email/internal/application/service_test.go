@@ -7,6 +7,7 @@ import (
 	"time"
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/mail"
 )
@@ -288,6 +289,124 @@ func TestOrganizationNoticesRejectEventsWithoutRecipientOrOrganization(t *testin
 			}
 		})
 	}
+}
+
+func TestBillingNoticesSendTheirEmail(t *testing.T) {
+	graceEnds := time.Date(2026, time.September, 16, 12, 30, 0, 0, time.UTC)
+	renewsAt := time.Date(2026, time.September, 20, 9, 0, 0, 0, time.UTC)
+	billingURL := "https://app.example.com/settings/billing?organization_id=org_1"
+
+	tests := []struct {
+		name      string
+		send      func(*Service) error
+		template  string
+		mentions  []string
+		expiresAt time.Time
+	}{
+		{
+			name: "payment failed with a grace period",
+			send: func(service *Service) error {
+				return service.SubscriptionPaymentFailed(context.Background(), billingRef(billingeventsv1.SubscriptionPaymentFailedDetailType), billingeventsv1.SubscriptionPaymentFailed{
+					OrganizationID: "org_1", OrganizationName: "Acme", SubscriptionID: "sub_1", BillingEmail: "billing@example.com",
+					GraceEndsAt: &graceEnds, BillingURL: billingURL, FailedAt: testNow,
+				})
+			},
+			template: "payment-failed",
+			mentions: []string{"by 16 September 2026, 12:30 UTC", billingURL},
+		},
+		{
+			name: "payment failed without a grace period",
+			send: func(service *Service) error {
+				return service.SubscriptionPaymentFailed(context.Background(), billingRef(billingeventsv1.SubscriptionPaymentFailedDetailType), billingeventsv1.SubscriptionPaymentFailed{
+					OrganizationID: "org_1", OrganizationName: "Acme", SubscriptionID: "sub_1", BillingEmail: "billing@example.com",
+					BillingURL: billingURL, FailedAt: testNow,
+				})
+			},
+			template: "payment-failed",
+			mentions: []string{"Acme has lost its plan"},
+		},
+		{
+			name: "subscription expired",
+			send: func(service *Service) error {
+				return service.SubscriptionEnded(context.Background(), billingRef(billingeventsv1.SubscriptionEndedDetailType), billingeventsv1.SubscriptionEnded{
+					OrganizationID: "org_1", OrganizationName: "Acme", SubscriptionID: "sub_1", BillingEmail: "billing@example.com",
+					Reason: billingeventsv1.SubscriptionEndedReasonExpired, BillingURL: billingURL, EndedAt: testNow,
+				})
+			},
+			template: "subscription-ended",
+			mentions: []string{"reached the end of its term"},
+		},
+		{
+			name: "renewal upcoming",
+			send: func(service *Service) error {
+				return service.SubscriptionRenewalUpcoming(context.Background(), billingRef(billingeventsv1.SubscriptionRenewalUpcomingDetailType), billingeventsv1.SubscriptionRenewalUpcoming{
+					OrganizationID: "org_1", OrganizationName: "Acme", SubscriptionID: "sub_1", BillingEmail: "billing@example.com",
+					Plan: "team", RenewsAt: renewsAt, BillingURL: billingURL,
+				})
+			},
+			template:  "renewal-upcoming",
+			mentions:  []string{"team plan renews on 20 September 2026"},
+			expiresAt: renewsAt,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service, deliveries := newTestService(t)
+			if err := test.send(service); err != nil {
+				t.Fatalf("error = %v", err)
+			}
+			if len(deliveries.requests) != 1 {
+				t.Fatalf("deliveries = %d, want 1", len(deliveries.requests))
+			}
+			request := deliveries.requests[0]
+			if request.Message.Template != test.template || request.Recipient != "billing@example.com" || !request.ExpiresAt.Equal(test.expiresAt) {
+				t.Fatalf("delivery request = %+v", request)
+			}
+			for _, mention := range test.mentions {
+				if !strings.Contains(request.Message.Text, mention) {
+					t.Fatalf("email lacks %q:\n%s", mention, request.Message.Text)
+				}
+			}
+		})
+	}
+}
+
+func TestBillingNoticesRejectUnusableEvents(t *testing.T) {
+	valid := billingeventsv1.SubscriptionEnded{
+		OrganizationID: "org_1", OrganizationName: "Acme", BillingEmail: "billing@example.com",
+		Reason: billingeventsv1.SubscriptionEndedReasonCancelled, BillingURL: "https://app.example.com/billing",
+	}
+	tests := map[string]func(*billingeventsv1.SubscriptionEnded){
+		"no billing email":     func(data *billingeventsv1.SubscriptionEnded) { data.BillingEmail = "" },
+		"no organization name": func(data *billingeventsv1.SubscriptionEnded) { data.OrganizationName = "" },
+		"insecure link":        func(data *billingeventsv1.SubscriptionEnded) { data.BillingURL = "http://app.example.com/billing" },
+		"unknown reason":       func(data *billingeventsv1.SubscriptionEnded) { data.Reason = "paused" },
+	}
+	for name, change := range tests {
+		t.Run(name, func(t *testing.T) {
+			service, deliveries := newTestService(t)
+			data := valid
+			change(&data)
+			if err := service.SubscriptionEnded(context.Background(), billingRef(billingeventsv1.SubscriptionEndedDetailType), data); err == nil {
+				t.Fatal("error = nil, want the event rejected")
+			}
+			if len(deliveries.requests) != 0 {
+				t.Fatalf("deliveries = %d, want 0", len(deliveries.requests))
+			}
+		})
+	}
+
+	service, _ := newTestService(t)
+	if err := service.SubscriptionRenewalUpcoming(context.Background(), billingRef(billingeventsv1.SubscriptionRenewalUpcomingDetailType), billingeventsv1.SubscriptionRenewalUpcoming{
+		OrganizationName: "Acme", BillingEmail: "billing@example.com", BillingURL: "https://app.example.com/billing",
+	}); err == nil {
+		t.Fatal("renewal without renews_at accepted")
+	}
+}
+
+func billingRef(detailType string) delivery.EventRef {
+	return delivery.EventRef{Source: billingeventsv1.Source, DetailType: detailType, ID: "evt_billing_1"}
 }
 
 func TestDeliveryRequestsRejectUnusableEvents(t *testing.T) {

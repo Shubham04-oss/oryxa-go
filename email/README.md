@@ -1,11 +1,11 @@
 # Email service
 
-The email service sends Oryxa's system email. It has no API of its own: it subscribes to auth's events on Amazon EventBridge, renders a template for each, and sends it with Amazon SES (API v2). That is a welcome when a user registers; auth's delivery requests — email verification, password reset and organization invitations — each built around the link auth supplied; and notices when a member's place in an organization changes. It never verifies an account, resets a password or accepts an invitation; auth owns those.
+The email service sends Oryxa's system email. It has no API of its own: it subscribes to auth's and billing's events on Amazon EventBridge, renders a template for each, and sends it with Amazon SES (API v2). That is a welcome when a user registers; auth's delivery requests — email verification, password reset and organization invitations — each built around the link auth supplied; notices when a member's place in an organization changes; and billing notices to an organization's billing contact. It never verifies an account, resets a password, accepts an invitation or touches a subscription; auth and billing own those.
 
 It sends each email at most once per event, keeps a log of every email and what became of it, and stops emailing addresses that bounce permanently or complain.
 
 ```text
-auth ── oryxa.auth events ──▶ email-subscriptions rule ─┐
+auth, billing ── events ────▶ email-subscriptions rule ─┐
                                                         ├─▶ email-events queue ─▶ email ─▶ SES
 SES ─── aws.ses events ─────▶ email-ses-feedback rule ──┘                          │
                                                                                    ▼
@@ -25,6 +25,9 @@ The service consumes the queue through one handler, run by Lambda in AWS and by 
 | `oryxa.auth` | `auth.member.invitation-revoked.v1` | Sends `invitation-revoked` to `data.email` |
 | `oryxa.auth` | `auth.member.role-changed.v1` | Sends `role-changed` to `data.email`, unless the member changed their own role |
 | `oryxa.auth` | `auth.member.removed.v1` | Sends `member-removed`, or `organization-deleted` when `data.reason` is `organization_deleted`, to `data.email` — unless the member left or deleted the organization themselves |
+| `oryxa.billing` | `billing.subscription.payment-failed.v1` | Sends `payment-failed` to `data.billing_email`, with the grace deadline when `data.grace_ends_at` is set |
+| `oryxa.billing` | `billing.subscription.ended.v1` | Sends `subscription-ended` to `data.billing_email` |
+| `oryxa.billing` | `billing.subscription.renewal-upcoming.v1` | Sends `renewal-upcoming` to `data.billing_email`, unless handled after `data.renews_at` |
 | `aws.ses` | `Email Delivered`, `Email Delivery Delayed`, `Email Rejected` | Records the status |
 | `aws.ses` | `Email Bounced` | Records the status; suppresses the address if the bounce is `Permanent` |
 | `aws.ses` | `Email Complaint Received` | Records the status; suppresses the address unless the feedback type is `not-spam` |
@@ -32,6 +35,8 @@ The service consumes the queue through one handler, run by Lambda in AWS and by 
 Auth emits `auth.user.registered.v1` once per user, when the user first signs in: straight away for a Google sign-up, and for a password account at its first login after the email is verified — so a password user never gets a welcome before confirming their address.
 
 Deleting an organization makes auth emit `auth.member.removed.v1` for every member, which is how each of them hears about it; `auth.organization.deleted.v1` itself sends nothing. Membership notices go only to the member affected, never to the people who acted.
+
+Billing notices go to the billing contact Dodo Payments holds for the organization, and link to the app's billing page (`data.billing_url`), which must be HTTPS outside `localhost`. Dates are written in UTC. Receipts and invoices come from Dodo, not from this service.
 
 A domain event's `detail` must be the publisher envelope (`event_id`, `version` 1, `occurred_at`, `data`), with `data` decoded as the matching type in `contracts/events`. The feedback rule only forwards SES events for mail sent through this service's configuration set.
 

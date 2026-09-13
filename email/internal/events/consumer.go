@@ -10,6 +10,7 @@ import (
 	lambdaevents "github.com/aws/aws-lambda-go/events"
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
 )
 
@@ -32,6 +33,14 @@ var (
 	memberRemoved              = Subscription{Source: autheventsv1.Source, DetailType: autheventsv1.MemberRemovedDetailType}
 )
 
+// The billing events the email service writes to an organization's billing
+// contact about.
+var (
+	subscriptionPaymentFailed   = Subscription{Source: billingeventsv1.Source, DetailType: billingeventsv1.SubscriptionPaymentFailedDetailType}
+	subscriptionEnded           = Subscription{Source: billingeventsv1.Source, DetailType: billingeventsv1.SubscriptionEndedDetailType}
+	subscriptionRenewalUpcoming = Subscription{Source: billingeventsv1.Source, DetailType: billingeventsv1.SubscriptionRenewalUpcomingDetailType}
+)
+
 // Subscriptions is every Oryxa domain event NewConsumer sends mail for. The
 // subscriptions rule's event pattern is built from it, so an event missing
 // here never reaches the queue.
@@ -44,6 +53,9 @@ func Subscriptions() []Subscription {
 		memberInvitationRevoked,
 		memberRoleChanged,
 		memberRemoved,
+		subscriptionPaymentFailed,
+		subscriptionEnded,
+		subscriptionRenewalUpcoming,
 	}
 }
 
@@ -55,6 +67,9 @@ type application interface {
 	MemberInvitationRevoked(context.Context, delivery.EventRef, autheventsv1.MemberInvitationRevoked) error
 	MemberRoleChanged(context.Context, delivery.EventRef, autheventsv1.MemberRoleChanged) error
 	MemberRemoved(context.Context, delivery.EventRef, autheventsv1.MemberRemoved) error
+	SubscriptionPaymentFailed(context.Context, delivery.EventRef, billingeventsv1.SubscriptionPaymentFailed) error
+	SubscriptionEnded(context.Context, delivery.EventRef, billingeventsv1.SubscriptionEnded) error
+	SubscriptionRenewalUpcoming(context.Context, delivery.EventRef, billingeventsv1.SubscriptionRenewalUpcoming) error
 	SESFeedback(context.Context, delivery.Feedback) error
 }
 
@@ -67,13 +82,16 @@ type Consumer struct {
 
 func NewConsumer(app application, logger *slog.Logger) *Consumer {
 	handlers := map[Subscription]handler{
-		userRegistered:             domainEvent(app.UserRegistered),
-		emailVerificationRequested: domainEvent(app.EmailVerificationRequested),
-		passwordResetRequested:     domainEvent(app.PasswordResetRequested),
-		memberInvited:              domainEvent(app.MemberInvited),
-		memberInvitationRevoked:    domainEvent(app.MemberInvitationRevoked),
-		memberRoleChanged:          domainEvent(app.MemberRoleChanged),
-		memberRemoved:              domainEvent(app.MemberRemoved),
+		userRegistered:              domainEvent(app.UserRegistered),
+		emailVerificationRequested:  domainEvent(app.EmailVerificationRequested),
+		passwordResetRequested:      domainEvent(app.PasswordResetRequested),
+		memberInvited:               domainEvent(app.MemberInvited),
+		memberInvitationRevoked:     domainEvent(app.MemberInvitationRevoked),
+		memberRoleChanged:           domainEvent(app.MemberRoleChanged),
+		memberRemoved:               domainEvent(app.MemberRemoved),
+		subscriptionPaymentFailed:   domainEvent(app.SubscriptionPaymentFailed),
+		subscriptionEnded:           domainEvent(app.SubscriptionEnded),
+		subscriptionRenewalUpcoming: domainEvent(app.SubscriptionRenewalUpcoming),
 	}
 	for _, detailType := range SESFeedbackDetailTypes() {
 		handlers[Subscription{Source: SESSource, DetailType: detailType}] = sesFeedback(app.SESFeedback)

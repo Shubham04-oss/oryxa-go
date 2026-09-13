@@ -1,0 +1,6 @@
+{{define "content"}}
+<h1 style="margin:0 0 16px;font-size:22px;line-height:30px;font-weight:600;">{{.OrganizationName}}'s subscription has ended</h1>
+<p style="margin:0;">{{if .Expired}}{{.OrganizationName}}'s Oryxa subscription reached the end of its term{{else}}{{.OrganizationName}}'s Oryxa subscription was cancelled{{end}}, so it won't renew and nothing more will be charged for it.</p>
+{{template "action" .}}
+<p style="margin:0;font-size:13px;line-height:20px;color:#78716c;">You can subscribe again from billing at any time.</p>
+{{end}}

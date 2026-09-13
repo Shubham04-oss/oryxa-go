@@ -47,13 +47,82 @@ type noticeData struct {
 	PreviousRole     string
 }
 
+// billingSubjects covers the emails to an organization's billing contact, which
+// link to the app's billing page.
+var billingSubjects = map[string]string{
+	"payment-failed":     "Payment failed for Acme & Sons's Oryxa subscription",
+	"subscription-ended": "Acme & Sons's Oryxa subscription has ended",
+	"renewal-upcoming":   "Acme & Sons's Oryxa subscription renews on 20 September 2026",
+}
+
+type billingData struct {
+	OrganizationName string
+	Plan             string
+	GraceEndsAt      string
+	RenewsOn         string
+	Expired          bool
+	ActionURL        string
+	ActionLabel      string
+}
+
 func TestEveryTemplateIsTested(t *testing.T) {
 	templates := parseTemplates(t)
 	for name := range templates.byName {
 		_, action := actionSubjects[name]
 		_, notice := noticeSubjects[name]
-		if !action && !notice && name != "welcome" {
+		_, billing := billingSubjects[name]
+		if !action && !notice && !billing && name != "welcome" {
 			t.Fatalf("template %q has no test", name)
+		}
+	}
+}
+
+func TestRenderBillingTemplates(t *testing.T) {
+	templates := parseTemplates(t)
+	data := billingData{
+		OrganizationName: "Acme & Sons",
+		Plan:             "team",
+		RenewsOn:         "20 September 2026",
+		ActionURL:        "https://app.example.com/settings/billing?organization_id=org_1",
+		ActionLabel:      "Manage billing",
+	}
+
+	for name, subject := range billingSubjects {
+		t.Run(name, func(t *testing.T) {
+			message, err := templates.Render(name, data)
+			if err != nil {
+				t.Fatalf("Render() error = %v", err)
+			}
+			if message.Subject != subject {
+				t.Fatalf("subject = %q, want %q", message.Subject, subject)
+			}
+			if !strings.Contains(message.Text, data.ActionURL) || !strings.Contains(message.HTML, `href="https://app.example.com/settings/billing?organization_id=org_1"`) {
+				t.Fatalf("bodies lack the billing link:\n%s\n%s", message.Text, message.HTML)
+			}
+		})
+	}
+
+	withGrace := data
+	withGrace.GraceEndsAt = "16 September 2026, 12:00 UTC"
+	for _, test := range []struct {
+		name    string
+		data    billingData
+		want    string
+		notWant string
+	}{
+		{name: "payment-failed", data: withGrace, want: "by 16 September 2026, 12:00 UTC to keep the plan", notWant: "has lost its plan"},
+		{name: "payment-failed", data: data, want: "has lost its plan until the payment method is updated", notWant: "to keep the plan"},
+		{name: "subscription-ended", data: data, want: "subscription was cancelled", notWant: "end of its term"},
+		{name: "subscription-ended", data: billingData{OrganizationName: "Acme & Sons", Expired: true, ActionURL: data.ActionURL}, want: "reached the end of its term", notWant: "was cancelled"},
+		{name: "renewal-upcoming", data: data, want: "to the team plan renews on 20 September 2026"},
+		{name: "renewal-upcoming", data: billingData{OrganizationName: "Acme & Sons", RenewsOn: "20 September 2026", ActionURL: data.ActionURL}, want: "subscription renews on 20 September 2026", notWant: " plan renews"},
+	} {
+		message, err := templates.Render(test.name, test.data)
+		if err != nil {
+			t.Fatalf("Render(%s) error = %v", test.name, err)
+		}
+		if !strings.Contains(message.Text, test.want) || (test.notWant != "" && strings.Contains(message.Text, test.notWant)) {
+			t.Fatalf("%s text = %q, want %q and not %q", test.name, message.Text, test.want, test.notWant)
 		}
 	}
 }

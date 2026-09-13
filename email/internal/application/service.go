@@ -9,6 +9,7 @@ import (
 	"time"
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/mail"
 )
@@ -145,6 +146,88 @@ func (s *Service) deliverNotice(ctx context.Context, event delivery.EventRef, te
 	}
 	_, err = s.deliveries.Deliver(ctx, delivery.Request{Event: event, Recipient: recipient, Message: message})
 	return err
+}
+
+// SubscriptionPaymentFailed tells the billing contact a renewal payment
+// failed, and by when to fix it if a grace period is open.
+func (s *Service) SubscriptionPaymentFailed(ctx context.Context, event delivery.EventRef, data billingeventsv1.SubscriptionPaymentFailed) error {
+	billing := billingNotice{
+		OrganizationName: data.OrganizationName,
+		ActionURL:        data.BillingURL,
+		ActionLabel:      "Update payment method",
+	}
+	if data.GraceEndsAt != nil {
+		billing.GraceEndsAt = formatDeadline(*data.GraceEndsAt)
+	}
+	return s.deliverBillingNotice(ctx, event, "payment-failed", data.BillingEmail, time.Time{}, billing)
+}
+
+// SubscriptionEnded tells the billing contact a subscription was cancelled or
+// reached the end of its term.
+func (s *Service) SubscriptionEnded(ctx context.Context, event delivery.EventRef, data billingeventsv1.SubscriptionEnded) error {
+	if data.Reason != billingeventsv1.SubscriptionEndedReasonCancelled && data.Reason != billingeventsv1.SubscriptionEndedReasonExpired {
+		return fmt.Errorf("unknown subscription end reason %q", data.Reason)
+	}
+	return s.deliverBillingNotice(ctx, event, "subscription-ended", data.BillingEmail, time.Time{}, billingNotice{
+		OrganizationName: data.OrganizationName,
+		Expired:          data.Reason == billingeventsv1.SubscriptionEndedReasonExpired,
+		ActionURL:        data.BillingURL,
+		ActionLabel:      "View billing",
+	})
+}
+
+// SubscriptionRenewalUpcoming reminds the billing contact of a renewal. A
+// reminder handled after the renewal is no longer worth sending.
+func (s *Service) SubscriptionRenewalUpcoming(ctx context.Context, event delivery.EventRef, data billingeventsv1.SubscriptionRenewalUpcoming) error {
+	if data.RenewsAt.IsZero() {
+		return errors.New("event has no renews_at")
+	}
+	return s.deliverBillingNotice(ctx, event, "renewal-upcoming", data.BillingEmail, data.RenewsAt, billingNotice{
+		OrganizationName: data.OrganizationName,
+		Plan:             data.Plan,
+		RenewsOn:         formatDate(data.RenewsAt),
+		ActionURL:        data.BillingURL,
+		ActionLabel:      "Manage billing",
+	})
+}
+
+// billingNotice is what the billing emails render with.
+type billingNotice struct {
+	OrganizationName string
+	Plan             string
+	GraceEndsAt      string
+	RenewsOn         string
+	Expired          bool
+	ActionURL        string
+	ActionLabel      string
+}
+
+func (s *Service) deliverBillingNotice(ctx context.Context, event delivery.EventRef, template, recipient string, expiresAt time.Time, data billingNotice) error {
+	if recipient == "" {
+		return errors.New("event has no billing_email")
+	}
+	if data.OrganizationName == "" {
+		return errors.New("event has no organization_name")
+	}
+	if err := validateActionURL(data.ActionURL); err != nil {
+		return err
+	}
+	message, err := s.templates.Render(template, data)
+	if err != nil {
+		return err
+	}
+	_, err = s.deliveries.Deliver(ctx, delivery.Request{Event: event, Recipient: recipient, Message: message, ExpiresAt: expiresAt})
+	return err
+}
+
+// formatDate and formatDeadline write times as the emails put them, in UTC
+// so every reader sees the same moment.
+func formatDate(value time.Time) string {
+	return value.UTC().Format("2 January 2006")
+}
+
+func formatDeadline(value time.Time) string {
+	return value.UTC().Format("2 January 2006, 15:04 MST")
 }
 
 // SESFeedback records what SES reported about an email this service sent.

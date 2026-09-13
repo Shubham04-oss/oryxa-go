@@ -1,0 +1,6 @@
+{{define "content"}}
+<h1 style="margin:0 0 16px;font-size:22px;line-height:30px;font-weight:600;">{{.OrganizationName}}'s subscription renews soon</h1>
+<p style="margin:0;">{{.OrganizationName}}'s Oryxa subscription{{with .Plan}} to the {{.}} plan{{end}} renews on <strong>{{.RenewsOn}}</strong>, charged to the payment method on file.</p>
+{{template "action" .}}
+<p style="margin:0;font-size:13px;line-height:20px;color:#78716c;">To change or cancel it before then, manage billing.</p>
+{{end}}

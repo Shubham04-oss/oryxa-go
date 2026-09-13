@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/events"
 )
 
@@ -15,16 +16,23 @@ func TestEventPatternMatchesSubscribedAuthEvents(t *testing.T) {
 		t.Fatalf("EventPattern() error = %v", err)
 	}
 
-	// Registration, auth's delivery requests, and the membership changes, in
-	// the sorted order the pattern lists them.
-	assertJSONEqual(t, pattern, `{"source":["`+autheventsv1.Source+`"],"detail-type":[
-		"`+autheventsv1.MemberInvitationRevokedDetailType+`",
-		"`+autheventsv1.MemberInvitedDetailType+`",
-		"`+autheventsv1.MemberRemovedDetailType+`",
-		"`+autheventsv1.MemberRoleChangedDetailType+`",
-		"`+autheventsv1.EmailVerificationDeliveryRequestedDetailType+`",
-		"`+autheventsv1.PasswordResetDeliveryRequestedDetailType+`",
-		"`+autheventsv1.UserRegisteredDetailType+`"
+	// Auth's registration, delivery requests and membership changes, and
+	// billing's notices, each under its own source, in sorted order.
+	assertJSONEqual(t, pattern, `{"$or":[
+		{"source":["`+autheventsv1.Source+`"],"detail-type":[
+			"`+autheventsv1.MemberInvitationRevokedDetailType+`",
+			"`+autheventsv1.MemberInvitedDetailType+`",
+			"`+autheventsv1.MemberRemovedDetailType+`",
+			"`+autheventsv1.MemberRoleChangedDetailType+`",
+			"`+autheventsv1.EmailVerificationDeliveryRequestedDetailType+`",
+			"`+autheventsv1.PasswordResetDeliveryRequestedDetailType+`",
+			"`+autheventsv1.UserRegisteredDetailType+`"
+		]},
+		{"source":["`+billingeventsv1.Source+`"],"detail-type":[
+			"`+billingeventsv1.SubscriptionEndedDetailType+`",
+			"`+billingeventsv1.SubscriptionPaymentFailedDetailType+`",
+			"`+billingeventsv1.SubscriptionRenewalUpcomingDetailType+`"
+		]}
 	]}`)
 }
 

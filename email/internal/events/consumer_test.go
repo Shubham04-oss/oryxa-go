@@ -12,6 +12,7 @@ import (
 	lambdaevents "github.com/aws/aws-lambda-go/events"
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
 )
 
@@ -26,6 +27,13 @@ const (
 	removedData      = `{"organization_id":"org_1","organization_name":"Acme","user_id":"user-2","email":"ravi@example.com","previous_role":"admin","reason":"organization_deleted","removed_by":"user-1","removed_at":"2026-09-13T12:00:00Z"}`
 )
 
+// The data billing writes for each subscribed event.
+const (
+	paymentFailedData   = `{"organization_id":"org_1","organization_name":"Acme","subscription_id":"sub_1","billing_email":"billing@example.com","grace_ends_at":"2026-09-16T12:00:00Z","billing_url":"http://localhost:3000/settings/billing?organization_id=org_1","failed_at":"2026-09-13T12:00:00Z"}`
+	endedData           = `{"organization_id":"org_1","organization_name":"Acme","subscription_id":"sub_1","billing_email":"billing@example.com","reason":"cancelled","billing_url":"http://localhost:3000/settings/billing?organization_id=org_1","ended_at":"2026-09-13T12:00:00Z"}`
+	renewalUpcomingData = `{"organization_id":"org_1","organization_name":"Acme","subscription_id":"sub_1","billing_email":"billing@example.com","plan":"team","renews_at":"2026-09-20T12:00:00Z","billing_url":"http://localhost:3000/settings/billing?organization_id=org_1"}`
+)
+
 type fakeApplication struct {
 	registrations []autheventsv1.UserRegistered
 	verifications []autheventsv1.EmailVerificationDeliveryRequested
@@ -34,9 +42,59 @@ type fakeApplication struct {
 	revocations   []autheventsv1.MemberInvitationRevoked
 	roleChanges   []autheventsv1.MemberRoleChanged
 	removals      []autheventsv1.MemberRemoved
+	failures      []billingeventsv1.SubscriptionPaymentFailed
+	endings       []billingeventsv1.SubscriptionEnded
+	renewals      []billingeventsv1.SubscriptionRenewalUpcoming
 	refs          []delivery.EventRef
 	feedback      []delivery.Feedback
 	err           error
+}
+
+func (f *fakeApplication) SubscriptionPaymentFailed(_ context.Context, ref delivery.EventRef, data billingeventsv1.SubscriptionPaymentFailed) error {
+	f.refs = append(f.refs, ref)
+	f.failures = append(f.failures, data)
+	return f.err
+}
+
+func (f *fakeApplication) SubscriptionEnded(_ context.Context, ref delivery.EventRef, data billingeventsv1.SubscriptionEnded) error {
+	f.refs = append(f.refs, ref)
+	f.endings = append(f.endings, data)
+	return f.err
+}
+
+func (f *fakeApplication) SubscriptionRenewalUpcoming(_ context.Context, ref delivery.EventRef, data billingeventsv1.SubscriptionRenewalUpcoming) error {
+	f.refs = append(f.refs, ref)
+	f.renewals = append(f.renewals, data)
+	return f.err
+}
+
+func TestHandleSQSDispatchesBillingEvents(t *testing.T) {
+	app := &fakeApplication{}
+	consumer := NewConsumer(app, slog.New(slog.DiscardHandler))
+	billingBody := func(detailType, data string) string {
+		return eventBody(billingeventsv1.Source, detailType, `{"event_id":"evt_billing_1","version":1,"occurred_at":"2026-09-13T12:00:00Z","data":`+data+`}`)
+	}
+
+	response, err := consumer.HandleSQS(context.Background(), batchOf(map[string]string{
+		"1-failed":  billingBody(billingeventsv1.SubscriptionPaymentFailedDetailType, paymentFailedData),
+		"2-ended":   billingBody(billingeventsv1.SubscriptionEndedDetailType, endedData),
+		"3-renewal": billingBody(billingeventsv1.SubscriptionRenewalUpcomingDetailType, renewalUpcomingData),
+		"4-auth":    eventBody(autheventsv1.Source, billingeventsv1.SubscriptionEndedDetailType, `{"event_id":"evt_x","version":1,"data":`+endedData+`}`),
+	}))
+	if err != nil {
+		t.Fatalf("HandleSQS() error = %v", err)
+	}
+	if len(response.BatchItemFailures) != 1 || response.BatchItemFailures[0].ItemIdentifier != "4-auth" {
+		t.Fatalf("failures = %+v, want only the billing event claimed by auth", response.BatchItemFailures)
+	}
+	if len(app.failures) != 1 || app.failures[0].GraceEndsAt == nil || app.failures[0].BillingEmail != "billing@example.com" ||
+		len(app.endings) != 1 || app.endings[0].Reason != "cancelled" ||
+		len(app.renewals) != 1 || app.renewals[0].RenewsAt.IsZero() || app.renewals[0].Plan != "team" {
+		t.Fatalf("dispatched failures=%+v endings=%+v renewals=%+v", app.failures, app.endings, app.renewals)
+	}
+	if app.refs[0] != (delivery.EventRef{Source: billingeventsv1.Source, DetailType: billingeventsv1.SubscriptionPaymentFailedDetailType, ID: "evt_billing_1"}) {
+		t.Fatalf("event ref = %+v", app.refs[0])
+	}
 }
 
 func (f *fakeApplication) MemberInvitationRevoked(_ context.Context, ref delivery.EventRef, data autheventsv1.MemberInvitationRevoked) error {

@@ -1,0 +1,7 @@
+{{.OrganizationName}}'s Oryxa subscription renews soon
+
+{{.OrganizationName}}'s subscription{{with .Plan}} to the {{.}} plan{{end}} renews on {{.RenewsOn}}, charged to the payment method on file.
+
+To change or cancel it before then, manage billing:
+
+{{.ActionURL}}

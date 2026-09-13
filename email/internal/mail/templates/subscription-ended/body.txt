@@ -1,0 +1,7 @@
+{{.OrganizationName}}'s Oryxa subscription has ended
+
+{{if .Expired}}{{.OrganizationName}}'s subscription reached the end of its term{{else}}{{.OrganizationName}}'s subscription was cancelled{{end}}, so it won't renew and nothing more will be charged for it.
+
+To subscribe again, open billing:
+
+{{.ActionURL}}
