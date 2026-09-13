@@ -43,13 +43,16 @@ func (c Static) ActionDefinition(provider, actionName string) (actionflow.Defini
 		return actionflow.Definition{}, false
 	}
 	if provider == "github" {
-		return githubActionDefinition(actionName)
+		definition, ok := githubActionDefinition(actionName)
+		return bindActionSkill(provider, actionName, definition, ok)
 	}
 	if provider == "google" {
-		return googleActionDefinition(actionName)
+		definition, ok := googleActionDefinition(actionName)
+		return bindActionSkill(provider, actionName, definition, ok)
 	}
 	if provider == "microsoft" {
-		return microsoftActionDefinition(actionName)
+		definition, ok := microsoftActionDefinition(actionName)
+		return bindActionSkill(provider, actionName, definition, ok)
 	}
 	if provider != "slack" {
 		return actionflow.Definition{}, false
@@ -72,7 +75,7 @@ func (c Static) ActionDefinition(provider, actionName string) (actionflow.Defini
 	default:
 		return actionflow.Definition{}, false
 	}
-	return base, true
+	return bindActionSkill(provider, actionName, base, true)
 }
 
 func (c Static) TriggerDefinition(provider, triggerName string) (triggerflow.Definition, bool) {
@@ -101,12 +104,12 @@ func (c Static) TriggerDefinition(provider, triggerName string) (triggerflow.Def
 		default:
 			return triggerflow.Definition{}, false
 		}
-		return base, true
+		return bindTriggerSkill(provider, triggerName, base, true)
 	}
 	if provider != "slack" || triggerName != "new-message" {
 		return triggerflow.Definition{}, false
 	}
-	return triggerflow.Definition{
+	return bindTriggerSkill(provider, triggerName, triggerflow.Definition{
 		Provider: "slack", PieceName: SlackPieceName, PieceVersion: SlackPieceVersion,
 		TriggerName: "new-message", RouteMode: domain.WebhookRouteAppLevel,
 		Event: "message", TimestampHeader: "x-slack-request-timestamp",
@@ -120,7 +123,7 @@ func (c Static) TriggerDefinition(provider, triggerName string) (triggerflow.Def
 			}
 			return nil
 		},
-	}, true
+	}, true)
 }
 
 func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
@@ -128,15 +131,15 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 		return oauthflow.Definition{}, false
 	}
 	if provider == "github" {
-		return oauthflow.Definition{
+		return bindConnectionSkill(provider, oauthflow.Definition{
 			Provider: "github", PieceName: GitHubPieceName, PieceVersion: GitHubPieceVersion,
 			RedirectURI:    c.PublicBaseURL + "/v1/oauth/callback/github",
 			AllowedScopes:  []string{"admin:repo_hook", "offline_access", "public_repo", "read:user", "repo", "workflow"},
 			RequiredScopes: []string{"read:user"}, SupportsPKCE: false,
-		}, true
+		}, true)
 	}
 	if provider == "google" {
-		return oauthflow.Definition{
+		return bindConnectionSkill(provider, oauthflow.Definition{
 			Provider: "google", PieceName: GmailPieceName, PieceVersion: GmailPieceVersion,
 			RedirectURI: c.PublicBaseURL + "/v1/oauth/callback/google",
 			AllowedScopes: []string{
@@ -147,10 +150,10 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 				"https://www.googleapis.com/auth/gmail.send",
 			},
 			RequiredScopes: []string{"email", "openid", "profile"}, SupportsPKCE: true,
-		}, true
+		}, true)
 	}
 	if provider == "microsoft" {
-		return oauthflow.Definition{
+		return bindConnectionSkill(provider, oauthflow.Definition{
 			Provider: "microsoft", PieceName: MicrosoftOutlookPieceName, PieceVersion: MicrosoftOutlookPieceVersion,
 			RedirectURI: c.PublicBaseURL + "/v1/oauth/callback/microsoft",
 			AllowedScopes: []string{
@@ -162,12 +165,12 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 			// adapter, but cannot be a persisted-grant authorization requirement.
 			RequiredScopes: []string{"openid", "profile", "User.Read"},
 			SupportsPKCE:   true,
-		}, true
+		}, true)
 	}
 	if provider != "slack" {
 		return oauthflow.Definition{}, false
 	}
-	return oauthflow.Definition{
+	return bindConnectionSkill(provider, oauthflow.Definition{
 		Provider:     "slack",
 		PieceName:    SlackPieceName,
 		PieceVersion: SlackPieceVersion,
@@ -181,7 +184,7 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 		// secret. PKCE remains enabled by catalog entry only for providers that
 		// explicitly support it.
 		SupportsPKCE: false,
-	}, true
+	}, true)
 }
 
 func validateSlackPostMessage(raw json.RawMessage) error {

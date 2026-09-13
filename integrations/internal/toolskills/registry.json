@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "load_policy": "tool-bound",
+  "skills": [
+    {
+      "name": "oryxa-slack",
+      "description": "Call-scoped instructions for Oryxa Slack connection, action, and new-message tools.",
+      "path": "skills/oryxa-slack/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/slack",
+      "connection_providers": ["slack"],
+      "pieces": ["@activepieces/piece-slack"],
+      "actions": [
+        {"provider": "slack", "name": "post-message"},
+        {"provider": "slack", "name": "add-reaction"},
+        {"provider": "slack", "name": "find-channel"}
+      ],
+      "triggers": [
+        {"provider": "slack", "name": "new-message"}
+      ]
+    },
+    {
+      "name": "oryxa-github",
+      "description": "Call-scoped instructions for Oryxa GitHub connection and approved issue or pull-request tools.",
+      "path": "skills/oryxa-github/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/github",
+      "connection_providers": ["github"],
+      "pieces": ["@activepieces/piece-github"],
+      "actions": [
+        {"provider": "github", "name": "create-issue"},
+        {"provider": "github", "name": "comment-on-issue"},
+        {"provider": "github", "name": "get-issue"},
+        {"provider": "github", "name": "list-pull-requests"}
+      ]
+    },
+    {
+      "name": "oryxa-gmail",
+      "description": "Call-scoped instructions for Oryxa Google authorization and the approved Gmail send tool.",
+      "path": "skills/oryxa-gmail/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/google/gmail",
+      "connection_providers": ["google"],
+      "pieces": ["@activepieces/piece-gmail"],
+      "actions": [
+        {"provider": "google", "name": "send-email"}
+      ]
+    },
+    {
+      "name": "oryxa-google-calendar",
+      "description": "Call-scoped instructions for Oryxa Google Calendar create and list tools.",
+      "path": "skills/oryxa-google-calendar/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/google/calendar",
+      "pieces": ["@activepieces/piece-google-calendar"],
+      "actions": [
+        {"provider": "google", "name": "create-calendar-event"},
+        {"provider": "google", "name": "list-calendar-events"}
+      ]
+    },
+    {
+      "name": "oryxa-google-drive",
+      "description": "Call-scoped instructions for Oryxa Google Drive metadata-only list and get tools.",
+      "path": "skills/oryxa-google-drive/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/google/drive",
+      "pieces": ["@activepieces/piece-google-drive"],
+      "actions": [
+        {"provider": "google", "name": "list-drive-files"},
+        {"provider": "google", "name": "get-drive-file-metadata"}
+      ]
+    },
+    {
+      "name": "oryxa-microsoft-outlook",
+      "description": "Call-scoped instructions for Oryxa Microsoft authorization, Outlook send, and new-email tools.",
+      "path": "skills/oryxa-microsoft-outlook/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/microsoft/outlook",
+      "connection_providers": ["microsoft"],
+      "pieces": ["@activepieces/piece-microsoft-outlook"],
+      "actions": [
+        {"provider": "microsoft", "name": "send-email"}
+      ],
+      "triggers": [
+        {"provider": "microsoft", "name": "new-email"}
+      ]
+    },
+    {
+      "name": "oryxa-microsoft-calendar",
+      "description": "Call-scoped instructions for Oryxa Microsoft Calendar action and change-notification tools.",
+      "path": "skills/oryxa-microsoft-calendar/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/microsoft/calendar",
+      "pieces": ["@activepieces/piece-microsoft-outlook-calendar"],
+      "actions": [
+        {"provider": "microsoft", "name": "create-calendar-event"},
+        {"provider": "microsoft", "name": "list-calendar-events"}
+      ],
+      "triggers": [
+        {"provider": "microsoft", "name": "calendar-event-changed"}
+      ]
+    },
+    {
+      "name": "oryxa-microsoft-onedrive",
+      "description": "Call-scoped instructions for the Oryxa Microsoft OneDrive metadata-only list tool.",
+      "path": "skills/oryxa-microsoft-onedrive/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/microsoft/onedrive",
+      "pieces": ["@activepieces/piece-microsoft-onedrive"],
+      "actions": [
+        {"provider": "microsoft", "name": "list-files"}
+      ]
+    }
+  ]
+}

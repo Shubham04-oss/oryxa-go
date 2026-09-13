@@ -48,7 +48,10 @@ GitHub/Google/Microsoft actions, and native Microsoft Graph subscriptions for
 mail and calendar changes. Successful connections, trigger registrations,
 execution claims, and domain outbox events are durable PostgreSQL records;
 other services receive only the credential-free connection catalog. The full
-Activepieces platform is not deployed.
+Activepieces platform is not deployed. Each approved connector tool also has a
+call-scoped `SKILL.md` embedded in the integrations catalog, so a direct tool or
+future MCP server can load only the selected provider operation's instructions
+for a smaller model.
 
 ## Shared PostgreSQL and observability
 

@@ -166,6 +166,44 @@ GitHub and Google triggers are not enabled yet. Their future webhook or polling
 paths require separate provider-specific lifecycle and replay reviews; adding
 an Activepieces package to the lock file alone never exposes an operation.
 
+## Tool-bound skills
+
+Complex provider guidance is stored with the integrations service rather than
+as globally loaded agent instructions. Every approved tool family has one
+`SKILL.md` under `internal/toolskills/skills/`:
+
+| Tool family | Bound skill |
+| --- | --- |
+| Slack actions and `new-message` | `oryxa-slack` |
+| GitHub issue and pull-request actions | `oryxa-github` |
+| Gmail send | `oryxa-gmail` |
+| Google Calendar actions | `oryxa-google-calendar` |
+| Google Drive metadata actions | `oryxa-google-drive` |
+| Outlook send and `new-email` | `oryxa-microsoft-outlook` |
+| Microsoft Calendar actions and change trigger | `oryxa-microsoft-calendar` |
+| OneDrive metadata actions | `oryxa-microsoft-onedrive` |
+
+`internal/toolskills/registry.json` binds the exact provider/action, trigger,
+OAuth connection family, and pinned piece to one skill. The Markdown is
+compiled into the Go binary with `go:embed`, and every entry has a stable
+`oryxa://integrations/skills/...` resource URI plus a SHA-256 digest.
+
+A direct function-tool adapter calls the executable catalog's `ActionTool`,
+`TriggerTool`, or `ConnectionTool`. Each returns the execution definition and
+its skill as one binding, and the adapter injects only that `Skill.Content`. A
+future MCP server exposes the same content at `Skill.ResourceURI` and
+associates that resource with the matching MCP tool. Do not preload all eight
+skills: the load policy is `tool-bound`, keeping unrelated provider
+instructions out of a small model's context.
+
+The executable catalog fails closed when a connection, action, or trigger has
+no skill binding. Tests also read `pieces.lock.json`, so adding a pinned piece
+without a corresponding skill breaks verification. Skills explain semantics,
+safe inputs, expected sanitized results, and retries; they never grant tenant
+access or permission for an external side effect. Authentication, organization
+membership, connection ownership, scopes, and idempotency remain enforced by
+the Go service.
+
 A connection belongs to a provider, not to one Activepieces package. One
 Google consent grant can therefore execute reviewed Gmail, Calendar, and Drive
 operations, and one Microsoft consent grant can execute reviewed Outlook,
@@ -330,6 +368,7 @@ The intended implementation stays within this service boundary:
 /integrations
 ├── cmd/integrations/          # Go API and command entrypoint
 ├── internal/                  # Domain, PostgreSQL, ephemeral DynamoDB, KMS and events
+│   └── toolskills/             # Embedded call-scoped skills and binding registry
 ├── runtime/                   # Small TypeScript piece adapter and Lambda entrypoint
 ├── pieces.lock.json           # Approved package, version, integrity and capabilities
 ├── infra/                     # AWS resources owned by integrations
