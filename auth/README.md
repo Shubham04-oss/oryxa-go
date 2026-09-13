@@ -105,4 +105,8 @@ EventBridge detail uses a stable envelope:
 }
 ```
 
-Consumers must deduplicate by `event_id`, because outbox delivery is at least once. Email consumes only delivery requests such as `auth.user.email-verification.delivery-requested.v1`, `auth.user.password-reset.delivery-requested.v1`, and `auth.member.invited.v1`. It sends the supplied action URL and never executes auth state transitions. No password, access token, refresh token, provider secret, or AWS credential is emitted.
+Consumers must deduplicate by `event_id`, because outbox delivery is at least once. No password, access token, refresh token, provider secret, or AWS credential is emitted.
+
+Every ended membership emits `auth.member.removed.v1`, whose `reason` is `left`, `removed`, or `organization_deleted`: deleting an organization emits one for each member in the same transaction, so consumers never have to expand `auth.organization.deleted.v1` themselves. Membership events carry the member's `email` and the `organization_name`, which is enough to notify someone without reading auth's data.
+
+Email consumes `auth.user.registered.v1` (welcome), the delivery requests `auth.user.email-verification.delivery-requested.v1`, `auth.user.password-reset.delivery-requested.v1` and `auth.member.invited.v1` (it sends the supplied action URL and never executes auth state transitions), and `auth.member.invitation-revoked.v1`, `auth.member.role-changed.v1` and `auth.member.removed.v1` (notices to the affected member). See `email/README.md`.

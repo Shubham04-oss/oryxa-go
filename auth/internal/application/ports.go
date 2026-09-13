@@ -22,7 +22,9 @@ type Store interface {
 	OrganizationsForUser(context.Context, string) ([]domain.Organization, error)
 	OrganizationByID(context.Context, string) (domain.Organization, error)
 	UpdateOrganization(context.Context, domain.Organization, domain.Event) error
-	DeleteOrganization(context.Context, string, domain.Event) error
+	// DeleteOrganization records the deletion event and, in the same
+	// transaction, the event removed returns for each membership it ends.
+	DeleteOrganization(ctx context.Context, organizationID string, deleted domain.Event, removed func(domain.Membership) (domain.Event, error)) error
 	Membership(context.Context, string, string) (domain.Membership, error)
 	Members(context.Context, string) ([]domain.Membership, error)
 

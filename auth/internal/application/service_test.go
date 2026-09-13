@@ -18,6 +18,7 @@ type fakeStore struct {
 	actorMembership  domain.Membership
 	targetMembership domain.Membership
 	organization     domain.Organization
+	members          []domain.Membership
 	events           []domain.Event
 	invitation       domain.Invitation
 	deletedOrgID     string
@@ -74,8 +75,25 @@ func (fake *fakeStore) UpdateOrganization(_ context.Context, organization domain
 	return nil
 }
 
-func (fake *fakeStore) DeleteOrganization(_ context.Context, organizationID string, event domain.Event) error {
+func (fake *fakeStore) DeleteOrganization(_ context.Context, organizationID string, deleted domain.Event, removed func(domain.Membership) (domain.Event, error)) error {
 	fake.deletedOrgID = organizationID
+	fake.events = append(fake.events, deleted)
+	for _, member := range fake.members {
+		event, err := removed(member)
+		if err != nil {
+			return err
+		}
+		fake.events = append(fake.events, event)
+	}
+	return nil
+}
+
+func (fake *fakeStore) ChangeMemberRole(_ context.Context, _, _ string, _, _ domain.Role, event domain.Event) error {
+	fake.events = append(fake.events, event)
+	return nil
+}
+
+func (fake *fakeStore) RemoveMember(_ context.Context, _, _ string, _ domain.Role, event domain.Event) error {
 	fake.events = append(fake.events, event)
 	return nil
 }
@@ -215,6 +233,10 @@ func TestOwnerUpdatesAndDeletesOrganizationWithEvents(t *testing.T) {
 	store := &fakeStore{
 		actorMembership: domain.Membership{UserID: "owner-1", Role: domain.RoleOwner},
 		organization:    domain.Organization{ID: "org-1", Name: "Before", Slug: "before"},
+		members: []domain.Membership{
+			{OrganizationID: "org-1", UserID: "owner-1", Email: "owner@example.com", Role: domain.RoleOwner},
+			{OrganizationID: "org-1", UserID: "member-1", Email: "member@example.com", Role: domain.RoleMember},
+		},
 	}
 	service := New(store, "https://app.example.com/invitations/accept")
 	service.now = fixedTime
@@ -231,6 +253,105 @@ func TestOwnerUpdatesAndDeletesOrganizationWithEvents(t *testing.T) {
 	}
 	if store.deletedOrgID != "org-1" || store.events[1].DetailType != autheventsv1.OrganizationDeletedDetailType {
 		t.Fatalf("unexpected delete: store=%+v", store)
+	}
+
+	removals := store.events[2:]
+	if len(removals) != 2 {
+		t.Fatalf("removal events = %d, want one per member", len(removals))
+	}
+	for index, event := range removals {
+		var removed autheventsv1.MemberRemoved
+		if event.DetailType != autheventsv1.MemberRemovedDetailType || json.Unmarshal(event.Data, &removed) != nil {
+			t.Fatalf("unexpected removal event: %+v", event)
+		}
+		member := store.members[index]
+		if removed.UserID != member.UserID || removed.Email != member.Email || removed.PreviousRole != string(member.Role) ||
+			removed.OrganizationName != "After" || removed.Reason != autheventsv1.MemberRemovedReasonOrganizationDeleted || removed.RemovedBy != "owner-1" {
+			t.Fatalf("unexpected removal: %+v", removed)
+		}
+	}
+}
+
+func TestRoleChangeEventNamesMemberAndOrganization(t *testing.T) {
+	store := &fakeStore{
+		actorMembership:  domain.Membership{OrganizationID: "org-1", UserID: "owner-1", Role: domain.RoleOwner},
+		targetMembership: domain.Membership{OrganizationID: "org-1", UserID: "member-1", Email: "member@example.com", Role: domain.RoleMember},
+		organization:     domain.Organization{ID: "org-1", Name: "Acme"},
+	}
+	service := New(store, "https://app.example.com/invitations/accept")
+	service.now = fixedTime
+
+	if _, err := service.ChangeMemberRole(context.Background(), "owner-1", "org-1", "member-1", domain.RoleAdmin); err != nil {
+		t.Fatalf("ChangeMemberRole() error = %v", err)
+	}
+	var changed autheventsv1.MemberRoleChanged
+	if len(store.events) != 1 || json.Unmarshal(store.events[0].Data, &changed) != nil {
+		t.Fatalf("unexpected events: %+v", store.events)
+	}
+	want := autheventsv1.MemberRoleChanged{
+		OrganizationID: "org-1", OrganizationName: "Acme", UserID: "member-1", Email: "member@example.com",
+		PreviousRole: "member", Role: "admin", ChangedBy: "owner-1", ChangedAt: fixedTime(),
+	}
+	if changed != want {
+		t.Fatalf("role change event = %+v, want %+v", changed, want)
+	}
+}
+
+func TestRemoveMemberEventSaysWhyMembershipEnded(t *testing.T) {
+	tests := []struct {
+		name    string
+		actorID string
+		reason  string
+	}{
+		{name: "removed by an admin", actorID: "admin-1", reason: autheventsv1.MemberRemovedReasonRemoved},
+		{name: "left", actorID: "member-1", reason: autheventsv1.MemberRemovedReasonLeft},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			target := domain.Membership{OrganizationID: "org-1", UserID: "member-1", Email: "member@example.com", Role: domain.RoleMember}
+			actor := domain.Membership{OrganizationID: "org-1", UserID: "admin-1", Role: domain.RoleAdmin}
+			if test.actorID == target.UserID {
+				actor = target
+			}
+			store := &fakeStore{actorMembership: actor, targetMembership: target, organization: domain.Organization{ID: "org-1", Name: "Acme"}}
+			service := New(store, "https://app.example.com/invitations/accept")
+			service.now = fixedTime
+
+			if err := service.RemoveMember(context.Background(), test.actorID, "org-1", "member-1"); err != nil {
+				t.Fatalf("RemoveMember() error = %v", err)
+			}
+			var removed autheventsv1.MemberRemoved
+			if len(store.events) != 1 || json.Unmarshal(store.events[0].Data, &removed) != nil {
+				t.Fatalf("unexpected events: %+v", store.events)
+			}
+			if removed.Reason != test.reason || removed.Email != "member@example.com" || removed.OrganizationName != "Acme" || removed.RemovedBy != test.actorID {
+				t.Fatalf("removal event = %+v, want reason %q", removed, test.reason)
+			}
+		})
+	}
+}
+
+func TestRevokedInvitationEventNamesOrganization(t *testing.T) {
+	store := &fakeStore{
+		actorMembership: domain.Membership{UserID: "owner-1", Role: domain.RoleOwner},
+		organization:    domain.Organization{ID: "org-1", Name: "Acme"},
+		invitation: domain.Invitation{
+			ID: "inv-1", OrganizationID: "org-1", Email: "invitee@example.com", Role: domain.RoleMember, Status: domain.InvitationPending,
+		},
+	}
+	service := New(store, "https://app.example.com/invitations/accept")
+	service.now = fixedTime
+
+	if err := service.RevokeInvitation(context.Background(), "owner-1", "org-1", "inv-1"); err != nil {
+		t.Fatalf("RevokeInvitation() error = %v", err)
+	}
+	var revoked autheventsv1.MemberInvitationRevoked
+	if len(store.events) != 1 || json.Unmarshal(store.events[0].Data, &revoked) != nil {
+		t.Fatalf("unexpected events: %+v", store.events)
+	}
+	if revoked.OrganizationName != "Acme" || revoked.Email != "invitee@example.com" || revoked.RevokedBy != "owner-1" {
+		t.Fatalf("revocation event = %+v", revoked)
 	}
 }
 

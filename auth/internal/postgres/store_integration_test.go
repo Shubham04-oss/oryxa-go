@@ -147,18 +147,30 @@ func TestStoreLifecycle(t *testing.T) {
 		t.Fatalf("RevokeInvitation() error = %v", err)
 	}
 
-	if err := store.DeleteOrganization(ctx, organizationID, testEvent(eventPrefix+"-org-deleted", "auth.organization.deleted.v1", now)); err != nil {
+	var removedMembers []domain.Membership
+	removed := func(member domain.Membership) (domain.Event, error) {
+		removedMembers = append(removedMembers, member)
+		return testEvent(eventPrefix+"-removed-with-org-"+member.UserID, "auth.member.removed.v1", now), nil
+	}
+	if err := store.DeleteOrganization(ctx, organizationID, testEvent(eventPrefix+"-org-deleted", "auth.organization.deleted.v1", now), removed); err != nil {
 		t.Fatalf("DeleteOrganization() error = %v", err)
 	}
 	if _, err := store.OrganizationByID(ctx, organizationID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("OrganizationByID(deleted) error = %v, want not found", err)
 	}
+	// Only the owner is still a member by now; the second owner was removed above.
+	if len(removedMembers) != 1 || removedMembers[0].UserID != ownerID || removedMembers[0].Email != owner.Email || removedMembers[0].Role != domain.RoleOwner {
+		t.Fatalf("DeleteOrganization() ended memberships %+v, want only the owner's", removedMembers)
+	}
+	if err := store.DeleteOrganization(ctx, organizationID, testEvent(eventPrefix+"-deleted-again", "auth.organization.deleted.v1", now), removed); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DeleteOrganization(deleted) error = %v, want not found", err)
+	}
 	var outboxCount int
 	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM auth_outbox WHERE id LIKE $1`, eventPrefix+"%").Scan(&outboxCount); err != nil {
 		t.Fatalf("count outbox events: %v", err)
 	}
-	if outboxCount != 18 {
-		t.Fatalf("outbox count = %d, want 18", outboxCount)
+	if outboxCount != 19 {
+		t.Fatalf("outbox count = %d, want 19", outboxCount)
 	}
 }
 
