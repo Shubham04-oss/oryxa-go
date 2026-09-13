@@ -5,6 +5,8 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"io/fs"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -37,13 +39,22 @@ func (store *Store) Close() {
 	store.pool.Close()
 }
 
+// Migrate applies every migration in name order. Each is written to be safe to
+// run again.
 func (store *Store) Migrate(ctx context.Context) error {
-	contents, err := migrations.ReadFile("migrations/001_auth.sql")
+	names, err := fs.Glob(migrations, "migrations/*.sql")
 	if err != nil {
-		return fmt.Errorf("read auth migration: %w", err)
+		return fmt.Errorf("list auth migrations: %w", err)
 	}
-	if _, err := store.pool.Exec(ctx, string(contents)); err != nil {
-		return fmt.Errorf("apply auth migration: %w", err)
+	slices.Sort(names)
+	for _, name := range names {
+		contents, err := migrations.ReadFile(name)
+		if err != nil {
+			return fmt.Errorf("read auth migration %s: %w", name, err)
+		}
+		if _, err := store.pool.Exec(ctx, string(contents)); err != nil {
+			return fmt.Errorf("apply auth migration %s: %w", name, err)
+		}
 	}
 	return nil
 }

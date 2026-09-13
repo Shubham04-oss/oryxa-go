@@ -14,6 +14,9 @@ var (
 	ErrUnauthorized = errors.New("unauthorized")
 	ErrRateLimited  = errors.New("rate limited")
 	ErrExpired      = errors.New("expired")
+	// ErrLimitReached means the organization's plan allows no more of what
+	// was asked for.
+	ErrLimitReached = errors.New("limit reached")
 )
 
 type Role string

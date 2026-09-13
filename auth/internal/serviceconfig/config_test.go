@@ -17,6 +17,20 @@ func TestFromEnvLoadsRuntimeConfiguration(t *testing.T) {
 	}
 }
 
+func TestFromEnvLoadsBillingEventsQueue(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("AUTH_EVENTS_QUEUE_URL", " http://localhost:4566/000000000000/auth-events ")
+	t.Setenv("SQS_ENDPOINT", "http://localhost:4566/")
+
+	config, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.EventsQueueURL != "http://localhost:4566/000000000000/auth-events" || config.SQSEndpoint != "http://localhost:4566" {
+		t.Fatalf("queue url = %q, sqs endpoint = %q", config.EventsQueueURL, config.SQSEndpoint)
+	}
+}
+
 func TestFromEnvRejectsInvalidBoolean(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("AUTH_COOKIE_SECURE", "sometimes")
@@ -41,4 +55,6 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("AUTH_RETURN_URLS", "https://app.example.com")
 	t.Setenv("AUTH_COOKIE_SECURE", "")
 	t.Setenv("AUTH_AUTO_MIGRATE", "")
+	t.Setenv("AUTH_EVENTS_QUEUE_URL", "")
+	t.Setenv("SQS_ENDPOINT", "")
 }
