@@ -14,10 +14,11 @@ import (
 const defaultRegion = "ap-south-1"
 
 type Config struct {
-	Address     string
-	AWSRegion   string
-	DatabaseURL string
-	AutoMigrate bool
+	Address            string
+	AWSRegion          string
+	DatabaseURL        string
+	PostgresExtensions []string
+	AutoMigrate        bool
 	// AuthURL is where billing asks auth who a caller is.
 	AuthURL string
 	// BillingURL is the app's billing page.
@@ -50,6 +51,7 @@ func FromEnv() (Config, error) {
 		Address:             valueOrDefault("BILLING_ADDRESS", ":8080"),
 		AWSRegion:           valueOrDefault("AWS_REGION", defaultRegion),
 		DatabaseURL:         strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		PostgresExtensions:  splitList(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
 		AutoMigrate:         autoMigrate,
 		AuthURL:             strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_URL")), "/"),
 		BillingURL:          strings.TrimSpace(os.Getenv("BILLING_URL")),

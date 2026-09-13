@@ -6,7 +6,7 @@ import (
 )
 
 var names = []string{
-	"BILLING_ADDRESS", "AWS_REGION", "DATABASE_URL", "BILLING_AUTO_MIGRATE", "AUTH_URL", "BILLING_URL",
+	"BILLING_ADDRESS", "AWS_REGION", "DATABASE_URL", "POSTGRES_REQUIRED_EXTENSIONS", "BILLING_AUTO_MIGRATE", "AUTH_URL", "BILLING_URL",
 	"BILLING_ALLOWED_ORIGINS", "BILLING_PLANS_FILE", "EVENT_BUS_NAME", "BILLING_EVENTS_QUEUE_URL",
 	"BILLING_RENEWAL_REMINDER_DAYS", "DODO_PAYMENTS_API_KEY", "DODO_PAYMENTS_WEBHOOK_KEY",
 	"DODO_PAYMENTS_BASE_URL", "DODO_PAYMENTS_ENVIRONMENT",
@@ -44,6 +44,7 @@ func TestFromEnvDodo(t *testing.T) {
 	t.Setenv("DODO_PAYMENTS_WEBHOOK_KEY", "whsec_abc")
 	t.Setenv("DODO_PAYMENTS_ENVIRONMENT", "live_mode")
 	t.Setenv("BILLING_ALLOWED_ORIGINS", "https://app.example.com, https://admin.example.com")
+	t.Setenv("POSTGRES_REQUIRED_EXTENSIONS", "ltree, pg_trgm")
 
 	config, err := FromEnv()
 	if err != nil {
@@ -51,6 +52,9 @@ func TestFromEnvDodo(t *testing.T) {
 	}
 	if !config.Dodo.LiveMode || config.Dodo.APIKey != "key" || config.Dodo.WebhookKey != "whsec_abc" || len(config.AllowedOrigins) != 2 {
 		t.Fatalf("config = %+v", config)
+	}
+	if !slices.Equal(config.PostgresExtensions, []string{"ltree", "pg_trgm"}) {
+		t.Fatalf("postgres extensions = %v", config.PostgresExtensions)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
+	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
 )
 
@@ -41,6 +42,13 @@ var (
 	subscriptionRenewalUpcoming = Subscription{Source: billingeventsv1.Source, DetailType: billingeventsv1.SubscriptionRenewalUpcomingDetailType}
 )
 
+// The teams events the email service sends mail for when a member's
+// notify_email switch is on. Teams owns that switch; this service only
+// delivers.
+var (
+	memberPinged = Subscription{Source: teamseventsv1.Source, DetailType: teamseventsv1.MemberPingedDetailType}
+)
+
 // Subscriptions is every Oryxa domain event NewConsumer sends mail for. The
 // subscriptions rule's event pattern is built from it, so an event missing
 // here never reaches the queue.
@@ -56,6 +64,7 @@ func Subscriptions() []Subscription {
 		subscriptionPaymentFailed,
 		subscriptionEnded,
 		subscriptionRenewalUpcoming,
+		memberPinged,
 	}
 }
 
@@ -70,6 +79,7 @@ type application interface {
 	SubscriptionPaymentFailed(context.Context, delivery.EventRef, billingeventsv1.SubscriptionPaymentFailed) error
 	SubscriptionEnded(context.Context, delivery.EventRef, billingeventsv1.SubscriptionEnded) error
 	SubscriptionRenewalUpcoming(context.Context, delivery.EventRef, billingeventsv1.SubscriptionRenewalUpcoming) error
+	MemberPinged(context.Context, delivery.EventRef, teamseventsv1.MemberPinged) error
 	SESFeedback(context.Context, delivery.Feedback) error
 }
 
@@ -92,6 +102,7 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 		subscriptionPaymentFailed:   domainEvent(app.SubscriptionPaymentFailed),
 		subscriptionEnded:           domainEvent(app.SubscriptionEnded),
 		subscriptionRenewalUpcoming: domainEvent(app.SubscriptionRenewalUpcoming),
+		memberPinged:                domainEvent(app.MemberPinged),
 	}
 	for _, detailType := range SESFeedbackDetailTypes() {
 		handlers[Subscription{Source: SESSource, DetailType: detailType}] = sesFeedback(app.SESFeedback)

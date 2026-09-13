@@ -18,6 +18,9 @@ type Config struct {
 	DeliveriesTable   string
 	SuppressionsTable string
 	QueueURL          string
+	// SMTPAddr, when set, sends through SMTP instead of SES. Local runs
+	// point this at Mailpit.
+	SMTPAddr string
 }
 
 func FromEnv() (Config, error) {
@@ -38,6 +41,7 @@ func FromEnv() (Config, error) {
 		DeliveriesTable:   valueOrDefault("EMAIL_DELIVERIES_TABLE", "email-deliveries"),
 		SuppressionsTable: valueOrDefault("EMAIL_SUPPRESSIONS_TABLE", "email-suppressions"),
 		QueueURL:          strings.TrimSpace(os.Getenv("EMAIL_QUEUE_URL")),
+		SMTPAddr:          strings.TrimSpace(os.Getenv("EMAIL_SMTP_ADDR")),
 	}, nil
 }
 

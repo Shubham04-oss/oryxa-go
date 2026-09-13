@@ -39,10 +39,12 @@ var noticeSubjects = map[string]string{
 	"member-removed":       "You were removed from Acme & Sons",
 	"organization-deleted": "Acme & Sons was deleted",
 	"invitation-revoked":   "Your invitation to join Acme & Sons was withdrawn",
+	"team-called":          "Engineering was called in Acme & Sons",
 }
 
 type noticeData struct {
 	OrganizationName string
+	TeamName         string
 	Role             string
 	PreviousRole     string
 }
@@ -129,7 +131,7 @@ func TestRenderBillingTemplates(t *testing.T) {
 
 func TestRenderNoticeTemplates(t *testing.T) {
 	templates := parseTemplates(t)
-	data := noticeData{OrganizationName: "Acme & Sons", Role: "admin", PreviousRole: "member"}
+	data := noticeData{OrganizationName: "Acme & Sons", TeamName: "Engineering", Role: "admin", PreviousRole: "member"}
 
 	for name, subject := range noticeSubjects {
 		t.Run(name, func(t *testing.T) {
@@ -155,6 +157,14 @@ func TestRenderNoticeTemplates(t *testing.T) {
 	}
 	if !strings.Contains(message.Text, "from member to admin") {
 		t.Fatalf("role change does not say what changed:\n%s", message.Text)
+	}
+
+	called, err := templates.Render("team-called", data)
+	if err != nil {
+		t.Fatalf("Render(team-called) error = %v", err)
+	}
+	if !strings.Contains(called.Text, "Engineering team") {
+		t.Fatalf("team call does not name the team:\n%s", called.Text)
 	}
 }
 

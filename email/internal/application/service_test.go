@@ -8,6 +8,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
+	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/mail"
 )
@@ -253,6 +254,56 @@ func TestOrganizationNoticesSkipWhatMembersDidThemselves(t *testing.T) {
 			service, deliveries := newTestService(t)
 			if err := send(service); err != nil {
 				t.Fatalf("error = %v, want the event skipped", err)
+			}
+			if len(deliveries.requests) != 0 {
+				t.Fatalf("deliveries = %d, want 0", len(deliveries.requests))
+			}
+		})
+	}
+}
+
+func TestTeamCalledSendsWhenTheMemberWantsEmail(t *testing.T) {
+	service, deliveries := newTestService(t)
+	err := service.MemberPinged(context.Background(), ref(teamseventsv1.MemberPingedDetailType), teamseventsv1.MemberPinged{
+		TeamID: "team_1", TeamName: "Engineering", OrganizationID: "org_1", OrganizationName: "Acme",
+		UserID: "user-2", Email: "ravi@example.com", Role: "member", Tool: teamseventsv1.ToolCallTeam,
+		NotifyEmail: true, CalledBy: "user-1", CalledAt: testNow,
+	})
+	if err != nil {
+		t.Fatalf("MemberPinged() error = %v", err)
+	}
+	if len(deliveries.requests) != 1 {
+		t.Fatalf("deliveries = %d, want 1", len(deliveries.requests))
+	}
+	request := deliveries.requests[0]
+	if request.Message.Template != "team-called" || request.Recipient != "ravi@example.com" {
+		t.Fatalf("delivery request = %+v", request)
+	}
+	if !strings.Contains(request.Message.Text, "Engineering") || !strings.Contains(request.Message.Text, "Acme") {
+		t.Fatalf("email lacks the team or organization:\n%s", request.Message.Text)
+	}
+}
+
+func TestTeamCalledSkipsWhenTheMemberDoesNotWantEmail(t *testing.T) {
+	tests := map[string]teamseventsv1.MemberPinged{
+		"switch off": {
+			TeamName: "Engineering", OrganizationName: "Acme", UserID: "user-2", Email: "ravi@example.com",
+			Tool: teamseventsv1.ToolCallTeam, NotifyEmail: false, CalledBy: "user-1",
+		},
+		"they ran the tool": {
+			TeamName: "Engineering", OrganizationName: "Acme", UserID: "user-1", Email: "asha@example.com",
+			Tool: teamseventsv1.ToolCallTeam, NotifyEmail: true, CalledBy: "user-1",
+		},
+		"listing": {
+			TeamName: "Engineering", OrganizationName: "Acme", UserID: "user-2", Email: "ravi@example.com",
+			Tool: teamseventsv1.ToolListTeams, NotifyEmail: true, CalledBy: "user-1",
+		},
+	}
+	for name, data := range tests {
+		t.Run(name, func(t *testing.T) {
+			service, deliveries := newTestService(t)
+			if err := service.MemberPinged(context.Background(), ref(teamseventsv1.MemberPingedDetailType), data); err != nil {
+				t.Fatalf("MemberPinged() error = %v", err)
 			}
 			if len(deliveries.requests) != 0 {
 				t.Fatalf("deliveries = %d, want 0", len(deliveries.requests))

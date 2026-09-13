@@ -7,8 +7,10 @@ Microsoft 365 has reviewed Outlook, Calendar, and OneDrive actions plus native
 Graph webhook subscriptions for new mail and calendar changes. The
 deterministic suite runs the real pinned piece code against mocked provider
 endpoints, and the combined lifecycle runs against PostgreSQL and LocalStack on
-the mini. Live Cognito, KMS, Lambda, and provider sandbox validation remains an
-AWS staging concern; no real customer credentials are used by the local suite.
+the mini. The k6 client journey across integrations and teams is `/test`
+(`./test/run.sh`). Live Cognito, KMS, Lambda, and provider sandbox validation
+remains an AWS staging concern; no real customer credentials are used by the
+local suite.
 
 The integrations service connects an Oryxa organization to third-party
 products. It reuses the MIT-licensed Activepieces piece framework and selected
