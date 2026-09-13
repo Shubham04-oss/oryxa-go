@@ -1,0 +1,19 @@
+{
+  "name": "@oryxa/integrations-runtime",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@activepieces/piece-slack": "0.17.10"
+  },
+  "devDependencies": {
+    "@activepieces/pieces-framework": "0.32.0",
+    "@types/node": "24.5.2",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "upstream": {
+    "repository": "https://github.com/activepieces/activepieces",
+    "reviewedCommit": "89aeeae8c1eb98428210ec7d214f933b96aa1987"
+  },
+  "framework": {
+    "package": "@activepieces/pieces-framework",
+    "version": "0.32.0",
+    "usage": "development-only compatibility fixtures",
+    "integrity": "sha512-sAJRjGEKbdqBXHP9eiffm3CM3iijt355gh6aDvhnh4/wa0T10W0I5dtXbQpkbMdIsY5ZpeNV092C8+k94nMyEA=="
+  },
+  "pieces": [
+    {
+      "package": "@activepieces/piece-slack",
+      "version": "0.17.10",
+      "integrity": "sha512-VV1Gyyw7fW16OT775ghIdNv+tCb2mrMHsaIJlyqRsEl7r/ibhCigUEYBHuHh3GUzZnFSJoDhpfPc7JPA+aHiyg==",
+      "actions": [],
+      "triggers": ["new-message"],
+      "eventHooks": true
+    }
+  ]
+}
