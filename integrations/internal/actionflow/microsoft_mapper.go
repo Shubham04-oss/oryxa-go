@@ -14,33 +14,236 @@ import (
 // content, attendees, authentication data, or Graph transport headers.
 func mapMicrosoft(request MapRequest) (MappedResult, error) {
 	switch request.ActionName {
-	case "send-email":
+	case "send-email", "send-draft-email":
 		return mapMicrosoftSentEmail(request)
+	case "reply-email":
+		return mapMicrosoftReplyEmail(request)
+	case "create-draft-email":
+		return mapMicrosoftDraftCreated(request)
+	case "forward-email":
+		return mapMicrosoftForwardedEmail(request)
+	case "add-label-to-email", "remove-label-from-email":
+		return mapMicrosoftMutatedEmail(request, "")
+	case "move-email-to-folder":
+		return mapMicrosoftMovedEmail(request)
+	case "find-email":
+		return mapMicrosoftFoundEmail(request)
 	case "create-calendar-event":
 		return mapMicrosoftCreatedCalendarEvent(request)
 	case "list-calendar-events":
 		return mapMicrosoftCalendarEvents(request)
-	case "list-files":
+	case "delete-calendar-event":
+		return mapMicrosoftDeletedCalendarEvent(request)
+	case "list-files", "list-folders":
 		return mapMicrosoftOneDriveFiles(request)
+	case "copy-file":
+		return mapMicrosoftCopiedFile(request)
 	default:
 		return MappedResult{}, fmt.Errorf("%w: unsupported Microsoft action", ErrPieceOutputInvalid)
 	}
 }
 
 func mapMicrosoftSentEmail(request MapRequest) (MappedResult, error) {
-	// Graph's sendMail endpoint returns 202 with an empty body. The runtime
-	// serializes that as null, {} or an omitted output; all represent an accepted
-	// request and reveal no submitted email content.
-	trimmed := strings.TrimSpace(string(request.Output))
-	if trimmed != "" && trimmed != "null" && trimmed != "{}" && trimmed != `{"accepted":true}` {
+	// Graph's sendMail endpoint returns 202 with an empty body. send-draft-email
+	// wraps the same empty POST in {success, messageId}. Recipients, subject,
+	// and body must not appear in either shape.
+	if request.ActionName == "send-email" {
+		if !microsoftEmptyOutput(request.Output) && strings.TrimSpace(string(request.Output)) != `{"accepted":true}` {
+			return MappedResult{}, ErrPieceOutputInvalid
+		}
+		return MappedResult{SafeResult: json.RawMessage(`{"accepted":true}`),
+			DetailType: integrationevents.MicrosoftOutlookEmailAcceptedDetailType,
+			Data: integrationevents.MicrosoftOutlookEmailAccepted{
+				ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID,
+				RequestedBy: request.Execution.MemberID, AcceptedAt: request.OccurredAt,
+			}}, nil
+	}
+	id, ok := microsoftOutputID(request.Output, request.Props, "messageId")
+	if !ok {
 		return MappedResult{}, ErrPieceOutputInvalid
 	}
-	return MappedResult{SafeResult: json.RawMessage(`{"accepted":true}`),
+	result, err := json.Marshal(struct {
+		Accepted bool   `json:"accepted"`
+		ID       string `json:"id"`
+	}{Accepted: true, ID: id})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result,
 		DetailType: integrationevents.MicrosoftOutlookEmailAcceptedDetailType,
 		Data: integrationevents.MicrosoftOutlookEmailAccepted{
 			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID,
 			RequestedBy: request.Execution.MemberID, AcceptedAt: request.OccurredAt,
 		}}, nil
+}
+
+func mapMicrosoftReplyEmail(request MapRequest) (MappedResult, error) {
+	var output struct {
+		DraftID   string `json:"draftId"`
+		DraftLink string `json:"draftLink"`
+	}
+	var props struct {
+		Draft     bool   `json:"draft"`
+		MessageID string `json:"messageId"`
+	}
+	if json.Unmarshal(request.Output, &output) != nil || json.Unmarshal(request.Props, &props) != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	id := output.DraftID
+	if id == "" {
+		id = props.MessageID
+	}
+	if id == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	result, err := json.Marshal(struct {
+		ID    string `json:"id"`
+		URL   string `json:"url,omitempty"`
+		Draft bool   `json:"draft"`
+	}{ID: id, URL: safeMicrosoftURL(output.DraftLink), Draft: props.Draft})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	if props.Draft {
+		return MappedResult{SafeResult: result,
+			DetailType: integrationevents.MicrosoftOutlookDraftCreatedDetailType,
+			Data: integrationevents.MicrosoftOutlookDraftCreated{
+				ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, MessageID: id,
+				RequestedBy: request.Execution.MemberID, CreatedAt: request.OccurredAt,
+			}}, nil
+	}
+	return MappedResult{SafeResult: result,
+		DetailType: integrationevents.MicrosoftOutlookEmailAcceptedDetailType,
+		Data: integrationevents.MicrosoftOutlookEmailAccepted{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID,
+			RequestedBy: request.Execution.MemberID, AcceptedAt: request.OccurredAt,
+		}}, nil
+}
+
+func mapMicrosoftDraftCreated(request MapRequest) (MappedResult, error) {
+	id, ok := microsoftOutputID(request.Output, nil, "id")
+	if !ok {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	result, err := json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: id})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result,
+		DetailType: integrationevents.MicrosoftOutlookDraftCreatedDetailType,
+		Data: integrationevents.MicrosoftOutlookDraftCreated{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, MessageID: id,
+			RequestedBy: request.Execution.MemberID, CreatedAt: request.OccurredAt,
+		}}, nil
+}
+
+func mapMicrosoftForwardedEmail(request MapRequest) (MappedResult, error) {
+	id, ok := microsoftOutputID(request.Output, request.Props, "messageId")
+	if !ok {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	result, err := json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: id})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result,
+		DetailType: integrationevents.MicrosoftOutlookEmailForwardedDetailType,
+		Data: integrationevents.MicrosoftOutlookEmailForwarded{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, MessageID: id,
+			RequestedBy: request.Execution.MemberID, ForwardedAt: request.OccurredAt,
+		}}, nil
+}
+
+func mapMicrosoftMutatedEmail(request MapRequest, folderID string) (MappedResult, error) {
+	id, ok := microsoftOutputID(request.Output, request.Props, "id")
+	if !ok {
+		id, ok = microsoftOutputID(nil, request.Props, "messageId")
+	}
+	if !ok {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	result, err := json.Marshal(struct {
+		ID       string `json:"id"`
+		FolderID string `json:"folder_id,omitempty"`
+	}{ID: id, FolderID: folderID})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result,
+		DetailType: integrationevents.MicrosoftOutlookEmailMutatedDetailType,
+		Data: integrationevents.MicrosoftOutlookEmailMutated{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID,
+			MessageID: id, FolderID: folderID, RequestedBy: request.Execution.MemberID,
+			MutatedAt: request.OccurredAt,
+		}}, nil
+}
+
+func mapMicrosoftMovedEmail(request MapRequest) (MappedResult, error) {
+	var props struct {
+		DestinationFolderID string `json:"destinationFolderId"`
+	}
+	_ = json.Unmarshal(request.Props, &props)
+	folderID := props.DestinationFolderID
+	var output struct {
+		ParentFolderID string `json:"parentFolderId"`
+	}
+	_ = json.Unmarshal(request.Output, &output)
+	if output.ParentFolderID != "" {
+		folderID = output.ParentFolderID
+	}
+	return mapMicrosoftMutatedEmail(request, folderID)
+}
+
+func mapMicrosoftFoundEmail(request MapRequest) (MappedResult, error) {
+	var output struct {
+		Found   bool `json:"found"`
+		HasMore bool `json:"hasMore"`
+		Result  []struct {
+			ID               string `json:"id"`
+			Subject          string `json:"subject"`
+			ReceivedDateTime string `json:"receivedDateTime"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(request.Output, &output) != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	items := output.Result
+	if items == nil {
+		items = []struct {
+			ID               string `json:"id"`
+			Subject          string `json:"subject"`
+			ReceivedDateTime string `json:"receivedDateTime"`
+		}{}
+	}
+	const maximum = 100
+	truncated := output.HasMore || len(items) > maximum
+	if len(items) > maximum {
+		items = items[:maximum]
+	}
+	safe := make([]any, 0, len(items))
+	for _, item := range items {
+		if item.ID == "" {
+			return MappedResult{}, ErrPieceOutputInvalid
+		}
+		safe = append(safe, struct {
+			ID         string `json:"id"`
+			Subject    string `json:"subject,omitempty"`
+			ReceivedAt string `json:"received_at,omitempty"`
+		}{ID: item.ID, Subject: item.Subject, ReceivedAt: item.ReceivedDateTime})
+	}
+	result, err := json.Marshal(struct {
+		Found     bool  `json:"found"`
+		Items     []any `json:"items"`
+		Truncated bool  `json:"truncated"`
+	}{Found: output.Found, Items: safe, Truncated: truncated})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result}, nil
 }
 
 type microsoftCalendarEvent struct {
@@ -116,6 +319,33 @@ func mapMicrosoftCalendarEvents(request MapRequest) (MappedResult, error) {
 	return MappedResult{SafeResult: result}, nil
 }
 
+func mapMicrosoftDeletedCalendarEvent(request MapRequest) (MappedResult, error) {
+	if !microsoftEmptyOutput(request.Output) {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	var props struct {
+		CalendarID string `json:"calendarId"`
+		EventID    string `json:"eventId"`
+	}
+	if json.Unmarshal(request.Props, &props) != nil || props.CalendarID == "" || props.EventID == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	result, err := json.Marshal(struct {
+		ID         string `json:"id"`
+		CalendarID string `json:"calendar_id"`
+	}{ID: props.EventID, CalendarID: props.CalendarID})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result,
+		DetailType: integrationevents.MicrosoftCalendarEventDeletedDetailType,
+		Data: integrationevents.MicrosoftCalendarEventDeleted{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID,
+			CalendarID: props.CalendarID, EventID: props.EventID,
+			RequestedBy: request.Execution.MemberID, DeletedAt: request.OccurredAt,
+		}}, nil
+}
+
 func safeMicrosoftCalendarEvent(value microsoftCalendarEvent) any {
 	return struct {
 		ID       string `json:"id"`
@@ -187,6 +417,36 @@ func mapMicrosoftOneDriveFiles(request MapRequest) (MappedResult, error) {
 	return MappedResult{SafeResult: result}, nil
 }
 
+func mapMicrosoftCopiedFile(request MapRequest) (MappedResult, error) {
+	var output struct {
+		ResourceID string                `json:"resourceId"`
+		File       microsoftOneDriveFile `json:"file"`
+	}
+	if json.Unmarshal(request.Output, &output) != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	file := output.File
+	if file.ID == "" {
+		file.ID = output.ResourceID
+	}
+	if file.ID == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	if file.Name == "" {
+		file.Name = file.ID
+	}
+	result, err := json.Marshal(safeMicrosoftOneDriveFile(file))
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result,
+		DetailType: integrationevents.MicrosoftOneDriveItemCopiedDetailType,
+		Data: integrationevents.MicrosoftOneDriveItemCopied{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, ItemID: file.ID,
+			RequestedBy: request.Execution.MemberID, CopiedAt: request.OccurredAt,
+		}}, nil
+}
+
 func safeMicrosoftOneDriveFile(value microsoftOneDriveFile) any {
 	mimeType := ""
 	if value.File != nil {
@@ -202,4 +462,43 @@ func safeMicrosoftOneDriveFile(value microsoftOneDriveFile) any {
 		ModifiedAt string `json:"modified_at,omitempty"`
 	}{ID: value.ID, Name: value.Name, Size: value.Size, MimeType: mimeType, URL: safeMicrosoftURL(value.WebURL),
 		CreatedAt: value.CreatedDateTime, ModifiedAt: value.ModifiedDateTime}
+}
+
+func microsoftEmptyOutput(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed == "" || trimmed == "null" || trimmed == "{}" || trimmed == "[]"
+}
+
+func microsoftOutputID(output, props json.RawMessage, propField string) (string, bool) {
+	var decoded struct {
+		ID         string `json:"id"`
+		DraftID    string `json:"draftId"`
+		MessageID  string `json:"messageId"`
+		ResourceID string `json:"resourceId"`
+	}
+	if len(output) > 0 && json.Unmarshal(output, &decoded) == nil {
+		for _, candidate := range []string{decoded.ID, decoded.DraftID, decoded.MessageID, decoded.ResourceID} {
+			if candidate != "" {
+				return candidate, true
+			}
+		}
+	}
+	if len(props) == 0 {
+		return "", false
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(props, &fields) != nil {
+		return "", false
+	}
+	for _, key := range []string{propField, "messageId", "id"} {
+		raw, ok := fields[key]
+		if !ok {
+			continue
+		}
+		var value string
+		if json.Unmarshal(raw, &value) == nil && value != "" {
+			return value, true
+		}
+	}
+	return "", false
 }

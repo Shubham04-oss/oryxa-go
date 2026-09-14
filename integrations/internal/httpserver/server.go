@@ -14,6 +14,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/credentials"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/oauthflow"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/google"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/triggerflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/webhookroutes"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/webhooks"
@@ -53,6 +54,10 @@ type WebhookAdmission interface {
 	Admit(context.Context, webhooks.Request) (webhooks.Decision, error)
 }
 
+type GmailPushAdmission interface {
+	Admit(context.Context, google.PushRequest) (webhooks.Decision, error)
+}
+
 type ActionLifecycle interface {
 	Run(context.Context, actionflow.RunRequest) (actionflow.RunResult, error)
 }
@@ -64,6 +69,7 @@ type Dependencies struct {
 	WebhookRoutes WebhookRouteLifecycle
 	Triggers      TriggerLifecycle
 	Webhooks      WebhookAdmission
+	GmailPushes   GmailPushAdmission
 	Actions       ActionLifecycle
 }
 
@@ -94,6 +100,7 @@ func NewAPI(dependencies Dependencies) *Server {
 	mux.HandleFunc("POST /v1/organizations/{organizationID}/triggers", server.createTrigger)
 	mux.HandleFunc("DELETE /v1/organizations/{organizationID}/triggers/{triggerID}", server.disableTrigger)
 	mux.HandleFunc("POST /v1/organizations/{organizationID}/connections/{connectionID}/actions/{actionName}", server.runAction)
+	mux.HandleFunc("POST /v1/webhooks/google/gmail", server.admitGmailPush)
 	mux.HandleFunc("POST /v1/webhooks/{opaqueRoute}", server.admitWebhook)
 	server.handler = mux
 	return server
@@ -428,6 +435,33 @@ func (s *Server) admitWebhook(writer http.ResponseWriter, request *http.Request)
 	writeJSON(writer, decision.Status, decision.Body)
 }
 
+func (s *Server) admitGmailPush(writer http.ResponseWriter, request *http.Request) {
+	if s.dependencies.GmailPushes == nil {
+		writeError(writer, 501, "not_configured", "endpoint is not configured")
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(request.Body, maxRequestBody+1))
+	if err != nil {
+		writeError(writer, 400, "invalid_request", "request body could not be read")
+		return
+	}
+	if len(raw) > maxRequestBody {
+		writeError(writer, 413, "payload_too_large", "webhook payload is too large")
+		return
+	}
+	decision, err := s.dependencies.GmailPushes.Admit(request.Context(), google.PushRequest{
+		Authorization: request.Header.Get("Authorization"), RawBody: raw,
+	})
+	if err != nil {
+		if decision.Status == 0 {
+			decision.Status = 500
+		}
+		writeError(writer, decision.Status, "webhook_rejected", "webhook could not be accepted")
+		return
+	}
+	writer.WriteHeader(decision.Status)
+}
+
 func safeProfile(profile domain.OAuthAppProfile) map[string]any {
 	return map[string]any{"id": profile.ID, "organization_id": profile.OrganizationID, "provider": profile.Provider,
 		"piece_name": profile.PieceName, "piece_version": profile.PieceVersion, "mode": profile.Mode,
@@ -532,7 +566,7 @@ func writeServiceError(writer http.ResponseWriter, err error) {
 		writeError(writer, 422, "operation_disabled", "integration operation is not enabled")
 	case errors.Is(err, actionflow.ErrOperationDisabled):
 		writeError(writer, 422, "operation_disabled", "integration action is not enabled")
-	case errors.Is(err, actionflow.ErrRequiredScope):
+	case errors.Is(err, actionflow.ErrRequiredScope), errors.Is(err, triggerflow.ErrRequiredScope):
 		writeError(writer, 422, "scope_required", "connection requires additional authorization")
 	case errors.Is(err, actionflow.ErrExecutionFailed), errors.Is(err, actionflow.ErrPieceOutputInvalid):
 		writeError(writer, 502, "provider_execution_failed", "provider action could not be completed")

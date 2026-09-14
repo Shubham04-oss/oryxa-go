@@ -24,17 +24,25 @@ func TestRegistryBindsEveryApprovedToolFamily(t *testing.T) {
 	}
 	actions := []struct{ provider, name, skill string }{
 		{"slack", "post-message", "oryxa-slack"}, {"slack", "add-reaction", "oryxa-slack"},
-		{"slack", "find-channel", "oryxa-slack"}, {"github", "create-issue", "oryxa-github"},
-		{"github", "comment-on-issue", "oryxa-github"}, {"github", "get-issue", "oryxa-github"},
-		{"github", "list-pull-requests", "oryxa-github"}, {"google", "send-email", "oryxa-gmail"},
+		{"slack", "find-channel", "oryxa-slack"}, {"slack", "send-direct-message", "oryxa-slack"},
+		{"slack", "delete-message", "oryxa-slack"}, 		{"github", "create-issue", "oryxa-github"}, {"github", "comment-on-issue", "oryxa-github"},
+		{"github", "get-issue", "oryxa-github"}, {"github", "list-pull-requests", "oryxa-github"},
+		{"github", "create-pull-request", "oryxa-github"}, {"github", "get-repository", "oryxa-github"}, 		{"google", "send-email", "oryxa-gmail"}, {"google", "reply-email", "oryxa-gmail"},
 		{"google", "create-calendar-event", "oryxa-google-calendar"},
 		{"google", "list-calendar-events", "oryxa-google-calendar"},
+		{"google", "delete-calendar-event", "oryxa-google-calendar"},
 		{"google", "list-drive-files", "oryxa-google-drive"},
+		{"google", "copy-drive-file", "oryxa-google-drive"},
 		{"google", "get-drive-file-metadata", "oryxa-google-drive"},
 		{"microsoft", "send-email", "oryxa-microsoft-outlook"},
+		{"microsoft", "reply-email", "oryxa-microsoft-outlook"},
+		{"microsoft", "find-email", "oryxa-microsoft-outlook"},
 		{"microsoft", "create-calendar-event", "oryxa-microsoft-calendar"},
 		{"microsoft", "list-calendar-events", "oryxa-microsoft-calendar"},
+		{"microsoft", "delete-calendar-event", "oryxa-microsoft-calendar"},
 		{"microsoft", "list-files", "oryxa-microsoft-onedrive"},
+		{"microsoft", "list-folders", "oryxa-microsoft-onedrive"},
+		{"microsoft", "copy-file", "oryxa-microsoft-onedrive"},
 	}
 	for _, action := range actions {
 		skill, ok := ForAction(action.provider, action.name)
@@ -45,8 +53,14 @@ func TestRegistryBindsEveryApprovedToolFamily(t *testing.T) {
 	}
 	for _, trigger := range []struct{ provider, name, skill string }{
 		{"slack", "new-message", "oryxa-slack"},
+		{"slack", "new-direct-message", "oryxa-slack"},
+		{"slack", "new-reaction", "oryxa-slack"},
 		{"microsoft", "new-email", "oryxa-microsoft-outlook"},
 		{"microsoft", "calendar-event-changed", "oryxa-microsoft-calendar"},
+		{"github", "new-issue", "oryxa-github"},
+		{"github", "new-pull-request", "oryxa-github"},
+		{"google", "new-email", "oryxa-gmail"},
+		{"google", "calendar-event-changed", "oryxa-google-calendar"},
 	} {
 		skill, ok := ForTrigger(trigger.provider, trigger.name)
 		assertSkill(t, skill, ok)
@@ -73,10 +87,10 @@ func TestRegistryBindsEveryApprovedToolFamily(t *testing.T) {
 }
 
 func TestRegistryRejectsUnknownToolBindings(t *testing.T) {
-	if _, ok := ForAction("slack", "delete-message"); ok {
+	if _, ok := ForAction("slack", "custom-api-call"); ok {
 		t.Fatal("unsupported action has a skill binding")
 	}
-	if _, ok := ForTrigger("google", "new-email"); ok {
+	if _, ok := ForTrigger("google", "new-drive-change"); ok {
 		t.Fatal("unsupported trigger has a skill binding")
 	}
 	if _, ok := ForConnection("unknown"); ok {

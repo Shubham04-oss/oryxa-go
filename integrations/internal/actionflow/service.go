@@ -37,6 +37,10 @@ type Definition struct {
 	RunnerActionName string
 	RequiredScopes   []string
 	ValidateProps    func(json.RawMessage) error
+	// PrepareProps rewrites already-validated public props into the pinned
+	// piece's expected shape (for example wrapping a Gmail label ID). It is
+	// applied only to the runner invocation; mapping still sees public props.
+	PrepareProps func(json.RawMessage) (json.RawMessage, error)
 }
 
 type Catalog interface {
@@ -139,6 +143,14 @@ func (s Service) Run(ctx context.Context, request RunRequest) (RunResult, error)
 	if definition.ValidateProps == nil || definition.ValidateProps(props) != nil {
 		return RunResult{}, ErrInvalidInput
 	}
+	runnerProps := props
+	if definition.PrepareProps != nil {
+		prepared, err := definition.PrepareProps(props)
+		if err != nil || !json.Valid(prepared) {
+			return RunResult{}, ErrInvalidInput
+		}
+		runnerProps = prepared
+	}
 	if missing := missingScopes(connection.Provider, definition.RequiredScopes, connection.GrantedScopes); len(missing) > 0 {
 		return RunResult{}, fmt.Errorf("%w: %s", ErrRequiredScope, strings.Join(missing, ","))
 	}
@@ -192,7 +204,7 @@ func (s Service) Run(ctx context.Context, request RunRequest) (RunResult, error)
 		InvocationID: execution.ID, OrganizationID: execution.OrganizationID,
 		PieceName: execution.PieceName, PieceVersion: execution.PieceVersion,
 		ActionName: definition.RunnerActionName, Auth: json.RawMessage(auth),
-		Props: props, PublicURL: s.PublicURL,
+		Props: runnerProps, PublicURL: s.PublicURL,
 	})
 	if err != nil {
 		return fail("piece_failed", fmt.Errorf("%w: %v", ErrExecutionFailed, err))
@@ -261,9 +273,21 @@ func missingScopes(provider string, required, actual []string) []string {
 	var missing []string
 	for _, value := range required {
 		_, granted := set[value]
-		if provider == "microsoft" && value == "Calendars.Read" {
-			_, implied := set["Calendars.ReadWrite"]
-			granted = granted || implied
+		if provider == "microsoft" {
+			switch value {
+			case "Calendars.Read":
+				_, implied := set["Calendars.ReadWrite"]
+				granted = granted || implied
+			case "Mail.Read":
+				_, implied := set["Mail.ReadWrite"]
+				granted = granted || implied
+			case "Files.Read":
+				_, implied := set["Files.ReadWrite"]
+				granted = granted || implied
+			}
+		}
+		if provider == "google" {
+			granted = granted || googleScopeImplied(value, set)
 		}
 		if !granted {
 			missing = append(missing, value)
@@ -271,6 +295,28 @@ func missingScopes(provider string, required, actual []string) []string {
 	}
 	slices.Sort(missing)
 	return missing
+}
+
+func googleScopeImplied(required string, granted map[string]struct{}) bool {
+	has := func(scope string) bool {
+		_, ok := granted[scope]
+		return ok
+	}
+	switch required {
+	case "https://www.googleapis.com/auth/calendar.readonly":
+		return has("https://www.googleapis.com/auth/calendar.events")
+	case "https://www.googleapis.com/auth/gmail.metadata":
+		return has("https://www.googleapis.com/auth/gmail.readonly") || has("https://www.googleapis.com/auth/gmail.modify")
+	case "https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.compose":
+		return has("https://www.googleapis.com/auth/gmail.modify")
+	case "https://www.googleapis.com/auth/gmail.send":
+		return has("https://www.googleapis.com/auth/gmail.modify") || has("https://www.googleapis.com/auth/gmail.compose")
+	case "https://www.googleapis.com/auth/drive.metadata.readonly":
+		return has("https://www.googleapis.com/auth/drive") || has("https://www.googleapis.com/auth/drive.readonly") ||
+			has("https://www.googleapis.com/auth/drive.metadata")
+	default:
+		return false
+	}
 }
 
 func digest(value string) string {

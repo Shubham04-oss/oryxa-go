@@ -85,7 +85,7 @@ func (s Service) ProcessWebhook(ctx context.Context, envelope webhooks.Envelope)
 func (s Service) processTrigger(ctx context.Context, envelope webhooks.Envelope, trigger domain.Trigger) error {
 	if trigger.OrganizationID != envelope.OrganizationID || trigger.ProfileID != envelope.ProfileID || trigger.Provider != envelope.Provider ||
 		trigger.PieceName != envelope.PieceName || trigger.PieceVersion != envelope.PieceVersion ||
-		trigger.TriggerName != envelope.TriggerName || trigger.Status != domain.TriggerStatusActive ||
+		!triggerNameMatchesEnvelope(trigger, envelope) || trigger.Status != domain.TriggerStatusActive ||
 		(envelope.ConnectionID != "" && trigger.ConnectionID != envelope.ConnectionID) ||
 		(envelope.IdentifierValue != "" && trigger.ProviderIdentifier != envelope.IdentifierValue) {
 		return ErrIsolationMismatch
@@ -128,7 +128,7 @@ func (s Service) processTrigger(ctx context.Context, envelope webhooks.Envelope,
 		(envelope.IdentifierValue != "" && connection.Identity.TenantID != envelope.IdentifierValue) {
 		return fail("isolation_mismatch", ErrIsolationMismatch)
 	}
-	if isNativeGraphNotification(trigger, envelope) {
+	if isNativeGraphNotification(trigger, envelope) || isNativeGitHubDelivery(trigger, envelope) || isNativeGoogleDelivery(trigger, envelope) {
 		eventID, err := s.newID("evt")
 		if err != nil {
 			return fail("id_unavailable", err)
@@ -163,7 +163,7 @@ func (s Service) processTrigger(ctx context.Context, envelope webhooks.Envelope,
 	result, err := s.Runner.RunTrigger(ctx, piece.TriggerInvocation{
 		InvocationID: execution.ID, OrganizationID: trigger.OrganizationID,
 		PieceName: trigger.PieceName, PieceVersion: trigger.PieceVersion,
-		Operation: "trigger.run", TriggerName: trigger.TriggerName,
+		Operation: "trigger.run", TriggerName: pieceTriggerName(trigger),
 		Auth: json.RawMessage(auth), Props: trigger.Props, PublicURL: s.PublicURL,
 		Payload: envelope, InitialStore: state,
 	})
@@ -211,43 +211,112 @@ func (DomainMapper) Map(provider string, trigger domain.Trigger, envelope webhoo
 			Data: integrationevents.MicrosoftCalendarEventChanged{TriggerID: trigger.ID,
 				ConnectionID: trigger.ConnectionID, DeliveryID: envelope.DeliveryID, ReceivedAt: envelope.ReceivedAt}}, nil
 	}
-	if provider != "slack" || trigger.TriggerName != "new-message" {
-		return domain.Event{}, fmt.Errorf("%w: unsupported trigger mapping", ErrOutputInvalid)
-	}
-	var records []struct {
-		Channel   string `json:"channel"`
-		User      string `json:"user"`
-		Text      string `json:"text"`
-		Timestamp string `json:"ts"`
-		ThreadTS  string `json:"thread_ts"`
-		Subtype   string `json:"subtype"`
-	}
-	if err := json.Unmarshal(output, &records); err != nil {
-		return domain.Event{}, fmt.Errorf("%w: decode Slack messages", ErrOutputInvalid)
-	}
-	if len(records) == 0 {
-		return domain.Event{}, nil
-	}
-	messages := make([]integrationevents.SlackMessage, 0, len(records))
-	for _, record := range records {
-		if record.Channel == "" || record.Timestamp == "" {
-			return domain.Event{}, fmt.Errorf("%w: Slack message identity is incomplete", ErrOutputInvalid)
+	if provider == "github" && trigger.TriggerName == "new-issue" && envelope.Event == "issues" && len(output) == 2 && string(output) == "{}" {
+		delivery, err := githubThinDelivery(envelope.Body)
+		if err != nil {
+			return domain.Event{}, err
 		}
-		messages = append(messages, integrationevents.SlackMessage{ChannelID: record.Channel,
-			UserID: record.User, Text: record.Text, Timestamp: record.Timestamp,
-			ThreadTimestamp: record.ThreadTS, Subtype: record.Subtype})
+		return domain.Event{EventID: eventID, Source: integrationevents.Source,
+			DetailType: integrationevents.GitHubIssueOpenedDetailType, Version: 1,
+			OrganizationID: trigger.OrganizationID, OccurredAt: now,
+			Data: integrationevents.GitHubIssueOpened{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
+				Repository: delivery.Repository, IssueNumber: delivery.Number, URL: delivery.URL, ReceivedAt: envelope.ReceivedAt}}, nil
 	}
-	return domain.Event{EventID: eventID, Source: integrationevents.Source,
-		DetailType: integrationevents.SlackMessageReceivedDetailType, Version: 1,
-		OrganizationID: trigger.OrganizationID, OccurredAt: now,
-		Data: integrationevents.SlackMessageReceived{TriggerID: trigger.ID,
-			ConnectionID: trigger.ConnectionID, WorkspaceID: envelope.IdentifierValue,
-			Messages: messages, ReceivedAt: envelope.ReceivedAt}}, nil
+	if provider == "github" && trigger.TriggerName == "new-pull-request" && envelope.Event == "pull_request" && len(output) == 2 && string(output) == "{}" {
+		delivery, err := githubThinDelivery(envelope.Body)
+		if err != nil {
+			return domain.Event{}, err
+		}
+		return domain.Event{EventID: eventID, Source: integrationevents.Source,
+			DetailType: integrationevents.GitHubPullRequestOpenedDetailType, Version: 1,
+			OrganizationID: trigger.OrganizationID, OccurredAt: now,
+			Data: integrationevents.GitHubPullRequestOpened{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
+				Repository: delivery.Repository, PullRequestNumber: delivery.Number, URL: delivery.URL, ReceivedAt: envelope.ReceivedAt}}, nil
+	}
+	if provider == "google" && trigger.TriggerName == "new-email" && envelope.Event == "mailbox-change" && len(output) == 2 && string(output) == "{}" {
+		if err := rejectGmailContent(envelope.Body); err != nil {
+			return domain.Event{}, err
+		}
+		return domain.Event{EventID: eventID, Source: integrationevents.Source,
+			DetailType: integrationevents.GoogleGmailMessageReceivedDetailType, Version: 1,
+			OrganizationID: trigger.OrganizationID, OccurredAt: now,
+			Data: integrationevents.GoogleGmailMessageReceived{TriggerID: trigger.ID,
+				ConnectionID: trigger.ConnectionID, DeliveryID: envelope.DeliveryID, ReceivedAt: envelope.ReceivedAt}}, nil
+	}
+	if provider == "google" && trigger.TriggerName == "calendar-event-changed" && envelope.Event == "channel-notification" && len(output) == 2 && string(output) == "{}" {
+		return domain.Event{EventID: eventID, Source: integrationevents.Source,
+			DetailType: integrationevents.GoogleCalendarEventChangedDetailType, Version: 1,
+			OrganizationID: trigger.OrganizationID, OccurredAt: now,
+			Data: integrationevents.GoogleCalendarEventChanged{TriggerID: trigger.ID,
+				ConnectionID: trigger.ConnectionID, DeliveryID: envelope.DeliveryID, ReceivedAt: envelope.ReceivedAt}}, nil
+	}
+	if provider == "slack" {
+		return mapSlackTrigger(trigger, envelope, output, eventID, now)
+	}
+	return domain.Event{}, fmt.Errorf("%w: unsupported trigger mapping", ErrOutputInvalid)
 }
 
 func isNativeGraphNotification(trigger domain.Trigger, envelope webhooks.Envelope) bool {
 	return trigger.Provider == "microsoft" && envelope.Event == "change-notification" &&
 		(trigger.TriggerName == "new-email" || trigger.TriggerName == "calendar-event-changed")
+}
+
+func isNativeGitHubDelivery(trigger domain.Trigger, envelope webhooks.Envelope) bool {
+	return trigger.Provider == "github" &&
+		((trigger.TriggerName == "new-issue" && envelope.Event == "issues") ||
+			(trigger.TriggerName == "new-pull-request" && envelope.Event == "pull_request"))
+}
+
+func isNativeGoogleDelivery(trigger domain.Trigger, envelope webhooks.Envelope) bool {
+	return trigger.Provider == "google" &&
+		((trigger.TriggerName == "new-email" && envelope.Event == "mailbox-change") ||
+			(trigger.TriggerName == "calendar-event-changed" && envelope.Event == "channel-notification"))
+}
+
+type githubDelivery struct {
+	Repository string `json:"repository"`
+	Number     int64  `json:"number"`
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	Body       string `json:"body"`
+}
+
+func githubThinDelivery(body any) (githubDelivery, error) {
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return githubDelivery{}, fmt.Errorf("%w: encode GitHub delivery", ErrOutputInvalid)
+	}
+	var delivery githubDelivery
+	if json.Unmarshal(encoded, &delivery) != nil || delivery.Repository == "" || delivery.Number < 1 || delivery.URL == "" {
+		return githubDelivery{}, fmt.Errorf("%w: GitHub delivery identity is incomplete", ErrOutputInvalid)
+	}
+	if delivery.Title != "" || delivery.Body != "" {
+		return githubDelivery{}, fmt.Errorf("%w: GitHub delivery included issue content", ErrOutputInvalid)
+	}
+	return delivery, nil
+}
+
+func rejectGmailContent(body any) error {
+	if body == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("%w: encode Gmail delivery", ErrOutputInvalid)
+	}
+	var payload struct {
+		Subject string `json:"subject"`
+		Snippet string `json:"snippet"`
+		Body    string `json:"body"`
+		Title   string `json:"title"`
+	}
+	if json.Unmarshal(encoded, &payload) != nil {
+		return fmt.Errorf("%w: Gmail delivery is invalid", ErrOutputInvalid)
+	}
+	if payload.Subject != "" || payload.Snippet != "" || payload.Body != "" || payload.Title != "" {
+		return fmt.Errorf("%w: Gmail delivery included message content", ErrOutputInvalid)
+	}
+	return nil
 }
 
 func (s Service) now() time.Time {

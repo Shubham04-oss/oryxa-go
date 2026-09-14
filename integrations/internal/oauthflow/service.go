@@ -38,7 +38,10 @@ type Definition struct {
 	RedirectURI    string
 	AllowedScopes  []string
 	RequiredScopes []string
-	SupportsPKCE   bool
+	// UserScopes are requested on Slack's user_scope authorize parameter.
+	// They are catalog-fixed and are not BYOC bot scopes.
+	UserScopes   []string
+	SupportsPKCE bool
 }
 
 type Catalog interface {
@@ -100,6 +103,7 @@ type AuthorizationRequest struct {
 	ClientID      string
 	RedirectURI   string
 	Scopes        []string
+	UserScopes    []string
 	State         string
 	PKCEChallenge string
 }
@@ -412,6 +416,7 @@ func (s Service) Begin(ctx context.Context, request BeginRequest) (BeginResult, 
 		ClientID:      profile.ClientID,
 		RedirectURI:   definition.RedirectURI,
 		Scopes:        append([]string(nil), profile.Scopes...),
+		UserScopes:    append([]string(nil), definition.UserScopes...),
 		State:         rawState,
 		PKCEChallenge: challenge,
 	})

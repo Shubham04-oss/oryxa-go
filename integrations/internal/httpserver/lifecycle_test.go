@@ -131,6 +131,11 @@ func TestLifecycleHTTPRoutesKeepSecretsAtIngressAndPreserveWebhookBytes(t *testi
 		t.Fatal("hop-by-hop response header was forwarded")
 	}
 
+	response = perform(server, http.MethodPost, "/v1/webhooks/google/gmail", `{"message":{}}`, nil)
+	if response.Code != http.StatusNotImplemented {
+		t.Fatalf("unconfigured Gmail push = %d/%s", response.Code, response.Body.String())
+	}
+
 	response = perform(server, http.MethodPost, "/v1/organizations/org-1/connections/con-1/actions/post-message", `{"props":{"channel":"C123","text":"hello"}}`, map[string]string{"Idempotency-Key": "request-123"})
 	if response.Code != http.StatusOK || actions.request.MemberID != "member-1" || actions.request.ConnectionID != "con-1" || actions.request.IdempotencyKey != "request-123" || strings.Contains(response.Body.String(), "hello") {
 		t.Fatalf("action response/request = %d/%s/%+v", response.Code, response.Body.String(), actions.request)

@@ -9,25 +9,27 @@ import (
 )
 
 type Config struct {
-	Address             string
-	AWSRegion           string
-	DatabaseURL         string
-	PostgresExtensions  []string
-	CognitoIssuer       string
-	CognitoClientID     string
-	PublicBaseURL       string
-	AllowedReturnURLs   []string
-	DynamoTable         string
-	WebhookQueueURL     string
-	PieceRunnerFunction string
-	KMSKeyID            string
-	EventBusName        string
-	DynamoEndpoint      string
-	SQSEndpoint         string
-	LambdaEndpoint      string
-	KMSEndpoint         string
-	EventBridgeEndpoint string
-	AutoMigrate         bool
+	Address                 string
+	AWSRegion               string
+	DatabaseURL             string
+	PostgresExtensions      []string
+	CognitoIssuer           string
+	CognitoClientID         string
+	PublicBaseURL           string
+	AllowedReturnURLs       []string
+	DynamoTable             string
+	WebhookQueueURL         string
+	PieceRunnerFunction     string
+	KMSKeyID                string
+	EventBusName            string
+	DynamoEndpoint          string
+	SQSEndpoint             string
+	LambdaEndpoint          string
+	KMSEndpoint             string
+	EventBridgeEndpoint     string
+	AutoMigrate             bool
+	GmailPubSubTopic        string
+	GmailPushServiceAccount string
 }
 
 func FromEnv() (Config, error) {
@@ -47,6 +49,8 @@ func FromEnv() (Config, error) {
 		DynamoEndpoint: endpointOr("AWS_ENDPOINT_URL_DYNAMODB", genericEndpoint), SQSEndpoint: endpointOr("AWS_ENDPOINT_URL_SQS", genericEndpoint),
 		LambdaEndpoint: endpoint("AWS_ENDPOINT_URL_LAMBDA"), KMSEndpoint: endpoint("AWS_ENDPOINT_URL_KMS"),
 		EventBridgeEndpoint: endpointOr("EVENTBRIDGE_ENDPOINT", genericEndpoint), AutoMigrate: autoMigrate,
+		GmailPubSubTopic:        strings.TrimSpace(os.Getenv("GOOGLE_GMAIL_PUBSUB_TOPIC")),
+		GmailPushServiceAccount: strings.TrimSpace(os.Getenv("GOOGLE_GMAIL_PUSH_SERVICE_ACCOUNT")),
 	}
 	if config.DatabaseURL == "" || config.CognitoIssuer == "" || config.CognitoClientID == "" || config.PublicBaseURL == "" || len(config.AllowedReturnURLs) == 0 || config.WebhookQueueURL == "" || config.PieceRunnerFunction == "" || config.KMSKeyID == "" {
 		return Config{}, errors.New("DATABASE_URL, COGNITO_ISSUER, COGNITO_CLIENT_ID, INTEGRATIONS_PUBLIC_BASE_URL, INTEGRATIONS_RETURN_URLS, INTEGRATIONS_WEBHOOK_QUEUE_URL, INTEGRATIONS_PIECE_RUNNER_FUNCTION, and INTEGRATIONS_KMS_KEY_ID are required")

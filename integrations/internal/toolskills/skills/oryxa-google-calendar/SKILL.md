@@ -1,6 +1,6 @@
 ---
 name: oryxa-google-calendar
-description: Use only with Oryxa Google Calendar tools for approved event creation and listing.
+description: Use only with Oryxa Google Calendar tools for approved event, free/busy, and inbound calendar-event-changed operations.
 ---
 
 # Oryxa Google Calendar
@@ -18,35 +18,58 @@ over this guidance.
 - Never request or pass OAuth credentials. The tool refreshes and decrypts the
   grant internally and enforces the exact Calendar scope.
 - Confirm the calendar, timezone-bearing RFC3339 times, title, attendees, and
-  notification intent before creating an event. Do not infer missing business
-  details when that could invite people or put an event on the wrong calendar.
-- Use one stable 8-200 character idempotency key per logical create or list
-  request and reuse it only with identical input.
+  notification intent before creating or updating an event. Do not infer missing
+  business details when that could invite people or put an event on the wrong
+  calendar.
+- Use one stable 8-200 character idempotency key per logical request and reuse
+  it only with identical input.
+- Custom API call and piece polling/webhook triggers remain disabled. Native
+  `calendar-event-changed` stays the inbound path. `calendar.events` satisfies
+  `calendar.readonly`.
 
 ## Approved actions
 
-### `create-calendar-event`
+Public names are kebab-case. Lists return at most 100 safe records plus
+`truncated`. Lookups do not publish domain events. Writes publish identity-only
+events without descriptions, attendee lists, or conferencing payloads. Safe
+event records may include ID, status, summary, URL, start/end, timezone, and
+update time.
 
-Input `props` requires `calendar_id`, non-empty `title`, RFC3339
-`start_date_time`, and `send_notifications` (`all|externalOnly|none`). Optional
-fields include `end_date_time`, `location`, `description`, `colorId`,
-`attendees`, guest-permission booleans, and `create_meet_link`. When supplied,
-the end must be after the start. Expect safe event metadata: ID, status,
-summary, URL, start/end, timezone, and update time. A success publishes
-`integrations.google.calendar-event-created.v1`.
+### Events
 
-### `list-calendar-events`
+`create-calendar-event`, `update-calendar-event`, `delete-calendar-event`,
+`get-calendar-event`, `list-calendar-events`, `add-calendar-attendees`,
+`remove-calendar-attendee`, `create-quick-event`, `move-calendar-event`,
+`import-calendar-event`, `list-recurring-event-instances`,
+`search-calendar-events`.
 
-Input `props` requires `calendar_id` and a non-empty `event_types` list chosen
-from `default`, `focusTime`, `outOfOffice`, and `workingLocation`. Optional
-`search`, RFC3339 `start_date`/`end_date`, and `singleEvents` narrow the result.
-Expect at most 100 safe event records plus `truncated`; descriptions,
-attendees, conferencing payloads, and provider transport fields are omitted.
+Create requires `calendar_id`, non-empty `title`, RFC3339 `start_date_time`,
+and `send_notifications` (`all|externalOnly|none`). List requires `calendar_id`
+and a non-empty `event_types` list from `default`, `focusTime`, `outOfOffice`,
+and `workingLocation`. Delete/get/update/move take `event_id`. Search requires
+`query` plus a start/end window. Create, quick-add, and import publish
+`integrations.google.calendar-event-created.v1`; other writes publish
+`integrations.google.calendar-event-updated.v1` or
+`integrations.google.calendar-event-deleted.v1`.
 
-## Triggers
+### Free/busy and calendars
 
-No Google Calendar trigger is approved. Do not create polling schedules or
-provider webhooks through another tool.
+`find-busy-periods`, `find-free-slots`, `list-calendars`, `get-calendar`,
+`get-calendar-colors`, `list-calendar-settings`.
+
+Busy/free tools require `calendar_ids` and an RFC3339 window. Results are times
+only. Calendar list/get omit descriptions.
+
+## Approved trigger: `calendar-event-changed`
+
+Input `props` must be an empty object. Oryxa watches the connected primary
+calendar through a per-connection HTTPS channel. `calendar.events` satisfies
+the required `calendar.readonly` grant.
+
+Expect at-least-once `integrations.google.calendar-event-changed.v1` with
+trigger, connection, and delivery identity only. Titles, attendees, location,
+and body are never published. Do not create polling schedules or provider
+webhooks through another tool.
 
 ## Failure handling
 

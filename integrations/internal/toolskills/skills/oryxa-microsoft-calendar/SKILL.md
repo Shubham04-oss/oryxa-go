@@ -1,6 +1,6 @@
 ---
 name: oryxa-microsoft-calendar
-description: Use only with Oryxa Microsoft Calendar tools for approved event creation, listing, and change subscriptions.
+description: Use only with Oryxa Microsoft Calendar tools for approved event creation, listing, deletion, and change subscriptions.
 ---
 
 # Oryxa Microsoft Calendar
@@ -40,6 +40,13 @@ the reviewed bounded filter field. The connection needs `Calendars.Read`,
 which is also satisfied by `Calendars.ReadWrite`. Expect at most 100 safe event
 records and `truncated`; subjects, attendees, bodies, and transport fields are
 not persisted in the result.
+
+### `delete-calendar-event`
+
+Input `props` requires `calendarId` and `eventId`. The connection needs
+`Calendars.ReadWrite`. Success returns those identities and publishes
+`integrations.microsoft.calendar-event-deleted.v1`. Titles, attendees, and
+bodies are not returned.
 
 ## Approved trigger: `calendar-event-changed`
 

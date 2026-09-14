@@ -184,6 +184,12 @@ func (s *Store) DisableOAuthAppWithEvent(ctx context.Context, organizationID, pr
 	if err := enqueueMicrosoftGraphCleanupForProfile(ctx, tx, organizationID, profileID, now); err != nil {
 		return err
 	}
+	if err := enqueueGitHubCleanupForProfile(ctx, tx, organizationID, profileID, now); err != nil {
+		return err
+	}
+	if err := enqueueGoogleCleanupForProfile(ctx, tx, organizationID, profileID, now); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE integrations_triggers
 		SET status='disabled', version=version+1, updated_at=$3
 		WHERE organization_id=$1 AND profile_id=$2 AND status='active'`, organizationID, profileID, now); err != nil {
@@ -303,6 +309,12 @@ func (s *Store) DisconnectConnectionWithEvent(ctx context.Context, organizationI
 	if err := enqueueMicrosoftGraphCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
 		return err
 	}
+	if err := enqueueGitHubCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
+		return err
+	}
+	if err := enqueueGoogleCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
+		return err
+	}
 	// A disconnected connection must stop all its trigger fan-out in the same
 	// transaction; provider webhook routes may remain shared by other members.
 	if _, err := tx.Exec(ctx, `UPDATE integrations_triggers SET status='disabled',version=version+1,updated_at=$2 WHERE organization_id=$1 AND connection_id=$3 AND status='active'`, organizationID, now, connectionID); err != nil {
@@ -353,6 +365,64 @@ func enqueueMicrosoftGraphCleanup(ctx context.Context, executor sqlExecutor, sel
 	ON CONFLICT (organization_id, trigger_id) DO NOTHING`
 	if _, err := executor.Exec(ctx, query, organizationID, selectorID, now); err != nil {
 		return fmt.Errorf("enqueue Microsoft Graph cleanup: %w", err)
+	}
+	return nil
+}
+
+func enqueueGitHubCleanupForProfile(ctx context.Context, executor sqlExecutor, organizationID, profileID string, now time.Time) error {
+	return enqueueGitHubCleanup(ctx, executor, `profile_id = $2`, organizationID, profileID, now)
+}
+
+func enqueueGitHubCleanupForConnection(ctx context.Context, executor sqlExecutor, organizationID, connectionID string, now time.Time) error {
+	return enqueueGitHubCleanup(ctx, executor, `connection_id = $2`, organizationID, connectionID, now)
+}
+
+func enqueueGitHubCleanupForTrigger(ctx context.Context, executor sqlExecutor, organizationID, triggerID string, now time.Time) error {
+	return enqueueGitHubCleanup(ctx, executor, `id = $2`, organizationID, triggerID, now)
+}
+
+func enqueueGitHubCleanup(ctx context.Context, executor sqlExecutor, selector, organizationID, selectorID string, now time.Time) error {
+	query := `INSERT INTO integrations_github_hook_cleanup (
+		organization_id, trigger_id, connection_id, profile_id, trigger_name,
+		created_at, available_at
+	)
+	SELECT organization_id, id, connection_id, profile_id, trigger_name, $3, $3
+	FROM integrations_triggers
+	WHERE organization_id = $1 AND ` + selector + `
+	  AND status = 'active' AND provider = 'github'
+	  AND trigger_name IN ('new-issue', 'new-pull-request')
+	ON CONFLICT (organization_id, trigger_id) DO NOTHING`
+	if _, err := executor.Exec(ctx, query, organizationID, selectorID, now); err != nil {
+		return fmt.Errorf("enqueue GitHub cleanup: %w", err)
+	}
+	return nil
+}
+
+func enqueueGoogleCleanupForProfile(ctx context.Context, executor sqlExecutor, organizationID, profileID string, now time.Time) error {
+	return enqueueGoogleCleanup(ctx, executor, `profile_id = $2`, organizationID, profileID, now)
+}
+
+func enqueueGoogleCleanupForConnection(ctx context.Context, executor sqlExecutor, organizationID, connectionID string, now time.Time) error {
+	return enqueueGoogleCleanup(ctx, executor, `connection_id = $2`, organizationID, connectionID, now)
+}
+
+func enqueueGoogleCleanupForTrigger(ctx context.Context, executor sqlExecutor, organizationID, triggerID string, now time.Time) error {
+	return enqueueGoogleCleanup(ctx, executor, `id = $2`, organizationID, triggerID, now)
+}
+
+func enqueueGoogleCleanup(ctx context.Context, executor sqlExecutor, selector, organizationID, selectorID string, now time.Time) error {
+	query := `INSERT INTO integrations_google_watch_cleanup (
+		organization_id, trigger_id, connection_id, profile_id, trigger_name,
+		created_at, available_at
+	)
+	SELECT organization_id, id, connection_id, profile_id, trigger_name, $3, $3
+	FROM integrations_triggers
+	WHERE organization_id = $1 AND ` + selector + `
+	  AND status = 'active' AND provider = 'google'
+	  AND trigger_name IN ('new-email', 'calendar-event-changed')
+	ON CONFLICT (organization_id, trigger_id) DO NOTHING`
+	if _, err := executor.Exec(ctx, query, organizationID, selectorID, now); err != nil {
+		return fmt.Errorf("enqueue Google cleanup: %w", err)
 	}
 	return nil
 }

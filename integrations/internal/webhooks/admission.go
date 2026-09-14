@@ -77,6 +77,9 @@ type RunnerResult struct {
 	Event           string
 	IdentifierValue string
 	ProviderEventID string
+	// Payload replaces the provider body on the queued envelope when a native
+	// verifier has already reduced the delivery to identity-only fields.
+	Payload any
 }
 
 type Envelope struct {
@@ -217,11 +220,24 @@ func (s Service) Admit(ctx context.Context, request Request) (Decision, error) {
 		RawBody:         append([]byte(nil), request.RawBody...),
 		ReceivedAt:      now,
 	}
-	// Native Graph triggers publish a content-free signal and never run the
+	// Native Graph, GitHub, and Google Calendar triggers never run the
 	// provider piece downstream. Verification and dedupe have already consumed
-	// the notification, so do not copy mailbox/calendar content or transport
-	// headers into SQS merely to discard them in the worker.
+	// the notification, so do not copy mailbox, issue, pull-request, or
+	// calendar content or transport headers into SQS merely to discard them in
+	// the worker.
 	if route.Provider == "microsoft" && route.Mode == domain.WebhookRoutePerConnection && result.Event == "change-notification" {
+		envelope.Headers = map[string]string{}
+		envelope.Query = map[string]string{}
+		envelope.Body = nil
+		envelope.RawBody = nil
+	}
+	if route.Provider == "github" && route.Mode == domain.WebhookRoutePerConnection && result.Payload != nil {
+		envelope.Headers = map[string]string{}
+		envelope.Query = map[string]string{}
+		envelope.Body = result.Payload
+		envelope.RawBody = nil
+	}
+	if route.Provider == "google" && route.Mode == domain.WebhookRoutePerConnection && result.Event == "channel-notification" {
 		envelope.Headers = map[string]string{}
 		envelope.Query = map[string]string{}
 		envelope.Body = nil

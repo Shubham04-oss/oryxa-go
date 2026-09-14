@@ -47,9 +47,10 @@ remains a delivery boundary: it sends what auth, billing and teams events call
 for but never performs their transitions. A team-call notice goes out only
 when that member's `notify_email` switch is on. `/integrations` contains the
 Go control plane, webhook worker, and lightweight TypeScript connector runtime
-built from approved Activepieces pieces. It covers Slack, reviewed
-GitHub/Google/Microsoft actions, and native Microsoft Graph subscriptions for
-mail and calendar changes. Successful connections, trigger registrations,
+built from approved Activepieces pieces. It covers Slack, GitHub, Google, and
+Microsoft catalog operations, plus native GitHub hooks, Gmail and Calendar
+watches, and Microsoft Graph subscriptions for mail and calendar changes.
+Successful connections, trigger registrations,
 execution claims, and domain outbox events are durable PostgreSQL records;
 other services receive only the credential-free connection catalog. The full
 Activepieces platform is not deployed. Each approved connector tool also has a

@@ -172,6 +172,68 @@ func TestAdmitDropsVerifiedMicrosoftGraphContentBeforeQueue(t *testing.T) {
 	}
 }
 
+func TestAdmitQueuesThinGitHubDeliveryWithoutIssueBody(t *testing.T) {
+	t.Parallel()
+	service, _, runner, _, queue, _ := newWebhookService()
+	routes := service.Routes.(testRoutes)
+	routes.route.Provider = "github"
+	routes.route.ConnectionID = "con-1"
+	routes.route.TriggerName = "new-issue"
+	routes.route.Mode = domain.WebhookRoutePerConnection
+	routes.route.TimestampHeader = ""
+	service.Routes = routes
+	thin := map[string]any{"event": "issues", "repository": "oryxa/api", "number": int64(12), "url": "https://github.com/oryxa/api/issues/12", "action": "opened"}
+	runner.result = RunnerResult{Verified: true, Event: "issues", ProviderEventID: "delivery-1", Payload: thin}
+	raw := []byte(`{"action":"opened","issue":{"title":"must-not-reach-sqs","body":"secret"}}`)
+	decision, err := service.Admit(context.Background(), Request{
+		OpaqueRoute: "opaque-route", Method: "POST",
+		Headers: map[string]string{"x-hub-signature-256": "sha256=test", "authorization": "provider-transport-secret"},
+		Query:   map[string]string{"private": "value"}, Body: map[string]any{"issue": "secret"}, RawBody: raw,
+	})
+	if err != nil || decision.Status != 202 || len(queue.envelopes) != 1 {
+		t.Fatalf("decision/error/queued = %+v/%v/%d", decision, err, len(queue.envelopes))
+	}
+	envelope := queue.envelopes[0]
+	if len(envelope.RawBody) != 0 || len(envelope.Headers) != 0 || len(envelope.Query) != 0 ||
+		envelope.ConnectionID != "con-1" || envelope.Event != "issues" {
+		t.Fatalf("queued GitHub envelope retained content or lost routing: %+v", envelope)
+	}
+	body, _ := envelope.Body.(map[string]any)
+	if body["repository"] != "oryxa/api" || body["number"] != int64(12) {
+		t.Fatalf("thin GitHub body = %#v", envelope.Body)
+	}
+}
+
+func TestAdmitDropsVerifiedGoogleCalendarContentBeforeQueue(t *testing.T) {
+	t.Parallel()
+	service, _, runner, _, queue, _ := newWebhookService()
+	routes := service.Routes.(testRoutes)
+	routes.route.Provider = "google"
+	routes.route.ConnectionID = "con-1"
+	routes.route.TriggerName = "calendar-event-changed"
+	routes.route.Mode = domain.WebhookRoutePerConnection
+	routes.route.TimestampHeader = ""
+	service.Routes = routes
+	runner.result = RunnerResult{Verified: true, Event: "channel-notification", ProviderEventID: "c-channel:7"}
+	raw := []byte(`{"summary":"must-not-reach-sqs"}`)
+	decision, err := service.Admit(context.Background(), Request{
+		OpaqueRoute: "opaque-route", Method: "POST",
+		Headers: map[string]string{"x-goog-channel-token": "provider-transport-secret", "authorization": "provider-transport-secret"},
+		Query:   map[string]string{"private": "value"}, Body: map[string]any{"private": "value"}, RawBody: raw,
+	})
+	if err != nil || decision.Status != 202 || len(queue.envelopes) != 1 {
+		t.Fatalf("decision/error/queued = %+v/%v/%d", decision, err, len(queue.envelopes))
+	}
+	if string(runner.request.RawBody) != string(raw) {
+		t.Fatal("Calendar verifier did not receive the exact payload")
+	}
+	envelope := queue.envelopes[0]
+	if len(envelope.RawBody) != 0 || envelope.Body != nil || len(envelope.Headers) != 0 || len(envelope.Query) != 0 ||
+		envelope.ConnectionID != "con-1" || envelope.Event != "channel-notification" || envelope.DeliveryID == "" {
+		t.Fatalf("queued Calendar envelope retained content or lost routing: %+v", envelope)
+	}
+}
+
 func TestAdmitRejectsStaleTimestampBeforeOpeningSecretOrCallingRunner(t *testing.T) {
 	t.Parallel()
 	service, secretBox, runner, _, queue, now := newWebhookService()

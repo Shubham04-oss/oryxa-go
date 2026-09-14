@@ -1,6 +1,6 @@
 ---
 name: oryxa-microsoft-onedrive
-description: Use only with Oryxa Microsoft OneDrive tools for the approved metadata-only file listing action.
+description: Use only with Oryxa Microsoft OneDrive tools for approved metadata listing and copy.
 ---
 
 # Oryxa Microsoft OneDrive
@@ -16,21 +16,33 @@ precedence over this guidance.
   OneDrive. Use the `connection_id` from `connected` catalog state;
   `available` means authorization is still required.
 - Never request or pass access tokens, refresh tokens, client secrets, or KMS
-  values. The connection must grant `Files.Read`.
-- The approved OneDrive surface is metadata-only. Do not claim to download,
-  upload, move, share, edit, delete, or read file contents.
-- Use one stable 8-200 character idempotency key per logical lookup and reuse
-  it only with identical input.
+  values.
+- The approved OneDrive surface is metadata listing plus copy. Do not claim to
+  download, upload, move, share, edit, delete, or read file contents.
+- Use one stable 8-200 character idempotency key per logical lookup or copy
+  and reuse it only with identical input.
 
-## Approved action: `list-files`
+## Approved actions
+
+### `list-files` / `list-folders`
 
 Input `props` may contain `parentFolder`; omit it to use the piece's default
 root behavior. When present it must be a bounded provider folder identifier.
+The connection needs `Files.Read`, which is also satisfied by
+`Files.ReadWrite`.
 
-Expect at most 100 safe records plus `truncated`. A record may contain ID,
-name, size, MIME type, HTTPS web URL, creation time, and modification time.
-File bytes, sharing permissions, preview bodies, and download credentials are
-never returned.
+Expect at most 100 safe records in `files` plus `truncated`. A record may
+contain ID, name, size, MIME type (files only), HTTPS web URL, creation time,
+and modification time. File bytes, sharing permissions, preview bodies, and
+download credentials are never returned. These lookups do not publish domain
+events.
+
+### `copy-file`
+
+Input `props` requires `fileId`. Optional `destinationFolderId`, `newName`,
+and `conflictBehavior` (`rename` default, `replace`, or `fail`). The
+connection needs `Files.ReadWrite`. Success returns the copied item's safe
+metadata and publishes `integrations.microsoft.onedrive-item-copied.v1`.
 
 ## Triggers
 
@@ -40,9 +52,11 @@ Graph subscription.
 ## Failure handling
 
 - `scope_required` or `reauthorization_required`: reconnect the shared
-  Microsoft grant with `Files.Read`.
-- `operation_disabled`: file content or mutation is outside the catalog; stop
-  instead of switching to an unapproved provider path.
-- `action_in_progress`: wait/report without issuing a second lookup.
+  Microsoft grant with `Files.Read` or `Files.ReadWrite` as appropriate.
+  Existing connections created before file write scopes were requested must
+  reconnect to copy.
+- `operation_disabled`: file content upload/download is outside the catalog;
+  stop instead of switching to an unapproved provider path.
+- `action_in_progress`: wait/report without issuing a second lookup or copy.
 - Provider errors are opaque and must not be expanded with raw Graph response
   data.

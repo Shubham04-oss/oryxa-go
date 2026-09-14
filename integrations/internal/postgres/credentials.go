@@ -88,6 +88,12 @@ func (s *Store) MarkConnectionReauthorizationWithEvent(ctx context.Context, orga
 	if err := enqueueMicrosoftGraphCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
 		return err
 	}
+	if err := enqueueGitHubCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
+		return err
+	}
+	if err := enqueueGoogleCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE integrations_triggers
 		SET status='disabled', version=version+1, updated_at=$3

@@ -15,6 +15,8 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/oauthflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/piece"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/github"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/google"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/microsoftgraph"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/secrets"
 )
@@ -44,6 +46,20 @@ type Definition struct {
 	GraphResource   string
 	GraphChangeType string
 	GraphTTL        time.Duration
+	// GitHubHookEvent is the native GitHub webhook event name for a reviewed
+	// per-connection hook trigger. It is not provider input.
+	GitHubHookEvent string
+	// GoogleWatch is "calendar" or "gmail" for a reviewed native Google
+	// inbound trigger. It is not provider input.
+	GoogleWatch string
+	GoogleTTL   time.Duration
+	// AppWebhookFamily is the shared app-level route key when several piece
+	// triggers share one provider Events URL (Slack). Empty means the route
+	// is keyed by TriggerName.
+	AppWebhookFamily string
+	// RunnerTriggerName is the pinned piece trigger name when it differs from
+	// the public catalog name. Empty means TriggerName.
+	RunnerTriggerName string
 }
 
 type Catalog interface {
@@ -103,6 +119,22 @@ type MicrosoftGraphSubscriptions interface {
 	Remove(context.Context, string, string) error
 }
 
+type GitHubHooks interface {
+	Create(context.Context, string, github.HookRequest) (github.Hook, error)
+	Remove(context.Context, string, github.HookState) error
+}
+
+type GoogleWatches interface {
+	WatchCalendar(context.Context, string, google.CalendarWatchRequest) (google.Channel, error)
+	StopChannel(context.Context, string, google.WatchState) error
+	WatchGmail(context.Context, string, google.GmailWatchRequest) (google.GmailWatch, error)
+	StopGmail(context.Context, string) error
+}
+
+type GoogleGmailCensus interface {
+	ActiveGoogleGmailTriggerCount(context.Context, string) (int, error)
+}
+
 type CreateRequest struct {
 	OrganizationID string
 	MemberID       string
@@ -112,20 +144,24 @@ type CreateRequest struct {
 }
 
 type Service struct {
-	Catalog        Catalog
-	Authorizer     Authorizer
-	Connections    Connections
-	Routes         Routes
-	Store          Store
-	State          RuntimeState
-	Secrets        SecretBox
-	Credentials    CredentialSource
-	Runner         piece.TriggerRunner
-	MicrosoftGraph MicrosoftGraphSubscriptions
-	Now            func() time.Time
-	IDs            func(string) (string, error)
-	Random         io.Reader
-	PublicURL      string
+	Catalog          Catalog
+	Authorizer       Authorizer
+	Connections      Connections
+	Routes           Routes
+	Store            Store
+	State            RuntimeState
+	Secrets          SecretBox
+	Credentials      CredentialSource
+	Runner           piece.TriggerRunner
+	MicrosoftGraph   MicrosoftGraphSubscriptions
+	GitHub           GitHubHooks
+	Google           GoogleWatches
+	GmailCensus      GoogleGmailCensus
+	GmailPubSubTopic string
+	Now              func() time.Time
+	IDs              func(string) (string, error)
+	Random           io.Reader
+	PublicURL        string
 }
 
 func (s Service) Create(ctx context.Context, request CreateRequest) (domain.Trigger, error) {
@@ -155,6 +191,12 @@ func (s Service) Create(ctx context.Context, request CreateRequest) (domain.Trig
 	if isMicrosoftGraphTrigger(connection, definition) && !isActiveMicrosoftConnection(connection) {
 		return domain.Trigger{}, oauthflow.ErrForbidden
 	}
+	if isGitHubTrigger(connection, definition) && !isActiveGitHubConnection(connection) {
+		return domain.Trigger{}, oauthflow.ErrForbidden
+	}
+	if isGoogleTrigger(connection, definition) && !isActiveGoogleConnection(connection) {
+		return domain.Trigger{}, oauthflow.ErrForbidden
+	}
 	if missing := missingScopes(connection.Provider, definition.RequiredScopes, connection.GrantedScopes); len(missing) > 0 {
 		return domain.Trigger{}, fmt.Errorf("%w: %s", ErrRequiredScope, strings.Join(missing, ","))
 	}
@@ -164,8 +206,8 @@ func (s Service) Create(ctx context.Context, request CreateRequest) (domain.Trig
 		}
 	}
 	var route domain.WebhookRoute
-	if !isMicrosoftGraphTrigger(connection, definition) {
-		route, err = s.Routes.ActiveWebhookRoute(ctx, request.OrganizationID, connection.ProfileID, request.TriggerName)
+	if !isMicrosoftGraphTrigger(connection, definition) && !isGitHubTrigger(connection, definition) && !isGoogleTrigger(connection, definition) {
+		route, err = s.activeAppLevelRoute(ctx, request.OrganizationID, connection.ProfileID, definition, request.TriggerName)
 		if err != nil || !route.Active || route.Mode != definition.RouteMode || route.PieceName != definition.PieceName || route.PieceVersion != definition.PieceVersion {
 			return domain.Trigger{}, ErrRouteUnavailable
 		}
@@ -184,6 +226,12 @@ func (s Service) Create(ctx context.Context, request CreateRequest) (domain.Trig
 	if isMicrosoftGraphTrigger(connection, definition) {
 		return s.createMicrosoftGraphTrigger(ctx, request, connection, definition, triggerID)
 	}
+	if isGitHubTrigger(connection, definition) {
+		return s.createGitHubTrigger(ctx, request, connection, definition, triggerID)
+	}
+	if isGoogleTrigger(connection, definition) {
+		return s.createGoogleTrigger(ctx, request, connection, definition, triggerID)
+	}
 	auth, err := s.openConnection(ctx, connection)
 	if err != nil {
 		return domain.Trigger{}, err
@@ -196,7 +244,7 @@ func (s Service) Create(ctx context.Context, request CreateRequest) (domain.Trig
 	enabled, err := s.Runner.RunTrigger(ctx, piece.TriggerInvocation{
 		InvocationID: triggerID + "-enable", OrganizationID: request.OrganizationID,
 		PieceName: definition.PieceName, PieceVersion: definition.PieceVersion,
-		Operation: "trigger.enable", TriggerName: request.TriggerName,
+		Operation: "trigger.enable", TriggerName: runnerTriggerName(definition, request.TriggerName),
 		Auth: auth, Props: request.Props, WebhookURL: s.PublicURL + "/v1/webhooks/" + route.OpaqueRoute,
 		PublicURL: s.PublicURL, InitialStore: initial,
 	})
@@ -371,6 +419,12 @@ func (s Service) Disable(ctx context.Context, organizationID, memberID, triggerI
 	if trigger.Provider == "microsoft" {
 		return s.disableMicrosoftGraphTrigger(ctx, organizationID, memberID, trigger)
 	}
+	if trigger.Provider == "github" {
+		return s.disableGitHubTrigger(ctx, organizationID, memberID, trigger)
+	}
+	if trigger.Provider == "google" {
+		return s.disableGoogleTrigger(ctx, organizationID, memberID, trigger)
+	}
 	connection, err := s.Connections.ConnectionForExecution(ctx, organizationID, trigger.ConnectionID)
 	if err != nil {
 		return err
@@ -384,10 +438,16 @@ func (s Service) Disable(ctx context.Context, organizationID, memberID, triggerI
 	if err != nil {
 		return err
 	}
+	disableName := trigger.TriggerName
+	if s.Catalog != nil {
+		if definition, ok := s.Catalog.TriggerDefinition(trigger.Provider, trigger.TriggerName); ok {
+			disableName = runnerTriggerName(definition, trigger.TriggerName)
+		}
+	}
 	result, err := s.Runner.RunTrigger(ctx, piece.TriggerInvocation{
 		InvocationID: trigger.ID + "-disable", OrganizationID: organizationID,
 		PieceName: trigger.PieceName, PieceVersion: trigger.PieceVersion,
-		Operation: "trigger.disable", TriggerName: trigger.TriggerName,
+		Operation: "trigger.disable", TriggerName: disableName,
 		Auth: auth, Props: trigger.Props, PublicURL: s.PublicURL, InitialStore: initial,
 	})
 	if err != nil {
@@ -421,11 +481,27 @@ func (s Service) Renew(ctx context.Context, organizationID, triggerID string) er
 	if err != nil {
 		return err
 	}
-	if trigger.Status != domain.TriggerStatusActive || trigger.Provider != "microsoft" {
+	if trigger.Status != domain.TriggerStatusActive || (trigger.Provider != "microsoft" && trigger.Provider != "google") {
 		return ErrOperationDisabled
 	}
 	connection, err := s.Connections.ConnectionForExecution(ctx, organizationID, trigger.ConnectionID)
-	if err != nil || connection.MemberID != trigger.MemberID || !isActiveMicrosoftConnection(connection) {
+	if err != nil || connection.MemberID != trigger.MemberID {
+		return oauthflow.ErrForbidden
+	}
+	if trigger.Provider == "google" {
+		if !isActiveGoogleConnection(connection) {
+			return oauthflow.ErrForbidden
+		}
+		definition, ok := s.Catalog.TriggerDefinition(connection.Provider, trigger.TriggerName)
+		if !ok || !isGoogleTrigger(connection, definition) {
+			return ErrOperationDisabled
+		}
+		if missing := missingScopes(connection.Provider, definition.RequiredScopes, connection.GrantedScopes); len(missing) > 0 {
+			return fmt.Errorf("%w: %s", ErrRequiredScope, strings.Join(missing, ","))
+		}
+		return s.renewGoogleWatch(ctx, trigger, connection, definition)
+	}
+	if !isActiveMicrosoftConnection(connection) {
 		return oauthflow.ErrForbidden
 	}
 	definition, ok := s.Catalog.TriggerDefinition(connection.Provider, trigger.TriggerName)
@@ -563,6 +639,44 @@ func hasListener(listeners []piece.Listener, event, identifier string) bool {
 	return false
 }
 
+func runnerTriggerName(definition Definition, fallback string) string {
+	if definition.RunnerTriggerName != "" {
+		return definition.RunnerTriggerName
+	}
+	if definition.TriggerName != "" {
+		return definition.TriggerName
+	}
+	return fallback
+}
+
+func (s Service) activeAppLevelRoute(ctx context.Context, organizationID, profileID string, definition Definition, requested string) (domain.WebhookRoute, error) {
+	names := []string{requested}
+	if definition.AppWebhookFamily != "" {
+		names = []string{definition.AppWebhookFamily, requested}
+	}
+	seen := map[string]struct{}{}
+	var last error
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, exists := seen[name]; exists {
+			continue
+		}
+		seen[name] = struct{}{}
+		route, err := s.Routes.ActiveWebhookRoute(ctx, organizationID, profileID, name)
+		if err != nil {
+			last = err
+			continue
+		}
+		return route, nil
+	}
+	if last != nil {
+		return domain.WebhookRoute{}, last
+	}
+	return domain.WebhookRoute{}, ErrRouteUnavailable
+}
+
 func (s Service) now() time.Time {
 	if s.Now != nil {
 		return s.Now().UTC()
@@ -581,6 +695,16 @@ func wipe(value []byte) {
 	for index := range value {
 		value[index] = 0
 	}
+}
+
+func isGitHubTrigger(connection domain.Connection, definition Definition) bool {
+	return connection.Provider == "github" && definition.Provider == "github" &&
+		definition.RouteMode == domain.WebhookRoutePerConnection &&
+		(definition.GitHubHookEvent == github.EventIssues || definition.GitHubHookEvent == github.EventPullRequest)
+}
+
+func isActiveGitHubConnection(connection domain.Connection) bool {
+	return connection.Provider == "github" && connection.Status == domain.ConnectionStatusActive
 }
 
 func isMicrosoftGraphTrigger(connection domain.Connection, definition Definition) bool {
@@ -640,13 +764,51 @@ func missingScopes(provider string, required, actual []string) []string {
 	var missing []string
 	for _, scope := range required {
 		_, allowed := granted[scope]
-		if provider == "microsoft" && scope == "Calendars.Read" {
-			_, implied := granted["Calendars.ReadWrite"]
+		if provider == "microsoft" {
+			switch scope {
+			case "Calendars.Read":
+				_, implied := granted["Calendars.ReadWrite"]
+				allowed = allowed || implied
+			case "Mail.Read":
+				_, implied := granted["Mail.ReadWrite"]
+				allowed = allowed || implied
+			case "Files.Read":
+				_, implied := granted["Files.ReadWrite"]
+				allowed = allowed || implied
+			}
+		}
+		if provider == "github" && scope == "admin:repo_hook" {
+			_, implied := granted["repo"]
 			allowed = allowed || implied
+		}
+		if provider == "google" {
+			allowed = allowed || googleScopeImplied(scope, granted)
 		}
 		if !allowed {
 			missing = append(missing, scope)
 		}
 	}
 	return missing
+}
+
+func googleScopeImplied(required string, granted map[string]struct{}) bool {
+	has := func(scope string) bool {
+		_, ok := granted[scope]
+		return ok
+	}
+	switch required {
+	case "https://www.googleapis.com/auth/calendar.readonly":
+		return has("https://www.googleapis.com/auth/calendar.events")
+	case "https://www.googleapis.com/auth/gmail.metadata":
+		return has("https://www.googleapis.com/auth/gmail.readonly") || has("https://www.googleapis.com/auth/gmail.modify")
+	case "https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/gmail.compose":
+		return has("https://www.googleapis.com/auth/gmail.modify")
+	case "https://www.googleapis.com/auth/gmail.send":
+		return has("https://www.googleapis.com/auth/gmail.modify") || has("https://www.googleapis.com/auth/gmail.compose")
+	case "https://www.googleapis.com/auth/drive.metadata.readonly":
+		return has("https://www.googleapis.com/auth/drive") || has("https://www.googleapis.com/auth/drive.readonly") ||
+			has("https://www.googleapis.com/auth/drive.metadata")
+	default:
+		return false
+	}
 }

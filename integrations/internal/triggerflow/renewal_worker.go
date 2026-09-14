@@ -94,12 +94,24 @@ func (w *RenewalWorker) RunOnce(ctx context.Context) {
 }
 
 func (w *RenewalWorker) scan(ctx context.Context) error {
+	if err := w.page(ctx, w.References.ActiveMicrosoftGraphTriggers); err != nil {
+		return err
+	}
+	if google, ok := w.References.(interface {
+		ActiveGoogleWatchTriggers(context.Context, string, string, int) ([]domain.Trigger, error)
+	}); ok {
+		return w.page(ctx, google.ActiveGoogleWatchTriggers)
+	}
+	return nil
+}
+
+func (w *RenewalWorker) page(ctx context.Context, list func(context.Context, string, string, int) ([]domain.Trigger, error)) error {
 	organizationID, triggerID := "", ""
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		triggers, err := w.References.ActiveMicrosoftGraphTriggers(ctx, organizationID, triggerID, w.batchSize())
+		triggers, err := list(ctx, organizationID, triggerID, w.batchSize())
 		if err != nil {
 			return err
 		}
@@ -111,8 +123,6 @@ func (w *RenewalWorker) scan(ctx context.Context) error {
 				return ctx.Err()
 			}
 			if trigger.OrganizationID == "" || trigger.ID == "" {
-				// The database query is trusted, but avoid turning malformed data
-				// into an unscoped renewal call.
 				continue
 			}
 			if err := w.Renewer.Renew(ctx, trigger.OrganizationID, trigger.ID); err != nil {

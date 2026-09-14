@@ -395,3 +395,129 @@ func TestStorePersistsMicrosoftGraphCleanupWithConnectionAndProfileDisable(t *te
 		t.Fatalf("manual disable cleanup row = %d/%v", cleanupCount, err)
 	}
 }
+
+func TestStorePersistsGitHubCleanupOnDisconnect(t *testing.T) {
+	databaseURL := os.Getenv("INTEGRATIONS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("INTEGRATIONS_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	organizationID := "github-cleanup-org-" + suffix
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_github_hook_cleanup WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_triggers WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_outbox WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_connections WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_oauth_apps WHERE organization_id = $1`, organizationID)
+	}()
+
+	profileID, connectionID, triggerID := "gh-profile-"+suffix, "gh-connection-"+suffix, "gh-trigger-"+suffix
+	profile := domain.OAuthAppProfile{ID: profileID, OrganizationID: organizationID, Provider: "github",
+		PieceName: "@activepieces/piece-github", PieceVersion: "0.8.11", Mode: domain.OAuthAppModeBYOC,
+		ClientID: "client", EncryptedSecret: testSealed(1), Scopes: []string{"repo", "admin:repo_hook"}, Status: domain.OAuthAppStatusActive,
+		CreatedBy: "admin", CreatedAt: now, UpdatedAt: now, CredentialRevision: 1}
+	if err := store.CreateOAuthApp(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	connection := domain.Connection{ID: connectionID, OrganizationID: organizationID, MemberID: "member", ProfileID: profileID,
+		Provider: "github", PieceName: profile.PieceName, PieceVersion: profile.PieceVersion,
+		Identity: domain.ProviderIdentity{SubjectID: "1", AccountID: "oryxa"}, GrantedScopes: []string{"repo"},
+		EncryptedCredentials: testSealed(2), Status: domain.ConnectionStatusActive, CreatedAt: now, UpdatedAt: now, Version: 1}
+	if err := store.CreateConnectionWithEvent(ctx, connection, domain.Event{EventID: "connected-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionConnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionConnected{ConnectionID: connectionID}}); err != nil {
+		t.Fatal(err)
+	}
+	trigger := domain.Trigger{ID: triggerID, OrganizationID: organizationID, MemberID: "member", ConnectionID: connectionID, ProfileID: profileID,
+		Provider: "github", PieceName: profile.PieceName, PieceVersion: profile.PieceVersion, TriggerName: "new-issue",
+		ProviderIdentifier: connectionID, Status: domain.TriggerStatusActive, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateTriggerWithEvent(ctx, trigger, domain.Event{EventID: "enabled-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.TriggerEnabledDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.TriggerEnabled{TriggerID: triggerID, ConnectionID: connectionID}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DisconnectConnectionWithEvent(ctx, organizationID, "member", connectionID, now, domain.Event{EventID: "disconnected-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionDisconnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionDisconnected{ConnectionID: connectionID}}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimGitHubCleanup(ctx, 10, "lease-"+suffix, now, now.Add(time.Minute))
+	if err != nil || len(claimed) != 1 || claimed[0].TriggerID != triggerID || claimed[0].TriggerName != "new-issue" ||
+		claimed[0].Connection.Provider != "github" || claimed[0].Connection.EncryptedCredentials.Version == 0 {
+		t.Fatalf("claimed GitHub cleanup = %#v/%v", claimed, err)
+	}
+	if err := store.CompleteGitHubCleanup(ctx, claimed[0], now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStorePersistsGoogleCleanupOnDisconnect(t *testing.T) {
+	databaseURL := os.Getenv("INTEGRATIONS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("INTEGRATIONS_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	organizationID := "google-cleanup-org-" + suffix
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_google_watch_cleanup WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_triggers WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_outbox WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_connections WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_oauth_apps WHERE organization_id = $1`, organizationID)
+	}()
+
+	profileID, connectionID, triggerID := "g-profile-"+suffix, "g-connection-"+suffix, "g-trigger-"+suffix
+	profile := domain.OAuthAppProfile{ID: profileID, OrganizationID: organizationID, Provider: "google",
+		PieceName: "@activepieces/piece-gmail", PieceVersion: "0.15.0", Mode: domain.OAuthAppModeBYOC,
+		ClientID: "client", EncryptedSecret: testSealed(1), Scopes: []string{"https://www.googleapis.com/auth/gmail.metadata"}, Status: domain.OAuthAppStatusActive,
+		CreatedBy: "admin", CreatedAt: now, UpdatedAt: now, CredentialRevision: 1}
+	if err := store.CreateOAuthApp(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	connection := domain.Connection{ID: connectionID, OrganizationID: organizationID, MemberID: "member", ProfileID: profileID,
+		Provider: "google", PieceName: profile.PieceName, PieceVersion: profile.PieceVersion,
+		Identity: domain.ProviderIdentity{SubjectID: "1", AccountID: "member@example.com"}, GrantedScopes: []string{"https://www.googleapis.com/auth/gmail.metadata"},
+		EncryptedCredentials: testSealed(2), Status: domain.ConnectionStatusActive, CreatedAt: now, UpdatedAt: now, Version: 1}
+	if err := store.CreateConnectionWithEvent(ctx, connection, domain.Event{EventID: "connected-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionConnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionConnected{ConnectionID: connectionID}}); err != nil {
+		t.Fatal(err)
+	}
+	trigger := domain.Trigger{ID: triggerID, OrganizationID: organizationID, MemberID: "member", ConnectionID: connectionID, ProfileID: profileID,
+		Provider: "google", PieceName: profile.PieceName, PieceVersion: profile.PieceVersion, TriggerName: "new-email",
+		ProviderIdentifier: connectionID, Status: domain.TriggerStatusActive, Version: 1, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateTriggerWithEvent(ctx, trigger, domain.Event{EventID: "enabled-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.TriggerEnabledDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.TriggerEnabled{TriggerID: triggerID, ConnectionID: connectionID}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DisconnectConnectionWithEvent(ctx, organizationID, "member", connectionID, now, domain.Event{EventID: "disconnected-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionDisconnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionDisconnected{ConnectionID: connectionID}}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimGoogleCleanup(ctx, 10, "lease-"+suffix, now, now.Add(time.Minute))
+	if err != nil || len(claimed) != 1 || claimed[0].TriggerID != triggerID || claimed[0].TriggerName != "new-email" ||
+		claimed[0].Connection.Provider != "google" || claimed[0].Connection.EncryptedCredentials.Version == 0 {
+		t.Fatalf("claimed Google cleanup = %#v/%v", claimed, err)
+	}
+	if err := store.CompleteGoogleCleanup(ctx, claimed[0], now); err != nil {
+		t.Fatal(err)
+	}
+}
