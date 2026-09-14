@@ -1,12 +1,15 @@
 package actionflow
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +17,8 @@ import (
 
 	integrationevents "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/filebroker"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/filesclient"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/piece"
 )
 
@@ -27,7 +32,24 @@ var (
 	ErrActionPreviouslyFailed = errors.New("integration action previously failed; use a new idempotency key for an explicit retry")
 	ErrPieceOutputInvalid     = errors.New("piece action output is invalid")
 	ErrExecutionFailed        = errors.New("integration action execution failed")
+	ErrFilesUnavailable       = errors.New("file storage is not configured")
 )
+
+// ExecutionFailed is a runner failure whose code and message are safe to
+// return to the caller. Upstream piece Error strings never appear here.
+type ExecutionFailed struct {
+	Code    string
+	Message string
+}
+
+func (e ExecutionFailed) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return ErrExecutionFailed.Error()
+}
+
+func (e ExecutionFailed) Unwrap() error { return ErrExecutionFailed }
 
 type Definition struct {
 	Provider         string
@@ -41,6 +63,7 @@ type Definition struct {
 	// piece's expected shape (for example wrapping a Gmail label ID). It is
 	// applied only to the runner invocation; mapping still sees public props.
 	PrepareProps func(json.RawMessage) (json.RawMessage, error)
+	NeedsFiles   bool
 }
 
 type Catalog interface {
@@ -91,6 +114,7 @@ type RunRequest struct {
 	ActionName     string
 	IdempotencyKey string
 	Props          json.RawMessage
+	Authorization  string
 }
 
 type RunResult struct {
@@ -105,17 +129,20 @@ type ExecutionStatus string
 const ExecutionSucceeded ExecutionStatus = "succeeded"
 
 type Service struct {
-	Catalog     Catalog
-	Authorizer  Authorizer
-	Connections Connections
-	Store       Store
-	Credentials Credentials
-	Runner      piece.ActionRunner
-	Mapper      Mapper
-	Now         func() time.Time
-	IDs         func(string) (string, error)
-	PublicURL   string
-	MaxOutput   int
+	Catalog       Catalog
+	Authorizer    Authorizer
+	Connections   Connections
+	Store         Store
+	Credentials   Credentials
+	Runner        piece.ActionRunner
+	Mapper        Mapper
+	Files         filebroker.Files
+	FileSessions  filebroker.Sessions
+	FileBrokerURL string
+	Now           func() time.Time
+	IDs           func(string) (string, error)
+	PublicURL     string
+	MaxOutput     int
 }
 
 func (s Service) Run(ctx context.Context, request RunRequest) (RunResult, error) {
@@ -140,13 +167,19 @@ func (s Service) Run(ctx context.Context, request RunRequest) (RunResult, error)
 	if err != nil {
 		return RunResult{}, err
 	}
-	if definition.ValidateProps == nil || definition.ValidateProps(props) != nil {
+	if definition.ValidateProps == nil {
 		return RunResult{}, ErrInvalidInput
+	}
+	if err := definition.ValidateProps(props); err != nil {
+		return RunResult{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
 	}
 	runnerProps := props
 	if definition.PrepareProps != nil {
 		prepared, err := definition.PrepareProps(props)
 		if err != nil || !json.Valid(prepared) {
+			if err != nil {
+				return RunResult{}, fmt.Errorf("%w: %v", ErrInvalidInput, err)
+			}
 			return RunResult{}, ErrInvalidInput
 		}
 		runnerProps = prepared
@@ -200,13 +233,25 @@ func (s Service) Run(ctx context.Context, request RunRequest) (RunResult, error)
 	if !json.Valid(auth) {
 		return fail("credential_invalid", errors.New("connection credential is invalid"))
 	}
-	output, err := s.Runner.RunAction(ctx, piece.ActionInvocation{
+	invocation := piece.ActionInvocation{
 		InvocationID: execution.ID, OrganizationID: execution.OrganizationID,
 		PieceName: execution.PieceName, PieceVersion: execution.PieceVersion,
 		ActionName: definition.RunnerActionName, Auth: json.RawMessage(auth),
 		Props: runnerProps, PublicURL: s.PublicURL,
-	})
+	}
+	if definition.NeedsFiles {
+		broker, cleanup, err := s.openFileBroker(ctx, request)
+		if err != nil {
+			return fail("files_unavailable", err)
+		}
+		defer cleanup()
+		invocation.FilesBroker = broker
+	}
+	output, err := s.Runner.RunAction(ctx, invocation)
 	if err != nil {
+		if failed, ok := publicExecutionFailure(err); ok {
+			return fail(failed.Code, failed)
+		}
 		return fail("piece_failed", fmt.Errorf("%w: %v", ErrExecutionFailed, err))
 	}
 	limit := s.MaxOutput
@@ -216,8 +261,20 @@ func (s Service) Run(ctx context.Context, request RunRequest) (RunResult, error)
 	if len(output.Output) > limit || !json.Valid(output.Output) {
 		return fail("output_invalid", ErrPieceOutputInvalid)
 	}
+	mappedOutput := output.Output
+	if definition.ActionName == "get-file-content" {
+		stored, err := s.storeGitHubFileContent(ctx, request, mappedOutput)
+		if err != nil {
+			code := "output_invalid"
+			if errors.Is(err, ErrFilesUnavailable) {
+				code = "files_unavailable"
+			}
+			return fail(code, err)
+		}
+		mappedOutput = stored
+	}
 	mapped, err := s.Mapper.Map(MapRequest{Execution: execution, Connection: connection,
-		ActionName: definition.ActionName, Props: props, Output: output.Output, OccurredAt: s.now()})
+		ActionName: definition.ActionName, Props: props, Output: mappedOutput, OccurredAt: s.now()})
 	if err != nil || !json.Valid(mapped.SafeResult) {
 		return fail("output_mapping_failed", errors.Join(ErrPieceOutputInvalid, err))
 	}
@@ -282,7 +339,21 @@ func missingScopes(provider string, required, actual []string) []string {
 				_, implied := set["Mail.ReadWrite"]
 				granted = granted || implied
 			case "Files.Read":
-				_, implied := set["Files.ReadWrite"]
+				_, write := set["Files.ReadWrite"]
+				_, all := set["Files.ReadWrite.All"]
+				granted = granted || write || all
+			case "Files.ReadWrite":
+				_, implied := set["Files.ReadWrite.All"]
+				granted = granted || implied
+			case "Sites.Read.All":
+				_, write := set["Sites.ReadWrite.All"]
+				_, manage := set["Sites.Manage.All"]
+				granted = granted || write || manage
+			case "Sites.ReadWrite.All":
+				_, implied := set["Sites.Manage.All"]
+				granted = granted || implied
+			case "Channel.ReadBasic.All":
+				_, implied := set["Channel.Create"]
 				granted = granted || implied
 			}
 		}
@@ -314,9 +385,107 @@ func googleScopeImplied(required string, granted map[string]struct{}) bool {
 	case "https://www.googleapis.com/auth/drive.metadata.readonly":
 		return has("https://www.googleapis.com/auth/drive") || has("https://www.googleapis.com/auth/drive.readonly") ||
 			has("https://www.googleapis.com/auth/drive.metadata")
+	case "https://www.googleapis.com/auth/drive.readonly":
+		return has("https://www.googleapis.com/auth/drive")
+	case "https://www.googleapis.com/auth/documents.readonly":
+		return has("https://www.googleapis.com/auth/documents")
+	case "https://www.googleapis.com/auth/spreadsheets.readonly":
+		return has("https://www.googleapis.com/auth/spreadsheets")
 	default:
 		return false
 	}
+}
+
+func (s Service) storeGitHubFileContent(ctx context.Context, request RunRequest, raw json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] == '[' {
+		return raw, nil
+	}
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil {
+		return nil, ErrPieceOutputInvalid
+	}
+	content, _ := payload["content"].(string)
+	encoding, _ := payload["encoding"].(string)
+	kind, _ := payload["type"].(string)
+	if kind == "dir" || content == "" {
+		delete(payload, "content")
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return nil, ErrPieceOutputInvalid
+		}
+		return encoded, nil
+	}
+	if !strings.EqualFold(encoding, "base64") {
+		return nil, ErrPieceOutputInvalid
+	}
+	if s.Files == nil || request.Authorization == "" {
+		return nil, ErrFilesUnavailable
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' {
+			return -1
+		}
+		return r
+	}, content))
+	if err != nil || len(decoded) == 0 || len(decoded) > 8<<20 {
+		return nil, ErrPieceOutputInvalid
+	}
+	name, _ := payload["name"].(string)
+	filePath, _ := payload["path"].(string)
+	filename := name
+	if filename == "" {
+		filename = path.Base(filePath)
+	}
+	if filename == "" || filename == "." || filename == "/" {
+		filename = "github-file"
+	}
+	object, err := s.Files.Create(ctx, filesclient.Credentials{Authorization: request.Authorization},
+		request.OrganizationID, filesclient.CreateInput{
+			Filename: filename, ContentType: "application/octet-stream",
+			Purpose: filesclient.PurposePiece, Content: decoded,
+		})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrFilesUnavailable, err)
+	}
+	delete(payload, "content")
+	payload["file_id"] = object.ID
+	payload["filename"] = object.Filename
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return nil, ErrPieceOutputInvalid
+	}
+	return encoded, nil
+}
+
+func (s Service) openFileBroker(ctx context.Context, request RunRequest) (*piece.FilesBroker, func(), error) {
+	if s.Files == nil || s.FileSessions == nil || s.FileBrokerURL == "" || request.Authorization == "" {
+		return nil, func() {}, ErrFilesUnavailable
+	}
+	token, err := s.newID("fbk")
+	if err != nil {
+		return nil, func() {}, err
+	}
+	expires := s.now().Add(filebroker.SessionTTL())
+	if err := s.FileSessions.Put(ctx, filebroker.Session{
+		Token: token, OrganizationID: request.OrganizationID, MemberID: request.MemberID,
+		Authorization: request.Authorization, ExpiresAt: expires,
+	}); err != nil {
+		return nil, func() {}, err
+	}
+	cleanup := func() {
+		_ = s.FileSessions.Delete(context.Background(), token)
+	}
+	return &piece.FilesBroker{URL: s.FileBrokerURL, Token: token}, cleanup, nil
+}
+
+func publicExecutionFailure(err error) (ExecutionFailed, bool) {
+	var runnerErr piece.RunnerError
+	if !errors.As(err, &runnerErr) {
+		return ExecutionFailed{}, false
+	}
+	stable := piece.StableRunnerError(runnerErr.Code, runnerErr.Message)
+	return ExecutionFailed{Code: stable.Code, Message: stable.Message}, true
 }
 
 func digest(value string) string {

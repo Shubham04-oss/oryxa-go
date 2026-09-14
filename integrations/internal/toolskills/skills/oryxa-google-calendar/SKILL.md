@@ -12,8 +12,8 @@ over this guidance.
 ## Tool-call contract
 
 - Use the Oryxa integration tool, not Google APIs or Activepieces directly.
-- Google uses one provider-level connection for Gmail, Calendar, and Drive.
-  Obtain the member-owned `connection_id` from a `connected` catalog record;
+- Google uses one provider-level connection for Gmail, Calendar, Drive, Docs,
+  and Sheets. Obtain the member-owned `connection_id` from a `connected` catalog record;
   `available` means authorization is still required.
 - Never request or pass OAuth credentials. The tool refreshes and decrypts the
   grant internally and enforces the exact Calendar scope.
@@ -23,9 +23,10 @@ over this guidance.
   calendar.
 - Use one stable 8-200 character idempotency key per logical request and reuse
   it only with identical input.
-- Custom API call and piece polling/webhook triggers remain disabled. Native
-  `calendar-event-changed` stays the inbound path. `calendar.events` satisfies
-  `calendar.readonly`.
+- Host-restricted `calendar-custom-api-call` may use `/path` or
+  `https://www.googleapis.com/...` only. Piece polling/webhook triggers remain
+  disabled. Native `calendar-event-changed` stays the inbound path.
+  `calendar.events` satisfies `calendar.readonly`.
 
 ## Approved actions
 
@@ -59,6 +60,11 @@ and `workingLocation`. Delete/get/update/move take `event_id`. Search requires
 
 Busy/free tools require `calendar_ids` and an RFC3339 window. Results are times
 only. Calendar list/get omit descriptions.
+
+`calendar-custom-api-call` requires `url` (`/calendars/...` or
+`https://www.googleapis.com/...`) and `method`. Optional `headers`, `query`,
+`body_type`, `body`. Do not send `Authorization`. Returns status plus body
+only. No event. Needs `calendar.readonly` (`calendar.events` satisfies it).
 
 ## Approved trigger: `calendar-event-changed`
 

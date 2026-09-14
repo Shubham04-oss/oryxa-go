@@ -1,6 +1,7 @@
 // Package github contains the OAuth adapter and the native webhook surface
-// that cannot be delegated to piece-github. Inbound issue and pull-request
-// triggers create repository or organization hooks with the member's token.
+// that cannot be delegated to piece-github. Inbound issue, pull-request, star,
+// push, release, and review triggers create repository or organization hooks
+// with the member's token.
 package github
 
 import (
@@ -33,10 +34,14 @@ var (
 )
 
 const (
-	HookScopeRepository   = "repository"
-	HookScopeOrganization = "organization"
-	EventIssues           = "issues"
-	EventPullRequest      = "pull_request"
+	HookScopeRepository    = "repository"
+	HookScopeOrganization  = "organization"
+	EventIssues            = "issues"
+	EventPullRequest       = "pull_request"
+	EventWatch             = "watch"
+	EventPush              = "push"
+	EventRelease           = "release"
+	EventPullRequestReview = "pull_request_review"
 )
 
 // RejectionError exposes only GitHub's HTTP status. It intentionally omits
@@ -261,11 +266,35 @@ func NewHookSecret(source io.Reader) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(bytes), nil
 }
 
+func NativeTrigger(name string) bool {
+	return NativeHookEvent(name) != ""
+}
+
+func NativeHookEvent(name string) string {
+	switch name {
+	case "new-issue":
+		return EventIssues
+	case "new-pull-request":
+		return EventPullRequest
+	case "new-star":
+		return EventWatch
+	case "new-push":
+		return EventPush
+	case "new-release":
+		return EventRelease
+	case "new-review":
+		return EventPullRequestReview
+	default:
+		return ""
+	}
+}
+
 func validHookEvents(events []string) bool {
 	if len(events) != 1 {
 		return false
 	}
-	return events[0] == EventIssues || events[0] == EventPullRequest
+	return events[0] == EventIssues || events[0] == EventPullRequest || events[0] == EventWatch ||
+		events[0] == EventPush || events[0] == EventRelease || events[0] == EventPullRequestReview
 }
 
 func validHookTarget(scope, owner, repo string) bool {
@@ -326,7 +355,7 @@ func validGitHubName(value string) bool {
 
 func validHTTPSURL(value string) bool {
 	request, err := http.NewRequest(http.MethodGet, value, nil)
-	return err == nil && request.URL.Scheme == "https" && request.URL.Host != "" && request.URL.User == nil && request.URL.Fragment == ""
+	return err == nil && request.URL.Scheme == "https" && request.URL.Host != "" && request.URL.User == nil
 }
 
 func validGitHubAPIURL(value string) bool {

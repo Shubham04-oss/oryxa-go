@@ -13,6 +13,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/actionflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/credentials"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/filebroker"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/oauthflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/google"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/triggerflow"
@@ -71,6 +72,7 @@ type Dependencies struct {
 	Webhooks      WebhookAdmission
 	GmailPushes   GmailPushAdmission
 	Actions       ActionLifecycle
+	PieceFiles    *filebroker.Handler
 }
 
 type Server struct {
@@ -100,6 +102,10 @@ func NewAPI(dependencies Dependencies) *Server {
 	mux.HandleFunc("POST /v1/organizations/{organizationID}/triggers", server.createTrigger)
 	mux.HandleFunc("DELETE /v1/organizations/{organizationID}/triggers/{triggerID}", server.disableTrigger)
 	mux.HandleFunc("POST /v1/organizations/{organizationID}/connections/{connectionID}/actions/{actionName}", server.runAction)
+	if dependencies.PieceFiles != nil {
+		mux.HandleFunc("POST /v1/internal/piece-files", dependencies.PieceFiles.Write)
+		mux.HandleFunc("GET /v1/internal/piece-files/{fileID}", dependencies.PieceFiles.Read)
+	}
 	mux.HandleFunc("POST /v1/webhooks/google/gmail", server.admitGmailPush)
 	mux.HandleFunc("POST /v1/webhooks/{opaqueRoute}", server.admitWebhook)
 	server.handler = mux
@@ -376,6 +382,7 @@ func (s *Server) runAction(writer http.ResponseWriter, request *http.Request) {
 		OrganizationID: request.PathValue("organizationID"), MemberID: memberID,
 		ConnectionID: request.PathValue("connectionID"), ActionName: request.PathValue("actionName"),
 		IdempotencyKey: request.Header.Get("Idempotency-Key"), Props: body.Props,
+		Authorization: request.Header.Get("Authorization"),
 	})
 	if err != nil {
 		writeServiceError(writer, err)
@@ -539,6 +546,11 @@ func safeResponseHeader(key string) bool {
 }
 
 func writeServiceError(writer http.ResponseWriter, err error) {
+	var failed actionflow.ExecutionFailed
+	if errors.As(err, &failed) && failed.Code != "" {
+		writeError(writer, runnerStatus(failed.Code), failed.Code, firstNonEmpty(failed.Message, "provider action could not be completed"))
+		return
+	}
 	switch {
 	case errors.Is(err, oauthflow.ErrForbidden):
 		writeError(writer, 403, "forbidden", "organization permission is required")
@@ -554,8 +566,14 @@ func writeServiceError(writer http.ResponseWriter, err error) {
 		writeError(writer, 409, "action_failed", "use a new idempotency key to explicitly retry the action")
 	case errors.Is(err, domain.ErrConflict), errors.Is(err, oauthflow.ErrAlreadyConnected):
 		writeError(writer, 409, "conflict", "resource already exists")
-	case errors.Is(err, oauthflow.ErrInvalidInput), errors.Is(err, webhookroutes.ErrInvalidInput), errors.Is(err, triggerflow.ErrInvalidInput), errors.Is(err, actionflow.ErrInvalidInput):
-		writeError(writer, 400, "invalid_request", "request is invalid")
+	case errors.Is(err, oauthflow.ErrInvalidInput):
+		writeError(writer, 400, "invalid_request", publicErrorMessage(err, oauthflow.ErrInvalidInput, "request is invalid"))
+	case errors.Is(err, webhookroutes.ErrInvalidInput):
+		writeError(writer, 400, "invalid_request", publicErrorMessage(err, webhookroutes.ErrInvalidInput, "request is invalid"))
+	case errors.Is(err, triggerflow.ErrInvalidInput):
+		writeError(writer, 400, "invalid_request", publicErrorMessage(err, triggerflow.ErrInvalidInput, "request is invalid"))
+	case errors.Is(err, actionflow.ErrInvalidInput):
+		writeError(writer, 400, "invalid_request", publicErrorMessage(err, actionflow.ErrInvalidInput, "request is invalid"))
 	case errors.Is(err, oauthflow.ErrStateExpired):
 		writeError(writer, 400, "state_expired", "authorization state expired")
 	case errors.Is(err, oauthflow.ErrProviderMismatch):
@@ -566,9 +584,15 @@ func writeServiceError(writer http.ResponseWriter, err error) {
 		writeError(writer, 422, "operation_disabled", "integration operation is not enabled")
 	case errors.Is(err, actionflow.ErrOperationDisabled):
 		writeError(writer, 422, "operation_disabled", "integration action is not enabled")
-	case errors.Is(err, actionflow.ErrRequiredScope), errors.Is(err, triggerflow.ErrRequiredScope):
-		writeError(writer, 422, "scope_required", "connection requires additional authorization")
-	case errors.Is(err, actionflow.ErrExecutionFailed), errors.Is(err, actionflow.ErrPieceOutputInvalid):
+	case errors.Is(err, actionflow.ErrRequiredScope):
+		writeError(writer, 422, "scope_required", scopedMessage(err, actionflow.ErrRequiredScope, "connection requires additional authorization"))
+	case errors.Is(err, triggerflow.ErrRequiredScope):
+		writeError(writer, 422, "scope_required", scopedMessage(err, triggerflow.ErrRequiredScope, "connection requires additional authorization"))
+	case errors.Is(err, actionflow.ErrFilesUnavailable):
+		writeError(writer, 503, "files_unavailable", "file storage is not configured")
+	case errors.Is(err, actionflow.ErrPieceOutputInvalid):
+		writeError(writer, 502, "provider_execution_failed", "piece action output is invalid")
+	case errors.Is(err, actionflow.ErrExecutionFailed):
 		writeError(writer, 502, "provider_execution_failed", "provider action could not be completed")
 	case errors.Is(err, credentials.ErrReauthorizationRequired):
 		writeError(writer, 409, "reauthorization_required", "connection requires fresh authorization")
@@ -581,6 +605,79 @@ func writeServiceError(writer http.ResponseWriter, err error) {
 	default:
 		writeError(writer, 500, "internal_error", "request could not be completed")
 	}
+}
+
+func runnerStatus(code string) int {
+	switch code {
+	case "invalid_request":
+		return 400
+	case "file_too_large":
+		return 413
+	case "capability_not_supported", "piece_not_allowed", "operation_not_allowed",
+		"auth_type_not_allowed", "property_not_executable":
+		return 422
+	default:
+		return 502
+	}
+}
+
+func publicErrorMessage(err, sentinel error, fallback string) string {
+	detail := sentinelDetail(err, sentinel)
+	if detail == "" {
+		return fallback
+	}
+	return detail
+}
+
+func scopedMessage(err, sentinel error, fallback string) string {
+	detail := sentinelDetail(err, sentinel)
+	if detail == "" {
+		return fallback
+	}
+	return fallback + ": " + detail
+}
+
+func sentinelDetail(err, sentinel error) string {
+	text := err.Error()
+	if i := strings.IndexByte(text, '\n'); i >= 0 {
+		text = text[:i]
+	}
+	prefix := sentinel.Error() + ": "
+	if !strings.HasPrefix(text, prefix) {
+		return ""
+	}
+	detail := strings.TrimPrefix(text, prefix)
+	if !safePublicDetail(detail) {
+		return ""
+	}
+	return detail
+}
+
+func safePublicDetail(detail string) bool {
+	if detail == "" || len(detail) > 200 {
+		return false
+	}
+	for _, r := range detail {
+		if r < 32 || r == 127 {
+			return false
+		}
+	}
+	lower := strings.ToLower(detail)
+	for _, forbidden := range []string{"access_token", "refresh_token", "authorization", "bearer ", "client_secret", "id_token"} {
+		if strings.Contains(lower, forbidden) {
+			return false
+		}
+	}
+	return true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func writeError(writer http.ResponseWriter, status int, code, message string) {

@@ -55,7 +55,10 @@
         {"provider": "slack", "name": "get-user-group-by-handle"},
         {"provider": "slack", "name": "update-user-group-members"},
         {"provider": "slack", "name": "list-custom-emoji"},
-        {"provider": "slack", "name": "list-files"}
+        {"provider": "slack", "name": "list-files"},
+        {"provider": "slack", "name": "upload-file"},
+        {"provider": "slack", "name": "get-file"},
+        {"provider": "slack", "name": "custom-api-call"}
       ],
       "triggers": [
         {"provider": "slack", "name": "new-message"},
@@ -75,7 +78,7 @@
     },
     {
       "name": "oryxa-github",
-      "description": "Call-scoped instructions for Oryxa GitHub connection, approved repository actions, and inbound issue or pull-request triggers.",
+      "description": "Call-scoped instructions for Oryxa GitHub connection, approved repository actions, file content through Oryxa file refs, and inbound issue, pull-request, star, push, release, and review triggers.",
       "path": "skills/oryxa-github/SKILL.md",
       "resource_uri": "oryxa://integrations/skills/github",
       "connection_providers": ["github"],
@@ -150,11 +153,23 @@
         {"provider": "github", "name": "star-repository"},
         {"provider": "github", "name": "unstar-repository"},
         {"provider": "github", "name": "list-starred-repositories"},
-        {"provider": "github", "name": "check-repository-starred"}
+        {"provider": "github", "name": "check-repository-starred"},
+        {"provider": "github", "name": "get-file-content"},
+        {"provider": "github", "name": "create-or-update-file"},
+        {"provider": "github", "name": "delete-file"},
+        {"provider": "github", "name": "search-code"},
+        {"provider": "github", "name": "create-gist"},
+        {"provider": "github", "name": "raw-graphql-query"},
+        {"provider": "github", "name": "dispatch-workflow"},
+        {"provider": "github", "name": "custom-api-call"}
       ],
       "triggers": [
         {"provider": "github", "name": "new-issue"},
-        {"provider": "github", "name": "new-pull-request"}
+        {"provider": "github", "name": "new-pull-request"},
+        {"provider": "github", "name": "new-star"},
+        {"provider": "github", "name": "new-push"},
+        {"provider": "github", "name": "new-release"},
+        {"provider": "github", "name": "new-review"}
       ]
     },
     {
@@ -183,7 +198,11 @@
         {"provider": "google", "name": "remove-label-from-email"},
         {"provider": "google", "name": "archive-email"},
         {"provider": "google", "name": "get-profile"},
-        {"provider": "google", "name": "list-history"}
+        {"provider": "google", "name": "list-history"},
+        {"provider": "google", "name": "get-email-attachment"},
+        {"provider": "google", "name": "get-email"},
+        {"provider": "google", "name": "find-email"},
+        {"provider": "google", "name": "gmail-custom-api-call"}
       ],
       "triggers": [
         {"provider": "google", "name": "new-email"}
@@ -213,7 +232,8 @@
         {"provider": "google", "name": "list-calendars"},
         {"provider": "google", "name": "get-calendar"},
         {"provider": "google", "name": "get-calendar-colors"},
-        {"provider": "google", "name": "list-calendar-settings"}
+        {"provider": "google", "name": "list-calendar-settings"},
+        {"provider": "google", "name": "calendar-custom-api-call"}
       ],
       "triggers": [
         {"provider": "google", "name": "calendar-event-changed"}
@@ -221,7 +241,7 @@
     },
     {
       "name": "oryxa-google-drive",
-      "description": "Call-scoped instructions for Oryxa Google Drive metadata, share, and comment tools.",
+      "description": "Call-scoped instructions for Oryxa Google Drive metadata, share, comment, upload, download, leftover unique Drive writes, and inbound drive-file-changed.",
       "path": "skills/oryxa-google-drive/SKILL.md",
       "resource_uri": "oryxa://integrations/skills/google/drive",
       "pieces": ["@activepieces/piece-google-drive"],
@@ -251,7 +271,21 @@
         {"provider": "google", "name": "list-drive-replies"},
         {"provider": "google", "name": "update-drive-reply"},
         {"provider": "google", "name": "delete-drive-reply"},
-        {"provider": "google", "name": "get-drive-about"}
+        {"provider": "google", "name": "get-drive-about"},
+        {"provider": "google", "name": "upload-drive-file"},
+        {"provider": "google", "name": "replace-drive-file"},
+        {"provider": "google", "name": "download-drive-file"},
+        {"provider": "google", "name": "export-drive-file"},
+        {"provider": "google", "name": "create-file-from-text"},
+        {"provider": "google", "name": "save-file-as-pdf"},
+        {"provider": "google", "name": "set-drive-public-access"},
+        {"provider": "google", "name": "empty-trash"},
+        {"provider": "google", "name": "delete-shared-drive"},
+        {"provider": "google", "name": "upload-from-url"},
+        {"provider": "google", "name": "drive-custom-api-call"}
+      ],
+      "triggers": [
+        {"provider": "google", "name": "drive-file-changed"}
       ]
     },
     {
@@ -270,7 +304,9 @@
         {"provider": "microsoft", "name": "add-label-to-email"},
         {"provider": "microsoft", "name": "remove-label-from-email"},
         {"provider": "microsoft", "name": "move-email-to-folder"},
-        {"provider": "microsoft", "name": "find-email"}
+        {"provider": "microsoft", "name": "find-email"},
+        {"provider": "microsoft", "name": "download-attachment"},
+        {"provider": "microsoft", "name": "custom-api-call"}
       ],
       "triggers": [
         {"provider": "microsoft", "name": "new-email"}
@@ -293,14 +329,158 @@
     },
     {
       "name": "oryxa-microsoft-onedrive",
-      "description": "Call-scoped instructions for Oryxa Microsoft OneDrive metadata list and copy tools.",
+      "description": "Call-scoped instructions for Oryxa Microsoft OneDrive list, copy, upload, and download tools.",
       "path": "skills/oryxa-microsoft-onedrive/SKILL.md",
       "resource_uri": "oryxa://integrations/skills/microsoft/onedrive",
       "pieces": ["@activepieces/piece-microsoft-onedrive"],
       "actions": [
         {"provider": "microsoft", "name": "list-files"},
         {"provider": "microsoft", "name": "list-folders"},
-        {"provider": "microsoft", "name": "copy-file"}
+        {"provider": "microsoft", "name": "copy-file"},
+        {"provider": "microsoft", "name": "upload-onedrive-file"},
+        {"provider": "microsoft", "name": "download-file"}
+      ]
+    },
+    {
+      "name": "oryxa-google-docs",
+      "description": "Call-scoped instructions for Oryxa Google Docs create, read, mutate, export, and host-restricted custom API tools.",
+      "path": "skills/oryxa-google-docs/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/google/docs",
+      "pieces": ["@activepieces/piece-google-docs"],
+      "actions": [
+        {"provider": "google", "name": "create-document"},
+        {"provider": "google", "name": "create-text-document"},
+        {"provider": "google", "name": "create-document-from-markdown"},
+        {"provider": "google", "name": "create-document-from-template"},
+        {"provider": "google", "name": "copy-document"},
+        {"provider": "google", "name": "search-documents"},
+        {"provider": "google", "name": "get-document"},
+        {"provider": "google", "name": "get-document-plaintext"},
+        {"provider": "google", "name": "read-document"},
+        {"provider": "google", "name": "get-document-end-index"},
+        {"provider": "google", "name": "append-text"},
+        {"provider": "google", "name": "insert-text"},
+        {"provider": "google", "name": "replace-all-text"},
+        {"provider": "google", "name": "delete-content-range"},
+        {"provider": "google", "name": "replace-body-with-markdown"},
+        {"provider": "google", "name": "replace-section-with-markdown"},
+        {"provider": "google", "name": "insert-page-break"},
+        {"provider": "google", "name": "create-header"},
+        {"provider": "google", "name": "delete-header"},
+        {"provider": "google", "name": "create-footer"},
+        {"provider": "google", "name": "delete-footer"},
+        {"provider": "google", "name": "create-footnote"},
+        {"provider": "google", "name": "create-named-range"},
+        {"provider": "google", "name": "delete-named-range"},
+        {"provider": "google", "name": "create-paragraph-bullets"},
+        {"provider": "google", "name": "delete-paragraph-bullets"},
+        {"provider": "google", "name": "insert-table"},
+        {"provider": "google", "name": "insert-table-row"},
+        {"provider": "google", "name": "insert-table-column"},
+        {"provider": "google", "name": "delete-table-row"},
+        {"provider": "google", "name": "delete-table-column"},
+        {"provider": "google", "name": "insert-text-in-table-cell"},
+        {"provider": "google", "name": "insert-image-in-table-cell"},
+        {"provider": "google", "name": "unmerge-table-cells"},
+        {"provider": "google", "name": "update-table-row-style"},
+        {"provider": "google", "name": "create-and-populate-table"},
+        {"provider": "google", "name": "insert-inline-image"},
+        {"provider": "google", "name": "replace-image"},
+        {"provider": "google", "name": "update-document-style"},
+        {"provider": "google", "name": "export-as-pdf"},
+        {"provider": "google", "name": "batch-update"},
+        {"provider": "google", "name": "docs-custom-api-call"}
+      ]
+    },
+    {
+      "name": "oryxa-google-sheets",
+      "description": "Call-scoped instructions for Oryxa Google Sheets AI actions, file export, and host-restricted custom API tools.",
+      "path": "skills/oryxa-google-sheets/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/google/sheets",
+      "pieces": ["@activepieces/piece-google-sheets"],
+      "actions": [
+        {"provider": "google", "name": "sheets-create-spreadsheet"},
+        {"provider": "google", "name": "sheets-get-spreadsheet"},
+        {"provider": "google", "name": "sheets-search-spreadsheets"},
+        {"provider": "google", "name": "sheets-add-worksheet"},
+        {"provider": "google", "name": "sheets-find-worksheet"},
+        {"provider": "google", "name": "sheets-find-or-create-worksheet"},
+        {"provider": "google", "name": "sheets-copy-worksheet"},
+        {"provider": "google", "name": "sheets-rename-worksheet"},
+        {"provider": "google", "name": "sheets-delete-worksheet"},
+        {"provider": "google", "name": "sheets-add-row"},
+        {"provider": "google", "name": "sheets-add-row-at-top"},
+        {"provider": "google", "name": "sheets-add-multiple-rows"},
+        {"provider": "google", "name": "sheets-update-row"},
+        {"provider": "google", "name": "sheets-update-multiple-rows"},
+        {"provider": "google", "name": "sheets-delete-row"},
+        {"provider": "google", "name": "sheets-delete-multiple-rows"},
+        {"provider": "google", "name": "sheets-find-rows"},
+        {"provider": "google", "name": "sheets-find-or-create-row"},
+        {"provider": "google", "name": "sheets-get-row"},
+        {"provider": "google", "name": "sheets-get-all-rows"},
+        {"provider": "google", "name": "sheets-get-values"},
+        {"provider": "google", "name": "sheets-append-values"},
+        {"provider": "google", "name": "sheets-update-values"},
+        {"provider": "google", "name": "sheets-clear-values"},
+        {"provider": "google", "name": "sheets-add-column"},
+        {"provider": "google", "name": "sheets-insert-dimension"},
+        {"provider": "google", "name": "sheets-append-dimension"},
+        {"provider": "google", "name": "sheets-delete-dimension"},
+        {"provider": "google", "name": "sheets-auto-resize-dimensions"},
+        {"provider": "google", "name": "sheets-update-dimension-properties"},
+        {"provider": "google", "name": "sheets-update-sheet-properties"},
+        {"provider": "google", "name": "sheets-format-cells"},
+        {"provider": "google", "name": "sheets-export-worksheet"},
+        {"provider": "google", "name": "sheets-custom-api-call"}
+      ]
+    },
+    {
+      "name": "oryxa-microsoft-teams",
+      "description": "Call-scoped instructions for Oryxa Microsoft Teams channel, chat, meeting lookup, and host-restricted custom API tools.",
+      "path": "skills/oryxa-microsoft-teams/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/microsoft/teams",
+      "pieces": ["@activepieces/piece-microsoft-teams"],
+      "actions": [
+        {"provider": "microsoft", "name": "create-channel"},
+        {"provider": "microsoft", "name": "send-channel-message"},
+        {"provider": "microsoft", "name": "send-chat-message"},
+        {"provider": "microsoft", "name": "reply-to-channel-message"},
+        {"provider": "microsoft", "name": "create-chat-and-send-message"},
+        {"provider": "microsoft", "name": "create-private-channel"},
+        {"provider": "microsoft", "name": "get-chat-message"},
+        {"provider": "microsoft", "name": "delete-chat-message"},
+        {"provider": "microsoft", "name": "get-channel-message"},
+        {"provider": "microsoft", "name": "find-channel"},
+        {"provider": "microsoft", "name": "find-team-member"},
+        {"provider": "microsoft", "name": "get-meeting-transcript"},
+        {"provider": "microsoft", "name": "get-meeting-recording"},
+        {"provider": "microsoft", "name": "teams-custom-api-call"}
+      ]
+    },
+    {
+      "name": "oryxa-microsoft-sharepoint",
+      "description": "Call-scoped instructions for Oryxa Microsoft SharePoint list, file, site, and host-restricted custom API tools.",
+      "path": "skills/oryxa-microsoft-sharepoint/SKILL.md",
+      "resource_uri": "oryxa://integrations/skills/microsoft/sharepoint",
+      "pieces": ["@activepieces/piece-microsoft-sharepoint"],
+      "actions": [
+        {"provider": "microsoft", "name": "create-sharepoint-folder"},
+        {"provider": "microsoft", "name": "create-list"},
+        {"provider": "microsoft", "name": "create-list-item"},
+        {"provider": "microsoft", "name": "update-list-item"},
+        {"provider": "microsoft", "name": "delete-list-item"},
+        {"provider": "microsoft", "name": "find-list-item"},
+        {"provider": "microsoft", "name": "upload-sharepoint-file"},
+        {"provider": "microsoft", "name": "publish-page"},
+        {"provider": "microsoft", "name": "copy-sharepoint-item"},
+        {"provider": "microsoft", "name": "copy-item-within-site"},
+        {"provider": "microsoft", "name": "move-sharepoint-file"},
+        {"provider": "microsoft", "name": "find-sharepoint-file"},
+        {"provider": "microsoft", "name": "get-folder-contents"},
+        {"provider": "microsoft", "name": "get-site-information"},
+        {"provider": "microsoft", "name": "find-site"},
+        {"provider": "microsoft", "name": "sharepoint-custom-api-call"}
       ]
     }
   ]

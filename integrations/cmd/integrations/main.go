@@ -20,7 +20,10 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/dynamo"
 	intevents "github.com/Shubham04-oss/oryxa-go/integrations/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/execution"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/filebroker"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/filesclient"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/lifecycle"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/oauthflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/piecerunner"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/postgres"
@@ -170,6 +173,15 @@ func main() {
 	actions := actionflow.Service{Catalog: catalog, Authorizer: store, Connections: store,
 		Store: store, Credentials: credentialSource, Runner: runner,
 		Mapper: actionflow.DomainMapper{}, IDs: ids, PublicURL: strings.TrimRight(config.PublicBaseURL, "/")}
+	var pieceFiles *filebroker.Handler
+	if config.FilesURL != "" {
+		files := filesclient.New(config.FilesURL)
+		sessions := dynamo.FileSessions{Client: dynamoClient, TableName: config.DynamoTable}
+		pieceFiles = &filebroker.Handler{Sessions: sessions, Files: files}
+		actions.Files = files
+		actions.FileSessions = sessions
+		actions.FileBrokerURL = strings.TrimRight(config.PublicBaseURL, "/") + "/v1/internal/piece-files"
+	}
 	renewals := triggerflow.RenewalWorker{References: store, Renewer: triggerService, Lease: store,
 		ReportError: func(err error) { slog.Error("renew Microsoft Graph trigger", "error", err) }}
 	graphCleanup := triggerflow.MicrosoftGraphCleanupWorker{Jobs: store, Routes: routes, State: state,
@@ -183,13 +195,18 @@ func main() {
 		ReportError: func(err error) { slog.Error("clean Google trigger", "error", err) }}
 	go (queue.Consumer{Client: sqsClient, QueueURL: config.WebhookQueueURL, Processor: executor}).Run(ctx)
 	go (intevents.Dispatcher{Store: store, Publisher: intevents.Publisher{Client: eventClient, BusName: config.EventBusName}}).Run(ctx)
+	if config.EventsQueueURL != "" {
+		go intevents.NewConsumer(lifecycle.Service{Store: store, IDs: ids}, slog.Default()).Poll(ctx, sqsClient, config.EventsQueueURL)
+	} else {
+		slog.Warn("INTEGRATIONS_EVENTS_QUEUE_URL is not set: integrations will not hear about deleted organizations or members leaving them")
+	}
 	go renewals.Run(ctx)
 	go graphCleanup.Run(ctx)
 	go githubCleanup.Run(ctx)
 	go googleCleanup.Run(ctx)
 
-	handler := observability.HTTPHandler("oryxa-integrations", httpserver.NewAPI(httpserver.Dependencies{Authenticator: authn.BearerAuthenticator{Verifier: authn.New(provider, config.CognitoClientID)}, Catalog: oauth, OAuth: oauth, WebhookRoutes: webhookRouteService, Triggers: triggerService, Webhooks: webhookService, GmailPushes: gmailPushes, Actions: actions}))
-	server := &http.Server{Addr: config.Address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
+	handler := observability.HTTPHandler("oryxa-integrations", httpserver.NewAPI(httpserver.Dependencies{Authenticator: authn.BearerAuthenticator{Verifier: authn.New(provider, config.CognitoClientID)}, Catalog: oauth, OAuth: oauth, WebhookRoutes: webhookRouteService, Triggers: triggerService, Webhooks: webhookService, GmailPushes: gmailPushes, Actions: actions, PieceFiles: pieceFiles}))
+	server := &http.Server{Addr: config.Address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 60 * time.Second, WriteTimeout: 90 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)

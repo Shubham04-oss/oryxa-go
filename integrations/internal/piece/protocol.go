@@ -44,6 +44,11 @@ type TriggerRunner interface {
 	RunTrigger(context.Context, TriggerInvocation) (TriggerResult, error)
 }
 
+type FilesBroker struct {
+	URL   string
+	Token string
+}
+
 type ActionInvocation struct {
 	InvocationID   string
 	OrganizationID string
@@ -53,6 +58,7 @@ type ActionInvocation struct {
 	Auth           json.RawMessage
 	Props          json.RawMessage
 	PublicURL      string
+	FilesBroker    *FilesBroker
 }
 
 type ActionResult struct {

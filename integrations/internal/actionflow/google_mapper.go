@@ -1,6 +1,7 @@
 package actionflow
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -22,8 +23,14 @@ func mapGoogle(request MapRequest) (MappedResult, error) {
 	case "add-label-to-email", "remove-label-from-email", "archive-email", "create-label":
 		return mapGoogleGmailMutated(request)
 	case "get-draft-email", "list-drafts", "get-thread", "list-threads", "list-labels", "get-label",
-		"get-profile", "list-history":
+		"get-profile", "list-history", "get-email-attachment":
 		return mapGoogleGmailLookup(request)
+	case "get-email":
+		return mapGoogleGmailMessage(request.Output)
+	case "find-email":
+		return mapGoogleGmailSearch(request.Output)
+	case "gmail-custom-api-call", "calendar-custom-api-call", "drive-custom-api-call":
+		return mapProviderHTTPCall(request)
 	case "create-calendar-event", "create-quick-event", "import-calendar-event":
 		return mapGoogleCalendarWrite(request, true)
 	case "update-calendar-event", "add-calendar-attendees", "remove-calendar-attendee", "move-calendar-event":
@@ -44,21 +51,34 @@ func mapGoogle(request MapRequest) (MappedResult, error) {
 		return mapGoogleDriveFiles(request)
 	case "get-drive-file-metadata":
 		return mapGoogleDriveFile(request, "")
-	case "create-drive-folder", "create-shared-drive":
+	case "create-drive-folder", "create-shared-drive", "upload-drive-file":
 		return mapGoogleDriveFile(request, "created")
 	case "copy-drive-file":
 		return mapGoogleDriveFile(request, "copied")
+	case "create-file-from-text", "save-file-as-pdf", "upload-from-url":
+		return mapGoogleDriveFile(request, "created")
 	case "move-drive-file", "update-drive-file-metadata", "trash-drive-file", "untrash-drive-file",
 		"delete-drive-file", "share-drive-file", "update-drive-permission", "remove-drive-permission",
 		"update-shared-drive", "create-drive-comment", "create-drive-reply", "update-drive-reply",
-		"delete-drive-reply":
+		"delete-drive-reply", "replace-drive-file":
 		return mapGoogleDriveFile(request, "mutated")
+	case "set-drive-public-access":
+		return mapGoogleDrivePublicAccess(request)
+	case "empty-trash", "delete-shared-drive":
+		return mapGoogleDriveDriveMutation(request)
 	case "list-drive-permissions", "list-shared-drives", "get-shared-drive", "list-drive-comments",
 		"get-drive-reply", "list-drive-replies", "get-drive-about":
 		return mapGoogleDriveLookup(request)
-	default:
-		return MappedResult{}, fmt.Errorf("%w: unsupported Google action", ErrPieceOutputInvalid)
+	case "download-drive-file", "export-drive-file":
+		return mapStoredFileLookup(request.Output)
 	}
+	if result, ok, err := mapGoogleDocsAction(request); ok {
+		return result, err
+	}
+	if result, ok, err := mapGoogleSheetsAction(request); ok {
+		return result, err
+	}
+	return MappedResult{}, fmt.Errorf("%w: unsupported Google action", ErrPieceOutputInvalid)
 }
 
 type gmailIdentity struct {
@@ -220,6 +240,138 @@ func mapGoogleGmailMutated(request MapRequest) (MappedResult, error) {
 			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, MessageID: id,
 			RequestedBy: request.Execution.MemberID, MutatedAt: request.OccurredAt,
 		}}, nil
+}
+
+func mapGoogleGmailMessage(raw json.RawMessage) (MappedResult, error) {
+	safe, err := projectGmailMessage(raw)
+	if err != nil {
+		return MappedResult{}, err
+	}
+	return googleJSON(safe)
+}
+
+func mapGoogleGmailSearch(raw json.RawMessage) (MappedResult, error) {
+	var output struct {
+		Found   bool `json:"found"`
+		Results struct {
+			Messages []json.RawMessage `json:"messages"`
+			Count    int               `json:"count"`
+		} `json:"results"`
+	}
+	if json.Unmarshal(raw, &output) != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	if output.Results.Messages == nil {
+		output.Results.Messages = []json.RawMessage{}
+	}
+	truncated := len(output.Results.Messages) > 100
+	if truncated {
+		output.Results.Messages = output.Results.Messages[:100]
+	}
+	messages := make([]any, 0, len(output.Results.Messages))
+	for _, item := range output.Results.Messages {
+		safe, err := projectGmailMessage(item)
+		if err != nil {
+			return MappedResult{}, err
+		}
+		messages = append(messages, safe)
+	}
+	count := output.Results.Count
+	if count == 0 {
+		count = len(messages)
+	}
+	return googleJSON(struct {
+		Found     bool  `json:"found"`
+		Messages  []any `json:"messages"`
+		Count     int   `json:"count"`
+		Truncated bool  `json:"truncated"`
+	}{Found: output.Found, Messages: messages, Count: count, Truncated: truncated})
+}
+
+type gmailAddressField struct {
+	Text  string `json:"text"`
+	Value []struct {
+		Address string `json:"address"`
+		Name    string `json:"name"`
+	} `json:"value"`
+}
+
+func projectGmailMessage(raw json.RawMessage) (any, error) {
+	var output struct {
+		ID          string            `json:"id"`
+		Subject     string            `json:"subject"`
+		Date        string            `json:"date"`
+		From        json.RawMessage   `json:"from"`
+		To          json.RawMessage   `json:"to"`
+		Attachments []json.RawMessage `json:"attachments"`
+		Error       string            `json:"error"`
+	}
+	if json.Unmarshal(raw, &output) != nil || output.ID == "" {
+		return nil, ErrPieceOutputInvalid
+	}
+	if output.Error != "" {
+		return struct {
+			ID    string `json:"id"`
+			Error string `json:"error,omitempty"`
+		}{ID: output.ID, Error: output.Error}, nil
+	}
+	attachments := make([]any, 0, len(output.Attachments))
+	for _, item := range output.Attachments {
+		filename, fileID := writtenOryxaFile(item)
+		if fileID == "" {
+			return nil, ErrPieceOutputInvalid
+		}
+		var leftover struct {
+			Content string `json:"content"`
+			Text    string `json:"text"`
+			HTML    string `json:"html"`
+		}
+		_ = json.Unmarshal(item, &leftover)
+		if leftover.Content != "" || leftover.Text != "" || leftover.HTML != "" {
+			return nil, ErrPieceOutputInvalid
+		}
+		var nested struct {
+			Data json.RawMessage `json:"data"`
+		}
+		_ = json.Unmarshal(item, &nested)
+		if len(nested.Data) > 0 && nested.Data[0] != '{' {
+			return nil, ErrPieceOutputInvalid
+		}
+		attachments = append(attachments, struct {
+			FileID   string `json:"file_id"`
+			Filename string `json:"filename,omitempty"`
+		}{FileID: fileID, Filename: filename})
+	}
+	return struct {
+		ID          string `json:"id"`
+		Subject     string `json:"subject,omitempty"`
+		From        string `json:"from,omitempty"`
+		To          string `json:"to,omitempty"`
+		Date        string `json:"date,omitempty"`
+		Attachments []any  `json:"attachments,omitempty"`
+	}{ID: output.ID, Subject: output.Subject, From: gmailAddressText(output.From),
+		To: gmailAddressText(output.To), Date: output.Date, Attachments: attachments}, nil
+}
+
+func gmailAddressText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var asString string
+	if json.Unmarshal(raw, &asString) == nil {
+		return asString
+	}
+	var field gmailAddressField
+	if json.Unmarshal(raw, &field) != nil {
+		return ""
+	}
+	if field.Text != "" {
+		return field.Text
+	}
+	if len(field.Value) > 0 {
+		return firstNonEmpty(field.Value[0].Address, field.Value[0].Name)
+	}
+	return ""
 }
 
 func mapGoogleGmailLookup(request MapRequest) (MappedResult, error) {
@@ -425,6 +577,8 @@ func mapGoogleGmailLookup(request MapRequest) (MappedResult, error) {
 			HistoryID string `json:"history_id,omitempty"`
 			Truncated bool   `json:"truncated"`
 		}{History: safe, HistoryID: output.HistoryID, Truncated: truncated})
+	case "get-email-attachment":
+		return mapStoredFileLookup(request.Output)
 	default:
 		return MappedResult{}, fmt.Errorf("%w: unsupported Google action", ErrPieceOutputInvalid)
 	}
@@ -770,16 +924,25 @@ func decodeGoogleDriveFile(raw json.RawMessage) googleDriveFile {
 }
 
 func mapGoogleDriveFiles(request MapRequest) (MappedResult, error) {
-	var output struct {
-		Files []googleDriveFile `json:"files"`
+	payload := unwrapGoogleHTTP(request.Output)
+	var files []googleDriveFile
+	if len(bytes.TrimSpace(payload)) > 0 && bytes.TrimSpace(payload)[0] == '[' {
+		if json.Unmarshal(payload, &files) != nil {
+			return MappedResult{}, ErrPieceOutputInvalid
+		}
+	} else {
+		var output struct {
+			Files []googleDriveFile `json:"files"`
+		}
+		if json.Unmarshal(payload, &output) != nil {
+			return MappedResult{}, ErrPieceOutputInvalid
+		}
+		files = output.Files
 	}
-	if json.Unmarshal(request.Output, &output) != nil {
-		return MappedResult{}, ErrPieceOutputInvalid
+	if files == nil {
+		files = []googleDriveFile{}
 	}
-	if output.Files == nil {
-		output.Files = []googleDriveFile{}
-	}
-	files, truncated := googleCap(output.Files, 100)
+	files, truncated := googleCap(files, 100)
 	safe := make([]any, 0, len(files))
 	for _, file := range files {
 		if file.ID == "" {
@@ -849,6 +1012,74 @@ func mapGoogleDriveFile(request MapRequest, kind string) (MappedResult, error) {
 	default:
 		return MappedResult{SafeResult: result}, nil
 	}
+}
+
+func mapGoogleDrivePublicAccess(request MapRequest) (MappedResult, error) {
+	var output struct {
+		ID          string `json:"id"`
+		Type        string `json:"type"`
+		Role        string `json:"role"`
+		WebViewLink string `json:"webViewLink"`
+	}
+	_ = json.Unmarshal(unwrapGoogleHTTP(request.Output), &output)
+	var props struct {
+		FileID string `json:"file_id"`
+		Role   string `json:"role"`
+	}
+	_ = json.Unmarshal(request.Props, &props)
+	if props.FileID == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	role := output.Role
+	if role == "" {
+		role = props.Role
+	}
+	result, err := json.Marshal(struct {
+		FileID       string `json:"file_id"`
+		PermissionID string `json:"permission_id,omitempty"`
+		Type         string `json:"type,omitempty"`
+		Role         string `json:"role,omitempty"`
+		URL          string `json:"url,omitempty"`
+	}{FileID: props.FileID, PermissionID: output.ID, Type: output.Type, Role: role, URL: output.WebViewLink})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result, DetailType: integrationevents.GoogleDriveItemMutatedDetailType,
+		Data: integrationevents.GoogleDriveItemMutated{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, ItemID: props.FileID,
+			RequestedBy: request.Execution.MemberID, MutatedAt: request.OccurredAt,
+		}}, nil
+}
+
+func mapGoogleDriveDriveMutation(request MapRequest) (MappedResult, error) {
+	var props struct {
+		DriveID string `json:"drive_id"`
+	}
+	_ = json.Unmarshal(request.Props, &props)
+	var output struct {
+		Success bool   `json:"success"`
+		Deleted bool   `json:"deleted"`
+		DriveID string `json:"driveId"`
+	}
+	_ = json.Unmarshal(unwrapGoogleHTTP(request.Output), &output)
+	id := firstNonEmpty(output.DriveID, props.DriveID)
+	if id == "" {
+		id = "me"
+	}
+	success := output.Success || output.Deleted || request.ActionName == "empty-trash" ||
+		request.ActionName == "delete-shared-drive"
+	result, err := json.Marshal(struct {
+		DriveID string `json:"drive_id"`
+		Success bool   `json:"success"`
+	}{DriveID: id, Success: success})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result, DetailType: integrationevents.GoogleDriveItemMutatedDetailType,
+		Data: integrationevents.GoogleDriveItemMutated{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, ItemID: id,
+			RequestedBy: request.Execution.MemberID, MutatedAt: request.OccurredAt,
+		}}, nil
 }
 
 func mapGoogleDriveLookup(request MapRequest) (MappedResult, error) {

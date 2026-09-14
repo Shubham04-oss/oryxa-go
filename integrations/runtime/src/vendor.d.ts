@@ -31,6 +31,18 @@ declare module '@activepieces/piece-google-drive' {
   export const googleDrive: Piece<any>
 }
 
+declare module '@activepieces/piece-google-docs' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const googleDocs: Piece<any>
+}
+
+declare module '@activepieces/piece-google-sheets' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const googleSheets: Piece<any>
+}
+
 declare module '@activepieces/piece-microsoft-outlook' {
   import type { Piece } from '@activepieces/pieces-framework'
 
@@ -47,4 +59,16 @@ declare module '@activepieces/piece-microsoft-onedrive' {
   import type { Piece } from '@activepieces/pieces-framework'
 
   export const microsoftOneDrive: Piece<any>
+}
+
+declare module '@activepieces/piece-microsoft-teams' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const microsoftTeams: Piece<any>
+}
+
+declare module '@activepieces/piece-microsoft-sharepoint' {
+  import type { Piece } from '@activepieces/pieces-framework'
+
+  export const microsoftSharePoint: Piece<any>
 }

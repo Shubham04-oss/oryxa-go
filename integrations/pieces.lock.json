@@ -33,7 +33,8 @@
         "find_user_by_email", "find_user_by_handle", "find-user-by-id", "get_user",
         "list_users", "set_user_status", "update_profile", "slack_list_user_conversations",
         "slack_list_user_reactions", "list_user_groups", "get_group_by_handle",
-        "update_group_users", "slack_list_custom_emoji", "slack_list_files"
+        "update_group_users", "slack_list_custom_emoji", "slack_list_files",
+        "uploadFile", "slack_get_file", "custom_api_call"
       ],
       "triggers": [
         "new-message", "new-message-in-channel", "new-direct-message", "new_mention",
@@ -47,15 +48,15 @@
       "package": "@activepieces/piece-github",
       "version": "0.8.11",
       "integrity": "sha512-QsKoAX5CU/lUnXsaMNX64FRQ09IjxTmvDfEfi3lJLfXIu6iE+hJYaZA8Y1Q/yIdW78vv86njzg4J72ooWZmVkw==",
-      "actions": ["create_issue_ai", "get_issue_ai", "list_repository_issues", "update_issue_ai", "create_issue_comment_ai", "list_issue_comments", "lock_issue_ai", "unlock_issue_ai", "add_labels_to_issue_ai", "remove_label_from_issue", "set_issue_labels", "list_issue_labels", "add_assignees_to_issue", "remove_assignees_from_issue", "list_assignees", "list_repository_labels", "create_label", "update_label", "create_pull_request", "get_pull_request", "list_pull_requests", "update_pull_request", "merge_pull_request", "list_pull_request_files", "list_pull_request_commits", "create_pull_request_review", "request_pull_request_reviewers", "create_pull_request_review_comment_ai", "list_pull_request_reviews", "list_pull_request_review_comments", "get_repository", "list_my_repositories", "list_user_repositories", "list_organization_repositories", "create_repository", "create_organization_repository", "update_repository", "list_branches", "get_branch", "create_branch_ai", "delete_branch_ai", "get_reference", "list_commits", "get_commit", "compare_commits", "list_contributors", "list_languages", "list_tags", "get_repository_tree", "search_repositories", "search_issues_and_pull_requests", "search_users", "get_authenticated_user", "get_user", "list_organization_members", "create_release", "list_releases", "get_release", "get_latest_release", "list_collaborators", "add_collaborator", "remove_collaborator", "create_milestone", "list_milestones", "get_milestone", "update_milestone", "star_repository", "unstar_repository", "list_starred_repositories", "check_repository_starred"],
-      "triggers": ["new-issue", "new-pull-request"],
+      "actions": ["create_issue_ai", "get_issue_ai", "list_repository_issues", "update_issue_ai", "create_issue_comment_ai", "list_issue_comments", "lock_issue_ai", "unlock_issue_ai", "add_labels_to_issue_ai", "remove_label_from_issue", "set_issue_labels", "list_issue_labels", "add_assignees_to_issue", "remove_assignees_from_issue", "list_assignees", "list_repository_labels", "create_label", "update_label", "create_pull_request", "get_pull_request", "list_pull_requests", "update_pull_request", "merge_pull_request", "list_pull_request_files", "list_pull_request_commits", "create_pull_request_review", "request_pull_request_reviewers", "create_pull_request_review_comment_ai", "list_pull_request_reviews", "list_pull_request_review_comments", "get_repository", "list_my_repositories", "list_user_repositories", "list_organization_repositories", "create_repository", "create_organization_repository", "update_repository", "list_branches", "get_branch", "create_branch_ai", "delete_branch_ai", "get_reference", "list_commits", "get_commit", "compare_commits", "list_contributors", "list_languages", "list_tags", "get_repository_tree", "search_repositories", "search_issues_and_pull_requests", "search_code", "search_users", "get_authenticated_user", "get_user", "list_organization_members", "create_release", "list_releases", "get_release", "get_latest_release", "list_collaborators", "add_collaborator", "remove_collaborator", "create_milestone", "list_milestones", "get_milestone", "update_milestone", "star_repository", "unstar_repository", "list_starred_repositories", "check_repository_starred", "get_file_content", "create_or_update_file", "delete_file", "github_create_gist", "rawGraphqlQuery", "trigger_workflow_dispatch", "custom_api_call"],
+      "triggers": ["new-issue", "new-pull-request", "new-star", "new-push", "new-release", "new-review"],
       "eventHooks": false
     },
     {
       "package": "@activepieces/piece-gmail",
       "version": "0.15.0",
       "integrity": "sha512-KZX+PV3lg3OuSlt0hwQJdWy/8vn0/stlGy2DSKybdG5jw/7LjQC0p/tDtloaGsvGCDPJAV1vIqPqjoNWrVgDAw==",
-      "actions": ["gmail_send_email", "gmail_reply_to_thread", "gmail_create_draft", "gmail_update_draft", "gmail_send_draft", "gmail_get_draft", "gmail_list_drafts", "gmail_delete_draft", "gmail_get_thread", "gmail_list_threads", "gmail_forward_message", "gmail_list_labels", "gmail_get_label", "gmail_create_label", "gmail_add_label_to_email", "gmail_remove_label_from_email", "gmail_archive_email", "gmail_get_profile", "gmail_list_history"],
+      "actions": ["gmail_send_email", "gmail_reply_to_thread", "gmail_create_draft", "gmail_update_draft", "gmail_send_draft", "gmail_get_draft", "gmail_list_drafts", "gmail_delete_draft", "gmail_get_thread", "gmail_list_threads", "gmail_forward_message", "gmail_list_labels", "gmail_get_label", "gmail_create_label", "gmail_add_label_to_email", "gmail_remove_label_from_email", "gmail_archive_email", "gmail_get_profile", "gmail_list_history", "gmail_get_attachment", "gmail_get_message", "gmail_search_email", "custom_api_call"],
       "triggers": ["new-email"],
       "eventHooks": false
     },
@@ -63,7 +64,7 @@
       "package": "@activepieces/piece-google-calendar",
       "version": "0.10.3",
       "integrity": "sha512-F3wdJU1J6MagKgqrskCHCuFg6g1NMNiwtoi647vl1HZ7LJXnBrm83WnPum6ewm8mjfFUMKcADfylSuZu8ExyTA==",
-      "actions": ["google_calendar_create_event", "google_calendar_list_events", "google_calendar_update_event", "google_calendar_delete_event", "google_calendar_get_event", "google-calendar-add-attendees", "google_calendar_remove_attendee", "create_quick_event", "google_calendar_find_busy_periods", "google_calendar_find_free_slots", "google_calendar_search_events_all_calendars", "google_calendar_list_recurring_event_instances", "google_calendar_move_event", "google_calendar_import_event", "google_calendar_list_calendars", "google_calendar_get_calendar", "google_calendar_get_colors", "google_calendar_list_settings"],
+      "actions": ["google_calendar_create_event", "google_calendar_list_events", "google_calendar_update_event", "google_calendar_delete_event", "google_calendar_get_event", "google-calendar-add-attendees", "google_calendar_remove_attendee", "create_quick_event", "google_calendar_find_busy_periods", "google_calendar_find_free_slots", "google_calendar_search_events_all_calendars", "google_calendar_list_recurring_event_instances", "google_calendar_move_event", "google_calendar_import_event", "google_calendar_list_calendars", "google_calendar_get_calendar", "google_calendar_get_colors", "google_calendar_list_settings", "custom_api_call"],
       "triggers": ["calendar-event-changed"],
       "eventHooks": false
     },
@@ -71,15 +72,15 @@
       "package": "@activepieces/piece-google-drive",
       "version": "0.9.1",
       "integrity": "sha512-ncBooHtSmgSv7wYIHYpCnosX2pD3TXwmpx+r1ZLDMLRAAQ0HQkPiP+NsIJKDYUqVR7NLKmPDhxcaV6mlI8rOyg==",
-      "actions": ["drive_list_files", "drive_get_file", "drive_create_folder", "drive_search_files", "drive_copy_file", "drive_move_file", "drive_update_file_metadata", "drive_trash_file", "drive_untrash_file", "drive_delete_file", "drive_share_file", "drive_list_permissions", "drive_update_permission", "drive_remove_permission", "drive_list_shared_drives", "drive_get_shared_drive", "drive_create_shared_drive", "drive_update_shared_drive", "drive_create_comment", "drive_list_comments", "drive_create_reply", "drive_get_reply", "drive_list_replies", "drive_update_reply", "drive_delete_reply", "drive_get_about"],
-      "triggers": [],
+      "actions": ["drive_list_files", "drive_get_file", "drive_create_folder", "drive_search_files", "drive_copy_file", "drive_move_file", "drive_update_file_metadata", "drive_trash_file", "drive_untrash_file", "drive_delete_file", "drive_share_file", "drive_list_permissions", "drive_update_permission", "drive_remove_permission", "drive_list_shared_drives", "drive_get_shared_drive", "drive_create_shared_drive", "drive_update_shared_drive", "drive_create_comment", "drive_list_comments", "drive_create_reply", "drive_get_reply", "drive_list_replies", "drive_update_reply", "drive_delete_reply", "drive_get_about", "drive_upload_file", "drive_replace_file_content", "drive_download_file", "drive_export_workspace_file", "drive_create_file_from_text", "drive_save_file_as_pdf", "drive_set_public_access", "drive_empty_trash", "drive_delete_shared_drive", "drive_upload_from_url", "custom_api_call"],
+      "triggers": ["drive-file-changed"],
       "eventHooks": false
     },
     {
       "package": "@activepieces/piece-microsoft-outlook",
       "version": "0.5.3",
       "integrity": "sha512-a1dldIy2Fula2r+BXiKwu8zvwI4hrIaOhYy31EI4OtNeminbwZ7X2sfs8EwNDh2f2O7IDS0x/6ibe1gOqqY0AQ==",
-      "actions": ["send-email", "reply-email", "createDraftEmail", "sendDraftEmail", "forwardEmail", "addLabelToEmail", "removeLabelFromEmail", "moveEmailToFolder", "findEmail"],
+      "actions": ["send-email", "reply-email", "createDraftEmail", "sendDraftEmail", "forwardEmail", "addLabelToEmail", "removeLabelFromEmail", "moveEmailToFolder", "findEmail", "downloadAttachment", "custom_api_call"],
       "triggers": [],
       "eventHooks": false
     },
@@ -95,7 +96,78 @@
       "package": "@activepieces/piece-microsoft-onedrive",
       "version": "0.4.7",
       "integrity": "sha512-iHLwgwG9htPAx/kptE8owcxhxgIhZTIBDaahJlXbGrw10mDvbBjvbiO1QceE24anB/A3NG6vHGaw9PSSXku1iQ==",
-      "actions": ["list_files", "list_folders", "copy_file"],
+      "actions": ["list_files", "list_folders", "copy_file", "upload_onedrive_file", "download_file"],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-google-docs",
+      "version": "0.4.9",
+      "integrity": "sha512-VJm80q5MzGDBD9N1YmWqMEByp9lb3+dWXjR91XLO+/uk8UP8xMiZUpQw/JCWhJaoBAUTSqle2ihzmGhgFNq4Mg==",
+      "actions": [
+        "create_document", "create_document_based_on_template", "read_document", "get_document_plaintext",
+        "replace_all_text", "search_documents", "copy_document", "get_document_end_index", "insert_text",
+        "delete_content_range", "create_document_from_markdown", "get_document", "create_text_document",
+        "create_footer", "create_footnote", "create_header", "create_named_range", "create_paragraph_bullets",
+        "delete_footer", "delete_header", "delete_named_range", "delete_paragraph_bullets",
+        "delete_table_column", "delete_table_row", "insert_table", "insert_table_column", "insert_table_row",
+        "insert_text_in_table_cell", "insert_image_in_table_cell", "unmerge_table_cells",
+        "update_table_row_style", "insert_inline_image", "insert_page_break", "replace_image",
+        "update_document_style", "export_as_pdf", "create_and_populate_table", "replace_body_with_markdown",
+        "replace_section_with_markdown", "batch_update", "custom_api_call", "append_text"
+      ],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-google-sheets",
+      "version": "0.16.11",
+      "integrity": "sha512-kUJU1uzFimYGkQ/vCwlxCpfAMw4ImC/xrnR5aSFzvj2ztUonirmT9U/kW44nRFrEptz57ypvRfdRbMo8bAirFA==",
+      "actions": [
+        "sheets_add_column", "sheets_add_multiple_rows", "sheets_add_row_at_top", "sheets_add_row",
+        "sheets_add_worksheet", "sheets_append_dimension", "sheets_append_values",
+        "sheets_auto_resize_dimensions", "sheets_clear_values", "sheets_copy_worksheet",
+        "sheets_create_spreadsheet", "sheets_delete_dimension", "sheets_delete_multiple_rows",
+        "sheets_delete_row", "sheets_delete_worksheet", "sheets_export_worksheet",
+        "sheets_find_or_create_row", "sheets_find_or_create_worksheet", "sheets_find_rows",
+        "sheets_find_worksheet", "sheets_format_cells", "sheets_get_all_rows", "sheets_get_row",
+        "sheets_get_spreadsheet", "sheets_get_values", "sheets_insert_dimension", "sheets_rename_worksheet",
+        "sheets_search_spreadsheets", "sheets_update_dimension_properties", "sheets_update_multiple_rows",
+        "sheets_update_row", "sheets_update_sheet_properties", "sheets_update_values", "custom_api_call"
+      ],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-microsoft-teams",
+      "version": "0.6.1",
+      "integrity": "sha512-OCH+k2o1fi98VRIcHB5+fm4S1JOyRUs7sbLY8htTJjtoPyChM3nruuIGWMwrX3j7d1/ZLzqpNRFNpuVIhF+T1g==",
+      "actions": [
+        "microsoft_teams_create_channel", "microsoft_teams_send_channel_message",
+        "microsoft_teams_send_chat_message", "microsoft_teams_reply_to_channel_message",
+        "microsoft_teams_create_chat_and_send_message", "microsoft_teams_create_private_channel",
+        "microsoft_teams_get_chat_message", "microsoft_teams_delete_chat_message",
+        "microsoft_teams_get_channel_message", "microsoft_teams_find_channel",
+        "microsoft_teams_find_team_member", "microsoft_teams_get_meeting_transcript",
+        "microsoft_teams_get_meeting_recording", "custom_api_call"
+      ],
+      "triggers": [],
+      "eventHooks": false
+    },
+    {
+      "package": "@activepieces/piece-microsoft-sharepoint",
+      "version": "0.3.8",
+      "integrity": "sha512-mESMxTKhFQkWA1mxhNsCf1YNkR7TTXlso5wBNGhW6LfDjjr+aZJGObfRA8252zoH89B1j+rhxPi/+uZ0sRoG4w==",
+      "actions": [
+        "microsoft_sharepoint_create_folder", "microsoft_sharepoint_create_list",
+        "microsoft_sharepoint_create_list_item", "microsoft_sharepoint_update_list_item",
+        "microsoft_sharepoint_delete_list_item", "microsoft_sharepoint_search_list_item",
+        "microsoft_sharepoint_upload_file", "microsoft_sharepoint_publish_page",
+        "microsoft_sharepoint_copy_item", "microsoft_sharepoint_copy_item_within_site",
+        "microsoft_sharepoint_move_file", "microsoft_sharepoint_find_file",
+        "microsoft_sharepoint_get_folder_contents", "microsoft_sharepoint_get_site_information",
+        "microsoft_sharepoint_find_site", "custom_api_call"
+      ],
       "triggers": [],
       "eventHooks": false
     }

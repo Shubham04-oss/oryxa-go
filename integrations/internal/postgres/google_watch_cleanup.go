@@ -119,7 +119,7 @@ func (s *Store) ActiveGoogleWatchTriggers(ctx context.Context, afterOrganization
 		JOIN integrations_oauth_apps p
 		  ON p.organization_id = c.organization_id AND p.id = c.profile_id
 		WHERE t.provider = 'google'
-		  AND t.trigger_name IN ('new-email', 'calendar-event-changed')
+		  AND t.trigger_name IN ('new-email', 'calendar-event-changed', 'drive-file-changed')
 		  AND t.status = 'active'
 		  AND c.provider = 'google'
 		  AND c.status = 'active'

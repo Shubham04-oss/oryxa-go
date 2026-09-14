@@ -85,8 +85,8 @@ Resources:
       PackageType: Image
       Code: { ImageUri: !Ref PieceRunnerImageUri }
       Architectures: [arm64]
-      MemorySize: 512
-      Timeout: 30
+      MemorySize: 1024
+      Timeout: 60
       ReservedConcurrentExecutions: 20
       Role: !GetAtt PieceRunnerRole.Arn
 
@@ -112,6 +112,10 @@ Resources:
             Effect: Allow
             Action: [sqs:SendMessage, sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
             Resource: !GetAtt WebhookQueue.Arn
+          - Sid: AuthEventsQueue
+            Effect: Allow
+            Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes]
+            Resource: !Sub 'arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:integrations-events'
           - Sid: InvokeRunner
             Effect: Allow
             Action: lambda:InvokeFunction

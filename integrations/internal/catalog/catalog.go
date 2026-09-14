@@ -26,12 +26,20 @@ const (
 	GoogleCalendarPieceVersion    = "0.10.3"
 	GoogleDrivePieceName          = "@activepieces/piece-google-drive"
 	GoogleDrivePieceVersion       = "0.9.1"
+	GoogleDocsPieceName           = "@activepieces/piece-google-docs"
+	GoogleDocsPieceVersion        = "0.4.9"
+	GoogleSheetsPieceName         = "@activepieces/piece-google-sheets"
+	GoogleSheetsPieceVersion      = "0.16.11"
 	MicrosoftOutlookPieceName     = "@activepieces/piece-microsoft-outlook"
 	MicrosoftOutlookPieceVersion  = "0.5.3"
 	MicrosoftCalendarPieceName    = "@activepieces/piece-microsoft-outlook-calendar"
 	MicrosoftCalendarPieceVersion = "0.2.8"
-	MicrosoftOneDrivePieceName    = "@activepieces/piece-microsoft-onedrive"
-	MicrosoftOneDrivePieceVersion = "0.4.7"
+	MicrosoftOneDrivePieceName      = "@activepieces/piece-microsoft-onedrive"
+	MicrosoftOneDrivePieceVersion   = "0.4.7"
+	MicrosoftTeamsPieceName         = "@activepieces/piece-microsoft-teams"
+	MicrosoftTeamsPieceVersion      = "0.6.1"
+	MicrosoftSharePointPieceName    = "@activepieces/piece-microsoft-sharepoint"
+	MicrosoftSharePointPieceVersion = "0.3.8"
 )
 
 type Static struct {
@@ -74,6 +82,14 @@ func (c Static) TriggerDefinition(provider, triggerName string) (triggerflow.Def
 			base.Event, base.GitHubHookEvent = "issues", "issues"
 		case "new-pull-request":
 			base.Event, base.GitHubHookEvent = "pull_request", "pull_request"
+		case "new-star":
+			base.Event, base.GitHubHookEvent = "watch", "watch"
+		case "new-push":
+			base.Event, base.GitHubHookEvent = "push", "push"
+		case "new-release":
+			base.Event, base.GitHubHookEvent = "release", "release"
+		case "new-review":
+			base.Event, base.GitHubHookEvent = "pull_request_review", "pull_request_review"
 		default:
 			return triggerflow.Definition{}, false
 		}
@@ -115,6 +131,11 @@ func (c Static) TriggerDefinition(provider, triggerName string) (triggerflow.Def
 			base.PieceName, base.PieceVersion = GoogleCalendarPieceName, GoogleCalendarPieceVersion
 			base.TriggerName, base.Event, base.GoogleWatch = triggerName, "channel-notification", "calendar"
 			base.RequiredScopes = []string{googleCalendarReadScope}
+		case "drive-file-changed":
+			base.PieceName, base.PieceVersion = GoogleDrivePieceName, GoogleDrivePieceVersion
+			base.TriggerName, base.Event, base.GoogleWatch = triggerName, "channel-notification", "drive"
+			base.RequiredScopes = []string{googleDriveFileReadScope}
+			base.GoogleTTL = 24 * time.Hour
 		default:
 			return triggerflow.Definition{}, false
 		}
@@ -135,7 +156,7 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 		return bindConnectionSkill(provider, oauthflow.Definition{
 			Provider: "github", PieceName: GitHubPieceName, PieceVersion: GitHubPieceVersion,
 			RedirectURI:    c.PublicBaseURL + "/v1/oauth/callback/github",
-			AllowedScopes:  []string{"admin:org_hook", "admin:repo_hook", "offline_access", "public_repo", "read:org", "read:user", "repo", "workflow"},
+			AllowedScopes:  []string{"admin:org_hook", "admin:repo_hook", "gist", "offline_access", "public_repo", "read:org", "read:user", "repo", "workflow"},
 			RequiredScopes: []string{"read:user"}, SupportsPKCE: false,
 		}, true)
 	}
@@ -148,12 +169,17 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 				"https://www.googleapis.com/auth/calendar.events",
 				"https://www.googleapis.com/auth/calendar.readonly",
 				"https://www.googleapis.com/auth/drive",
+				"https://www.googleapis.com/auth/drive.readonly",
 				"https://www.googleapis.com/auth/drive.metadata.readonly",
 				"https://www.googleapis.com/auth/gmail.compose",
 				"https://www.googleapis.com/auth/gmail.metadata",
 				"https://www.googleapis.com/auth/gmail.modify",
 				"https://www.googleapis.com/auth/gmail.readonly",
 				"https://www.googleapis.com/auth/gmail.send",
+				"https://www.googleapis.com/auth/documents",
+				"https://www.googleapis.com/auth/documents.readonly",
+				"https://www.googleapis.com/auth/spreadsheets",
+				"https://www.googleapis.com/auth/spreadsheets.readonly",
 			},
 			RequiredScopes: []string{"email", "openid", "profile"}, SupportsPKCE: true,
 		}, true)
@@ -165,7 +191,11 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 			AllowedScopes: []string{
 				"openid", "profile", "email", "offline_access", "User.Read",
 				"Mail.Send", "Mail.Read", "Mail.ReadWrite", "Calendars.ReadWrite", "Calendars.Read",
-				"Files.Read", "Files.ReadWrite",
+				"Files.Read", "Files.ReadWrite", "Files.ReadWrite.All",
+				"Channel.Create", "Channel.ReadBasic.All", "ChannelMessage.Send", "ChannelMessage.Read.All",
+				"Team.ReadBasic.All", "Chat.ReadWrite", "TeamMember.Read.All", "User.ReadBasic.All",
+				"Presence.Read.All", "OnlineMeetingTranscript.Read.All", "OnlineMeetingRecording.Read.All",
+				"Sites.Read.All", "Sites.ReadWrite.All", "Sites.Manage.All",
 			},
 			// Microsoft may omit offline_access from the returned scope string even
 			// when it issued a refresh token. It is still requested by the OAuth
@@ -194,4 +224,62 @@ func decodeStrict(raw json.RawMessage, target any) error {
 
 func boundedIdentifier(value string, maximum int) bool {
 	return value != "" && len(value) <= maximum && strings.TrimSpace(value) == value && !strings.ContainsAny(value, " \t\r\n")
+}
+
+type fileRef struct {
+	FileID string `json:"file_id"`
+}
+
+func oryxaFileID(value string) bool {
+	return strings.HasPrefix(value, "file_") && boundedIdentifier(value, 64)
+}
+
+func optionalFileRefs(values []fileRef) bool {
+	if len(values) > 5 {
+		return false
+	}
+	for _, value := range values {
+		if !oryxaFileID(value.FileID) {
+			return false
+		}
+	}
+	return true
+}
+
+func optionalFileRef(value *fileRef) bool {
+	return value == nil || oryxaFileID(value.FileID)
+}
+
+func boundedFilename(value string) bool {
+	return value != "" && len(value) <= 255 && strings.TrimSpace(value) == value &&
+		!strings.ContainsAny(value, "\r\n/\\") && value != "." && value != ".."
+}
+
+func optionalFilename(value string) bool {
+	return value == "" || boundedFilename(value)
+}
+
+func prepareFileAttachments(raw json.RawMessage) (json.RawMessage, error) {
+	var props map[string]any
+	if err := json.Unmarshal(raw, &props); err != nil {
+		return nil, err
+	}
+	items, ok := props["attachments"].([]any)
+	if !ok || len(items) == 0 {
+		return raw, nil
+	}
+	wrapped := make([]any, 0, len(items))
+	for _, item := range items {
+		object, _ := item.(map[string]any)
+		if object == nil {
+			return nil, errors.New("invalid attachment")
+		}
+		if _, ok := object["file"]; ok {
+			wrapped = append(wrapped, object)
+			continue
+		}
+		wrapped = append(wrapped, map[string]any{"file": object})
+	}
+	props["attachments"] = wrapped
+	return json.Marshal(props)
 }

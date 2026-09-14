@@ -20,6 +20,7 @@ import (
 const (
 	defaultCalendarURL = "https://www.googleapis.com/calendar/v3"
 	defaultGmailURL    = "https://gmail.googleapis.com/gmail/v1"
+	defaultDriveURL    = "https://www.googleapis.com/drive/v3"
 	maxResponseSize    = 1 << 20
 	defaultTimeout     = 15 * time.Second
 	primaryCalendarID  = "primary"
@@ -28,6 +29,7 @@ const (
 const (
 	WatchKindCalendar = "calendar"
 	WatchKindGmail    = "gmail"
+	WatchKindDrive    = "drive"
 )
 
 var defaultHTTPClient = &http.Client{Timeout: defaultTimeout}
@@ -64,6 +66,13 @@ type CalendarWatchRequest struct {
 
 type GmailWatchRequest struct {
 	TopicName string
+}
+
+type DriveWatchRequest struct {
+	ChannelID  string
+	Address    string
+	Token      string
+	Expiration time.Time
 }
 
 type Channel struct {
@@ -107,12 +116,14 @@ func (s WatchState) StoreMutations() []piece.StoreMutation {
 		{Operation: "put", Key: storeWatchKind, Value: s.Kind},
 		{Operation: "put", Key: storeWatchExpiresAt, Value: s.ExpiresAt.UTC().Format(time.RFC3339Nano)},
 	}
-	if s.Kind == WatchKindCalendar {
+	if s.Kind == WatchKindCalendar || s.Kind == WatchKindDrive {
 		mutations = append(mutations,
 			piece.StoreMutation{Operation: "put", Key: storeChannelID, Value: s.ChannelID},
 			piece.StoreMutation{Operation: "put", Key: storeResourceID, Value: s.ResourceID},
-			piece.StoreMutation{Operation: "put", Key: storeCalendarID, Value: s.CalendarID},
 		)
+	}
+	if s.Kind == WatchKindCalendar {
+		mutations = append(mutations, piece.StoreMutation{Operation: "put", Key: storeCalendarID, Value: s.CalendarID})
 	}
 	if s.Kind == WatchKindGmail && s.HistoryID != "" {
 		mutations = append(mutations, piece.StoreMutation{Operation: "put", Key: storeHistoryID, Value: s.HistoryID})
@@ -171,11 +182,42 @@ func (c Client) WatchCalendar(ctx context.Context, accessToken string, request C
 	return channel, nil
 }
 
+func (c Client) WatchDrive(ctx context.Context, accessToken string, request DriveWatchRequest) (Channel, error) {
+	if err := validateDriveWatch(request, c.now()); err != nil {
+		return Channel{}, err
+	}
+	pageToken, err := c.driveStartPageToken(ctx, accessToken)
+	if err != nil {
+		return Channel{}, err
+	}
+	body, err := json.Marshal(struct {
+		ID         string `json:"id"`
+		Type       string `json:"type"`
+		Address    string `json:"address"`
+		Token      string `json:"token"`
+		Expiration string `json:"expiration"`
+	}{
+		ID: request.ChannelID, Type: "web_hook", Address: request.Address, Token: request.Token,
+		Expiration: strconv.FormatInt(request.Expiration.UTC().UnixMilli(), 10),
+	})
+	if err != nil {
+		return Channel{}, err
+	}
+	path := "/changes/watch?pageToken=" + url.QueryEscape(pageToken) + "&supportsAllDrives=true"
+	return c.driveRequest(ctx, path, accessToken, body)
+}
+
 func (c Client) StopChannel(ctx context.Context, accessToken string, state WatchState) error {
-	if state.Kind != WatchKindCalendar || !validChannelID(state.ChannelID) || !validResourceID(state.ResourceID) {
+	if !validChannelID(state.ChannelID) || !validResourceID(state.ResourceID) || strings.TrimSpace(accessToken) == "" {
 		return ErrInvalidWatch
 	}
-	if strings.TrimSpace(accessToken) == "" {
+	var stopURL string
+	switch state.Kind {
+	case WatchKindCalendar:
+		stopURL = c.calendarBase() + "/channels/stop"
+	case WatchKindDrive:
+		stopURL = c.driveBase() + "/channels/stop"
+	default:
 		return ErrInvalidWatch
 	}
 	body, err := json.Marshal(struct {
@@ -185,7 +227,7 @@ func (c Client) StopChannel(ctx context.Context, accessToken string, state Watch
 	if err != nil {
 		return err
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.calendarBase()+"/channels/stop", strings.NewReader(string(body)))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, stopURL, strings.NewReader(string(body)))
 	if err != nil {
 		return err
 	}
@@ -298,6 +340,69 @@ func (c Client) calendarRequest(ctx context.Context, path, accessToken string, b
 	return Channel{ID: payload.ID, ResourceID: payload.ResourceID, Expiration: expiresAt}, nil
 }
 
+func (c Client) driveRequest(ctx context.Context, path, accessToken string, body []byte) (Channel, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return Channel{}, ErrInvalidWatch
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.driveBase()+path, strings.NewReader(string(body)))
+	if err != nil {
+		return Channel{}, err
+	}
+	c.authorize(request, accessToken)
+	request.Header.Set("content-type", "application/json")
+	response, err := c.client().Do(request)
+	if err != nil {
+		return Channel{}, fmt.Errorf("create Google Drive watch: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return Channel{}, googleError(response)
+	}
+	var payload struct {
+		ID         string `json:"id"`
+		ResourceID string `json:"resourceId"`
+		Expiration string `json:"expiration"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, maxResponseSize+1))
+	if err := decoder.Decode(&payload); err != nil {
+		return Channel{}, ErrInvalidWatch
+	}
+	expiresAt, err := parseUnixMilli(payload.Expiration)
+	if err != nil || !validChannelID(payload.ID) || !validResourceID(payload.ResourceID) {
+		return Channel{}, ErrInvalidWatch
+	}
+	return Channel{ID: payload.ID, ResourceID: payload.ResourceID, Expiration: expiresAt}, nil
+}
+
+func (c Client) driveStartPageToken(ctx context.Context, accessToken string) (string, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return "", ErrInvalidWatch
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.driveBase()+"/changes/startPageToken?supportsAllDrives=true", nil)
+	if err != nil {
+		return "", err
+	}
+	c.authorize(request, accessToken)
+	response, err := c.client().Do(request)
+	if err != nil {
+		return "", fmt.Errorf("read Drive start page token: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", googleError(response)
+	}
+	var payload struct {
+		StartPageToken string `json:"startPageToken"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, maxResponseSize+1))
+	if err := decoder.Decode(&payload); err != nil || payload.StartPageToken == "" ||
+		len(payload.StartPageToken) > 256 || strings.ContainsAny(payload.StartPageToken, "\r\n\t ") {
+		return "", ErrInvalidWatch
+	}
+	return payload.StartPageToken, nil
+}
+
 func (c Client) authorize(request *http.Request, accessToken string) {
 	request.Header.Set("authorization", "Bearer "+accessToken)
 	request.Header.Set("accept", "application/json")
@@ -315,6 +420,13 @@ func (c Client) gmailBase() string {
 		return strings.TrimRight(c.BaseURL, "/") + "/gmail/v1"
 	}
 	return defaultGmailURL
+}
+
+func (c Client) driveBase() string {
+	if strings.TrimSpace(c.BaseURL) != "" {
+		return strings.TrimRight(c.BaseURL, "/") + "/drive/v3"
+	}
+	return defaultDriveURL
 }
 
 func (c Client) client() *http.Client {
@@ -379,6 +491,15 @@ func validateCalendarWatch(request CalendarWatchRequest, now time.Time) error {
 	return nil
 }
 
+func validateDriveWatch(request DriveWatchRequest, now time.Time) error {
+	if !validChannelID(request.ChannelID) || !validHTTPSURL(request.Address) ||
+		len(request.Token) < 32 || len(request.Token) > 256 || request.Expiration.Before(now.Add(time.Minute)) ||
+		request.Expiration.After(now.Add(25*time.Hour)) {
+		return ErrInvalidWatch
+	}
+	return nil
+}
+
 func validWatchState(state WatchState) bool {
 	if state.ExpiresAt.IsZero() {
 		return false
@@ -386,6 +507,8 @@ func validWatchState(state WatchState) bool {
 	switch state.Kind {
 	case WatchKindCalendar:
 		return validChannelID(state.ChannelID) && validResourceID(state.ResourceID) && validCalendarID(state.CalendarID)
+	case WatchKindDrive:
+		return validChannelID(state.ChannelID) && validResourceID(state.ResourceID)
 	case WatchKindGmail:
 		return state.HistoryID == "" || validHistoryID(state.HistoryID)
 	default:

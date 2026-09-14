@@ -42,6 +42,29 @@ func TestCalendarWebhookRejectsTokenMismatch(t *testing.T) {
 	}
 }
 
+func TestDriveWebhookAcceptsUpdateAndDropsCalendarExists(t *testing.T) {
+	t.Parallel()
+	secret := []byte("abcdefghijklmnopqrstuvwxyz012345")
+	request := driveWebhookRequest("update", "d-channel", "resource-1", "3", secret)
+	result, err := (WebhookVerifier{}).VerifyAndParse(context.Background(), request)
+	if err != nil || !result.Verified || result.Reply != nil || result.Event != calendarEventName ||
+		result.ProviderEventID != "d-channel:3" {
+		t.Fatalf("update result/error = %+v / %v", result, err)
+	}
+
+	exists := driveWebhookRequest("exists", "d-channel", "resource-1", "4", secret)
+	dropped, err := (WebhookVerifier{}).VerifyAndParse(context.Background(), exists)
+	if err != nil || !dropped.Verified || dropped.Reply == nil || dropped.Reply.Status != http.StatusAccepted {
+		t.Fatalf("exists result/error = %+v / %v", dropped, err)
+	}
+
+	sync := driveWebhookRequest("sync", "d-channel", "resource-1", "1", secret)
+	replied, err := (WebhookVerifier{}).VerifyAndParse(context.Background(), sync)
+	if err != nil || !replied.Verified || replied.Reply == nil || replied.Reply.Status != http.StatusOK || replied.Event != "" {
+		t.Fatalf("sync result/error = %+v / %v", replied, err)
+	}
+}
+
 func TestWebhookRunnerLeavesOtherProvidersOnTheExistingRunner(t *testing.T) {
 	t.Parallel()
 	fallback := &webhookFallback{}
@@ -61,9 +84,17 @@ func (r *webhookFallback) VerifyAndParse(context.Context, webhooks.RunnerRequest
 }
 
 func calendarWebhookRequest(state, channelID, resourceID, messageNumber string, secret []byte) webhooks.RunnerRequest {
+	return googleWebhookRequest("calendar-event-changed", state, channelID, resourceID, messageNumber, secret)
+}
+
+func driveWebhookRequest(state, channelID, resourceID, messageNumber string, secret []byte) webhooks.RunnerRequest {
+	return googleWebhookRequest("drive-file-changed", state, channelID, resourceID, messageNumber, secret)
+}
+
+func googleWebhookRequest(triggerName, state, channelID, resourceID, messageNumber string, secret []byte) webhooks.RunnerRequest {
 	return webhooks.RunnerRequest{
 		Route: domain.WebhookRoute{Provider: "google", Mode: domain.WebhookRoutePerConnection,
-			ConnectionID: "con-1", TriggerName: "calendar-event-changed"},
+			ConnectionID: "con-1", TriggerName: triggerName},
 		Method: http.MethodPost, SigningSecret: secret,
 		Headers: map[string]string{
 			headerChannelID: channelID, headerChannelToken: string(secret),

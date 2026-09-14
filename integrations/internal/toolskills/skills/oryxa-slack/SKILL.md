@@ -35,7 +35,11 @@ react as that member. Search, profile, and status writes require the user
 token. Missing scopes surface as `scope_required` or
 `reauthorization_required`; reconnect rather than seeking a bypass.
 
-File upload, file download, custom API call, and waitpoint/approval actions
+File upload and download are approved as `upload-file` and `get-file`. Pass
+Oryxa `{file_id}` objects, never raw bytes. Reconnect existing Slack grants to
+pick up `files:write`. Host-restricted `custom-api-call` may use `/method.name`
+or `https://slack.com/...` / `https://api.slack.com/...` only. Optional
+`use_user_token` posts with the member user token. Waitpoint/approval actions
 are not approved. `list-files` returns metadata only.
 
 ## Approved actions
@@ -63,11 +67,19 @@ Users and groups: `find-user-by-email`, `find-user-by-handle`,
 `find-user-by-id`, `get-user`, `list-users`, `set-user-status`,
 `update-profile`, `list-user-conversations`, `list-user-reactions`,
 `list-user-groups`, `get-user-group-by-handle`,
-`update-user-group-members`, `list-custom-emoji`, `list-files`.
+`update-user-group-members`, `list-custom-emoji`, `list-files`, `upload-file`,
+`get-file`, `custom-api-call`.
 
-Writes that change Slack state publish identity-only domain events (channel,
-timestamp, mutation). Lookups publish none. Do not claim Slack delivered or
-displayed a message beyond the provider-accepted result.
+`upload-file` requires `file: {file_id}` (Oryxa files ID). Optional `title`,
+`filename`, and `channel`. Success returns `slack_file_id` plus the source
+`file_id` and publishes `integrations.slack.file-uploaded.v1`. `get-file`
+requires Slack `fileId` and returns metadata plus the stored Oryxa `file_id`.
+`custom-api-call` requires `url` and `method`. Optional `headers`, `query`,
+`body_type`, `body`, and `use_user_token`. Do not send `Authorization`. Returns
+status plus body only; no event. Writes that change Slack state publish
+identity-only domain events (channel, timestamp, mutation, or file id).
+Lookups publish none. Do not claim Slack delivered or displayed a message
+beyond the provider-accepted result.
 
 ## Approved triggers
 

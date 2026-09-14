@@ -126,6 +126,7 @@ type GitHubHooks interface {
 
 type GoogleWatches interface {
 	WatchCalendar(context.Context, string, google.CalendarWatchRequest) (google.Channel, error)
+	WatchDrive(context.Context, string, google.DriveWatchRequest) (google.Channel, error)
 	StopChannel(context.Context, string, google.WatchState) error
 	WatchGmail(context.Context, string, google.GmailWatchRequest) (google.GmailWatch, error)
 	StopGmail(context.Context, string) error
@@ -699,8 +700,7 @@ func wipe(value []byte) {
 
 func isGitHubTrigger(connection domain.Connection, definition Definition) bool {
 	return connection.Provider == "github" && definition.Provider == "github" &&
-		definition.RouteMode == domain.WebhookRoutePerConnection &&
-		(definition.GitHubHookEvent == github.EventIssues || definition.GitHubHookEvent == github.EventPullRequest)
+		definition.RouteMode == domain.WebhookRoutePerConnection && definition.GitHubHookEvent != ""
 }
 
 func isActiveGitHubConnection(connection domain.Connection) bool {

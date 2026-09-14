@@ -12,6 +12,7 @@ const (
 	githubRepoScope    = "repo"
 	githubUserScope    = "read:user"
 	githubOrgReadScope = "read:org"
+	githubGistScope    = "gist"
 )
 
 type githubActionSpec struct {
@@ -23,6 +24,7 @@ type githubActionSpec struct {
 var githubRepoScopes = []string{githubRepoScope}
 var githubUserScopes = []string{githubUserScope}
 var githubOrgScopes = []string{githubOrgReadScope}
+var githubGistScopes = []string{githubGistScope}
 
 var githubActions = map[string]githubActionSpec{
 	"create-issue":                   {"create_issue_ai", githubRepoScopes, validateGitHubCreateIssue},
@@ -95,6 +97,22 @@ var githubActions = map[string]githubActionSpec{
 	"unstar-repository":              {"unstar_repository", githubRepoScopes, validateGitHubRepo},
 	"list-starred-repositories":      {"list_starred_repositories", githubRepoScopes, validateGitHubEmpty},
 	"check-repository-starred":       {"check_repository_starred", githubRepoScopes, validateGitHubRepo},
+	"get-file-content":               {"get_file_content", githubRepoScopes, validateGitHubGetFile},
+	"create-or-update-file":          {"create_or_update_file", githubRepoScopes, validateGitHubCreateOrUpdateFile},
+	"delete-file":                    {"delete_file", githubRepoScopes, validateGitHubDeleteFile},
+	"search-code":                    {"search_code", githubRepoScopes, validateGitHubCodeSearch},
+	"create-gist":                    {"github_create_gist", githubGistScopes, validateGitHubCreateGist},
+	"raw-graphql-query":              {"rawGraphqlQuery", githubUserScopes, validateGitHubGraphQL},
+	"dispatch-workflow":              {"trigger_workflow_dispatch", githubRepoScopes, validateGitHubWorkflowDispatch},
+	"custom-api-call":                {"custom_api_call", githubUserScopes, validateCustomAPICall("api.github.com")},
+}
+
+var githubNeedsFiles = map[string]bool{"create-or-update-file": true}
+
+var githubPrepare = map[string]func(json.RawMessage) (json.RawMessage, error){
+	"create-or-update-file": prepareGitHubFileContent,
+	"dispatch-workflow":     prepareGitHubWorkflowDispatch,
+	"custom-api-call":       prepareCustomAPICall,
 }
 
 func githubActionDefinition(actionName string) (actionflow.Definition, bool) {
@@ -106,6 +124,7 @@ func githubActionDefinition(actionName string) (actionflow.Definition, bool) {
 		Provider: "github", PieceName: GitHubPieceName, PieceVersion: GitHubPieceVersion,
 		ActionName: actionName, RunnerActionName: spec.Runner,
 		RequiredScopes: append([]string(nil), spec.Scopes...), ValidateProps: spec.Validate,
+		PrepareProps: githubPrepare[actionName], NeedsFiles: githubNeedsFiles[actionName],
 	}, true
 }
 
@@ -796,6 +815,153 @@ func validateGitHubUpdateMilestone(raw json.RawMessage) error {
 	return nil
 }
 
+func validateGitHubGetFile(raw json.RawMessage) error {
+	var props struct {
+		Owner string `json:"owner"`
+		Repo  string `json:"repo"`
+		Path  string `json:"path"`
+		Ref   string `json:"ref"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !githubName(props.Owner) || !githubName(props.Repo) ||
+		!githubPath(props.Path) || (props.Ref != "" && !githubRef(props.Ref, 200)) {
+		return errors.New("invalid GitHub get-file-content properties")
+	}
+	return nil
+}
+
+func validateGitHubCreateOrUpdateFile(raw json.RawMessage) error {
+	var props struct {
+		Owner   string  `json:"owner"`
+		Repo    string  `json:"repo"`
+		Path    string  `json:"path"`
+		Message string  `json:"message"`
+		File    fileRef `json:"file"`
+		SHA     string  `json:"sha"`
+		Branch  string  `json:"branch"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !githubName(props.Owner) || !githubName(props.Repo) ||
+		!githubPath(props.Path) || strings.TrimSpace(props.Message) == "" || len(props.Message) > 256 ||
+		!oryxaFileID(props.File.FileID) || (props.SHA != "" && !githubRef(props.SHA, 64)) ||
+		(props.Branch != "" && !githubRef(props.Branch, 200)) {
+		return errors.New("invalid GitHub create-or-update-file properties")
+	}
+	return nil
+}
+
+func validateGitHubDeleteFile(raw json.RawMessage) error {
+	var props struct {
+		Owner   string `json:"owner"`
+		Repo    string `json:"repo"`
+		Path    string `json:"path"`
+		Message string `json:"message"`
+		SHA     string `json:"sha"`
+		Branch  string `json:"branch"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !githubName(props.Owner) || !githubName(props.Repo) ||
+		!githubPath(props.Path) || strings.TrimSpace(props.Message) == "" || len(props.Message) > 256 ||
+		!githubRef(props.SHA, 64) || (props.Branch != "" && !githubRef(props.Branch, 200)) {
+		return errors.New("invalid GitHub delete-file properties")
+	}
+	return nil
+}
+
+func validateGitHubCreateGist(raw json.RawMessage) error {
+	var props struct {
+		Description string `json:"description"`
+		Public      bool   `json:"public"`
+		Filename    string `json:"filename"`
+		Content     string `json:"content"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedFilename(props.Filename) ||
+		strings.TrimSpace(props.Content) == "" || len(props.Content) > 64*1024 ||
+		len(props.Description) > 1024 {
+		return errors.New("invalid GitHub create-gist properties")
+	}
+	return nil
+}
+
+func validateGitHubGraphQL(raw json.RawMessage) error {
+	var props struct {
+		Query     string          `json:"query"`
+		Variables json.RawMessage `json:"variables"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || strings.TrimSpace(props.Query) == "" ||
+		len(props.Query) > 16*1024 || !githubGraphQLVariables(props.Variables) {
+		return errors.New("invalid GitHub raw-graphql-query properties")
+	}
+	return nil
+}
+
+func validateGitHubWorkflowDispatch(raw json.RawMessage) error {
+	var props struct {
+		Owner             string         `json:"owner"`
+		Repo              string         `json:"repo"`
+		WorkflowID        string         `json:"workflow_id"`
+		Ref               string         `json:"ref"`
+		Inputs            map[string]any `json:"inputs"`
+		WaitForCompletion bool           `json:"wait_for_completion"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !githubName(props.Owner) || !githubName(props.Repo) ||
+		!githubWorkflowID(props.WorkflowID) || !githubRef(props.Ref, 256) || props.WaitForCompletion ||
+		!githubWorkflowInputs(props.Inputs) {
+		return errors.New("invalid GitHub dispatch-workflow properties")
+	}
+	return nil
+}
+
+func validateGitHubCodeSearch(raw json.RawMessage) error {
+	var props struct {
+		Q       string `json:"q"`
+		PerPage int    `json:"per_page"`
+		Page    int    `json:"page"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !githubSearchQuery(props.Q) || !githubPage(props.PerPage, props.Page) {
+		return errors.New("invalid GitHub search-code properties")
+	}
+	return nil
+}
+
+func prepareGitHubWorkflowDispatch(raw json.RawMessage) (json.RawMessage, error) {
+	var props struct {
+		Owner      string         `json:"owner"`
+		Repo       string         `json:"repo"`
+		WorkflowID string         `json:"workflow_id"`
+		Ref        string         `json:"ref"`
+		Inputs     map[string]any `json:"inputs"`
+	}
+	if err := json.Unmarshal(raw, &props); err != nil {
+		return nil, err
+	}
+	prepared := map[string]any{
+		"repository":        map[string]string{"owner": props.Owner, "repo": props.Repo},
+		"workflow":          map[string]any{"id": props.WorkflowID},
+		"ref":               props.Ref,
+		"waitForCompletion": false,
+	}
+	if len(props.Inputs) > 0 {
+		prepared["inputs"] = props.Inputs
+	}
+	return json.Marshal(prepared)
+}
+
+func prepareGitHubFileContent(raw json.RawMessage) (json.RawMessage, error) {
+	var props map[string]any
+	if err := json.Unmarshal(raw, &props); err != nil {
+		return nil, err
+	}
+	file, _ := props["file"].(map[string]any)
+	if file == nil {
+		return nil, errors.New("invalid GitHub file")
+	}
+	delete(props, "file")
+	props["content"] = file
+	return json.Marshal(props)
+}
+
+func githubPath(value string) bool {
+	return !strings.HasPrefix(value, "/") && githubRef(value, 4096)
+}
+
 func validateGitHubTrigger(raw json.RawMessage) error {
 	var props struct {
 		Scope string `json:"scope"`
@@ -851,6 +1017,49 @@ func githubQueryValue(value string, maximum int) bool {
 
 func githubSearchQuery(value string) bool {
 	return githubQueryValue(value, 256)
+}
+
+func githubWorkflowID(value string) bool {
+	return githubRef(value, 200)
+}
+
+func githubGraphQLVariables(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return true
+	}
+	if len(raw) > 16*1024 || len(bytesTrimSpace(raw)) == 0 || bytesTrimSpace(raw)[0] != '{' {
+		return false
+	}
+	var object map[string]any
+	return json.Unmarshal(raw, &object) == nil
+}
+
+func githubWorkflowInputs(values map[string]any) bool {
+	if values == nil {
+		return true
+	}
+	if len(values) > 20 {
+		return false
+	}
+	for key, value := range values {
+		if !githubQueryValue(key, 100) {
+			return false
+		}
+		switch typed := value.(type) {
+		case string:
+			if len(typed) > 1024 || strings.ContainsAny(typed, "\r") {
+				return false
+			}
+		case float64, bool, nil:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func bytesTrimSpace(raw json.RawMessage) json.RawMessage {
+	return json.RawMessage(strings.TrimSpace(string(raw)))
 }
 
 func githubColor(value string) bool {

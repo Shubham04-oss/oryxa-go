@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -69,6 +70,71 @@ func TestWebhookAcceptsOpenedPullRequestOnMatchingTrigger(t *testing.T) {
 	delivery := result.Payload.(ThinDelivery)
 	if delivery.Number != 9 || strings.Contains(delivery.URL, "leak") {
 		t.Fatalf("PR delivery = %+v", delivery)
+	}
+}
+
+func TestWebhookProjectsStarPushReleaseAndReviewWithoutBodies(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, event, trigger, raw string
+		check                     func(t *testing.T, delivery ThinDelivery)
+	}{
+		{
+			name: "star", event: "watch", trigger: "new-star",
+			raw: `{"action":"started","repository":{"full_name":"oryxa/api","html_url":"https://github.com/oryxa/api"},"sender":{"login":"private"}}`,
+			check: func(t *testing.T, delivery ThinDelivery) {
+				if delivery.URL != "https://github.com/oryxa/api" || delivery.Repository != "oryxa/api" || delivery.Number != 0 {
+					t.Fatalf("star delivery = %+v", delivery)
+				}
+			},
+		},
+		{
+			name: "push", event: "push", trigger: "new-push",
+			raw: `{"ref":"refs/heads/main","after":"abc1234","compare":"https://github.com/oryxa/api/compare/1...2","repository":{"full_name":"oryxa/api"},"commits":[{"message":"secret-body"}]}`,
+			check: func(t *testing.T, delivery ThinDelivery) {
+				if delivery.Ref != "refs/heads/main" || delivery.SHA != "abc1234" || delivery.URL != "https://github.com/oryxa/api/compare/1...2" {
+					t.Fatalf("push delivery = %+v", delivery)
+				}
+			},
+		},
+		{
+			name: "release", event: "release", trigger: "new-release",
+			raw: `{"action":"published","repository":{"full_name":"oryxa/api"},"release":{"id":7,"html_url":"https://github.com/oryxa/api/releases/tag/v1","body":"secret-body"}}`,
+			check: func(t *testing.T, delivery ThinDelivery) {
+				if delivery.ReleaseID != 7 || delivery.URL != "https://github.com/oryxa/api/releases/tag/v1" {
+					t.Fatalf("release delivery = %+v", delivery)
+				}
+			},
+		},
+		{
+			name: "review", event: "pull_request_review", trigger: "new-review",
+			raw: `{"action":"submitted","repository":{"full_name":"oryxa/api"},"pull_request":{"number":4,"html_url":"https://github.com/oryxa/api/pull/4","body":"secret-body"},"review":{"id":9,"html_url":"https://github.com/oryxa/api/pull/4#pullrequestreview-9","body":"secret-body"}}`,
+			check: func(t *testing.T, delivery ThinDelivery) {
+				if delivery.Number != 4 || delivery.ReviewID != 9 || delivery.URL != "https://github.com/oryxa/api/pull/4#pullrequestreview-9" {
+					t.Fatalf("review delivery = %+v", delivery)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := (WebhookVerifier{}).VerifyAndParse(context.Background(), githubWebhookRequest([]byte(test.raw), test.event, test.name+"-1", test.trigger))
+			if err != nil || !result.Verified || result.Reply != nil || result.Event != test.event {
+				t.Fatalf("result/error = %+v / %v", result, err)
+			}
+			delivery := result.Payload.(ThinDelivery)
+			if strings.Contains(fmt.Sprintf("%+v", delivery), "secret-body") || strings.Contains(fmt.Sprintf("%+v", delivery), "private") {
+				t.Fatalf("thin delivery leaked content: %+v", delivery)
+			}
+			test.check(t, delivery)
+		})
+	}
+
+	dropped, err := (WebhookVerifier{}).VerifyAndParse(context.Background(), githubWebhookRequest(
+		[]byte(`{"action":"created","repository":{"full_name":"oryxa/api"},"release":{"id":7,"html_url":"https://github.com/oryxa/api/releases/tag/v1"}}`),
+		"release", "created-1", "new-release"))
+	if err != nil || !dropped.Verified || dropped.Reply == nil || dropped.Reply.Status != http.StatusAccepted {
+		t.Fatalf("created release result/error = %+v / %v", dropped, err)
 	}
 }
 

@@ -33,6 +33,11 @@ func TestMicrosoftMappersProjectOnlySafeResourceMetadata(t *testing.T) {
 		{action: "list-files", output: `[{"id":"file-1","name":"report.pdf","webUrl":"javascript:alert(1)","file":{"mimeType":"application/pdf"},"@microsoft.graph.downloadUrl":"secret-url"}]`},
 		{action: "list-folders", output: `[{"id":"folder-1","name":"Archive","webUrl":"javascript:alert(1)","folder":{}}]`},
 		{action: "copy-file", output: `{"success":true,"resourceId":"file-2","file":{"id":"file-2","name":"copy.pdf","webUrl":"javascript:alert(1)","@microsoft.graph.downloadUrl":"secret-url"}}`, detailType: integrationevents.MicrosoftOneDriveItemCopiedDetailType},
+		{action: "upload-onedrive-file", output: `{"id":"file-3","name":"note.txt","webUrl":"javascript:alert(1)","@microsoft.graph.downloadUrl":"secret-url"}`, detailType: integrationevents.MicrosoftOneDriveItemCreatedDetailType},
+		{action: "create-channel", props: `{"teamId":"team-1","channelDisplayName":"alerts"}`, output: `{"id":"channel-1","displayName":"alerts","description":"private body"}`, detailType: integrationevents.MicrosoftTeamsChannelCreatedDetailType},
+		{action: "send-channel-message", props: `{"teamId":"team-1","channelId":"channel-1","contentType":"text","content":"private body"}`, output: `{"id":"message-1","body":{"content":"private body"}}`, detailType: integrationevents.MicrosoftTeamsMessageSentDetailType},
+		{action: "create-sharepoint-folder", props: `{"siteId":"site-1","driveId":"drive-1","parentFolder":"/","folderName":"Archive"}`, output: `{"id":"folder-9","name":"Archive","webUrl":"javascript:alert(1)"}`, detailType: integrationevents.MicrosoftSharePointItemCreatedDetailType},
+		{action: "upload-sharepoint-file", props: `{"siteId":"site-1","driveId":"drive-1","file":{"file_id":"file_abc"},"parentFolder":"/","fileName":"note.txt"}`, output: `{"id":"file-9","name":"note.txt","@microsoft.graph.downloadUrl":"secret-url"}`, detailType: integrationevents.MicrosoftSharePointItemCreatedDetailType},
 	}
 	for _, test := range tests {
 		t.Run(test.action, func(t *testing.T) {
@@ -93,6 +98,51 @@ func TestMicrosoftFindEmailStripsBodiesSendersAndNextPage(t *testing.T) {
 	}
 }
 
+func TestMicrosoftFileMappersKeepBytesAndDownloadURLsOut(t *testing.T) {
+	t.Parallel()
+	downloaded, err := (DomainMapper{}).Map(MapRequest{
+		Connection: domain.Connection{Provider: "microsoft"}, ActionName: "download-file",
+		Output: json.RawMessage(`{"id":"item-1","name":"report.pdf","webUrl":"https://onedrive.live.com/secret","@microsoft.graph.downloadUrl":"secret-url","data":{"fileName":"report.pdf","fileId":"file_xyz"}}`),
+	})
+	if err != nil || downloaded.DetailType != "" || strings.Contains(string(downloaded.SafeResult), "secret") ||
+		!strings.Contains(string(downloaded.SafeResult), `"file_id":"file_xyz"`) {
+		t.Fatalf("download result/error = %s / %v", downloaded.SafeResult, err)
+	}
+	attachments, err := (DomainMapper{}).Map(MapRequest{
+		Connection: domain.Connection{Provider: "microsoft"}, ActionName: "download-attachment",
+		Output: json.RawMessage(`[{"name":"invoice.pdf","contentBytes":"private-bytes","file":{"fileName":"invoice.pdf","fileId":"file_att"}}]`),
+	})
+	if err != nil || attachments.DetailType != "" || strings.Contains(string(attachments.SafeResult), "private-bytes") ||
+		!strings.Contains(string(attachments.SafeResult), `"file_id":"file_att"`) {
+		t.Fatalf("attachments result/error = %s / %v", attachments.SafeResult, err)
+	}
+	api, err := (DomainMapper{}).Map(MapRequest{
+		Connection: domain.Connection{Provider: "microsoft"}, ActionName: "custom-api-call",
+		Output: json.RawMessage(`{"status":200,"headers":{"authorization":"Bearer secret"},"body":{"id":"user-1","displayName":"Ada"}}`),
+	})
+	if err != nil || api.DetailType != "" || strings.Contains(string(api.SafeResult), "secret") ||
+		!strings.Contains(string(api.SafeResult), `"id":"user-1"`) {
+		t.Fatalf("Microsoft custom API result/error = %s / %v", api.SafeResult, err)
+	}
+	message, err := (DomainMapper{}).Map(MapRequest{
+		Connection: domain.Connection{Provider: "microsoft"}, ActionName: "get-chat-message",
+		Props:  json.RawMessage(`{"chatId":"chat-1","messageId":"m-1"}`),
+		Output: json.RawMessage(`{"id":"m-1","body":{"content":"private body"},"from":{"user":{"displayName":"Ada"}}}`),
+	})
+	if err != nil || message.DetailType != "" || strings.Contains(string(message.SafeResult), "private body") ||
+		!strings.Contains(string(message.SafeResult), `"id":"m-1"`) {
+		t.Fatalf("Teams get-chat-message result/error = %s / %v", message.SafeResult, err)
+	}
+	recording, err := (DomainMapper{}).Map(MapRequest{
+		Connection: domain.Connection{Provider: "microsoft"}, ActionName: "get-meeting-recording",
+		Output: json.RawMessage(`{"id":"rec-1","recordingContentUrl":"secret-url","createdDateTime":"2026-09-14T09:00:00Z"}`),
+	})
+	if err != nil || recording.DetailType != "" || strings.Contains(string(recording.SafeResult), "secret-url") ||
+		!strings.Contains(string(recording.SafeResult), `"id":"rec-1"`) {
+		t.Fatalf("Teams recording result/error = %s / %v", recording.SafeResult, err)
+	}
+}
+
 func TestMicrosoftCalendarReadScopeAcceptsReadWriteGrant(t *testing.T) {
 	t.Parallel()
 	if missing := missingScopes("microsoft", []string{"Calendars.Read"}, []string{"Calendars.ReadWrite"}); len(missing) != 0 {
@@ -109,5 +159,14 @@ func TestMicrosoftCalendarReadScopeAcceptsReadWriteGrant(t *testing.T) {
 	}
 	if missing := missingScopes("microsoft", []string{"Mail.Send"}, []string{"Mail.ReadWrite"}); len(missing) != 1 {
 		t.Fatalf("Mail.ReadWrite unexpectedly satisfied Mail.Send: %v", missing)
+	}
+	if missing := missingScopes("microsoft", []string{"Channel.ReadBasic.All"}, []string{"Channel.Create"}); len(missing) != 0 {
+		t.Fatalf("Channel.Create did not satisfy Channel.ReadBasic.All: %v", missing)
+	}
+	if missing := missingScopes("microsoft", []string{"Sites.Read.All"}, []string{"Sites.Manage.All"}); len(missing) != 0 {
+		t.Fatalf("Sites.Manage.All did not satisfy Sites.Read.All: %v", missing)
+	}
+	if missing := missingScopes("microsoft", []string{"Files.ReadWrite"}, []string{"Files.ReadWrite.All"}); len(missing) != 0 {
+		t.Fatalf("Files.ReadWrite.All did not satisfy Files.ReadWrite: %v", missing)
 	}
 }

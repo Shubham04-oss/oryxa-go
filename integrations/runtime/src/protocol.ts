@@ -40,6 +40,10 @@ export interface RunnerRequest {
   providerPayload?: WebhookPayload
   initialStore?: Record<string, unknown>
   secondaryConnections?: Record<string, unknown>
+  filesBroker?: {
+    url: string
+    token: string
+  }
 }
 
 export interface StoreMutation {

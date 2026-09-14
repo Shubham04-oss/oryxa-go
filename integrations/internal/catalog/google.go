@@ -19,6 +19,7 @@ const (
 	googleCalendarScope      = "https://www.googleapis.com/auth/calendar.events"
 	googleCalendarReadScope  = "https://www.googleapis.com/auth/calendar.readonly"
 	googleDriveReadScope     = "https://www.googleapis.com/auth/drive.metadata.readonly"
+	googleDriveFileReadScope = "https://www.googleapis.com/auth/drive.readonly"
 	googleDriveWriteScope    = "https://www.googleapis.com/auth/drive"
 )
 
@@ -32,26 +33,39 @@ type googleActionSpec struct {
 }
 
 var (
-	googleGmailSend    = []string{googleGmailSendScope}
-	googleGmailRead    = []string{googleGmailReadScope}
-	googleGmailCompose = []string{googleGmailComposeScope}
-	googleGmailModify  = []string{googleGmailModifyScope}
-	googleCalWrite     = []string{googleCalendarScope}
-	googleCalRead      = []string{googleCalendarReadScope}
-	googleDriveRead    = []string{googleDriveReadScope}
-	googleDriveWrite   = []string{googleDriveWriteScope}
+	googleGmailSend     = []string{googleGmailSendScope}
+	googleGmailRead     = []string{googleGmailReadScope}
+	googleGmailCompose  = []string{googleGmailComposeScope}
+	googleGmailModify   = []string{googleGmailModifyScope}
+	googleCalWrite      = []string{googleCalendarScope}
+	googleCalRead       = []string{googleCalendarReadScope}
+	googleDriveRead     = []string{googleDriveReadScope}
+	googleDriveFileRead = []string{googleDriveFileReadScope}
+	googleDriveWrite    = []string{googleDriveWriteScope}
 )
 
+var googleDriveExportMIME = []string{
+	"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+	"application/pdf", "text/html", "text/plain", "application/rtf",
+	"application/vnd.oasis.opendocument.text", "application/epub+zip", "text/markdown",
+	"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	"text/csv", "text/tab-separated-values", "application/vnd.oasis.opendocument.spreadsheet",
+	"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+	"application/vnd.oasis.opendocument.presentation", "image/png", "image/svg+xml",
+}
+
 var googleActions = map[string]googleActionSpec{
-	"send-email": {GmailPieceName, GmailPieceVersion, "gmail_send_email", googleGmailSend, validateGmailSend, nil},
+	"send-email": {
+		GmailPieceName, GmailPieceVersion, "gmail_send_email", googleGmailSend, validateGmailSend, prepareFileAttachments,
+	},
 	"reply-email": {
 		GmailPieceName, GmailPieceVersion, "gmail_reply_to_thread", googleGmailModify, validateGmailReply, nil,
 	},
 	"create-draft-email": {
-		GmailPieceName, GmailPieceVersion, "gmail_create_draft", googleGmailCompose, validateGmailCreateDraft, nil,
+		GmailPieceName, GmailPieceVersion, "gmail_create_draft", googleGmailCompose, validateGmailCreateDraft, prepareFileAttachments,
 	},
 	"update-draft-email": {
-		GmailPieceName, GmailPieceVersion, "gmail_update_draft", googleGmailCompose, validateGmailUpdateDraft, nil,
+		GmailPieceName, GmailPieceVersion, "gmail_update_draft", googleGmailCompose, validateGmailUpdateDraft, prepareFileAttachments,
 	},
 	"send-draft-email": {
 		GmailPieceName, GmailPieceVersion, "gmail_send_draft", googleGmailSend, validateGmailDraftID, nil,
@@ -251,10 +265,78 @@ var googleActions = map[string]googleActionSpec{
 	"get-drive-about": {
 		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_get_about", googleDriveRead, validateGoogleEmpty, nil,
 	},
+	"upload-drive-file": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_upload_file", googleDriveWrite, validateGoogleDriveUpload, nil,
+	},
+	"replace-drive-file": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_replace_file_content",
+		googleDriveWrite, validateGoogleDriveReplace, nil,
+	},
+	"download-drive-file": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_download_file", googleDriveFileRead, validateGoogleDriveDownload, nil,
+	},
+	"export-drive-file": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_export_workspace_file",
+		googleDriveFileRead, validateGoogleDriveExport, nil,
+	},
+	"create-file-from-text": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_create_file_from_text",
+		googleDriveWrite, validateGoogleDriveCreateFromText, nil,
+	},
+	"save-file-as-pdf": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_save_file_as_pdf",
+		googleDriveWrite, validateGoogleDriveSavePDF, nil,
+	},
+	"set-drive-public-access": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_set_public_access",
+		googleDriveWrite, validateGoogleDrivePublicAccess, nil,
+	},
+	"empty-trash": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_empty_trash",
+		googleDriveWrite, validateGoogleDriveEmptyTrash, nil,
+	},
+	"delete-shared-drive": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_delete_shared_drive",
+		googleDriveWrite, validateGoogleDriveSharedID, nil,
+	},
+	"get-email-attachment": {
+		GmailPieceName, GmailPieceVersion, "gmail_get_attachment", googleGmailRead, validateGmailGetAttachment, nil,
+	},
+	"get-email": {
+		GmailPieceName, GmailPieceVersion, "gmail_get_message", googleGmailRead, validateGmailGetEmail, nil,
+	},
+	"find-email": {
+		GmailPieceName, GmailPieceVersion, "gmail_search_email", googleGmailRead, validateGmailFindEmail, prepareGmailSearchLabel,
+	},
+	"upload-from-url": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "drive_upload_from_url", googleDriveWrite, validateGoogleDriveUploadFromURL, nil,
+	},
+	"gmail-custom-api-call": {
+		GmailPieceName, GmailPieceVersion, "custom_api_call", googleGmailRead, validateCustomAPICall("gmail.googleapis.com"), prepareCustomAPICall,
+	},
+	"calendar-custom-api-call": {
+		GoogleCalendarPieceName, GoogleCalendarPieceVersion, "custom_api_call", googleCalRead, validateCustomAPICall("www.googleapis.com"), prepareCustomAPICall,
+	},
+	"drive-custom-api-call": {
+		GoogleDrivePieceName, GoogleDrivePieceVersion, "custom_api_call", googleDriveFileRead, validateCustomAPICall("www.googleapis.com"), prepareCustomAPICall,
+	},
+}
+
+var googleNeedsFiles = map[string]bool{
+	"send-email": true, "reply-email": true, "create-draft-email": true, "update-draft-email": true,
+	"get-email-attachment": true, "get-email": true, "find-email": true,
+	"upload-drive-file": true, "replace-drive-file": true,
+	"download-drive-file": true, "export-drive-file": true, "set-drive-public-access": true,
 }
 
 func googleActionDefinition(actionName string) (actionflow.Definition, bool) {
 	spec, ok := googleActions[actionName]
+	if !ok {
+		spec, ok = googleDocsActions[actionName]
+	}
+	if !ok {
+		spec, ok = googleSheetsActions[actionName]
+	}
 	if !ok {
 		return actionflow.Definition{}, false
 	}
@@ -262,29 +344,30 @@ func googleActionDefinition(actionName string) (actionflow.Definition, bool) {
 		Provider: "google", ActionName: actionName, PieceName: spec.Piece, PieceVersion: spec.Version,
 		RunnerActionName: spec.Runner, RequiredScopes: append([]string(nil), spec.Scopes...),
 		ValidateProps: spec.Validate, PrepareProps: spec.Prepare,
+		NeedsFiles: googleNeedsFiles[actionName] || googleDocsNeedsFiles[actionName] || googleSheetsNeedsFiles[actionName],
 	}, true
 }
 
 func validateGmailSend(raw json.RawMessage) error {
 	var props struct {
-		Receiver    []string `json:"receiver"`
-		CC          []string `json:"cc"`
-		BCC         []string `json:"bcc"`
-		Subject     string   `json:"subject"`
-		BodyType    string   `json:"body_type"`
-		Body        string   `json:"body"`
-		ReplyTo     []string `json:"reply_to"`
-		SenderName  string   `json:"sender_name"`
-		From        string   `json:"from"`
-		Attachments []any    `json:"attachments"`
-		InReplyTo   string   `json:"in_reply_to"`
-		Draft       bool     `json:"draft"`
+		Receiver    []string  `json:"receiver"`
+		CC          []string  `json:"cc"`
+		BCC         []string  `json:"bcc"`
+		Subject     string    `json:"subject"`
+		BodyType    string    `json:"body_type"`
+		Body        string    `json:"body"`
+		ReplyTo     []string  `json:"reply_to"`
+		SenderName  string    `json:"sender_name"`
+		From        string    `json:"from"`
+		Attachments []fileRef `json:"attachments"`
+		InReplyTo   string    `json:"in_reply_to"`
+		Draft       bool      `json:"draft"`
 	}
 	if err := decodeStrict(raw, &props); err != nil || !emails(props.Receiver, true) || !emails(props.CC, false) ||
 		!emails(props.BCC, false) || !emails(props.ReplyTo, false) || strings.TrimSpace(props.Subject) == "" ||
 		len(props.Subject) > 998 || len(props.Body) == 0 || len(props.Body) > 100*1024 ||
 		!oneOf(props.BodyType, "plain_text", "html") || len(props.SenderName) > 200 || len(props.InReplyTo) > 998 ||
-		len(props.Attachments) != 0 || props.Draft || (props.From != "" && !email(props.From)) {
+		!optionalFileRefs(props.Attachments) || props.Draft || (props.From != "" && !email(props.From)) {
 		return errors.New("invalid Gmail send-email properties")
 	}
 	return nil
@@ -292,18 +375,19 @@ func validateGmailSend(raw json.RawMessage) error {
 
 func validateGmailReply(raw json.RawMessage) error {
 	var props struct {
-		MessageID      string `json:"message_id"`
-		ReplyType      string `json:"reply_type"`
-		BodyType       string `json:"body_type"`
-		Body           string `json:"body"`
-		SenderName     string `json:"sender_name"`
-		Attachment     any    `json:"attachment"`
-		AttachmentName string `json:"attachment_name"`
+		MessageID      string   `json:"message_id"`
+		ReplyType      string   `json:"reply_type"`
+		BodyType       string   `json:"body_type"`
+		Body           string   `json:"body"`
+		SenderName     string   `json:"sender_name"`
+		Attachment     *fileRef `json:"attachment"`
+		AttachmentName string   `json:"attachment_name"`
 	}
 	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.MessageID, 1024) ||
 		!oneOf(props.ReplyType, "reply", "reply_all") || !oneOf(props.BodyType, "plain_text", "html") ||
 		len(props.Body) == 0 || len(props.Body) > 100*1024 || len(props.SenderName) > 200 ||
-		props.Attachment != nil || props.AttachmentName != "" {
+		!optionalFileRef(props.Attachment) || (props.AttachmentName != "" && (len(props.AttachmentName) > 255 ||
+		strings.ContainsAny(props.AttachmentName, "\r\n/\\"))) {
 		return errors.New("invalid Gmail reply-email properties")
 	}
 	return nil
@@ -319,24 +403,24 @@ func validateGmailUpdateDraft(raw json.RawMessage) error {
 
 func validateGmailDraftFields(raw json.RawMessage, requireID bool) error {
 	var props struct {
-		DraftID     string   `json:"draft_id"`
-		Receiver    []string `json:"receiver"`
-		CC          []string `json:"cc"`
-		BCC         []string `json:"bcc"`
-		Subject     string   `json:"subject"`
-		BodyType    string   `json:"body_type"`
-		Body        string   `json:"body"`
-		SenderName  string   `json:"sender_name"`
-		From        string   `json:"from"`
-		ThreadID    string   `json:"thread_id"`
-		Attachments []any    `json:"attachments"`
+		DraftID     string    `json:"draft_id"`
+		Receiver    []string  `json:"receiver"`
+		CC          []string  `json:"cc"`
+		BCC         []string  `json:"bcc"`
+		Subject     string    `json:"subject"`
+		BodyType    string    `json:"body_type"`
+		Body        string    `json:"body"`
+		SenderName  string    `json:"sender_name"`
+		From        string    `json:"from"`
+		ThreadID    string    `json:"thread_id"`
+		Attachments []fileRef `json:"attachments"`
 	}
 	if err := decodeStrict(raw, &props); err != nil || (requireID && !boundedValue(props.DraftID, 1024)) ||
 		(!requireID && props.DraftID != "") || !emails(props.Receiver, false) || !emails(props.CC, false) ||
 		!emails(props.BCC, false) || strings.TrimSpace(props.Subject) == "" || len(props.Subject) > 998 ||
 		len(props.Body) == 0 || len(props.Body) > 100*1024 || !oneOf(props.BodyType, "plain_text", "html") ||
 		len(props.SenderName) > 200 || (props.ThreadID != "" && !boundedValue(props.ThreadID, 1024)) ||
-		len(props.Attachments) != 0 || (props.From != "" && !email(props.From)) {
+		!optionalFileRefs(props.Attachments) || (props.From != "" && !email(props.From)) {
 		return errors.New("invalid Gmail draft properties")
 	}
 	return nil
@@ -772,7 +856,7 @@ func validateGoogleDriveSearch(raw json.RawMessage) error {
 		ParentFolderID    string `json:"parent_folder_id"`
 		IncludeTeamDrives bool   `json:"include_team_drives"`
 	}
-	if err := decodeStrict(raw, &props); err != nil || !oneOf(props.QueryTerm, "name", "mimeType") ||
+	if err := decodeStrict(raw, &props); err != nil || !oneOf(props.QueryTerm, "name", "mimeType", "fullText") ||
 		!oneOf(props.Operator, "contains", "=") || strings.TrimSpace(props.Value) == "" || len(props.Value) > 1024 ||
 		strings.ContainsAny(props.Value, "'\\") || (props.Type != "" && !oneOf(props.Type, "all", "file", "folder")) ||
 		(props.ParentFolderID != "" && !boundedValue(props.ParentFolderID, 1024)) {
@@ -790,7 +874,8 @@ func validateGoogleDriveCopy(raw json.RawMessage) error {
 	}
 	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.FileID, 1024) ||
 		strings.TrimSpace(props.Name) == "" || len(props.Name) > 255 || !boundedValue(props.FolderID, 1024) ||
-		props.ConvertTo != "" {
+		(props.ConvertTo != "" && !oneOf(props.ConvertTo, "application/vnd.google-apps.document",
+			"application/vnd.google-apps.spreadsheet")) {
 		return errors.New("invalid Google Drive copy-file properties")
 	}
 	return nil
@@ -973,12 +1058,206 @@ func validateGoogleDriveUpdateReply(raw json.RawMessage) error {
 	return nil
 }
 
+func validateGoogleDriveCreateFromText(raw json.RawMessage) error {
+	var props struct {
+		FileName       string `json:"file_name"`
+		Text           string `json:"text"`
+		ContentType    string `json:"content_type"`
+		ParentFolderID string `json:"parent_folder_id"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedFilename(props.FileName) ||
+		strings.TrimSpace(props.Text) == "" || len(props.Text) > 1024*1024 ||
+		!oneOf(props.ContentType, "plain/text", "text/csv", "text/xml") ||
+		(props.ParentFolderID != "" && !boundedValue(props.ParentFolderID, 1024)) {
+		return errors.New("invalid Google Drive create-file-from-text properties")
+	}
+	return nil
+}
+
+func validateGoogleDriveSavePDF(raw json.RawMessage) error {
+	var props struct {
+		DocumentID string `json:"document_id"`
+		FolderID   string `json:"folder_id"`
+		Name       string `json:"name"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.DocumentID, 1024) ||
+		!boundedValue(props.FolderID, 1024) || strings.TrimSpace(props.Name) == "" || len(props.Name) > 255 ||
+		strings.ContainsAny(props.Name, "\r\n/\\") {
+		return errors.New("invalid Google Drive save-file-as-pdf properties")
+	}
+	return nil
+}
+
+func validateGoogleDrivePublicAccess(raw json.RawMessage) error {
+	var props struct {
+		FileID string `json:"file_id"`
+		Role   string `json:"role"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.FileID, 1024) ||
+		!oneOf(props.Role, "reader", "commenter", "writer") {
+		return errors.New("invalid Google Drive set-drive-public-access properties")
+	}
+	return nil
+}
+
+func validateGoogleDriveEmptyTrash(raw json.RawMessage) error {
+	var props struct {
+		DriveID string `json:"drive_id"`
+	}
+	if err := decodeStrict(raw, &props); err != nil ||
+		(props.DriveID != "" && !boundedValue(props.DriveID, 1024)) {
+		return errors.New("invalid Google Drive empty-trash properties")
+	}
+	return nil
+}
+
+func validateGmailGetEmail(raw json.RawMessage) error {
+	var props struct {
+		MessageID string `json:"message_id"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.MessageID, 1024) {
+		return errors.New("invalid Gmail get-email properties")
+	}
+	return nil
+}
+
+func validateGmailFindEmail(raw json.RawMessage) error {
+	var props struct {
+		From             string `json:"from"`
+		To               string `json:"to"`
+		Subject          string `json:"subject"`
+		Content          string `json:"content"`
+		HasAttachment    bool   `json:"has_attachment"`
+		AttachmentName   string `json:"attachment_name"`
+		Label            string `json:"label"`
+		Category         string `json:"category"`
+		AfterDate        string `json:"after_date"`
+		BeforeDate       string `json:"before_date"`
+		IncludeSpamTrash bool   `json:"include_spam_trash"`
+		MaxResults       int    `json:"max_results"`
+	}
+	if err := decodeStrict(raw, &props); err != nil ||
+		(props.From != "" && !gmailSearchTerm(props.From, 320)) ||
+		(props.To != "" && !gmailSearchTerm(props.To, 320)) ||
+		(props.Subject != "" && !gmailSearchTerm(props.Subject, 512)) ||
+		(props.Content != "" && !gmailSearchTerm(props.Content, 512)) ||
+		(props.AttachmentName != "" && !gmailSearchTerm(props.AttachmentName, 255)) ||
+		(props.Label != "" && !boundedValue(props.Label, 256)) ||
+		!oneOf(props.Category, "", "primary", "social", "promotions", "updates", "forums", "reservations", "purchases") ||
+		!optionalRFC3339(props.AfterDate) || !optionalRFC3339(props.BeforeDate) ||
+		!googleMaxResults(props.MaxResults) {
+		return errors.New("invalid Gmail find-email properties")
+	}
+	return nil
+}
+
+func validateGmailGetAttachment(raw json.RawMessage) error {
+	var props struct {
+		MessageID    string `json:"message_id"`
+		AttachmentID string `json:"attachment_id"`
+		FileName     string `json:"file_name"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.MessageID, 1024) ||
+		!boundedValue(props.AttachmentID, 1024) || !optionalFilename(props.FileName) {
+		return errors.New("invalid Gmail get-email-attachment properties")
+	}
+	return nil
+}
+
+func validateGoogleDriveUpload(raw json.RawMessage) error {
+	var props struct {
+		FileName       string  `json:"file_name"`
+		File           fileRef `json:"file"`
+		ParentFolderID string  `json:"parent_folder_id"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedFilename(props.FileName) ||
+		!oryxaFileID(props.File.FileID) || (props.ParentFolderID != "" && !boundedValue(props.ParentFolderID, 1024)) {
+		return errors.New("invalid Google Drive upload-drive-file properties")
+	}
+	return nil
+}
+
+func validateGoogleDriveReplace(raw json.RawMessage) error {
+	var props struct {
+		FileID   string  `json:"file_id"`
+		File     fileRef `json:"file"`
+		MimeType string  `json:"mime_type"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.FileID, 1024) ||
+		!oryxaFileID(props.File.FileID) || (props.MimeType != "" && (len(props.MimeType) > 200 ||
+		strings.ContainsAny(props.MimeType, "\r\n\t"))) {
+		return errors.New("invalid Google Drive replace-drive-file properties")
+	}
+	return nil
+}
+
+func validateGoogleDriveDownload(raw json.RawMessage) error {
+	var props struct {
+		FileID              string `json:"file_id"`
+		DestinationFileName string `json:"destination_file_name"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.FileID, 1024) ||
+		!optionalFilename(props.DestinationFileName) {
+		return errors.New("invalid Google Drive download-drive-file properties")
+	}
+	return nil
+}
+
+func validateGoogleDriveExport(raw json.RawMessage) error {
+	var props struct {
+		FileID   string `json:"file_id"`
+		MimeType string `json:"mime_type"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.FileID, 1024) ||
+		!oneOf(props.MimeType, googleDriveExportMIME...) {
+		return errors.New("invalid Google Drive export-drive-file properties")
+	}
+	return nil
+}
+
 func validateGoogleEmpty(raw json.RawMessage) error {
 	var props struct{}
 	if err := decodeStrict(raw, &props); err != nil {
 		return errors.New("Google properties must be an empty object")
 	}
 	return nil
+}
+
+func validateGoogleDriveUploadFromURL(raw json.RawMessage) error {
+	var props struct {
+		SourceURL      string `json:"source_url"`
+		FileName       string `json:"file_name"`
+		MimeType       string `json:"mime_type"`
+		ParentFolderID string `json:"parent_folder_id"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !publicHTTPSURL(props.SourceURL) ||
+		!boundedFilename(props.FileName) || !optionalDriveMIME(props.MimeType) ||
+		(props.ParentFolderID != "" && !boundedValue(props.ParentFolderID, 1024)) {
+		return errors.New("invalid Google Drive upload-from-url properties")
+	}
+	return nil
+}
+
+func prepareGmailSearchLabel(raw json.RawMessage) (json.RawMessage, error) {
+	var props map[string]any
+	if err := json.Unmarshal(raw, &props); err != nil {
+		return nil, err
+	}
+	if label, ok := props["label"].(string); ok && label != "" {
+		props["label"] = map[string]string{"name": label}
+	}
+	return json.Marshal(props)
+}
+
+func gmailSearchTerm(value string, maximum int) bool {
+	return value != "" && len(value) <= maximum && strings.TrimSpace(value) == value && !strings.ContainsAny(value, "\r\n")
+}
+
+func optionalDriveMIME(value string) bool {
+	if value == "" {
+		return true
+	}
+	return boundedValue(value, 128) && strings.Count(value, "/") == 1 && !strings.Contains(value, " ")
 }
 
 func prepareGmailLabelID(raw json.RawMessage) (json.RawMessage, error) {

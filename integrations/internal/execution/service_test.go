@@ -254,6 +254,83 @@ func TestDomainMapperProjectsGitHubPullRequestOpenedWithoutContent(t *testing.T)
 	}
 }
 
+func TestDomainMapperProjectsGitHubStarPushReleaseAndReview(t *testing.T) {
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	star, err := (DomainMapper{}).Map("github",
+		domain.Trigger{ID: "trg-star", OrganizationID: "org-1", ConnectionID: "con-1", Provider: "github", TriggerName: "new-star"},
+		webhooks.Envelope{Event: "watch", Body: map[string]any{
+			"repository": "oryxa/api", "url": "https://github.com/oryxa/api",
+		}, ReceivedAt: now}, json.RawMessage(`{}`), "evt-1", now)
+	if err != nil || star.DetailType != integrationevents.GitHubStarReceivedDetailType {
+		t.Fatalf("star event/error = %+v/%v", star, err)
+	}
+	push, err := (DomainMapper{}).Map("github",
+		domain.Trigger{ID: "trg-push", OrganizationID: "org-1", ConnectionID: "con-1", Provider: "github", TriggerName: "new-push"},
+		webhooks.Envelope{Event: "push", Body: map[string]any{
+			"repository": "oryxa/api", "ref": "refs/heads/main", "sha": "abc1234", "url": "https://github.com/oryxa/api/compare/1...2",
+		}, ReceivedAt: now}, json.RawMessage(`{}`), "evt-1", now)
+	if err != nil || push.DetailType != integrationevents.GitHubPushReceivedDetailType {
+		t.Fatalf("push event/error = %+v/%v", push, err)
+	}
+	data := push.Data.(integrationevents.GitHubPushReceived)
+	if data.Ref != "refs/heads/main" || data.SHA != "abc1234" {
+		t.Fatalf("push projection = %+v", data)
+	}
+	release, err := (DomainMapper{}).Map("github",
+		domain.Trigger{ID: "trg-rel", OrganizationID: "org-1", ConnectionID: "con-1", Provider: "github", TriggerName: "new-release"},
+		webhooks.Envelope{Event: "release", Body: map[string]any{
+			"repository": "oryxa/api", "release_id": int64(7), "url": "https://github.com/oryxa/api/releases/tag/v1",
+		}, ReceivedAt: now}, json.RawMessage(`{}`), "evt-1", now)
+	if err != nil || release.DetailType != integrationevents.GitHubReleasePublishedDetailType {
+		t.Fatalf("release event/error = %+v/%v", release, err)
+	}
+	review, err := (DomainMapper{}).Map("github",
+		domain.Trigger{ID: "trg-rev", OrganizationID: "org-1", ConnectionID: "con-1", Provider: "github", TriggerName: "new-review"},
+		webhooks.Envelope{Event: "pull_request_review", Body: map[string]any{
+			"repository": "oryxa/api", "number": int64(4), "review_id": int64(9), "url": "https://github.com/oryxa/api/pull/4",
+		}, ReceivedAt: now}, json.RawMessage(`{}`), "evt-1", now)
+	if err != nil || review.DetailType != integrationevents.GitHubReviewSubmittedDetailType {
+		t.Fatalf("review event/error = %+v/%v", review, err)
+	}
+}
+
+func TestDomainMapperRejectsGitHubDeliveryWithCommits(t *testing.T) {
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	trigger := domain.Trigger{ID: "trg-1", OrganizationID: "org-1", ConnectionID: "con-1", Provider: "github", TriggerName: "new-push"}
+	_, err := (DomainMapper{}).Map("github", trigger, webhooks.Envelope{Event: "push", Body: map[string]any{
+		"repository": "oryxa/api", "ref": "refs/heads/main", "commits": []any{map[string]any{"message": "leak"}},
+	}, ReceivedAt: now}, json.RawMessage(`{}`), "evt-1", now)
+	if err == nil {
+		t.Fatal("mapper accepted push commits")
+	}
+}
+
+func TestProcessWebhookProjectsDriveFileChangedWithoutRunningPiece(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	trigger := domain.Trigger{ID: "trg-1", OrganizationID: "org-1", MemberID: "member-1", ConnectionID: "con-1", ProfileID: "app-1",
+		Provider: "google", PieceName: "@activepieces/piece-google-drive", PieceVersion: "0.9.1", TriggerName: "drive-file-changed",
+		ProviderIdentifier: "con-1", Status: domain.TriggerStatusActive}
+	store := &executionStore{triggers: []domain.Trigger{trigger}, claimed: true,
+		connection: domain.Connection{ID: "con-1", OrganizationID: "org-1", ProfileID: "app-1", Provider: "google",
+			PieceName: trigger.PieceName, PieceVersion: trigger.PieceVersion, Status: domain.ConnectionStatusActive}}
+	runner := &executionRunner{}
+	service := Service{Store: store, Runner: runner, Mapper: DomainMapper{}, Now: func() time.Time { return now }, IDs: func(prefix string) (string, error) { return prefix + "-1", nil }}
+	envelope := webhooks.Envelope{InvocationID: "whi-1", DeliveryID: "delivery-1", OrganizationID: "org-1", ProfileID: "app-1", ConnectionID: "con-1",
+		Provider: "google", PieceName: trigger.PieceName, PieceVersion: trigger.PieceVersion, TriggerName: "drive-file-changed", Event: "channel-notification",
+		ReceivedAt: now}
+	if err := service.ProcessWebhook(context.Background(), envelope); err != nil {
+		t.Fatal(err)
+	}
+	if runner.calls != 0 || len(store.completed) != 1 || store.completed[0].DetailType != integrationevents.GoogleDriveFileChangedDetailType {
+		t.Fatalf("runner/events = %d/%+v", runner.calls, store.completed)
+	}
+	data := store.completed[0].Data.(integrationevents.GoogleDriveFileChanged)
+	if data.TriggerID != "trg-1" || data.ConnectionID != "con-1" || data.DeliveryID != "delivery-1" {
+		t.Fatalf("drive projection = %+v", data)
+	}
+}
+
 func TestProcessWebhookProjectsGoogleCalendarNotificationWithoutRunningPiece(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)

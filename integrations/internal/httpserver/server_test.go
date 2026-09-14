@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/actionflow"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/oauthflow"
 )
@@ -130,4 +132,90 @@ func TestMemberCatalogReturnsGenericInternalError(t *testing.T) {
 	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "database") {
 		t.Fatalf("status/body = %d/%s", response.Code, response.Body.String())
 	}
+}
+
+func TestActionErrorsIncludeStableMessagesWithoutInternalDetails(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		err     error
+		status  int
+		code    string
+		message string
+		hidden  string
+	}{
+		{
+			name:    "validation",
+			err:     fmt.Errorf("%w: %s", actionflow.ErrInvalidInput, "invalid GitHub create-gist properties"),
+			status:  http.StatusBadRequest,
+			code:    "invalid_request",
+			message: "invalid GitHub create-gist properties",
+		},
+		{
+			name:    "scope",
+			err:     fmt.Errorf("%w: %s", actionflow.ErrRequiredScope, "gist"),
+			status:  http.StatusUnprocessableEntity,
+			code:    "scope_required",
+			message: "connection requires additional authorization: gist",
+		},
+		{
+			name:    "runner",
+			err:     actionflow.ExecutionFailed{Code: "file_too_large", Message: "file exceeds the size limit"},
+			status:  http.StatusRequestEntityTooLarge,
+			code:    "file_too_large",
+			message: "file exceeds the size limit",
+		},
+		{
+			name:    "opaque execution",
+			err:     fmt.Errorf("%w: %s", actionflow.ErrExecutionFailed, "provider timeout"),
+			status:  http.StatusBadGateway,
+			code:    "provider_execution_failed",
+			message: "provider action could not be completed",
+			hidden:  "provider timeout",
+		},
+		{
+			name:    "joined database detail",
+			err:     errors.Join(fmt.Errorf("%w: %s", actionflow.ErrInvalidInput, "invalid GitHub create-gist properties"), errors.New("database detail")),
+			status:  http.StatusBadRequest,
+			code:    "invalid_request",
+			message: "invalid GitHub create-gist properties",
+			hidden:  "database",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			server := NewAPI(Dependencies{
+				Authenticator: testAuthenticator{memberID: "member-1"},
+				Actions:       failingActions{err: test.err},
+			})
+			response := perform(server, http.MethodPost, "/v1/organizations/org-1/connections/con-1/actions/create-gist",
+				`{"props":{"public":false,"filename":"note.txt","content":"hello"}}`,
+				map[string]string{"Idempotency-Key": "request-123"})
+			if response.Code != test.status {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			var body struct {
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Error.Code != test.code || body.Error.Message != test.message {
+				t.Fatalf("error = %+v", body.Error)
+			}
+			if test.hidden != "" && strings.Contains(response.Body.String(), test.hidden) {
+				t.Fatalf("body leaked %q: %s", test.hidden, response.Body.String())
+			}
+		})
+	}
+}
+
+type failingActions struct{ err error }
+
+func (a failingActions) Run(context.Context, actionflow.RunRequest) (actionflow.RunResult, error) {
+	return actionflow.RunResult{}, a.err
 }

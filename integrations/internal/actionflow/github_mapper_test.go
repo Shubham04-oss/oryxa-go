@@ -61,6 +61,13 @@ func TestGitHubMappersStripBodiesPatchesAndTokens(t *testing.T) {
 		{action: "get-user", output: `{"login":"octocat","html_url":"https://github.com/octocat","email":"private@example.com","token":"secret"}`},
 		{action: "lock-issue", props: `{"owner":"oryxa","repo":"api","issue_number":42}`, output: `{"success":true,"locked":true}`, detailType: integrationevents.GitHubIssueMutatedDetailType},
 		{action: "star-repository", props: `{"owner":"oryxa","repo":"api"}`, output: `{"success":true,"status":204}`, detailType: integrationevents.GitHubRepositoryMutatedDetailType},
+		{action: "create-or-update-file", props: `{"owner":"oryxa","repo":"api","path":"docs/readme.md"}`, output: `{"content":{"path":"docs/readme.md","sha":"abc1234","size":12,"html_url":"https://github.com/oryxa/api/blob/main/docs/readme.md","download_url":"secret-url","type":"file"},"commit":{"sha":"def5678","html_url":"https://github.com/oryxa/api/commit/def5678","message":"private body"}}`, detailType: integrationevents.GitHubFileMutatedDetailType},
+		{action: "search-code", output: `{"total_count":1,"items":[{"name":"readme.md","path":"docs/readme.md","sha":"abc1234","html_url":"https://github.com/oryxa/api/blob/main/docs/readme.md","text_matches":[{"fragment":"private body"}]}]}`},
+		{action: "get-file-content", output: `{"name":"readme.md","path":"docs/readme.md","sha":"abc1234","size":12,"html_url":"https://github.com/oryxa/api/blob/main/docs/readme.md","type":"file","file_id":"file_xyz","filename":"readme.md"}`},
+		{action: "create-gist", output: `{"status":201,"headers":{"authorization":"token secret"},"body":{"id":"gist-1","html_url":"https://gist.github.com/gist-1","public":false,"files":{"note.txt":{"filename":"note.txt","type":"text/plain","size":5,"content":"private body","raw_url":"secret-url"}}}}`, detailType: integrationevents.GitHubGistCreatedDetailType},
+		{action: "raw-graphql-query", output: `{"status":200,"headers":{"authorization":"token secret"},"body":{"data":{"viewer":{"login":"octocat"}}}}`},
+		{action: "dispatch-workflow", props: `{"owner":"oryxa","repo":"api","workflow_id":"ci.yml","ref":"main"}`, output: `{"id":99,"status":"queued","html_url":"https://github.com/oryxa/api/actions/runs/99","logs_url":"secret-url","repository":{"full_name":"oryxa/api"}}`, detailType: integrationevents.GitHubWorkflowDispatchedDetailType},
+		{action: "custom-api-call", output: `{"status":200,"headers":{"authorization":"token secret"},"body":{"login":"octocat"}}`},
 	}
 	for _, test := range tests {
 		t.Run(test.action, func(t *testing.T) {
@@ -82,5 +89,33 @@ func TestGitHubMappersStripBodiesPatchesAndTokens(t *testing.T) {
 				t.Fatalf("detail type = %q, want %q", mapped.DetailType, test.detailType)
 			}
 		})
+	}
+}
+
+func TestGitHubGetFileContentRejectsRemainingBytesAndProjectsDirectoryListings(t *testing.T) {
+	_, err := (DomainMapper{}).Map(MapRequest{
+		Connection: domain.Connection{Provider: "github"}, ActionName: "get-file-content",
+		Output: json.RawMessage(`{"name":"readme.md","path":"docs/readme.md","sha":"abc","type":"file","encoding":"base64","content":"aGVsbG8="}`),
+	})
+	if err == nil {
+		t.Fatal("get-file-content accepted leftover file bytes")
+	}
+	listed, err := (DomainMapper{}).Map(MapRequest{
+		Connection: domain.Connection{Provider: "github"}, ActionName: "get-file-content",
+		Output: json.RawMessage(`[{"name":"readme.md","path":"docs/readme.md","sha":"abc","type":"file","html_url":"https://github.com/oryxa/api/blob/main/docs/readme.md"}]`),
+	})
+	if err != nil || listed.DetailType != "" || strings.Contains(string(listed.SafeResult), `"content"`) ||
+		!strings.Contains(string(listed.SafeResult), `"docs/readme.md"`) {
+		t.Fatalf("directory listing result/error = %s / %v", listed.SafeResult, err)
+	}
+}
+
+func TestGitHubHTTPCallRejectsLeakedAccessTokens(t *testing.T) {
+	_, err := (DomainMapper{}).Map(MapRequest{
+		Connection: domain.Connection{Provider: "github"}, ActionName: "custom-api-call",
+		Output: json.RawMessage(`{"status":200,"body":{"access_token":"secret"}}`),
+	})
+	if err == nil {
+		t.Fatal("custom-api-call accepted a leaked access_token")
 	}
 }

@@ -23,6 +23,7 @@ const (
 	SlackReactionAddedDetailType                = "integrations.slack.reaction-added.v1"
 	SlackReactionRemovedDetailType              = "integrations.slack.reaction-removed.v1"
 	SlackChannelMutatedDetailType               = "integrations.slack.channel-mutated.v1"
+	SlackFileUploadedDetailType                 = "integrations.slack.file-uploaded.v1"
 	SlackReactionReceivedDetailType             = "integrations.slack.reaction-received.v1"
 	SlackChannelCreatedReceivedDetailType       = "integrations.slack.channel-created.v1"
 	SlackUserJoinedDetailType                   = "integrations.slack.user-joined.v1"
@@ -41,6 +42,13 @@ const (
 	GitHubLabelMutatedDetailType                = "integrations.github.label-mutated.v1"
 	GitHubIssueOpenedDetailType                 = "integrations.github.issue-opened.v1"
 	GitHubPullRequestOpenedDetailType           = "integrations.github.pull-request-opened.v1"
+	GitHubFileMutatedDetailType                 = "integrations.github.file-mutated.v1"
+	GitHubGistCreatedDetailType                 = "integrations.github.gist-created.v1"
+	GitHubWorkflowDispatchedDetailType          = "integrations.github.workflow-dispatched.v1"
+	GitHubStarReceivedDetailType                = "integrations.github.star-received.v1"
+	GitHubPushReceivedDetailType                = "integrations.github.push-received.v1"
+	GitHubReleasePublishedDetailType            = "integrations.github.release-published.v1"
+	GitHubReviewSubmittedDetailType             = "integrations.github.review-submitted.v1"
 	GoogleGmailMessageSentDetailType            = "integrations.google.gmail-message-sent.v1"
 	GoogleGmailDraftCreatedDetailType           = "integrations.google.gmail-draft-created.v1"
 	GoogleGmailEmailForwardedDetailType         = "integrations.google.gmail-email-forwarded.v1"
@@ -53,6 +61,7 @@ const (
 	GoogleDriveItemCreatedDetailType            = "integrations.google.drive-item-created.v1"
 	GoogleDriveItemCopiedDetailType             = "integrations.google.drive-item-copied.v1"
 	GoogleDriveItemMutatedDetailType            = "integrations.google.drive-item-mutated.v1"
+	GoogleDriveFileChangedDetailType            = "integrations.google.drive-file-changed.v1"
 	MicrosoftOutlookEmailAcceptedDetailType     = "integrations.microsoft.outlook-email-accepted.v1"
 	MicrosoftOutlookDraftCreatedDetailType      = "integrations.microsoft.outlook-draft-created.v1"
 	MicrosoftOutlookEmailForwardedDetailType    = "integrations.microsoft.outlook-email-forwarded.v1"
@@ -60,8 +69,20 @@ const (
 	MicrosoftCalendarEventCreatedDetailType     = "integrations.microsoft.calendar-event-created.v1"
 	MicrosoftCalendarEventDeletedDetailType     = "integrations.microsoft.calendar-event-deleted.v1"
 	MicrosoftOneDriveItemCopiedDetailType       = "integrations.microsoft.onedrive-item-copied.v1"
+	MicrosoftOneDriveItemCreatedDetailType      = "integrations.microsoft.onedrive-item-created.v1"
 	MicrosoftOutlookEmailReceivedDetailType     = "integrations.microsoft.outlook-email-received.v1"
 	MicrosoftCalendarEventChangedDetailType     = "integrations.microsoft.calendar-event-changed.v1"
+	GoogleDocsDocumentCreatedDetailType         = "integrations.google.docs-document-created.v1"
+	GoogleDocsDocumentCopiedDetailType          = "integrations.google.docs-document-copied.v1"
+	GoogleDocsDocumentMutatedDetailType         = "integrations.google.docs-document-mutated.v1"
+	GoogleSheetsSpreadsheetCreatedDetailType    = "integrations.google.sheets-spreadsheet-created.v1"
+	GoogleSheetsSpreadsheetMutatedDetailType    = "integrations.google.sheets-spreadsheet-mutated.v1"
+	MicrosoftTeamsChannelCreatedDetailType      = "integrations.microsoft.teams-channel-created.v1"
+	MicrosoftTeamsMessageSentDetailType         = "integrations.microsoft.teams-message-sent.v1"
+	MicrosoftTeamsMessageDeletedDetailType      = "integrations.microsoft.teams-message-deleted.v1"
+	MicrosoftSharePointItemCreatedDetailType    = "integrations.microsoft.sharepoint-item-created.v1"
+	MicrosoftSharePointItemCopiedDetailType     = "integrations.microsoft.sharepoint-item-copied.v1"
+	MicrosoftSharePointItemMutatedDetailType    = "integrations.microsoft.sharepoint-item-mutated.v1"
 )
 
 type ProviderIdentity struct {
@@ -253,6 +274,17 @@ type SlackChannelMutated struct {
 	MutatedAt    time.Time `json:"mutated_at"`
 }
 
+// SlackFileUploaded records the Slack file identity and the Oryxa object used
+// as the source. Bytes and private download URLs never leave the boundary.
+type SlackFileUploaded struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	SlackFileID  string    `json:"slack_file_id"`
+	FileID       string    `json:"file_id,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	UploadedAt   time.Time `json:"uploaded_at"`
+}
+
 type SlackReactionReceived struct {
 	TriggerID    string    `json:"trigger_id"`
 	ConnectionID string    `json:"connection_id"`
@@ -339,6 +371,88 @@ type GitHubPullRequestOpened struct {
 	ConnectionID      string    `json:"connection_id"`
 	Repository        string    `json:"repository"`
 	PullRequestNumber int64     `json:"pull_request_number"`
+	URL               string    `json:"url"`
+	ReceivedAt        time.Time `json:"received_at"`
+}
+
+// GitHubFileMutated records a contents create, update, or delete. File bytes
+// never leave the integrations boundary.
+type GitHubFileMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	Path         string    `json:"path"`
+	SHA          string    `json:"sha,omitempty"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
+}
+
+// GitHubGistCreated records gist identity after create. File bytes never
+// leave the integrations boundary.
+type GitHubGistCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	GistID       string    `json:"gist_id"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// GitHubWorkflowDispatched records that a workflow_dispatch was accepted.
+// Logs and job output never leave the integrations boundary.
+type GitHubWorkflowDispatched struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	WorkflowID   string    `json:"workflow_id"`
+	Ref          string    `json:"ref"`
+	RunID        int64     `json:"run_id,omitempty"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	DispatchedAt time.Time `json:"dispatched_at"`
+}
+
+// GitHubStarReceived is an identity-only receipt for a repository star.
+type GitHubStarReceived struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	URL          string    `json:"url"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+// GitHubPushReceived is an identity-only receipt for a git push. Commit
+// messages and diffs never leave the integrations boundary.
+type GitHubPushReceived struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	Ref          string    `json:"ref"`
+	SHA          string    `json:"sha,omitempty"`
+	URL          string    `json:"url,omitempty"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+// GitHubReleasePublished is an identity-only receipt for a published release.
+// Notes never leave the integrations boundary.
+type GitHubReleasePublished struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	ReleaseID    int64     `json:"release_id"`
+	URL          string    `json:"url"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+// GitHubReviewSubmitted is an identity-only receipt for a pull-request review.
+// Review bodies never leave the integrations boundary.
+type GitHubReviewSubmitted struct {
+	TriggerID         string    `json:"trigger_id"`
+	ConnectionID      string    `json:"connection_id"`
+	Repository        string    `json:"repository"`
+	PullRequestNumber int64     `json:"pull_request_number"`
+	ReviewID          int64     `json:"review_id,omitempty"`
 	URL               string    `json:"url"`
 	ReceivedAt        time.Time `json:"received_at"`
 }
@@ -574,6 +688,15 @@ type GoogleCalendarEventChanged struct {
 	ReceivedAt   time.Time `json:"received_at"`
 }
 
+// GoogleDriveFileChanged is an identity-only receipt that Drive reported a
+// change on the watched corpus. File names and bytes never leave the boundary.
+type GoogleDriveFileChanged struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	DeliveryID   string    `json:"delivery_id"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
 // MicrosoftOutlookEmailAccepted records Graph's accepted sendMail write. The
 // endpoint deliberately does not return a message ID, and recipients, subject,
 // and body must never leave the integrations boundary.
@@ -649,4 +772,126 @@ type MicrosoftOneDriveItemCopied struct {
 	ItemID       string    `json:"item_id"`
 	RequestedBy  string    `json:"requested_by"`
 	CopiedAt     time.Time `json:"copied_at"`
+}
+
+// MicrosoftOneDriveItemCreated records the uploaded item identity. File bytes
+// and download URLs never leave the integrations boundary.
+type MicrosoftOneDriveItemCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ItemID       string    `json:"item_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// GoogleDocsDocumentCreated records a created document identity. Body text,
+// markdown, and template values never leave the integrations boundary.
+type GoogleDocsDocumentCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	DocumentID   string    `json:"document_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// GoogleDocsDocumentCopied records a copied document identity. Body text never
+// leaves the integrations boundary.
+type GoogleDocsDocumentCopied struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	DocumentID   string    `json:"document_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CopiedAt     time.Time `json:"copied_at"`
+}
+
+// GoogleDocsDocumentMutated records a Docs write. Body text, markdown, and
+// image URIs never leave the integrations boundary.
+type GoogleDocsDocumentMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	DocumentID   string    `json:"document_id"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
+}
+
+// GoogleSheetsSpreadsheetCreated records a created spreadsheet identity. Cell
+// values never leave the integrations event boundary.
+type GoogleSheetsSpreadsheetCreated struct {
+	ExecutionID   string    `json:"execution_id"`
+	ConnectionID  string    `json:"connection_id"`
+	SpreadsheetID string    `json:"spreadsheet_id"`
+	RequestedBy   string    `json:"requested_by"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+// GoogleSheetsSpreadsheetMutated records a Sheets write. Cell values never
+// leave the integrations event boundary.
+type GoogleSheetsSpreadsheetMutated struct {
+	ExecutionID   string    `json:"execution_id"`
+	ConnectionID  string    `json:"connection_id"`
+	SpreadsheetID string    `json:"spreadsheet_id"`
+	RequestedBy   string    `json:"requested_by"`
+	MutatedAt     time.Time `json:"mutated_at"`
+}
+
+// MicrosoftTeamsChannelCreated records a created channel identity. Channel
+// descriptions never leave the integrations boundary.
+type MicrosoftTeamsChannelCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	TeamID       string    `json:"team_id"`
+	ChannelID    string    `json:"channel_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// MicrosoftTeamsMessageSent records that a Teams message was accepted. Message
+// bodies never leave the integrations boundary.
+type MicrosoftTeamsMessageSent struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	MessageID    string    `json:"message_id"`
+	RequestedBy  string    `json:"requested_by"`
+	SentAt       time.Time `json:"sent_at"`
+}
+
+// MicrosoftTeamsMessageDeleted records a deleted chat message identity. Bodies
+// never leave the integrations boundary.
+type MicrosoftTeamsMessageDeleted struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	MessageID    string    `json:"message_id"`
+	RequestedBy  string    `json:"requested_by"`
+	DeletedAt    time.Time `json:"deleted_at"`
+}
+
+// MicrosoftSharePointItemCreated records a created folder, list, list item, or
+// uploaded file identity. File bytes and list field values never leave the
+// integrations boundary.
+type MicrosoftSharePointItemCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ItemID       string    `json:"item_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// MicrosoftSharePointItemCopied records a copied SharePoint item identity.
+// File bytes never leave the integrations boundary.
+type MicrosoftSharePointItemCopied struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ItemID       string    `json:"item_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CopiedAt     time.Time `json:"copied_at"`
+}
+
+// MicrosoftSharePointItemMutated records a SharePoint write. File bytes, list
+// field values, and next-page URLs never leave the integrations boundary.
+type MicrosoftSharePointItemMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ItemID       string    `json:"item_id"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
 }

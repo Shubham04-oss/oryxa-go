@@ -57,6 +57,12 @@ func mapSlack(request MapRequest) (MappedResult, error) {
 		"list-custom-emoji", "list-files", "search-messages", "find-user-by-email",
 		"find-user-by-handle", "find-user-by-id", "get-user", "get-user-group-by-handle":
 		return mapSlackLookup(request)
+	case "upload-file":
+		return mapSlackUploadFile(request)
+	case "get-file":
+		return mapSlackGetFile(request)
+	case "custom-api-call":
+		return mapProviderHTTPCall(request)
 	default:
 		return MappedResult{}, fmt.Errorf("%w: unsupported action", ErrPieceOutputInvalid)
 	}
@@ -371,6 +377,72 @@ func mapSlackChannel(request MapRequest) (MappedResult, error) {
 		return MappedResult{}, ErrPieceOutputInvalid
 	}
 	result, err := json.Marshal(channel)
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result}, nil
+}
+
+func mapSlackUploadFile(request MapRequest) (MappedResult, error) {
+	var output struct {
+		OK    bool `json:"ok"`
+		Files []struct {
+			ID string `json:"id"`
+		} `json:"files"`
+		File struct {
+			ID string `json:"id"`
+		} `json:"file"`
+	}
+	var props struct {
+		File struct {
+			FileID string `json:"file_id"`
+		} `json:"file"`
+	}
+	if json.Unmarshal(request.Output, &output) != nil || json.Unmarshal(request.Props, &props) != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	slackID := output.File.ID
+	if slackID == "" && len(output.Files) > 0 {
+		slackID = output.Files[0].ID
+	}
+	if slackID == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	result, err := json.Marshal(struct {
+		SlackFileID string `json:"slack_file_id"`
+		FileID      string `json:"file_id,omitempty"`
+	}{SlackFileID: slackID, FileID: props.File.FileID})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result, DetailType: integrationevents.SlackFileUploadedDetailType,
+		Data: integrationevents.SlackFileUploaded{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID,
+			SlackFileID: slackID, FileID: props.File.FileID, RequestedBy: request.Execution.MemberID,
+			UploadedAt: request.OccurredAt,
+		}}, nil
+}
+
+func mapSlackGetFile(request MapRequest) (MappedResult, error) {
+	var output struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Mimetype string `json:"mimetype"`
+		Size     int64  `json:"size"`
+		Data     storedFile
+	}
+	if json.Unmarshal(request.Output, &output) != nil || output.ID == "" || output.Data.FileID == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	result, err := json.Marshal(struct {
+		ID       string `json:"id"`
+		Name     string `json:"name,omitempty"`
+		MimeType string `json:"mimetype,omitempty"`
+		Size     int64  `json:"size,omitempty"`
+		FileID   string `json:"file_id"`
+		Filename string `json:"filename,omitempty"`
+	}{ID: output.ID, Name: output.Name, MimeType: output.Mimetype, Size: output.Size,
+		FileID: output.Data.FileID, Filename: firstNonEmpty(output.Data.FileName, output.Name)})
 	if err != nil {
 		return MappedResult{}, ErrPieceOutputInvalid
 	}

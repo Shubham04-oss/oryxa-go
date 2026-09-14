@@ -28,96 +28,126 @@ type microsoftActionSpec struct {
 	Runner   string
 	Scopes   []string
 	Validate func(json.RawMessage) error
+	Prepare  func(json.RawMessage) (json.RawMessage, error)
 }
 
 var microsoftActions = map[string]microsoftActionSpec{
 	"send-email": {
 		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "send-email",
-		[]string{microsoftMailSendScope}, validateMicrosoftSendEmail,
+		[]string{microsoftMailSendScope}, validateMicrosoftSendEmail, prepareFileAttachments,
 	},
 	"reply-email": {
 		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "reply-email",
-		[]string{microsoftMailReadWriteScope, microsoftMailSendScope}, validateMicrosoftReplyEmail,
+		[]string{microsoftMailReadWriteScope, microsoftMailSendScope}, validateMicrosoftReplyEmail, prepareFileAttachments,
 	},
 	"create-draft-email": {
 		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "createDraftEmail",
-		[]string{microsoftMailReadWriteScope}, validateMicrosoftSendEmail,
+		[]string{microsoftMailReadWriteScope}, validateMicrosoftSendEmail, prepareFileAttachments,
 	},
 	"send-draft-email": {
 		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "sendDraftEmail",
-		[]string{microsoftMailSendScope}, validateMicrosoftMessageID,
+		[]string{microsoftMailSendScope}, validateMicrosoftMessageID, nil,
 	},
 	"forward-email": {
 		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "forwardEmail",
-		[]string{microsoftMailReadWriteScope, microsoftMailSendScope}, validateMicrosoftForwardEmail,
+		[]string{microsoftMailReadWriteScope, microsoftMailSendScope}, validateMicrosoftForwardEmail, nil,
 	},
 	"add-label-to-email": {
 		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "addLabelToEmail",
-		[]string{microsoftMailReadWriteScope}, validateMicrosoftEmailLabels,
+		[]string{microsoftMailReadWriteScope}, validateMicrosoftEmailLabels, nil,
 	},
 	"remove-label-from-email": {
 		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "removeLabelFromEmail",
-		[]string{microsoftMailReadWriteScope}, validateMicrosoftEmailLabels,
+		[]string{microsoftMailReadWriteScope}, validateMicrosoftEmailLabels, nil,
 	},
 	"move-email-to-folder": {
 		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "moveEmailToFolder",
-		[]string{microsoftMailReadWriteScope}, validateMicrosoftMoveEmail,
+		[]string{microsoftMailReadWriteScope}, validateMicrosoftMoveEmail, nil,
 	},
 	"find-email": {
 		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "findEmail",
-		[]string{microsoftMailReadScope}, validateMicrosoftFindEmail,
+		[]string{microsoftMailReadScope}, validateMicrosoftFindEmail, nil,
+	},
+	"download-attachment": {
+		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "downloadAttachment",
+		[]string{microsoftMailReadScope}, validateMicrosoftMessageID, nil,
 	},
 	"create-calendar-event": {
 		MicrosoftCalendarPieceName, MicrosoftCalendarPieceVersion, "create_event",
-		[]string{microsoftCalendarWriteScope}, validateMicrosoftCalendarCreate,
+		[]string{microsoftCalendarWriteScope}, validateMicrosoftCalendarCreate, nil,
 	},
 	"list-calendar-events": {
 		MicrosoftCalendarPieceName, MicrosoftCalendarPieceVersion, "list_events",
-		[]string{microsoftCalendarReadScope}, validateMicrosoftCalendarList,
+		[]string{microsoftCalendarReadScope}, validateMicrosoftCalendarList, nil,
 	},
 	"delete-calendar-event": {
 		MicrosoftCalendarPieceName, MicrosoftCalendarPieceVersion, "delete_event",
-		[]string{microsoftCalendarWriteScope}, validateMicrosoftCalendarDelete,
+		[]string{microsoftCalendarWriteScope}, validateMicrosoftCalendarDelete, nil,
 	},
 	"list-files": {
 		MicrosoftOneDrivePieceName, MicrosoftOneDrivePieceVersion, "list_files",
-		[]string{microsoftFilesReadScope}, validateMicrosoftOneDriveList,
+		[]string{microsoftFilesReadScope}, validateMicrosoftOneDriveList, nil,
 	},
 	"list-folders": {
 		MicrosoftOneDrivePieceName, MicrosoftOneDrivePieceVersion, "list_folders",
-		[]string{microsoftFilesReadScope}, validateMicrosoftOneDriveList,
+		[]string{microsoftFilesReadScope}, validateMicrosoftOneDriveList, nil,
 	},
 	"copy-file": {
 		MicrosoftOneDrivePieceName, MicrosoftOneDrivePieceVersion, "copy_file",
-		[]string{microsoftFilesReadWriteScope}, validateMicrosoftCopyFile,
+		[]string{microsoftFilesReadWriteScope}, validateMicrosoftCopyFile, nil,
 	},
+	"upload-onedrive-file": {
+		MicrosoftOneDrivePieceName, MicrosoftOneDrivePieceVersion, "upload_onedrive_file",
+		[]string{microsoftFilesReadWriteScope}, validateMicrosoftUploadFile, nil,
+	},
+	"download-file": {
+		MicrosoftOneDrivePieceName, MicrosoftOneDrivePieceVersion, "download_file",
+		[]string{microsoftFilesReadScope}, validateMicrosoftDownloadFile, nil,
+	},
+	"custom-api-call": {
+		MicrosoftOutlookPieceName, MicrosoftOutlookPieceVersion, "custom_api_call",
+		[]string{"User.Read"}, validateCustomAPICall("graph.microsoft.com"), prepareCustomAPICall,
+	},
+}
+
+var microsoftNeedsFiles = map[string]bool{
+	"send-email": true, "reply-email": true, "create-draft-email": true,
+	"download-attachment": true, "upload-onedrive-file": true, "download-file": true,
 }
 
 func microsoftActionDefinition(actionName string) (actionflow.Definition, bool) {
 	spec, ok := microsoftActions[actionName]
 	if !ok {
+		spec, ok = microsoftTeamsActions[actionName]
+	}
+	if !ok {
+		spec, ok = microsoftSharePointActions[actionName]
+	}
+	if !ok {
 		return actionflow.Definition{}, false
 	}
 	return actionflow.Definition{
 		Provider: "microsoft", ActionName: actionName, PieceName: spec.Piece, PieceVersion: spec.Version,
-		RunnerActionName: spec.Runner, RequiredScopes: append([]string(nil), spec.Scopes...), ValidateProps: spec.Validate,
+		RunnerActionName: spec.Runner, RequiredScopes: append([]string(nil), spec.Scopes...),
+		ValidateProps: spec.Validate, PrepareProps: spec.Prepare,
+		NeedsFiles: microsoftNeedsFiles[actionName] || microsoftSharePointNeedsFiles[actionName],
 	}, true
 }
 
 func validateMicrosoftSendEmail(raw json.RawMessage) error {
 	var props struct {
-		Recipients    []string `json:"recipients"`
-		CCRecipients  []string `json:"ccRecipients"`
-		BCCRecipients []string `json:"bccRecipients"`
-		Subject       string   `json:"subject"`
-		BodyFormat    string   `json:"bodyFormat"`
-		Body          string   `json:"body"`
-		Attachments   []any    `json:"attachments"`
+		Recipients    []string  `json:"recipients"`
+		CCRecipients  []string  `json:"ccRecipients"`
+		BCCRecipients []string  `json:"bccRecipients"`
+		Subject       string    `json:"subject"`
+		BodyFormat    string    `json:"bodyFormat"`
+		Body          string    `json:"body"`
+		Attachments   []fileRef `json:"attachments"`
 	}
 	if err := decodeStrict(raw, &props); err != nil || !emails(props.Recipients, true) ||
 		!emails(props.CCRecipients, false) || !emails(props.BCCRecipients, false) ||
 		strings.TrimSpace(props.Subject) == "" || len(props.Subject) > 998 || len(props.Body) == 0 ||
-		len(props.Body) > 100*1024 || !oneOf(props.BodyFormat, "text", "html") || len(props.Attachments) != 0 {
+		len(props.Body) > 100*1024 || !oneOf(props.BodyFormat, "text", "html") || !optionalFileRefs(props.Attachments) {
 		return errors.New("invalid Microsoft Outlook send-email properties")
 	}
 	return nil
@@ -125,17 +155,17 @@ func validateMicrosoftSendEmail(raw json.RawMessage) error {
 
 func validateMicrosoftReplyEmail(raw json.RawMessage) error {
 	var props struct {
-		MessageID     string   `json:"messageId"`
-		ReplyBody     string   `json:"replyBody"`
-		BodyFormat    string   `json:"bodyFormat"`
-		Draft         bool     `json:"draft"`
-		CCRecipients  []string `json:"ccRecipients"`
-		BCCRecipients []string `json:"bccRecipients"`
-		Attachments   []any    `json:"attachments"`
+		MessageID     string    `json:"messageId"`
+		ReplyBody     string    `json:"replyBody"`
+		BodyFormat    string    `json:"bodyFormat"`
+		Draft         bool      `json:"draft"`
+		CCRecipients  []string  `json:"ccRecipients"`
+		BCCRecipients []string  `json:"bccRecipients"`
+		Attachments   []fileRef `json:"attachments"`
 	}
 	if err := decodeStrict(raw, &props); err != nil || !boundedValue(props.MessageID, 1024) ||
 		len(props.ReplyBody) == 0 || len(props.ReplyBody) > 100*1024 || !oneOf(props.BodyFormat, "text", "html") ||
-		!emails(props.CCRecipients, false) || !emails(props.BCCRecipients, false) || len(props.Attachments) != 0 {
+		!emails(props.CCRecipients, false) || !emails(props.BCCRecipients, false) || !optionalFileRefs(props.Attachments) {
 		return errors.New("invalid Microsoft Outlook reply-email properties")
 	}
 	return nil
@@ -279,6 +309,31 @@ func validateMicrosoftCopyFile(raw json.RawMessage) error {
 	}
 	if !oneOf(props.ConflictBehavior, "rename", "replace", "fail") {
 		return errors.New("invalid Microsoft OneDrive copy-file properties")
+	}
+	return nil
+}
+
+func validateMicrosoftUploadFile(raw json.RawMessage) error {
+	var props struct {
+		FileName string  `json:"fileName"`
+		File     fileRef `json:"file"`
+		ParentID string  `json:"parentId"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedFilename(props.FileName) ||
+		!oryxaFileID(props.File.FileID) || (props.ParentID != "" && !boundedValue(props.ParentID, 1024)) {
+		return errors.New("invalid Microsoft OneDrive upload-onedrive-file properties")
+	}
+	return nil
+}
+
+func validateMicrosoftDownloadFile(raw json.RawMessage) error {
+	var props struct {
+		LookupBy       string `json:"lookupBy"`
+		FileIdentifier string `json:"fileIdentifier"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !oneOf(props.LookupBy, "id", "name") ||
+		!boundedValue(props.FileIdentifier, 1024) {
+		return errors.New("invalid Microsoft OneDrive download-file properties")
 	}
 	return nil
 }

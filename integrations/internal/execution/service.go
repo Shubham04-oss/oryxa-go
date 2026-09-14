@@ -10,6 +10,7 @@ import (
 	integrationevents "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/piece"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers/github"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/webhooks"
 )
@@ -211,27 +212,19 @@ func (DomainMapper) Map(provider string, trigger domain.Trigger, envelope webhoo
 			Data: integrationevents.MicrosoftCalendarEventChanged{TriggerID: trigger.ID,
 				ConnectionID: trigger.ConnectionID, DeliveryID: envelope.DeliveryID, ReceivedAt: envelope.ReceivedAt}}, nil
 	}
-	if provider == "github" && trigger.TriggerName == "new-issue" && envelope.Event == "issues" && len(output) == 2 && string(output) == "{}" {
+	if provider == "github" && github.NativeTrigger(trigger.TriggerName) &&
+		envelope.Event == github.NativeHookEvent(trigger.TriggerName) && len(output) == 2 && string(output) == "{}" {
 		delivery, err := githubThinDelivery(envelope.Body)
 		if err != nil {
 			return domain.Event{}, err
 		}
-		return domain.Event{EventID: eventID, Source: integrationevents.Source,
-			DetailType: integrationevents.GitHubIssueOpenedDetailType, Version: 1,
-			OrganizationID: trigger.OrganizationID, OccurredAt: now,
-			Data: integrationevents.GitHubIssueOpened{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
-				Repository: delivery.Repository, IssueNumber: delivery.Number, URL: delivery.URL, ReceivedAt: envelope.ReceivedAt}}, nil
-	}
-	if provider == "github" && trigger.TriggerName == "new-pull-request" && envelope.Event == "pull_request" && len(output) == 2 && string(output) == "{}" {
-		delivery, err := githubThinDelivery(envelope.Body)
-		if err != nil {
-			return domain.Event{}, err
+		event, mapErr := mapGitHubInbound(trigger, envelope, delivery)
+		if mapErr != nil {
+			return domain.Event{}, mapErr
 		}
-		return domain.Event{EventID: eventID, Source: integrationevents.Source,
-			DetailType: integrationevents.GitHubPullRequestOpenedDetailType, Version: 1,
-			OrganizationID: trigger.OrganizationID, OccurredAt: now,
-			Data: integrationevents.GitHubPullRequestOpened{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
-				Repository: delivery.Repository, PullRequestNumber: delivery.Number, URL: delivery.URL, ReceivedAt: envelope.ReceivedAt}}, nil
+		event.EventID, event.Source, event.Version = eventID, integrationevents.Source, 1
+		event.OrganizationID, event.OccurredAt = trigger.OrganizationID, now
+		return event, nil
 	}
 	if provider == "google" && trigger.TriggerName == "new-email" && envelope.Event == "mailbox-change" && len(output) == 2 && string(output) == "{}" {
 		if err := rejectGmailContent(envelope.Body); err != nil {
@@ -250,6 +243,13 @@ func (DomainMapper) Map(provider string, trigger domain.Trigger, envelope webhoo
 			Data: integrationevents.GoogleCalendarEventChanged{TriggerID: trigger.ID,
 				ConnectionID: trigger.ConnectionID, DeliveryID: envelope.DeliveryID, ReceivedAt: envelope.ReceivedAt}}, nil
 	}
+	if provider == "google" && trigger.TriggerName == "drive-file-changed" && envelope.Event == "channel-notification" && len(output) == 2 && string(output) == "{}" {
+		return domain.Event{EventID: eventID, Source: integrationevents.Source,
+			DetailType: integrationevents.GoogleDriveFileChangedDetailType, Version: 1,
+			OrganizationID: trigger.OrganizationID, OccurredAt: now,
+			Data: integrationevents.GoogleDriveFileChanged{TriggerID: trigger.ID,
+				ConnectionID: trigger.ConnectionID, DeliveryID: envelope.DeliveryID, ReceivedAt: envelope.ReceivedAt}}, nil
+	}
 	if provider == "slack" {
 		return mapSlackTrigger(trigger, envelope, output, eventID, now)
 	}
@@ -262,23 +262,28 @@ func isNativeGraphNotification(trigger domain.Trigger, envelope webhooks.Envelop
 }
 
 func isNativeGitHubDelivery(trigger domain.Trigger, envelope webhooks.Envelope) bool {
-	return trigger.Provider == "github" &&
-		((trigger.TriggerName == "new-issue" && envelope.Event == "issues") ||
-			(trigger.TriggerName == "new-pull-request" && envelope.Event == "pull_request"))
+	return trigger.Provider == "github" && github.NativeTrigger(trigger.TriggerName) &&
+		envelope.Event == github.NativeHookEvent(trigger.TriggerName)
 }
 
 func isNativeGoogleDelivery(trigger domain.Trigger, envelope webhooks.Envelope) bool {
 	return trigger.Provider == "google" &&
 		((trigger.TriggerName == "new-email" && envelope.Event == "mailbox-change") ||
-			(trigger.TriggerName == "calendar-event-changed" && envelope.Event == "channel-notification"))
+			((trigger.TriggerName == "calendar-event-changed" || trigger.TriggerName == "drive-file-changed") &&
+				envelope.Event == "channel-notification"))
 }
 
 type githubDelivery struct {
-	Repository string `json:"repository"`
-	Number     int64  `json:"number"`
-	URL        string `json:"url"`
-	Title      string `json:"title"`
-	Body       string `json:"body"`
+	Repository string          `json:"repository"`
+	Number     int64           `json:"number"`
+	URL        string          `json:"url"`
+	Ref        string          `json:"ref"`
+	SHA        string          `json:"sha"`
+	ReleaseID  int64           `json:"release_id"`
+	ReviewID   int64           `json:"review_id"`
+	Title      string          `json:"title"`
+	Body       string          `json:"body"`
+	Commits    json.RawMessage `json:"commits"`
 }
 
 func githubThinDelivery(body any) (githubDelivery, error) {
@@ -287,13 +292,65 @@ func githubThinDelivery(body any) (githubDelivery, error) {
 		return githubDelivery{}, fmt.Errorf("%w: encode GitHub delivery", ErrOutputInvalid)
 	}
 	var delivery githubDelivery
-	if json.Unmarshal(encoded, &delivery) != nil || delivery.Repository == "" || delivery.Number < 1 || delivery.URL == "" {
+	if json.Unmarshal(encoded, &delivery) != nil || delivery.Repository == "" {
 		return githubDelivery{}, fmt.Errorf("%w: GitHub delivery identity is incomplete", ErrOutputInvalid)
 	}
-	if delivery.Title != "" || delivery.Body != "" {
+	if delivery.Title != "" || delivery.Body != "" || (len(delivery.Commits) > 0 && string(delivery.Commits) != "null") {
 		return githubDelivery{}, fmt.Errorf("%w: GitHub delivery included issue content", ErrOutputInvalid)
 	}
 	return delivery, nil
+}
+
+func mapGitHubInbound(trigger domain.Trigger, envelope webhooks.Envelope, delivery githubDelivery) (domain.Event, error) {
+	base := domain.Event{}
+	switch trigger.TriggerName {
+	case "new-issue":
+		if delivery.Number < 1 || delivery.URL == "" {
+			return domain.Event{}, fmt.Errorf("%w: GitHub delivery identity is incomplete", ErrOutputInvalid)
+		}
+		base.DetailType = integrationevents.GitHubIssueOpenedDetailType
+		base.Data = integrationevents.GitHubIssueOpened{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
+			Repository: delivery.Repository, IssueNumber: delivery.Number, URL: delivery.URL, ReceivedAt: envelope.ReceivedAt}
+	case "new-pull-request":
+		if delivery.Number < 1 || delivery.URL == "" {
+			return domain.Event{}, fmt.Errorf("%w: GitHub delivery identity is incomplete", ErrOutputInvalid)
+		}
+		base.DetailType = integrationevents.GitHubPullRequestOpenedDetailType
+		base.Data = integrationevents.GitHubPullRequestOpened{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
+			Repository: delivery.Repository, PullRequestNumber: delivery.Number, URL: delivery.URL, ReceivedAt: envelope.ReceivedAt}
+	case "new-star":
+		if delivery.URL == "" {
+			return domain.Event{}, fmt.Errorf("%w: GitHub delivery identity is incomplete", ErrOutputInvalid)
+		}
+		base.DetailType = integrationevents.GitHubStarReceivedDetailType
+		base.Data = integrationevents.GitHubStarReceived{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
+			Repository: delivery.Repository, URL: delivery.URL, ReceivedAt: envelope.ReceivedAt}
+	case "new-push":
+		if delivery.Ref == "" {
+			return domain.Event{}, fmt.Errorf("%w: GitHub delivery identity is incomplete", ErrOutputInvalid)
+		}
+		base.DetailType = integrationevents.GitHubPushReceivedDetailType
+		base.Data = integrationevents.GitHubPushReceived{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
+			Repository: delivery.Repository, Ref: delivery.Ref, SHA: delivery.SHA, URL: delivery.URL, ReceivedAt: envelope.ReceivedAt}
+	case "new-release":
+		if delivery.ReleaseID < 1 || delivery.URL == "" {
+			return domain.Event{}, fmt.Errorf("%w: GitHub delivery identity is incomplete", ErrOutputInvalid)
+		}
+		base.DetailType = integrationevents.GitHubReleasePublishedDetailType
+		base.Data = integrationevents.GitHubReleasePublished{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
+			Repository: delivery.Repository, ReleaseID: delivery.ReleaseID, URL: delivery.URL, ReceivedAt: envelope.ReceivedAt}
+	case "new-review":
+		if delivery.Number < 1 || delivery.URL == "" {
+			return domain.Event{}, fmt.Errorf("%w: GitHub delivery identity is incomplete", ErrOutputInvalid)
+		}
+		base.DetailType = integrationevents.GitHubReviewSubmittedDetailType
+		base.Data = integrationevents.GitHubReviewSubmitted{TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID,
+			Repository: delivery.Repository, PullRequestNumber: delivery.Number, ReviewID: delivery.ReviewID, URL: delivery.URL,
+			ReceivedAt: envelope.ReceivedAt}
+	default:
+		return domain.Event{}, fmt.Errorf("%w: unsupported trigger mapping", ErrOutputInvalid)
+	}
+	return base, nil
 }
 
 func rejectGmailContent(body any) error {

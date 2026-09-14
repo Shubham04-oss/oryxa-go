@@ -21,10 +21,28 @@ const (
 	calendarEventName   = "channel-notification"
 )
 
+func googleChannelTrigger(name string) bool {
+	return name == "calendar-event-changed" || name == "drive-file-changed"
+}
+
+func acceptedGoogleResourceState(triggerName, state string) bool {
+	if triggerName == "calendar-event-changed" {
+		return state == resourceStateExists
+	}
+	if triggerName == "drive-file-changed" {
+		switch state {
+		case "change", "add", "remove", "update", "trash", "untrash":
+			return true
+		}
+	}
+	return false
+}
+
 type WebhookVerifier struct{}
 
-// WebhookRunner dispatches Google Calendar channel notifications to native
-// token verification and preserves the existing runner for every other provider.
+// WebhookRunner dispatches Google Calendar and Drive channel notifications to
+// native token verification and preserves the existing runner for every other
+// provider.
 type WebhookRunner struct {
 	Fallback webhooks.Runner
 }
@@ -41,7 +59,7 @@ func (r WebhookRunner) VerifyAndParse(ctx context.Context, request webhooks.Runn
 
 func (WebhookVerifier) VerifyAndParse(_ context.Context, request webhooks.RunnerRequest) (webhooks.RunnerResult, error) {
 	if request.Route.Provider != "google" || request.Route.Mode != domain.WebhookRoutePerConnection ||
-		request.Route.ConnectionID == "" || request.Route.TriggerName != "calendar-event-changed" ||
+		request.Route.ConnectionID == "" || !googleChannelTrigger(request.Route.TriggerName) ||
 		!strings.EqualFold(request.Method, "POST") {
 		return webhooks.RunnerResult{Verified: false}, nil
 	}
@@ -61,7 +79,7 @@ func (WebhookVerifier) VerifyAndParse(_ context.Context, request webhooks.Runner
 	if state == resourceStateSync {
 		return webhooks.RunnerResult{Verified: true, Reply: &webhooks.Reply{Status: http.StatusOK}}, nil
 	}
-	if state != resourceStateExists {
+	if !acceptedGoogleResourceState(request.Route.TriggerName, state) {
 		return webhooks.RunnerResult{Verified: true, Reply: &webhooks.Reply{Status: http.StatusAccepted}}, nil
 	}
 	messageNumber := request.Headers[headerMessageNumber]

@@ -162,7 +162,11 @@ async function runAction(
   response: RunnerResponse,
 ): Promise<RunnerResponse> {
   const action = allowedAction(entry, required(request.actionName, 'actionName'))
-  const context = runtimeContext(request)
+  const props = await flattenGitHubFileContent(
+    request.actionName,
+    await hydrateFileProps(request, request.props ?? {}),
+  )
+  const context = runtimeContext({ ...request, props })
   const output = await action.run(context.value)
   response.output = entry.projectActionOutput
     ? entry.projectActionOutput(request.actionName!, output)
@@ -277,9 +281,7 @@ function runtimeContext(request: RunnerRequest): {
     output: { update: async () => undefined },
     tags: { add: async ({ name }: { name: string }) => { tags.push(name) } },
     files: {
-      write: async () => {
-        throw new RunnerError('capability_not_supported', 'file storage is not enabled')
-      },
+      write: async ({ fileName, data }: { fileName: string; data: unknown }) => writeFile(request, fileName, data),
     },
     connections: {
       get: async (key: string) => request.secondaryConnections?.[key] ?? null,
@@ -350,4 +352,152 @@ function required<T>(value: T | undefined, name: string): T {
     throw new RunnerError('invalid_request', `${name} is required`)
   }
   return value
+}
+
+const maxFileBytes = 8 * 1024 * 1024
+
+async function flattenGitHubFileContent(
+  actionName: string | undefined,
+  props: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (actionName !== 'create_or_update_file') {
+    return props
+  }
+  const content = props.content
+  if (!isPlainObject(content)) {
+    return props
+  }
+  if (Buffer.isBuffer(content.data)) {
+    return { ...props, content: content.data.toString('base64') }
+  }
+  if (typeof content.base64 === 'string') {
+    return { ...props, content: content.base64 }
+  }
+  return props
+}
+
+async function hydrateFileProps(
+  request: RunnerRequest,
+  value: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const result: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    result[key] = await hydrateValue(request, item)
+  }
+  return result
+}
+
+async function hydrateValue(request: RunnerRequest, value: unknown): Promise<unknown> {
+  if (Array.isArray(value)) {
+    return Promise.all(value.map((item) => hydrateValue(request, item)))
+  }
+  if (!isPlainObject(value)) {
+    return value
+  }
+  if (isFileRef(value)) {
+    return readFile(request, value.file_id)
+  }
+  const result: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    result[key] = await hydrateValue(request, item)
+  }
+  return result
+}
+
+function isFileRef(value: Record<string, unknown>): value is { file_id: string } {
+  const keys = Object.keys(value)
+  return keys.length === 1 && keys[0] === 'file_id' && typeof value.file_id === 'string'
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && !Buffer.isBuffer(value)
+}
+
+async function readFile(request: RunnerRequest, fileId: string): Promise<Record<string, unknown>> {
+  const broker = requireFilesBroker(request)
+  const response = await fetch(`${broker.url}/${encodeURIComponent(fileId)}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${broker.token}` },
+  })
+  if (!response.ok) {
+    throw new RunnerError('file_read_failed', 'file storage read failed')
+  }
+  const bytes = Buffer.from(await response.arrayBuffer())
+  if (bytes.length > maxFileBytes) {
+    throw new RunnerError('file_too_large', 'file exceeds the size limit')
+  }
+  const filename = filenameFromDisposition(response.headers.get('content-disposition')) || fileId
+  return apFile(filename, bytes)
+}
+
+async function writeFile(request: RunnerRequest, fileName: string, data: unknown): Promise<{ fileName: string; fileId: string }> {
+  const broker = requireFilesBroker(request)
+  const bytes = await toBuffer(data)
+  if (bytes.length === 0 || bytes.length > maxFileBytes) {
+    throw new RunnerError('file_too_large', 'file exceeds the size limit')
+  }
+  const response = await fetch(broker.url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${broker.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ filename: fileName, content: bytes.toString('base64') }),
+  })
+  if (!response.ok) {
+    throw new RunnerError('file_write_failed', 'file storage write failed')
+  }
+  const body = await response.json() as { id?: string; filename?: string }
+  if (!body.id) {
+    throw new RunnerError('file_write_failed', 'file storage write failed')
+  }
+  return { fileName: body.filename || fileName, fileId: body.id }
+}
+
+function requireFilesBroker(request: RunnerRequest): { url: string; token: string } {
+  const broker = request.filesBroker
+  if (!broker?.url || !broker.token) {
+    throw new RunnerError('capability_not_supported', 'file storage is not enabled')
+  }
+  return broker
+}
+
+function apFile(filename: string, data: Buffer): Record<string, unknown> {
+  const extension = filename.includes('.') ? filename.slice(filename.lastIndexOf('.') + 1) : ''
+  return {
+    filename,
+    extension,
+    data,
+    get base64() {
+      return data.toString('base64')
+    },
+  }
+}
+
+async function toBuffer(data: unknown): Promise<Buffer> {
+  if (Buffer.isBuffer(data)) {
+    return data
+  }
+  if (data instanceof Uint8Array) {
+    return Buffer.from(data)
+  }
+  if (typeof data === 'string') {
+    return Buffer.from(data)
+  }
+  if (data && typeof (data as AsyncIterable<unknown>)[Symbol.asyncIterator] === 'function') {
+    const chunks: Buffer[] = []
+    for await (const chunk of data as AsyncIterable<unknown>) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array))
+    }
+    return Buffer.concat(chunks)
+  }
+  throw new RunnerError('invalid_request', 'file data is invalid')
+}
+
+function filenameFromDisposition(value: string | null): string {
+  if (!value) {
+    return ''
+  }
+  const match = /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(value)
+  return match ? match[1].replace(/"/g, '').trim() : ''
 }

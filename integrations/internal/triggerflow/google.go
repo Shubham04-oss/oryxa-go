@@ -15,13 +15,17 @@ import (
 )
 
 func (s Service) createGoogleTrigger(ctx context.Context, request CreateRequest, connection domain.Connection, definition Definition, triggerID string) (domain.Trigger, error) {
-	if definition.GoogleWatch == google.WatchKindGmail {
+	switch definition.GoogleWatch {
+	case google.WatchKindGmail:
 		return s.createGoogleGmailTrigger(ctx, request, connection, definition, triggerID)
+	case google.WatchKindCalendar, google.WatchKindDrive:
+		return s.createGoogleChannelTrigger(ctx, request, connection, definition, triggerID)
+	default:
+		return domain.Trigger{}, ErrOperationDisabled
 	}
-	return s.createGoogleCalendarTrigger(ctx, request, connection, definition, triggerID)
 }
 
-func (s Service) createGoogleCalendarTrigger(ctx context.Context, request CreateRequest, connection domain.Connection, definition Definition, triggerID string) (trigger domain.Trigger, resultErr error) {
+func (s Service) createGoogleChannelTrigger(ctx context.Context, request CreateRequest, connection domain.Connection, definition Definition, triggerID string) (trigger domain.Trigger, resultErr error) {
 	routes, ok := s.Routes.(PerConnectionRoutes)
 	if !ok || s.Google == nil || s.PublicURL == "" {
 		return domain.Trigger{}, ErrRouteUnavailable
@@ -74,11 +78,11 @@ func (s Service) createGoogleCalendarTrigger(ctx context.Context, request Create
 		}
 		if statePersisted {
 			if err := s.State.DeleteTriggerState(cleanupCtx, request.OrganizationID, triggerID); err != nil {
-				cleanupErrs = append(cleanupErrs, fmt.Errorf("compensate Google Calendar trigger state: %w", err))
+				cleanupErrs = append(cleanupErrs, fmt.Errorf("compensate Google channel trigger state: %w", err))
 			}
 		}
 		if err := routes.DeactivateWebhookRoute(cleanupCtx, opaqueRoute); err != nil {
-			cleanupErrs = append(cleanupErrs, fmt.Errorf("compensate Google Calendar webhook route: %w", err))
+			cleanupErrs = append(cleanupErrs, fmt.Errorf("compensate Google webhook route: %w", err))
 		}
 		if len(cleanupErrs) > 0 {
 			resultErr = errors.Join(resultErr, errors.Join(cleanupErrs...))
@@ -94,14 +98,21 @@ func (s Service) createGoogleCalendarTrigger(ctx context.Context, request Create
 		return domain.Trigger{}, err
 	}
 	expiresAt := s.now().Add(googleTTL(definition))
-	channel, err := s.Google.WatchCalendar(ctx, googleAccessToken, google.CalendarWatchRequest{
-		CalendarID: "primary", ChannelID: channelID, Token: token, Expiration: expiresAt,
-		Address: s.PublicURL + "/v1/webhooks/" + opaqueRoute,
-	})
-	if err != nil {
-		return domain.Trigger{}, fmt.Errorf("create Google Calendar watch: %w", err)
+	address := s.PublicURL + "/v1/webhooks/" + opaqueRoute
+	var channel google.Channel
+	if definition.GoogleWatch == google.WatchKindDrive {
+		channel, err = s.Google.WatchDrive(ctx, googleAccessToken, google.DriveWatchRequest{
+			ChannelID: channelID, Token: token, Expiration: expiresAt, Address: address,
+		})
+	} else {
+		channel, err = s.Google.WatchCalendar(ctx, googleAccessToken, google.CalendarWatchRequest{
+			CalendarID: "primary", ChannelID: channelID, Token: token, Expiration: expiresAt, Address: address,
+		})
 	}
-	watchState = google.WatchState{Kind: google.WatchKindCalendar, ChannelID: channel.ID,
+	if err != nil {
+		return domain.Trigger{}, fmt.Errorf("create Google watch: %w", err)
+	}
+	watchState = google.WatchState{Kind: definition.GoogleWatch, ChannelID: channel.ID,
 		ResourceID: channel.ResourceID, CalendarID: channel.CalendarID, ExpiresAt: channel.Expiration.UTC()}
 	if watchState.ExpiresAt.IsZero() {
 		watchState.ExpiresAt = expiresAt.UTC()
@@ -226,7 +237,7 @@ func (s Service) disableGoogleTrigger(ctx context.Context, organizationID, membe
 	if err != nil {
 		return err
 	}
-	if watch.Kind == google.WatchKindCalendar {
+	if watch.Kind == google.WatchKindCalendar || watch.Kind == google.WatchKindDrive {
 		if err := s.Google.StopChannel(ctx, accessToken, watch); err != nil {
 			return fmt.Errorf("remove Google Calendar channel: %w", err)
 		}
@@ -335,17 +346,25 @@ func (s Service) renewGoogleWatch(ctx context.Context, trigger domain.Trigger, c
 		channelToken, err := s.Secrets.Open(ctx, secrets.Binding{OrganizationID: trigger.OrganizationID,
 			ResourceType: "webhook-route", ResourceID: route.OpaqueRoute}, route.SigningSecret)
 		if err != nil {
-			return fmt.Errorf("open Google Calendar channel token: %w", err)
+			return fmt.Errorf("open Google channel token: %w", err)
 		}
 		defer wipe(channelToken)
-		channel, err := s.Google.WatchCalendar(ctx, token, google.CalendarWatchRequest{
-			CalendarID: watch.CalendarID, ChannelID: channelID, Token: string(channelToken), Expiration: expiresAt,
-			Address: s.PublicURL + "/v1/webhooks/" + route.OpaqueRoute,
-		})
-		if err != nil {
-			return fmt.Errorf("renew Google Calendar watch: %w", err)
+		address := s.PublicURL + "/v1/webhooks/" + route.OpaqueRoute
+		var channel google.Channel
+		if watch.Kind == google.WatchKindDrive {
+			channel, err = s.Google.WatchDrive(ctx, token, google.DriveWatchRequest{
+				ChannelID: channelID, Token: string(channelToken), Expiration: expiresAt, Address: address,
+			})
+		} else {
+			channel, err = s.Google.WatchCalendar(ctx, token, google.CalendarWatchRequest{
+				CalendarID: watch.CalendarID, ChannelID: channelID, Token: string(channelToken), Expiration: expiresAt,
+				Address: address,
+			})
 		}
-		next = google.WatchState{Kind: google.WatchKindCalendar, ChannelID: channel.ID,
+		if err != nil {
+			return fmt.Errorf("renew Google watch: %w", err)
+		}
+		next = google.WatchState{Kind: watch.Kind, ChannelID: channel.ID,
 			ResourceID: channel.ResourceID, CalendarID: channel.CalendarID, ExpiresAt: channel.Expiration.UTC()}
 		if next.ExpiresAt.IsZero() {
 			next.ExpiresAt = expiresAt.UTC()
@@ -376,7 +395,8 @@ func googleTTL(definition Definition) time.Duration {
 func isGoogleTrigger(connection domain.Connection, definition Definition) bool {
 	return connection.Provider == "google" && definition.Provider == "google" &&
 		definition.RouteMode == domain.WebhookRoutePerConnection &&
-		(definition.GoogleWatch == google.WatchKindCalendar || definition.GoogleWatch == google.WatchKindGmail)
+		(definition.GoogleWatch == google.WatchKindCalendar || definition.GoogleWatch == google.WatchKindGmail ||
+			definition.GoogleWatch == google.WatchKindDrive)
 }
 
 func isActiveGoogleConnection(connection domain.Connection) bool {

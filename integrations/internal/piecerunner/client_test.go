@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
@@ -64,6 +65,26 @@ func TestRunActionSendsOnlyOneConnectionAndApprovedInput(t *testing.T) {
 	}
 	if string(result.Output) != `{"ok":true,"channel":"C123","ts":"171.2"}` {
 		t.Fatalf("result = %s", result.Output)
+	}
+}
+
+func TestRunActionForwardsFilesBroker(t *testing.T) {
+	t.Parallel()
+	lambdaClient := &fakeLambda{outputs: [][]byte{[]byte(`{"ok":true,"result":{"output":{"ok":true}}}`)}}
+	client := Client{Lambda: lambdaClient, FunctionName: "runner"}
+	_, err := client.RunAction(context.Background(), piece.ActionInvocation{
+		InvocationID: "act-1", OrganizationID: "org-1", PieceName: "piece", PieceVersion: "1",
+		ActionName: "uploadFile", Auth: json.RawMessage(`{"access_token":"one-token"}`),
+		Props:       json.RawMessage(`{"file":{"file_id":"file_abc"}}`),
+		FilesBroker: &piece.FilesBroker{URL: "https://connect.example/v1/internal/piece-files", Token: "fbk_1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lambdaClient.requests) != 1 || lambdaClient.requests[0].FilesBroker == nil ||
+		lambdaClient.requests[0].FilesBroker.URL != "https://connect.example/v1/internal/piece-files" ||
+		lambdaClient.requests[0].FilesBroker.Token != "fbk_1" {
+		t.Fatalf("request = %+v", lambdaClient.requests)
 	}
 }
 
@@ -136,10 +157,11 @@ func TestRunnerErrorExposesStableCodeOnly(t *testing.T) {
 		InvocationID: "i", Route: domain.WebhookRoute{OrganizationID: "o", PieceName: "p", PieceVersion: "1"},
 	})
 	var runnerError RunnerError
-	if !errors.As(err, &runnerError) || runnerError.Code != "piece_not_allowed" {
-		t.Fatalf("error = %v", err)
+	if !errors.As(err, &runnerError) || runnerError.Code != "piece_not_allowed" ||
+		runnerError.Message != "piece and exact version are not allowed" {
+		t.Fatalf("error = %+v / %v", runnerError, err)
 	}
-	if err.Error() != "piece runner failed: piece_not_allowed" {
+	if err.Error() != "piece runner failed: piece_not_allowed" || strings.Contains(err.Error(), "sensitive") {
 		t.Fatalf("error leaked upstream message: %q", err.Error())
 	}
 }

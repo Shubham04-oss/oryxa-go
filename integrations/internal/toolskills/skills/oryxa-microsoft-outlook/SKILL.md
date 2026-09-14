@@ -14,16 +14,18 @@ request takes precedence over this guidance.
 - Use the Oryxa integration tool, not Microsoft Graph or Activepieces
   directly. Oryxa owns tenant validation, refresh rotation, Graph subscription
   state, idempotency, and credential-free events.
-- Microsoft uses one provider-level member grant across Outlook, Calendar, and
-  OneDrive. `available` means the member must authorize; `connected` supplies
+- Microsoft uses one provider-level member grant across Outlook, Calendar,
+  OneDrive, Teams, and SharePoint. `available` means the member must authorize; `connected` supplies
   the shared `connection_id` and safe tenant/account identity.
 - Never request or pass access tokens, refresh tokens, Entra client secrets,
   Graph `clientState`, subscription secrets, or raw webhook bodies.
 - Mail writes are external side effects. Preserve the user's recipients and
   content, and use one stable 8-200 character idempotency key. Never change the
   key merely because the provider outcome is uncertain.
-- `attachments` must be empty or omitted on every mail action. File upload,
-  download, and approval waitpoints are not approved.
+- `attachments` are Oryxa `{file_id}` refs, max 5. File upload/download use the
+  same refs. Host-restricted `custom-api-call` may use `/me/...` or
+  `https://graph.microsoft.com/...` only. Approval waitpoints are not approved.
+  File actions require `FILES_URL` or they fail with `files_unavailable`.
 
 ## Approved actions
 
@@ -33,7 +35,8 @@ Input `props` requires non-empty `recipients`, non-blank `subject`,
 `bodyFormat` (`text|html`), and `body`. Optional `ccRecipients` and
 `bccRecipients` are address arrays.
 
-The connection needs `Mail.Send`. Success returns only
+The connection needs `Mail.Send`. Optional `attachments` are
+`[{"file_id":"file_..."}]`. Success returns only
 `{"accepted":true}` and publishes
 `integrations.microsoft.outlook-email-accepted.v1`. Microsoft Graph's sendMail
 operation does not provide a message ID here; report acceptance, not delivery
@@ -90,6 +93,21 @@ and `top` (1-100; omit for the piece default). The connection needs
 items with id, subject, and received time, plus `found` and `truncated`.
 Bodies, senders, recipients, attachments, and next-page URLs are not returned.
 This is a lookup: it does not publish a domain event.
+
+### `custom-api-call`
+
+Input `props` requires `url` (`/me` or `https://graph.microsoft.com/...`) and
+`method`. Optional `headers`, `query`, `body_type` (`none|json|form_data|raw`),
+and `body`. Do not send `Authorization`. The connection needs `User.Read`.
+Returns HTTP `status` plus `body` only; headers and tokens are stripped. This
+is a lookup: it does not publish a domain event.
+
+### `download-attachment`
+
+Input `props` requires `messageId`. The connection needs `Mail.Read`. Success
+returns up to 5 `{name, file_id}` records for stored attachments. Bytes and
+Graph `contentBytes` are not returned. This is a lookup: it does not publish a
+domain event.
 
 ## Approved trigger: `new-email`
 

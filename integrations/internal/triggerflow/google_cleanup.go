@@ -90,12 +90,13 @@ func (w GoogleCleanupWorker) RunOnce(ctx context.Context) error {
 
 func (w GoogleCleanupWorker) cleanup(ctx context.Context, job domain.GoogleCleanupJob) error {
 	if job.OrganizationID == "" || job.TriggerID == "" || job.ConnectionID == "" || job.ProfileID == "" ||
-		(job.TriggerName != "new-email" && job.TriggerName != "calendar-event-changed") ||
+		(job.TriggerName != "new-email" && job.TriggerName != "calendar-event-changed" &&
+			job.TriggerName != "drive-file-changed") ||
 		job.Connection.ID != job.ConnectionID || job.Connection.OrganizationID != job.OrganizationID ||
 		job.Connection.ProfileID != job.ProfileID || job.Connection.Provider != "google" {
 		return errors.New("invalid Google cleanup job")
 	}
-	if job.TriggerName == "calendar-event-changed" && w.Routes != nil {
+	if (job.TriggerName == "calendar-event-changed" || job.TriggerName == "drive-file-changed") && w.Routes != nil {
 		route, err := w.Routes.ActiveWebhookRouteForConnection(ctx, job.OrganizationID, job.ProfileID, job.TriggerName, job.ConnectionID)
 		if err == nil {
 			if err := w.Routes.DeactivateWebhookRoute(ctx, route.OpaqueRoute); err != nil {

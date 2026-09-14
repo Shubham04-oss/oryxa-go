@@ -586,6 +586,25 @@ type googleWatches struct {
 	routeCreated    *bool
 }
 
+func (s *googleWatches) WatchDrive(_ context.Context, _ string, request google.DriveWatchRequest) (google.Channel, error) {
+	if s.routeCreated != nil && !*s.routeCreated {
+		return google.Channel{}, errors.New("route was not persisted before Google Drive watch")
+	}
+	if s.createErr != nil {
+		return google.Channel{}, s.createErr
+	}
+	channel := s.channel
+	if channel.ID == "" {
+		channel.ID = request.ChannelID
+	}
+	if channel.ResourceID == "" {
+		channel.ResourceID = "resource-1"
+	}
+	if channel.Expiration.IsZero() {
+		channel.Expiration = request.Expiration
+	}
+	return channel, nil
+}
 func (s *googleWatches) WatchCalendar(_ context.Context, _ string, request google.CalendarWatchRequest) (google.Channel, error) {
 	s.calendarRequest = request
 	if s.routeCreated != nil && !*s.routeCreated {

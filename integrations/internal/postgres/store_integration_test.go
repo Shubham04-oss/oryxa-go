@@ -521,3 +521,90 @@ func TestStorePersistsGoogleCleanupOnDisconnect(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStoreAuthLifecycleClosesOpenGrants(t *testing.T) {
+	databaseURL := os.Getenv("INTEGRATIONS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("INTEGRATIONS_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	suffix := time.Now().UTC().Format("20060102150405.000000000")
+	organizationID := "it-auth-org-" + suffix
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	defer func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_outbox WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_connections WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM integrations_oauth_apps WHERE organization_id = $1`, organizationID)
+	}()
+
+	profile := domain.OAuthAppProfile{
+		ID: "it-auth-app-" + suffix, OrganizationID: organizationID, Provider: "slack",
+		PieceName: "@activepieces/piece-slack", PieceVersion: "0.11.4", Mode: domain.OAuthAppModeBYOC,
+		ClientID: "client", EncryptedSecret: testSealed(1), Scopes: []string{"chat:write"}, Status: domain.OAuthAppStatusActive,
+		CreatedBy: "admin", CreatedAt: now, UpdatedAt: now, CredentialRevision: 1,
+	}
+	if err := store.CreateOAuthApp(ctx, profile); err != nil {
+		t.Fatal(err)
+	}
+	active := domain.Connection{
+		ID: "it-auth-con-active-" + suffix, OrganizationID: organizationID, MemberID: "member-a", ProfileID: profile.ID,
+		Provider: "slack", PieceName: profile.PieceName, PieceVersion: profile.PieceVersion,
+		Identity: domain.ProviderIdentity{SubjectID: "U1", TenantID: "T1"}, GrantedScopes: []string{"chat:write"},
+		EncryptedCredentials: testSealed(2), Status: domain.ConnectionStatusActive, CreatedAt: now, UpdatedAt: now, Version: 1,
+	}
+	reauth := domain.Connection{
+		ID: "it-auth-con-reauth-" + suffix, OrganizationID: organizationID, MemberID: "member-b", ProfileID: profile.ID,
+		Provider: "slack", PieceName: profile.PieceName, PieceVersion: profile.PieceVersion,
+		Identity: domain.ProviderIdentity{SubjectID: "U2", TenantID: "T1"}, GrantedScopes: []string{"chat:write"},
+		EncryptedCredentials: testSealed(3), Status: domain.ConnectionStatusReauthorizationRequired, CreatedAt: now, UpdatedAt: now, Version: 1,
+	}
+	if err := store.CreateConnectionWithEvent(ctx, active, domain.Event{EventID: "connected-a-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionConnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionConnected{ConnectionID: active.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateConnectionWithEvent(ctx, reauth, domain.Event{EventID: "connected-b-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionConnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionConnected{ConnectionID: reauth.ID}}); err != nil {
+		t.Fatal(err)
+	}
+
+	open, err := store.OpenConnections(ctx, organizationID, "")
+	if err != nil || len(open) != 2 {
+		t.Fatalf("open connections = %#v/%v", open, err)
+	}
+	memberA, err := store.OpenConnections(ctx, organizationID, "member-a")
+	if err != nil || len(memberA) != 1 || memberA[0].ID != active.ID || memberA[0].EncryptedCredentials.Version != 0 {
+		t.Fatalf("member connections = %#v/%v", memberA, err)
+	}
+	apps, err := store.ActiveOAuthApps(ctx, organizationID)
+	if err != nil || len(apps) != 1 || apps[0].ID != profile.ID || apps[0].EncryptedSecret.Version != 0 {
+		t.Fatalf("oauth apps = %#v/%v", apps, err)
+	}
+
+	if err := store.DisconnectOpenConnectionWithEvent(ctx, organizationID, "member-b", reauth.ID, now, domain.Event{EventID: "disconnected-reauth-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionDisconnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionDisconnected{ConnectionID: reauth.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DisconnectOpenConnectionWithEvent(ctx, organizationID, "member-b", reauth.ID, now, domain.Event{EventID: "disconnected-reauth-again-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.ConnectionDisconnectedDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.ConnectionDisconnected{ConnectionID: reauth.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := store.OpenConnections(ctx, organizationID, "")
+	if err != nil || len(remaining) != 1 || remaining[0].ID != active.ID {
+		t.Fatalf("remaining open = %#v/%v", remaining, err)
+	}
+	if err := store.DisableOAuthAppWithEvent(ctx, organizationID, profile.ID, now, domain.Event{EventID: "app-disabled-" + suffix, Source: integrationevents.Source, DetailType: integrationevents.OAuthAppDisabledDetailType, Version: 1, OrganizationID: organizationID, OccurredAt: now, Data: integrationevents.OAuthAppDisabled{ProfileID: profile.ID}}); err != nil {
+		t.Fatal(err)
+	}
+	apps, err = store.ActiveOAuthApps(ctx, organizationID)
+	if err != nil || len(apps) != 0 {
+		t.Fatalf("oauth apps after disable = %#v/%v", apps, err)
+	}
+}

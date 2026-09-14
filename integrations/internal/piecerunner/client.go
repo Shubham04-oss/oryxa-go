@@ -21,22 +21,22 @@ type Client struct {
 	FunctionName string
 }
 
-type RunnerError struct {
-	Code string
-}
-
-func (e RunnerError) Error() string { return "piece runner failed: " + e.Code }
+type RunnerError = piece.RunnerError
 
 func (c Client) RunAction(ctx context.Context, invocation piece.ActionInvocation) (piece.ActionResult, error) {
 	if invocation.ActionName == "" {
 		return piece.ActionResult{}, errors.New("action name is required")
 	}
-	response, err := c.invoke(ctx, runnerRequest{
+	request := runnerRequest{
 		InvocationID: invocation.InvocationID, OrganizationID: invocation.OrganizationID,
 		PieceName: invocation.PieceName, PieceVersion: invocation.PieceVersion,
 		Operation: "action.run", ActionName: invocation.ActionName,
 		Auth: invocation.Auth, Props: invocation.Props, PublicURL: invocation.PublicURL,
-	})
+	}
+	if invocation.FilesBroker != nil && invocation.FilesBroker.URL != "" && invocation.FilesBroker.Token != "" {
+		request.FilesBroker = &filesBroker{URL: invocation.FilesBroker.URL, Token: invocation.FilesBroker.Token}
+	}
+	response, err := c.invoke(ctx, request)
 	if err != nil {
 		return piece.ActionResult{}, err
 	}
@@ -159,11 +159,7 @@ func (c Client) invoke(ctx context.Context, request runnerRequest) (runnerRespon
 		return runnerResponse{}, errors.New("piece runner Lambda returned invalid JSON")
 	}
 	if !response.OK {
-		code := response.Error.Code
-		if code == "" {
-			code = "piece_failed"
-		}
-		return runnerResponse{}, RunnerError{Code: code}
+		return runnerResponse{}, piece.StableRunnerError(response.Error.Code, response.Error.Message)
 	}
 	return response, nil
 }
@@ -183,6 +179,12 @@ type runnerRequest struct {
 	InitialStore    map[string]any  `json:"initialStore,omitempty"`
 	WebhookSecret   string          `json:"webhookSecret,omitempty"`
 	ProviderPayload webhookPayload  `json:"providerPayload"`
+	FilesBroker     *filesBroker    `json:"filesBroker,omitempty"`
+}
+
+type filesBroker struct {
+	URL   string `json:"url"`
+	Token string `json:"token"`
 }
 
 type webhookPayload struct {
@@ -201,7 +203,8 @@ type runnerResponse struct {
 		Listeners      []piece.Listener      `json:"listeners"`
 	} `json:"result"`
 	Error struct {
-		Code string `json:"code"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
 	} `json:"error"`
 }
 

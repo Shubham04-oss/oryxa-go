@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,52 @@ func TestWatchGmailAndStopFollowGoogleContract(t *testing.T) {
 	}
 }
 
+func TestWatchDriveUsesStartPageTokenAndDriveStop(t *testing.T) {
+	t.Parallel()
+	var calls []string
+	expires := time.Now().UTC().Add(12 * time.Hour)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls = append(calls, request.Method+" "+request.URL.Path)
+		switch {
+		case request.Method == http.MethodGet && request.URL.Path == "/drive/v3/changes/startPageToken":
+			writer.Header().Set("content-type", "application/json")
+			_, _ = writer.Write([]byte(`{"startPageToken":"token-1"}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/drive/v3/changes/watch":
+			if request.URL.Query().Get("pageToken") != "token-1" || request.Header.Get("authorization") != "Bearer token" {
+				t.Fatalf("watch query/auth = %s %s", request.URL.RawQuery, request.Header.Get("authorization"))
+			}
+			body, _ := io.ReadAll(request.Body)
+			if !strings.Contains(string(body), `"id":"d-channel"`) || !strings.Contains(string(body), `"type":"web_hook"`) {
+				t.Fatalf("watch body = %s", body)
+			}
+			writer.Header().Set("content-type", "application/json")
+			_, _ = writer.Write([]byte(`{"id":"d-channel","resourceId":"resource-1","expiration":"` +
+				strconv.FormatInt(expires.UnixMilli(), 10) + `"}`))
+		case request.Method == http.MethodPost && request.URL.Path == "/drive/v3/channels/stop":
+			writer.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("path = %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+	client := Client{HTTPClient: server.Client(), BaseURL: server.URL}
+	channel, err := client.WatchDrive(context.Background(), "token", DriveWatchRequest{
+		ChannelID: "d-channel", Address: "https://connect.example.com/v1/webhooks/opaque",
+		Token: "abcdefghijklmnopqrstuvwxyz012345", Expiration: expires,
+	})
+	if err != nil || channel.ID != "d-channel" || channel.ResourceID != "resource-1" {
+		t.Fatalf("channel/error = %+v / %v", channel, err)
+	}
+	if err := client.StopChannel(context.Background(), "token", WatchState{
+		Kind: WatchKindDrive, ChannelID: "d-channel", ResourceID: "resource-1", ExpiresAt: expires,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(calls, ",") != "GET /drive/v3/changes/startPageToken,POST /drive/v3/changes/watch,POST /drive/v3/channels/stop" {
+		t.Fatalf("calls = %v", calls)
+	}
+}
+
 func TestWatchRejectsUnsafeInputsAndClassifiesAuthorization(t *testing.T) {
 	t.Parallel()
 	client := Client{}
@@ -89,6 +136,12 @@ func TestWatchRejectsUnsafeInputsAndClassifiesAuthorization(t *testing.T) {
 	}
 	if _, err := client.WatchGmail(context.Background(), "token", GmailWatchRequest{TopicName: "not-a-topic"}); !errors.Is(err, ErrInvalidWatch) {
 		t.Fatalf("unsafe gmail topic error = %v", err)
+	}
+	if _, err := client.WatchDrive(context.Background(), "token", DriveWatchRequest{
+		ChannelID: "d-channel", Address: "https://connect.example.com/v1/webhooks/opaque",
+		Token: "abcdefghijklmnopqrstuvwxyz012345", Expiration: time.Now().Add(48 * time.Hour),
+	}); !errors.Is(err, ErrInvalidWatch) {
+		t.Fatalf("overlong Drive watch error = %v", err)
 	}
 	if !IsAuthorizationRejection(RejectionError{StatusCode: http.StatusUnauthorized}) ||
 		IsAuthorizationRejection(RejectionError{StatusCode: http.StatusBadRequest}) {

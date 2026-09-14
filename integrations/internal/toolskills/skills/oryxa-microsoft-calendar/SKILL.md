@@ -12,8 +12,8 @@ precedence over this guidance.
 ## Tool-call contract
 
 - Use the Oryxa integration tool, not Graph APIs or Activepieces directly.
-- Microsoft uses one provider-level member grant for Outlook, Calendar, and
-  OneDrive. Obtain the member-owned `connection_id` from `connected` catalog
+- Microsoft uses one provider-level member grant for Outlook, Calendar,
+  OneDrive, Teams, and SharePoint. Obtain the member-owned `connection_id` from `connected` catalog
   state; `available` means authorization is required.
 - Never request or pass Microsoft credentials, Graph `clientState`, or
   subscription identifiers from untrusted input.

@@ -1,6 +1,7 @@
 package actionflow
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -95,6 +96,18 @@ func mapGitHub(request MapRequest) (MappedResult, error) {
 		return mapGitHubMilestoneMutation(request)
 	case "check-repository-starred":
 		return mapGitHubStarCheck(request)
+	case "get-file-content":
+		return mapGitHubFileContent(request)
+	case "create-or-update-file", "delete-file":
+		return mapGitHubFileMutation(request)
+	case "search-code":
+		return mapGitHubSearch(request, githubProjectCode)
+	case "create-gist":
+		return mapGitHubGistCreated(request)
+	case "raw-graphql-query", "custom-api-call":
+		return mapProviderHTTPCall(request)
+	case "dispatch-workflow":
+		return mapGitHubWorkflowDispatched(request)
 	default:
 		return MappedResult{}, fmt.Errorf("%w: unsupported GitHub action", ErrPieceOutputInvalid)
 	}
@@ -672,6 +685,267 @@ func mapGitHubStarCheck(request MapRequest) (MappedResult, error) {
 		return MappedResult{}, ErrPieceOutputInvalid
 	}
 	return MappedResult{SafeResult: result}, nil
+}
+
+func mapGitHubFileContent(request MapRequest) (MappedResult, error) {
+	trimmed := bytesTrim(request.Output)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var items []json.RawMessage
+		if json.Unmarshal(request.Output, &items) != nil || items == nil {
+			return MappedResult{}, ErrPieceOutputInvalid
+		}
+		truncated := len(items) > 100
+		if truncated {
+			items = items[:100]
+		}
+		safe := githubProjectMany(items, githubProjectContentEntry)
+		if safe == nil {
+			return MappedResult{}, ErrPieceOutputInvalid
+		}
+		result, err := json.Marshal(struct {
+			Items     []any `json:"items"`
+			Count     int   `json:"count"`
+			Truncated bool  `json:"truncated"`
+		}{Items: safe, Count: len(safe), Truncated: truncated})
+		if err != nil {
+			return MappedResult{}, ErrPieceOutputInvalid
+		}
+		return MappedResult{SafeResult: result}, nil
+	}
+	mapped, err := githubProjectContentEntry(request.Output)
+	if err != nil {
+		return MappedResult{}, err
+	}
+	result, err := json.Marshal(mapped)
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result}, nil
+}
+
+func mapGitHubFileMutation(request MapRequest) (MappedResult, error) {
+	owner, repo, _, err := githubProps(request.Props)
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	var props struct {
+		Path string `json:"path"`
+	}
+	_ = json.Unmarshal(request.Props, &props)
+	var output struct {
+		Content *struct {
+			Path    string `json:"path"`
+			SHA     string `json:"sha"`
+			Size    int64  `json:"size"`
+			HTMLURL string `json:"html_url"`
+			Type    string `json:"type"`
+		} `json:"content"`
+		Commit struct {
+			SHA     string `json:"sha"`
+			HTMLURL string `json:"html_url"`
+		} `json:"commit"`
+	}
+	if json.Unmarshal(request.Output, &output) != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	path := props.Path
+	sha := output.Commit.SHA
+	url := output.Commit.HTMLURL
+	size := int64(0)
+	kind := ""
+	if output.Content != nil {
+		if output.Content.Path != "" {
+			path = output.Content.Path
+		}
+		if output.Content.SHA != "" {
+			sha = output.Content.SHA
+		}
+		if output.Content.HTMLURL != "" {
+			url = output.Content.HTMLURL
+		}
+		size = output.Content.Size
+		kind = output.Content.Type
+	}
+	if path == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	result, err := json.Marshal(struct {
+		Path string `json:"path"`
+		SHA  string `json:"sha,omitempty"`
+		Size int64  `json:"size,omitempty"`
+		URL  string `json:"url,omitempty"`
+		Type string `json:"type,omitempty"`
+	}{Path: path, SHA: sha, Size: size, URL: url, Type: kind})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result, DetailType: integrationevents.GitHubFileMutatedDetailType,
+		Data: integrationevents.GitHubFileMutated{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID,
+			Repository: owner + "/" + repo, Path: path, SHA: sha, URL: url,
+			RequestedBy: request.Execution.MemberID, MutatedAt: request.OccurredAt,
+		}}, nil
+}
+
+func mapGitHubGistCreated(request MapRequest) (MappedResult, error) {
+	payload := unwrapHTTPBody(request.Output)
+	var output struct {
+		ID      string `json:"id"`
+		HTMLURL string `json:"html_url"`
+		Public  bool   `json:"public"`
+		Files   map[string]struct {
+			Filename string `json:"filename"`
+			Type     string `json:"type"`
+			Language string `json:"language"`
+			Size     int64  `json:"size"`
+		} `json:"files"`
+	}
+	if json.Unmarshal(payload, &output) != nil || output.ID == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	files := make(map[string]any, len(output.Files))
+	for name, file := range output.Files {
+		filename := file.Filename
+		if filename == "" {
+			filename = name
+		}
+		files[name] = struct {
+			Filename string `json:"filename"`
+			Type     string `json:"type,omitempty"`
+			Language string `json:"language,omitempty"`
+			Size     int64  `json:"size,omitempty"`
+		}{Filename: filename, Type: file.Type, Language: file.Language, Size: file.Size}
+	}
+	result, err := json.Marshal(struct {
+		ID     string         `json:"id"`
+		URL    string         `json:"url,omitempty"`
+		Public bool           `json:"public"`
+		Files  map[string]any `json:"files,omitempty"`
+	}{ID: output.ID, URL: output.HTMLURL, Public: output.Public, Files: files})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result, DetailType: integrationevents.GitHubGistCreatedDetailType,
+		Data: integrationevents.GitHubGistCreated{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, GistID: output.ID,
+			URL: output.HTMLURL, RequestedBy: request.Execution.MemberID, CreatedAt: request.OccurredAt,
+		}}, nil
+}
+
+func mapGitHubWorkflowDispatched(request MapRequest) (MappedResult, error) {
+	payload := unwrapHTTPBody(request.Output)
+	var output struct {
+		ID           int64  `json:"id"`
+		Status       string `json:"status"`
+		Conclusion   string `json:"conclusion"`
+		HTMLURL      string `json:"html_url"`
+		DisplayTitle string `json:"display_title"`
+		Repository   struct {
+			FullName string `json:"full_name"`
+		} `json:"repository"`
+	}
+	if json.Unmarshal(payload, &output) != nil || output.ID < 1 {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	var props struct {
+		Owner      string `json:"owner"`
+		Repo       string `json:"repo"`
+		WorkflowID string `json:"workflow_id"`
+		Ref        string `json:"ref"`
+	}
+	_ = json.Unmarshal(request.Props, &props)
+	repository := output.Repository.FullName
+	if repository == "" && props.Owner != "" && props.Repo != "" {
+		repository = props.Owner + "/" + props.Repo
+	}
+	if repository == "" || props.WorkflowID == "" || props.Ref == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	result, err := json.Marshal(struct {
+		ID         int64  `json:"id"`
+		Status     string `json:"status,omitempty"`
+		Conclusion string `json:"conclusion,omitempty"`
+		URL        string `json:"url,omitempty"`
+		Repository string `json:"repository"`
+		WorkflowID string `json:"workflow_id"`
+		Ref        string `json:"ref"`
+	}{ID: output.ID, Status: output.Status, Conclusion: output.Conclusion, URL: output.HTMLURL,
+		Repository: repository, WorkflowID: props.WorkflowID, Ref: props.Ref})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result, DetailType: integrationevents.GitHubWorkflowDispatchedDetailType,
+		Data: integrationevents.GitHubWorkflowDispatched{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID,
+			Repository: repository, WorkflowID: props.WorkflowID, Ref: props.Ref, RunID: output.ID,
+			URL: output.HTMLURL, RequestedBy: request.Execution.MemberID, DispatchedAt: request.OccurredAt,
+		}}, nil
+}
+
+func githubProjectContentEntry(raw json.RawMessage) (any, error) {
+	var output struct {
+		Name     string `json:"name"`
+		Path     string `json:"path"`
+		SHA      string `json:"sha"`
+		Size     int64  `json:"size"`
+		HTMLURL  string `json:"html_url"`
+		Type     string `json:"type"`
+		FileID   string `json:"file_id"`
+		Filename string `json:"filename"`
+		Content  string `json:"content"`
+	}
+	if json.Unmarshal(raw, &output) != nil || (output.Path == "" && output.Name == "") {
+		return nil, ErrPieceOutputInvalid
+	}
+	if output.Content != "" {
+		return nil, ErrPieceOutputInvalid
+	}
+	path := output.Path
+	if path == "" {
+		path = output.Name
+	}
+	filename := output.Filename
+	if filename == "" {
+		filename = output.Name
+	}
+	return struct {
+		Path     string `json:"path"`
+		SHA      string `json:"sha,omitempty"`
+		Size     int64  `json:"size,omitempty"`
+		URL      string `json:"url,omitempty"`
+		Type     string `json:"type,omitempty"`
+		FileID   string `json:"file_id,omitempty"`
+		Filename string `json:"filename,omitempty"`
+	}{Path: path, SHA: output.SHA, Size: output.Size, URL: output.HTMLURL, Type: output.Type,
+		FileID: output.FileID, Filename: filename}, nil
+}
+
+func githubProjectCode(raw json.RawMessage) (any, error) {
+	var output struct {
+		Name       string `json:"name"`
+		Path       string `json:"path"`
+		SHA        string `json:"sha"`
+		HTMLURL    string `json:"html_url"`
+		Repository struct {
+			FullName string `json:"full_name"`
+			HTMLURL  string `json:"html_url"`
+		} `json:"repository"`
+	}
+	if json.Unmarshal(raw, &output) != nil || output.Path == "" {
+		return nil, ErrPieceOutputInvalid
+	}
+	return struct {
+		Name       string `json:"name,omitempty"`
+		Path       string `json:"path"`
+		SHA        string `json:"sha,omitempty"`
+		URL        string `json:"url,omitempty"`
+		Repository string `json:"repository,omitempty"`
+	}{Name: output.Name, Path: output.Path, SHA: output.SHA, URL: output.HTMLURL,
+		Repository: output.Repository.FullName}, nil
+}
+
+func bytesTrim(raw json.RawMessage) json.RawMessage {
+	return bytes.TrimSpace(raw)
 }
 
 func mapGitHubListed(request MapRequest, project func(json.RawMessage) (any, error)) (MappedResult, error) {

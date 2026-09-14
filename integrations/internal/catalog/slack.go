@@ -25,7 +25,7 @@ var slackUserScopes = []string{
 var slackAllowedBotScopes = []string{
 	"channels:history", "channels:join", "channels:manage", "channels:read",
 	"channels:write.invites", "chat:write", "chat:write.customize",
-	"emoji:read", "files:read", "groups:history", "groups:read", "groups:write",
+	"emoji:read", "files:read", "files:write", "groups:history", "groups:read", "groups:write",
 	"groups:write.invites", "im:history", "im:read", "im:write", "links:read",
 	"links:write", "mpim:history", "mpim:read", "mpim:write", "reactions:read",
 	"reactions:write", "users.profile:read", "users:read", "users:read.email",
@@ -92,6 +92,15 @@ var slackActions = map[string]slackActionSpec{
 	"update-user-group-members": {"update_group_users", []string{"usergroups:write"}, validateSlackUpdateGroupUsers},
 	"list-custom-emoji":         {"slack_list_custom_emoji", []string{"emoji:read"}, validateSlackEmpty},
 	"list-files":                {"slack_list_files", []string{"files:read"}, validateSlackListFiles},
+	"upload-file":               {"uploadFile", []string{"files:write"}, validateSlackUploadFile},
+	"get-file":                  {"slack_get_file", []string{"files:read"}, validateSlackGetFile},
+	"custom-api-call":           {"custom_api_call", []string{"users:read"}, validateSlackCustomAPICall},
+}
+
+var slackNeedsFiles = map[string]bool{"upload-file": true, "get-file": true}
+
+var slackPrepare = map[string]func(json.RawMessage) (json.RawMessage, error){
+	"custom-api-call": prepareSlackCustomAPICall,
 }
 
 var slackTriggers = map[string]slackTriggerSpec{
@@ -126,7 +135,7 @@ func slackActionDefinition(actionName string) (actionflow.Definition, bool) {
 	return actionflow.Definition{
 		Provider: "slack", PieceName: SlackPieceName, PieceVersion: SlackPieceVersion,
 		ActionName: actionName, RunnerActionName: spec.Runner, RequiredScopes: append([]string(nil), spec.Scopes...),
-		ValidateProps: spec.Validate,
+		ValidateProps: spec.Validate, PrepareProps: slackPrepare[actionName], NeedsFiles: slackNeedsFiles[actionName],
 	}, true
 }
 
@@ -688,6 +697,72 @@ func validateSlackListFiles(raw json.RawMessage) error {
 		return errors.New("invalid Slack list-files properties")
 	}
 	return nil
+}
+
+func validateSlackUploadFile(raw json.RawMessage) error {
+	var props struct {
+		File     fileRef `json:"file"`
+		Title    string  `json:"title"`
+		Filename string  `json:"filename"`
+		Channel  string  `json:"channel"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !oryxaFileID(props.File.FileID) ||
+		len(props.Title) > 255 || strings.ContainsAny(props.Title, "\r\n") ||
+		len(props.Filename) > 255 || strings.ContainsAny(props.Filename, "\r\n/\\") ||
+		(props.Channel != "" && !boundedIdentifier(props.Channel, 100)) {
+		return errors.New("invalid Slack upload-file properties")
+	}
+	return nil
+}
+
+func validateSlackGetFile(raw json.RawMessage) error {
+	var props struct {
+		FileID string `json:"fileId"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !boundedIdentifier(props.FileID, 100) {
+		return errors.New("invalid Slack get-file properties")
+	}
+	return nil
+}
+
+func validateSlackCustomAPICall(raw json.RawMessage) error {
+	var props struct {
+		URL          string          `json:"url"`
+		Method       string          `json:"method"`
+		Headers      map[string]any  `json:"headers"`
+		Query        map[string]any  `json:"query"`
+		BodyType     string          `json:"body_type"`
+		Body         json.RawMessage `json:"body"`
+		UseUserToken bool            `json:"use_user_token"`
+	}
+	if err := decodeStrict(raw, &props); err != nil || !customAPIURL(props.URL, "slack.com", "www.slack.com", "api.slack.com") ||
+		!oneOf(strings.ToUpper(props.Method), customAPIMethods...) ||
+		!customAPIHeaders(props.Headers) || !customAPIObject(props.Query) ||
+		(props.BodyType != "" && !oneOf(props.BodyType, "none", "json", "form_data", "raw")) ||
+		(len(props.Body) > 64*1024) {
+		return errors.New("invalid Slack custom API call properties")
+	}
+	if (props.BodyType == "" || props.BodyType == "none") && len(props.Body) > 0 && string(props.Body) != "null" {
+		return errors.New("invalid Slack custom API call properties")
+	}
+	return nil
+}
+
+func prepareSlackCustomAPICall(raw json.RawMessage) (json.RawMessage, error) {
+	prepared, err := prepareCustomAPICall(raw)
+	if err != nil {
+		return nil, err
+	}
+	var extra struct {
+		UseUserToken bool `json:"use_user_token"`
+	}
+	_ = json.Unmarshal(raw, &extra)
+	var object map[string]any
+	if err := json.Unmarshal(prepared, &object); err != nil {
+		return nil, err
+	}
+	object["useUserToken"] = extra.UseUserToken
+	return json.Marshal(object)
 }
 
 func validateSlackIgnoreBots(raw json.RawMessage) error {

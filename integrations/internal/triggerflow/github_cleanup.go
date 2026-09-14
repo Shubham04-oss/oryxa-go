@@ -89,7 +89,9 @@ func (w GitHubCleanupWorker) RunOnce(ctx context.Context) error {
 
 func (w GitHubCleanupWorker) cleanup(ctx context.Context, job domain.GitHubCleanupJob) error {
 	if job.OrganizationID == "" || job.TriggerID == "" || job.ConnectionID == "" || job.ProfileID == "" ||
-		(job.TriggerName != "new-issue" && job.TriggerName != "new-pull-request") ||
+		(job.TriggerName != "new-issue" && job.TriggerName != "new-pull-request" &&
+			job.TriggerName != "new-star" && job.TriggerName != "new-push" &&
+			job.TriggerName != "new-release" && job.TriggerName != "new-review") ||
 		job.Connection.ID != job.ConnectionID || job.Connection.OrganizationID != job.OrganizationID ||
 		job.Connection.ProfileID != job.ProfileID || job.Connection.Provider != "github" {
 		return errors.New("invalid GitHub cleanup job")

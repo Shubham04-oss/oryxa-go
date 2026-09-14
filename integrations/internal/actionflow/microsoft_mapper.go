@@ -38,9 +38,22 @@ func mapMicrosoft(request MapRequest) (MappedResult, error) {
 		return mapMicrosoftOneDriveFiles(request)
 	case "copy-file":
 		return mapMicrosoftCopiedFile(request)
-	default:
-		return MappedResult{}, fmt.Errorf("%w: unsupported Microsoft action", ErrPieceOutputInvalid)
+	case "upload-onedrive-file":
+		return mapMicrosoftCreatedFile(request)
+	case "download-file":
+		return mapMicrosoftDownloadedFile(request)
+	case "download-attachment":
+		return mapMicrosoftDownloadedAttachments(request)
+	case "custom-api-call":
+		return mapProviderHTTPCall(request)
 	}
+	if result, ok, err := mapMicrosoftTeamsAction(request); ok {
+		return result, err
+	}
+	if result, ok, err := mapMicrosoftSharePointAction(request); ok {
+		return result, err
+	}
+	return MappedResult{}, fmt.Errorf("%w: unsupported Microsoft action", ErrPieceOutputInvalid)
 }
 
 func mapMicrosoftSentEmail(request MapRequest) (MappedResult, error) {
@@ -445,6 +458,87 @@ func mapMicrosoftCopiedFile(request MapRequest) (MappedResult, error) {
 			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, ItemID: file.ID,
 			RequestedBy: request.Execution.MemberID, CopiedAt: request.OccurredAt,
 		}}, nil
+}
+
+func mapMicrosoftCreatedFile(request MapRequest) (MappedResult, error) {
+	file := decodeMicrosoftOneDriveFile(request.Output)
+	if file.ID == "" {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	if file.Name == "" {
+		file.Name = file.ID
+	}
+	result, err := json.Marshal(safeMicrosoftOneDriveFile(file))
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result,
+		DetailType: integrationevents.MicrosoftOneDriveItemCreatedDetailType,
+		Data: integrationevents.MicrosoftOneDriveItemCreated{
+			ExecutionID: request.Execution.ID, ConnectionID: request.Connection.ID, ItemID: file.ID,
+			RequestedBy: request.Execution.MemberID, CreatedAt: request.OccurredAt,
+		}}, nil
+}
+
+func mapMicrosoftDownloadedFile(request MapRequest) (MappedResult, error) {
+	return mapStoredFileLookup(request.Output)
+}
+
+func mapMicrosoftDownloadedAttachments(request MapRequest) (MappedResult, error) {
+	var items []json.RawMessage
+	if json.Unmarshal(request.Output, &items) != nil {
+		var wrapped struct {
+			Value []json.RawMessage `json:"value"`
+		}
+		if json.Unmarshal(request.Output, &wrapped) != nil || wrapped.Value == nil {
+			return MappedResult{}, ErrPieceOutputInvalid
+		}
+		items = wrapped.Value
+	}
+	if items == nil {
+		items = []json.RawMessage{}
+	}
+	const maximum = 5
+	truncated := len(items) > maximum
+	if truncated {
+		items = items[:maximum]
+	}
+	safe := make([]any, 0, len(items))
+	for _, item := range items {
+		filename, fileID := writtenOryxaFile(item)
+		var named struct {
+			Name string `json:"name"`
+		}
+		_ = json.Unmarshal(item, &named)
+		if fileID == "" {
+			return MappedResult{}, ErrPieceOutputInvalid
+		}
+		safe = append(safe, struct {
+			Name     string `json:"name,omitempty"`
+			FileID   string `json:"file_id"`
+			Filename string `json:"filename,omitempty"`
+		}{Name: named.Name, FileID: fileID, Filename: filename})
+	}
+	result, err := json.Marshal(struct {
+		Attachments []any `json:"attachments"`
+		Truncated   bool  `json:"truncated"`
+	}{Attachments: safe, Truncated: truncated})
+	if err != nil {
+		return MappedResult{}, ErrPieceOutputInvalid
+	}
+	return MappedResult{SafeResult: result}, nil
+}
+
+func decodeMicrosoftOneDriveFile(raw json.RawMessage) microsoftOneDriveFile {
+	var file microsoftOneDriveFile
+	if json.Unmarshal(raw, &file) == nil && file.ID != "" {
+		return file
+	}
+	var wrapped struct {
+		File microsoftOneDriveFile `json:"file"`
+	}
+	_ = json.Unmarshal(raw, &wrapped)
+	return wrapped.File
 }
 
 func safeMicrosoftOneDriveFile(value microsoftOneDriveFile) any {

@@ -1,17 +1,24 @@
 # Integrations service
 
 Status: the connection, action, refresh, and webhook execution foundations are
-implemented. Slack has the remaining non-file pinned-piece actions plus shared
-app-level Events API triggers; GitHub has the remaining non-file owner/repo
-string actions plus native inbound `new-issue` and `new-pull-request` hooks;
-Google Workspace has the remaining non-file Gmail, Calendar, and Drive
-actions plus native inbound Gmail `new-email` and
-Calendar `calendar-event-changed`; Microsoft 365 has the remaining non-file
-Outlook, Calendar, and OneDrive actions plus native Graph webhook subscriptions
-for new mail and calendar changes. The deterministic suite runs the real pinned piece code
+implemented. Slack has the remaining unique pinned-piece actions plus shared
+app-level Events API triggers, including file upload/download through `/files`;
+GitHub has the remaining owner/repo string operations plus file
+content through `/files` and native inbound `new-issue`, `new-pull-request`,
+`new-star`, `new-push`, `new-release`, and `new-review` hooks;
+Google Workspace has the remaining Gmail, Calendar, Drive, Docs, and Sheets
+actions plus native inbound Gmail `new-email`, Calendar
+`calendar-event-changed`, and Drive `drive-file-changed`, including Gmail
+attachments, Drive upload/download/export, Docs PDF export, and Sheets
+worksheet export through `/files`; Microsoft 365 has the remaining
+Outlook, Calendar, OneDrive, Teams, and SharePoint actions plus native Graph webhook subscriptions
+for new mail and calendar changes, including mail attachments, OneDrive
+upload/download, and SharePoint upload through `/files`. The deterministic suite runs the real pinned piece code
 against mocked provider endpoints, and the combined lifecycle runs against
 PostgreSQL and LocalStack on the mini. The k6 client journey across
-integrations, teams, and files is `/test` (`./test/run.sh`). Live Cognito, KMS,
+integrations, teams, and files is `/test` (`./test/run.sh`). Auth organization
+deletion and membership end are consumed from EventBridge onto
+`integrations-events`. Live Cognito, KMS,
 Lambda, and provider sandbox validation remains an AWS staging concern; no
 real customer credentials are used by the local suite.
 
@@ -148,35 +155,55 @@ The current implementation includes:
   HMAC-SHA256 and ping handshakes, queues identity-only issue and pull-request
   opened events, and durably deletes the hook on disable, disconnect, or
   reauthorization failure;
-- an EventBridge outbox dispatcher, deployable Go and Lambda-runner images,
+- an EventBridge outbox dispatcher, an inbound EventBridge consumer for
+  auth organization deletion and membership end, deployable Go and Lambda-runner images,
   and a minimal CloudFormation data-plane template.
 
 The reviewed action surface is an explicit allowlist, not the full provider API:
 
-- Slack: the unique non-file, non-waitpoint operations on the pinned piece,
-  including send-as-user, DMs, message/channel/user/group lookups, and
-  metadata-only file listing. File upload/download stay closed until the
-  `/files` broker path is enabled. Custom API call and approval waitpoints
-  remain disabled;
-- GitHub: the unique owner/repo string operations on the pinned piece (issues,
+- Slack: the unique non-waitpoint operations on the pinned piece,
+  including send-as-user, DMs, message/channel/user/group lookups,
+  metadata-only file listing, `upload-file`, and `get-file`. Bytes move as
+  Oryxa `{file_id}` refs through `/files`. Reconnect existing grants to pick up
+  `files:write`. Host-restricted `custom-api-call` is approved; approval
+  waitpoints remain disabled;
+- GitHub: the unique owner/repo operations on the pinned piece (issues,
   pull requests, repositories, git refs, search, releases, collaborators,
-  milestones, and stars). File content, gist, GraphQL, custom API, workflow
-  dispatch, and dropdown-only duplicates remain disabled. Inbound `new-issue`
-  and `new-pull-request` stay native HMAC-verified hooks. Reconnect existing
-  grants to pick up `read:org` before listing organization members;
-- Google Workspace: the unique non-file operations on the pinned Gmail,
-  Calendar, and Drive pieces, plus native Gmail `new-email` and Calendar
-  `calendar-event-changed`. Attachments, raw MIME get/search, and Drive
-  upload/download/export stay closed until the `/files` broker path is
-  enabled. `fullText` search, Docs/Sheets convert, custom API call, approval
-  waitpoints, and piece polling remain disabled. Reconnect existing grants to
-  pick up `gmail.readonly`, `gmail.compose`, `gmail.modify`, and `drive`;
-- Microsoft 365: the unique non-file, non-waitpoint operations on the pinned
-  Outlook, Calendar, and OneDrive pieces, plus native Graph `new-email` and
-  `calendar-event-changed`. Attachments and OneDrive upload/download stay
-  closed until the `/files` broker path is enabled. Custom API call, approval
-  waitpoints, polling triggers, Teams, and SharePoint remain disabled.
-  Reconnect existing grants to pick up `Mail.ReadWrite` and `Files.ReadWrite`;
+  milestones, stars, file create/update/delete, get-file-content,
+  search-code, gist, GraphQL, workflow dispatch, and host-restricted
+  `custom-api-call`). File bytes move as Oryxa `{file_id}` refs through
+  `/files`. Gist content is text, not a file ref. Workflow dispatch does not
+  wait for completion. Dropdown-only duplicates remain disabled. Inbound
+  `new-issue`, `new-pull-request`, `new-star`, `new-push`, `new-release`, and
+  `new-review` stay native HMAC-verified hooks. Reconnect existing grants to
+  pick up `read:org` before listing organization members and `gist` before
+  `create-gist`;
+- Google Workspace: the unique operations on the pinned Gmail,
+  Calendar, Drive, Docs, and Sheets pieces, plus native Gmail `new-email`, Calendar
+  `calendar-event-changed`, and Drive `drive-file-changed`. Gmail attachments,
+  `get-email` / `find-email` / `get-email-attachment`, Drive
+  upload/replace/download/export, Docs `export-as-pdf`, and Sheets
+  `sheets-export-worksheet` use Oryxa `{file_id}` refs through `/files`.
+  Drive leftover unique writes are `set-drive-public-access`,
+  `create-file-from-text`, `save-file-as-pdf`, `empty-trash`,
+  `delete-shared-drive`, and `upload-from-url` (public HTTPS only). Per-piece
+  host-restricted custom API calls are `gmail-custom-api-call`,
+  `calendar-custom-api-call`, `drive-custom-api-call`, `docs-custom-api-call`,
+  and `sheets-custom-api-call`. Sheets uses the AI `sheets_*` actions only;
+  human dropdown duplicates and `sheets_get_next_rows` stay disabled. Approval
+  waitpoints and piece polling remain disabled. Reconnect existing grants to
+  pick up `gmail.readonly`, `gmail.compose`, `gmail.modify`, `drive`,
+  `drive.readonly`, `documents`, and `spreadsheets`;
+- Microsoft 365: the unique non-waitpoint operations on the pinned
+  Outlook, Calendar, OneDrive, Teams, and SharePoint pieces, plus native Graph
+  `new-email` and `calendar-event-changed`. Mail attachments,
+  `download-attachment`, OneDrive upload/download, and SharePoint upload use
+  Oryxa `{file_id}` refs through `/files`. Host-restricted Outlook
+  `custom-api-call`, `teams-custom-api-call`, and `sharepoint-custom-api-call`
+  are approved. Approval waitpoints and polling triggers remain disabled.
+  Reconnect existing grants to pick up `Mail.ReadWrite`, `Files.ReadWrite`,
+  Teams channel/chat/meeting scopes, and SharePoint `Sites.*` /
+  `Files.ReadWrite.All`;
 
 The reviewed trigger surface is equally explicit:
 
@@ -190,12 +217,19 @@ The reviewed trigger surface is equally explicit:
 - Microsoft `calendar-event-changed` creates a per-connection Graph
   subscription for created, updated, or deleted events and requires
   `Calendars.Read`;
-- GitHub `new-issue` and `new-pull-request` create a per-connection repository
+- GitHub `new-issue`, `new-pull-request`, `new-star`, `new-push`,
+  `new-release`, and `new-review` create a per-connection repository
   or organization hook. Repository hooks require `admin:repo_hook` (implied by
   an existing `repo` grant). Organization-wide hooks require `admin:org_hook`.
+  Issue and pull-request deliveries stay opened-only. Push events omit commit
+  lists. Star, release, and review receipts are identity-only.
 - Google `calendar-event-changed` creates a per-connection Calendar channel on
   the primary calendar. `calendar.readonly` is required (`calendar.events`
   implies it).
+- Google `drive-file-changed` creates a per-connection Drive `changes.watch`
+  channel (TTL one day). `drive.readonly` is required (`drive` implies it).
+  Sync notifications are acknowledged and not enqueued. File names and bytes
+  never publish.
 - Google `new-email` creates a Gmail Inbox `users.watch` on the operator Pub/Sub
   topic (`GOOGLE_GMAIL_PUBSUB_TOPIC`) and requires `gmail.metadata` (implied by
   `gmail.readonly` or `gmail.modify`). Push
@@ -212,13 +246,17 @@ as globally loaded agent instructions. Every approved tool family has one
 | Tool family | Bound skill |
 | --- | --- |
 | Slack actions and Events API triggers | `oryxa-slack` |
-| GitHub repository actions plus inbound issue/PR triggers | `oryxa-github` |
+| GitHub repository actions, file content through `/files`, and inbound issue/PR/star/push/release/review triggers | `oryxa-github` |
 | Gmail actions and `new-email` | `oryxa-gmail` |
 | Google Calendar actions and change trigger | `oryxa-google-calendar` |
-| Google Drive metadata, share, and comment actions | `oryxa-google-drive` |
+| Google Drive metadata, share, comment, leftover unique writes, upload/download, and `drive-file-changed` | `oryxa-google-drive` |
+| Google Docs create, read, mutate, PDF export, and custom API | `oryxa-google-docs` |
+| Google Sheets AI spreadsheet/worksheet/row tools and custom API | `oryxa-google-sheets` |
 | Outlook mail actions and `new-email` | `oryxa-microsoft-outlook` |
 | Microsoft Calendar actions and change trigger | `oryxa-microsoft-calendar` |
-| OneDrive metadata list and copy | `oryxa-microsoft-onedrive` |
+| OneDrive list, copy, upload, and download | `oryxa-microsoft-onedrive` |
+| Microsoft Teams channel, chat, and meeting lookup tools | `oryxa-microsoft-teams` |
+| Microsoft SharePoint list, file, and site tools | `oryxa-microsoft-sharepoint` |
 
 `internal/toolskills/registry.json` binds the exact provider/action, trigger,
 OAuth connection family, and pinned piece to one skill. The Markdown is
@@ -229,7 +267,7 @@ A direct function-tool adapter calls the executable catalog's `ActionTool`,
 `TriggerTool`, or `ConnectionTool`. Each returns the execution definition and
 its skill as one binding, and the adapter injects only that `Skill.Content`. A
 future MCP server exposes the same content at `Skill.ResourceURI` and
-associates that resource with the matching MCP tool. Do not preload all eight
+associates that resource with the matching MCP tool. Do not preload all twelve
 skills: the load policy is `tool-bound`, keeping unrelated provider
 instructions out of a small model's context.
 
@@ -242,12 +280,12 @@ membership, connection ownership, scopes, and idempotency remain enforced by
 the Go service.
 
 A connection belongs to a provider, not to one Activepieces package. One
-Google consent grant can therefore execute reviewed Gmail, Calendar, and Drive
-operations, and one Microsoft consent grant can execute reviewed Outlook,
-Calendar, and OneDrive operations, when the organization enabled and the
-member granted the required scopes. The action catalog selects the exact piece
-and version for each call; the member's encrypted provider grant remains the
-common authorization boundary.
+Google consent grant can therefore execute reviewed Gmail, Calendar, Drive,
+Docs, and Sheets operations, and one Microsoft consent grant can execute
+reviewed Outlook, Calendar, OneDrive, Teams, and SharePoint operations, when
+the organization enabled and the member granted the required scopes. The action
+catalog selects the exact piece and version for each call; the member's
+encrypted provider grant remains the common authorization boundary.
 
 ## OAuth application modes
 
@@ -441,8 +479,10 @@ list integrations.
 
 - Polling triggers: one EventBridge Scheduler schedule per active trigger.
 - Files: S3-backed `files.write` with strict size, type and retention limits,
-  through the `/files` service rather than IAM on the runner. The runner still
-  fails closed until that broker path is enabled.
+  through the `/files` service rather than IAM on the runner. The Go process
+  exposes an invocation-scoped `POST/GET /v1/internal/piece-files` broker.
+  Public action props use `{file_id}` only. Set `FILES_URL` to enable file
+  operations; otherwise they return `files_unavailable`.
 - Secondary connections: a brokered `connections.get` limited to explicitly
   linked connection IDs.
 
@@ -495,6 +535,13 @@ Oryxa EventBridge event
      -> synchronous Invoke of piece-runner Lambda
      -> record result + publish domain event through outbox
 
+Auth organization deleted or member removed
+  -> integrations-events SQS queue + DLQ
+  -> Go broker consumer
+     -> disconnect remaining grants and disable org OAuth apps
+     -> enqueue native webhook cleanup
+     -> publish disconnected/disabled facts through the outbox
+
 Provider webhook
   -> Cloudflare callback route
   -> Go integrations ingress
@@ -535,6 +582,8 @@ PostgreSQL cluster and observability. Integrations adds only:
 - one KMS key for envelope-encrypted connection credentials;
 - one standard webhook queue and one DLQ, isolated so provider bursts cannot
   starve outbound integration commands;
+- one standard EventBridge consumer queue and DLQ for auth organization and
+  membership events (`integrations-events`);
 - one Go API/broker/dispatcher image, split into Lambda handlers later only if
   scaling or permissions require it;
 - one TypeScript piece-runner Lambda container and ECR repository;
@@ -561,7 +610,7 @@ integrations_trigger_executions # per-delivery/trigger retry and idempotency sta
 integrations_action_executions # member action idempotency, safe result and audit state
 integrations_microsoft_graph_cleanup # leased subscription teardown jobs
 integrations_github_hook_cleanup     # leased GitHub hook teardown jobs
-integrations_google_watch_cleanup    # leased Gmail/Calendar watch teardown jobs
+integrations_google_watch_cleanup    # leased Gmail/Calendar/Drive watch teardown jobs
 integrations_outbox           # domain event written with the state transition
 integrations_connection_catalog (view) # credential-free active connections
 ```
@@ -647,7 +696,7 @@ ID, organization ID, deadline and a size-limited input. The runner resolves the
 name only from its compiled allowlist. It never accepts a package URL, module
 path, JavaScript body or arbitrary export name.
 
-Responses contain structured output or a stable error category. Both sides
+Responses contain structured output or a stable error code and message. Both sides
 redact configured secrets and token-shaped fields before logging. Raw action
 inputs and outputs are not logged by default.
 
@@ -666,6 +715,28 @@ EventBridge continues to carry Oryxa domain facts, not arbitrary vendor
 callbacks. Provider output must map to a product-owned command or event before
 it reaches the shared bus. Raw payloads are transient; if a use case needs
 replay, enable the optional encrypted S3 path with a short retention policy.
+
+Integrations publishes those facts through the PostgreSQL outbox. The in-process
+dispatcher claims pending rows and `PutEvents` onto `EVENT_BUS_NAME` with source
+`oryxa.integrations`.
+
+It also consumes auth's organization-deleted and member-removed events from
+`INTEGRATIONS_EVENTS_QUEUE_URL`. Organization deletion disconnects every remaining
+grant, disables org OAuth apps, and queues native webhook teardown. Member
+removal disconnects only that member's grants and leaves org OAuth apps in place.
+A follow-on `auth.member.removed` with reason `organization_deleted` is ignored
+so org deletion is not applied twice. The queue is optional at process start: if
+the URL is unset the broker logs a warning and keeps serving HTTP.
+
+Provision the queue, its DLQ, and the EventBridge rule with:
+
+```sh
+(set -a && . integrations/.env && go run ./integrations/infra/events/cmd/provision)
+```
+
+The command is repeatable. Put the printed `queue_url` in
+`INTEGRATIONS_EVENTS_QUEUE_URL`. The broker managed policy also allows receive
+and delete on the default queue name `integrations-events`.
 
 SQS is at-least-once. Webhook admission claims the provider delivery in
 DynamoDB before enqueue. The worker separately claims each
@@ -711,12 +782,18 @@ Connection and catalog lifecycle facts may use source `oryxa.integrations`:
 - `integrations.github.release-created.v1`;
 - `integrations.github.milestone-mutated.v1`;
 - `integrations.github.label-mutated.v1`;
+- `integrations.github.file-mutated.v1`;
 - `integrations.github.issue-opened.v1`;
 - `integrations.github.pull-request-opened.v1`;
+- `integrations.github.star-received.v1`;
+- `integrations.github.push-received.v1`;
+- `integrations.github.release-published.v1`;
+- `integrations.github.review-submitted.v1`;
 - `integrations.google.gmail-message-sent.v1`;
 - `integrations.google.gmail-message-received.v1`;
 - `integrations.google.calendar-event-created.v1`;
 - `integrations.google.calendar-event-changed.v1`;
+- `integrations.google.drive-file-changed.v1`;
 - `integrations.microsoft.outlook-email-accepted.v1`;
 - `integrations.microsoft.outlook-draft-created.v1`;
 - `integrations.microsoft.outlook-email-forwarded.v1`;
@@ -800,8 +877,8 @@ security approval.
 - Run the checked-in install-time hardening rule that forces TLS certificate
   verification and removes provider request/response logging from the bundled
   Activepieces HTTP client; CI fails if any pinned piece retains either unsafe
-  upstream behavior. Provider failures returned to Go are opaque categories,
-  never upstream messages.
+  upstream behavior. Provider failures returned to Go are opaque categories
+  with stable messages, never upstream payloads.
 - Generate an SBOM, scan dependencies and the image, and retain notices.
 - Review outbound hosts, OAuth scopes, logging and dynamic code use per
   operation.
@@ -865,7 +942,8 @@ provider-neutral action projections, Graph callback validation and
 `clientState` isolation, subscription compensation, renewal pagination,
 durable disconnect/profile-disable cleanup, create-vs-disable serialization,
 cross-replica renewal and migration exclusion, EventBridge publication and SQS
-redelivery idempotency.
+redelivery idempotency, and auth organization-delete / member-leave grant
+teardown.
 
 The combined mini test runs the HTTP registration and OAuth callback, member
 availability isolation, webhook-route registration, trigger enable, signed
@@ -905,6 +983,8 @@ and trigger/provider expansion rather than another architecture spike.
 
 - Provision DynamoDB, KMS, SQS/DLQ, the Go broker and arm64 runner Lambda in
   `ap-south-1`.
+- Run `go run ./integrations/infra/events/cmd/provision` against the shared
+  bus so org deletion and membership end reach `integrations-events`.
 - Put OAuth and webhook callback routes through Cloudflare without caching or
   browser challenges.
 - Register a real Slack BYOC app and validate Cognito discovery, KMS binding,
@@ -917,12 +997,10 @@ and trigger/provider expansion rather than another architecture spike.
 
 ### Catalog and trigger expansion
 
-- Add Google webhook triggers only after their signature, account routing,
-  subscription lifecycle, and replay rules have provider-specific contract
-  tests.
 - Add EventBridge Scheduler only for approved polling triggers.
-- Broker piece `files.write` through `/files` only when a supported operation
-  actually requires file handling. The files service already owns the bucket.
+- Broker piece `files.write` through `/files` for the reviewed Slack, Gmail,
+  Drive, Outlook, OneDrive, and GitHub file operations. Set `FILES_URL` and
+  reconnect Slack grants for `files:write`.
 - Introduce Oryxa-managed one-click OAuth credentials only after BYOC staging
   is stable; existing connections are never silently moved between clients.
 

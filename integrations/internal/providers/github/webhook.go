@@ -22,15 +22,19 @@ const (
 )
 
 // ThinDelivery is the only GitHub webhook material that may cross the
-// admission boundary. Issue and pull-request title, body, and diffs are
-// never copied here.
+// admission boundary. Issue, pull-request, review, and commit bodies never
+// copy here.
 type ThinDelivery struct {
 	Event      string `json:"event"`
 	DeliveryID string `json:"delivery_id"`
-	Action     string `json:"action"`
+	Action     string `json:"action,omitempty"`
 	Repository string `json:"repository"`
-	Number     int64  `json:"number"`
-	URL        string `json:"url"`
+	Number     int64  `json:"number,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Ref        string `json:"ref,omitempty"`
+	SHA        string `json:"sha,omitempty"`
+	ReleaseID  int64  `json:"release_id,omitempty"`
+	ReviewID   int64  `json:"review_id,omitempty"`
 }
 
 type WebhookVerifier struct{}
@@ -63,14 +67,14 @@ func (WebhookVerifier) VerifyAndParse(_ context.Context, request webhooks.Runner
 	if event == eventPing {
 		return webhooks.RunnerResult{Verified: true, Reply: &webhooks.Reply{Status: http.StatusOK}}, nil
 	}
-	if !acceptedOpenedEvent(request.Route.TriggerName, event) {
+	if !acceptedGitHubEvent(request.Route.TriggerName, event) {
 		return drop()
 	}
 	deliveryID := request.Headers[headerDelivery]
 	if !validDeliveryID(deliveryID) {
 		return webhooks.RunnerResult{Verified: false}, nil
 	}
-	delivery, ok := parseOpenedDelivery(event, deliveryID, request.RawBody)
+	delivery, ok := parseThinDelivery(request.Route.TriggerName, event, deliveryID, request.RawBody)
 	if !ok {
 		return drop()
 	}
@@ -81,22 +85,19 @@ func drop() (webhooks.RunnerResult, error) {
 	return webhooks.RunnerResult{Verified: true, Reply: &webhooks.Reply{Status: http.StatusAccepted}}, nil
 }
 
-func acceptedOpenedEvent(triggerName, event string) bool {
-	switch triggerName {
-	case "new-issue":
-		return event == EventIssues
-	case "new-pull-request":
-		return event == EventPullRequest
-	default:
-		return false
-	}
+func acceptedGitHubEvent(triggerName, event string) bool {
+	return NativeHookEvent(triggerName) == event
 }
 
-func parseOpenedDelivery(event, deliveryID string, raw []byte) (ThinDelivery, bool) {
+func parseThinDelivery(triggerName, event, deliveryID string, raw []byte) (ThinDelivery, bool) {
 	var payload struct {
 		Action     string `json:"action"`
+		Ref        string `json:"ref"`
+		After      string `json:"after"`
+		Compare    string `json:"compare"`
 		Repository struct {
 			FullName string `json:"full_name"`
+			HTMLURL  string `json:"html_url"`
 		} `json:"repository"`
 		Issue struct {
 			Number  int64  `json:"number"`
@@ -106,22 +107,71 @@ func parseOpenedDelivery(event, deliveryID string, raw []byte) (ThinDelivery, bo
 			Number  int64  `json:"number"`
 			HTMLURL string `json:"html_url"`
 		} `json:"pull_request"`
+		Release struct {
+			ID      int64  `json:"id"`
+			HTMLURL string `json:"html_url"`
+		} `json:"release"`
+		Review struct {
+			ID      int64  `json:"id"`
+			HTMLURL string `json:"html_url"`
+		} `json:"review"`
 	}
-	if json.Unmarshal(raw, &payload) != nil || payload.Action != actionOpened || !validRepositoryFullName(payload.Repository.FullName) {
+	if json.Unmarshal(raw, &payload) != nil || !validRepositoryFullName(payload.Repository.FullName) {
 		return ThinDelivery{}, false
 	}
 	delivery := ThinDelivery{Event: event, DeliveryID: deliveryID, Action: payload.Action, Repository: payload.Repository.FullName}
-	switch event {
-	case EventIssues:
-		if payload.Issue.Number < 1 || payload.Issue.Number > 2_147_483_647 || !validHTTPSURL(payload.Issue.HTMLURL) {
+	switch triggerName {
+	case "new-issue":
+		if payload.Action != actionOpened || payload.Issue.Number < 1 || payload.Issue.Number > 2_147_483_647 ||
+			!validHTTPSURL(payload.Issue.HTMLURL) {
 			return ThinDelivery{}, false
 		}
 		delivery.Number, delivery.URL = payload.Issue.Number, payload.Issue.HTMLURL
-	case EventPullRequest:
-		if payload.PullRequest.Number < 1 || payload.PullRequest.Number > 2_147_483_647 || !validHTTPSURL(payload.PullRequest.HTMLURL) {
+	case "new-pull-request":
+		if payload.Action != actionOpened || payload.PullRequest.Number < 1 || payload.PullRequest.Number > 2_147_483_647 ||
+			!validHTTPSURL(payload.PullRequest.HTMLURL) {
 			return ThinDelivery{}, false
 		}
 		delivery.Number, delivery.URL = payload.PullRequest.Number, payload.PullRequest.HTMLURL
+	case "new-star":
+		if payload.Action != "started" || !validHTTPSURL(payload.Repository.HTMLURL) {
+			return ThinDelivery{}, false
+		}
+		delivery.URL = payload.Repository.HTMLURL
+	case "new-push":
+		if payload.Ref == "" || len(payload.Ref) > 256 || strings.Contains(payload.Ref, "..") ||
+			strings.ContainsAny(payload.Ref, "\r\n\t ") {
+			return ThinDelivery{}, false
+		}
+		if payload.After != "" && (len(payload.After) > 64 || strings.ContainsAny(payload.After, "\r\n\t ")) {
+			return ThinDelivery{}, false
+		}
+		if payload.Compare != "" && !validHTTPSURL(payload.Compare) {
+			return ThinDelivery{}, false
+		}
+		delivery.Ref, delivery.SHA, delivery.URL = payload.Ref, payload.After, payload.Compare
+	case "new-release":
+		if (payload.Action != "published" && payload.Action != "released") || payload.Release.ID < 1 ||
+			payload.Release.ID > 2_147_483_647 || !validHTTPSURL(payload.Release.HTMLURL) {
+			return ThinDelivery{}, false
+		}
+		delivery.ReleaseID, delivery.URL = payload.Release.ID, payload.Release.HTMLURL
+	case "new-review":
+		if payload.Action != "submitted" || payload.PullRequest.Number < 1 || payload.PullRequest.Number > 2_147_483_647 ||
+			!validHTTPSURL(payload.PullRequest.HTMLURL) {
+			return ThinDelivery{}, false
+		}
+		if payload.Review.ID < 0 || payload.Review.ID > 2_147_483_647 {
+			return ThinDelivery{}, false
+		}
+		if payload.Review.HTMLURL != "" && !validHTTPSURL(payload.Review.HTMLURL) {
+			return ThinDelivery{}, false
+		}
+		url := payload.Review.HTMLURL
+		if url == "" {
+			url = payload.PullRequest.HTMLURL
+		}
+		delivery.Number, delivery.ReviewID, delivery.URL = payload.PullRequest.Number, payload.Review.ID, url
 	default:
 		return ThinDelivery{}, false
 	}

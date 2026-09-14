@@ -329,6 +329,117 @@ func (s *Store) DisconnectConnectionWithEvent(ctx context.Context, organizationI
 	return nil
 }
 
+// DisconnectOpenConnectionWithEvent is the auth-lifecycle counterpart of a
+// member disconnect: it closes an active or reauthorization-required
+// connection, queues native webhook cleanup, and disables that connection's
+// triggers. A connection that is already disconnected is a no-op so EventBridge
+// retries stay idempotent.
+func (s *Store) DisconnectOpenConnectionWithEvent(ctx context.Context, organizationID, memberID, connectionID string, now time.Time, event domain.Event) error {
+	detail, err := json.Marshal(event.Data)
+	if err != nil {
+		return err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	tag, err := tx.Exec(ctx, `UPDATE integrations_connections
+		SET status='disconnected', version=version+1, updated_at=$4
+		WHERE organization_id=$1 AND member_id=$2 AND id=$3 AND status <> 'disconnected'`, organizationID, memberID, connectionID, now)
+	if err != nil {
+		return fmt.Errorf("disconnect open integration: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil
+	}
+	if err := enqueueMicrosoftGraphCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
+		return err
+	}
+	if err := enqueueGitHubCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
+		return err
+	}
+	if err := enqueueGoogleCleanupForConnection(ctx, tx, organizationID, connectionID, now); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE integrations_triggers SET status='disabled',version=version+1,updated_at=$2 WHERE organization_id=$1 AND connection_id=$3 AND status='active'`, organizationID, now, connectionID); err != nil {
+		return fmt.Errorf("disable disconnected triggers: %w", err)
+	}
+	if err := insertOutbox(ctx, tx, event, detail); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit open integration disconnect: %w", err)
+	}
+	return nil
+}
+
+// OpenConnections lists connections that still hold a grant. An empty memberID
+// returns every open connection in the organization. Credential envelopes are
+// not loaded; callers only need identity to disconnect.
+func (s *Store) OpenConnections(ctx context.Context, organizationID, memberID string) ([]domain.Connection, error) {
+	query := `
+		SELECT id, organization_id, member_id, profile_id, provider, piece_name,
+		       piece_version, status
+		FROM integrations_connections
+		WHERE organization_id = $1 AND status <> 'disconnected'`
+	arguments := []any{organizationID}
+	if memberID != "" {
+		query += ` AND member_id = $2`
+		arguments = append(arguments, memberID)
+	}
+	query += ` ORDER BY id`
+	rows, err := s.pool.Query(ctx, query, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("list open connections: %w", err)
+	}
+	defer rows.Close()
+	var result []domain.Connection
+	for rows.Next() {
+		var connection domain.Connection
+		if err := rows.Scan(
+			&connection.ID, &connection.OrganizationID, &connection.MemberID,
+			&connection.ProfileID, &connection.Provider, &connection.PieceName,
+			&connection.PieceVersion, &connection.Status,
+		); err != nil {
+			return nil, fmt.Errorf("scan open connection: %w", err)
+		}
+		result = append(result, connection)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate open connections: %w", err)
+	}
+	return result, nil
+}
+
+// ActiveOAuthApps lists org-enabled OAuth profiles without opening secrets.
+func (s *Store) ActiveOAuthApps(ctx context.Context, organizationID string) ([]domain.OAuthAppProfile, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, organization_id, provider, piece_name, piece_version, status
+		FROM integrations_oauth_apps
+		WHERE organization_id = $1 AND status = 'active'
+		ORDER BY id`, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("list oauth apps: %w", err)
+	}
+	defer rows.Close()
+	var result []domain.OAuthAppProfile
+	for rows.Next() {
+		var profile domain.OAuthAppProfile
+		if err := rows.Scan(
+			&profile.ID, &profile.OrganizationID, &profile.Provider,
+			&profile.PieceName, &profile.PieceVersion, &profile.Status,
+		); err != nil {
+			return nil, fmt.Errorf("scan oauth app: %w", err)
+		}
+		result = append(result, profile)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate oauth apps: %w", err)
+	}
+	return result, nil
+}
+
 type sqlExecutor interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 }
@@ -390,7 +501,7 @@ func enqueueGitHubCleanup(ctx context.Context, executor sqlExecutor, selector, o
 	FROM integrations_triggers
 	WHERE organization_id = $1 AND ` + selector + `
 	  AND status = 'active' AND provider = 'github'
-	  AND trigger_name IN ('new-issue', 'new-pull-request')
+	  AND trigger_name IN ('new-issue', 'new-pull-request', 'new-star', 'new-push', 'new-release', 'new-review')
 	ON CONFLICT (organization_id, trigger_id) DO NOTHING`
 	if _, err := executor.Exec(ctx, query, organizationID, selectorID, now); err != nil {
 		return fmt.Errorf("enqueue GitHub cleanup: %w", err)
@@ -419,7 +530,7 @@ func enqueueGoogleCleanup(ctx context.Context, executor sqlExecutor, selector, o
 	FROM integrations_triggers
 	WHERE organization_id = $1 AND ` + selector + `
 	  AND status = 'active' AND provider = 'google'
-	  AND trigger_name IN ('new-email', 'calendar-event-changed')
+	  AND trigger_name IN ('new-email', 'calendar-event-changed', 'drive-file-changed')
 	ON CONFLICT (organization_id, trigger_id) DO NOTHING`
 	if _, err := executor.Exec(ctx, query, organizationID, selectorID, now); err != nil {
 		return fmt.Errorf("enqueue Google cleanup: %w", err)
