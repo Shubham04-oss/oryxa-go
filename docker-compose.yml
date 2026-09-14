@@ -1,9 +1,9 @@
 # Local dependencies for oryxa-go.
 #
 # Postgres holds service data (pgvector/pgvector:0.8.6-pg17, with vector,
-# ltree and pg_trgm). LocalStack stands in for EventBridge, SQS and
-# DynamoDB, and Moto for SES, so an event can be published, routed to a queue,
-# turned into an email and logged without an AWS account.
+# ltree and pg_trgm). LocalStack stands in for EventBridge, SQS, DynamoDB
+# and S3, and Moto for SES, so an event can be published, routed to a queue,
+# turned into an email, or stored as an object without an AWS account.
 #
 # The services are deliberately not here: they are what you are editing, and
 # `go run` on the host rebuilds faster than any image.
@@ -48,19 +48,20 @@ services:
   # SQS runs alongside it because a rule needs somewhere to deliver: a queue
   # target is how a service on the host receives what was published. DynamoDB
   # holds what services keep about the events they handled, such as the email
-  # service's delivery log.
+  # service's delivery log. S3 is the object store the files service owns;
+  # buckets are created by that service's provisioner, not this file.
   #
   # Point the AWS SDK here with AWS_ENDPOINT_URL=http://localhost:4566 and any
   # non-empty credentials; the region is whatever the client sends.
   #
-  # Nothing survives a restart. Buses, rules, queues and tables live in memory,
-  # so re-run the provisioner of each service that owns them; this file creates
-  # none.
+  # Nothing survives a restart. Buses, rules, queues, tables and buckets live
+  # in memory, so re-run the provisioner of each service that owns them; this
+  # file creates none.
   eventbridge:
     image: localstack/localstack:4.14.0
     restart: unless-stopped
     environment:
-      SERVICES: events,sqs,dynamodb
+      SERVICES: events,sqs,dynamodb,s3
       # Start them at boot instead of on first request. Loaded lazily they
       # report "available" until something calls them, and the healthcheck
       # below would never pass.
@@ -73,7 +74,7 @@ services:
           "CMD",
           "python3",
           "-c",
-          "import json, urllib.request; services = json.load(urllib.request.urlopen('http://localhost:4566/_localstack/health'))['services']; raise SystemExit(any(services[name] != 'running' for name in ('events', 'sqs', 'dynamodb')))",
+          "import json, urllib.request; services = json.load(urllib.request.urlopen('http://localhost:4566/_localstack/health'))['services']; raise SystemExit(any(services[name] != 'running' for name in ('events', 'sqs', 'dynamodb', 's3')))",
         ]
       interval: 5s
       timeout: 5s

@@ -84,7 +84,32 @@ type Membership struct {
 	DisplayName    string    `json:"display_name,omitempty" db:"display_name"`
 	Role           Role      `json:"role" db:"role"`
 	NotifyEmail    bool      `json:"notify_email" db:"notify_email"`
+	Path           string    `json:"path,omitempty" db:"path"`
 	JoinedAt       time.Time `json:"joined_at" db:"joined_at"`
+}
+
+// User is a person teams has seen in an organization, hanging under
+// the org in ltree. Auth remains the source of org membership.
+type User struct {
+	OrganizationID string    `json:"organization_id" db:"organization_id"`
+	UserID         string    `json:"user_id" db:"user_id"`
+	Email          string    `json:"email" db:"email"`
+	DisplayName    string    `json:"display_name,omitempty" db:"display_name"`
+	Path           string    `json:"path,omitempty" db:"path"`
+	UpdatedAt      time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// OrganizationMembership is one person's place on one team, with enough
+// team fields for a member search to name the team.
+type OrganizationMembership struct {
+	UserID      string `db:"user_id"`
+	Email       string `db:"email"`
+	DisplayName string `db:"display_name"`
+	Role        Role   `db:"role"`
+	TeamID      string `db:"team_id"`
+	TeamName    string `db:"team_name"`
+	Path        string `db:"path"`
+	MemberPath  string `db:"member_path"`
 }
 
 // Event is what teams puts on EventBridge, in the envelope every Oryxa

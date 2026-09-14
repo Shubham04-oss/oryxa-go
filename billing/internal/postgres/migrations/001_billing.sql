@@ -37,7 +37,7 @@ CREATE INDEX IF NOT EXISTS billing_subscriptions_organization_idx
     ON billing_subscriptions (organization_id);
 
 CREATE INDEX IF NOT EXISTS billing_subscriptions_renewal_idx
-    ON billing_subscriptions (next_billing_date)
+    ON billing_subscriptions (next_billing_date, billing_interval)
     WHERE status = 'active' AND NOT cancel_at_next_billing_date;
 
 CREATE TABLE IF NOT EXISTS billing_webhook_deliveries (
@@ -62,5 +62,5 @@ CREATE TABLE IF NOT EXISTS billing_outbox (
 );
 
 CREATE INDEX IF NOT EXISTS billing_outbox_pending_idx
-    ON billing_outbox (available_at, occurred_at)
+    ON billing_outbox (available_at, occurred_at, id)
     WHERE published_at IS NULL;

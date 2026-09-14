@@ -49,5 +49,5 @@ CREATE TABLE IF NOT EXISTS teams_outbox (
 );
 
 CREATE INDEX IF NOT EXISTS teams_outbox_pending_idx
-    ON teams_outbox (available_at, occurred_at)
+    ON teams_outbox (available_at, occurred_at, id)
     WHERE published_at IS NULL;

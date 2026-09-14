@@ -1,9 +1,8 @@
 // Package authstub stands in for auth during the stack k6 journey.
 //
-// Teams forwards the caller's bearer token or session cookie here. The
-// stub answers only the two reads teams makes: the caller's organization
-// membership, and the organization's member list. This is not auth and
-// must not be deployed.
+// Teams and files forward the caller's bearer token or session cookie here.
+// The stub answers the caller's organization membership, and the
+// organization's member list. This is not auth and must not be deployed.
 package authstub
 
 import (

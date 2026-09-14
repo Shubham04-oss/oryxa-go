@@ -12,12 +12,12 @@ auth ── organization created/updated/deleted, member removed ──▶ teams
 
 ## Control
 
-Organization admin (auth owner or admin) and team admin are the same control. Either may update or delete the team, add members, change roles, and remove others. Creating a team is organization-admin only, because there is no team admin yet. The creator becomes the team's first admin.
+Organization admin (auth owner or admin) and team admin are the same control. Either may update or delete the team, add members, change roles, remove others, and nest a team under it. Creating a top-level team is organization-admin only, because there is no team admin yet. The creator becomes the team's first admin.
 
 | Who | Create team | See team | Manage team and members | Leave |
 | --- | --- | --- | --- | --- |
-| Organization owner or admin | Yes | Every team in the org | Yes | If on the team |
-| Team admin | No | Their team | Yes — same as an organization admin, on that team | Yes |
+| Organization owner or admin | Yes, including nested teams | Every team in the org | Yes | If on the team |
+| Team admin | Nested team under theirs | Their team | Yes — same as an organization admin, on that team | Yes |
 | Team member | No | Their team | No | Yes |
 | Other organization member | No | No (404) | No | No |
 
@@ -60,13 +60,14 @@ These tools are reach-only. Creating, renaming, and changing membership stay on 
 
 Teams uses `/internal/postgreskit`: one instrumented native `pgxpool`, with sqlx sharing that pool. Local Postgres is `pgvector/pgvector:0.8.6-pg17` in the root `docker-compose.yml` — not alpine — so the extension files exist. Recreate the container after that image change (`docker compose up -d postgres`). A data volume from alpine 17 can stay; `CREATE EXTENSION` runs from teams migrations, and from `infra/postgres/init` on a fresh volume. Set `POSTGRES_REQUIRED_EXTENSIONS=ltree,pg_trgm,vector` to fail startup when those capabilities are missing.
 
-| Extension | On `teams` | Used for |
+| Extension | Where | Used for |
 | --- | --- | --- |
-| `ltree` | `path` (not null, unique, GIST) | Hierarchy: org label, then team label. Nested teams append labels. |
-| `pg_trgm` | GIN on `name` (`gin_trgm_ops`) | Name similarity (`%`, `similarity`) |
-| `vector` | optional `embedding vector(1536)` | Nearest-neighbour (`<=>`). No HNSW/IVFFlat yet. |
+| `ltree` | `teams.path`, `teams_users.path`, `teams_memberships.path` (not null, unique btree, GiST with `organization_id`) | Hierarchy. Teams: org label, then team label; nested teams append. Users: org label, then user label (flat). Members: the team's path, then user label — so people on nested teams sit under the parent (`organization_id = $org AND path <@ team.path`). |
+| `pg_trgm` | GIN on `(organization_id, name)` (`btree_gin` + `gin_trgm_ops`) | Tenant-scoped name similarity (`%`, `similarity`, `ILIKE`) |
+| `vector` | optional `teams.embedding vector(1536)` | Cosine nearest-neighbour (`<=>`) on a partial HNSW index (`vector_cosine_ops`). IVFFlat is not used. |
+| `btree_gist` / `btree_gin` | with `organization_id` on the GiST and GIN indexes above | Keep tenant equality in the same index as path / name |
 
-`LtreeLabel` keeps only `[A-Za-z0-9_]`. Store methods `SearchTeams`, `TeamDescendants`, `SetTeamEmbedding` and `TeamsNearest` are store-only until an API asks for them. Writes of any embedding width other than 1536 are rejected.
+`LtreeLabel` keeps only `[A-Za-z0-9_]`. Create a nested team with `parent_id`; its `path` is the parent's path plus its own label. Deleting a team deletes its descendants in the same transaction. Name search uses `GET …/teams/search?q=`. People search uses `GET …/members/search?q=` against the org roster from auth; each hit has the person's org `path` and the visible teams they are on (each with the team `path` and `member_path`). `GET …/teams/{id}/members/descendants` is everyone hanging under that team, including nested teams, still concealed to what the caller can see. Nearest-neighbour uses a 1536-wide embedding written with `PUT …/embedding` and queried with `POST …/teams/nearest`. Writes of any other width are rejected. The lookup uses HNSW with iterative scans so the organization and visibility filters still return enough neighbours. Search, descendants and nearest only return teams the caller can see.
 
 ## API
 
@@ -76,12 +77,18 @@ Teams uses `/internal/postgreskit`: one instrumented native `pgxpool`, with sqlx
 | `GET` | `/v1/organizations/{organizationID}/tools` | Members | Tool catalog: `list_teams`, `call_team`, `call_team_members` |
 | `POST` | `/v1/organizations/{organizationID}/tools/{name}` | Members | Call one of those three tools |
 | `GET` | `/v1/organizations/{organizationID}/teams` | Members | Organization admins see every team; others see teams they belong to |
-| `POST` | `/v1/organizations/{organizationID}/teams` | Organization admins | Create a team: `{"name": "Engineering"}`; the caller becomes team admin |
+| `GET` | `/v1/organizations/{organizationID}/members/search` | Members | Fuzzy people search: `?q=` required, `limit` optional. Each hit includes org `path` and `teams` (empty if they are on none the caller can see) |
+| `GET` | `/v1/organizations/{organizationID}/teams/search` | Members | Name search: `?q=` required, `limit` optional (default 20, max 100) |
+| `POST` | `/v1/organizations/{organizationID}/teams/nearest` | Members | Nearest teams: `{"embedding":[…1536…],"limit":20}` |
+| `POST` | `/v1/organizations/{organizationID}/teams` | Organization admins; parent team admin when nesting | Create a team: `{"name": "Engineering"}` or `{"name": "Frontend", "parent_id": "team_…"}`; the caller becomes team admin |
 | `GET` | `/v1/organizations/{organizationID}/teams/{teamID}` | Organization admins or team members | Team, the caller's membership, and `can_manage` |
+| `GET` | `/v1/organizations/{organizationID}/teams/{teamID}/descendants` | Organization admins or team members | The team and visible teams under it |
+| `PUT` | `/v1/organizations/{organizationID}/teams/{teamID}/embedding` | Organization or team admin | Store a 1536-wide embedding: `{"embedding":[…]}` |
 | `PATCH` | `/v1/organizations/{organizationID}/teams/{teamID}` | Organization or team admin | Rename: `{"name": "Platform"}` |
-| `DELETE` | `/v1/organizations/{organizationID}/teams/{teamID}` | Organization or team admin | Delete the team |
+| `DELETE` | `/v1/organizations/{organizationID}/teams/{teamID}` | Organization or team admin | Delete the team and its descendants |
 | `PATCH` | `/v1/organizations/{organizationID}/teams/{teamID}/notification` | Team members | The caller's email switch for team-call notices: `{"notify_email": false}` |
-| `GET` | `/v1/organizations/{organizationID}/teams/{teamID}/members` | Organization admins or team members | List members |
+| `GET` | `/v1/organizations/{organizationID}/teams/{teamID}/members` | Organization admins or team members | List members of that team |
+| `GET` | `/v1/organizations/{organizationID}/teams/{teamID}/members/descendants` | Organization admins or team members | Members of the team and visible nested teams |
 | `POST` | `/v1/organizations/{organizationID}/teams/{teamID}/members` | Organization or team admin | Add an organization member: `{"user_id": "...", "role": "member"}` |
 | `PATCH` | `/v1/organizations/{organizationID}/teams/{teamID}/members/{userID}` | Organization or team admin | Change role: `{"role": "admin"}` |
 | `DELETE` | `/v1/organizations/{organizationID}/teams/{teamID}/members/{userID}` | Self, or organization or team admin | Leave or remove |

@@ -1,5 +1,5 @@
 // Command stack supervises the k6 journey: seeds the simulated
-// organization, serves the auth stub, and runs teams plus the
+// organization, serves the auth stub, and runs teams, files, plus the
 // integrations stack process. It is not a product service.
 package main
 
@@ -45,6 +45,7 @@ func run(ctx context.Context) error {
 	authAddr := value("AUTHSTUB_ADDRESS", "127.0.0.1:18080")
 	teamsAddr := value("TEAMS_ADDRESS", "127.0.0.1:18083")
 	integrationsAddr := value("INTEGRATIONS_ADDRESS", "127.0.0.1:18084")
+	filesAddr := value("FILES_ADDRESS", "127.0.0.1:18085")
 	if err := seedAuth(ctx, databaseURL, organizationID); err != nil {
 		return err
 	}
@@ -57,8 +58,16 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	filesProvision, err := provisionFiles(ctx, root, awsEndpoint)
+	if err != nil {
+		return err
+	}
 
 	teamsBin, err := build(ctx, root, "teams", "./teams/cmd/teams")
+	if err != nil {
+		return err
+	}
+	filesBin, err := build(ctx, root, "files", "./files/cmd/files")
 	if err != nil {
 		return err
 	}
@@ -86,6 +95,15 @@ func run(ctx context.Context) error {
 		"TEAMS_ADDRESS":      teamsAddr,
 		"TEAMS_AUTO_MIGRATE": "true",
 	}))
+	files := command(ctx, filesBin, mergeEnv(awsLocal, map[string]string{
+		"DATABASE_URL":           databaseURL,
+		"AUTH_URL":               "http://" + authAddr,
+		"TEAMS_URL":              "http://" + teamsAddr,
+		"FILES_ADDRESS":          filesAddr,
+		"FILES_AUTO_MIGRATE":     "true",
+		"FILES_BUCKET_NAME":      filesProvision.BucketName,
+		"FILES_EVENTS_QUEUE_URL": filesProvision.QueueURL,
+	}))
 	integrations := command(ctx, integrationsBin, map[string]string{
 		"ORG_ID":                       organizationID,
 		"DATABASE_URL":                 databaseURL,
@@ -110,6 +128,9 @@ func run(ctx context.Context) error {
 	if err := teams.Start(); err != nil {
 		return fmt.Errorf("start teams: %w", err)
 	}
+	if err := files.Start(); err != nil {
+		return fmt.Errorf("start files: %w", err)
+	}
 	if err := integrations.Start(); err != nil {
 		return fmt.Errorf("start integrations stack: %w", err)
 	}
@@ -117,10 +138,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("start email: %w", err)
 	}
 	go waitLogged("teams", teams)
+	go waitLogged("files", files)
 	go waitLogged("integrations", integrations)
 	go waitLogged("email", email)
 
-	log.Printf("stack ready org_id=%s auth=http://%s teams=http://%s integrations=http://%s mailpit=http://127.0.0.1:8025", organizationID, authAddr, teamsAddr, integrationsAddr)
+	log.Printf("stack ready org_id=%s auth=http://%s teams=http://%s files=http://%s integrations=http://%s mailpit=http://127.0.0.1:8025", organizationID, authAddr, teamsAddr, filesAddr, integrationsAddr)
 	<-ctx.Done()
 	return nil
 }
@@ -198,6 +220,44 @@ func build(ctx context.Context, root, name, packagePath string) (string, error) 
 		return "", fmt.Errorf("build %s: %w", name, err)
 	}
 	return bin, nil
+}
+
+func provisionFiles(ctx context.Context, root, awsEndpoint string) (struct {
+	QueueURL   string `json:"queue_url"`
+	BucketName string `json:"bucket_name"`
+}, error) {
+	var result struct {
+		QueueURL   string `json:"queue_url"`
+		BucketName string `json:"bucket_name"`
+	}
+	bin, err := build(ctx, root, "files-provision", "./files/infra/storage/cmd/provision")
+	if err != nil {
+		return result, err
+	}
+	cmd := exec.CommandContext(ctx, bin)
+	cmd.Dir = root
+	cmd.Env = isolatedEnv(map[string]string{
+		"AWS_REGION":              "ap-south-1",
+		"AWS_ACCESS_KEY_ID":       "test",
+		"AWS_SECRET_ACCESS_KEY":   "test",
+		"AWS_ENDPOINT_URL":        awsEndpoint,
+		"EVENT_BUS_NAME":          "default",
+		"FILES_BUCKET_NAME":       "oryxa-files",
+		"FILES_EVENTS_QUEUE_NAME": "files-events",
+	})
+	out, err := cmd.Output()
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			return result, fmt.Errorf("provision files: %w: %s", err, strings.TrimSpace(string(exit.Stderr)))
+		}
+		return result, fmt.Errorf("provision files: %w", err)
+	}
+	if err := json.Unmarshal(out, &result); err != nil || result.QueueURL == "" || result.BucketName == "" {
+		return result, fmt.Errorf("provision files: decode output: %w (%s)", err, strings.TrimSpace(string(out)))
+	}
+	log.Printf("files bucket %s queue %s", result.BucketName, result.QueueURL)
+	return result, nil
 }
 
 func provisionEmail(ctx context.Context, root, awsEndpoint, sesEndpoint string) (string, error) {

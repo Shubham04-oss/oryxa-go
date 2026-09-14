@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/application"
@@ -24,12 +25,18 @@ type teamsService interface {
 	UpdateTeam(context.Context, authclient.Credentials, string, string, application.UpdateTeamInput) (domain.Team, error)
 	DeleteTeam(context.Context, authclient.Credentials, string, string) error
 	Members(context.Context, authclient.Credentials, string, string) ([]domain.Membership, error)
+	MemberDescendants(context.Context, authclient.Credentials, string, string) ([]domain.Membership, error)
 	AddMember(context.Context, authclient.Credentials, string, string, application.AddMemberInput) (domain.Membership, error)
 	ChangeMemberRole(context.Context, authclient.Credentials, string, string, string, domain.Role) (domain.Membership, error)
 	RemoveMember(context.Context, authclient.Credentials, string, string, string) error
 	Tools(context.Context, authclient.Credentials, string) ([]domain.Tool, error)
 	CallTool(context.Context, authclient.Credentials, string, string, json.RawMessage) (any, error)
 	SetNotification(context.Context, authclient.Credentials, string, string, bool) (domain.Membership, error)
+	SearchTeams(context.Context, authclient.Credentials, string, string, int) ([]application.TeamSummary, error)
+	TeamDescendants(context.Context, authclient.Credentials, string, string) ([]application.TeamSummary, error)
+	SetTeamEmbedding(context.Context, authclient.Credentials, string, string, []float32) error
+	TeamsNearest(context.Context, authclient.Credentials, string, []float32, int) ([]application.TeamSummary, error)
+	SearchMembers(context.Context, authclient.Credentials, string, string, int) ([]application.MemberSearchHit, error)
 }
 
 type Config struct {
@@ -66,10 +73,16 @@ func New(service teamsService, config Config, logger *slog.Logger) *Server {
 	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/tools/{name}", server.callTool)
 	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams", server.teams)
 	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/teams", server.createTeam)
+	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/members/search", server.searchMembers)
+	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/search", server.searchTeams)
+	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/teams/nearest", server.nearestTeams)
 	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/{teamID}", server.team)
+	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/{teamID}/descendants", server.descendants)
+	server.mux.HandleFunc("PUT /v1/organizations/{organizationID}/teams/{teamID}/embedding", server.setEmbedding)
 	server.mux.HandleFunc("PATCH /v1/organizations/{organizationID}/teams/{teamID}", server.updateTeam)
 	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/teams/{teamID}", server.deleteTeam)
 	server.mux.HandleFunc("PATCH /v1/organizations/{organizationID}/teams/{teamID}/notification", server.setNotification)
+	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/{teamID}/members/descendants", server.memberDescendants)
 	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/{teamID}/members", server.members)
 	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/teams/{teamID}/members", server.addMember)
 	server.mux.HandleFunc("PATCH /v1/organizations/{organizationID}/teams/{teamID}/members/{userID}", server.changeRole)
@@ -133,6 +146,107 @@ func (server *Server) teams(writer http.ResponseWriter, request *http.Request) {
 		teams = []application.TeamSummary{}
 	}
 	writeJSON(writer, http.StatusOK, map[string]any{"teams": teams})
+}
+
+func (server *Server) searchMembers(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	limit, err := queryLimit(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "limit must be a whole number")
+		return
+	}
+	members, err := server.service.SearchMembers(request.Context(), credentials, request.PathValue("organizationID"), strings.TrimSpace(request.URL.Query().Get("q")), limit)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	if members == nil {
+		members = []application.MemberSearchHit{}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"members": members})
+}
+
+func (server *Server) searchTeams(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	limit, err := queryLimit(request)
+	if err != nil {
+		writeError(writer, http.StatusBadRequest, "limit must be a whole number")
+		return
+	}
+	teams, err := server.service.SearchTeams(request.Context(), credentials, request.PathValue("organizationID"), strings.TrimSpace(request.URL.Query().Get("q")), limit)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	if teams == nil {
+		teams = []application.TeamSummary{}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"teams": teams})
+}
+
+func (server *Server) nearestTeams(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		Embedding []float32 `json:"embedding"`
+		Limit     int       `json:"limit"`
+	}
+	if err := readJSON(request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	teams, err := server.service.TeamsNearest(request.Context(), credentials, request.PathValue("organizationID"), input.Embedding, input.Limit)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	if teams == nil {
+		teams = []application.TeamSummary{}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"teams": teams})
+}
+
+func (server *Server) descendants(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	teams, err := server.service.TeamDescendants(request.Context(), credentials, request.PathValue("organizationID"), request.PathValue("teamID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	if teams == nil {
+		teams = []application.TeamSummary{}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"teams": teams})
+}
+
+func (server *Server) setEmbedding(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	var input struct {
+		Embedding []float32 `json:"embedding"`
+	}
+	if err := readJSON(request, &input); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := server.service.SetTeamEmbedding(request.Context(), credentials, request.PathValue("organizationID"), request.PathValue("teamID"), input.Embedding); err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
 }
 
 func (server *Server) createTeam(writer http.ResponseWriter, request *http.Request) {
@@ -222,6 +336,22 @@ func (server *Server) members(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	members, err := server.service.Members(request.Context(), credentials, request.PathValue("organizationID"), request.PathValue("teamID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	if members == nil {
+		members = []domain.Membership{}
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"members": members})
+}
+
+func (server *Server) memberDescendants(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	members, err := server.service.MemberDescendants(request.Context(), credentials, request.PathValue("organizationID"), request.PathValue("teamID"))
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -331,6 +461,18 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 		server.logger.ErrorContext(request.Context(), "teams request failed", "method", request.Method, "path", request.URL.Path, "error", err)
 		writeError(writer, http.StatusInternalServerError, "internal server error")
 	}
+}
+
+func queryLimit(request *http.Request) (int, error) {
+	raw := strings.TrimSpace(request.URL.Query().Get("limit"))
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 0 {
+		return 0, domain.ErrInvalid
+	}
+	return limit, nil
 }
 
 func isBearer(value string) bool {

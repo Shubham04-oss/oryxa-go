@@ -96,5 +96,5 @@ CREATE TABLE IF NOT EXISTS auth_outbox (
 );
 
 CREATE INDEX IF NOT EXISTS auth_outbox_pending_idx
-    ON auth_outbox (available_at, occurred_at)
+    ON auth_outbox (available_at, occurred_at, id)
     WHERE published_at IS NULL;

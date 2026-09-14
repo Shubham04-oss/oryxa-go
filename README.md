@@ -4,13 +4,14 @@ Oryxa is an AWS-backed Go monorepo. It starts with a single Go module and will g
 
 ## Service layout
 
-Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/auth`, `/billing`, `/email`, `/integrations` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
+Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/auth`, `/billing`, `/email`, `/files`, `/integrations` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
 
 ```text
 /
 ├── auth/                  # Identity and access service
 ├── billing/               # Subscriptions and entitlements
 ├── email/                 # Email delivery service
+├── files/                 # Organization object storage on S3
 ├── integrations/          # Third-party connection and automation control plane
 ├── teams/                 # Teams service
 ├── contracts/             # Versioned event contracts services publish
@@ -54,7 +55,9 @@ other services receive only the credential-free connection catalog. The full
 Activepieces platform is not deployed. Each approved connector tool also has a
 call-scoped `SKILL.md` embedded in the integrations catalog, so a direct tool or
 future MCP server can load only the selected provider operation's instructions
-for a smaller model. `/teams` owns teams inside an
+for a smaller model. `/files` owns organization object storage: a private S3
+bucket, PostgreSQL metadata, and credential-free `oryxa.files` events. Other
+services never talk to the bucket; they ask files. `/teams` owns teams inside an
 organization and who is on them: organization admins and team admins share the
 same control. An AI has three tools: `list_teams`, `call_team`, and
 `call_team_members`. It publishes as `oryxa.teams` and consumes from its own
@@ -62,7 +65,7 @@ EventBridge queue. Its contract lives in `teams/README.md`.
 
 ## Shared PostgreSQL and observability
 
-Auth, billing, integrations and teams use `/internal/postgreskit`. Each process owns one native
+Auth, billing, files, integrations and teams use `/internal/postgreskit`. Each process owns one native
 `pgxpool`; `sqlx` wraps that same pool through pgx's `database/sql` adapter, so
 it does not create a second connection budget. PostgreSQL statements and
 transactions remain on native pgx where its semantics matter.
@@ -91,10 +94,10 @@ docker --context mac-mini exec oryxa-go-postgres-1 \
   "SELECT extname, extversion FROM pg_extension WHERE extname IN ('ltree', 'pg_trgm', 'vector', 'graph') ORDER BY extname"
 ```
 
-`/internal/observability` gives auth, billing, email, integrations and teams structured JSON logs,
+`/internal/observability` gives auth, billing, email, files, integrations and teams structured JSON logs,
 W3C trace propagation, HTTP/AWS SDK/pgx spans, PostgreSQL pool metrics, and Go
 runtime metrics. Set `OTEL_EXPORTER_OTLP_ENDPOINT` for OTLP/gRPC export, or use
 the standard signal-specific trace and metric endpoint variables. With no
 endpoint, structured logs remain enabled and telemetry export is a no-op.
 
-Services talk through EventBridge, each consuming what it needs from its own SQS queue. `docker-compose.yml` runs the shared local dependencies — Postgres is `pgvector/pgvector:0.8.6-pg17` so `vector`, `ltree` and `pg_trgm` are available; LocalStack and Moto stand in for AWS; Mailpit catches local SMTP at [http://localhost:8025](http://localhost:8025). Each service's README covers provisioning and running it. `/test` is the k6 client journey across teams, integrations, and email; see `test/README.md`.
+Services talk through EventBridge, each consuming what it needs from its own SQS queue. `docker-compose.yml` runs the shared local dependencies — Postgres is `pgvector/pgvector:0.8.6-pg17` so `vector`, `ltree` and `pg_trgm` are available; LocalStack and Moto stand in for AWS (EventBridge, SQS, DynamoDB, and S3); Mailpit catches local SMTP at [http://localhost:8025](http://localhost:8025). Each service's README covers provisioning and running it. `/test` is the k6 client journey across teams, files, integrations, and email; see `test/README.md`.
