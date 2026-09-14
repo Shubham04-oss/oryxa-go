@@ -5,6 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY teams ./teams
 COPY contracts ./contracts
+COPY internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/teams ./teams/cmd/teams
 
 FROM gcr.io/distroless/static-debian12:nonroot
