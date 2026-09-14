@@ -151,8 +151,8 @@ func normalizeExtensionName(name string) string {
 	switch name {
 	case "pgvector":
 		return "vector"
-	case "pg graph", "pg_graph", "pggraph":
-		return "graph"
+	case "apache age", "apache_age", "apache-age", "apacheage":
+		return "age"
 	default:
 		return name
 	}
@@ -168,7 +168,7 @@ func loadExtensions(ctx context.Context, database *sqlx.DB) (map[string]string, 
 	if err := database.SelectContext(ctx, &rows, `
 		SELECT extname AS name, extversion AS version
 		FROM pg_extension
-		WHERE extname IN ('graph', 'ltree', 'pg_trgm', 'vector')
+		WHERE extname IN ('age', 'ltree', 'pg_trgm', 'vector')
 		ORDER BY extname`); err != nil {
 		return nil, fmt.Errorf("discover postgres extensions: %w", err)
 	}

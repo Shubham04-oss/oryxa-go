@@ -10,8 +10,8 @@ import (
 )
 
 func TestRequireExtensionsNormalizesNames(t *testing.T) {
-	database := &Database{extensions: map[string]string{"vector": "0.8.6", "ltree": "1.3", "graph": "1.1.0"}}
-	if err := database.RequireExtensions("pgvector", " ltree ", "pgGraph", "pg_graph", "pg graph"); err != nil {
+	database := &Database{extensions: map[string]string{"vector": "0.8.6", "ltree": "1.3", "age": "1.5.0"}}
+	if err := database.RequireExtensions("pgvector", " ltree ", "Apache AGE", "apache_age", "age"); err != nil {
 		t.Fatal(err)
 	}
 	err := database.RequireExtensions("pg_trgm")

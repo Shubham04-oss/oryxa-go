@@ -78,21 +78,21 @@ The boundary discovers these database capabilities:
 | ltree | `ltree` | Version discovery and optional startup enforcement |
 | pg_trgm | `pg_trgm` | Version discovery and optional startup enforcement |
 | pgvector | `vector` | Per-connection pgx vector codec registration |
-| [pgGraph](https://github.com/evokoa/pggraph) | `graph` | Version discovery and optional startup enforcement |
+| [Apache AGE](https://age.apache.org/) | `age` | Version discovery and optional startup enforcement |
 
 Applications do not run `CREATE EXTENSION`; the database image or managed
 database control plane owns installation and upgrades. Set
-`POSTGRES_REQUIRED_EXTENSIONS=ltree,pg_trgm,vector,graph` to fail startup when
+`POSTGRES_REQUIRED_EXTENSIONS=ltree,pg_trgm,vector,age` to fail startup when
 the expected capability set is incomplete. `pgvector` is accepted as an alias
-for `vector`, and `pgGraph`, `pg_graph`, or `pg graph` are accepted as aliases
-for `graph`.
+for `vector`, and `Apache AGE`, `apache_age`, or `apache-age` are accepted as
+aliases for `age`.
 
 To inspect the mini database directly:
 
 ```sh
 docker --context mac-mini exec oryxa-go-postgres-1 \
   psql -U oryxa -d oryxa -c \
-  "SELECT extname, extversion FROM pg_extension WHERE extname IN ('ltree', 'pg_trgm', 'vector', 'graph') ORDER BY extname"
+  "SELECT extname, extversion FROM pg_extension WHERE extname IN ('age', 'ltree', 'pg_trgm', 'vector') ORDER BY extname"
 ```
 
 `/internal/observability` gives auth, billing, email, files, integrations and teams structured JSON logs,
