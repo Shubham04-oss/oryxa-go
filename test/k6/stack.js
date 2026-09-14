@@ -1,11 +1,13 @@
 import { check, fail, sleep } from 'k6';
 import http from 'k6/http';
 import crypto from 'k6/crypto';
+import encoding from 'k6/encoding';
 import { Trend } from 'k6/metrics';
 
 const org = __ENV.ORG_ID;
 const teamsURL = (__ENV.TEAMS_URL || 'http://127.0.0.1:18083').replace(/\/$/, '');
 const integrationsURL = (__ENV.INTEGRATIONS_URL || 'http://127.0.0.1:18084').replace(/\/$/, '');
+const filesURL = (__ENV.FILES_URL || 'http://127.0.0.1:18085').replace(/\/$/, '');
 const authURL = (__ENV.AUTH_URL || 'http://127.0.0.1:18080').replace(/\/$/, '');
 const mailpitURL = (__ENV.MAILPIT_URL || 'http://127.0.0.1:8025').replace(/\/$/, '');
 const runID = __ENV.RUN_ID || `${Date.now()}`;
@@ -22,6 +24,7 @@ const secrets = ['client-secret', 'rotated-secret', 'access-token', 'signing-sec
 
 const teamsDuration = new Trend('teams_req_duration');
 const integrationsDuration = new Trend('integrations_req_duration');
+const filesDuration = new Trend('files_req_duration');
 
 export const options = {
   scenarios: {
@@ -36,6 +39,7 @@ export const options = {
     checks: ['rate==1'],
     teams_req_duration: ['p(95)<2500'],
     integrations_req_duration: ['p(95)<4000'],
+    files_req_duration: ['p(95)<2500'],
   },
 };
 
@@ -48,6 +52,7 @@ export default function journey() {
   clearMail();
   concealment();
   const teams = teamsJourney();
+  filesJourney(teams);
   integrationsJourney();
   crossStack(teams.engineeringName);
   cleanup(teams);
@@ -58,6 +63,7 @@ function health() {
     ['auth', `${authURL}/healthz`, 204],
     ['teams', `${teamsURL}/healthz`, 204],
     ['integrations', `${integrationsURL}/healthz`, 204],
+    ['files', `${filesURL}/healthz`, 204],
     ['mailpit', `${mailpitURL}/api/v1/info`, 200],
   ]) {
     const res = http.get(url);
@@ -67,14 +73,128 @@ function health() {
 
 function concealment() {
   must(t('GET', '/teams', '', null), { 'teams without credentials is 401': (r) => r.status === 401 });
+  must(f('GET', '/files', '', null), { 'files without credentials is 401': (r) => r.status === 401 });
   must(i('GET', '/integrations', '', null), { 'integrations without credentials is 401': (r) => r.status === 401 });
   must(t('GET', '/teams', 'nope', null), { 'teams unknown token is 401': (r) => r.status === 401 });
+  must(f('GET', '/files', 'nope', null), { 'files unknown token is 401': (r) => r.status === 401 });
   must(i('GET', '/integrations', 'nope', null), { 'integrations unknown token is 401': (r) => r.status === 401 });
   must(t('GET', '/teams', 'stranger', null), { 'teams conceals the org from a stranger': (r) => r.status === 404 });
+  must(f('GET', '/files', 'stranger', null), { 'files conceals the org from a stranger': (r) => r.status === 404 });
   must(i('GET', '/integrations', 'stranger', null), { 'integrations forbids a stranger': (r) => r.status === 403 });
   must(i('GET', `/integrations`, 'owner', null, `${integrationsURL}/v1/organizations/not-${org}/integrations`), {
     'integrations conceals a foreign org': (r) => r.status === 403,
   });
+}
+
+function filesJourney(teams) {
+  const notes = encoding.b64encode(`sim-notes ${runID}`);
+  const personal = json(must(f('POST', '/files', 'owner', {
+    filename: `notes-${runID}.txt`,
+    content_type: 'text/plain',
+    purpose: 'upload',
+    content: notes,
+  }), { 'owner stores a personal object': (r) => r.status === 201 }));
+  mustOk(personal.id && personal.sha256 && personal.size_bytes > 0 && personal.purpose === 'upload', 'created file metadata is complete');
+  mustOk(personal.organization_id === org && personal.scope === 'member' && personal.member_id, 'personal file hangs on the owner');
+  must(f('GET', `/files/${personal.id}`, 'member', null), { 'another member cannot fetch a personal file': (r) => r.status === 404 });
+  must(f('GET', `/files/${personal.id}/content`, 'outsider', null), { 'outsider cannot download a personal file': (r) => r.status === 404 });
+
+  const memberList = json(must(f('GET', '/files', 'member', null), { 'member lists visible files': (r) => r.status === 200 }));
+  mustOk(Array.isArray(memberList.files) && !memberList.files.some((row) => row.id === personal.id), 'member list does not include the owner personal object');
+
+  const ownerList = json(must(f('GET', '/files', 'owner', null), { 'owner lists member and org files': (r) => r.status === 200 }));
+  mustOk(ownerList.files.some((row) => row.id === personal.id), 'owner list includes the personal object');
+
+  const createdAt = new Date(personal.created_at);
+  const year = createdAt.getUTCFullYear();
+  const month = createdAt.getUTCMonth() + 1;
+  const day = createdAt.getUTCDate();
+  const dayList = json(must(f('GET', `/files?scope=member&year=${year}&month=${month}&day=${day}`, 'owner', null), { 'owner lists files for that UTC day': (r) => r.status === 200 }));
+  mustOk(dayList.files.some((row) => row.id === personal.id), 'day list includes the personal object');
+  const otherYear = json(must(f('GET', `/files?scope=member&year=${year - 1}`, 'owner', null), { 'owner lists files for another year': (r) => r.status === 200 }));
+  mustOk(!otherYear.files.some((row) => row.id === personal.id), "another year does not include today's file");
+
+  const signed = json(must(f('POST', `/files/${personal.id}/download-url`, 'owner', {}), { 'owner gets a download url': (r) => r.status === 200 }));
+  mustOk(signed.url && signed.expires_at, 'presigned download url is present');
+  const fromS3 = http.get(signed.url);
+  must(fromS3, { 'presigned S3 get returns the object': (r) => r.status === 200 && String(r.body) === `sim-notes ${runID}` });
+
+  must(f('DELETE', `/files/${personal.id}`, 'member', null), { 'another member cannot delete the personal object': (r) => r.status === 404 });
+  must(f('DELETE', `/files/${personal.id}`, 'owner', null), { 'owner deletes the personal object': (r) => r.status === 204 });
+  must(f('GET', `/files/${personal.id}`, 'owner', null), { 'deleted personal object is gone': (r) => r.status === 404 });
+
+  must(f('POST', '/files', 'member', {
+    filename: `org-${runID}.txt`,
+    content_type: 'text/plain',
+    scope: 'organization',
+    content: encoding.b64encode('nope'),
+  }), { 'a member cannot create an organization file': (r) => r.status === 403 });
+
+  const orgFile = json(must(f('POST', '/files', 'owner', {
+    filename: `handbook-${runID}.txt`,
+    content_type: 'text/plain',
+    scope: 'organization',
+    purpose: 'upload',
+    content: encoding.b64encode(`handbook ${runID}`),
+  }), { 'owner stores an organization file': (r) => r.status === 201 }));
+  mustOk(orgFile.scope === 'organization' && !orgFile.team_id && !orgFile.member_id, 'organization file hangs on the org');
+  const fetchedOrg = json(must(f('GET', `/files/${orgFile.id}`, 'member', null), { 'a member can fetch an organization file': (r) => r.status === 200 }));
+  mustOk(fetchedOrg.id === orgFile.id && fetchedOrg.sha256 === orgFile.sha256, 'member sees the organization object');
+  const orgList = json(must(f('GET', '/files?scope=organization', 'member', null), { 'member lists organization files': (r) => r.status === 200 }));
+  mustOk(orgList.files.some((row) => row.id === orgFile.id), 'member org list includes the handbook');
+
+  const invoice = json(must(f('POST', '/files', 'owner', {
+    filename: `invoice-${runID}.pdf`,
+    content_type: 'application/pdf',
+    scope: 'organization',
+    purpose: 'billing.attachment',
+    content: encoding.b64encode(`invoice ${runID}`),
+  }), { 'owner stores a billing attachment': (r) => r.status === 201 }));
+  must(f('GET', `/files/${invoice.id}`, 'member', null), { 'billing attachments stay off members': (r) => r.status === 404 });
+  must(f('GET', `/files/${invoice.id}`, 'admin', null), { 'org admin can fetch a billing attachment': (r) => r.status === 200 });
+  const memberOrgList = json(must(f('GET', '/files?scope=organization', 'member', null), { 'member org list hides billing': (r) => r.status === 200 }));
+  mustOk(!memberOrgList.files.some((row) => row.id === invoice.id), 'billing stays off the member org list');
+
+  must(f('POST', '/files', 'outsider', {
+    filename: `leak-${runID}.txt`,
+    content_type: 'text/plain',
+    scope: 'team',
+    team_id: teams.engineering.id,
+    content: encoding.b64encode('nope'),
+  }), { 'outsider cannot hang a file on Engineering': (r) => r.status === 404 });
+
+  const teamFile = json(must(f('POST', '/files', 'owner', {
+    filename: `spec-${runID}.md`,
+    content_type: 'text/markdown',
+    scope: 'team',
+    team_id: teams.engineering.id,
+    purpose: 'upload',
+    content: encoding.b64encode(`spec ${runID}`),
+  }), { 'owner stores a team file on Engineering': (r) => r.status === 201 }));
+  mustOk(teamFile.scope === 'team' && teamFile.team_id === teams.engineering.id, 'team file hangs on Engineering');
+  must(f('GET', `/files/${teamFile.id}`, 'member', null), { 'Engineering member can fetch the team file': (r) => r.status === 200 });
+  must(f('GET', `/files/${teamFile.id}`, 'outsider', null), { 'outsider cannot fetch the team file': (r) => r.status === 404 });
+  const teamList = json(must(f('GET', `/files?team_id=${teams.engineering.id}`, 'member', null), { 'member lists Engineering files': (r) => r.status === 200 }));
+  mustOk(teamList.files.some((row) => row.id === teamFile.id), 'Engineering list includes the spec');
+  must(f('GET', `/files?team_id=${teams.engineering.id}`, 'outsider', null), { 'outsider Engineering file list stays 404': (r) => r.status === 404 });
+  must(f('GET', `/files?team_id=${teams.design.id}`, 'member', null), { 'member cannot list Design files': (r) => r.status === 404 });
+
+  const attachment = json(must(f('POST', '/files', 'member', {
+    filename: `slack-${runID}.txt`,
+    content_type: 'text/plain',
+    scope: 'team',
+    team_id: teams.engineering.id,
+    purpose: 'integrations.attachment',
+    content: encoding.b64encode('slack note'),
+  }), { 'member stores an integrations attachment on Engineering': (r) => r.status === 201 }));
+  mustOk(attachment.purpose === 'integrations.attachment' && attachment.team_id === teams.engineering.id, 'integrations attachment hangs on Engineering');
+
+  must(f('DELETE', `/files/${orgFile.id}`, 'member', null), { 'member cannot delete an organization file': (r) => r.status === 404 });
+  must(f('DELETE', `/files/${orgFile.id}`, 'owner', null), { 'owner deletes the organization file': (r) => r.status === 204 });
+  must(f('DELETE', `/files/${invoice.id}`, 'owner', null), { 'owner deletes the billing attachment': (r) => r.status === 204 });
+  must(f('DELETE', `/files/${teamFile.id}`, 'outsider', null), { 'outsider cannot delete the team file': (r) => r.status === 404 });
+  must(f('DELETE', `/files/${teamFile.id}`, 'owner', null), { 'owner deletes the team file': (r) => r.status === 204 });
+  must(f('DELETE', `/files/${attachment.id}`, 'member', null), { 'creator deletes their team attachment': (r) => r.status === 204 });
 }
 
 function teamsJourney() {
@@ -384,6 +504,10 @@ function slackApp(secret) {
 
 function t(method, path, token, body, url) {
   return request(method, url || `${teamsURL}/v1/organizations/${org}${path}`, token, body, teamsDuration);
+}
+
+function f(method, path, token, body, url) {
+  return request(method, url || `${filesURL}/v1/organizations/${org}${path}`, token, body, filesDuration);
 }
 
 function i(method, path, token, body, url, extraHeaders) {

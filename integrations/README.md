@@ -404,7 +404,9 @@ list integrations.
 ### Added deliberately, piece by piece
 
 - Polling triggers: one EventBridge Scheduler schedule per active trigger.
-- Files: S3-backed `files.write` with strict size, type and retention limits.
+- Files: S3-backed `files.write` with strict size, type and retention limits,
+  through the `/files` service rather than IAM on the runner. The runner still
+  fails closed until that broker path is enabled.
 - Secondary connections: a brokered `connections.get` limited to explicitly
   linked connection IDs.
 
@@ -503,9 +505,10 @@ PostgreSQL cluster and observability. Integrations adds only:
 - an in-process hourly renewal scan and minute-level cleanup worker for the
   current always-on Go broker; their bounded entry points can move to
   EventBridge Scheduler when the broker is split into Lambda handlers;
-- EventBridge Scheduler later for approved polling triggers;
-- S3 only after an approved piece requires files or payloads too large for the
-  normal invocation path.
+- EventBridge Scheduler later for approved polling triggers.
+
+Large payloads and piece files go through the `/files` service, not an
+integrations-owned bucket. The runner still has no S3 IAM.
 
 There is no Activepieces RDS database, Redis/ElastiCache cluster, ECS service,
 load balancer or Activepieces S3 run-log bucket.
@@ -853,7 +856,8 @@ and trigger/provider expansion rather than another architecture spike.
   installation/account routing, subscription lifecycle, and replay rules have
   provider-specific contract tests.
 - Add EventBridge Scheduler only for approved polling triggers.
-- Add S3 only when a supported operation actually requires file handling.
+- Broker piece `files.write` through `/files` only when a supported operation
+  actually requires file handling. The files service already owns the bucket.
 - Introduce Oryxa-managed one-click OAuth credentials only after BYOC staging
   is stable; existing connections are never silently moved between clients.
 

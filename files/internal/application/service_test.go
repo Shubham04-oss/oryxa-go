@@ -1,0 +1,273 @@
+package application
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	fileseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
+	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
+
+	"github.com/Shubham04-oss/oryxa-go/files/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/files/internal/blob"
+	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
+)
+
+func testService(store Store, blobs blob.Store) *Service {
+	service := New(store, blobs, fakeDirectory{}, newFakeTeams(), nil)
+	service.now = func() time.Time { return time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC) }
+	return service
+}
+
+func TestCreateStoresObjectAndEvent(t *testing.T) {
+	store := newFakeStore()
+	blobs := blob.NewMemory()
+	service := testService(store, blobs)
+
+	object, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+		Filename: "notes.txt", ContentType: "text/plain", Content: []byte("hello"),
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if !strings.HasPrefix(object.ID, "file_") || object.SizeBytes != 5 || object.Purpose != domain.PurposeUpload || object.CreatedBy != "user-owner" {
+		t.Fatalf("object = %+v", object)
+	}
+	if object.Scope != domain.ScopeMember || object.MemberID != "user-owner" || object.TeamID != "" {
+		t.Fatalf("placement = %+v", object)
+	}
+	if object.ExpiresAt.Sub(object.CreatedAt) != 30*24*time.Hour {
+		t.Fatalf("expires_at = %s", object.ExpiresAt)
+	}
+	if object.Key() != "org/org_1/member/user-owner/2026/09/14/obj/"+object.ID {
+		t.Fatalf("key = %q", object.Key())
+	}
+	got, body, err := service.Content(context.Background(), creds("user-owner"), "org_1", object.ID)
+	if err != nil || string(body) != "hello" || got.SHA256 != object.SHA256 {
+		t.Fatalf("Content() = %+v %q %v", got, body, err)
+	}
+	if len(store.events) != 1 || store.events[0].DetailType != fileseventsv1.ObjectCreatedDetailType {
+		t.Fatalf("events = %+v", store.events)
+	}
+}
+
+func TestMemberFileIsPrivateToOwner(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Get(context.Background(), creds("user-member"), "org_1", created.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("member get error = %v, want not found", err)
+	}
+	listed, err := service.List(context.Background(), creds("user-member"), "org_1", ListFilter{})
+	if err != nil || len(listed) != 0 {
+		t.Fatalf("member list = %+v, %v", listed, err)
+	}
+	adminList, err := service.List(context.Background(), creds("user-owner"), "org_1", ListFilter{})
+	if err != nil || len(adminList) != 1 || adminList[0].ID != created.ID {
+		t.Fatalf("admin list = %+v, %v", adminList, err)
+	}
+	dayList, err := service.List(context.Background(), creds("user-owner"), "org_1", ListFilter{Date: domain.DateFilter{Year: 2026, Month: 9, Day: 14}})
+	if err != nil || len(dayList) != 1 || dayList[0].ID != created.ID {
+		t.Fatalf("day list = %+v, %v", dayList, err)
+	}
+	otherYear, err := service.List(context.Background(), creds("user-owner"), "org_1", ListFilter{Date: domain.DateFilter{Year: 2025}})
+	if err != nil || len(otherYear) != 0 {
+		t.Fatalf("other year list = %+v, %v", otherYear, err)
+	}
+}
+
+func TestOrgFileIsVisibleToMembers(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+		Filename: "handbook.pdf", ContentType: "application/pdf", Scope: domain.ScopeOrganization, Content: []byte("org"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Scope != domain.ScopeOrganization || created.Key() != "org/org_1/organization/2026/09/14/obj/"+created.ID {
+		t.Fatalf("org object = %+v key = %q", created, created.Key())
+	}
+	if _, err := service.Get(context.Background(), creds("user-member"), "org_1", created.ID); err != nil {
+		t.Fatalf("member get org file error = %v", err)
+	}
+	listed, err := service.List(context.Background(), creds("user-member"), "org_1", ListFilter{})
+	if err != nil || len(listed) != 1 || listed[0].ID != created.ID {
+		t.Fatalf("member list org files = %+v, %v", listed, err)
+	}
+}
+
+func TestMemberCannotCreateOrgFile(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	if _, err := service.Create(context.Background(), creds("user-member"), "org_1", CreateInput{
+		Filename: "a.txt", ContentType: "text/plain", Scope: domain.ScopeOrganization, Content: []byte("a"),
+	}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("member org create error = %v, want forbidden", err)
+	}
+}
+
+func TestTeamFileFollowsTeamsACL(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+		Filename: "spec.md", ContentType: "text/markdown", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("spec"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Key() != "org/org_1/team/team_eng/2026/09/14/obj/"+created.ID {
+		t.Fatalf("team key = %q", created.Key())
+	}
+	if _, err := service.Get(context.Background(), creds("user-member"), "org_1", created.ID); err != nil {
+		t.Fatalf("engineering member get error = %v", err)
+	}
+	if _, err := service.Get(context.Background(), creds("user-outsider"), "org_1", created.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("outsider get error = %v, want not found", err)
+	}
+	if _, err := service.Create(context.Background(), creds("user-outsider"), "org_1", CreateInput{
+		Filename: "nope.txt", ContentType: "text/plain", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("nope"),
+	}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("outsider team create error = %v, want not found", err)
+	}
+	listed, err := service.List(context.Background(), creds("user-member"), "org_1", ListFilter{TeamID: "team_eng"})
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("team list = %+v, %v", listed, err)
+	}
+	if _, err := service.List(context.Background(), creds("user-outsider"), "org_1", ListFilter{TeamID: "team_eng"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("outsider team list error = %v, want not found", err)
+	}
+}
+
+func TestBillingAttachmentIsAdminOnly(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+		Filename: "invoice.pdf", ContentType: "application/pdf", Purpose: domain.PurposeBillingAttachment, Scope: domain.ScopeMember, Content: []byte("inv"),
+	}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("billing on member error = %v, want invalid", err)
+	}
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+		Filename: "invoice.pdf", ContentType: "application/pdf", Purpose: domain.PurposeBillingAttachment, Scope: domain.ScopeOrganization, Content: []byte("inv"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.ExpiresAt.Sub(created.CreatedAt) != 90*24*time.Hour {
+		t.Fatalf("billing retention = %s", created.ExpiresAt)
+	}
+	if _, err := service.Get(context.Background(), creds("user-member"), "org_1", created.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("member billing get error = %v, want not found", err)
+	}
+	if _, err := service.Get(context.Background(), creds("user-admin"), "org_1", created.ID); err != nil {
+		t.Fatalf("admin billing get error = %v", err)
+	}
+	memberList, err := service.List(context.Background(), creds("user-member"), "org_1", ListFilter{Scope: domain.ScopeOrganization})
+	if err != nil || len(memberList) != 0 {
+		t.Fatalf("member org list leaked billing = %+v, %v", memberList, err)
+	}
+}
+
+func TestDeleteIsCreatorOrAdmin(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	created, err := service.Create(context.Background(), creds("user-member"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Delete(context.Background(), creds("user-outsider"), "org_1", created.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("outsider delete error = %v, want not found", err)
+	}
+	if err := service.Delete(context.Background(), creds("user-owner"), "org_1", created.ID); err != nil {
+		t.Fatalf("admin delete error = %v", err)
+	}
+	if _, err := service.Get(context.Background(), creds("user-owner"), "org_1", created.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("get after delete = %v", err)
+	}
+}
+
+func TestRejectsDisallowedPurposeAndType(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.exe", ContentType: "application/x-msdownload", Content: []byte("a")}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("exe error = %v", err)
+	}
+	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Purpose: "other", Content: []byte("a")}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("purpose error = %v", err)
+	}
+}
+
+func TestStrangerIsNotFound(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	if _, err := service.List(context.Background(), creds("user-stranger"), "org_1", ListFilter{}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("stranger list error = %v, want not found", err)
+	}
+}
+
+func TestOrganizationDeletedWipesPrefix(t *testing.T) {
+	store := newFakeStore()
+	blobs := blob.NewMemory()
+	service := testService(store, blobs)
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.OrganizationDeleted(context.Background(), autheventsv1.OrganizationDeleted{OrganizationID: "org_1", DeletedBy: "user-owner"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blobs.Get(context.Background(), created.Key()); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("blob after org delete = %v", err)
+	}
+}
+
+func TestMemberRemovedDeletesOnlyMemberFiles(t *testing.T) {
+	store := newFakeStore()
+	service := testService(store, blob.NewMemory())
+	personal, err := service.Create(context.Background(), creds("user-member"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamFile, err := service.Create(context.Background(), creds("user-member"), "org_1", CreateInput{
+		Filename: "team.txt", ContentType: "text/plain", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("t"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.MemberRemoved(context.Background(), autheventsv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-member", Reason: "left"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Get(context.Background(), creds("user-owner"), "org_1", personal.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("personal after member removed = %v", err)
+	}
+	if _, err := service.Get(context.Background(), creds("user-owner"), "org_1", teamFile.ID); err != nil {
+		t.Fatalf("team file after member removed = %v", err)
+	}
+}
+
+func TestTeamDeletedWipesTeamFiles(t *testing.T) {
+	store := newFakeStore()
+	blobs := blob.NewMemory()
+	service := testService(store, blobs)
+	teamFile, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+		Filename: "spec.md", ContentType: "text/markdown", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("spec"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	personal, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.TeamDeleted(context.Background(), teamseventsv1.TeamDeleted{OrganizationID: "org_1", TeamID: "team_eng", DeletedBy: "user-owner"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blobs.Get(context.Background(), teamFile.Key()); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("team blob after team delete = %v", err)
+	}
+	if _, err := service.Get(context.Background(), creds("user-owner"), "org_1", personal.ID); err != nil {
+		t.Fatalf("personal after team delete = %v", err)
+	}
+}
+
+func creds(userID string) authclient.Credentials {
+	return authclient.Credentials{Authorization: "Bearer " + userID}
+}
