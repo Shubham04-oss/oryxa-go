@@ -1,0 +1,172 @@
+package events
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"time"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+
+	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
+)
+
+// AuthSubscriptions are the auth detail types connections consumes.
+func AuthSubscriptions() []string {
+	return []string{
+		autheventsv1.OrganizationDeletedDetailType,
+		autheventsv1.MemberRemovedDetailType,
+	}
+}
+
+// TeamSubscriptions are the teams detail types connections consumes.
+func TeamSubscriptions() []string {
+	return []string{
+		teamseventsv1.TeamDeletedDetailType,
+	}
+}
+
+// application is what the consumer dispatches decoded events to. It is
+// satisfied by *connections/internal/application.Service.
+type application interface {
+	OrganizationDeleted(context.Context, autheventsv1.OrganizationDeleted) error
+	MemberRemoved(context.Context, autheventsv1.MemberRemoved) error
+	TeamDeleted(context.Context, teamseventsv1.TeamDeleted) error
+}
+
+type handler func(context.Context, json.RawMessage) error
+
+type subscription struct {
+	source string
+	handle handler
+}
+
+// Consumer ends the connections affected by an organization deletion, a
+// member leaving an organization, or a team being deleted.
+type Consumer struct {
+	handlers map[string]subscription
+	logger   *slog.Logger
+}
+
+func NewConsumer(app application, logger *slog.Logger) *Consumer {
+	return &Consumer{
+		handlers: map[string]subscription{
+			autheventsv1.OrganizationDeletedDetailType: {source: autheventsv1.Source, handle: decode(app.OrganizationDeleted)},
+			autheventsv1.MemberRemovedDetailType:       {source: autheventsv1.Source, handle: decode(app.MemberRemoved)},
+			teamseventsv1.TeamDeletedDetailType:        {source: teamseventsv1.Source, handle: decode(app.TeamDeleted)},
+		},
+		logger: logger,
+	}
+}
+
+type eventBridgeEvent struct {
+	ID         string          `json:"id"`
+	Source     string          `json:"source"`
+	DetailType string          `json:"detail-type"`
+	Detail     json.RawMessage `json:"detail"`
+}
+
+type receivedEnvelope struct {
+	EventID string          `json:"event_id"`
+	Version int             `json:"version"`
+	Data    json.RawMessage `json:"data"`
+}
+
+// Handle decodes one SQS message body as an EventBridge event and dispatches
+// it to the subscribed handler.
+func (consumer *Consumer) Handle(ctx context.Context, body string) error {
+	var event eventBridgeEvent
+	if err := json.Unmarshal([]byte(body), &event); err != nil {
+		return fmt.Errorf("decode EventBridge event: %w", err)
+	}
+	subscribed, ok := consumer.handlers[event.DetailType]
+	if !ok || event.Source != subscribed.source {
+		return fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
+	}
+	var detail receivedEnvelope
+	if err := json.Unmarshal(event.Detail, &detail); err != nil {
+		return fmt.Errorf("event %s: decode detail: %w", event.ID, err)
+	}
+	if detail.Version != 1 || detail.EventID == "" {
+		return fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, detail.Version, detail.EventID)
+	}
+	if err := subscribed.handle(ctx, detail.Data); err != nil {
+		return fmt.Errorf("event %s: %s: %w", detail.EventID, event.DetailType, err)
+	}
+	consumer.logger.InfoContext(ctx, "event handled", "event_id", detail.EventID, "detail_type", event.DetailType)
+	return nil
+}
+
+func decode[T any](handle func(context.Context, T) error) handler {
+	return func(ctx context.Context, data json.RawMessage) error {
+		var event T
+		if err := json.Unmarshal(data, &event); err != nil {
+			return fmt.Errorf("decode event data: %w", err)
+		}
+		return handle(ctx, event)
+	}
+}
+
+type queueAPI interface {
+	ReceiveMessage(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
+	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
+}
+
+// receiveBackoff is how long Poll waits after a failed receive before trying
+// again. A var so tests can shorten it instead of waiting for real time.
+var receiveBackoff = 5 * time.Second
+
+// Poll long-polls the connections-events queue until ctx is cancelled,
+// deleting only the messages it handled successfully.
+func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL string) {
+	for {
+		output, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
+			QueueUrl:            aws.String(queueURL),
+			MaxNumberOfMessages: 10,
+			WaitTimeSeconds:     20,
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			consumer.logger.ErrorContext(ctx, "receive from connections queue failed", "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(receiveBackoff):
+			}
+			continue
+		}
+
+		var handled []sqstypes.DeleteMessageBatchRequestEntry
+		for index, message := range output.Messages {
+			if err := consumer.Handle(ctx, aws.ToString(message.Body)); err != nil {
+				consumer.logger.ErrorContext(ctx, "event failed", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
+				continue
+			}
+			handled = append(handled, sqstypes.DeleteMessageBatchRequestEntry{
+				Id:            aws.String(strconv.Itoa(index)),
+				ReceiptHandle: message.ReceiptHandle,
+			})
+		}
+		if len(handled) == 0 {
+			continue
+		}
+		deleted, err := client.DeleteMessageBatch(ctx, &sqs.DeleteMessageBatchInput{QueueUrl: aws.String(queueURL), Entries: handled})
+		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				consumer.logger.ErrorContext(ctx, "delete handled messages failed", "error", err)
+			}
+			continue
+		}
+		for _, failure := range deleted.Failed {
+			consumer.logger.ErrorContext(ctx, "delete handled message failed", "code", aws.ToString(failure.Code), "message", aws.ToString(failure.Message))
+		}
+	}
+}
