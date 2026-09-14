@@ -57,30 +57,27 @@ func (c Static) ActionDefinition(provider, actionName string) (actionflow.Defini
 	if provider != "slack" {
 		return actionflow.Definition{}, false
 	}
-	base := actionflow.Definition{Provider: "slack", PieceName: SlackPieceName,
-		PieceVersion: SlackPieceVersion, ActionName: actionName}
-	switch actionName {
-	case "post-message":
-		base.RunnerActionName = "slack_post_message"
-		base.RequiredScopes = []string{"chat:write"}
-		base.ValidateProps = validateSlackPostMessage
-	case "add-reaction":
-		base.RunnerActionName = "slack_add_reaction"
-		base.RequiredScopes = []string{"reactions:write"}
-		base.ValidateProps = validateSlackReaction
-	case "find-channel":
-		base.RunnerActionName = "slack_find_channel"
-		base.RequiredScopes = []string{"channels:read", "groups:read"}
-		base.ValidateProps = validateSlackFindChannel
-	default:
-		return actionflow.Definition{}, false
-	}
-	return bindActionSkill(provider, actionName, base, true)
+	definition, ok := slackActionDefinition(actionName)
+	return bindActionSkill(provider, actionName, definition, ok)
 }
 
 func (c Static) TriggerDefinition(provider, triggerName string) (triggerflow.Definition, bool) {
 	if c.PublicBaseURL == "" {
 		return triggerflow.Definition{}, false
+	}
+	if provider == "github" {
+		base := triggerflow.Definition{Provider: "github", PieceName: GitHubPieceName, PieceVersion: GitHubPieceVersion,
+			TriggerName: triggerName, RouteMode: domain.WebhookRoutePerConnection, MaxBodyBytes: 256 * 1024,
+			ValidateProps: validateGitHubTrigger}
+		switch triggerName {
+		case "new-issue":
+			base.Event, base.GitHubHookEvent = "issues", "issues"
+		case "new-pull-request":
+			base.Event, base.GitHubHookEvent = "pull_request", "pull_request"
+		default:
+			return triggerflow.Definition{}, false
+		}
+		return bindTriggerSkill(provider, triggerName, base, true)
 	}
 	if provider == "microsoft" {
 		base := triggerflow.Definition{Provider: "microsoft", RouteMode: domain.WebhookRoutePerConnection,
@@ -106,24 +103,28 @@ func (c Static) TriggerDefinition(provider, triggerName string) (triggerflow.Def
 		}
 		return bindTriggerSkill(provider, triggerName, base, true)
 	}
-	if provider != "slack" || triggerName != "new-message" {
+	if provider == "google" {
+		base := triggerflow.Definition{Provider: "google", RouteMode: domain.WebhookRoutePerConnection,
+			MaxBodyBytes: 64 * 1024, GoogleTTL: 7 * 24 * time.Hour, ValidateProps: validateGoogleTrigger}
+		switch triggerName {
+		case "new-email":
+			base.PieceName, base.PieceVersion = GmailPieceName, GmailPieceVersion
+			base.TriggerName, base.Event, base.GoogleWatch = triggerName, "mailbox-change", "gmail"
+			base.RequiredScopes = []string{googleGmailMetadataScope}
+		case "calendar-event-changed":
+			base.PieceName, base.PieceVersion = GoogleCalendarPieceName, GoogleCalendarPieceVersion
+			base.TriggerName, base.Event, base.GoogleWatch = triggerName, "channel-notification", "calendar"
+			base.RequiredScopes = []string{googleCalendarReadScope}
+		default:
+			return triggerflow.Definition{}, false
+		}
+		return bindTriggerSkill(provider, triggerName, base, true)
+	}
+	if provider != "slack" {
 		return triggerflow.Definition{}, false
 	}
-	return bindTriggerSkill(provider, triggerName, triggerflow.Definition{
-		Provider: "slack", PieceName: SlackPieceName, PieceVersion: SlackPieceVersion,
-		TriggerName: "new-message", RouteMode: domain.WebhookRouteAppLevel,
-		Event: "message", TimestampHeader: "x-slack-request-timestamp",
-		TimestampWindow: 5 * time.Minute, MaxBodyBytes: 128 * 1024,
-		ValidateProps: func(raw json.RawMessage) error {
-			var props struct {
-				IgnoreBots *bool `json:"ignoreBots"`
-			}
-			if err := json.Unmarshal(raw, &props); err != nil {
-				return errors.New("trigger properties must be a JSON object")
-			}
-			return nil
-		},
-	}, true)
+	definition, ok := slackTriggerDefinition(triggerName)
+	return bindTriggerSkill(provider, triggerName, definition, ok)
 }
 
 func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
@@ -134,7 +135,7 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 		return bindConnectionSkill(provider, oauthflow.Definition{
 			Provider: "github", PieceName: GitHubPieceName, PieceVersion: GitHubPieceVersion,
 			RedirectURI:    c.PublicBaseURL + "/v1/oauth/callback/github",
-			AllowedScopes:  []string{"admin:repo_hook", "offline_access", "public_repo", "read:user", "repo", "workflow"},
+			AllowedScopes:  []string{"admin:org_hook", "admin:repo_hook", "offline_access", "public_repo", "read:org", "read:user", "repo", "workflow"},
 			RequiredScopes: []string{"read:user"}, SupportsPKCE: false,
 		}, true)
 	}
@@ -146,7 +147,12 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 				"email", "openid", "profile",
 				"https://www.googleapis.com/auth/calendar.events",
 				"https://www.googleapis.com/auth/calendar.readonly",
+				"https://www.googleapis.com/auth/drive",
 				"https://www.googleapis.com/auth/drive.metadata.readonly",
+				"https://www.googleapis.com/auth/gmail.compose",
+				"https://www.googleapis.com/auth/gmail.metadata",
+				"https://www.googleapis.com/auth/gmail.modify",
+				"https://www.googleapis.com/auth/gmail.readonly",
 				"https://www.googleapis.com/auth/gmail.send",
 			},
 			RequiredScopes: []string{"email", "openid", "profile"}, SupportsPKCE: true,
@@ -158,7 +164,8 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 			RedirectURI: c.PublicBaseURL + "/v1/oauth/callback/microsoft",
 			AllowedScopes: []string{
 				"openid", "profile", "email", "offline_access", "User.Read",
-				"Mail.Send", "Mail.Read", "Calendars.ReadWrite", "Calendars.Read", "Files.Read",
+				"Mail.Send", "Mail.Read", "Mail.ReadWrite", "Calendars.ReadWrite", "Calendars.Read",
+				"Files.Read", "Files.ReadWrite",
 			},
 			// Microsoft may omit offline_access from the returned scope string even
 			// when it issued a refresh token. It is still requested by the OAuth
@@ -170,78 +177,7 @@ func (c Static) OAuthDefinition(provider string) (oauthflow.Definition, bool) {
 	if provider != "slack" {
 		return oauthflow.Definition{}, false
 	}
-	return bindConnectionSkill(provider, oauthflow.Definition{
-		Provider:     "slack",
-		PieceName:    SlackPieceName,
-		PieceVersion: SlackPieceVersion,
-		RedirectURI:  c.PublicBaseURL + "/v1/oauth/callback/slack",
-		AllowedScopes: []string{
-			"channels:history", "channels:read", "chat:write",
-			"groups:history", "groups:read", "reactions:write",
-		},
-		RequiredScopes: []string{"channels:history", "groups:history"},
-		// Slack's OAuth v2 flow currently relies on the confidential client
-		// secret. PKCE remains enabled by catalog entry only for providers that
-		// explicitly support it.
-		SupportsPKCE: false,
-	}, true)
-}
-
-func validateSlackPostMessage(raw json.RawMessage) error {
-	var props struct {
-		Channel        string          `json:"channel"`
-		Text           string          `json:"text"`
-		ThreadTS       string          `json:"threadTs"`
-		ReplyBroadcast bool            `json:"replyBroadcast"`
-		SendAsUser     bool            `json:"sendAsUser"`
-		UnfurlLinks    *bool           `json:"unfurlLinks"`
-		Blocks         json.RawMessage `json:"blocks"`
-	}
-	if err := decodeStrict(raw, &props); err != nil || !boundedIdentifier(props.Channel, 100) || len(props.Text) > 40_000 || len(props.ThreadTS) > 80 || props.SendAsUser {
-		return errors.New("invalid Slack post-message properties")
-	}
-	if strings.TrimSpace(props.Text) == "" && len(props.Blocks) == 0 {
-		return errors.New("message text or blocks are required")
-	}
-	if props.ReplyBroadcast && props.ThreadTS == "" {
-		return errors.New("replyBroadcast requires threadTs")
-	}
-	if len(props.Blocks) > 0 {
-		var blocks []any
-		if len(props.Blocks) > 100*1024 || json.Unmarshal(props.Blocks, &blocks) != nil || len(blocks) == 0 || len(blocks) > 50 {
-			return errors.New("invalid Slack blocks")
-		}
-	}
-	return nil
-}
-
-func validateSlackReaction(raw json.RawMessage) error {
-	var props struct {
-		Channel     string `json:"channel"`
-		TS          string `json:"ts"`
-		Reaction    string `json:"reaction"`
-		ReactAsUser bool   `json:"reactAsUser"`
-	}
-	if err := decodeStrict(raw, &props); err != nil || !boundedIdentifier(props.Channel, 100) ||
-		!boundedIdentifier(props.TS, 80) || props.ReactAsUser || len(props.Reaction) == 0 || len(props.Reaction) > 100 || strings.ContainsAny(props.Reaction, ": \t\r\n") {
-		return errors.New("invalid Slack add-reaction properties")
-	}
-	return nil
-}
-
-func validateSlackFindChannel(raw json.RawMessage) error {
-	var props struct {
-		Name            string `json:"name"`
-		ExcludeArchived *bool  `json:"excludeArchived"`
-	}
-	if err := decodeStrict(raw, &props); err != nil {
-		return err
-	}
-	name := strings.TrimPrefix(strings.TrimSpace(props.Name), "#")
-	if name == "" || len(name) > 80 || strings.ContainsAny(name, "\r\n\t") {
-		return errors.New("invalid Slack channel name")
-	}
-	return nil
+	return bindConnectionSkill(provider, slackOAuthDefinition(c.PublicBaseURL), true)
 }
 
 func decodeStrict(raw json.RawMessage, target any) error {

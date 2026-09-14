@@ -41,6 +41,9 @@ func (o OAuth) AuthorizationURL(request oauthflow.AuthorizationRequest) (string,
 	query.Set("redirect_uri", request.RedirectURI)
 	query.Set("scope", strings.Join(request.Scopes, ","))
 	query.Set("state", request.State)
+	if len(request.UserScopes) > 0 {
+		query.Set("user_scope", strings.Join(request.UserScopes, ","))
+	}
 	if request.PKCEChallenge != "" {
 		query.Set("code_challenge", request.PKCEChallenge)
 		query.Set("code_challenge_method", "S256")
@@ -98,6 +101,9 @@ func (o OAuth) Exchange(ctx context.Context, request oauthflow.ExchangeRequest) 
 		}
 		return oauthflow.Grant{}, fmt.Errorf("Slack rejected OAuth exchange: %s", providerError)
 	}
+	if token.AuthedUser.AccessToken == "" {
+		return oauthflow.Grant{}, errors.New("Slack token response has no user access token")
+	}
 	var data map[string]any
 	if err := json.Unmarshal(body, &data); err != nil {
 		return oauthflow.Grant{}, errors.New("Slack token endpoint returned invalid data")
@@ -139,7 +145,9 @@ type slackTokenResponse struct {
 	TokenType   string `json:"token_type"`
 	Scope       string `json:"scope"`
 	AuthedUser  struct {
-		Scope string `json:"scope"`
+		ID          string `json:"id"`
+		Scope       string `json:"scope"`
+		AccessToken string `json:"access_token"`
 	} `json:"authed_user"`
 }
 

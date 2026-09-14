@@ -7,7 +7,7 @@ func TestFromEnvLoadsRuntimeConfiguration(t *testing.T) {
 	t.Setenv("AUTH_COOKIE_SECURE", "false")
 	t.Setenv("AUTH_AUTO_MIGRATE", "true")
 	t.Setenv("AUTH_RETURN_URLS", "https://app.example.com, https://admin.example.com")
-	t.Setenv("POSTGRES_REQUIRED_EXTENSIONS", "ltree, pg_trgm, pgvector, graph")
+	t.Setenv("POSTGRES_REQUIRED_EXTENSIONS", "ltree, pg_trgm, pgvector, age")
 
 	config, err := FromEnv()
 	if err != nil {

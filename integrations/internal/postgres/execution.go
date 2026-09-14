@@ -84,6 +84,12 @@ func (s *Store) DisableTriggerWithEvent(ctx context.Context, organizationID, mem
 	if err := enqueueMicrosoftGraphCleanupForTrigger(ctx, tx, organizationID, triggerID, now); err != nil {
 		return err
 	}
+	if err := enqueueGitHubCleanupForTrigger(ctx, tx, organizationID, triggerID, now); err != nil {
+		return err
+	}
+	if err := enqueueGoogleCleanupForTrigger(ctx, tx, organizationID, triggerID, now); err != nil {
+		return err
+	}
 	tag, err := tx.Exec(ctx, `
 		UPDATE integrations_triggers
 		SET status = 'disabled', version = version + 1, updated_at = $4
@@ -126,11 +132,12 @@ func (s *Store) RunnableTriggers(ctx context.Context, organizationID, profileID,
 		JOIN integrations_oauth_apps p
 		  ON p.id = c.profile_id AND p.organization_id = c.organization_id
 		WHERE t.organization_id = $1 AND t.profile_id = $2
-		  AND t.piece_name = $3 AND t.piece_version = $4 AND t.trigger_name = $5
+		  AND t.piece_name = $3 AND t.piece_version = $4
+		  AND ($5 = $8 OR t.trigger_name = $5)
 		  AND t.status = 'active' AND c.status = 'active' AND p.status = 'active'
 		  AND ($6 = '' OR t.connection_id = $6)
 		  AND ($7 = '' OR t.provider_identifier = $7)
-		ORDER BY t.id`, organizationID, profileID, pieceName, pieceVersion, triggerName, connectionID, providerIdentifier)
+		ORDER BY t.id`, organizationID, profileID, pieceName, pieceVersion, triggerName, connectionID, providerIdentifier, domain.SlackEventsRouteTrigger)
 	if err != nil {
 		return nil, fmt.Errorf("query runnable triggers: %w", err)
 	}

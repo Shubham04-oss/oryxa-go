@@ -1,6 +1,6 @@
 ---
 name: oryxa-slack
-description: Use only with Oryxa Slack tools for member connection status, approved message and reaction actions, channel lookup, or the new-message trigger.
+description: Use only with Oryxa Slack tools for member connection status, approved Slack actions, or Events API triggers.
 ---
 
 # Oryxa Slack
@@ -26,51 +26,74 @@ guidance.
   action. Reuse it only with identical input. A new key means a deliberate new
   provider side effect.
 
+## Authorization
+
+Each member OAuth-connects. The catalog always requests Slack `user_scope` in
+addition to the org's bot scopes, and stores both the bot token (`xoxb`) and
+the authorizing user's token (`xoxp`). `sendAsUser` and `reactAsUser` post or
+react as that member. Search, profile, and status writes require the user
+token. Missing scopes surface as `scope_required` or
+`reauthorization_required`; reconnect rather than seeking a bypass.
+
+File upload, file download, custom API call, and waitpoint/approval actions
+are not approved. `list-files` returns metadata only.
+
 ## Approved actions
 
-### `post-message`
+Use channel, user, timestamp, and file IDs, not guessed display names. Message
+writes accept `text` (max 40,000) or a `blocks` array (max 50 items / 100 KiB).
+`replyBroadcast=true` requires `threadTs`. Reaction names have no colons or
+whitespace.
 
-Input `props`:
+Messaging: `post-message`, `send-direct-message`, `update-message`,
+`delete-message`, `send-ephemeral-message`, `schedule-message`,
+`list-scheduled-messages`, `delete-scheduled-message`, `get-message`,
+`get-channel-history`, `get-thread-replies`, `get-message-permalink`,
+`search-messages`, `mark-conversation-read`, `close-dm`.
 
-- `channel` is required and must be a channel ID, not a guessed display name.
-- Supply non-empty `text` or a non-empty `blocks` array. `text` is limited to
-  40,000 characters and `blocks` to 50 items/100 KiB.
-- Optional: `threadTs`, `replyBroadcast`, and `unfurlLinks`.
-- `replyBroadcast=true` requires `threadTs`. `sendAsUser` is unsupported.
+Reactions: `add-reaction`, `remove-reaction`, `get-reactions`.
 
-Expect `channel_id`, `message_timestamp`, and optionally `thread_timestamp`.
-A success publishes `integrations.slack.message-sent.v1`. Do not claim Slack
-delivered or displayed the message beyond the provider-accepted result.
+Channels: `find-channel`, `create-channel`, `archive-channel`,
+`unarchive-channel`, `rename-channel`, `set-channel-topic`,
+`set-channel-purpose`, `join-channel`, `leave-channel`,
+`invite-users-to-channel`, `remove-user-from-channel`, `list-channels`,
+`get-channel-info`, `list-channel-members`.
 
-### `add-reaction`
+Users and groups: `find-user-by-email`, `find-user-by-handle`,
+`find-user-by-id`, `get-user`, `list-users`, `set-user-status`,
+`update-profile`, `list-user-conversations`, `list-user-reactions`,
+`list-user-groups`, `get-user-group-by-handle`,
+`update-user-group-members`, `list-custom-emoji`, `list-files`.
 
-Input `props` requires `channel`, message `ts`, and an emoji name in `reaction`
-without colons or whitespace. `reactAsUser` is unsupported. Expect the same
-channel/message identifiers and reaction in the safe result, plus
-`integrations.slack.reaction-added.v1`.
+Writes that change Slack state publish identity-only domain events (channel,
+timestamp, mutation). Lookups publish none. Do not claim Slack delivered or
+displayed a message beyond the provider-accepted result.
 
-### `find-channel`
+## Approved triggers
 
-Input `props` requires `name`; a leading `#` is accepted. Optional
-`excludeArchived` controls archived results. Expect safe channel metadata such
-as ID, name, privacy, archive, membership, and member count. This is a lookup
-and publishes no domain side-effect event.
+All Slack inbound triggers share one organization app-level Events URL. An
+admin registers that route once per OAuth profile (`trigger_name` of any
+approved Slack trigger is accepted; the stored route is `slack-events`). The
+Slack app Event Subscriptions must include the event types for the triggers
+the org enables (`message`, `reaction_added`, `reaction_removed`,
+`channel_created`, `team_join`, `star_added`, `emoji_changed`).
 
-## Approved trigger
+- `new-message`, `new-message-in-channel`, `new-direct-message`
+- `new-mention` (requires `users` or `usergroups`), `new-mention-in-direct-message`
+- `new-reaction`, `reaction-removed`
+- `channel-created`, `new-user`, `new-saved-message`, `new-team-custom-emoji`
+- `new-command`, `new-command-in-direct-message` (require `user` and `commands`)
 
-`new-message` is an organization app-level webhook trigger. Input `props` may
-contain `ignoreBots`; prefer `true` unless the user explicitly needs bot
-messages. The organization admin must configure the Slack webhook route and
-signing secret first. The connected grant needs history access for the relevant
-public/private channel type. Expect authenticated, deduplicated, at-least-once
-events; downstream consumers must deduplicate by event ID.
+Personal IM inboxes that the bot is not in are not delivered by the Events
+API. Expect authenticated, deduplicated, at-least-once events; downstream
+consumers must deduplicate by event ID.
 
 ## Failure handling
 
 - `scope_required` or `reauthorization_required`: tell the user Slack must be
   reconnected with the missing scopes; do not seek a bypass.
-- `webhook_route_required`: an admin must configure the app-level route before
-  enabling `new-message`.
+- `webhook_route_required`: an admin must configure the app-level Events URL
+  before enabling any Slack trigger.
 - `action_in_progress`: do not submit another action with a different key.
 - `action_failed`: use a new idempotency key only after the user asks to retry.
 - Provider failures are intentionally opaque. Never infer success from an

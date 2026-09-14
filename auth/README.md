@@ -82,8 +82,8 @@ connections. Migrations use a transaction-scoped PostgreSQL advisory lock, so
 multiple replicas can start with `AUTH_AUTO_MIGRATE=true` safely.
 
 Startup discovers the installed versions of `ltree`, `pg_trgm`, pgvector and
-pgGraph. Their PostgreSQL extension names are `ltree`, `pg_trgm`, `vector`, and
-`graph` respectively. If pgvector is installed, its pgx codecs are registered
+Apache AGE. Their PostgreSQL extension names are `ltree`, `pg_trgm`, `vector`,
+and `age` respectively. If pgvector is installed, its pgx codecs are registered
 on every newly opened connection. The service does not install or upgrade
 extensions itself.
 
@@ -91,13 +91,13 @@ Set the following after the database image or managed control plane contains
 all four extensions:
 
 ```env
-POSTGRES_REQUIRED_EXTENSIONS=ltree,pg_trgm,vector,graph
+POSTGRES_REQUIRED_EXTENSIONS=ltree,pg_trgm,vector,age
 ```
 
 This makes a missing capability a startup error. Product-name aliases such as
-`pgvector`, `pgGraph`, `pg_graph`, and `pg graph` are normalized to their SQL
-extension names. In particular, a pgvector PostgreSQL image does not imply
-that pgGraph is installed; the database image must bundle both when both are
+`pgvector`, `Apache AGE`, `apache_age`, and `apache-age` are normalized to their
+SQL extension names. In particular, a pgvector PostgreSQL image does not imply
+that Apache AGE is installed; the database image must bundle both when both are
 required.
 
 ### Observability

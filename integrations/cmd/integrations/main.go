@@ -137,6 +137,8 @@ func main() {
 	state := dynamo.TriggerState{Client: dynamoClient, TableName: config.DynamoTable}
 	runner := piecerunner.Client{Lambda: lambdaClient, FunctionName: config.PieceRunnerFunction}
 	graphClient := microsoftgraph.Client{}
+	githubClient := githubprovider.Client{}
+	googleClient := googleprovider.Client{}
 	oauth := oauthflow.Service{Catalog: catalog, Authorizer: store, Profiles: store,
 		States: dynamo.OAuthStates{Client: dynamoClient, TableName: config.DynamoTable}, Connections: store,
 		Secrets: secretBox, Providers: providerRegistry,
@@ -145,12 +147,24 @@ func main() {
 		Routes: routes, Secrets: secretBox, PublicURL: strings.TrimRight(config.PublicBaseURL, "/")}
 	triggerService := triggerflow.Service{Catalog: catalog, Authorizer: store, Connections: store,
 		Routes: routes, Store: store, State: state, Secrets: secretBox, Credentials: credentialSource, Runner: runner,
-		MicrosoftGraph: graphClient,
-		IDs:            ids, PublicURL: strings.TrimRight(config.PublicBaseURL, "/")}
+		MicrosoftGraph: graphClient, GitHub: githubClient, Google: googleClient, GmailCensus: store,
+		GmailPubSubTopic: config.GmailPubSubTopic,
+		IDs:              ids, PublicURL: strings.TrimRight(config.PublicBaseURL, "/")}
+	claims := dynamo.Claims{Client: dynamoClient, TableName: config.DynamoTable, IDs: ids}
+	webhookQueue := queue.WebhookQueue{Client: sqsClient, QueueURL: config.WebhookQueueURL}
 	webhookService := webhooks.Service{Routes: routes, Secrets: secretBox,
-		Runner: microsoftgraph.WebhookRunner{Fallback: runner},
-		Claims: dynamo.Claims{Client: dynamoClient, TableName: config.DynamoTable, IDs: ids},
-		Queue:  queue.WebhookQueue{Client: sqsClient, QueueURL: config.WebhookQueueURL}, IDs: ids}
+		Runner: githubprovider.WebhookRunner{Fallback: googleprovider.WebhookRunner{Fallback: microsoftgraph.WebhookRunner{Fallback: runner}}},
+		Claims: claims, Queue: webhookQueue, IDs: ids}
+	var gmailPushes httpserver.GmailPushAdmission
+	if config.GmailPubSubTopic != "" {
+		audience := strings.TrimRight(config.PublicBaseURL, "/") + "/v1/webhooks/google/gmail"
+		verifier, err := googleprovider.NewIDTokenVerifier(ctx, audience, config.GmailPushServiceAccount)
+		if err != nil {
+			log.Fatalf("configure Gmail push verifier: %v", err)
+		}
+		gmailPushes = googleprovider.PushService{Verifier: verifier, Triggers: store, Claims: claims,
+			Queue: webhookQueue, IDs: ids, Audience: audience}
+	}
 	executor := execution.Service{Store: store, State: state, Secrets: secretBox, Credentials: credentialSource, Runner: runner,
 		Mapper: execution.DomainMapper{}, IDs: ids, PublicURL: strings.TrimRight(config.PublicBaseURL, "/")}
 	actions := actionflow.Service{Catalog: catalog, Authorizer: store, Connections: store,
@@ -161,12 +175,20 @@ func main() {
 	graphCleanup := triggerflow.MicrosoftGraphCleanupWorker{Jobs: store, Routes: routes, State: state,
 		Secrets: secretBox, Graph: graphClient,
 		ReportError: func(err error) { slog.Error("clean Microsoft Graph trigger", "error", err) }}
+	githubCleanup := triggerflow.GitHubCleanupWorker{Jobs: store, Routes: routes, State: state,
+		Secrets: secretBox, GitHub: githubClient,
+		ReportError: func(err error) { slog.Error("clean GitHub trigger", "error", err) }}
+	googleCleanup := triggerflow.GoogleCleanupWorker{Jobs: store, Routes: routes, State: state,
+		Secrets: secretBox, Google: googleClient, Census: store,
+		ReportError: func(err error) { slog.Error("clean Google trigger", "error", err) }}
 	go (queue.Consumer{Client: sqsClient, QueueURL: config.WebhookQueueURL, Processor: executor}).Run(ctx)
 	go (intevents.Dispatcher{Store: store, Publisher: intevents.Publisher{Client: eventClient, BusName: config.EventBusName}}).Run(ctx)
 	go renewals.Run(ctx)
 	go graphCleanup.Run(ctx)
+	go githubCleanup.Run(ctx)
+	go googleCleanup.Run(ctx)
 
-	handler := observability.HTTPHandler("oryxa-integrations", httpserver.NewAPI(httpserver.Dependencies{Authenticator: authn.BearerAuthenticator{Verifier: authn.New(provider, config.CognitoClientID)}, Catalog: oauth, OAuth: oauth, WebhookRoutes: webhookRouteService, Triggers: triggerService, Webhooks: webhookService, Actions: actions}))
+	handler := observability.HTTPHandler("oryxa-integrations", httpserver.NewAPI(httpserver.Dependencies{Authenticator: authn.BearerAuthenticator{Verifier: authn.New(provider, config.CognitoClientID)}, Catalog: oauth, OAuth: oauth, WebhookRoutes: webhookRouteService, Triggers: triggerService, Webhooks: webhookService, GmailPushes: gmailPushes, Actions: actions}))
 	server := &http.Server{Addr: config.Address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	go func() {
 		<-ctx.Done()

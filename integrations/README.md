@@ -1,16 +1,19 @@
 # Integrations service
 
 Status: the connection, action, refresh, and webhook execution foundations are
-implemented. Slack has outbound actions plus its app-level `new-message`
-trigger; GitHub and Google Workspace have reviewed outbound action slices;
-Microsoft 365 has reviewed Outlook, Calendar, and OneDrive actions plus native
-Graph webhook subscriptions for new mail and calendar changes. The
-deterministic suite runs the real pinned piece code against mocked provider
-endpoints, and the combined lifecycle runs against PostgreSQL and LocalStack on
-the mini. The k6 client journey across integrations and teams is `/test`
-(`./test/run.sh`). Live Cognito, KMS, Lambda, and provider sandbox validation
-remains an AWS staging concern; no real customer credentials are used by the
-local suite.
+implemented. Slack has the remaining non-file pinned-piece actions plus shared
+app-level Events API triggers; GitHub has the remaining non-file owner/repo
+string actions plus native inbound `new-issue` and `new-pull-request` hooks;
+Google Workspace has the remaining non-file Gmail, Calendar, and Drive
+actions plus native inbound Gmail `new-email` and
+Calendar `calendar-event-changed`; Microsoft 365 has the remaining non-file
+Outlook, Calendar, and OneDrive actions plus native Graph webhook subscriptions
+for new mail and calendar changes. The deterministic suite runs the real pinned piece code
+against mocked provider endpoints, and the combined lifecycle runs against
+PostgreSQL and LocalStack on the mini. The k6 client journey across
+integrations, teams, and files is `/test` (`./test/run.sh`). Live Cognito, KMS,
+Lambda, and provider sandbox validation remains an AWS staging concern; no
+real customer credentials are used by the local suite.
 
 The integrations service connects an Oryxa organization to third-party
 products. It reuses the MIT-licensed Activepieces piece framework and selected
@@ -32,14 +35,14 @@ PostgreSQL capability discovery uses the actual SQL extension names:
 | ltree | `ltree` | Discover version; optionally require at startup |
 | pg_trgm | `pg_trgm` | Discover version; optionally require at startup |
 | pgvector | `vector` | Register pgx codecs on every pooled connection |
-| [pgGraph](https://github.com/evokoa/pggraph) | `graph` | Discover version; optionally require at startup |
+| [Apache AGE](https://age.apache.org/) | `age` | Discover version; optionally require at startup |
 
-Set `POSTGRES_REQUIRED_EXTENSIONS=ltree,pg_trgm,vector,graph` to enforce the
-full set. The aliases `pgvector`, `pgGraph`, `pg_graph`, and `pg graph` are
-normalized to the corresponding SQL names. Extension installation and upgrades
-remain database provisioning concerns; application migrations never run
-`CREATE EXTENSION`. A pgvector-based image does not automatically include
-pgGraph, so the production and mini images must explicitly provide both.
+Set `POSTGRES_REQUIRED_EXTENSIONS=ltree,pg_trgm,vector,age` to enforce the
+full set. The aliases `pgvector`, `Apache AGE`, `apache_age`, and `apache-age`
+are normalized to the corresponding SQL names. Extension installation and
+upgrades remain database provisioning concerns; application migrations never
+run `CREATE EXTENSION`. A pgvector-based image does not automatically include
+Apache AGE, so the production and mini images must explicitly provide both.
 
 Observability includes JSON access/application logs, W3C trace propagation,
 Cloudflare public-endpoint HTTP spans and metrics, AWS SDK spans, privacy-safe
@@ -103,7 +106,8 @@ The current implementation includes:
   with one-use hashed state, fixed callbacks, bounded return URLs, encrypted
   PKCE verifiers, exact scope checks and a domain-shaped connected event;
 - an actual Slack OAuth v2 adapter for authorization URL creation, code
-  exchange and authorizing user/workspace identity extraction;
+  exchange, user_scope, dual bot/user token persistence, and authorizing
+  user/workspace identity extraction;
 - a Microsoft identity-platform OAuth adapter using the tenant-scoped
   `organizations` endpoint, PKCE, offline access, refresh-token rotation, and
   Graph-backed user/tenant identity projection;
@@ -139,34 +143,65 @@ The current implementation includes:
   SQS, renews leases, and durably cleans them up on disconnect, profile disable,
   explicit trigger/connection/profile disable, or permanent reauthorization
   failure;
+- a native GitHub webhook controller that creates opaque per-connection
+  repository or organization hooks with the member OAuth grant, verifies
+  HMAC-SHA256 and ping handshakes, queues identity-only issue and pull-request
+  opened events, and durably deletes the hook on disable, disconnect, or
+  reauthorization failure;
 - an EventBridge outbox dispatcher, deployable Go and Lambda-runner images,
   and a minimal CloudFormation data-plane template.
 
-The reviewed action surface is deliberately small:
+The reviewed action surface is an explicit allowlist, not the full provider API:
 
-- Slack: post a message, add a reaction, and find a channel;
-- GitHub: create an issue, comment on an issue, get an issue, and list pull
-  requests;
-- Google Workspace: send via Gmail, create/list Calendar events, and list/get
-  Drive metadata. Attachments and Drive downloads remain disabled because the
-  runner intentionally has no file-storage capability;
-- Microsoft 365: send via Outlook, create/list Calendar events, and list
-  OneDrive files. OneDrive downloads remain disabled for the same file-storage
-  boundary.
+- Slack: the unique non-file, non-waitpoint operations on the pinned piece,
+  including send-as-user, DMs, message/channel/user/group lookups, and
+  metadata-only file listing. File upload/download stay closed until the
+  `/files` broker path is enabled. Custom API call and approval waitpoints
+  remain disabled;
+- GitHub: the unique owner/repo string operations on the pinned piece (issues,
+  pull requests, repositories, git refs, search, releases, collaborators,
+  milestones, and stars). File content, gist, GraphQL, custom API, workflow
+  dispatch, and dropdown-only duplicates remain disabled. Inbound `new-issue`
+  and `new-pull-request` stay native HMAC-verified hooks. Reconnect existing
+  grants to pick up `read:org` before listing organization members;
+- Google Workspace: the unique non-file operations on the pinned Gmail,
+  Calendar, and Drive pieces, plus native Gmail `new-email` and Calendar
+  `calendar-event-changed`. Attachments, raw MIME get/search, and Drive
+  upload/download/export stay closed until the `/files` broker path is
+  enabled. `fullText` search, Docs/Sheets convert, custom API call, approval
+  waitpoints, and piece polling remain disabled. Reconnect existing grants to
+  pick up `gmail.readonly`, `gmail.compose`, `gmail.modify`, and `drive`;
+- Microsoft 365: the unique non-file, non-waitpoint operations on the pinned
+  Outlook, Calendar, and OneDrive pieces, plus native Graph `new-email` and
+  `calendar-event-changed`. Attachments and OneDrive upload/download stay
+  closed until the `/files` broker path is enabled. Custom API call, approval
+  waitpoints, polling triggers, Teams, and SharePoint remain disabled.
+  Reconnect existing grants to pick up `Mail.ReadWrite` and `Files.ReadWrite`;
 
 The reviewed trigger surface is equally explicit:
 
-- Slack `new-message` uses the organization app-level webhook and requires the
-  channel/private-channel history scopes configured by the profile;
+- Slack Events API triggers share one organization app-level webhook
+  (`slack-events`). Member connections still OAuth-connect; authorize always
+  requests Slack `user_scope` and stores both the bot token and the user's
+  token. The Slack app must subscribe to the event types of enabled triggers.
+  Personal IMs the bot is not in are not delivered;
 - Microsoft `new-email` creates a per-connection Graph subscription for new
   Inbox messages and requires `Mail.Read`;
 - Microsoft `calendar-event-changed` creates a per-connection Graph
   subscription for created, updated, or deleted events and requires
-  `Calendars.Read`.
-
-GitHub and Google triggers are not enabled yet. Their future webhook or polling
-paths require separate provider-specific lifecycle and replay reviews; adding
-an Activepieces package to the lock file alone never exposes an operation.
+  `Calendars.Read`;
+- GitHub `new-issue` and `new-pull-request` create a per-connection repository
+  or organization hook. Repository hooks require `admin:repo_hook` (implied by
+  an existing `repo` grant). Organization-wide hooks require `admin:org_hook`.
+- Google `calendar-event-changed` creates a per-connection Calendar channel on
+  the primary calendar. `calendar.readonly` is required (`calendar.events`
+  implies it).
+- Google `new-email` creates a Gmail Inbox `users.watch` on the operator Pub/Sub
+  topic (`GOOGLE_GMAIL_PUBSUB_TOPIC`) and requires `gmail.metadata` (implied by
+  `gmail.readonly` or `gmail.modify`). Push
+  deliveries arrive at `POST /v1/webhooks/google/gmail` and fan out by mailbox
+  email. Gmail allows only one watch per mailbox: stop runs only when no other
+  active `new-email` trigger remains for that address.
 
 ## Tool-bound skills
 
@@ -176,14 +211,14 @@ as globally loaded agent instructions. Every approved tool family has one
 
 | Tool family | Bound skill |
 | --- | --- |
-| Slack actions and `new-message` | `oryxa-slack` |
-| GitHub issue and pull-request actions | `oryxa-github` |
-| Gmail send | `oryxa-gmail` |
-| Google Calendar actions | `oryxa-google-calendar` |
-| Google Drive metadata actions | `oryxa-google-drive` |
-| Outlook send and `new-email` | `oryxa-microsoft-outlook` |
+| Slack actions and Events API triggers | `oryxa-slack` |
+| GitHub repository actions plus inbound issue/PR triggers | `oryxa-github` |
+| Gmail actions and `new-email` | `oryxa-gmail` |
+| Google Calendar actions and change trigger | `oryxa-google-calendar` |
+| Google Drive metadata, share, and comment actions | `oryxa-google-drive` |
+| Outlook mail actions and `new-email` | `oryxa-microsoft-outlook` |
 | Microsoft Calendar actions and change trigger | `oryxa-microsoft-calendar` |
-| OneDrive metadata actions | `oryxa-microsoft-onedrive` |
+| OneDrive metadata list and copy | `oryxa-microsoft-onedrive` |
 
 `internal/toolskills/registry.json` binds the exact provider/action, trigger,
 OAuth connection family, and pinned piece to one skill. The Markdown is
@@ -326,6 +361,7 @@ POST   /v1/organizations/{org_id}/triggers
 DELETE /v1/organizations/{org_id}/triggers/{trigger_id}
 POST   /v1/organizations/{org_id}/connections/{connection_id}/actions/{action_name}
 POST   /v1/webhooks/{opaque_route}
+POST   /v1/webhooks/google/gmail
 ```
 
 Secret values are accepted only on create/rotation and are never returned.
@@ -524,6 +560,8 @@ integrations_triggers         # durable member-owned trigger registrations
 integrations_trigger_executions # per-delivery/trigger retry and idempotency state
 integrations_action_executions # member action idempotency, safe result and audit state
 integrations_microsoft_graph_cleanup # leased subscription teardown jobs
+integrations_github_hook_cleanup     # leased GitHub hook teardown jobs
+integrations_google_watch_cleanup    # leased Gmail/Calendar watch teardown jobs
 integrations_outbox           # domain event written with the state transition
 integrations_connection_catalog (view) # credential-free active connections
 ```
@@ -652,13 +690,40 @@ Connection and catalog lifecycle facts may use source `oryxa.integrations`:
 - `integrations.trigger.disabled.v1`;
 - `integrations.slack.message-received.v1`;
 - `integrations.slack.message-sent.v1`;
+- `integrations.slack.message-deleted.v1`;
+- `integrations.slack.message-scheduled.v1`;
 - `integrations.slack.reaction-added.v1`;
+- `integrations.slack.reaction-removed.v1`;
+- `integrations.slack.channel-mutated.v1`;
+- `integrations.slack.reaction-received.v1`;
+- `integrations.slack.channel-created.v1`;
+- `integrations.slack.user-joined.v1`;
+- `integrations.slack.item-starred.v1`;
+- `integrations.slack.emoji-changed.v1`;
 - `integrations.github.issue-created.v1`;
 - `integrations.github.issue-comment-created.v1`;
+- `integrations.github.issue-mutated.v1`;
+- `integrations.github.pull-request-created.v1`;
+- `integrations.github.pull-request-mutated.v1`;
+- `integrations.github.repository-created.v1`;
+- `integrations.github.repository-mutated.v1`;
+- `integrations.github.ref-mutated.v1`;
+- `integrations.github.release-created.v1`;
+- `integrations.github.milestone-mutated.v1`;
+- `integrations.github.label-mutated.v1`;
+- `integrations.github.issue-opened.v1`;
+- `integrations.github.pull-request-opened.v1`;
 - `integrations.google.gmail-message-sent.v1`;
+- `integrations.google.gmail-message-received.v1`;
 - `integrations.google.calendar-event-created.v1`;
+- `integrations.google.calendar-event-changed.v1`;
 - `integrations.microsoft.outlook-email-accepted.v1`;
+- `integrations.microsoft.outlook-draft-created.v1`;
+- `integrations.microsoft.outlook-email-forwarded.v1`;
+- `integrations.microsoft.outlook-email-mutated.v1`;
 - `integrations.microsoft.calendar-event-created.v1`;
+- `integrations.microsoft.calendar-event-deleted.v1`;
+- `integrations.microsoft.onedrive-item-copied.v1`;
 - `integrations.microsoft.outlook-email-received.v1`;
 - `integrations.microsoft.calendar-event-changed.v1`;
 - `integrations.catalog.operation-enabled.v1`;
@@ -712,7 +777,7 @@ provider-aware and are not authentication. The piece/provider signature,
 timestamp and dedupe key remain authoritative, and direct access to the AWS
 origin is restricted independently.
 
-Slack V1 uses its app-level webhook configured by the organization admin, so
+Slack uses one app-level Events URL per OAuth profile (`slack-events`), so
 there is no provider subscription lease to renew. Microsoft Graph uses one
 subscription and opaque route per connection/trigger. The random
 subscription `clientState` is encrypted with the route secret; the durable
@@ -852,9 +917,9 @@ and trigger/provider expansion rather than another architecture spike.
 
 ### Catalog and trigger expansion
 
-- Add GitHub and Google webhook triggers only after their signature,
-  installation/account routing, subscription lifecycle, and replay rules have
-  provider-specific contract tests.
+- Add Google webhook triggers only after their signature, account routing,
+  subscription lifecycle, and replay rules have provider-specific contract
+  tests.
 - Add EventBridge Scheduler only for approved polling triggers.
 - Broker piece `files.write` through `/files` only when a supported operation
   actually requires file handling. The files service already owns the bucket.
@@ -874,9 +939,13 @@ and trigger/provider expansion rather than another architecture spike.
 - [DynamoDB TTL](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html)
 - [GitHub OAuth apps](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps)
 - [GitHub OAuth scopes](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/scopes-for-oauth-apps)
+- [GitHub webhook events and payloads](https://docs.github.com/en/webhooks/webhook-events-and-payloads)
+- [GitHub securing webhooks](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)
 - [Google OAuth 2.0 web-server flow](https://developers.google.com/identity/protocols/oauth2/web-server)
 - [Google OpenID Connect](https://developers.google.com/identity/openid-connect/openid-connect)
 - [Gmail OAuth scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)
+- [Gmail push notifications](https://developers.google.com/workspace/gmail/api/guides/push)
+- [Google Calendar push notifications](https://developers.google.com/workspace/calendar/api/guides/push)
 - [Google Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
 - [Microsoft identity platform authorization-code flow](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow)
 - [Microsoft Graph create subscription](https://learn.microsoft.com/en-us/graph/api/subscription-post-subscriptions?view=graph-rest-1.0)

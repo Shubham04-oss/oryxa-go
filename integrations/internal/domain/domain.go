@@ -161,6 +161,10 @@ type WebhookRouteMode string
 const (
 	WebhookRoutePerConnection WebhookRouteMode = "per_connection"
 	WebhookRouteAppLevel      WebhookRouteMode = "app_level"
+	// SlackEventsRouteTrigger is the shared Dynamo/Postgres route key for
+	// every Slack Events API trigger. Slack allows one Events URL per app, so
+	// admission fans out by workspace rather than by trigger name.
+	SlackEventsRouteTrigger = "slack-events"
 )
 
 type WebhookRoute struct {
@@ -227,6 +231,35 @@ type MicrosoftGraphCleanupJob struct {
 	Attempt    int
 	LeaseToken string
 	Connection Connection
+}
+
+// GoogleCleanupJob is the durable instruction to stop a Google Calendar
+// channel or Gmail users.watch after its local trigger is disabled.
+type GoogleCleanupJob struct {
+	OrganizationID string
+	TriggerID      string
+	ConnectionID   string
+	ProfileID      string
+	TriggerName    string
+	CreatedAt      time.Time
+	Attempt        int
+	LeaseToken     string
+	Connection     Connection
+}
+
+// GitHubCleanupJob is the durable instruction to delete a GitHub repository
+// or organization hook after its local trigger is disabled. The connection is
+// populated only while a trusted worker holds the job.
+type GitHubCleanupJob struct {
+	OrganizationID string
+	TriggerID      string
+	ConnectionID   string
+	ProfileID      string
+	TriggerName    string
+	CreatedAt      time.Time
+	Attempt        int
+	LeaseToken     string
+	Connection     Connection
 }
 
 type ExecutionStatus string

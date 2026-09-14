@@ -18,13 +18,48 @@ const (
 	TriggerDisabledDetailType                   = "integrations.trigger.disabled.v1"
 	SlackMessageReceivedDetailType              = "integrations.slack.message-received.v1"
 	SlackMessageSentDetailType                  = "integrations.slack.message-sent.v1"
+	SlackMessageDeletedDetailType               = "integrations.slack.message-deleted.v1"
+	SlackMessageScheduledDetailType             = "integrations.slack.message-scheduled.v1"
 	SlackReactionAddedDetailType                = "integrations.slack.reaction-added.v1"
+	SlackReactionRemovedDetailType              = "integrations.slack.reaction-removed.v1"
+	SlackChannelMutatedDetailType               = "integrations.slack.channel-mutated.v1"
+	SlackReactionReceivedDetailType             = "integrations.slack.reaction-received.v1"
+	SlackChannelCreatedReceivedDetailType       = "integrations.slack.channel-created.v1"
+	SlackUserJoinedDetailType                   = "integrations.slack.user-joined.v1"
+	SlackItemStarredDetailType                  = "integrations.slack.item-starred.v1"
+	SlackEmojiChangedDetailType                 = "integrations.slack.emoji-changed.v1"
 	GitHubIssueCreatedDetailType                = "integrations.github.issue-created.v1"
 	GitHubIssueCommentCreatedDetailType         = "integrations.github.issue-comment-created.v1"
+	GitHubIssueMutatedDetailType                = "integrations.github.issue-mutated.v1"
+	GitHubPullRequestCreatedDetailType          = "integrations.github.pull-request-created.v1"
+	GitHubPullRequestMutatedDetailType          = "integrations.github.pull-request-mutated.v1"
+	GitHubRepositoryCreatedDetailType           = "integrations.github.repository-created.v1"
+	GitHubRepositoryMutatedDetailType           = "integrations.github.repository-mutated.v1"
+	GitHubRefMutatedDetailType                  = "integrations.github.ref-mutated.v1"
+	GitHubReleaseCreatedDetailType              = "integrations.github.release-created.v1"
+	GitHubMilestoneMutatedDetailType            = "integrations.github.milestone-mutated.v1"
+	GitHubLabelMutatedDetailType                = "integrations.github.label-mutated.v1"
+	GitHubIssueOpenedDetailType                 = "integrations.github.issue-opened.v1"
+	GitHubPullRequestOpenedDetailType           = "integrations.github.pull-request-opened.v1"
 	GoogleGmailMessageSentDetailType            = "integrations.google.gmail-message-sent.v1"
+	GoogleGmailDraftCreatedDetailType           = "integrations.google.gmail-draft-created.v1"
+	GoogleGmailEmailForwardedDetailType         = "integrations.google.gmail-email-forwarded.v1"
+	GoogleGmailEmailMutatedDetailType           = "integrations.google.gmail-email-mutated.v1"
+	GoogleGmailMessageReceivedDetailType        = "integrations.google.gmail-message-received.v1"
 	GoogleCalendarEventCreatedDetailType        = "integrations.google.calendar-event-created.v1"
+	GoogleCalendarEventUpdatedDetailType        = "integrations.google.calendar-event-updated.v1"
+	GoogleCalendarEventDeletedDetailType        = "integrations.google.calendar-event-deleted.v1"
+	GoogleCalendarEventChangedDetailType        = "integrations.google.calendar-event-changed.v1"
+	GoogleDriveItemCreatedDetailType            = "integrations.google.drive-item-created.v1"
+	GoogleDriveItemCopiedDetailType             = "integrations.google.drive-item-copied.v1"
+	GoogleDriveItemMutatedDetailType            = "integrations.google.drive-item-mutated.v1"
 	MicrosoftOutlookEmailAcceptedDetailType     = "integrations.microsoft.outlook-email-accepted.v1"
+	MicrosoftOutlookDraftCreatedDetailType      = "integrations.microsoft.outlook-draft-created.v1"
+	MicrosoftOutlookEmailForwardedDetailType    = "integrations.microsoft.outlook-email-forwarded.v1"
+	MicrosoftOutlookEmailMutatedDetailType      = "integrations.microsoft.outlook-email-mutated.v1"
 	MicrosoftCalendarEventCreatedDetailType     = "integrations.microsoft.calendar-event-created.v1"
+	MicrosoftCalendarEventDeletedDetailType     = "integrations.microsoft.calendar-event-deleted.v1"
+	MicrosoftOneDriveItemCopiedDetailType       = "integrations.microsoft.onedrive-item-copied.v1"
 	MicrosoftOutlookEmailReceivedDetailType     = "integrations.microsoft.outlook-email-received.v1"
 	MicrosoftCalendarEventChangedDetailType     = "integrations.microsoft.calendar-event-changed.v1"
 )
@@ -181,6 +216,88 @@ type SlackReactionAdded struct {
 	AddedAt          time.Time `json:"added_at"`
 }
 
+type SlackMessageDeleted struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ChannelID    string    `json:"channel_id"`
+	MessageTS    string    `json:"message_timestamp"`
+	RequestedBy  string    `json:"requested_by"`
+	DeletedAt    time.Time `json:"deleted_at"`
+}
+
+type SlackMessageScheduled struct {
+	ExecutionID        string    `json:"execution_id"`
+	ConnectionID       string    `json:"connection_id"`
+	ChannelID          string    `json:"channel_id"`
+	ScheduledMessageID string    `json:"scheduled_message_id"`
+	RequestedBy        string    `json:"requested_by"`
+	ScheduledAt        time.Time `json:"scheduled_at"`
+}
+
+type SlackReactionRemoved struct {
+	ExecutionID      string    `json:"execution_id"`
+	ConnectionID     string    `json:"connection_id"`
+	ChannelID        string    `json:"channel_id"`
+	MessageTimestamp string    `json:"message_timestamp"`
+	Reaction         string    `json:"reaction"`
+	RequestedBy      string    `json:"requested_by"`
+	RemovedAt        time.Time `json:"removed_at"`
+}
+
+type SlackChannelMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ChannelID    string    `json:"channel_id"`
+	Mutation     string    `json:"mutation"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
+}
+
+type SlackReactionReceived struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	WorkspaceID  string    `json:"workspace_id"`
+	ChannelID    string    `json:"channel_id,omitempty"`
+	UserID       string    `json:"user_id,omitempty"`
+	Reaction     string    `json:"reaction,omitempty"`
+	ItemTS       string    `json:"item_timestamp,omitempty"`
+	Removed      bool      `json:"removed"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+type SlackChannelCreatedReceived struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	WorkspaceID  string    `json:"workspace_id"`
+	ChannelID    string    `json:"channel_id"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+type SlackUserJoined struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	WorkspaceID  string    `json:"workspace_id"`
+	UserID       string    `json:"user_id"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+type SlackItemStarred struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	WorkspaceID  string    `json:"workspace_id"`
+	ChannelID    string    `json:"channel_id,omitempty"`
+	MessageTS    string    `json:"message_timestamp,omitempty"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+type SlackEmojiChanged struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	WorkspaceID  string    `json:"workspace_id"`
+	Name         string    `json:"name"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
 type GitHubIssueCreated struct {
 	ExecutionID  string    `json:"execution_id"`
 	ConnectionID string    `json:"connection_id"`
@@ -200,6 +317,131 @@ type GitHubIssueCommentCreated struct {
 	URL          string    `json:"url"`
 	RequestedBy  string    `json:"requested_by"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// GitHubIssueOpened is an identity-only receipt for a newly opened GitHub
+// issue. Title, body, labels, and assignees never cross the integrations
+// event boundary.
+type GitHubIssueOpened struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	IssueNumber  int64     `json:"issue_number"`
+	URL          string    `json:"url"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+// GitHubPullRequestOpened is an identity-only receipt for a newly opened
+// GitHub pull request. Title, body, and diffs never cross the integrations
+// event boundary.
+type GitHubPullRequestOpened struct {
+	TriggerID         string    `json:"trigger_id"`
+	ConnectionID      string    `json:"connection_id"`
+	Repository        string    `json:"repository"`
+	PullRequestNumber int64     `json:"pull_request_number"`
+	URL               string    `json:"url"`
+	ReceivedAt        time.Time `json:"received_at"`
+}
+
+// GitHubIssueMutated records lock, label, assignee, or field updates. Title
+// and body never leave the integrations boundary.
+type GitHubIssueMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	IssueNumber  int64     `json:"issue_number"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
+}
+
+// GitHubPullRequestCreated omits title, body, and diffs.
+type GitHubPullRequestCreated struct {
+	ExecutionID       string    `json:"execution_id"`
+	ConnectionID      string    `json:"connection_id"`
+	Repository        string    `json:"repository"`
+	PullRequestNumber int64     `json:"pull_request_number"`
+	URL               string    `json:"url"`
+	RequestedBy       string    `json:"requested_by"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+// GitHubPullRequestMutated records update, merge, review, or reviewer changes.
+// Title, body, and patches never leave the integrations boundary.
+type GitHubPullRequestMutated struct {
+	ExecutionID       string    `json:"execution_id"`
+	ConnectionID      string    `json:"connection_id"`
+	Repository        string    `json:"repository"`
+	PullRequestNumber int64     `json:"pull_request_number"`
+	URL               string    `json:"url,omitempty"`
+	RequestedBy       string    `json:"requested_by"`
+	MutatedAt         time.Time `json:"mutated_at"`
+}
+
+// GitHubRepositoryCreated omits description and clone credentials.
+type GitHubRepositoryCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// GitHubRepositoryMutated records settings, collaborator, or star changes.
+type GitHubRepositoryMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
+}
+
+// GitHubRefMutated records branch create or delete. Commit patches never leave
+// the integrations boundary.
+type GitHubRefMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	Ref          string    `json:"ref"`
+	SHA          string    `json:"sha,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
+}
+
+// GitHubReleaseCreated omits release notes.
+type GitHubReleaseCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	ReleaseID    int64     `json:"release_id"`
+	Tag          string    `json:"tag,omitempty"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// GitHubMilestoneMutated omits milestone description.
+type GitHubMilestoneMutated struct {
+	ExecutionID     string    `json:"execution_id"`
+	ConnectionID    string    `json:"connection_id"`
+	Repository      string    `json:"repository"`
+	MilestoneNumber int64     `json:"milestone_number"`
+	URL             string    `json:"url,omitempty"`
+	RequestedBy     string    `json:"requested_by"`
+	MutatedAt       time.Time `json:"mutated_at"`
+}
+
+// GitHubLabelMutated records label create or rename. Description never leaves
+// the integrations boundary.
+type GitHubLabelMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	Repository   string    `json:"repository"`
+	Name         string    `json:"name"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
 }
 
 // GoogleGmailMessageSent deliberately excludes recipients, subject, and body.
@@ -226,6 +468,112 @@ type GoogleCalendarEventCreated struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+// GoogleGmailDraftCreated records a saved Gmail draft identity. Recipients,
+// subject, and body never leave the integrations boundary.
+type GoogleGmailDraftCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	DraftID      string    `json:"draft_id"`
+	MessageID    string    `json:"message_id,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// GoogleGmailEmailForwarded records that Gmail accepted a forward. Original
+// content and destination addresses never leave the integrations boundary.
+type GoogleGmailEmailForwarded struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	MessageID    string    `json:"message_id"`
+	ThreadID     string    `json:"thread_id,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	ForwardedAt  time.Time `json:"forwarded_at"`
+}
+
+// GoogleGmailEmailMutated records a draft, label, or archive change. Subjects,
+// bodies, and label names never leave the integrations boundary.
+type GoogleGmailEmailMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	MessageID    string    `json:"message_id,omitempty"`
+	DraftID      string    `json:"draft_id,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
+}
+
+// GoogleCalendarEventUpdated omits title, description, location, and attendee
+// data so downstream services can react without receiving calendar content.
+type GoogleCalendarEventUpdated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	CalendarID   string    `json:"calendar_id"`
+	EventID      string    `json:"event_id"`
+	URL          string    `json:"url,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// GoogleCalendarEventDeleted omits title, description, location, and attendee
+// data. Downstream consumers receive only the durable calendar and event identity.
+type GoogleCalendarEventDeleted struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	CalendarID   string    `json:"calendar_id"`
+	EventID      string    `json:"event_id"`
+	RequestedBy  string    `json:"requested_by"`
+	DeletedAt    time.Time `json:"deleted_at"`
+}
+
+// GoogleDriveItemCreated records a created Drive folder, shared drive, or
+// similar identity. File bytes and download URLs never leave the boundary.
+type GoogleDriveItemCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ItemID       string    `json:"item_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// GoogleDriveItemCopied records a copied Drive item identity. File bytes,
+// download URLs, and sharing emails never leave the integrations boundary.
+type GoogleDriveItemCopied struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ItemID       string    `json:"item_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CopiedAt     time.Time `json:"copied_at"`
+}
+
+// GoogleDriveItemMutated records a metadata, trash, share, or comment change.
+// File bytes, download URLs, and emails never leave the integrations boundary.
+type GoogleDriveItemMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ItemID       string    `json:"item_id"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
+}
+
+// GoogleGmailMessageReceived is a content-free receipt for a Gmail Inbox
+// watch notification. Subjects, bodies, and headers never cross the
+// integrations event boundary.
+type GoogleGmailMessageReceived struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	DeliveryID   string    `json:"delivery_id"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
+// GoogleCalendarEventChanged is a content-free receipt for a Google Calendar
+// channel notification. Titles, attendees, location, and body never cross the
+// integrations event boundary.
+type GoogleCalendarEventChanged struct {
+	TriggerID    string    `json:"trigger_id"`
+	ConnectionID string    `json:"connection_id"`
+	DeliveryID   string    `json:"delivery_id"`
+	ReceivedAt   time.Time `json:"received_at"`
+}
+
 // MicrosoftOutlookEmailAccepted records Graph's accepted sendMail write. The
 // endpoint deliberately does not return a message ID, and recipients, subject,
 // and body must never leave the integrations boundary.
@@ -247,4 +595,58 @@ type MicrosoftCalendarEventCreated struct {
 	URL          string    `json:"url,omitempty"`
 	RequestedBy  string    `json:"requested_by"`
 	CreatedAt    time.Time `json:"created_at"`
+}
+
+// MicrosoftOutlookDraftCreated records a saved Outlook draft identity. Subject,
+// recipients, and body never leave the integrations boundary.
+type MicrosoftOutlookDraftCreated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	MessageID    string    `json:"message_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// MicrosoftOutlookEmailForwarded records that Graph accepted a forward. The
+// original message content and destination addresses never leave the
+// integrations boundary.
+type MicrosoftOutlookEmailForwarded struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	MessageID    string    `json:"message_id"`
+	RequestedBy  string    `json:"requested_by"`
+	ForwardedAt  time.Time `json:"forwarded_at"`
+}
+
+// MicrosoftOutlookEmailMutated records a category or folder change. Subjects,
+// bodies, and category names never leave the integrations boundary.
+type MicrosoftOutlookEmailMutated struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	MessageID    string    `json:"message_id"`
+	FolderID     string    `json:"folder_id,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	MutatedAt    time.Time `json:"mutated_at"`
+}
+
+// MicrosoftCalendarEventDeleted omits the event title, body, location, and
+// attendees. Downstream consumers receive only the durable calendar and event
+// identity.
+type MicrosoftCalendarEventDeleted struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	CalendarID   string    `json:"calendar_id"`
+	EventID      string    `json:"event_id"`
+	RequestedBy  string    `json:"requested_by"`
+	DeletedAt    time.Time `json:"deleted_at"`
+}
+
+// MicrosoftOneDriveItemCopied records the copied item identity. File bytes,
+// download URLs, and sharing permissions never leave the integrations boundary.
+type MicrosoftOneDriveItemCopied struct {
+	ExecutionID  string    `json:"execution_id"`
+	ConnectionID string    `json:"connection_id"`
+	ItemID       string    `json:"item_id"`
+	RequestedBy  string    `json:"requested_by"`
+	CopiedAt     time.Time `json:"copied_at"`
 }

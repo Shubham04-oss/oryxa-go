@@ -16,7 +16,8 @@ func TestAuthorizationURLContainsStateScopesAndOptionalPKCEButNoSecret(t *testin
 	provider := OAuth{AuthURL: "https://slack.example/authorize"}
 	value, err := provider.AuthorizationURL(oauthflow.AuthorizationRequest{
 		ClientID: "client-id", RedirectURI: "https://connect.oryxa.test/callback",
-		Scopes: []string{"channels:history", "groups:history"}, State: "random-state", PKCEChallenge: "challenge",
+		Scopes: []string{"channels:history", "groups:history"}, UserScopes: []string{"search:read", "chat:write"},
+		State: "random-state", PKCEChallenge: "challenge",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -28,6 +29,9 @@ func TestAuthorizationURLContainsStateScopesAndOptionalPKCEButNoSecret(t *testin
 	}
 	if query.Get("scope") != "channels:history,groups:history" {
 		t.Fatalf("scope = %q", query.Get("scope"))
+	}
+	if query.Get("user_scope") != "search:read,chat:write" {
+		t.Fatalf("user_scope = %q", query.Get("user_scope"))
 	}
 	if query.Has("client_secret") {
 		t.Fatal("client secret leaked into authorization URL")
@@ -72,12 +76,28 @@ func TestExchangeUsesFormAndMapsSlackGrantAndIdentity(t *testing.T) {
 	if grant.AccessToken != "xoxb-secret" || !slices.Contains(grant.Scopes, "users:read") {
 		t.Fatalf("unexpected grant: %+v", grant)
 	}
+	authedUser, _ := grant.Data["authed_user"].(map[string]any)
+	if stringValue(authedUser["access_token"]) != "xoxp-secret" {
+		t.Fatalf("user token missing from grant data: %+v", grant.Data)
+	}
 	identity, err := provider.ResolveIdentity(context.Background(), grant)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if identity.SubjectID != "U123" || identity.TenantID != "T123" || identity.TenantName != "Oryxa" {
 		t.Fatalf("unexpected identity: %+v", identity)
+	}
+}
+
+func TestExchangeRejectsMissingUserToken(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"ok":true,"access_token":"xoxb-secret","scope":"chat:write","team":{"id":"T123"},"authed_user":{"id":"U123"}}`))
+	}))
+	defer server.Close()
+	provider := OAuth{Client: server.Client(), TokenURL: server.URL}
+	if _, err := provider.Exchange(context.Background(), oauthflow.ExchangeRequest{ClientID: "id", ClientSecret: "secret", Code: "code"}); err == nil {
+		t.Fatal("Slack grant without a user token was accepted")
 	}
 }
 

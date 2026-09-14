@@ -82,6 +82,13 @@ func (s Service) Register(ctx context.Context, request RegisterRequest) (Registr
 	if !ok || definition.Provider != profile.Provider {
 		return Registration{}, triggerflow.ErrOperationDisabled
 	}
+	if definition.RouteMode != domain.WebhookRouteAppLevel {
+		return Registration{}, triggerflow.ErrOperationDisabled
+	}
+	triggerName := request.TriggerName
+	if definition.AppWebhookFamily != "" {
+		triggerName = definition.AppWebhookFamily
+	}
 	opaque, err := randomToken(s.Random, 32)
 	if err != nil {
 		return Registration{}, fmt.Errorf("generate opaque webhook route: %w", err)
@@ -94,7 +101,7 @@ func (s Service) Register(ctx context.Context, request RegisterRequest) (Registr
 	route := domain.WebhookRoute{
 		OpaqueRoute: opaque, OrganizationID: request.OrganizationID, ProfileID: profile.ID,
 		Provider: profile.Provider, PieceName: definition.PieceName, PieceVersion: definition.PieceVersion,
-		TriggerName: request.TriggerName, Mode: definition.RouteMode, SigningSecret: sealed,
+		TriggerName: triggerName, Mode: definition.RouteMode, SigningSecret: sealed,
 		TimestampHeader: definition.TimestampHeader, TimestampWindow: definition.TimestampWindow,
 		MaxBodyBytes: definition.MaxBodyBytes, Active: true, CredentialRevision: 1,
 	}
