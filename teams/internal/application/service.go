@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +30,8 @@ type Store interface {
 	TeamsForUser(context.Context, string, string) ([]domain.Team, error)
 	Membership(context.Context, string, string) (domain.Membership, error)
 	Members(context.Context, string) ([]domain.Membership, error)
+	MembersUnder(context.Context, string, string) ([]domain.Membership, error)
+	OrganizationMemberships(context.Context, string) ([]domain.OrganizationMembership, error)
 	AddMember(context.Context, domain.Membership, domain.Event) error
 	ChangeMemberRole(context.Context, string, string, domain.Role, domain.Role, domain.Event) error
 	RemoveMember(context.Context, string, string, domain.Role, domain.Event) error
@@ -36,6 +39,10 @@ type Store interface {
 	DeleteOrganizationTeams(context.Context, string, func(domain.Team, []domain.Membership) ([]domain.Event, error)) error
 	RecordEvents(context.Context, []domain.Event) error
 	SetNotifyEmail(context.Context, string, string, bool) error
+	SearchTeams(context.Context, string, string, int, []string) ([]domain.Team, error)
+	TeamDescendants(context.Context, string, string) ([]domain.Team, error)
+	SetTeamEmbedding(context.Context, string, string, []float32) error
+	TeamsNearest(context.Context, string, []float32, int, []string) ([]domain.Team, error)
 }
 
 type Directory interface {
@@ -44,7 +51,8 @@ type Directory interface {
 }
 
 type CreateTeamInput struct {
-	Name string `json:"name"`
+	Name     string `json:"name"`
+	ParentID string `json:"parent_id,omitempty"`
 }
 
 type UpdateTeamInput struct {
@@ -68,6 +76,23 @@ type TeamDetail struct {
 	CanManage  bool               `json:"can_manage"`
 }
 
+type MemberTeamRef struct {
+	ID         string      `json:"id"`
+	Name       string      `json:"name"`
+	Path       string      `json:"path,omitempty"`
+	MemberPath string      `json:"member_path,omitempty"`
+	Role       domain.Role `json:"role"`
+}
+
+type MemberSearchHit struct {
+	UserID      string          `json:"user_id"`
+	Email       string          `json:"email"`
+	DisplayName string          `json:"display_name,omitempty"`
+	OrgRole     domain.OrgRole  `json:"org_role"`
+	Path        string          `json:"path,omitempty"`
+	Teams       []MemberTeamRef `json:"teams"`
+}
+
 type Service struct {
 	store     Store
 	directory Directory
@@ -87,23 +112,40 @@ func (s *Service) CreateTeam(ctx context.Context, credentials authclient.Credent
 	if err != nil {
 		return domain.Team{}, err
 	}
-	if !domain.CanCreateTeam(org.Role) {
-		return domain.Team{}, domain.ErrForbidden
-	}
 	name, err := teamName(input.Name)
 	if err != nil {
 		return domain.Team{}, err
+	}
+	parentPath := ""
+	if parentID := strings.TrimSpace(input.ParentID); parentID != "" {
+		parent, err := s.teamActor(ctx, credentials, organizationID, parentID)
+		if err != nil {
+			return domain.Team{}, err
+		}
+		if !parent.canSee() {
+			return domain.Team{}, domain.ErrNotFound
+		}
+		if !parent.canManage() {
+			return domain.Team{}, domain.ErrForbidden
+		}
+		parentPath = parent.team.Path
+	} else if !domain.CanCreateTeam(org.Role) {
+		return domain.Team{}, domain.ErrForbidden
 	}
 	teamID, err := randomID("team_", 12)
 	if err != nil {
 		return domain.Team{}, err
 	}
 	now := s.now().UTC()
+	path := domain.TeamPath(organizationID, teamID)
+	if parentPath != "" {
+		path = domain.ChildPath(parentPath, teamID)
+	}
 	team := domain.Team{
 		ID:             teamID,
 		OrganizationID: organizationID,
 		Name:           name,
-		Path:           domain.TeamPath(organizationID, teamID),
+		Path:           path,
 		CreatedBy:      org.UserID,
 		CreatedAt:      now,
 		UpdatedAt:      now,
@@ -116,6 +158,7 @@ func (s *Service) CreateTeam(ctx context.Context, credentials authclient.Credent
 		DisplayName:    org.DisplayName,
 		Role:           domain.RoleAdmin,
 		NotifyEmail:    true,
+		Path:           domain.MemberPath(path, org.UserID),
 		JoinedAt:       now,
 	}
 	created, err := s.event(teamseventsv1.TeamCreatedDetailType, teamseventsv1.TeamCreated{
@@ -144,20 +187,149 @@ func (s *Service) Teams(ctx context.Context, credentials authclient.Credentials,
 	if err != nil {
 		return nil, err
 	}
-	summaries := make([]TeamSummary, 0, len(teams))
-	for _, team := range teams {
-		membership, membershipErr := s.store.Membership(ctx, team.ID, org.UserID)
-		onTeam := membershipErr == nil
-		if membershipErr != nil && !errors.Is(membershipErr, domain.ErrNotFound) {
-			return nil, membershipErr
-		}
-		summary := TeamSummary{Team: team, CanManage: domain.CanManageTeam(org.Role, membership.Role)}
-		if onTeam {
-			summary.Role = membership.Role
-		}
-		summaries = append(summaries, summary)
+	return s.summarizeTeams(ctx, org, teams)
+}
+
+func (s *Service) SearchTeams(ctx context.Context, credentials authclient.Credentials, organizationID, query string, limit int) ([]TeamSummary, error) {
+	org, teamIDs, err := s.searchScope(ctx, credentials, organizationID)
+	if err != nil {
+		return nil, err
 	}
-	return summaries, nil
+	teams, err := s.store.SearchTeams(ctx, organizationID, strings.TrimSpace(query), limit, teamIDs)
+	if err != nil {
+		return nil, err
+	}
+	return s.summarizeTeams(ctx, org, teams)
+}
+
+func (s *Service) TeamDescendants(ctx context.Context, credentials authclient.Credentials, organizationID, teamID string) ([]TeamSummary, error) {
+	actor, err := s.teamActor(ctx, credentials, organizationID, teamID)
+	if err != nil {
+		return nil, err
+	}
+	if !actor.canSee() {
+		return nil, domain.ErrNotFound
+	}
+	subtree, err := s.store.TeamDescendants(ctx, organizationID, actor.team.Path)
+	if err != nil {
+		return nil, err
+	}
+	visible := make([]domain.Team, 0, len(subtree))
+	if actor.org.Role.IsOrgAdmin() {
+		visible = subtree
+	} else {
+		for _, team := range subtree {
+			_, membershipErr := s.store.Membership(ctx, team.ID, actor.org.UserID)
+			onTeam := membershipErr == nil
+			if membershipErr != nil && !errors.Is(membershipErr, domain.ErrNotFound) {
+				return nil, membershipErr
+			}
+			if domain.CanSeeTeam(actor.org.Role, onTeam) {
+				visible = append(visible, team)
+			}
+		}
+	}
+	return s.summarizeTeams(ctx, actor.org, visible)
+}
+
+func (s *Service) SetTeamEmbedding(ctx context.Context, credentials authclient.Credentials, organizationID, teamID string, values []float32) error {
+	actor, err := s.teamActor(ctx, credentials, organizationID, teamID)
+	if err != nil {
+		return err
+	}
+	if !actor.canSee() {
+		return domain.ErrNotFound
+	}
+	if !actor.canManage() {
+		return domain.ErrForbidden
+	}
+	return s.store.SetTeamEmbedding(ctx, organizationID, teamID, values)
+}
+
+func (s *Service) SearchMembers(ctx context.Context, credentials authclient.Credentials, organizationID, query string, limit int) ([]MemberSearchHit, error) {
+	org, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil, fmt.Errorf("search query is required: %w", domain.ErrInvalid)
+	}
+	limit = domain.ClampSearchLimit(limit)
+	people, err := s.directory.Members(ctx, organizationID, credentials)
+	if err != nil {
+		return nil, conceal(err)
+	}
+	memberships, err := s.store.OrganizationMemberships(ctx, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	visibleTeamIDs := map[string]struct{}{}
+	if org.Role.IsOrgAdmin() {
+		for _, membership := range memberships {
+			visibleTeamIDs[membership.TeamID] = struct{}{}
+		}
+	} else {
+		teams, err := s.store.TeamsForUser(ctx, organizationID, org.UserID)
+		if err != nil {
+			return nil, err
+		}
+		for _, team := range teams {
+			visibleTeamIDs[team.ID] = struct{}{}
+		}
+	}
+	teamsByUser := map[string][]MemberTeamRef{}
+	for _, membership := range memberships {
+		if _, ok := visibleTeamIDs[membership.TeamID]; !ok {
+			continue
+		}
+		teamsByUser[membership.UserID] = append(teamsByUser[membership.UserID], MemberTeamRef{
+			ID: membership.TeamID, Name: membership.TeamName, Path: membership.Path,
+			MemberPath: membership.MemberPath, Role: membership.Role,
+		})
+	}
+
+	hits := make([]MemberSearchHit, 0)
+	for _, person := range people {
+		if !domain.FuzzyMatch(query, person.Email, person.DisplayName, person.UserID) {
+			continue
+		}
+		teams := teamsByUser[person.UserID]
+		if teams == nil {
+			teams = []MemberTeamRef{}
+		}
+		hits = append(hits, MemberSearchHit{
+			UserID: person.UserID, Email: person.Email, DisplayName: person.DisplayName,
+			OrgRole: person.Role, Path: domain.UserPath(organizationID, person.UserID), Teams: teams,
+		})
+	}
+	slices.SortFunc(hits, func(a, b MemberSearchHit) int {
+		as := max(domain.Similarity(query, a.Email), domain.Similarity(query, a.DisplayName))
+		bs := max(domain.Similarity(query, b.Email), domain.Similarity(query, b.DisplayName))
+		if as != bs {
+			if as > bs {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(strings.ToLower(a.Email), strings.ToLower(b.Email))
+	})
+	if len(hits) > limit {
+		hits = hits[:limit]
+	}
+	return hits, nil
+}
+
+func (s *Service) TeamsNearest(ctx context.Context, credentials authclient.Credentials, organizationID string, values []float32, limit int) ([]TeamSummary, error) {
+	org, teamIDs, err := s.searchScope(ctx, credentials, organizationID)
+	if err != nil {
+		return nil, err
+	}
+	teams, err := s.store.TeamsNearest(ctx, organizationID, values, limit, teamIDs)
+	if err != nil {
+		return nil, err
+	}
+	return s.summarizeTeams(ctx, org, teams)
 }
 
 func (s *Service) Team(ctx context.Context, credentials authclient.Credentials, organizationID, teamID string) (TeamDetail, error) {
@@ -220,14 +392,23 @@ func (s *Service) DeleteTeam(ctx context.Context, credentials authclient.Credent
 	if !actor.canManage() {
 		return domain.ErrForbidden
 	}
-	members, err := s.store.Members(ctx, teamID)
+	subtree, err := s.store.TeamDescendants(ctx, organizationID, actor.team.Path)
 	if err != nil {
 		return err
 	}
 	now := s.now().UTC()
-	events, err := s.teamDeletedEvents(actor.team, actor.org.OrganizationName, members, actor.org.UserID, teamseventsv1.MemberRemovedReasonTeamDeleted, now)
-	if err != nil {
-		return err
+	var events []domain.Event
+	for i := len(subtree) - 1; i >= 0; i-- {
+		team := subtree[i]
+		members, err := s.store.Members(ctx, team.ID)
+		if err != nil {
+			return err
+		}
+		emitted, err := s.teamDeletedEvents(team, actor.org.OrganizationName, members, actor.org.UserID, teamseventsv1.MemberRemovedReasonTeamDeleted, now)
+		if err != nil {
+			return err
+		}
+		events = append(events, emitted...)
 	}
 	return s.store.DeleteTeam(ctx, organizationID, teamID, events)
 }
@@ -241,6 +422,38 @@ func (s *Service) Members(ctx context.Context, credentials authclient.Credential
 		return nil, domain.ErrNotFound
 	}
 	return s.store.Members(ctx, teamID)
+}
+
+func (s *Service) MemberDescendants(ctx context.Context, credentials authclient.Credentials, organizationID, teamID string) ([]domain.Membership, error) {
+	actor, err := s.teamActor(ctx, credentials, organizationID, teamID)
+	if err != nil {
+		return nil, err
+	}
+	if !actor.canSee() {
+		return nil, domain.ErrNotFound
+	}
+	members, err := s.store.MembersUnder(ctx, organizationID, actor.team.Path)
+	if err != nil {
+		return nil, err
+	}
+	if actor.org.Role.IsOrgAdmin() {
+		return members, nil
+	}
+	teams, err := s.store.TeamsForUser(ctx, organizationID, actor.org.UserID)
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[string]struct{}, len(teams))
+	for _, team := range teams {
+		allowed[team.ID] = struct{}{}
+	}
+	visible := make([]domain.Membership, 0, len(members))
+	for _, member := range members {
+		if _, ok := allowed[member.TeamID]; ok {
+			visible = append(visible, member)
+		}
+	}
+	return visible, nil
 }
 
 func (s *Service) AddMember(ctx context.Context, credentials authclient.Credentials, organizationID, teamID string, input AddMemberInput) (domain.Membership, error) {
@@ -278,6 +491,7 @@ func (s *Service) AddMember(ctx context.Context, credentials authclient.Credenti
 		DisplayName:    orgMember.DisplayName,
 		Role:           input.Role,
 		NotifyEmail:    true,
+		Path:           domain.MemberPath(actor.team.Path, orgMember.UserID),
 		JoinedAt:       now,
 	}
 	event, err := s.memberAddedEvent(actor.team, actor.org.OrganizationName, membership, actor.org.UserID, now)
@@ -447,6 +661,42 @@ func (actor teamActor) canSee() bool {
 
 func (actor teamActor) canManage() bool {
 	return domain.CanManageTeam(actor.org.Role, actor.teamRole())
+}
+
+func (s *Service) summarizeTeams(ctx context.Context, org domain.OrgMembership, teams []domain.Team) ([]TeamSummary, error) {
+	summaries := make([]TeamSummary, 0, len(teams))
+	for _, team := range teams {
+		membership, membershipErr := s.store.Membership(ctx, team.ID, org.UserID)
+		onTeam := membershipErr == nil
+		if membershipErr != nil && !errors.Is(membershipErr, domain.ErrNotFound) {
+			return nil, membershipErr
+		}
+		summary := TeamSummary{Team: team, CanManage: domain.CanManageTeam(org.Role, membership.Role)}
+		if onTeam {
+			summary.Role = membership.Role
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries, nil
+}
+
+func (s *Service) searchScope(ctx context.Context, credentials authclient.Credentials, organizationID string) (domain.OrgMembership, []string, error) {
+	org, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.OrgMembership{}, nil, err
+	}
+	if org.Role.IsOrgAdmin() {
+		return org, nil, nil
+	}
+	teams, err := s.store.TeamsForUser(ctx, organizationID, org.UserID)
+	if err != nil {
+		return domain.OrgMembership{}, nil, err
+	}
+	ids := make([]string, 0, len(teams))
+	for _, team := range teams {
+		ids = append(ids, team.ID)
+	}
+	return org, ids, nil
 }
 
 func (s *Service) caller(ctx context.Context, credentials authclient.Credentials, organizationID string) (domain.OrgMembership, error) {

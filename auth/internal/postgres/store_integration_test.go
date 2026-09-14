@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,6 +206,65 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 	if outboxCount != 19 {
 		t.Fatalf("outbox count = %d, want 19", outboxCount)
+	}
+}
+
+func TestIndexes(t *testing.T) {
+	databaseURL := os.Getenv("AUTH_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("AUTH_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := store.pool.Query(ctx, `
+		SELECT indexname FROM pg_indexes
+		WHERE schemaname = current_schema()
+		  AND indexname = ANY($1)
+		ORDER BY indexname`, []string{
+		"auth_memberships_owners_idx",
+		"auth_invitations_org_created_idx",
+		"auth_invitations_pending_expiry_idx",
+		"auth_outbox_pending_idx",
+	})
+	if err != nil {
+		t.Fatalf("list indexes: %v", err)
+	}
+	defer rows.Close()
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := "auth_invitations_org_created_idx auth_invitations_pending_expiry_idx auth_memberships_owners_idx auth_outbox_pending_idx"
+	if got := strings.Join(names, " "); got != want {
+		t.Fatalf("indexes = %q, want %q", got, want)
+	}
+	var outboxDef string
+	if err := store.pool.QueryRow(ctx, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = current_schema() AND indexname = 'auth_outbox_pending_idx'`).Scan(&outboxDef); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(outboxDef, "available_at, occurred_at, id") {
+		t.Fatalf("outbox indexdef = %s", outboxDef)
 	}
 }
 

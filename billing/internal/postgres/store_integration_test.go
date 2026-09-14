@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,6 +232,60 @@ func TestStoreLifecycle(t *testing.T) {
 
 	if err := store.PruneWebhookDeliveries(ctx, now.Add(-time.Hour)); err != nil {
 		t.Fatalf("PruneWebhookDeliveries() error = %v", err)
+	}
+}
+
+func TestIndexes(t *testing.T) {
+	databaseURL := os.Getenv("BILLING_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BILLING_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var names []string
+	if err := store.db.SelectContext(ctx, &names, `
+		SELECT indexname FROM pg_indexes
+		WHERE schemaname = current_schema()
+		  AND indexname = ANY($1)
+		ORDER BY indexname`, []string{
+		"billing_organizations_active_idx",
+		"billing_subscriptions_renewal_idx",
+		"billing_outbox_pending_idx",
+	}); err != nil {
+		t.Fatalf("list indexes: %v", err)
+	}
+	want := "billing_organizations_active_idx billing_outbox_pending_idx billing_subscriptions_renewal_idx"
+	if got := strings.Join(names, " "); got != want {
+		t.Fatalf("indexes = %q, want %q", got, want)
+	}
+	var renewalDef, outboxDef string
+	if err := store.db.GetContext(ctx, &renewalDef, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = current_schema() AND indexname = 'billing_subscriptions_renewal_idx'`); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(renewalDef, "billing_interval") {
+		t.Fatalf("renewal indexdef = %s", renewalDef)
+	}
+	if err := store.db.GetContext(ctx, &outboxDef, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = current_schema() AND indexname = 'billing_outbox_pending_idx'`); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(outboxDef, "available_at, occurred_at, id") {
+		t.Fatalf("outbox indexdef = %s", outboxDef)
 	}
 }
 

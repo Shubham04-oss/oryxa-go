@@ -33,7 +33,7 @@ func TestCreateTeamAddsCreatorAsAdminAndEmitsEvents(t *testing.T) {
 		t.Fatalf("team = %+v", team)
 	}
 	membership, err := store.Membership(context.Background(), team.ID, "user-owner")
-	if err != nil || membership.Role != domain.RoleAdmin {
+	if err != nil || membership.Role != domain.RoleAdmin || membership.Path != domain.MemberPath(team.Path, "user-owner") {
 		t.Fatalf("creator membership = %+v, err = %v", membership, err)
 	}
 	if !slices.Contains(store.detailTypes(), teamseventsv1.TeamCreatedDetailType) || !slices.Contains(store.detailTypes(), teamseventsv1.MemberAddedDetailType) {
@@ -232,6 +232,158 @@ func TestAuthMemberRemovedClearsTeamMemberships(t *testing.T) {
 	}
 }
 
+func TestCreateNestedTeamRequiresParentManage(t *testing.T) {
+	service, _, _ := newService()
+	ctx := context.Background()
+	parent, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Engineering"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddMember(ctx, creds("user-owner"), "org_1", parent.ID, AddMemberInput{UserID: "user-member", Role: domain.RoleMember}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateTeam(ctx, creds("user-member"), "org_1", CreateTeamInput{Name: "Frontend", ParentID: parent.ID}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("member nest error = %v, want forbidden", err)
+	}
+	if _, err := service.CreateTeam(ctx, creds("user-member"), "org_1", CreateTeamInput{Name: "Hidden", ParentID: "team_missing"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing parent error = %v, want not found", err)
+	}
+	if _, err := service.AddMember(ctx, creds("user-owner"), "org_1", parent.ID, AddMemberInput{UserID: "user-outsider", Role: domain.RoleAdmin}); err != nil {
+		t.Fatal(err)
+	}
+	child, err := service.CreateTeam(ctx, creds("user-outsider"), "org_1", CreateTeamInput{Name: "Frontend", ParentID: parent.ID})
+	if err != nil || child.Path != domain.ChildPath(parent.Path, child.ID) {
+		t.Fatalf("child = %+v, err = %v", child, err)
+	}
+	if _, err := service.Team(ctx, creds("user-member"), "org_1", child.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("member saw child: %v", err)
+	}
+}
+
+func TestSearchAndDescendantsRespectVisibility(t *testing.T) {
+	service, _, _ := newService()
+	ctx := context.Background()
+	parent, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Engineering"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Design"}); err != nil {
+		t.Fatal(err)
+	}
+	child, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Frontend", ParentID: parent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddMember(ctx, creds("user-owner"), "org_1", parent.ID, AddMemberInput{UserID: "user-member", Role: domain.RoleMember}); err != nil {
+		t.Fatal(err)
+	}
+
+	asOwner, err := service.SearchTeams(ctx, creds("user-owner"), "org_1", "Eng", 10)
+	if err != nil || len(asOwner) != 1 || asOwner[0].ID != parent.ID {
+		t.Fatalf("owner search = %+v, err = %v", asOwner, err)
+	}
+	asMember, err := service.SearchTeams(ctx, creds("user-member"), "org_1", "Design", 10)
+	if err != nil || len(asMember) != 0 {
+		t.Fatalf("member search leaked Design: %+v, err = %v", asMember, err)
+	}
+
+	tree, err := service.TeamDescendants(ctx, creds("user-owner"), "org_1", parent.ID)
+	if err != nil || len(tree) != 2 {
+		t.Fatalf("owner descendants = %+v, err = %v", tree, err)
+	}
+	visible, err := service.TeamDescendants(ctx, creds("user-member"), "org_1", parent.ID)
+	if err != nil || len(visible) != 1 || visible[0].ID != parent.ID {
+		t.Fatalf("member descendants = %+v, err = %v", visible, err)
+	}
+	if _, err := service.TeamDescendants(ctx, creds("user-member"), "org_1", child.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("hidden descendants error = %v, want not found", err)
+	}
+
+	people, err := service.MemberDescendants(ctx, creds("user-owner"), "org_1", parent.ID)
+	if err != nil || len(people) != 3 {
+		t.Fatalf("owner member descendants = %+v, err = %v", people, err)
+	}
+	if !hasMembership(people, parent.ID, "user-member") || !hasMembership(people, child.ID, "user-owner") {
+		t.Fatalf("owner member descendants missing nested people: %+v", people)
+	}
+	visiblePeople, err := service.MemberDescendants(ctx, creds("user-member"), "org_1", parent.ID)
+	if err != nil || len(visiblePeople) != 2 || hasMembership(visiblePeople, child.ID, "user-owner") {
+		t.Fatalf("member descendants leaked the child: %+v, err = %v", visiblePeople, err)
+	}
+	if _, err := service.MemberDescendants(ctx, creds("user-member"), "org_1", child.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("hidden member descendants error = %v, want not found", err)
+	}
+}
+
+func TestEmbeddingNearestAndSubtreeDelete(t *testing.T) {
+	service, store, _ := newService()
+	ctx := context.Background()
+	parent, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Engineering"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Frontend", ParentID: parent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddMember(ctx, creds("user-owner"), "org_1", parent.ID, AddMemberInput{UserID: "user-member", Role: domain.RoleMember}); err != nil {
+		t.Fatal(err)
+	}
+
+	values := make([]float32, domain.EmbeddingDimensions)
+	values[0] = 1
+	if err := service.SetTeamEmbedding(ctx, creds("user-member"), "org_1", parent.ID, values); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("member embedding error = %v, want forbidden", err)
+	}
+	if err := service.SetTeamEmbedding(ctx, creds("user-owner"), "org_1", parent.ID, values); err != nil {
+		t.Fatal(err)
+	}
+	nearest, err := service.TeamsNearest(ctx, creds("user-owner"), "org_1", values, 5)
+	if err != nil || len(nearest) != 1 || nearest[0].ID != parent.ID {
+		t.Fatalf("nearest = %+v, err = %v", nearest, err)
+	}
+
+	if err := service.DeleteTeam(ctx, creds("user-owner"), "org_1", parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Team(ctx, "org_1", child.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("child survived parent delete: %v", err)
+	}
+}
+
+func TestSearchMembersReturnsTeamsAndHidesTheRest(t *testing.T) {
+	service, _, _ := newService()
+	ctx := context.Background()
+	engineering, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Engineering"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateTeam(ctx, creds("user-admin"), "org_1", CreateTeamInput{Name: "Design"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddMember(ctx, creds("user-owner"), "org_1", engineering.ID, AddMemberInput{UserID: "user-member", Role: domain.RoleMember}); err != nil {
+		t.Fatal(err)
+	}
+
+	asOwner, err := service.SearchMembers(ctx, creds("user-owner"), "org_1", "member", 10)
+	if err != nil || len(asOwner) != 1 || asOwner[0].UserID != "user-member" || asOwner[0].Path != domain.UserPath("org_1", "user-member") ||
+		len(asOwner[0].Teams) != 1 || asOwner[0].Teams[0].ID != engineering.ID ||
+		asOwner[0].Teams[0].Path != engineering.Path || asOwner[0].Teams[0].MemberPath != domain.MemberPath(engineering.Path, "user-member") {
+		t.Fatalf("owner member search = %+v, err = %v", asOwner, err)
+	}
+	outsider, err := service.SearchMembers(ctx, creds("user-owner"), "org_1", "outsider", 10)
+	if err != nil || len(outsider) != 1 || outsider[0].UserID != "user-outsider" || outsider[0].Path != domain.UserPath("org_1", "user-outsider") || len(outsider[0].Teams) != 0 {
+		t.Fatalf("unplaced member = %+v, err = %v", outsider, err)
+	}
+	asMember, err := service.SearchMembers(ctx, creds("user-member"), "org_1", "admin", 10)
+	if err != nil || len(asMember) != 1 || asMember[0].UserID != "user-admin" || len(asMember[0].Teams) != 0 {
+		t.Fatalf("member should not see Design on admin: %+v, err = %v", asMember, err)
+	}
+	if _, err := service.SearchMembers(ctx, creds("user-owner"), "org_1", "", 10); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("empty member search error = %v, want invalid", err)
+	}
+}
+
 func TestUnknownOrganizationIsNotFound(t *testing.T) {
 	service, _, _ := newService()
 	if _, err := service.Teams(context.Background(), creds("user-owner"), "org_missing"); !errors.Is(err, domain.ErrNotFound) {
@@ -258,6 +410,15 @@ func newService() (*Service, *fakeStore, *fakeDirectory) {
 	service := New(store, directory, slog.New(slog.DiscardHandler))
 	service.now = func() time.Time { return time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC) }
 	return service, store, directory
+}
+
+func hasMembership(members []domain.Membership, teamID, userID string) bool {
+	for _, member := range members {
+		if member.TeamID == teamID && member.UserID == userID {
+			return true
+		}
+	}
+	return false
 }
 
 func containsReason(events []domain.Event, reason string) bool {

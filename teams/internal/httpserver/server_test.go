@@ -50,6 +50,10 @@ func (fake *fakeService) Members(context.Context, authclient.Credentials, string
 	return []domain.Membership{{UserID: "user-1", Role: domain.RoleAdmin}}, fake.err
 }
 
+func (fake *fakeService) MemberDescendants(context.Context, authclient.Credentials, string, string) ([]domain.Membership, error) {
+	return []domain.Membership{{UserID: "user-1", TeamID: "team_1", Role: domain.RoleAdmin, Path: "org_1.team_1.user_1"}}, fake.err
+}
+
 func (fake *fakeService) AddMember(_ context.Context, _ authclient.Credentials, _, _ string, input application.AddMemberInput) (domain.Membership, error) {
 	fake.added = input
 	return domain.Membership{UserID: input.UserID, Role: input.Role}, fake.err
@@ -69,6 +73,26 @@ func (fake *fakeService) Tools(context.Context, authclient.Credentials, string) 
 
 func (fake *fakeService) SetNotification(_ context.Context, _ authclient.Credentials, _, _ string, notifyEmail bool) (domain.Membership, error) {
 	return domain.Membership{UserID: "user-1", NotifyEmail: notifyEmail}, fake.err
+}
+
+func (fake *fakeService) SearchTeams(context.Context, authclient.Credentials, string, string, int) ([]application.TeamSummary, error) {
+	return []application.TeamSummary{{Team: fake.team, CanManage: true}}, fake.err
+}
+
+func (fake *fakeService) TeamDescendants(context.Context, authclient.Credentials, string, string) ([]application.TeamSummary, error) {
+	return []application.TeamSummary{{Team: fake.team, CanManage: true}}, fake.err
+}
+
+func (fake *fakeService) SetTeamEmbedding(context.Context, authclient.Credentials, string, string, []float32) error {
+	return fake.err
+}
+
+func (fake *fakeService) TeamsNearest(context.Context, authclient.Credentials, string, []float32, int) ([]application.TeamSummary, error) {
+	return []application.TeamSummary{{Team: fake.team, CanManage: true}}, fake.err
+}
+
+func (fake *fakeService) SearchMembers(context.Context, authclient.Credentials, string, string, int) ([]application.MemberSearchHit, error) {
+	return []application.MemberSearchHit{{UserID: "user-1", Email: "asha@example.com", Teams: []application.MemberTeamRef{}}}, fake.err
 }
 
 func (fake *fakeService) CallTool(_ context.Context, _ authclient.Credentials, _, name string, _ json.RawMessage) (any, error) {
@@ -158,6 +182,81 @@ func TestCallTool(t *testing.T) {
 	}
 	if members.TeamID != "team_1" || len(members.Members) != 1 || members.Members[0].UserID != "user-1" || members.Members[0].Email != "asha@example.com" {
 		t.Fatalf("members = %+v", members)
+	}
+}
+
+func TestMemberDescendants(t *testing.T) {
+	response := do(New(&fakeService{}, Config{}, nil), http.MethodGet, "/v1/organizations/org_1/teams/team_1/members/descendants", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
+	}
+	var body struct {
+		Members []domain.Membership `json:"members"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body.Members) != 1 || body.Members[0].UserID != "user-1" || body.Members[0].Path == "" {
+		t.Fatalf("body = %s", response.Body.Bytes())
+	}
+}
+
+func TestSearchMembers(t *testing.T) {
+	response := do(New(&fakeService{}, Config{}, nil), http.MethodGet, "/v1/organizations/org_1/members/search?q=asha", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
+	}
+	var body struct {
+		Members []application.MemberSearchHit `json:"members"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body.Members) != 1 || body.Members[0].UserID != "user-1" {
+		t.Fatalf("body = %s", response.Body.Bytes())
+	}
+}
+
+func TestSearchTeams(t *testing.T) {
+	service := &fakeService{team: domain.Team{ID: "team_1", Name: "Engineering"}}
+	response := do(New(service, Config{}, nil), http.MethodGet, "/v1/organizations/org_1/teams/search?q=Eng", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
+	}
+	var body struct {
+		Teams []application.TeamSummary `json:"teams"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body.Teams) != 1 || body.Teams[0].ID != "team_1" {
+		t.Fatalf("body = %s", response.Body.Bytes())
+	}
+}
+
+func TestDescendants(t *testing.T) {
+	service := &fakeService{team: domain.Team{ID: "team_1", Name: "Engineering"}}
+	response := do(New(service, Config{}, nil), http.MethodGet, "/v1/organizations/org_1/teams/team_1/descendants", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
+	}
+	var body struct {
+		Teams []application.TeamSummary `json:"teams"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body.Teams) != 1 || body.Teams[0].ID != "team_1" {
+		t.Fatalf("body = %s", response.Body.Bytes())
+	}
+}
+
+func TestNearestTeams(t *testing.T) {
+	service := &fakeService{team: domain.Team{ID: "team_1", Name: "Engineering"}}
+	response := do(New(service, Config{}, nil), http.MethodPost, "/v1/organizations/org_1/teams/nearest", `{"embedding":[0],"limit":5}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
+	}
+	var body struct {
+		Teams []application.TeamSummary `json:"teams"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body.Teams) != 1 || body.Teams[0].ID != "team_1" {
+		t.Fatalf("body = %s", response.Body.Bytes())
+	}
+}
+
+func TestSetEmbedding(t *testing.T) {
+	response := do(New(&fakeService{}, Config{}, nil), http.MethodPut, "/v1/organizations/org_1/teams/team_1/embedding", `{"embedding":[0,1]}`)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
 	}
 }
 

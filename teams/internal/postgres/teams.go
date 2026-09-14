@@ -12,7 +12,9 @@ import (
 
 const teamColumns = `id, organization_id, name, path::text AS path, created_by, created_at, updated_at`
 
-const membershipColumns = `team_id, organization_id, user_id, email, display_name, role, notify_email, joined_at`
+const membershipColumns = `team_id, organization_id, user_id, email, display_name, role, notify_email, joined_at, path::text AS path`
+
+const userColumns = `organization_id, user_id, email, display_name, path::text AS path, updated_at`
 
 func (store *Store) UpsertOrganization(ctx context.Context, organizationID, name string, at time.Time) error {
 	if organizationID == "" {
@@ -69,7 +71,7 @@ func (store *Store) CreateTeam(ctx context.Context, organizationName string, tea
 		if err != nil {
 			return mapWriteError("insert team", err)
 		}
-		if err := insertMembership(ctx, tx, creator); err != nil {
+		if err := insertMembership(ctx, tx, team.Path, creator); err != nil {
 			return err
 		}
 		return insertEvents(ctx, tx, events)
@@ -100,15 +102,20 @@ func (store *Store) UpdateTeam(ctx context.Context, team domain.Team, event doma
 
 func (store *Store) DeleteTeam(ctx context.Context, organizationID, teamID string, events []domain.Event) error {
 	return store.inTx(ctx, func(tx *sqlx.Tx) error {
-		if _, err := lockTeam(ctx, tx, organizationID, teamID); err != nil {
+		team, err := lockTeam(ctx, tx, organizationID, teamID)
+		if err != nil {
 			return err
 		}
-		result, err := tx.ExecContext(ctx, `DELETE FROM teams WHERE id = $1 AND organization_id = $2`, teamID, organizationID)
+		result, err := tx.ExecContext(ctx, `
+			DELETE FROM teams WHERE organization_id = $1 AND path <@ $2::ltree`, organizationID, team.Path)
 		if err != nil {
 			return fmt.Errorf("delete team: %w", err)
 		}
 		if rows, _ := result.RowsAffected(); rows == 0 {
 			return domain.ErrNotFound
+		}
+		if err := pruneUsers(ctx, tx, organizationID); err != nil {
+			return err
 		}
 		return insertEvents(ctx, tx, events)
 	})
@@ -154,12 +161,30 @@ func (store *Store) Members(ctx context.Context, teamID string) ([]domain.Member
 	return listMembers(ctx, store.db, teamID)
 }
 
+// OrganizationMemberships is every team membership in the organization,
+// with the team name and path so a member search can say which teams
+// someone is on.
+func (store *Store) OrganizationMemberships(ctx context.Context, organizationID string) ([]domain.OrganizationMembership, error) {
+	rows := make([]domain.OrganizationMembership, 0)
+	if err := store.db.SelectContext(ctx, &rows, `
+		SELECT m.user_id, m.email, m.display_name, m.role,
+		       t.id AS team_id, t.name AS team_name, t.path::text AS path, m.path::text AS member_path
+		FROM teams_memberships m
+		JOIN teams t ON t.id = m.team_id
+		WHERE m.organization_id = $1
+		ORDER BY lower(t.name), t.id, m.user_id`, organizationID); err != nil {
+		return nil, fmt.Errorf("list organization memberships: %w", err)
+	}
+	return rows, nil
+}
+
 func (store *Store) AddMember(ctx context.Context, membership domain.Membership, event domain.Event) error {
 	return store.inTx(ctx, func(tx *sqlx.Tx) error {
-		if _, err := lockTeam(ctx, tx, membership.OrganizationID, membership.TeamID); err != nil {
+		team, err := lockTeam(ctx, tx, membership.OrganizationID, membership.TeamID)
+		if err != nil {
 			return err
 		}
-		if err := insertMembership(ctx, tx, membership); err != nil {
+		if err := insertMembership(ctx, tx, team.Path, membership); err != nil {
 			return err
 		}
 		return insertEvents(ctx, tx, []domain.Event{event})
@@ -192,7 +217,8 @@ func (store *Store) ChangeMemberRole(ctx context.Context, teamID, userID string,
 
 func (store *Store) RemoveMember(ctx context.Context, teamID, userID string, expected domain.Role, event domain.Event) error {
 	return store.inTx(ctx, func(tx *sqlx.Tx) error {
-		if err := tx.GetContext(ctx, new(string), `SELECT organization_id FROM teams WHERE id = $1 FOR UPDATE`, teamID); err != nil {
+		var organizationID string
+		if err := tx.GetContext(ctx, &organizationID, `SELECT organization_id FROM teams WHERE id = $1 FOR UPDATE`, teamID); err != nil {
 			if isNoRows(err) {
 				return domain.ErrNotFound
 			}
@@ -209,6 +235,9 @@ func (store *Store) RemoveMember(ctx context.Context, teamID, userID string, exp
 		if rows, _ := result.RowsAffected(); rows == 0 {
 			return domain.ErrConflict
 		}
+		if err := pruneUsers(ctx, tx, organizationID); err != nil {
+			return err
+		}
 		return insertEvents(ctx, tx, []domain.Event{event})
 	})
 }
@@ -224,12 +253,16 @@ func (store *Store) RemoveUserFromOrganization(ctx context.Context, organization
 		var rows []userTeamRow
 		if err := tx.SelectContext(ctx, &rows, `
 			SELECT t.id AS team_id, t.organization_id, t.name, t.path::text AS path, t.created_by, t.created_at, t.updated_at,
-			       m.user_id, m.email, m.display_name, m.role, m.notify_email, m.joined_at
+			       m.user_id, m.email, m.display_name, m.role, m.notify_email, m.joined_at, m.path::text AS member_path
 			FROM teams_memberships m
 			JOIN teams t ON t.id = m.team_id
 			WHERE m.organization_id = $1 AND m.user_id = $2
 			FOR UPDATE OF m`, organizationID, userID); err != nil {
 			return fmt.Errorf("list user teams: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM teams_users WHERE organization_id = $1 AND user_id = $2`, organizationID, userID); err != nil {
+			return fmt.Errorf("delete organization user: %w", err)
 		}
 		if len(rows) == 0 {
 			return nil
@@ -284,6 +317,9 @@ func (store *Store) DeleteOrganizationTeams(ctx context.Context, organizationID 
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM teams WHERE organization_id = $1`, organizationID); err != nil {
 			return fmt.Errorf("delete organization teams: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM teams_users WHERE organization_id = $1`, organizationID); err != nil {
+			return fmt.Errorf("delete organization users: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE teams_organizations SET deleted_at = coalesce(deleted_at, now()), updated_at = now()
@@ -364,15 +400,78 @@ func (store *Store) SetNotifyEmail(ctx context.Context, teamID, userID string, n
 	return nil
 }
 
-func insertMembership(ctx context.Context, tx execer, membership domain.Membership) error {
+func insertMembership(ctx context.Context, tx execer, teamPath string, membership domain.Membership) error {
+	if membership.Path == "" {
+		membership.Path = domain.MemberPath(teamPath, membership.UserID)
+	}
 	_, err := tx.ExecContext(ctx, `
-		INSERT INTO teams_memberships (team_id, organization_id, user_id, email, display_name, role, notify_email, joined_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		membership.TeamID, membership.OrganizationID, membership.UserID, membership.Email, membership.DisplayName, membership.Role, membership.NotifyEmail, membership.JoinedAt)
+		INSERT INTO teams_memberships (team_id, organization_id, user_id, email, display_name, role, notify_email, joined_at, path)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::ltree)`,
+		membership.TeamID, membership.OrganizationID, membership.UserID, membership.Email, membership.DisplayName, membership.Role, membership.NotifyEmail, membership.JoinedAt, membership.Path)
 	if err != nil {
 		return mapWriteError("insert membership", err)
 	}
+	return upsertUser(ctx, tx, membership)
+}
+
+func upsertUser(ctx context.Context, tx execer, membership domain.Membership) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO teams_users (organization_id, user_id, email, display_name, path, updated_at)
+		VALUES ($1, $2, $3, $4, $5::ltree, now())
+		ON CONFLICT (organization_id, user_id) DO UPDATE SET
+			email = EXCLUDED.email,
+			display_name = EXCLUDED.display_name,
+			updated_at = now()`,
+		membership.OrganizationID, membership.UserID, membership.Email, membership.DisplayName, domain.UserPath(membership.OrganizationID, membership.UserID))
+	if err != nil {
+		return fmt.Errorf("upsert user: %w", err)
+	}
 	return nil
+}
+
+func pruneUsers(ctx context.Context, tx execer, organizationID string) error {
+	if _, err := tx.ExecContext(ctx, `
+		DELETE FROM teams_users u
+		WHERE u.organization_id = $1
+		  AND NOT EXISTS (
+		      SELECT 1 FROM teams_memberships m
+		      WHERE m.organization_id = u.organization_id AND m.user_id = u.user_id
+		  )`, organizationID); err != nil {
+		return fmt.Errorf("prune users: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) User(ctx context.Context, organizationID, userID string) (domain.User, error) {
+	var user domain.User
+	err := store.db.GetContext(ctx, &user, `
+		SELECT `+userColumns+` FROM teams_users
+		WHERE organization_id = $1 AND user_id = $2`, organizationID, userID)
+	if isNoRows(err) {
+		return domain.User{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return domain.User{}, fmt.Errorf("get user: %w", err)
+	}
+	user.UpdatedAt = user.UpdatedAt.UTC()
+	return user, nil
+}
+
+func (store *Store) UsersUnder(ctx context.Context, organizationID, path string) ([]domain.User, error) {
+	if path == "" {
+		return nil, fmt.Errorf("path is required: %w", domain.ErrInvalid)
+	}
+	users := make([]domain.User, 0)
+	if err := store.db.SelectContext(ctx, &users, `
+		SELECT `+userColumns+` FROM teams_users
+		WHERE organization_id = $1 AND path <@ $2::ltree
+		ORDER BY path, user_id`, organizationID, path); err != nil {
+		return nil, fmt.Errorf("list users: %w", err)
+	}
+	for i := range users {
+		users[i].UpdatedAt = users[i].UpdatedAt.UTC()
+	}
+	return users, nil
 }
 
 func getTeam(ctx context.Context, ext execer, query string, args ...any) (domain.Team, error) {
@@ -429,6 +528,7 @@ type userTeamRow struct {
 	Role           domain.Role `db:"role"`
 	NotifyEmail    bool        `db:"notify_email"`
 	JoinedAt       time.Time   `db:"joined_at"`
+	MemberPath     string      `db:"member_path"`
 }
 
 func (row userTeamRow) asDomain() (domain.Team, domain.Membership) {
@@ -448,6 +548,7 @@ func (row userTeamRow) asDomain() (domain.Team, domain.Membership) {
 			DisplayName:    row.DisplayName,
 			Role:           row.Role,
 			NotifyEmail:    row.NotifyEmail,
+			Path:           row.MemberPath,
 			JoinedAt:       row.JoinedAt.UTC(),
 		}
 }

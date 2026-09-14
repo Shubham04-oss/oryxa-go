@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +45,7 @@ func TestStoreLifecycle(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
 		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM teams WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM teams_users WHERE organization_id = $1`, organizationID)
 		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM teams_organizations WHERE organization_id = $1`, organizationID)
 		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM teams_outbox WHERE id LIKE $1`, eventPrefix+"%")
 	}()
@@ -60,6 +62,13 @@ func TestStoreLifecycle(t *testing.T) {
 	member := domain.Membership{TeamID: teamID, OrganizationID: organizationID, UserID: "user-2", Email: "ben@example.com", Role: domain.RoleMember, JoinedAt: now}
 	if err := store.AddMember(ctx, member, testEvent(eventPrefix+"-added", "teams.member.added.v1", now)); err != nil {
 		t.Fatalf("AddMember() error = %v", err)
+	}
+	gotMember, err := store.Membership(ctx, teamID, "user-2")
+	if err != nil || gotMember.Path != domain.MemberPath(domain.TeamPath(organizationID, teamID), "user-2") {
+		t.Fatalf("Membership() = %+v, err = %v", gotMember, err)
+	}
+	if _, err := store.User(ctx, organizationID, "user-2"); err != nil {
+		t.Fatalf("User() error = %v", err)
 	}
 	if err := store.ChangeMemberRole(ctx, teamID, "user-1", domain.RoleAdmin, domain.RoleMember, testEvent(eventPrefix+"-demote", "teams.member.role-changed.v1", now)); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("demote last admin error = %v, want conflict", err)
@@ -99,11 +108,32 @@ func TestStoreExtensions(t *testing.T) {
 
 	var extensions []string
 	if err := store.db.SelectContext(ctx, &extensions, `
-		SELECT extname FROM pg_extension WHERE extname IN ('vector', 'ltree', 'pg_trgm') ORDER BY extname`); err != nil {
+		SELECT extname FROM pg_extension WHERE extname IN ('btree_gin', 'btree_gist', 'vector', 'ltree', 'pg_trgm') ORDER BY extname`); err != nil {
 		t.Fatalf("list extensions: %v", err)
 	}
-	if got := fmt.Sprint(extensions); got != "[ltree pg_trgm vector]" {
-		t.Fatalf("extensions = %s, want ltree, pg_trgm and vector", got)
+	if got := fmt.Sprint(extensions); got != "[btree_gin btree_gist ltree pg_trgm vector]" {
+		t.Fatalf("extensions = %s, want btree_gin, btree_gist, ltree, pg_trgm and vector", got)
+	}
+
+	var indexes []string
+	if err := store.db.SelectContext(ctx, &indexes, `
+		SELECT indexname FROM pg_indexes
+		WHERE schemaname = current_schema()
+		  AND indexname IN (
+		    'teams_org_path_gist_idx',
+		    'teams_org_name_trgm_idx',
+		    'teams_users_org_path_gist_idx',
+		    'teams_memberships_org_path_gist_idx',
+		    'teams_memberships_admins_idx',
+		    'teams_embedding_hnsw_idx',
+		    'teams_path_gist_idx',
+		    'teams_name_trgm_idx'
+		  )
+		ORDER BY indexname`); err != nil {
+		t.Fatalf("list indexes: %v", err)
+	}
+	if got := fmt.Sprint(indexes); got != "[teams_embedding_hnsw_idx teams_memberships_admins_idx teams_memberships_org_path_gist_idx teams_org_name_trgm_idx teams_org_path_gist_idx teams_users_org_path_gist_idx]" {
+		t.Fatalf("indexes = %s", got)
 	}
 
 	suffix := time.Now().UTC().Format("20060102150405.000000000")
@@ -114,6 +144,7 @@ func TestStoreExtensions(t *testing.T) {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cleanupCancel()
 		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM teams WHERE organization_id = $1`, organizationID)
+		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM teams_users WHERE organization_id = $1`, organizationID)
 		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM teams_organizations WHERE organization_id = $1`, organizationID)
 	}()
 
@@ -131,7 +162,7 @@ func TestStoreExtensions(t *testing.T) {
 	if err != nil || len(descendants) != 1 || descendants[0].ID != teamID {
 		t.Fatalf("TeamDescendants() = %+v, err = %v", descendants, err)
 	}
-	matches, err := store.SearchTeams(ctx, organizationID, "Engine", 5)
+	matches, err := store.SearchTeams(ctx, organizationID, "Engine", 5, nil)
 	if err != nil || len(matches) != 1 || matches[0].ID != teamID {
 		t.Fatalf("SearchTeams() = %+v, err = %v", matches, err)
 	}
@@ -141,9 +172,40 @@ func TestStoreExtensions(t *testing.T) {
 	if err := store.SetTeamEmbedding(ctx, organizationID, teamID, embedding); err != nil {
 		t.Fatalf("SetTeamEmbedding() error = %v", err)
 	}
-	nearest, err := store.TeamsNearest(ctx, organizationID, embedding, 3)
+	nearest, err := store.TeamsNearest(ctx, organizationID, embedding, 3, nil)
 	if err != nil || len(nearest) != 1 || nearest[0].ID != teamID {
 		t.Fatalf("TeamsNearest() = %+v, err = %v", nearest, err)
+	}
+	var hnsw string
+	if err := store.db.GetContext(ctx, &hnsw, `
+		SELECT indexdef FROM pg_indexes
+		WHERE schemaname = current_schema() AND indexname = 'teams_embedding_hnsw_idx'`); err != nil {
+		t.Fatalf("hnsw index: %v", err)
+	}
+	if !strings.Contains(hnsw, "hnsw") || !strings.Contains(hnsw, "vector_cosine_ops") {
+		t.Fatalf("hnsw indexdef = %s", hnsw)
+	}
+
+	childID := "it-child-" + suffix
+	child := domain.Team{
+		ID: childID, OrganizationID: organizationID, Name: "Frontend",
+		Path: domain.ChildPath(got.Path, childID), CreatedBy: "user-1", CreatedAt: now, UpdatedAt: now,
+	}
+	childCreator := domain.Membership{TeamID: childID, OrganizationID: organizationID, UserID: "user-2", Email: "ben@example.com", Role: domain.RoleAdmin, JoinedAt: now}
+	if err := store.CreateTeam(ctx, "Acme", child, childCreator, nil); err != nil {
+		t.Fatalf("CreateTeam(child) error = %v", err)
+	}
+	people, err := store.MembersUnder(ctx, organizationID, got.Path)
+	if err != nil || len(people) != 2 {
+		t.Fatalf("MembersUnder() = %+v, err = %v", people, err)
+	}
+	users, err := store.UsersUnder(ctx, organizationID, domain.LtreeLabel(organizationID))
+	if err != nil || len(users) != 2 {
+		t.Fatalf("UsersUnder() = %+v, err = %v", users, err)
+	}
+	user, err := store.User(ctx, organizationID, "user-2")
+	if err != nil || user.Path != domain.UserPath(organizationID, "user-2") {
+		t.Fatalf("User() = %+v, err = %v", user, err)
 	}
 }
 

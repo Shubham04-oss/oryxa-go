@@ -104,6 +104,7 @@ function teamsJourney() {
     'owner adds the member to Engineering': (r) => r.status === 201,
   }));
   mustOk(added.user_id === 'user-member' && added.role === 'member' && added.notify_email === true, 'new member starts with mail on');
+  mustOk(added.path && added.path.startsWith(`${engineering.path}.`), 'new member hangs under the team');
 
   const memberTeams = json(must(t('GET', '/teams', 'member', null), { 'member lists only Engineering': (r) => r.status === 200 }));
   mustOk(memberTeams.teams.length === 1 && memberTeams.teams[0].id === engineering.id && memberTeams.teams[0].can_manage === false, 'member sees one team and cannot manage it');
@@ -113,6 +114,51 @@ function teamsJourney() {
 
   const outsiderTeams = json(must(t('GET', '/teams', 'outsider', null), { 'outsider lists no teams': (r) => r.status === 200 }));
   mustOk(outsiderTeams.teams.length === 0, 'outsider is in the org but on no team');
+
+  const frontendName = `Sim Frontend ${runID}`;
+  must(t('POST', '/teams', 'member', { name: frontendName, parent_id: engineering.id }), { 'a team member cannot nest a team': (r) => r.status === 403 });
+  const frontend = json(must(t('POST', '/teams', 'owner', { name: frontendName, parent_id: engineering.id }), { 'owner nests Frontend under Engineering': (r) => r.status === 201 }));
+  mustOk(frontend.path && frontend.path.startsWith(`${engineering.path}.`), 'child path hangs under the parent');
+  must(t('GET', `/teams/${frontend.id}`, 'member', null), { 'member cannot see a child they are not on': (r) => r.status === 404 });
+  const tree = json(must(t('GET', `/teams/${engineering.id}/descendants`, 'owner', null), { 'owner reads the Engineering tree': (r) => r.status === 200 }));
+  mustOk(tree.teams.length === 2 && tree.teams.some((row) => row.id === frontend.id), 'descendants include the child');
+  const memberTree = json(must(t('GET', `/teams/${engineering.id}/descendants`, 'member', null), { 'member descendants hide the child': (r) => r.status === 200 }));
+  mustOk(memberTree.teams.length === 1 && memberTree.teams[0].id === engineering.id, 'member descendants stay on visible teams');
+  must(t('GET', `/teams/${design.id}/descendants`, 'member', null), { 'hidden team descendants stay 404': (r) => r.status === 404 });
+  const treePeople = json(must(t('GET', `/teams/${engineering.id}/members/descendants`, 'owner', null), { 'owner reads people under Engineering': (r) => r.status === 200 }));
+  mustOk(
+    treePeople.members.some((row) => row.user_id === 'user-member' && row.team_id === engineering.id) &&
+      treePeople.members.some((row) => row.user_id === 'user-owner' && row.team_id === frontend.id),
+    'member descendants include the nested team'
+  );
+  const memberPeople = json(must(t('GET', `/teams/${engineering.id}/members/descendants`, 'member', null), { 'member people descendants hide the child': (r) => r.status === 200 }));
+  mustOk(
+    memberPeople.members.some((row) => row.team_id === engineering.id) && !memberPeople.members.some((row) => row.team_id === frontend.id),
+    'member people descendants stay on visible teams'
+  );
+  must(t('GET', `/teams/${design.id}/members/descendants`, 'member', null), { 'hidden team member descendants stay 404': (r) => r.status === 404 });
+
+  const found = json(must(t('GET', `/teams/search?q=${encodeURIComponent(engineeringName)}`, 'owner', null), { 'owner search finds Engineering': (r) => r.status === 200 }));
+  mustOk(found.teams.some((row) => row.id === engineering.id), 'search hit is Engineering');
+  const memberSearch = json(must(t('GET', `/teams/search?q=${encodeURIComponent(designName)}`, 'member', null), { 'member search does not leak Design': (r) => r.status === 200 }));
+  mustOk(!memberSearch.teams.some((row) => row.id === design.id), 'Design stays hidden from search');
+
+  const embedding = Array(1536).fill(0);
+  embedding[0] = 1;
+  must(t('PUT', `/teams/${engineering.id}/embedding`, 'member', { embedding }), { 'a team member cannot write an embedding': (r) => r.status === 403 });
+  must(t('PUT', `/teams/${engineering.id}/embedding`, 'owner', { embedding }), { 'owner writes the Engineering embedding': (r) => r.status === 204 });
+  const nearest = json(must(t('POST', '/teams/nearest', 'owner', { embedding, limit: 5 }), { 'owner nearest-neighbour finds Engineering': (r) => r.status === 200 }));
+  mustOk(nearest.teams[0] && nearest.teams[0].id === engineering.id, 'nearest team is Engineering');
+
+  const people = json(must(t('GET', `/members/search?q=member`, 'owner', null), { 'owner fuzzy-searches members': (r) => r.status === 200 }));
+  const memberHit = (people.members || []).find((row) => row.user_id === 'user-member');
+  mustOk(memberHit && memberHit.path && memberHit.teams.some((team) => team.id === engineering.id && team.member_path), 'member search says they are on Engineering');
+  const unplaced = json(must(t('GET', `/members/search?q=outsider`, 'owner', null), { 'owner finds an org member on no team': (r) => r.status === 200 }));
+  const outsiderHit = (unplaced.members || []).find((row) => row.user_id === 'user-outsider');
+  mustOk(outsiderHit && outsiderHit.path && outsiderHit.teams.length === 0, 'unplaced member has an empty teams list');
+  const hiddenAdmin = json(must(t('GET', `/members/search?q=admin`, 'member', null), { 'member searches people without leaking Design': (r) => r.status === 200 }));
+  const adminHit = (hiddenAdmin.members || []).find((row) => row.user_id === 'user-admin');
+  mustOk(adminHit && !adminHit.teams.some((team) => team.id === design.id), 'Design stays off the member search');
 
   must(t('GET', `/teams/${design.id}`, 'member', null), { 'member cannot see Design': (r) => r.status === 404 });
   must(t('GET', `/teams/${engineering.id}`, 'outsider', null), { 'outsider cannot see Engineering': (r) => r.status === 404 });
@@ -137,7 +183,7 @@ function teamsJourney() {
   const listed = json(must(t('POST', '/tools/list_teams', 'member', {}), { 'member list_teams hides Design': (r) => r.status === 200 }));
   mustOk(Array.isArray(listed) && listed.length === 1 && listed[0].id === engineering.id, 'list_teams is a handle array');
   const ownerListed = json(must(t('POST', '/tools/list_teams', 'owner', {}), { 'owner list_teams sees both': (r) => r.status === 200 }));
-  mustOk(Array.isArray(ownerListed) && ownerListed.length === 2, 'owner lists both teams');
+  mustOk(Array.isArray(ownerListed) && ownerListed.length === 3, 'owner lists Engineering, Design, and Frontend');
 
   const roster = json(must(t('POST', '/tools/call_team_members', 'member', { query: platformName }), { 'member calls the roster': (r) => r.status === 200 }));
   mustOk(roster.team_id === engineering.id && roster.members.length === 2, 'roster has owner and member');
