@@ -160,3 +160,95 @@ func TestKeyIdentityRejectsIncompleteAccount(t *testing.T) {
 		t.Fatalf("incomplete account error = %v, want %v", err, domain.ErrProviderUnavailable)
 	}
 }
+
+func TestKeyIdentityAsanaBearer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/users/me" || request.Header.Get("Authorization") != "Bearer 2/1204/1205:abc" {
+			t.Errorf("identity request = %s %v", request.URL.Path, request.Header)
+		}
+		_, _ = io.WriteString(writer, `{"data":{"gid":"4673218951","email":"ada@example.test","name":"Ada Lovelace"}}`)
+	}))
+	defer server.Close()
+
+	provider := Asana()
+	keys := provider.Keys[domain.CredentialBearer]
+	keys.APIURL = server.URL
+	provider.Keys = map[domain.CredentialType]KeyAuth{domain.CredentialBearer: keys}
+
+	account, err := testClient(server).KeyIdentity(context.Background(), provider, domain.CredentialBearer, domain.CredentialInput{Token: "2/1204/1205:abc"})
+	if err != nil || account != (domain.ProviderAccount{ID: "4673218951", Name: "ada@example.test"}) {
+		t.Fatalf("KeyIdentity() = %+v %v", account, err)
+	}
+}
+
+func TestKeyIdentityClickUpAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		// ClickUp personal API tokens carry no "Bearer " prefix.
+		if request.URL.Path != "/user" || request.Header.Get("Authorization") != "pk_183_ABC" {
+			t.Errorf("identity request = %s %v", request.URL.Path, request.Header)
+		}
+		_, _ = io.WriteString(writer, `{"user":{"id":183,"username":"ada","email":"ada@example.test"}}`)
+	}))
+	defer server.Close()
+
+	provider := ClickUp()
+	keys := provider.Keys[domain.CredentialAPIKey]
+	keys.APIURL = server.URL
+	provider.Keys = map[domain.CredentialType]KeyAuth{domain.CredentialAPIKey: keys}
+
+	account, err := testClient(server).KeyIdentity(context.Background(), provider, domain.CredentialAPIKey, domain.CredentialInput{APIKey: "pk_183_ABC"})
+	if err != nil || account != (domain.ProviderAccount{ID: "183", Name: "ada@example.test"}) {
+		t.Fatalf("KeyIdentity() = %+v %v", account, err)
+	}
+}
+
+func TestKeyIdentityAtlassianAPIToken(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		paths = append(paths, request.URL.Path)
+		user, password, basic := request.BasicAuth()
+		if !basic || user != "ada@example.test" {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case password == "jira-token" && request.URL.Path == "/rest/api/3/myself":
+			_, _ = io.WriteString(writer, `{"accountId":"557058:f58131cb","emailAddress":"ada@example.test","displayName":"Ada Lovelace"}`)
+		case password == "confluence-token" && request.URL.Path == "/wiki/rest/api/user/current":
+			_, _ = io.WriteString(writer, `{"type":"known","accountId":"557058:f58131cb","email":"ada@example.test","publicName":"ada"}`)
+		case password == "anonymous" && request.URL.Path == "/wiki/rest/api/user/current":
+			_, _ = io.WriteString(writer, `{"type":"anonymous","displayName":"Anonymous"}`)
+		case password == "revoked":
+			writer.WriteHeader(http.StatusUnauthorized)
+		default:
+			// A site without Jira.
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	provider := Atlassian()
+	keys := provider.Keys[domain.CredentialBasic]
+	keys.APIURL = server.URL
+	provider.Keys = map[domain.CredentialType]KeyAuth{domain.CredentialBasic: keys}
+	identity := func(token string) (domain.ProviderAccount, error) {
+		paths = nil
+		return testClient(server).KeyIdentity(context.Background(), provider, domain.CredentialBasic,
+			domain.CredentialInput{Username: "ada@example.test", Password: token})
+	}
+	want := domain.ProviderAccount{ID: "557058:f58131cb", Name: "ada@example.test"}
+
+	if account, err := identity("jira-token"); err != nil || account != want || len(paths) != 1 {
+		t.Fatalf("KeyIdentity() on a Jira site = %+v %v, paths %v", account, err, paths)
+	}
+	if account, err := identity("confluence-token"); err != nil || account != want || len(paths) != 2 {
+		t.Fatalf("KeyIdentity() on a Confluence-only site = %+v %v, paths %v", account, err, paths)
+	}
+	// A refused token stops at Jira; one Confluence reads as anonymous is refused too.
+	if _, err := identity("revoked"); !errors.Is(err, domain.ErrCredentialRejected) || len(paths) != 1 {
+		t.Fatalf("KeyIdentity() with a revoked token error = %v, paths %v", err, paths)
+	}
+	if _, err := identity("anonymous"); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("KeyIdentity() read as anonymous error = %v", err)
+	}
+}

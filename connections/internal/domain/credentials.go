@@ -95,6 +95,12 @@ type IssuedToken struct {
 	Placement       TokenPlacement  `json:"placement"`
 	Scopes          []string        `json:"scopes"`
 	ProviderAccount ProviderAccount `json:"provider_account"`
+	// Domain is the app's domain, for providers reached through the
+	// organization's own address, such as an Atlassian site.
+	Domain string `json:"domain,omitempty"`
+	// Metadata carries what the provider returned with the token that callers
+	// need and that is not secret, such as Salesforce's instance_url.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 var holderPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._:-]{0,79}$`)

@@ -1,7 +1,8 @@
 # Connections service
 
 Status: built. Apps; OAuth 2.0, GitHub App installation, client-credentials and
-key-based connections for GitHub, Google, Linear, Microsoft and Slack;
+key-based connections for Asana, Atlassian (Jira and Confluence), ClickUp,
+GitHub, Google, Linear, Microsoft and Slack;
 reconnect, labels, defaults and disconnect; token issuance with refresh and
 minting under a lease; holds, revocation and credential deletion; the
 heartbeat; the auth and teams event consumer; and service identity. Not built
@@ -39,11 +40,11 @@ change, disable or delete apps.
 
 | Field | Holds |
 | --- | --- |
-| `provider` | A built-in provider: `github`, `google`, `linear`, `microsoft` or `slack` |
+| `provider` | A built-in provider: `asana`, `atlassian`, `clickup`, `github`, `google`, `linear`, `microsoft` or `slack` |
 | `credential_type` | How connections to this app authenticate (below). Defaults to the provider's `oauth2` |
 | Client | `oauth2` and `oauth2_client_credentials` apps: `client_id` and an encrypted `client_secret`. `installation` apps: also the GitHub App's `github_app_id`, `github_app_slug` and encrypted `private_key`. Key-based apps take no client |
 | `scopes` | What `oauth2` connections may be granted. Never beyond the provider's ceiling; always includes its required scopes. Client-credentials apps carry the provider's fixed app-only scopes; installation and key-based apps carry none |
-| `settings` | What is not secret about the client, such as the GitHub App's ID and slug |
+| `settings` | What is not secret about the client, such as the GitHub App's ID and slug, and the app's `domain` where the provider needs one |
 | `status` | `active` or `disabled` |
 
 - Narrowing `scopes` applies at once: tokens are issued only for scopes the app still allows. Widening needs each connection to reconnect to gain the new scopes.
@@ -59,15 +60,23 @@ change, disable or delete apps.
 | `installation` | A GitHub App installation ID, and the last installation token | The installation, named by its account | An installation token, minted with the app's private key | Minted again before expiry (hourly) |
 | `api_key`, `bearer`, `basic` | The secret | The account the provider's identity check returns | The secret, with where it goes on a request | None; the owner replaces it |
 
-Built-in key-based providers are GitHub personal access tokens (`bearer`) and
-Linear API keys (`api_key`); Microsoft offers client credentials; GitHub offers
-installations. Client-credentials connections are team or organization scope
-only, because no person consents to them.
+Built-in key-based providers are Asana and GitHub personal access tokens
+(`bearer`), ClickUp personal tokens and Linear API keys (`api_key`), and
+Atlassian API tokens (`basic`, the account's email and the token); Microsoft
+offers client credentials; GitHub offers installations.
+Client-credentials connections are team or organization scope only, because no
+person consents to them.
 
 Only `oauth2` connections carry scopes connections can see. An installation
 token has the permissions set on the GitHub App, a client-credentials token the
 application permissions an admin granted, and a key whatever its owner gave it,
 so requested scopes are checked only for `oauth2` connections.
+
+Some providers differ in ways callers notice:
+
+- `atlassian` covers Jira and Confluence Cloud. An `oauth2` grant reaches every site the member lets the app use; callers list those sites, with the cloud IDs their API URLs need, at `https://api.atlassian.com/oauth/token/accessible-resources`. `offline_access` and `read:me` are always requested, and refresh tokens rotate on every refresh. Classic and granular scopes are both offered; Jira Software's boards, sprints and epics have only granular ones. A `basic` app names its site as its `domain`, such as `acme.atlassian.net`, and its API tokens work there alone.
+- `asana` apps either have full permissions, allowing `default` on its own, or allow specific scopes such as `tasks:read`, which the Asana app must also enable, with `users:read` always included for the identity check. `default` covers every specific scope a caller asks for.
+- `clickup` has no OAuth scopes: the member picks the workspaces an app may reach while consenting. Its access tokens do not expire, so there is nothing to refresh.
 
 ## Ownership
 
@@ -171,7 +180,7 @@ authorization sessions.
 
 ## Token issuance
 
-Integrations and other services ask for a credential whenever they need one:
+Services ask for a credential whenever they need one:
 
 ```text
 POST /v1/internal/connections/{connectionID}/token
@@ -203,7 +212,11 @@ it the primary token is issued.
 
 `placement` says where the credential goes: a header or query parameter, with
 an optional prefix. A key-based connection's `token_type` is its credential
-type, and it has no `expires_at`.
+type, and it has no `expires_at`. Two fields appear only when they apply:
+`domain`, the app's domain for a provider reached through one, such as
+`acme.atlassian.net`; and `metadata`, what the provider returned with an
+`oauth2` token that callers need and that is not secret, such as Salesforce's
+`instance_url`, kept through refreshes.
 
 Checks, in order:
 
@@ -264,7 +277,7 @@ Cookie-authenticated mutations on public routes must come from an origin in
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |
 | `GET` | `/v1/organizations/{organizationID}/apps` | Members | Enabled apps: provider, credential type, allowed scopes, settings, status. Never secrets |
-| `POST` | `/v1/organizations/{organizationID}/apps` | Org admins | Enable a provider: `{provider, credential_type, client_id, client_secret, scopes}`, plus `{github_app_id, github_app_slug, private_key}` for an installation app |
+| `POST` | `/v1/organizations/{organizationID}/apps` | Org admins | Enable a provider: `{provider, credential_type, client_id, client_secret, scopes}`, plus `{github_app_id, github_app_slug, private_key}` for an installation app, and `domain` where the provider needs one |
 | `PATCH` | `/v1/organizations/{organizationID}/apps/{appID}` | Org admins | `{scopes}`, `{client_secret}`, `{private_key}`, or `{client_id, client_secret}` |
 | `POST` | `/v1/organizations/{organizationID}/apps/{appID}/disable` | Org admins | Block its connections |
 | `POST` | `/v1/organizations/{organizationID}/apps/{appID}/enable` | Org admins | Unblock them |
@@ -408,6 +421,22 @@ consumer. New here: sessions finished from the
 app, team and organization scopes, holds, statuses and health, key-based,
 client-credentials and installation connections, token issuance, and the
 service identity.
+
+## Adding a provider
+
+A provider is one file in `internal/providers` returning a `Provider`,
+registered in `Builtin()`. The application, store and API need no change. What
+a definition can say:
+
+- Credential types, and for each the URLs it uses and an identity check that returns the account a grant or key belongs to.
+- Scope rules: the ceiling, required scopes, implications between scopes, and exclusive scopes allowed only on their own.
+- OAuth 2.0 differences: fixed authorization parameters, PKCE, the scope separator, scopes adjusted before sending or read back from the token response, JSON token requests (`JSONTokenRequests`), client credentials sent as HTTP Basic (`ClientSecretBasic`), a token response that is not RFC 6749 (`DecodeToken`), permanent refresh errors, and whether a refresh token is required.
+- `Metadata`: token response fields that are not secret and that callers need with the token.
+- A `DomainRule` when URLs name `{domain}`: each app supplies its domain once, validated against the rule, and every flow for the app runs with it filled in. The provider HTTP client still refuses private addresses.
+- A revoke hook, where the provider can end a grant.
+
+`TestBuiltinProvidersAreConsistent` checks every definition; each provider also
+gets a flow test against a fake server.
 
 ## Run locally
 

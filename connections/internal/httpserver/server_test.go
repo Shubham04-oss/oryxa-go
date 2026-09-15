@@ -327,6 +327,10 @@ func TestApps(t *testing.T) {
 		service.createApp.GitHubAppID != "12345" || service.createApp.GitHubAppSlug != "oryxa-bot" || service.createApp.PrivateKey != "-----BEGIN KEY-----" {
 		t.Fatalf("POST apps with a GitHub App = %d %s %+v", recorder.Code, recorder.Body, service.createApp)
 	}
+	recorder = serve(service, http.MethodPost, "/v1/organizations/org_1/apps", `{"provider":"atlassian","credential_type":"basic","domain":"acme.atlassian.net"}`)
+	if recorder.Code != http.StatusCreated || service.createApp.Domain != "acme.atlassian.net" || service.createApp.CredentialType != domain.CredentialBasic {
+		t.Fatalf("POST apps with a domain = %d %s %+v", recorder.Code, recorder.Body, service.createApp)
+	}
 
 	recorder = serve(service, http.MethodPatch, "/v1/organizations/org_1/apps/app_1", `{"client_secret":"secret-2"}`)
 	if recorder.Code != http.StatusOK || service.id != "app_1" || service.updateApp.ClientSecret != "secret-2" || service.updateApp.Scopes != nil {

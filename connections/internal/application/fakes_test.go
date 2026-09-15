@@ -446,6 +446,7 @@ type fakeOAuth struct {
 	refreshDelay time.Duration
 
 	keyChecks  []domain.CredentialInput
+	keyAPIURLs []string
 	keyAccount domain.ProviderAccount
 	keyErr     error
 

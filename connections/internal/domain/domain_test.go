@@ -211,19 +211,34 @@ func TestMissingScopes(t *testing.T) {
 }
 
 func TestAppScopes(t *testing.T) {
-	ceiling := []string{"read", "write", "comments:create"}
-	required := []string{"read"}
-	if scopes, err := AppScopes(nil, ceiling, required); err != nil || !slices.Equal(scopes, []string{"read"}) {
+	rules := ScopeRules{Ceiling: []string{"read", "write", "comments:create"}, Required: []string{"read"}}
+	if scopes, err := AppScopes(nil, rules); err != nil || !slices.Equal(scopes, []string{"read"}) {
 		t.Fatalf("default scopes = %v %v", scopes, err)
 	}
-	if scopes, err := AppScopes([]string{"write", " read ", "read"}, ceiling, required); err != nil || !slices.Equal(scopes, []string{"read", "write"}) {
+	if scopes, err := AppScopes([]string{"write", " read ", "read"}, rules); err != nil || !slices.Equal(scopes, []string{"read", "write"}) {
 		t.Fatalf("requested scopes = %v %v", scopes, err)
 	}
-	if _, err := AppScopes([]string{"write"}, ceiling, required); !errors.Is(err, ErrInvalid) {
+	if _, err := AppScopes([]string{"write"}, rules); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("missing required scope error = %v", err)
 	}
-	if _, err := AppScopes([]string{"read", "admin"}, ceiling, required); !errors.Is(err, ErrInvalid) {
+	if _, err := AppScopes([]string{"read", "admin"}, rules); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("scope beyond the ceiling error = %v", err)
+	}
+
+	// A broader scope satisfies a required one, and an exclusive scope is
+	// allowed only on its own, as with Asana's default.
+	full := ScopeRules{
+		Ceiling: []string{"default", "tasks:read", "users:read"}, Required: []string{"users:read"},
+		Implications: Implications{"tasks:read": {"default"}, "users:read": {"default"}}, Exclusive: []string{"default"},
+	}
+	if scopes, err := AppScopes([]string{"default"}, full); err != nil || !slices.Equal(scopes, []string{"default"}) {
+		t.Fatalf("exclusive scope on its own = %v %v", scopes, err)
+	}
+	if _, err := AppScopes([]string{"default", "users:read"}, full); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("exclusive scope with another error = %v", err)
+	}
+	if scopes, err := AppScopes([]string{"tasks:read", "users:read"}, full); err != nil || !slices.Equal(scopes, []string{"tasks:read", "users:read"}) {
+		t.Fatalf("specific scopes = %v %v", scopes, err)
 	}
 }
 

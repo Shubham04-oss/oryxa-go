@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -62,13 +64,19 @@ func TestBuiltinProvidersAreConsistent(t *testing.T) {
 	// Every provider supports oauth2 first (apps default to it); some also
 	// support other credential types.
 	credentialTypes := map[string][]domain.CredentialType{
+		"asana":     {domain.CredentialOAuth2, domain.CredentialBearer},
+		"atlassian": {domain.CredentialOAuth2, domain.CredentialBasic},
+		"clickup":   {domain.CredentialOAuth2, domain.CredentialAPIKey},
 		"github":    {domain.CredentialOAuth2, domain.CredentialInstallation, domain.CredentialBearer},
 		"google":    {domain.CredentialOAuth2},
 		"linear":    {domain.CredentialOAuth2, domain.CredentialAPIKey},
 		"microsoft": {domain.CredentialOAuth2, domain.CredentialOAuth2ClientCredentials},
 		"slack":     {domain.CredentialOAuth2},
 	}
-	for _, name := range []string{"github", "google", "linear", "microsoft", "slack"} {
+	if len(registry) != len(credentialTypes) {
+		t.Fatalf("Builtin() has %d providers, want %d", len(registry), len(credentialTypes))
+	}
+	for _, name := range slices.Sorted(maps.Keys(credentialTypes)) {
 		provider, ok := registry.Lookup(" " + strings.ToUpper(name) + " ")
 		if !ok || provider.Name != name {
 			t.Fatalf("Lookup(%q) = %+v %v", name, provider, ok)
@@ -81,7 +89,7 @@ func TestBuiltinProvidersAreConsistent(t *testing.T) {
 				t.Fatalf("%s does not support its own %s credential type", name, credentialType)
 			}
 		}
-		if _, err := domain.AppScopes(nil, provider.Scopes.Ceiling, provider.Scopes.Required); err != nil {
+		if _, err := domain.AppScopes(nil, provider.Scopes); err != nil {
 			t.Fatalf("%s required scopes are outside its ceiling: %v", name, err)
 		}
 		for narrow, broader := range provider.Scopes.Implications {
@@ -89,6 +97,37 @@ func TestBuiltinProvidersAreConsistent(t *testing.T) {
 				if !slices.Contains(provider.Scopes.Ceiling, scope) {
 					t.Fatalf("%s implication names %q, which is not in its ceiling", name, scope)
 				}
+			}
+		}
+		for _, scope := range provider.Scopes.Exclusive {
+			if !slices.Contains(provider.Scopes.Ceiling, scope) {
+				t.Fatalf("%s exclusive scope %q is not in its ceiling", name, scope)
+			}
+		}
+		// A credential type whose URLs name {domain} has a rule whose example
+		// fills them into absolute HTTPS URLs.
+		for _, credentialType := range credentialTypes[name] {
+			value := ""
+			if provider.NeedsDomain(credentialType) {
+				if provider.Domain == nil {
+					t.Fatalf("%s %s URLs name a domain but it has no domain rule", name, credentialType)
+				}
+				value = provider.Domain.Example
+			}
+			if accepted, err := provider.AppDomain(credentialType, value); err != nil || accepted != value {
+				t.Fatalf("%s %s AppDomain(%q) = %q %v", name, credentialType, value, accepted, err)
+			}
+			filled := provider.WithDomain(value)
+			for _, endpoint := range filled.endpoints(credentialType) {
+				if endpoint == "" {
+					continue
+				}
+				if parsed, err := url.Parse(endpoint); err != nil || parsed.Scheme != "https" || parsed.Host == "" || strings.Contains(endpoint, "{domain}") {
+					t.Fatalf("%s %s endpoint %q is not an absolute HTTPS URL", name, credentialType, endpoint)
+				}
+			}
+			if credentialType.KeyBased() && filled.Keys[credentialType].Identity == nil {
+				t.Fatalf("%s has no identity check for %s credentials", name, credentialType)
 			}
 		}
 		for _, endpoint := range []string{provider.OAuth2.AuthorizationURL, provider.OAuth2.TokenURL, provider.OAuth2.APIURL} {
@@ -377,6 +416,237 @@ func TestLinearFlow(t *testing.T) {
 	}
 }
 
+func TestAtlassianFlow(t *testing.T) {
+	rotated := false
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			// Atlassian documents only JSON token requests.
+			var body map[string]string
+			if request.Header.Get("Content-Type") != "application/json" || json.NewDecoder(request.Body).Decode(&body) != nil ||
+				body["client_id"] != "client" || body["client_secret"] != "secret-value" {
+				t.Errorf("token request = %v %v", request.Header, body)
+			}
+			switch {
+			case body["grant_type"] == "authorization_code" && body["code"] == "code":
+				// The granted scopes may leave out offline_access.
+				_, _ = io.WriteString(writer, `{"access_token":"token","refresh_token":"refresh-1","scope":"read:jira-work read:me","token_type":"Bearer","expires_in":3600}`)
+			case body["grant_type"] == "refresh_token" && body["refresh_token"] == "refresh-1" && !rotated:
+				rotated = true
+				_, _ = io.WriteString(writer, `{"access_token":"token-2","refresh_token":"refresh-2","scope":"offline_access read:jira-work read:me","expires_in":3600}`)
+			default:
+				writer.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(writer, `{"error":"invalid_grant","error_description":"Unknown or invalid refresh token."}`)
+			}
+		case "/api/me":
+			if request.Header.Get("Authorization") != "Bearer token" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"account_id":"557058:f58131cb","email":"ada@example.test","name":"Ada Lovelace","nickname":"ada"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Atlassian(), server)
+
+	query := authorizationQuery(t, client, flow, "read:me", "read:jira-work", "offline_access")
+	if query.Get("audience") != "api.atlassian.com" || query.Get("prompt") != "consent" ||
+		query.Get("scope") != "offline_access read:jira-work read:me" || query.Has("code_challenge") {
+		t.Fatalf("Atlassian authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code", "offline_access", "read:jira-work", "read:me"))
+	if err != nil || grant.RefreshToken != "refresh-1" || !slices.Equal(grant.Scopes, []string{"offline_access", "read:jira-work", "read:me"}) {
+		t.Fatalf("Exchange() = %+v %v", grant, err)
+	}
+	account, err := client.Identity(ctx, flow, grant)
+	if err != nil || account != (domain.ProviderAccount{ID: "557058:f58131cb", Name: "ada@example.test"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	// Refresh tokens rotate, and one that was used is refused for good.
+	refresh := RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh-1", Scopes: grant.Scopes}
+	refreshed, err := client.Refresh(ctx, flow, refresh)
+	if err != nil || refreshed.AccessToken != "token-2" || refreshed.RefreshToken != "refresh-2" {
+		t.Fatalf("Refresh() = %+v %v", refreshed, err)
+	}
+	if _, err := client.Refresh(ctx, flow, refresh); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("reused refresh token error = %v, want rejected", err)
+	}
+	if _, err := client.Identity(ctx, flow, Grant{AccessToken: "revoked"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("revoked token error = %v", err)
+	}
+}
+
+func TestAsanaFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if err := request.ParseForm(); err != nil || request.Header.Get("Content-Type") != "application/x-www-form-urlencoded" ||
+				request.PostForm.Get("code_verifier") != "verifier" || request.PostForm.Get("client_secret") != "secret-value" {
+				t.Errorf("token request = %v %v", request.Header, request.PostForm)
+			}
+			// Asana names the member in the token response but sends no scope.
+			_, _ = io.WriteString(writer, `{"access_token":"token","refresh_token":"refresh","token_type":"bearer","expires_in":3600,"data":{"id":"4673218951","gid":"4673218951","name":"Ada Lovelace","email":"ada@example.test"}}`)
+		case "/api/users/me":
+			if request.Header.Get("Authorization") != "Bearer token" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"data":{"gid":"4673218951","email":"ada@example.test","name":"Ada Lovelace","resource_type":"user"}}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Asana(), server)
+
+	query := authorizationQuery(t, client, flow, "users:read", "tasks:read")
+	if query.Get("scope") != "tasks:read users:read" || query.Get("code_challenge") != "challenge-1" || query.Get("code_challenge_method") != "S256" {
+		t.Fatalf("Asana authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code", "tasks:read", "users:read"))
+	if err != nil || grant.RefreshToken != "refresh" || !grant.Expiry.Equal(testNow.Add(time.Hour)) ||
+		!slices.Equal(grant.Scopes, []string{"tasks:read", "users:read"}) {
+		t.Fatalf("Exchange() = %+v %v", grant, err)
+	}
+	account, err := client.Identity(ctx, flow, grant)
+	if err != nil || account != (domain.ProviderAccount{ID: "4673218951", Name: "ada@example.test"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	if _, err := client.Identity(ctx, flow, Grant{AccessToken: "revoked"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("revoked token error = %v", err)
+	}
+}
+
+func TestClickUpFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if err := request.ParseForm(); err != nil || request.PostForm.Get("client_id") != "client" ||
+				request.PostForm.Get("client_secret") != "secret-value" || request.PostForm.Get("code") != "code" {
+				t.Errorf("token request = %v", request.PostForm)
+			}
+			// ClickUp answers with the access token alone.
+			_, _ = io.WriteString(writer, `{"access_token":"token"}`)
+		case "/api/user":
+			if request.Header.Get("Authorization") != "Bearer token" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"user":{"id":183,"username":"ada","email":"ada@example.test","color":"#827718"}}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(ClickUp(), server)
+
+	if query := authorizationQuery(t, client, flow); query.Has("scope") || query.Has("code_challenge") {
+		t.Fatalf("ClickUp authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code"))
+	if err != nil || grant.AccessToken != "token" || grant.RefreshToken != "" || !grant.Expiry.IsZero() || len(grant.Scopes) != 0 {
+		t.Fatalf("Exchange() = %+v %v, want a token that never expires", grant, err)
+	}
+	account, err := client.Identity(ctx, flow, grant)
+	if err != nil || account != (domain.ProviderAccount{ID: "183", Name: "ada@example.test"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	if _, err := client.Identity(ctx, flow, Grant{AccessToken: "revoked"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("revoked token error = %v", err)
+	}
+}
+
+func TestTokenRequestsCanAuthenticateTheClientWithBasic(t *testing.T) {
+	type seen struct {
+		user, password string
+		basic          bool
+		fields         map[string]string
+	}
+	var requests []seen
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		user, password, basic := request.BasicAuth()
+		fields := map[string]string{}
+		if request.Header.Get("Content-Type") == "application/json" {
+			_ = json.NewDecoder(request.Body).Decode(&fields)
+		} else if request.ParseForm() == nil {
+			for name := range request.PostForm {
+				fields[name] = request.PostForm.Get(name)
+			}
+		}
+		requests = append(requests, seen{user, password, basic, fields})
+		_, _ = io.WriteString(writer, `{"access_token":"token","refresh_token":"refresh","expires_in":3600}`)
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(GitHub(), server)
+	flow.ClientSecretBasic = true
+
+	secret := "secret value+/:"
+	if _, err := client.Exchange(ctx, flow, ExchangeRequest{ClientID: "client id", ClientSecret: secret, Code: "code", RedirectURI: "https://connect.example.test/callback"}); err != nil {
+		t.Fatal(err)
+	}
+	flow.JSONTokenRequests = true
+	if _, err := client.Refresh(ctx, flow, RefreshRequest{ClientID: "client id", ClientSecret: secret, RefreshToken: "refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(requests) != 2 || requests[0].fields["code"] != "code" || requests[1].fields["refresh_token"] != "refresh" {
+		t.Fatalf("token requests = %+v", requests)
+	}
+	for _, request := range requests {
+		// The ID and secret are form-encoded, then sent only as Basic credentials.
+		if !request.basic || request.user != "client+id" || request.password != "secret+value%2B%2F%3A" {
+			t.Errorf("Basic credentials = %q %q %v", request.user, request.password, request.basic)
+		}
+		for _, name := range []string{"client_id", "client_secret"} {
+			if _, carried := request.fields[name]; carried {
+				t.Errorf("token request still carries %s: %v", name, request.fields)
+			}
+		}
+	}
+}
+
+func TestGrantsKeepTheTokenMetadataTheProviderNames(t *testing.T) {
+	var refreshResponse string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.ParseForm() == nil && request.PostForm.Get("grant_type") == "refresh_token" {
+			_, _ = io.WriteString(writer, refreshResponse)
+			return
+		}
+		_, _ = io.WriteString(writer, `{"access_token":"token","refresh_token":"refresh","expires_in":3600,
+			"instance_url":"https://acme.my.salesforce.test","issued_at":1278448832702,"signature":"line\nbreak","unnamed":"kept out"}`)
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(GitHub(), server)
+	flow.Metadata = []string{"instance_url", "issued_at", "signature", "workspace_id"}
+
+	// Only named fields that are safe strings are kept.
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code"))
+	if err != nil || !maps.Equal(grant.Metadata, map[string]string{"instance_url": "https://acme.my.salesforce.test"}) {
+		t.Fatalf("Exchange() metadata = %v %v", grant.Metadata, err)
+	}
+	refresh := RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh",
+		Metadata: map[string]string{"instance_url": "https://acme.my.salesforce.test", "dropped": "no longer named"}}
+
+	// A refresh that leaves a field out keeps it; one that sends it replaces it.
+	refreshResponse = `{"access_token":"token-2","expires_in":3600}`
+	if refreshed, err := client.Refresh(ctx, flow, refresh); err != nil ||
+		!maps.Equal(refreshed.Metadata, map[string]string{"instance_url": "https://acme.my.salesforce.test"}) {
+		t.Fatalf("Refresh() metadata = %v %v", refreshed.Metadata, err)
+	}
+	refreshResponse = `{"access_token":"token-3","expires_in":3600,"instance_url":"https://acme2.my.salesforce.test"}`
+	if refreshed, err := client.Refresh(ctx, flow, refresh); err != nil ||
+		!maps.Equal(refreshed.Metadata, map[string]string{"instance_url": "https://acme2.my.salesforce.test"}) {
+		t.Fatalf("Refresh() replaced metadata = %v %v", refreshed.Metadata, err)
+	}
+
+	// A provider that names no metadata keeps none.
+	flow.Metadata = nil
+	if grant, err := client.Exchange(ctx, flow, exchangeRequest("code")); err != nil || grant.Metadata != nil {
+		t.Fatalf("Exchange() without named metadata = %v %v", grant.Metadata, err)
+	}
+}
+
 func TestProviderFailuresAreUnavailableAndNeverLeak(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -455,5 +725,26 @@ func TestHTTPClientIsBoundedAndDoesNotFollowRedirects(t *testing.T) {
 	transport, ok := client.Transport.(*http.Transport)
 	if !ok || transport.Proxy != nil {
 		t.Fatalf("Transport = %+v, want a *http.Transport with no Proxy", client.Transport)
+	}
+}
+
+func TestAsanaFullPermissions(t *testing.T) {
+	rules := Asana().Scopes
+	// An app with full permissions allows default alone, which covers the
+	// identity check's users:read and every specific scope a caller asks for.
+	if scopes, err := domain.AppScopes([]string{"default"}, rules); err != nil || !slices.Equal(scopes, []string{"default"}) {
+		t.Fatalf("AppScopes(default) = %v %v", scopes, err)
+	}
+	if _, err := domain.AppScopes([]string{"default", "tasks:read"}, rules); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("AppScopes(default with tasks:read) error = %v", err)
+	}
+	if missing := domain.MissingScopes([]string{"tasks:write", "projects:read"}, []string{"default"}, []string{"default"}, rules.Implications); len(missing) != 0 {
+		t.Fatalf("scopes default does not cover = %v", missing)
+	}
+	if missing := domain.MissingScopes([]string{"openid"}, []string{"default"}, []string{"default"}, rules.Implications); !slices.Equal(missing, []string{"openid"}) {
+		t.Fatalf("default covered OpenID scopes: missing = %v", missing)
+	}
+	if _, err := domain.AppScopes([]string{"tasks:read"}, rules); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("AppScopes(specific scopes without users:read) error = %v", err)
 	}
 }

@@ -37,18 +37,37 @@ func MissingScopes(required, granted, allowed []string, implications Implication
 	return missing
 }
 
+// ScopeRules are a provider's rules for the scopes an app may allow.
+type ScopeRules struct {
+	// Ceiling is every scope an app for the provider may allow.
+	Ceiling []string
+	// Required scopes are part of every app's allowed scopes, directly or
+	// through a broader scope.
+	Required []string
+	// Implications lists the broader scopes that satisfy narrower ones.
+	Implications Implications
+	// Exclusive scopes are allowed only on their own, such as Asana's
+	// default, which the provider refuses next to any other scope.
+	Exclusive []string
+}
+
 // AppScopes validates the scopes an admin allows on an app: everything the
-// provider requires and nothing beyond its ceiling. No scopes means just the
-// required ones.
-func AppScopes(requested, ceiling, required []string) ([]string, error) {
+// provider requires, nothing beyond its ceiling, and an exclusive scope only
+// on its own. No scopes means just the required ones.
+func AppScopes(requested []string, rules ScopeRules) ([]string, error) {
 	scopes := NormalizeScopes(requested)
 	if len(scopes) == 0 {
-		scopes = NormalizeScopes(required)
+		scopes = NormalizeScopes(rules.Required)
 	}
-	if missing := MissingScopes(required, scopes, scopes, nil); len(missing) > 0 {
+	if missing := MissingScopes(rules.Required, scopes, scopes, rules.Implications); len(missing) > 0 {
 		return nil, fmt.Errorf("required scope %s is missing: %w", strings.Join(missing, " "), ErrInvalid)
 	}
-	ceilingSet := scopeSet(ceiling)
+	for _, scope := range scopes {
+		if len(scopes) > 1 && slices.Contains(rules.Exclusive, scope) {
+			return nil, fmt.Errorf("scope %s must be allowed on its own: %w", scope, ErrInvalid)
+		}
+	}
+	ceilingSet := scopeSet(rules.Ceiling)
 	var outside []string
 	for _, scope := range scopes {
 		if _, ok := ceilingSet[scope]; !ok {

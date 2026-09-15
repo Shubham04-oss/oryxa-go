@@ -528,7 +528,7 @@ func (s *Service) authorizingApp(ctx context.Context, organizationID, appID stri
 	case app.Status != domain.AppStatusActive:
 		return domain.App{}, providers.Provider{}, domain.ErrAppDisabled
 	}
-	return app, provider, nil
+	return app, provider.WithDomain(app.Settings.Domain), nil
 }
 
 // startSession stores a session and returns the provider URL it starts at.

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -217,5 +218,57 @@ func TestRevokeWithNoHookOrNoTokens(t *testing.T) {
 	githubProvider.OAuth2 = &githubFlow
 	if revoked, err := client.Revoke(context.Background(), githubProvider, RevokeRequest{ClientID: "c", ClientSecret: "s", Grant: Grant{}}); err != nil || revoked || called {
 		t.Fatalf("empty-grant Revoke() = %v %v, called = %v, want (false, nil) and no request", revoked, err, called)
+	}
+}
+
+func TestAsanaRevoke(t *testing.T) {
+	var got url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/revoke" || request.ParseForm() != nil {
+			t.Errorf("revoke request = %s", request.URL.Path)
+		}
+		got = request.PostForm
+		switch got.Get("token") {
+		case "already-gone":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":"invalid_grant"}`)
+		case "wrong-client":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":"invalid_client"}`)
+		case "failure":
+			writer.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(writer, "secret-value")
+		default:
+			writer.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	client, flow := testClient(server), pointAt(Asana(), server)
+	flow.RevokeURL = server.URL + "/revoke" // Asana's revoke endpoint is not under APIURL.
+	provider := Asana()
+	provider.OAuth2 = &flow
+	revoke := func(refreshToken string) (bool, error) {
+		return client.Revoke(context.Background(), provider, RevokeRequest{
+			ClientID: "client", ClientSecret: "secret-value", Grant: Grant{AccessToken: "access-1", RefreshToken: refreshToken},
+		})
+	}
+
+	// Asana revokes by refresh token, with the app's client.
+	if revoked, err := revoke("refresh-1"); err != nil || !revoked || got.Get("token") != "refresh-1" ||
+		got.Get("client_id") != "client" || got.Get("client_secret") != "secret-value" {
+		t.Fatalf("Revoke() = %v %v, form = %v", revoked, err, got)
+	}
+	if revoked, err := revoke("already-gone"); err != nil || !revoked {
+		t.Fatalf("already gone Revoke() = %v %v", revoked, err)
+	}
+	if revoked, err := revoke("wrong-client"); revoked || !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("invalid_client Revoke() = %v %v", revoked, err)
+	}
+	if revoked, err := revoke("failure"); revoked || !errors.Is(err, domain.ErrProviderUnavailable) || strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("failure Revoke() = %v %v", revoked, err)
+	}
+	if revoked, err := client.Revoke(context.Background(), provider, RevokeRequest{Grant: Grant{AccessToken: "access-only"}}); revoked || err != nil {
+		t.Fatalf("no refresh token Revoke() = %v %v, want (false, nil)", revoked, err)
 	}
 }

@@ -31,6 +31,9 @@ type CreateAppInput struct {
 	GitHubAppID   string
 	GitHubAppSlug string
 	PrivateKey    string
+	// Domain is the organization's address at a provider that needs one for
+	// the credential type, such as an Atlassian site. It cannot change later.
+	Domain string
 }
 
 // UpdateAppInput changes an app. Nil Scopes and empty strings each leave that
@@ -77,8 +80,12 @@ func (s *Service) CreateApp(ctx context.Context, credentials authclient.Credenti
 	if !provider.Supports(credentialType) {
 		return domain.App{}, fmt.Errorf("%s does not support %q credentials: %w", provider.Name, credentialType, domain.ErrInvalid)
 	}
+	appDomain, err := provider.AppDomain(credentialType, input.Domain)
+	if err != nil {
+		return domain.App{}, err
+	}
 	rules := provider.ScopesFor(credentialType)
-	scopes, err := domain.AppScopes(input.Scopes, rules.Ceiling, rules.Required)
+	scopes, err := domain.AppScopes(input.Scopes, rules)
 	if err != nil {
 		return domain.App{}, err
 	}
@@ -119,6 +126,7 @@ func (s *Service) CreateApp(ctx context.Context, credentials authclient.Credenti
 	case input.ClientID != "" || input.ClientSecret != "" || githubAppGiven:
 		return domain.App{}, fmt.Errorf("%q apps take no client: %w", credentialType, domain.ErrInvalid)
 	}
+	app.Settings.Domain = appDomain
 	event, err := s.event(connectionseventsv1.AppCreatedDetailType, connectionseventsv1.AppCreated{
 		AppID: app.ID, OrganizationID: app.OrganizationID, Provider: app.Provider,
 		CredentialType: string(app.CredentialType), Scopes: app.Scopes, CreatedBy: app.CreatedBy, CreatedAt: now,
@@ -153,7 +161,7 @@ func (s *Service) UpdateApp(ctx context.Context, credentials authclient.Credenti
 	var reconnect domain.ReconnectReason
 	if input.Scopes != nil {
 		rules := provider.ScopesFor(app.CredentialType)
-		scopes, err := domain.AppScopes(input.Scopes, rules.Ceiling, rules.Required)
+		scopes, err := domain.AppScopes(input.Scopes, rules)
 		if err != nil {
 			return domain.App{}, err
 		}
