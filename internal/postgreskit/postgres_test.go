@@ -30,6 +30,15 @@ func TestOpenDoesNotEchoInvalidDatabaseCredentials(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsUnsafeSchemaBeforeConnecting(t *testing.T) {
+	_, err := Open(context.Background(), Config{
+		URL: "postgres://oryxa@localhost/oryxa", ApplicationName: "oryxa-test", Schema: "agents_primary, public",
+	})
+	if err == nil || !strings.Contains(err.Error(), "schema") {
+		t.Fatalf("Open() error = %v", err)
+	}
+}
+
 func TestOpenSharesPGXPoolWithSQLXAndRegistersVector(t *testing.T) {
 	databaseURL := os.Getenv("POSTGRESKIT_TEST_DATABASE_URL")
 	if databaseURL == "" {

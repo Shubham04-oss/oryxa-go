@@ -4,10 +4,11 @@ Oryxa is an AWS-backed Go monorepo. It starts with a single Go module and will g
 
 ## Service layout
 
-Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/auth`, `/billing`, `/connections`, `/email`, `/files` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
+Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/auth`, `/billing`, `/connections`, `/email`, `/files` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
 
 ```text
 /
+├── agents/                # Agent system; primary is its adk-go engine
 ├── auth/                  # Identity and access service
 ├── billing/               # Subscriptions and entitlements
 ├── connections/           # Third-party apps, connections and their credentials
@@ -58,12 +59,20 @@ same control. An AI has three tools: `list_teams`, `call_team`, and
 `call_team_members`. It publishes as `oryxa.teams` and consumes from its own
 EventBridge queue. Its contract lives in `teams/README.md`.
 
+`/agents` holds the agent system. `/agents/primary` is its adk-go engine and
+the first service with its own Go module: it replaces the root module with
+`../..` for `/internal`, so adk-go's dependency upgrades stay out of the module
+the other services share. The root `go test ./...` does not reach it;
+`agents/primary/README.md` has its checks.
+
 ## Shared PostgreSQL and observability
 
-Auth, billing, connections, files and teams use `/internal/postgreskit`. Each process owns one native
-`pgxpool`; `sqlx` wraps that same pool through pgx's `database/sql` adapter, so
-it does not create a second connection budget. PostgreSQL statements and
-transactions remain on native pgx where its semantics matter.
+Auth, billing, connections, files, teams and the ADK session runtime use
+`/internal/postgreskit`. Each process owns one native `pgxpool`; `sqlx` wraps
+that same pool through pgx's `database/sql` adapter, so it does not create a
+second connection budget. PostgreSQL statements and transactions remain on
+native pgx where its semantics matter. ADK's GORM session service shares that
+same pool and is isolated in the `agents_primary` schema.
 
 The boundary discovers these database capabilities:
 
@@ -89,7 +98,8 @@ docker --context mac-mini exec oryxa-go-postgres-1 \
   "SELECT extname, extversion FROM pg_extension WHERE extname IN ('age', 'ltree', 'pg_trgm', 'vector') ORDER BY extname"
 ```
 
-`/internal/observability` gives auth, billing, connections, email, files and teams structured JSON logs,
+`/internal/observability` gives agents primary, auth, billing, connections,
+email, files and teams structured JSON logs,
 W3C trace propagation, HTTP/AWS SDK/pgx spans, PostgreSQL pool metrics, and Go
 runtime metrics. Set `OTEL_EXPORTER_OTLP_ENDPOINT` for OTLP/gRPC export, or use
 the standard signal-specific trace and metric endpoint variables. With no
