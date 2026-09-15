@@ -252,3 +252,44 @@ func TestKeyIdentityAtlassianAPIToken(t *testing.T) {
 		t.Fatalf("KeyIdentity() read as anonymous error = %v", err)
 	}
 }
+
+func TestKeyIdentityFigmaNotionAndAirtableTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		// Figma personal access tokens go in X-Figma-Token.
+		case request.URL.Path == "/figma/me" && request.Header.Get("X-Figma-Token") == "figd_abc" && request.Header.Get("Authorization") == "":
+			_, _ = io.WriteString(writer, `{"id":"12345","handle":"ada","email":"ada@example.test"}`)
+		// A Notion internal integration's bot belongs to its workspace.
+		case request.URL.Path == "/notion/users/me" && request.Header.Get("Authorization") == "Bearer ntn_abc" && request.Header.Get("Notion-Version") == notionVersion:
+			_, _ = io.WriteString(writer, `{"object":"user","id":"bot-1","name":"Oryxa","type":"bot","bot":{"owner":{"type":"workspace","workspace":true},"workspace_name":"Acme"}}`)
+		// Without user.email:read, Airtable leaves the email out.
+		case request.URL.Path == "/airtable/meta/whoami" && request.Header.Get("Authorization") == "Bearer pat.abc":
+			_, _ = io.WriteString(writer, `{"id":"usrL2PNC5o3H4lBEi"}`)
+		default:
+			t.Errorf("identity request = %s %v", request.URL.Path, request.Header)
+			writer.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer server.Close()
+	pointKeys := func(provider Provider, credentialType domain.CredentialType, path string) Provider {
+		keys := provider.Keys[credentialType]
+		keys.APIURL = server.URL + path
+		provider.Keys = map[domain.CredentialType]KeyAuth{credentialType: keys}
+		return provider
+	}
+	client := testClient(server)
+	for name, test := range map[string]struct {
+		provider       Provider
+		credentialType domain.CredentialType
+		credential     domain.CredentialInput
+		want           domain.ProviderAccount
+	}{
+		"figma":    {pointKeys(Figma(), domain.CredentialAPIKey, "/figma"), domain.CredentialAPIKey, domain.CredentialInput{APIKey: "figd_abc"}, domain.ProviderAccount{ID: "12345", Name: "ada@example.test"}},
+		"notion":   {pointKeys(Notion(), domain.CredentialBearer, "/notion"), domain.CredentialBearer, domain.CredentialInput{Token: "ntn_abc"}, domain.ProviderAccount{ID: "bot-1", Name: "Acme"}},
+		"airtable": {pointKeys(Airtable(), domain.CredentialBearer, "/airtable"), domain.CredentialBearer, domain.CredentialInput{Token: "pat.abc"}, domain.ProviderAccount{ID: "usrL2PNC5o3H4lBEi", Name: "usrL2PNC5o3H4lBEi"}},
+	} {
+		if account, err := client.KeyIdentity(context.Background(), test.provider, test.credentialType, test.credential); err != nil || account != test.want {
+			t.Errorf("%s KeyIdentity() = %+v %v, want %+v", name, account, err, test.want)
+		}
+	}
+}

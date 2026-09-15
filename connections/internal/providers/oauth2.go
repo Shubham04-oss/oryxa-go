@@ -124,6 +124,11 @@ type OAuth2 struct {
 	// Params are fixed authorization parameters, such as Google's
 	// access_type=offline.
 	Params map[string]string
+	// RefreshURL is where refreshes go when it is not TokenURL, as with Figma.
+	RefreshURL string
+	// TokenHeaders are sent with every token request, such as Notion's
+	// Notion-Version.
+	TokenHeaders map[string]string
 	// JSONTokenRequests sends token requests as a JSON object rather than a
 	// form, for providers that document only JSON, such as Atlassian.
 	JSONTokenRequests bool
@@ -324,7 +329,11 @@ func (client Client) Refresh(ctx context.Context, provider OAuth2, request Refre
 	if provider.SendScopeOnRefresh && len(scopes) > 0 {
 		values.Set("scope", strings.Join(scopes, provider.separator()))
 	}
-	token, err := client.token(ctx, provider, values)
+	endpoint := provider
+	if provider.RefreshURL != "" {
+		endpoint.TokenURL = provider.RefreshURL
+	}
+	token, err := client.token(ctx, endpoint, values)
 	if err != nil {
 		return Grant{}, err
 	}
@@ -380,12 +389,13 @@ func (client Client) token(ctx context.Context, provider OAuth2, values url.Valu
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("%w: token request could not be built", domain.ErrProviderUnavailable)
 	}
+	for name, value := range provider.TokenHeaders {
+		request.Header.Set(name, value)
+	}
 	request.Header.Set("Content-Type", contentType)
 	request.Header.Set("Accept", "application/json")
 	if provider.ClientSecretBasic {
-		// RFC 6749 section 2.3.1 form-encodes the ID and secret before they
-		// become Basic credentials.
-		request.SetBasicAuth(url.QueryEscape(clientID), url.QueryEscape(clientSecret))
+		setClientBasicAuth(request, clientID, clientSecret)
 	}
 	response, err := client.httpClient().Do(request)
 	if err != nil {
@@ -456,6 +466,12 @@ func (client Client) grant(provider OAuth2, token TokenResponse, requested []str
 		grant.Expiry = client.now().Add(time.Duration(token.ExpiresIn) * time.Second)
 	}
 	return grant
+}
+
+// setClientBasicAuth sends a client's ID and secret as HTTP Basic credentials,
+// form-encoded first as RFC 6749 section 2.3.1 says.
+func setClientBasicAuth(request *http.Request, clientID, clientSecret string) {
+	request.SetBasicAuth(url.QueryEscape(clientID), url.QueryEscape(clientSecret))
 }
 
 // tokenRequestBody encodes a token request's fields as a form, or as a JSON

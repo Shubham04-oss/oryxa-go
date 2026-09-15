@@ -1,8 +1,9 @@
 # Connections service
 
 Status: built. Apps; OAuth 2.0, GitHub App installation, client-credentials and
-key-based connections for Asana, Atlassian (Jira and Confluence), ClickUp,
-GitHub, Google, Linear, Microsoft and Slack;
+key-based connections for Airtable, Asana, Atlassian (Jira and Confluence),
+Box, ClickUp, Dropbox, Figma, GitHub, Google, Linear, Microsoft, Notion and
+Slack;
 reconnect, labels, defaults and disconnect; token issuance with refresh and
 minting under a lease; holds, revocation and credential deletion; the
 heartbeat; the auth and teams event consumer; and service identity. Not built
@@ -40,7 +41,7 @@ change, disable or delete apps.
 
 | Field | Holds |
 | --- | --- |
-| `provider` | A built-in provider: `asana`, `atlassian`, `clickup`, `github`, `google`, `linear`, `microsoft` or `slack` |
+| `provider` | A built-in provider: `airtable`, `asana`, `atlassian`, `box`, `clickup`, `dropbox`, `figma`, `github`, `google`, `linear`, `microsoft`, `notion` or `slack` |
 | `credential_type` | How connections to this app authenticate (below). Defaults to the provider's `oauth2` |
 | Client | `oauth2` and `oauth2_client_credentials` apps: `client_id` and an encrypted `client_secret`. `installation` apps: also the GitHub App's `github_app_id`, `github_app_slug` and encrypted `private_key`. Key-based apps take no client |
 | `scopes` | What `oauth2` connections may be granted. Never beyond the provider's ceiling; always includes its required scopes. Client-credentials apps carry the provider's fixed app-only scopes; installation and key-based apps carry none |
@@ -60,10 +61,11 @@ change, disable or delete apps.
 | `installation` | A GitHub App installation ID, and the last installation token | The installation, named by its account | An installation token, minted with the app's private key | Minted again before expiry (hourly) |
 | `api_key`, `bearer`, `basic` | The secret | The account the provider's identity check returns | The secret, with where it goes on a request | None; the owner replaces it |
 
-Built-in key-based providers are Asana and GitHub personal access tokens
-(`bearer`), ClickUp personal tokens and Linear API keys (`api_key`), and
-Atlassian API tokens (`basic`, the account's email and the token); Microsoft
-offers client credentials; GitHub offers installations.
+Built-in key-based providers are Airtable, Asana and GitHub personal access
+tokens and Notion internal integration tokens (`bearer`); ClickUp personal
+tokens, Figma personal access tokens (sent in `X-Figma-Token`) and Linear API
+keys (`api_key`); and Atlassian API tokens (`basic`, the account's email and
+the token). Microsoft offers client credentials; GitHub offers installations.
 Client-credentials connections are team or organization scope only, because no
 person consents to them.
 
@@ -77,6 +79,11 @@ Some providers differ in ways callers notice:
 - `atlassian` covers Jira and Confluence Cloud. An `oauth2` grant reaches every site the member lets the app use; callers list those sites, with the cloud IDs their API URLs need, at `https://api.atlassian.com/oauth/token/accessible-resources`. `offline_access` and `read:me` are always requested, and refresh tokens rotate on every refresh. Classic and granular scopes are both offered; Jira Software's boards, sprints and epics have only granular ones. A `basic` app names its site as its `domain`, such as `acme.atlassian.net`, and its API tokens work there alone.
 - `asana` apps either have full permissions, allowing `default` on its own, or allow specific scopes such as `tasks:read`, which the Asana app must also enable, with `users:read` always included for the identity check. `default` covers every specific scope a caller asks for.
 - `clickup` has no OAuth scopes: the member picks the workspaces an app may reach while consenting. Its access tokens do not expire, so there is nothing to refresh.
+- `airtable` requires PKCE, and its refresh tokens rotate. The member picks the bases and workspaces an app may reach while consenting. `user.email:read` is always requested: Airtable refuses an empty scope, and the identity check names the account by its email.
+- `box` refresh tokens work once; each refresh returns a new one. An enterprise's admin may have to authorize the Box app before its members can connect.
+- `dropbox` always asks for offline access, so it issues a refresh token, which does not rotate. `account_info.read` is always requested. Revoking refreshes the grant first, because Dropbox revokes only with a live access token.
+- `figma` refreshes at its own endpoint and keeps the refresh token. It keeps one access token per app and account: refreshing one connection's token ends the previous one, so the same account connected twice to one app interrupts itself. `current_user:read` is always requested.
+- `notion` has no OAuth scopes: an integration's capabilities are set in Notion, and the member picks the pages it may reach while consenting. A connection is the integration's bot in the member's workspace. Its `metadata` carries `workspace_id`, `workspace_name`, `bot_id` and, when the member duplicated a template, `duplicated_template_id`. Connections calls Notion with `Notion-Version: 2025-09-03`.
 
 ## Ownership
 
@@ -430,7 +437,7 @@ a definition can say:
 
 - Credential types, and for each the URLs it uses and an identity check that returns the account a grant or key belongs to.
 - Scope rules: the ceiling, required scopes, implications between scopes, and exclusive scopes allowed only on their own.
-- OAuth 2.0 differences: fixed authorization parameters, PKCE, the scope separator, scopes adjusted before sending or read back from the token response, JSON token requests (`JSONTokenRequests`), client credentials sent as HTTP Basic (`ClientSecretBasic`), a token response that is not RFC 6749 (`DecodeToken`), permanent refresh errors, and whether a refresh token is required.
+- OAuth 2.0 differences: fixed authorization parameters, PKCE, the scope separator, scopes adjusted before sending or read back from the token response, JSON token requests (`JSONTokenRequests`), client credentials sent as HTTP Basic (`ClientSecretBasic`), fixed headers on token requests (`TokenHeaders`), a separate refresh endpoint (`RefreshURL`), a token response that is not RFC 6749 (`DecodeToken`), permanent refresh errors, and whether a refresh token is required.
 - `Metadata`: token response fields that are not secret and that callers need with the token.
 - A `DomainRule` when URLs name `{domain}`: each app supplies its domain once, validated against the rule, and every flow for the app runs with it filled in. The provider HTTP client still refuses private addresses.
 - A revoke hook, where the provider can end a grant.

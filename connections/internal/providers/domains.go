@@ -64,7 +64,8 @@ func (provider Provider) WithDomain(value string) Provider {
 	fill := func(endpoint string) string { return strings.ReplaceAll(endpoint, domainPlaceholder, value) }
 	if provider.OAuth2 != nil {
 		flow := *provider.OAuth2
-		flow.AuthorizationURL, flow.TokenURL, flow.APIURL, flow.RevokeURL = fill(flow.AuthorizationURL), fill(flow.TokenURL), fill(flow.APIURL), fill(flow.RevokeURL)
+		flow.AuthorizationURL, flow.TokenURL, flow.APIURL = fill(flow.AuthorizationURL), fill(flow.TokenURL), fill(flow.APIURL)
+		flow.RefreshURL, flow.RevokeURL = fill(flow.RefreshURL), fill(flow.RevokeURL)
 		provider.OAuth2 = &flow
 	}
 	if provider.ClientCredentials != nil {
@@ -92,7 +93,8 @@ func (provider Provider) WithDomain(value string) Provider {
 func (provider Provider) endpoints(credentialType domain.CredentialType) []string {
 	var endpoints []string
 	if provider.OAuth2 != nil && (credentialType == domain.CredentialOAuth2 || credentialType == domain.CredentialInstallation) {
-		endpoints = append(endpoints, provider.OAuth2.AuthorizationURL, provider.OAuth2.TokenURL, provider.OAuth2.APIURL, provider.OAuth2.RevokeURL)
+		endpoints = append(endpoints, provider.OAuth2.AuthorizationURL, provider.OAuth2.TokenURL, provider.OAuth2.RefreshURL,
+			provider.OAuth2.APIURL, provider.OAuth2.RevokeURL)
 	}
 	switch {
 	case credentialType == domain.CredentialInstallation && provider.Installation != nil:

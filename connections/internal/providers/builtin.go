@@ -5,7 +5,9 @@ package providers
 // test server without affecting any other.
 func Builtin() Registry {
 	registry := Registry{}
-	for _, provider := range []Provider{Asana(), Atlassian(), ClickUp(), GitHub(), Google(), Linear(), Microsoft(), Slack()} {
+	for _, provider := range []Provider{
+		Airtable(), Asana(), Atlassian(), Box(), ClickUp(), Dropbox(), Figma(), GitHub(), Google(), Linear(), Microsoft(), Notion(), Slack(),
+	} {
 		registry[provider.Name] = provider
 	}
 	return registry

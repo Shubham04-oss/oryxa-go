@@ -64,13 +64,18 @@ func TestBuiltinProvidersAreConsistent(t *testing.T) {
 	// Every provider supports oauth2 first (apps default to it); some also
 	// support other credential types.
 	credentialTypes := map[string][]domain.CredentialType{
+		"airtable":  {domain.CredentialOAuth2, domain.CredentialBearer},
 		"asana":     {domain.CredentialOAuth2, domain.CredentialBearer},
 		"atlassian": {domain.CredentialOAuth2, domain.CredentialBasic},
+		"box":       {domain.CredentialOAuth2},
 		"clickup":   {domain.CredentialOAuth2, domain.CredentialAPIKey},
+		"dropbox":   {domain.CredentialOAuth2},
+		"figma":     {domain.CredentialOAuth2, domain.CredentialAPIKey},
 		"github":    {domain.CredentialOAuth2, domain.CredentialInstallation, domain.CredentialBearer},
 		"google":    {domain.CredentialOAuth2},
 		"linear":    {domain.CredentialOAuth2, domain.CredentialAPIKey},
 		"microsoft": {domain.CredentialOAuth2, domain.CredentialOAuth2ClientCredentials},
+		"notion":    {domain.CredentialOAuth2, domain.CredentialBearer},
 		"slack":     {domain.CredentialOAuth2},
 	}
 	if len(registry) != len(credentialTypes) {
@@ -746,5 +751,267 @@ func TestAsanaFullPermissions(t *testing.T) {
 	}
 	if _, err := domain.AppScopes([]string{"tasks:read"}, rules); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("AppScopes(specific scopes without users:read) error = %v", err)
+	}
+}
+
+func TestFigmaFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token", "/refresh":
+			user, password, basic := request.BasicAuth()
+			if request.ParseForm() != nil || !basic || user != "client" || password != "secret-value" || request.PostForm.Has("client_secret") {
+				t.Errorf("%s request = %v %v", request.URL.Path, request.Header, request.PostForm)
+			}
+			switch {
+			case request.URL.Path == "/token":
+				_, _ = io.WriteString(writer, `{"user_id_string":"12345","access_token":"token","token_type":"bearer","expires_in":7776000,"refresh_token":"refresh"}`)
+			case request.PostForm.Get("refresh_token") == "refresh":
+				// A refresh returns no new refresh token.
+				_, _ = io.WriteString(writer, `{"access_token":"token-2","token_type":"bearer","expires_in":7776000}`)
+			default:
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(writer, `{"error":true,"status":400,"message":"Invalid refresh token"}`)
+			}
+		case "/api/me":
+			if request.Header.Get("Authorization") != "Bearer token" {
+				writer.WriteHeader(http.StatusForbidden)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"id":"12345","handle":"ada","img_url":"https://example.test/ada.png","email":"ada@example.test"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Figma(), server)
+	flow.RefreshURL = server.URL + "/refresh"
+
+	query := authorizationQuery(t, client, flow, "file_content:read", "current_user:read")
+	if query.Get("scope") != "current_user:read file_content:read" || query.Get("code_challenge") != "challenge-1" {
+		t.Fatalf("Figma authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code", "current_user:read", "file_content:read"))
+	if err != nil || grant.RefreshToken != "refresh" || !grant.Expiry.Equal(testNow.Add(90*24*time.Hour)) {
+		t.Fatalf("Exchange() = %+v %v", grant, err)
+	}
+	if account, err := client.Identity(ctx, flow, grant); err != nil || account != (domain.ProviderAccount{ID: "12345", Name: "ada@example.test"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	refreshed, err := client.Refresh(ctx, flow, RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh"})
+	if err != nil || refreshed.AccessToken != "token-2" || refreshed.RefreshToken != "refresh" {
+		t.Fatalf("Refresh() = %+v %v, want the refresh token kept", refreshed, err)
+	}
+	// Figma documents no refresh error codes, so any refusal is for good.
+	if _, err := client.Refresh(ctx, flow, RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "revoked"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("refused refresh error = %v", err)
+	}
+}
+
+func TestNotionFlow(t *testing.T) {
+	const botID, workspaceID = "b1f8e3c5-0000-4000-8000-000000000001", "1d2c3b4a-0000-4000-8000-000000000002"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			user, password, basic := request.BasicAuth()
+			body := map[string]string{}
+			if request.Header.Get("Notion-Version") != notionVersion || request.Header.Get("Content-Type") != "application/json" ||
+				!basic || user != "client" || password != "secret-value" || json.NewDecoder(request.Body).Decode(&body) != nil {
+				t.Errorf("token request = %v %v", request.Header, body)
+			}
+			if _, carried := body["client_secret"]; carried {
+				t.Errorf("token request carries the client secret: %v", body)
+			}
+			if body["grant_type"] == "refresh_token" {
+				// Notion reports errors in its API format.
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(writer, `{"object":"error","status":400,"code":"invalid_grant","message":"Invalid refresh token."}`)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"access_token":"token","token_type":"bearer","refresh_token":null,"bot_id":"`+botID+`",
+				"workspace_name":"Ada's Notion","workspace_icon":null,"workspace_id":"`+workspaceID+`",
+				"owner":{"type":"user","user":{"object":"user","id":"u1"}},"duplicated_template_id":null,"request_id":"r1"}`)
+		case "/api/users/me":
+			if request.Header.Get("Authorization") != "Bearer token" || request.Header.Get("Notion-Version") != notionVersion {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			// A bot a member owns carries no workspace name of its own.
+			_, _ = io.WriteString(writer, `{"object":"user","id":"`+botID+`","name":"Oryxa","type":"bot","bot":{"owner":{"type":"user","user":{"object":"user","id":"u1"}},"workspace_name":null}}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Notion(), server)
+
+	if query := authorizationQuery(t, client, flow); query.Get("owner") != "user" || query.Has("scope") || query.Has("code_challenge") {
+		t.Fatalf("Notion authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code"))
+	metadata := map[string]string{"bot_id": botID, "workspace_id": workspaceID, "workspace_name": "Ada's Notion"}
+	if err != nil || grant.AccessToken != "token" || grant.RefreshToken != "" || !grant.Expiry.IsZero() || !maps.Equal(grant.Metadata, metadata) {
+		t.Fatalf("Exchange() = %+v %v", grant, err)
+	}
+	if account, err := client.Identity(ctx, flow, grant); err != nil || account != (domain.ProviderAccount{ID: botID, Name: "Ada's Notion"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	if _, err := client.Refresh(ctx, flow, RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("refused refresh error = %v, want invalid_grant read from code", err)
+	}
+	if _, err := client.Identity(ctx, flow, Grant{AccessToken: "revoked"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("revoked token error = %v", err)
+	}
+}
+
+func TestBoxFlow(t *testing.T) {
+	rotated := false
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if request.ParseForm() != nil || request.PostForm.Get("client_secret") != "secret-value" {
+				t.Errorf("token request = %v", request.PostForm)
+			}
+			switch {
+			case request.PostForm.Get("grant_type") == "authorization_code":
+				_, _ = io.WriteString(writer, `{"access_token":"token","expires_in":3600,"restricted_to":[],"refresh_token":"refresh-1","token_type":"bearer"}`)
+			case request.PostForm.Get("refresh_token") == "refresh-1" && !rotated:
+				rotated = true
+				_, _ = io.WriteString(writer, `{"access_token":"token-2","expires_in":3600,"refresh_token":"refresh-2","token_type":"bearer"}`)
+			default:
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(writer, `{"error":"invalid_grant","error_description":"Invalid refresh token"}`)
+			}
+		case "/api/users/me":
+			if request.Header.Get("Authorization") != "Bearer token" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"type":"user","id":"11446498","name":"Aaron Levie","login":"ceo@example.test"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Box(), server)
+
+	if query := authorizationQuery(t, client, flow, "root_readwrite"); query.Get("scope") != "root_readwrite" || query.Has("code_challenge") {
+		t.Fatalf("Box authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code", "root_readwrite"))
+	if err != nil || grant.RefreshToken != "refresh-1" || !grant.Expiry.Equal(testNow.Add(time.Hour)) || !slices.Equal(grant.Scopes, []string{"root_readwrite"}) {
+		t.Fatalf("Exchange() = %+v %v", grant, err)
+	}
+	if account, err := client.Identity(ctx, flow, grant); err != nil || account != (domain.ProviderAccount{ID: "11446498", Name: "ceo@example.test"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	// Refresh tokens work once.
+	refresh := RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh-1"}
+	if refreshed, err := client.Refresh(ctx, flow, refresh); err != nil || refreshed.RefreshToken != "refresh-2" {
+		t.Fatalf("Refresh() = %+v %v", refreshed, err)
+	}
+	if _, err := client.Refresh(ctx, flow, refresh); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("reused refresh token error = %v", err)
+	}
+}
+
+func TestAirtableFlow(t *testing.T) {
+	refreshes := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			user, password, basic := request.BasicAuth()
+			if request.ParseForm() != nil || !basic || user != "client" || password != "secret-value" ||
+				request.PostForm.Has("client_id") || request.PostForm.Has("client_secret") {
+				t.Errorf("token request = %v %v", request.Header, request.PostForm)
+			}
+			if request.PostForm.Get("grant_type") == "authorization_code" {
+				if request.PostForm.Get("code_verifier") != "verifier" {
+					t.Errorf("exchange without its PKCE verifier: %v", request.PostForm)
+				}
+				_, _ = io.WriteString(writer, `{"access_token":"token","refresh_token":"refresh-1","token_type":"Bearer ","scope":"data.records:read user.email:read","expires_in":3600,"refresh_expires_in":5184000}`)
+				return
+			}
+			refreshes++
+			if refreshes == 1 {
+				// Refreshing again too soon conflicts, which is worth retrying.
+				writer.WriteHeader(http.StatusConflict)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"access_token":"token-2","refresh_token":"refresh-2","token_type":"Bearer ","scope":"data.records:read user.email:read","expires_in":3600,"refresh_expires_in":5184000}`)
+		case "/api/meta/whoami":
+			if request.Header.Get("Authorization") != "Bearer token" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"id":"usrL2PNC5o3H4lBEi","email":"ada@example.test","scopes":["data.records:read","user.email:read"]}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Airtable(), server)
+
+	query := authorizationQuery(t, client, flow, "user.email:read", "data.records:read")
+	if query.Get("scope") != "data.records:read user.email:read" || query.Get("code_challenge_method") != "S256" {
+		t.Fatalf("Airtable authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code", "data.records:read", "user.email:read"))
+	if err != nil || grant.RefreshToken != "refresh-1" || !slices.Equal(grant.Scopes, []string{"data.records:read", "user.email:read"}) {
+		t.Fatalf("Exchange() = %+v %v", grant, err)
+	}
+	if account, err := client.Identity(ctx, flow, grant); err != nil || account != (domain.ProviderAccount{ID: "usrL2PNC5o3H4lBEi", Name: "ada@example.test"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	refresh := RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh-1"}
+	if _, err := client.Refresh(ctx, flow, refresh); !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("conflicting refresh error = %v, want unavailable", err)
+	}
+	if refreshed, err := client.Refresh(ctx, flow, refresh); err != nil || refreshed.RefreshToken != "refresh-2" {
+		t.Fatalf("Refresh() = %+v %v", refreshed, err)
+	}
+}
+
+func TestDropboxFlow(t *testing.T) {
+	const accountID = "dbid:AAH4f99T0taONIb-OurWxbNQ6ywGRopQngc"
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if request.ParseForm() != nil || request.PostForm.Get("client_secret") != "secret-value" {
+				t.Errorf("token request = %v", request.PostForm)
+			}
+			if request.PostForm.Get("grant_type") == "refresh_token" {
+				_, _ = io.WriteString(writer, `{"access_token":"sl.token-2","expires_in":14400,"token_type":"bearer"}`)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"access_token":"sl.token","expires_in":14400,"token_type":"bearer","scope":"account_info.read files.content.read","account_id":"`+accountID+`","refresh_token":"refresh","uid":"12345"}`)
+		case "/api/users/get_current_account":
+			// An RPC endpoint without arguments takes no body.
+			if request.Method != http.MethodPost || request.ContentLength > 0 || request.Header.Get("Authorization") != "Bearer sl.token" {
+				t.Errorf("identity request = %s %d %v", request.Method, request.ContentLength, request.Header)
+				writer.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"account_id":"`+accountID+`","name":{"display_name":"Franz Ferdinand (Personal)"},"email":"franz@example.test"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Dropbox(), server)
+
+	query := authorizationQuery(t, client, flow, "files.content.read", "account_info.read")
+	if query.Get("token_access_type") != "offline" || query.Get("scope") != "account_info.read files.content.read" {
+		t.Fatalf("Dropbox authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code", "account_info.read", "files.content.read"))
+	if err != nil || grant.RefreshToken != "refresh" || !grant.Expiry.Equal(testNow.Add(4*time.Hour)) {
+		t.Fatalf("Exchange() = %+v %v", grant, err)
+	}
+	if account, err := client.Identity(ctx, flow, grant); err != nil || account != (domain.ProviderAccount{ID: accountID, Name: "franz@example.test"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	if refreshed, err := client.Refresh(ctx, flow, RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh"}); err != nil ||
+		refreshed.AccessToken != "sl.token-2" || refreshed.RefreshToken != "refresh" {
+		t.Fatalf("Refresh() = %+v %v, want the refresh token kept", refreshed, err)
 	}
 }
