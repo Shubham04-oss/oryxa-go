@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -25,6 +26,9 @@ type Config struct {
 	URL                string
 	ApplicationName    string
 	RequiredExtensions []string
+	// Schema, when set, leads this pool's PostgreSQL search_path. Public stays
+	// behind it so extension-owned types such as vector remain resolvable.
+	Schema string
 }
 
 type Database struct {
@@ -44,6 +48,12 @@ func Open(ctx context.Context, config Config) (*Database, error) {
 	}
 	if poolConfig.ConnConfig.RuntimeParams["application_name"] == "" {
 		poolConfig.ConnConfig.RuntimeParams["application_name"] = config.ApplicationName
+	}
+	if config.Schema != "" {
+		if !postgresIdentifier.MatchString(config.Schema) {
+			return nil, errors.New("postgres schema must be a lowercase SQL identifier")
+		}
+		poolConfig.ConnConfig.RuntimeParams["search_path"] = config.Schema + ",public"
 	}
 	if poolConfig.ConnConfig.ConnectTimeout == 0 {
 		poolConfig.ConnConfig.ConnectTimeout = 5 * time.Second
@@ -108,6 +118,8 @@ func Open(ctx context.Context, config Config) (*Database, error) {
 	}
 	return database, nil
 }
+
+var postgresIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
 func (database *Database) Close() {
 	if database == nil {

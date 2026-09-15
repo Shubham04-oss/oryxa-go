@@ -1,6 +1,6 @@
 module github.com/Shubham04-oss/oryxa-go
 
-go 1.25.0
+go 1.27.1
 
 require (
 	github.com/aws/aws-lambda-go v1.54.0
