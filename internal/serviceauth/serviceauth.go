@@ -59,7 +59,7 @@ type Caller struct {
 }
 
 // ParseCallers reads a JSON list of callers, such as
-// [{"service":"integrations","key_id":"arn:aws:kms:…","purposes":["action","trigger","cleanup"]}].
+// [{"service":"worker","key_id":"arn:aws:kms:…","purposes":["action","trigger","cleanup"]}].
 func ParseCallers(raw string) ([]Caller, error) {
 	if strings.TrimSpace(raw) == "" {
 		return []Caller{}, nil

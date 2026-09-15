@@ -1,6 +1,6 @@
 // Command stack supervises the k6 journey: seeds the simulated
-// organization, serves the auth stub, and runs teams, files, plus the
-// integrations stack process. It is not a product service.
+// organization, serves the auth stub, and runs teams, files and email. It is
+// not a product service.
 package main
 
 import (
@@ -44,7 +44,6 @@ func run(ctx context.Context) error {
 	smtpAddr := value("EMAIL_SMTP_ADDR", "127.0.0.1:1025")
 	authAddr := value("AUTHSTUB_ADDRESS", "127.0.0.1:18080")
 	teamsAddr := value("TEAMS_ADDRESS", "127.0.0.1:18083")
-	integrationsAddr := value("INTEGRATIONS_ADDRESS", "127.0.0.1:18084")
 	filesAddr := value("FILES_ADDRESS", "127.0.0.1:18085")
 	if err := seedAuth(ctx, databaseURL, organizationID); err != nil {
 		return err
@@ -68,10 +67,6 @@ func run(ctx context.Context) error {
 		return err
 	}
 	filesBin, err := build(ctx, root, "files", "./files/cmd/files")
-	if err != nil {
-		return err
-	}
-	integrationsBin, err := build(ctx, root, "integrations-stack", "./integrations/cmd/stack")
 	if err != nil {
 		return err
 	}
@@ -104,18 +99,6 @@ func run(ctx context.Context) error {
 		"FILES_BUCKET_NAME":      filesProvision.BucketName,
 		"FILES_EVENTS_QUEUE_URL": filesProvision.QueueURL,
 	}))
-	integrations := command(ctx, integrationsBin, map[string]string{
-		"ORG_ID":                       organizationID,
-		"DATABASE_URL":                 databaseURL,
-		"AWS_ENDPOINT_URL":             awsEndpoint,
-		"INTEGRATIONS_ADDRESS":         integrationsAddr,
-		"INTEGRATIONS_PUBLIC_BASE_URL": "http://" + integrationsAddr,
-		"INTEGRATIONS_RETURN_URL":      value("INTEGRATIONS_RETURN_URL", "https://app.example.test/settings/integrations"),
-		"AWS_REGION":                   "ap-south-1",
-		"AWS_ACCESS_KEY_ID":            "test",
-		"AWS_SECRET_ACCESS_KEY":        "test",
-		"EVENT_BUS_NAME":               "default",
-	})
 	email := command(ctx, emailBin, mergeEnv(awsLocal, map[string]string{
 		"EMAIL_FROM_ADDRESS":       "no-reply@example.com",
 		"EMAIL_FROM_NAME":          "Oryxa",
@@ -131,18 +114,14 @@ func run(ctx context.Context) error {
 	if err := files.Start(); err != nil {
 		return fmt.Errorf("start files: %w", err)
 	}
-	if err := integrations.Start(); err != nil {
-		return fmt.Errorf("start integrations stack: %w", err)
-	}
 	if err := email.Start(); err != nil {
 		return fmt.Errorf("start email: %w", err)
 	}
 	go waitLogged("teams", teams)
 	go waitLogged("files", files)
-	go waitLogged("integrations", integrations)
 	go waitLogged("email", email)
 
-	log.Printf("stack ready org_id=%s auth=http://%s teams=http://%s files=http://%s integrations=http://%s mailpit=http://127.0.0.1:8025", organizationID, authAddr, teamsAddr, filesAddr, integrationsAddr)
+	log.Printf("stack ready org_id=%s auth=http://%s teams=http://%s files=http://%s mailpit=http://127.0.0.1:8025", organizationID, authAddr, teamsAddr, filesAddr)
 	<-ctx.Done()
 	return nil
 }

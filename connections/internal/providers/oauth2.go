@@ -1,6 +1,7 @@
 // Package providers describes the providers connections can reach: which
 // credential types each supports, its scope rules, and its OAuth 2.0 flow.
-// Calling provider APIs for actions and triggers stays in integrations.
+// Calling provider APIs for actions and triggers is left to the services that
+// ask connections for tokens.
 package providers
 
 import (

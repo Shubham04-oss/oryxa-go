@@ -1,6 +1,6 @@
 // Package identities is the shared simulated roster the stack k6 journey
-// uses. Tokens are the role names. Teams asks the auth stub; integrations
-// maps the same tokens onto auth_memberships user ids.
+// uses. Tokens are the role names. The auth stub resolves them to these
+// people for teams and files, and the harness seeds them into auth_memberships.
 package identities
 
 import (

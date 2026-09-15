@@ -6,17 +6,17 @@ reconnect, labels, defaults and disconnect; token issuance with refresh and
 minting under a lease; holds, revocation and credential deletion; the
 heartbeat; the auth and teams event consumer; and service identity. Not built
 yet: custom providers from OpenAPI specs (see Later). The service replaces the
-OAuth, token and connection code inside `integrations`, which holds no
-production data, so nothing migrates.
+OAuth, token and connection code of the integrations service, which has been
+removed. It held no production data, so nothing migrates.
 
 Connections owns how an organization reaches third-party accounts: the apps an
 organization enables, the connections its members, teams and admins make, the
 credentials behind them, and whether each one still works. Auth remains the
 identity and organization/membership boundary. Teams remains the team graph:
 connections forwards the caller's credentials to teams when a connection hangs
-on a team, and never copies the tree. Integrations remains provider operations
-— actions, triggers, webhooks and tools. It never stores a credential; it asks
-connections for one whenever it needs it.
+on a team, and never copies the tree. Provider operations — actions, triggers,
+webhooks and tools — belong to the services that call providers. They never
+store a credential; they ask connections for one whenever they need it.
 
 A credential leaves this service only in a token-issuance response. Client
 secrets, private keys and refresh tokens never leave it at all.
@@ -27,7 +27,7 @@ app ── apps, connect, reconnect, disconnect ──▶ connections ── tok
                                                    ├── GET auth  /v1/organizations/{org}
                                                    ├── GET teams /v1/organizations/{org}/teams/{team}
                                                    └── oryxa.connections ──▶ EventBridge
-integrations ── POST /v1/internal/connections/{id}/token ──▶ connections
+service ── POST /v1/internal/connections/{id}/token ──▶ connections
 auth ── organization deleted, member removed ──▶ connections-events queue
 teams ── team deleted ──▶ connections-events queue
 ```
@@ -157,7 +157,7 @@ a connection gains scopes its app newly allows. Replacing a key with
 ## Disconnect
 
 1. `DELETE …/connections/{id}` sets `disconnected` and publishes `connections.connection.disconnected.v1`.
-2. A service that created remote resources with the connection, such as integrations' webhooks, registered a hold when it created them. It cleans up with `cleanup` tokens, then releases its hold.
+2. A service that created remote resources with the connection, such as webhooks at the provider, registered a hold when it created them. It cleans up with `cleanup` tokens, then releases its hold.
 3. When no holds remain, or 7 days after the disconnect, a cleanup worker revokes the grant at the provider where the provider supports it, deletes the credentials, and publishes `connections.connection.credentials-deleted.v1` saying whether it revoked.
 
 Providers revoke per account and client, so a grant is left alone while another
@@ -244,7 +244,7 @@ clock skew, and a per-caller allowlist of purposes from
 `CONNECTIONS_SERVICE_CALLERS`:
 
 ```json
-[{"service": "integrations", "key_id": "arn:aws:kms:ap-south-1:…:key/…", "purposes": ["action", "trigger", "cleanup"]}]
+[{"service": "worker", "key_id": "arn:aws:kms:ap-south-1:…:key/…", "purposes": ["action", "trigger", "cleanup"]}]
 ```
 
 IAM decides which runtime can sign with a key. Without
@@ -286,7 +286,7 @@ Cookie-authenticated mutations on public routes must come from an origin in
 | `POST` | `/v1/internal/connections/{connectionID}/report` | Services | Report a credential the provider rejected: `{organization_id}` → `204` |
 
 A holder is 1 to 80 lowercase letters, digits, `.`, `_`, `:` or `-`, such as
-`integrations:webhooks`. Adding a hold twice, or releasing one that is gone,
+`worker:webhooks`. Adding a hold twice, or releasing one that is gone,
 changes nothing.
 
 Apps list their provider, credential type, allowed scopes, settings and status.
@@ -401,11 +401,10 @@ account, and one default per organization, app, scope and owner.
 
 ## Built from integrations
 
-Most of the machinery existed in `integrations` and moved here: envelope
-encryption (`integrations/internal/secrets`), refresh under a lease
-(`integrations/internal/credentials`), the OAuth flow
-(`integrations/internal/oauthflow`), the provider OAuth adapters, the outbox
-dispatcher, and the auth event consumer. New here: sessions finished from the
+Most of the machinery existed in the integrations service and moved here
+before it was removed: envelope encryption, refresh under a lease, the OAuth
+flow, the provider OAuth adapters, the outbox dispatcher, and the auth event
+consumer. New here: sessions finished from the
 app, team and organization scopes, holds, statuses and health, key-based,
 client-credentials and installation connections, token issuance, and the
 service identity.
