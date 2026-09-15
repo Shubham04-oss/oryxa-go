@@ -1,6 +1,6 @@
 # Teams service
 
-Teams owns teams inside an organization and who is on them. Auth remains the identity and organization/membership boundary; billing remains subscriptions and entitlements; email remains delivery; integrations remains third-party connections. Teams never verifies a token itself: it forwards the caller's bearer token or session cookie to auth and acts on the membership auth returns.
+Teams owns teams inside an organization and who is on them. Auth remains the identity and organization/membership boundary; billing remains subscriptions and entitlements; email remains delivery; connections remains third-party accounts and their credentials. Teams never verifies a token itself: it forwards the caller's bearer token or session cookie to auth and acts on the membership auth returns.
 
 Services talk through EventBridge. Teams publishes source `oryxa.teams` on `EVENT_BUS_NAME` in the same envelope every Oryxa publisher uses, and consumes what it needs from its own `teams-events` queue. Other services never read teams' data. Consumers must deduplicate by `event_id`, because outbox delivery is at least once.
 
@@ -161,7 +161,7 @@ docker compose -f compose.teams.yaml up -d --build teams
 
 Logs are structured JSON from `/internal/observability`. HTTP access logs skip `/healthz`. AWS SDK and pgx spans export over OTLP/gRPC when `OTEL_EXPORTER_OTLP_ENDPOINT` (or the signal-specific endpoints) is set.
 
-The simulated client journey for teams together with integrations is `/test` (`./test/run.sh`). It is k6 against a local harness, not this binary.
+The simulated client journey for teams together with files and email is `/test` (`./test/run.sh`). It is k6 against a local harness, not this binary.
 
 Without `TEAMS_EVENTS_QUEUE_URL` teams still starts, but it will not hear about organizations. The store has its own tests against PostgreSQL, which the unit test run skips:
 
