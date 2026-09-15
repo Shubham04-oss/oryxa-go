@@ -1,0 +1,932 @@
+{
+  "components": {
+    "schemas": {
+      "ClientError": {
+        "description": "A generic error.",
+        "properties": {
+          "code": {
+            "description": "A Box-specific error code.",
+            "enum": [
+              "created",
+              "accepted",
+              "no_content",
+              "redirect",
+              "not_modified",
+              "bad_request",
+              "unauthorized",
+              "forbidden",
+              "not_found",
+              "method_not_allowed",
+              "conflict",
+              "precondition_failed",
+              "too_many_requests",
+              "internal_server_error",
+              "unavailable",
+              "item_name_invalid",
+              "insufficient_scope"
+            ],
+            "example": "item_name_invalid",
+            "type": "string"
+          },
+          "context_info": {
+            "additionalProperties": {},
+            "description": "A free-form object that contains additional context\nabout the error. The possible fields are defined on\na per-endpoint basis. `message` is only one example.",
+            "example": {
+              "message": "Something went wrong"
+            },
+            "nullable": true,
+            "type": "object"
+          },
+          "help_url": {
+            "description": "A URL that links to more information about why this error occurred.",
+            "example": "https://developer.box.com/guides/api-calls/permissions-and-errors/common-errors/",
+            "nullable": false,
+            "type": "string"
+          },
+          "message": {
+            "description": "A short message describing the error.",
+            "example": "Method Not Allowed",
+            "nullable": false,
+            "type": "string"
+          },
+          "request_id": {
+            "description": "A unique identifier for this response, which can be used\nwhen contacting Box support.",
+            "example": "abcdef123456",
+            "nullable": false,
+            "type": "string"
+          },
+          "status": {
+            "description": "The HTTP status of the response.",
+            "example": 400,
+            "format": "int32",
+            "nullable": false,
+            "type": "integer"
+          },
+          "type": {
+            "description": "The value will always be `error`.",
+            "enum": [
+              "error"
+            ],
+            "example": "error",
+            "nullable": false,
+            "type": "string"
+          }
+        },
+        "title": "Client error",
+        "type": "object",
+        "x-box-resource-id": "client_error"
+      },
+      "User--Base": {
+        "description": "A mini representation of a user, used when\nnested within another resource.",
+        "properties": {
+          "id": {
+            "description": "The unique identifier for this user.",
+            "example": "11446498",
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `user`.",
+            "enum": [
+              "user"
+            ],
+            "example": "user",
+            "nullable": false,
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "title": "User (Base)",
+        "type": "object",
+        "x-box-resource-id": "user--base",
+        "x-box-tag": "users",
+        "x-box-variant": "base",
+        "x-box-variants": [
+          "base",
+          "mini",
+          "standard",
+          "full"
+        ]
+      },
+      "User--Mini": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/User--Base"
+          },
+          {
+            "properties": {
+              "login": {
+                "description": "The primary email address of this user.",
+                "example": "ceo@example.com",
+                "format": "email",
+                "nullable": false,
+                "type": "string"
+              },
+              "name": {
+                "description": "The display name of this user.",
+                "example": "Aaron Levie",
+                "maxLength": 50,
+                "nullable": false,
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A mini representation of a user, as can be returned when nested within other\nresources.",
+        "title": "User (Mini)",
+        "type": "object",
+        "x-box-resource-id": "user--mini",
+        "x-box-tag": "users",
+        "x-box-variant": "mini"
+      },
+      "Webhook": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Webhook--Mini"
+          },
+          {
+            "properties": {
+              "address": {
+                "description": "The URL that is notified by this webhook.",
+                "example": "https://example.com/webhooks",
+                "type": "string"
+              },
+              "created_at": {
+                "description": "A timestamp identifying the time that\nthe webhook was created.",
+                "example": "2012-12-12T10:53:43-08:00",
+                "format": "date-time",
+                "type": "string"
+              },
+              "created_by": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/User--Mini"
+                  },
+                  {
+                    "description": "The user who created the webhook."
+                  }
+                ]
+              },
+              "triggers": {
+                "description": "An array of event names that this webhook is\nto be triggered for.",
+                "example": [
+                  "FILE.UPLOADED"
+                ],
+                "items": {
+                  "description": "The event name that triggered this webhook.",
+                  "enum": [
+                    "FILE.UPLOADED",
+                    "FILE.PREVIEWED",
+                    "FILE.DOWNLOADED",
+                    "FILE.TRASHED",
+                    "FILE.DELETED",
+                    "FILE.RESTORED",
+                    "FILE.COPIED",
+                    "FILE.MOVED",
+                    "FILE.LOCKED",
+                    "FILE.UNLOCKED",
+                    "FILE.RENAMED",
+                    "COMMENT.CREATED",
+                    "COMMENT.UPDATED",
+                    "COMMENT.DELETED",
+                    "TASK_ASSIGNMENT.CREATED",
+                    "TASK_ASSIGNMENT.UPDATED",
+                    "METADATA_INSTANCE.CREATED",
+                    "METADATA_INSTANCE.UPDATED",
+                    "METADATA_INSTANCE.DELETED",
+                    "FOLDER.CREATED",
+                    "FOLDER.RENAMED",
+                    "FOLDER.DOWNLOADED",
+                    "FOLDER.RESTORED",
+                    "FOLDER.DELETED",
+                    "FOLDER.COPIED",
+                    "FOLDER.MOVED",
+                    "FOLDER.TRASHED",
+                    "WEBHOOK.DELETED",
+                    "COLLABORATION.CREATED",
+                    "COLLABORATION.ACCEPTED",
+                    "COLLABORATION.REJECTED",
+                    "COLLABORATION.REMOVED",
+                    "COLLABORATION.UPDATED",
+                    "SHARED_LINK.DELETED",
+                    "SHARED_LINK.CREATED",
+                    "SHARED_LINK.UPDATED",
+                    "SIGN_REQUEST.COMPLETED",
+                    "SIGN_REQUEST.DECLINED",
+                    "SIGN_REQUEST.EXPIRED",
+                    "SIGN_REQUEST.SIGNER_EMAIL_BOUNCED",
+                    "SIGN_REQUEST.SIGN_SIGNER_SIGNED",
+                    "SIGN_REQUEST.SIGN_DOCUMENT_CREATED",
+                    "SIGN_REQUEST.SIGN_ERROR_FINALIZING"
+                  ],
+                  "example": "FILE.UPLOADED",
+                  "title": "Webhook Trigger",
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            }
+          }
+        ],
+        "description": "Represents a configured webhook.",
+        "title": "Webhook",
+        "type": "object",
+        "x-box-resource-id": "webhook",
+        "x-box-tag": "webhooks",
+        "x-box-variant": "standard"
+      },
+      "Webhook--Mini": {
+        "description": "Represents a configured webhook.",
+        "properties": {
+          "id": {
+            "description": "The unique identifier for this webhook.",
+            "example": "11446498",
+            "type": "string"
+          },
+          "target": {
+            "description": "The item that will trigger the webhook.",
+            "properties": {
+              "id": {
+                "description": "The ID of the item to trigger a webhook.",
+                "example": "1231232",
+                "type": "string"
+              },
+              "type": {
+                "description": "The type of item to trigger a webhook.",
+                "enum": [
+                  "file",
+                  "folder"
+                ],
+                "example": "file",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": {
+            "description": "The value will always be `webhook`.",
+            "enum": [
+              "webhook"
+            ],
+            "example": "webhook",
+            "type": "string"
+          }
+        },
+        "title": "Webhook (Mini)",
+        "type": "object",
+        "x-box-resource-id": "webhook--mini",
+        "x-box-tag": "webhooks",
+        "x-box-variant": "mini",
+        "x-box-variants": [
+          "mini",
+          "standard"
+        ]
+      },
+      "Webhooks": {
+        "allOf": [
+          {
+            "description": "The part of an API response that describes marker\nbased pagination.",
+            "properties": {
+              "limit": {
+                "description": "The limit that was used for these entries. This will be the same as the\n`limit` query parameter unless that value exceeded the maximum value\nallowed. The maximum value varies by API.",
+                "example": 1000,
+                "format": "int64",
+                "type": "integer"
+              },
+              "next_marker": {
+                "description": "The marker for the start of the next page of results.",
+                "example": "JV9IRGZmieiBasejOG9yDCRNgd2ymoZIbjsxbJMjIs3kioVii",
+                "nullable": true,
+                "type": "string"
+              },
+              "prev_marker": {
+                "description": "The marker for the start of the previous page of results.",
+                "example": "JV9IRGZmieiBasejOG9yDCRNgd2ymoZIbjsxbJMjIs3kioVih",
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          {
+            "properties": {
+              "entries": {
+                "description": "A list of webhooks.",
+                "items": {
+                  "$ref": "#/components/schemas/Webhook--Mini"
+                },
+                "type": "array"
+              }
+            }
+          }
+        ],
+        "description": "A list of webhooks.",
+        "title": "Webhooks",
+        "type": "object",
+        "x-box-resource-id": "webhooks",
+        "x-box-tag": "webhooks"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2Security": {
+        "description": "The access token received from the authorization server in the OAuth 2.0 flow.",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://account.box.com/api/oauth2/authorize",
+            "scopes": {
+              "manage_app_users": "Provision and manage app users",
+              "manage_data_retention": "Manage data retention polices",
+              "manage_enterprise_properties": "Manage enterprise properties",
+              "manage_groups": "Manage an enterprise's groups",
+              "manage_legal_hold": "Manage Legal Holds",
+              "manage_managed_users": "Provision and manage managed users",
+              "manage_webhook": "Create webhooks programmatically through the API",
+              "root_readonly": "Read all files and folders stored in Box",
+              "root_readwrite": "Read and write all files and folders stored in Box"
+            },
+            "tokenUrl": "https://api.box.com/oauth2/token"
+          }
+        },
+        "type": "oauth2"
+      }
+    }
+  },
+  "externalDocs": {
+    "description": "Box Developer Documentation.",
+    "url": "https://developer.box.com"
+  },
+  "info": {
+    "contact": {
+      "email": "devrel@box.com",
+      "name": "Box, Inc",
+      "url": "https://developer.box.com"
+    },
+    "description": "[Box Platform](https://developer.box.com) provides functionality to provide access to content stored within [Box](https://box.com). It provides endpoints for basic manipulation of files and folders, management of users within an enterprise, as well as more complex topics such as legal holds and retention policies.",
+    "license": {
+      "name": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    "termsOfService": "https://cloud.app.box.com/s/rmwxu64h1ipr41u49w3bbuvbsa29wku9",
+    "title": "Box Platform API",
+    "version": "2024.0",
+    "x-box-commit-hash": "21e370b9bd"
+  },
+  "openapi": "3.0.2",
+  "paths": {
+    "/webhooks": {
+      "get": {
+        "description": "Returns all defined webhooks for the requesting application.\n\nThis API only returns webhooks that are applied to files or folders that are\nowned by the authenticated user. This means that an admin can not see webhooks\ncreated by a service account unless the admin has access to those folders, and\nvice versa.",
+        "operationId": "get_webhooks",
+        "parameters": [
+          {
+            "description": "Defines the position marker at which to begin returning results. This is\nused when paginating using marker-based pagination.\n\nThis requires `usemarker` to be set to `true`.",
+            "example": "JV9IRGZmieiBasejOG9yDCRNgd2ymoZIbjsxbJMjIs3kioVii",
+            "in": "query",
+            "name": "marker",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The maximum number of items to return per page.",
+            "example": 1000,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "maximum": 1000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhooks"
+                }
+              }
+            },
+            "description": "Returns a list of webhooks."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the application does not\nhave the permission to manage webhooks."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "List all webhooks",
+        "tags": [
+          "Webhooks"
+        ],
+        "x-box-tag": "webhooks"
+      },
+      "post": {
+        "description": "Creates a webhook.",
+        "operationId": "post_webhooks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "address": {
+                    "description": "The URL that is notified by this webhook.",
+                    "example": "https://example.com/webhooks",
+                    "type": "string"
+                  },
+                  "target": {
+                    "description": "The item that will trigger the webhook.",
+                    "properties": {
+                      "id": {
+                        "description": "The ID of the item to trigger a webhook.",
+                        "example": "1231232",
+                        "type": "string"
+                      },
+                      "type": {
+                        "description": "The type of item to trigger a webhook.",
+                        "enum": [
+                          "file",
+                          "folder"
+                        ],
+                        "example": "file",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "triggers": {
+                    "description": "An array of event names that this webhook is\nto be triggered for.",
+                    "example": [
+                      "FILE.UPLOADED"
+                    ],
+                    "items": {
+                      "description": "The event name that triggered this webhook.",
+                      "enum": [
+                        "FILE.UPLOADED",
+                        "FILE.PREVIEWED",
+                        "FILE.DOWNLOADED",
+                        "FILE.TRASHED",
+                        "FILE.DELETED",
+                        "FILE.RESTORED",
+                        "FILE.COPIED",
+                        "FILE.MOVED",
+                        "FILE.LOCKED",
+                        "FILE.UNLOCKED",
+                        "FILE.RENAMED",
+                        "COMMENT.CREATED",
+                        "COMMENT.UPDATED",
+                        "COMMENT.DELETED",
+                        "TASK_ASSIGNMENT.CREATED",
+                        "TASK_ASSIGNMENT.UPDATED",
+                        "METADATA_INSTANCE.CREATED",
+                        "METADATA_INSTANCE.UPDATED",
+                        "METADATA_INSTANCE.DELETED",
+                        "FOLDER.CREATED",
+                        "FOLDER.RENAMED",
+                        "FOLDER.DOWNLOADED",
+                        "FOLDER.RESTORED",
+                        "FOLDER.DELETED",
+                        "FOLDER.COPIED",
+                        "FOLDER.MOVED",
+                        "FOLDER.TRASHED",
+                        "WEBHOOK.DELETED",
+                        "COLLABORATION.CREATED",
+                        "COLLABORATION.ACCEPTED",
+                        "COLLABORATION.REJECTED",
+                        "COLLABORATION.REMOVED",
+                        "COLLABORATION.UPDATED",
+                        "SHARED_LINK.DELETED",
+                        "SHARED_LINK.CREATED",
+                        "SHARED_LINK.UPDATED",
+                        "SIGN_REQUEST.COMPLETED",
+                        "SIGN_REQUEST.DECLINED",
+                        "SIGN_REQUEST.EXPIRED",
+                        "SIGN_REQUEST.SIGNER_EMAIL_BOUNCED",
+                        "SIGN_REQUEST.SIGN_SIGNER_SIGNED",
+                        "SIGN_REQUEST.SIGN_DOCUMENT_CREATED",
+                        "SIGN_REQUEST.SIGN_ERROR_FINALIZING"
+                      ],
+                      "example": "FILE.UPLOADED",
+                      "title": "Webhook Trigger",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "target",
+                  "triggers",
+                  "address"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            },
+            "description": "Returns the new webhook object."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the parameters were\nincorrect."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the application does not\nhave the permission to manage webhooks."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the target item could\nnot be found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the a webhook for this\ncombination of target, application, and user\nalready exists."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Create webhook",
+        "tags": [
+          "Webhooks"
+        ],
+        "x-box-tag": "webhooks"
+      }
+    },
+    "/webhooks/{webhook_id}": {
+      "delete": {
+        "description": "Deletes a webhook.",
+        "operationId": "delete_webhooks_id",
+        "parameters": [
+          {
+            "description": "The ID of the webhook.",
+            "example": "3321123",
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "An empty response will be returned when the webhook\nwas successfully deleted."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the application does not\nhave the permission to manage webhooks."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the webhook could not be found."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Remove webhook",
+        "tags": [
+          "Webhooks"
+        ],
+        "x-box-tag": "webhooks"
+      },
+      "get": {
+        "description": "Retrieves a specific webhook.",
+        "operationId": "get_webhooks_id",
+        "parameters": [
+          {
+            "description": "The ID of the webhook.",
+            "example": "3321123",
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            },
+            "description": "Returns a webhook object."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the application does not\nhave the permission to manage webhooks."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the webhook could not be found."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Get webhook",
+        "tags": [
+          "Webhooks"
+        ],
+        "x-box-tag": "webhooks"
+      },
+      "put": {
+        "description": "Updates a webhook.",
+        "operationId": "put_webhooks_id",
+        "parameters": [
+          {
+            "description": "The ID of the webhook.",
+            "example": "3321123",
+            "in": "path",
+            "name": "webhook_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "address": {
+                    "description": "The URL that is notified by this webhook.",
+                    "example": "https://example.com/webhooks",
+                    "type": "string"
+                  },
+                  "target": {
+                    "description": "The item that will trigger the webhook.",
+                    "properties": {
+                      "id": {
+                        "description": "The ID of the item to trigger a webhook.",
+                        "example": "1231232",
+                        "type": "string"
+                      },
+                      "type": {
+                        "description": "The type of item to trigger a webhook.",
+                        "enum": [
+                          "file",
+                          "folder"
+                        ],
+                        "example": "file",
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "triggers": {
+                    "description": "An array of event names that this webhook is\nto be triggered for.",
+                    "example": [
+                      "FILE.UPLOADED"
+                    ],
+                    "items": {
+                      "description": "The event name that triggered this webhook.",
+                      "enum": [
+                        "FILE.UPLOADED",
+                        "FILE.PREVIEWED",
+                        "FILE.DOWNLOADED",
+                        "FILE.TRASHED",
+                        "FILE.DELETED",
+                        "FILE.RESTORED",
+                        "FILE.COPIED",
+                        "FILE.MOVED",
+                        "FILE.LOCKED",
+                        "FILE.UNLOCKED",
+                        "FILE.RENAMED",
+                        "COMMENT.CREATED",
+                        "COMMENT.UPDATED",
+                        "COMMENT.DELETED",
+                        "TASK_ASSIGNMENT.CREATED",
+                        "TASK_ASSIGNMENT.UPDATED",
+                        "METADATA_INSTANCE.CREATED",
+                        "METADATA_INSTANCE.UPDATED",
+                        "METADATA_INSTANCE.DELETED",
+                        "FOLDER.CREATED",
+                        "FOLDER.RENAMED",
+                        "FOLDER.DOWNLOADED",
+                        "FOLDER.RESTORED",
+                        "FOLDER.DELETED",
+                        "FOLDER.COPIED",
+                        "FOLDER.MOVED",
+                        "FOLDER.TRASHED",
+                        "WEBHOOK.DELETED",
+                        "COLLABORATION.CREATED",
+                        "COLLABORATION.ACCEPTED",
+                        "COLLABORATION.REJECTED",
+                        "COLLABORATION.REMOVED",
+                        "COLLABORATION.UPDATED",
+                        "SHARED_LINK.DELETED",
+                        "SHARED_LINK.CREATED",
+                        "SHARED_LINK.UPDATED",
+                        "SIGN_REQUEST.COMPLETED",
+                        "SIGN_REQUEST.DECLINED",
+                        "SIGN_REQUEST.EXPIRED",
+                        "SIGN_REQUEST.SIGNER_EMAIL_BOUNCED",
+                        "SIGN_REQUEST.SIGN_SIGNER_SIGNED",
+                        "SIGN_REQUEST.SIGN_DOCUMENT_CREATED",
+                        "SIGN_REQUEST.SIGN_ERROR_FINALIZING"
+                      ],
+                      "example": "FILE.UPLOADED",
+                      "title": "Webhook Trigger",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Webhook"
+                }
+              }
+            },
+            "description": "Returns the new webhook object."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the parameters were\nincorrect."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the application does not\nhave the permission to manage webhooks."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the target item or webhook\ncould not be found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the a webhook for this\ncombination of target, application, and user\nalready exists."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Update webhook",
+        "tags": [
+          "Webhooks"
+        ],
+        "x-box-tag": "webhooks"
+      }
+    }
+  },
+  "security": [
+    {
+      "OAuth2Security": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Box Platform API server.",
+      "url": "https://api.box.com/2.0"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Webhooks allow you to monitor Box content for events,\nand receive notifications to a URL of your choice when they occur.\nFor example, a workflow may include waiting\nfor a file to be downloaded to delete a shared link.",
+      "name": "Webhooks",
+      "x-box-tag": "webhooks"
+    }
+  ]
+}

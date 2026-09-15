@@ -1,0 +1,17 @@
+# Shared by every generated provider client; each go:generate line passes its own -package and -o.
+generate:
+  models: true
+  client: true
+output-options:
+  # A name that collides across component sections takes the section as a
+  # suffix, such as RuleSuiteResultParameter.
+  resolve-type-name-collisions: true
+  # ID, URL and HTML rather than Id, Url and Html.
+  name-normalizer: ToCamelCaseWithInitialisms
+  # Inline objects get named types, so request bodies can be built.
+  generate-types-for-anonymous-schemas: true
+compatibility:
+  # WorkflowStateActive rather than Active. Without this, a constant is
+  # prefixed only while its name collides, so a newer description could rename
+  # constants callers already use.
+  always-prefix-enum-values: true

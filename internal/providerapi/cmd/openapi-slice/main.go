@@ -6,10 +6,17 @@
 //	openapi-slice -spec api.json -tags actions,repos,orgs -out dir
 //
 // writes dir/actions/openapi.json, dir/repos/openapi.json and
-// dir/orgs/openapi.json. -spec is a file path or an https URL, read once; only
-// JSON descriptions are read.
+// dir/orgs/openapi.json. A tag's package is its letters and digits, lowercased.
+// Where tags are finer than a package should be, an entry names the package
+// and lists its tags, separated by |:
 //
-// Within a slice, an operationId that starts with the tag and a slash loses
+//	openapi-slice -spec api.json -tags "files=Files|File versions,search=Search" -out dir
+//
+// writes dir/files/openapi.json, holding the operations tagged Files or File
+// versions, and dir/search/openapi.json. -spec is a file path or an https URL,
+// read once; only JSON descriptions are read.
+//
+// Within a slice, an operationId that starts with its tag and a slash loses
 // that prefix, and any other slash becomes a hyphen, so generated names read
 // repos.Get rather than repos.Reposget. The original id stays in
 // x-original-operation-id. Each slice is then adjusted so oapi-codegen
@@ -48,7 +55,7 @@ func run(args []string, log io.Writer) error {
 	flags := flag.NewFlagSet("openapi-slice", flag.ContinueOnError)
 	flags.SetOutput(log)
 	spec := flags.String("spec", "", "OpenAPI 3 JSON description: a file path or an https URL")
-	tags := flags.String("tags", "", "comma-separated tags; each becomes one slice")
+	tags := flags.String("tags", "", "comma-separated slices, each a tag or package=tag|tag")
 	out := flags.String("out", "", "directory to write each slice under, as <package>/"+sliceFile)
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -67,16 +74,20 @@ func run(args []string, log io.Writer) error {
 	if err := decoder.Decode(&document); err != nil {
 		return fmt.Errorf("decode %s as JSON: %w", *spec, err)
 	}
-	for _, tag := range strings.Split(*tags, ",") {
-		tag = strings.TrimSpace(tag)
-		if tag == "" {
+	written := map[string]bool{}
+	for _, entry := range strings.Split(*tags, ",") {
+		if strings.TrimSpace(entry) == "" {
 			continue
 		}
-		pkg, err := packageName(tag)
+		pkg, sliceTags, err := parseEntry(entry)
 		if err != nil {
 			return err
 		}
-		slice, err := Slice(document, tag)
+		if written[pkg] {
+			return fmt.Errorf("package %s is sliced twice", pkg)
+		}
+		written[pkg] = true
+		slice, err := Slice(document, sliceTags...)
 		if err != nil {
 			return err
 		}
@@ -85,6 +96,30 @@ func run(args []string, log io.Writer) error {
 		}
 	}
 	return nil
+}
+
+// parseEntry reads one entry of -tags: a tag, sliced into the package named
+// after it, or package=tag|tag, whose tags are sliced together into package.
+func parseEntry(entry string) (pkg string, tags []string, err error) {
+	name, list, grouped := strings.Cut(entry, "=")
+	if !grouped {
+		tag := strings.TrimSpace(entry)
+		pkg, err = packageName(tag)
+		return pkg, []string{tag}, err
+	}
+	name = strings.TrimSpace(name)
+	if derived, err := packageName(name); err != nil || derived != name {
+		return "", nil, fmt.Errorf("%q is not a package name: use lowercase letters and digits", name)
+	}
+	for _, tag := range strings.Split(list, "|") {
+		if tag = strings.TrimSpace(tag); tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	if len(tags) == 0 {
+		return "", nil, fmt.Errorf("package %s lists no tags", name)
+	}
+	return name, tags, nil
 }
 
 // read returns a description from a file, or from an https URL.

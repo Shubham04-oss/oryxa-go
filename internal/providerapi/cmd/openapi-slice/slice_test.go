@@ -201,6 +201,39 @@ func TestSliceKeepsWhatATagReaches(t *testing.T) {
 	}
 }
 
+func TestSliceKeepsWhatSeveralTagsReach(t *testing.T) {
+	document := decode(t, description)
+	both, err := Slice(document, "admin", "pets")
+	if err != nil {
+		t.Fatalf("Slice(admin, pets) error = %v", err)
+	}
+	// pets/delete is tagged admin, so it keeps its pets prefix even though pets
+	// is sliced too.
+	if got := operations(both); len(got) != 3 || got["list"] != "pets/list" || got["audit"] != "admin/audit" || got["pets-delete"] != "pets/delete" {
+		t.Fatalf("operations = %v, want list, audit and pets-delete", got)
+	}
+	if methods := at(t, both, "paths", "/owners/{owner}/pets").(map[string]any); methods["get"] == nil || methods["delete"] == nil {
+		t.Fatalf("/owners/{owner}/pets = %v, want both its operations", methods)
+	}
+	for kind, want := range map[string][]string{
+		"schemas":         {"Audit", "Entry", "Legacy", "Owner", "Pet", "Sizes", "a/b"},
+		"securitySchemes": {"admin", "token"},
+	} {
+		if got := names(both, kind); !slices.Equal(got, want) {
+			t.Errorf("components/%s = %v, want %v", kind, got, want)
+		}
+	}
+	if got := encoded(t, both["tags"]); got != `[{"name":"pets"},{"name":"admin"}]` {
+		t.Errorf("tags = %s, want both definitions in the description's order", got)
+	}
+	if _, err := Slice(document, "pets", "owners"); err == nil || !strings.Contains(err.Error(), `tag "owners" has no operations`) {
+		t.Errorf("Slice(pets, owners) error = %v, want owners refused", err)
+	}
+	if _, err := Slice(document); err == nil {
+		t.Error("Slice() with no tags succeeded")
+	}
+}
+
 func TestSliceRefusesWhatItCannotKeep(t *testing.T) {
 	for name, test := range map[string]struct {
 		raw  string
@@ -241,8 +274,11 @@ func TestReferenceNames(t *testing.T) {
 		{"reposition/get", "repos"}:                    "reposition-get",
 		{"already-plain", "repos"}:                     "already-plain",
 		{"code-scanning/list-alerts", "code-scanning"}: "list-alerts",
+		{"post_files_id#add_shared_link", "Files"}:     "post_files_id#add_shared_link",
+		{"users/get", "orgs,users"}:                    "get",
+		{"orgs/users/get", "orgs,users"}:               "users-get",
 	} {
-		if got := operationID(id[0], id[1]); got != want {
+		if got := operationID(id[0], strings.Split(id[1], ",")); got != want {
 			t.Errorf("operationID(%q, %q) = %q, want %q", id[0], id[1], got, want)
 		}
 	}
