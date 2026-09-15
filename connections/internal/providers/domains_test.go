@@ -67,4 +67,19 @@ func TestDomains(t *testing.T) {
 	if unchanged := provider.WithDomain(""); unchanged.OAuth2 != provider.OAuth2 {
 		t.Fatal("WithDomain(\"\") copied a provider with nothing to fill")
 	}
+
+	// A rule with a default gives it to an app that names no domain, and only
+	// where the credential type needs one.
+	provider.Domain.Default = "support"
+	for credentialType, want := range map[domain.CredentialType]string{domain.CredentialOAuth2: "support", domain.CredentialBearer: ""} {
+		if value, err := provider.AppDomain(credentialType, " "); err != nil || value != want {
+			t.Errorf("AppDomain(%s) without a domain = %q %v, want %q", credentialType, value, err, want)
+		}
+	}
+	if value, err := provider.AppDomain(domain.CredentialOAuth2, "acme"); err != nil || value != "acme" {
+		t.Errorf("AppDomain() with a domain = %q %v, want acme", value, err)
+	}
+	if _, err := provider.AppDomain(domain.CredentialOAuth2, "acme.zendesk.test"); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("AppDomain() with an invalid domain error = %v, want invalid despite the default", err)
+	}
 }

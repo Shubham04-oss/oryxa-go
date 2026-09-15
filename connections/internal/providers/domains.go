@@ -22,6 +22,10 @@ type DomainRule struct {
 	Pattern *regexp.Regexp
 	// Example is a valid domain, shown when one is missing or does not match.
 	Example string
+	// Default is the domain of an app that gives none, where one domain serves
+	// most customers, such as Salesforce's login.salesforce.com. Empty means
+	// every app gives its own.
+	Default string
 }
 
 // NeedsDomain reports whether apps of a credential type supply a domain: any
@@ -36,7 +40,8 @@ func (provider Provider) NeedsDomain(credentialType domain.CredentialType) bool 
 }
 
 // AppDomain checks the domain an app of a credential type gives, trimmed and
-// lowercased. One is required when the type needs it, and refused otherwise.
+// lowercased. When the type needs one, an app that gives none gets the rule's
+// default, or is refused without one; other types take no domain.
 func (provider Provider) AppDomain(credentialType domain.CredentialType, value string) (string, error) {
 	value = strings.ToLower(strings.TrimSpace(value))
 	if !provider.NeedsDomain(credentialType) {
@@ -47,6 +52,9 @@ func (provider Provider) AppDomain(credentialType domain.CredentialType, value s
 	}
 	if provider.Domain == nil || provider.Domain.Pattern == nil {
 		return "", fmt.Errorf("%s has no rule for its domain: %w", provider.Name, domain.ErrInvalid)
+	}
+	if value == "" {
+		value = provider.Domain.Default
 	}
 	if !provider.Domain.Pattern.MatchString(value) {
 		return "", fmt.Errorf("%s %s apps need a domain such as %s: %w", provider.Name, credentialType, provider.Domain.Example, domain.ErrInvalid)

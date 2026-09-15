@@ -6,7 +6,8 @@ package providers
 func Builtin() Registry {
 	registry := Registry{}
 	for _, provider := range []Provider{
-		Airtable(), Asana(), Atlassian(), Box(), ClickUp(), Dropbox(), Figma(), GitHub(), Google(), Linear(), Microsoft(), Notion(), Slack(),
+		Airtable(), Asana(), Atlassian(), Box(), ClickUp(), Dropbox(), Figma(), GitHub(), Google(), HubSpot(), Intercom(), Linear(),
+		Microsoft(), Notion(), Salesforce(), Slack(), Zendesk(),
 	} {
 		registry[provider.Name] = provider
 	}

@@ -293,3 +293,40 @@ func TestKeyIdentityFigmaNotionAndAirtableTokens(t *testing.T) {
 		}
 	}
 }
+
+func TestKeyIdentityHubSpotAndIntercomTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch {
+		// A HubSpot private app's token reaches its portal.
+		case request.URL.Path == "/hubspot/account-info/2026-09/details" && request.Header.Get("Authorization") == "Bearer pat-na1-abc":
+			_, _ = io.WriteString(writer, `{"portalId":1234567,"accountType":"STANDARD","uiDomain":"app.hubspot.com"}`)
+		// An Intercom access token acts as an admin of its workspace.
+		case request.URL.Path == "/intercom/me" && request.Header.Get("Authorization") == "Bearer dG9rOmFiYw==" && request.Header.Get("Intercom-Version") == intercomVersion:
+			_, _ = io.WriteString(writer, `{"type":"admin","id":"991267459","name":"Ada","email":"","app":{"id_code":"abc123de","name":""}}`)
+		default:
+			t.Errorf("identity request = %s %v", request.URL.Path, request.Header)
+			writer.WriteHeader(http.StatusUnauthorized)
+		}
+	}))
+	defer server.Close()
+	pointKeys := func(provider Provider, path string) Provider {
+		keys := provider.Keys[domain.CredentialBearer]
+		keys.APIURL = server.URL + path
+		provider.Keys = map[domain.CredentialType]KeyAuth{domain.CredentialBearer: keys}
+		return provider
+	}
+	client := testClient(server)
+	for name, test := range map[string]struct {
+		provider Provider
+		token    string
+		want     domain.ProviderAccount
+	}{
+		// A portal without a name is named by nothing but its ID.
+		"hubspot":  {pointKeys(HubSpot(), "/hubspot"), "pat-na1-abc", domain.ProviderAccount{ID: "1234567"}},
+		"intercom": {pointKeys(Intercom(), "/intercom"), "dG9rOmFiYw==", domain.ProviderAccount{ID: "abc123de:991267459", Name: "Ada"}},
+	} {
+		if account, err := client.KeyIdentity(context.Background(), test.provider, domain.CredentialBearer, domain.CredentialInput{Token: test.token}); err != nil || account != test.want {
+			t.Errorf("%s KeyIdentity() = %+v %v, want %+v", name, account, err, test.want)
+		}
+	}
+}

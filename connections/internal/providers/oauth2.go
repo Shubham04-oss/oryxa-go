@@ -148,6 +148,11 @@ type OAuth2 struct {
 	SendScopeOnRefresh bool
 	// RequireRefreshToken rejects an exchange that issues no refresh token.
 	RequireRefreshToken bool
+	// Lifetime is how long an access token is taken to last when the token
+	// response gives no expires_in, for a provider whose tokens expire on a
+	// schedule it does not report, such as Salesforce's session timeout. Zero
+	// takes such a token to last until the provider refuses it.
+	Lifetime time.Duration
 	// PermanentErrors are token endpoint error codes meaning the grant or
 	// client is gone for good, so the connection needs reconnecting.
 	PermanentErrors []string
@@ -429,8 +434,9 @@ func (client Client) token(ctx context.Context, provider OAuth2, values url.Valu
 	return token, nil
 }
 
-// tokenMetadata reads the named top-level fields of a token response. A field
-// that is missing, is not a string, or is not a safe value is left out.
+// tokenMetadata reads the named top-level fields of a token response: strings,
+// and whole numbers as their digits, such as HubSpot's hub_id. A field that is
+// missing, is of another type, or is not a safe value is left out.
 func tokenMetadata(body []byte, names []string) map[string]string {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(body, &fields) != nil {
@@ -438,8 +444,7 @@ func tokenMetadata(body []byte, names []string) map[string]string {
 	}
 	metadata := map[string]string{}
 	for _, name := range names {
-		var value string
-		if raw, ok := fields[name]; ok && json.Unmarshal(raw, &value) == nil && safeValue(value) {
+		if value, ok := metadataValue(fields[name]); ok && safeValue(value) {
 			metadata[name] = value
 		}
 	}
@@ -447,6 +452,23 @@ func tokenMetadata(body []byte, names []string) map[string]string {
 		return nil
 	}
 	return metadata
+}
+
+// metadataValue reads a token response field as text: a string as it is, or a
+// whole number as its digits.
+func metadataValue(raw json.RawMessage) (string, bool) {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text, true
+	}
+	var number json.Number
+	if json.Unmarshal(raw, &number) != nil {
+		return "", false
+	}
+	if _, err := strconv.ParseInt(number.String(), 10, 64); err != nil {
+		return "", false
+	}
+	return number.String(), true
 }
 
 func (client Client) grant(provider OAuth2, token TokenResponse, requested []string) Grant {
@@ -462,8 +484,11 @@ func (client Client) grant(provider OAuth2, token TokenResponse, requested []str
 		Tokens:       token.Tokens,
 		Metadata:     token.Metadata,
 	}
-	if token.ExpiresIn > 0 {
+	switch {
+	case token.ExpiresIn > 0:
 		grant.Expiry = client.now().Add(time.Duration(token.ExpiresIn) * time.Second)
+	case provider.Lifetime > 0:
+		grant.Expiry = client.now().Add(provider.Lifetime)
 	}
 	return grant
 }

@@ -41,11 +41,11 @@ change, disable or delete apps.
 
 | Field | Holds |
 | --- | --- |
-| `provider` | A built-in provider: `airtable`, `asana`, `atlassian`, `box`, `clickup`, `dropbox`, `figma`, `github`, `google`, `linear`, `microsoft`, `notion` or `slack` |
+| `provider` | A built-in provider: `airtable`, `asana`, `atlassian`, `box`, `clickup`, `dropbox`, `figma`, `github`, `google`, `hubspot`, `intercom`, `linear`, `microsoft`, `notion`, `salesforce`, `slack` or `zendesk` |
 | `credential_type` | How connections to this app authenticate (below). Defaults to the provider's `oauth2` |
 | Client | `oauth2` and `oauth2_client_credentials` apps: `client_id` and an encrypted `client_secret`. `installation` apps: also the GitHub App's `github_app_id`, `github_app_slug` and encrypted `private_key`. Key-based apps take no client |
 | `scopes` | What `oauth2` connections may be granted. Never beyond the provider's ceiling; always includes its required scopes. Client-credentials apps carry the provider's fixed app-only scopes; installation and key-based apps carry none |
-| `settings` | What is not secret about the client, such as the GitHub App's ID and slug, and the app's `domain` where the provider needs one |
+| `settings` | What is not secret about the client, such as the GitHub App's ID and slug, and the app's `domain` where the provider needs one. A provider may give an app that names none its default, such as Salesforce's `login.salesforce.com` |
 | `status` | `active` or `disabled` |
 
 - Narrowing `scopes` applies at once: tokens are issued only for scopes the app still allows. Widening needs each connection to reconnect to gain the new scopes.
@@ -62,12 +62,12 @@ change, disable or delete apps.
 | `api_key`, `bearer`, `basic` | The secret | The account the provider's identity check returns | The secret, with where it goes on a request | None; the owner replaces it |
 
 Built-in key-based providers are Airtable, Asana and GitHub personal access
-tokens and Notion internal integration tokens (`bearer`); ClickUp personal
-tokens, Figma personal access tokens (sent in `X-Figma-Token`) and Linear API
-keys (`api_key`); and Atlassian API tokens (`basic`, the account's email and
-the token). Microsoft offers client credentials; GitHub offers installations.
-Client-credentials connections are team or organization scope only, because no
-person consents to them.
+tokens, HubSpot private app tokens, Intercom access tokens and Notion internal
+integration tokens (`bearer`); ClickUp personal tokens, Figma personal access
+tokens (sent in `X-Figma-Token`) and Linear API keys (`api_key`); and Atlassian
+API tokens (`basic`, the account's email and the token). Microsoft offers
+client credentials; GitHub offers installations. Client-credentials connections
+are team or organization scope only, because no person consents to them.
 
 Only `oauth2` connections carry scopes connections can see. An installation
 token has the permissions set on the GitHub App, a client-credentials token the
@@ -84,6 +84,10 @@ Some providers differ in ways callers notice:
 - `dropbox` always asks for offline access, so it issues a refresh token, which does not rotate. `account_info.read` is always requested. Revoking refreshes the grant first, because Dropbox revokes only with a live access token.
 - `figma` refreshes at its own endpoint and keeps the refresh token. It keeps one access token per app and account: refreshing one connection's token ends the previous one, so the same account connected twice to one app interrupts itself. `current_user:read` is always requested.
 - `notion` has no OAuth scopes: an integration's capabilities are set in Notion, and the member picks the pages it may reach while consenting. A connection is the integration's bot in the member's workspace. Its `metadata` carries `workspace_id`, `workspace_name`, `bot_id` and, when the member duplicated a template, `duplicated_template_id`. Connections calls Notion with `Notion-Version: 2025-09-03`.
+- `hubspot` connections are named by their HubSpot account (portal), and their `metadata` carries `hub_id` and `user_id`. `oauth` is always requested. HubSpot reports the scopes it granted, and its refresh tokens do not expire. Disconnecting does not revoke the refresh token, which other connections to the same account may share; uninstalling the app in HubSpot ends it.
+- `intercom` has no OAuth scopes: an app's permissions are set in Intercom's Developer Hub. Its access tokens do not expire, so there is nothing to refresh. A connection is an admin in a workspace. Each region has its own authorization host, which the app names as its `domain`: `app.intercom.com` (the default), `app.eu.intercom.com` or `app.au.intercom.com`. A member sent to the US host can still pick their region, unless they sign in to Intercom with Google. Callers call `api.intercom.io`, which routes to the workspace's region. Disconnecting does not uninstall the app, which would end every connection to the workspace.
+- `salesforce` apps name the host their users log in at as their `domain`: `login.salesforce.com` (the default), `test.salesforce.com`, or an org's My Domain, such as `acme.my.salesforce.com` or `acme--uat.sandbox.my.salesforce.com`. PKCE is always used, and `id` and `refresh_token` are always requested; `full` covers every scope but `refresh_token`. Callers call the org at the `instance_url` in `metadata`, kept current through refreshes. Salesforce does not say when an access token expires, which depends on the org's session timeout, so connections treats each as expiring after 15 minutes, the shortest timeout, and refreshes it then.
+- `zendesk` apps name their account's subdomain as their `domain`, such as `acme` for `acme.zendesk.com`. PKCE is always used, and `users:read` is always requested; `read` and `write` cover every resource's reading and writing. An OAuth client created since 2026-04-30 issues access tokens that expire, with refresh tokens that work once; an older client may still issue tokens that never expire, until Zendesk requires expiry on 2027-04-01. Zendesk API tokens are not offered, since Zendesk deactivates them all on 2027-04-30.
 
 ## Ownership
 
@@ -223,7 +227,7 @@ type, and it has no `expires_at`. Two fields appear only when they apply:
 `domain`, the app's domain for a provider reached through one, such as
 `acme.atlassian.net`; and `metadata`, what the provider returned with an
 `oauth2` token that callers need and that is not secret, such as Salesforce's
-`instance_url`, kept through refreshes.
+`instance_url` or HubSpot's `hub_id`, kept through refreshes.
 
 Checks, in order:
 
@@ -438,8 +442,9 @@ a definition can say:
 - Credential types, and for each the URLs it uses and an identity check that returns the account a grant or key belongs to.
 - Scope rules: the ceiling, required scopes, implications between scopes, and exclusive scopes allowed only on their own.
 - OAuth 2.0 differences: fixed authorization parameters, PKCE, the scope separator, scopes adjusted before sending or read back from the token response, JSON token requests (`JSONTokenRequests`), client credentials sent as HTTP Basic (`ClientSecretBasic`), fixed headers on token requests (`TokenHeaders`), a separate refresh endpoint (`RefreshURL`), a token response that is not RFC 6749 (`DecodeToken`), permanent refresh errors, and whether a refresh token is required.
-- `Metadata`: token response fields that are not secret and that callers need with the token.
-- A `DomainRule` when URLs name `{domain}`: each app supplies its domain once, validated against the rule, and every flow for the app runs with it filled in. The provider HTTP client still refuses private addresses.
+- `Metadata`: token response fields that are not secret and that callers need with the token, strings or whole numbers.
+- `Lifetime`: how long an access token lasts when the token response does not say, for a provider whose tokens expire on a schedule it does not report.
+- A `DomainRule` when URLs name `{domain}`: each app supplies its domain once, validated against the rule, and every flow for the app runs with it filled in. A rule's `Default` is the domain of an app that names none. The provider HTTP client still refuses private addresses.
 - A revoke hook, where the provider can end a grant.
 
 `TestBuiltinProvidersAreConsistent` checks every definition; each provider also

@@ -64,19 +64,23 @@ func TestBuiltinProvidersAreConsistent(t *testing.T) {
 	// Every provider supports oauth2 first (apps default to it); some also
 	// support other credential types.
 	credentialTypes := map[string][]domain.CredentialType{
-		"airtable":  {domain.CredentialOAuth2, domain.CredentialBearer},
-		"asana":     {domain.CredentialOAuth2, domain.CredentialBearer},
-		"atlassian": {domain.CredentialOAuth2, domain.CredentialBasic},
-		"box":       {domain.CredentialOAuth2},
-		"clickup":   {domain.CredentialOAuth2, domain.CredentialAPIKey},
-		"dropbox":   {domain.CredentialOAuth2},
-		"figma":     {domain.CredentialOAuth2, domain.CredentialAPIKey},
-		"github":    {domain.CredentialOAuth2, domain.CredentialInstallation, domain.CredentialBearer},
-		"google":    {domain.CredentialOAuth2},
-		"linear":    {domain.CredentialOAuth2, domain.CredentialAPIKey},
-		"microsoft": {domain.CredentialOAuth2, domain.CredentialOAuth2ClientCredentials},
-		"notion":    {domain.CredentialOAuth2, domain.CredentialBearer},
-		"slack":     {domain.CredentialOAuth2},
+		"airtable":   {domain.CredentialOAuth2, domain.CredentialBearer},
+		"asana":      {domain.CredentialOAuth2, domain.CredentialBearer},
+		"atlassian":  {domain.CredentialOAuth2, domain.CredentialBasic},
+		"box":        {domain.CredentialOAuth2},
+		"clickup":    {domain.CredentialOAuth2, domain.CredentialAPIKey},
+		"dropbox":    {domain.CredentialOAuth2},
+		"figma":      {domain.CredentialOAuth2, domain.CredentialAPIKey},
+		"github":     {domain.CredentialOAuth2, domain.CredentialInstallation, domain.CredentialBearer},
+		"google":     {domain.CredentialOAuth2},
+		"hubspot":    {domain.CredentialOAuth2, domain.CredentialBearer},
+		"intercom":   {domain.CredentialOAuth2, domain.CredentialBearer},
+		"linear":     {domain.CredentialOAuth2, domain.CredentialAPIKey},
+		"microsoft":  {domain.CredentialOAuth2, domain.CredentialOAuth2ClientCredentials},
+		"notion":     {domain.CredentialOAuth2, domain.CredentialBearer},
+		"salesforce": {domain.CredentialOAuth2},
+		"slack":      {domain.CredentialOAuth2},
+		"zendesk":    {domain.CredentialOAuth2},
 	}
 	if len(registry) != len(credentialTypes) {
 		t.Fatalf("Builtin() has %d providers, want %d", len(registry), len(credentialTypes))
@@ -109,6 +113,9 @@ func TestBuiltinProvidersAreConsistent(t *testing.T) {
 				t.Fatalf("%s exclusive scope %q is not in its ceiling", name, scope)
 			}
 		}
+		if rule := provider.Domain; rule != nil && rule.Default != "" && !rule.Pattern.MatchString(rule.Default) {
+			t.Fatalf("%s default domain %q does not match its own rule", name, rule.Default)
+		}
 		// A credential type whose URLs name {domain} has a rule whose example
 		// fills them into absolute HTTPS URLs.
 		for _, credentialType := range credentialTypes[name] {
@@ -135,7 +142,11 @@ func TestBuiltinProvidersAreConsistent(t *testing.T) {
 				t.Fatalf("%s has no identity check for %s credentials", name, credentialType)
 			}
 		}
-		for _, endpoint := range []string{provider.OAuth2.AuthorizationURL, provider.OAuth2.TokenURL, provider.OAuth2.APIURL} {
+		flow := provider.OAuth2
+		if provider.NeedsDomain(domain.CredentialOAuth2) {
+			flow = provider.WithDomain(provider.Domain.Example).OAuth2
+		}
+		for _, endpoint := range []string{flow.AuthorizationURL, flow.TokenURL, flow.APIURL} {
 			if parsed, err := url.Parse(endpoint); err != nil || parsed.Scheme != "https" || parsed.Host == "" {
 				t.Fatalf("%s endpoint %q is not an absolute HTTPS URL", name, endpoint)
 			}
@@ -619,15 +630,16 @@ func TestGrantsKeepTheTokenMetadataTheProviderNames(t *testing.T) {
 			return
 		}
 		_, _ = io.WriteString(writer, `{"access_token":"token","refresh_token":"refresh","expires_in":3600,
-			"instance_url":"https://acme.my.salesforce.test","issued_at":1278448832702,"signature":"line\nbreak","unnamed":"kept out"}`)
+			"instance_url":"https://acme.my.salesforce.test","hub_id":1234567,"ratio":1.5,"large":1e3,"verified":true,"owner":{"id":"u1"},
+			"signature":"line\nbreak","unnamed":"kept out"}`)
 	}))
 	defer server.Close()
 	ctx, client, flow := context.Background(), testClient(server), pointAt(GitHub(), server)
-	flow.Metadata = []string{"instance_url", "issued_at", "signature", "workspace_id"}
+	flow.Metadata = []string{"hub_id", "instance_url", "large", "owner", "ratio", "signature", "verified", "workspace_id"}
 
-	// Only named fields that are safe strings are kept.
+	// Only named fields that are safe strings or whole numbers are kept.
 	grant, err := client.Exchange(ctx, flow, exchangeRequest("code"))
-	if err != nil || !maps.Equal(grant.Metadata, map[string]string{"instance_url": "https://acme.my.salesforce.test"}) {
+	if err != nil || !maps.Equal(grant.Metadata, map[string]string{"hub_id": "1234567", "instance_url": "https://acme.my.salesforce.test"}) {
 		t.Fatalf("Exchange() metadata = %v %v", grant.Metadata, err)
 	}
 	refresh := RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh",
@@ -649,6 +661,33 @@ func TestGrantsKeepTheTokenMetadataTheProviderNames(t *testing.T) {
 	flow.Metadata = nil
 	if grant, err := client.Exchange(ctx, flow, exchangeRequest("code")); err != nil || grant.Metadata != nil {
 		t.Fatalf("Exchange() without named metadata = %v %v", grant.Metadata, err)
+	}
+}
+
+func TestLifetimeStandsInForAMissingExpiry(t *testing.T) {
+	var response string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(writer, response)
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(GitHub(), server)
+	flow.Lifetime = 15 * time.Minute
+
+	response = `{"access_token":"token","refresh_token":"refresh"}`
+	if grant, err := client.Exchange(ctx, flow, exchangeRequest("code")); err != nil || !grant.Expiry.Equal(testNow.Add(15*time.Minute)) {
+		t.Fatalf("Exchange() without expires_in = %+v %v", grant, err)
+	}
+	// A token response that says when its token expires is taken at its word.
+	response = `{"access_token":"token-2","expires_in":7200}`
+	if grant, err := client.Refresh(ctx, flow, RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh"}); err != nil ||
+		!grant.Expiry.Equal(testNow.Add(2*time.Hour)) {
+		t.Fatalf("Refresh() with expires_in = %+v %v", grant, err)
+	}
+	// Without a lifetime, such a token lasts until the provider refuses it.
+	flow.Lifetime = 0
+	response = `{"access_token":"token"}`
+	if grant, err := client.Exchange(ctx, flow, exchangeRequest("code")); err != nil || !grant.Expiry.IsZero() {
+		t.Fatalf("Exchange() without a lifetime = %+v %v", grant, err)
 	}
 }
 
@@ -1013,5 +1052,334 @@ func TestDropboxFlow(t *testing.T) {
 	if refreshed, err := client.Refresh(ctx, flow, RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh"}); err != nil ||
 		refreshed.AccessToken != "sl.token-2" || refreshed.RefreshToken != "refresh" {
 		t.Fatalf("Refresh() = %+v %v, want the refresh token kept", refreshed, err)
+	}
+}
+
+func TestHubSpotFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if request.ParseForm() != nil || request.PostForm.Get("client_secret") != "secret-value" {
+				t.Errorf("token request = %v", request.PostForm)
+			}
+			if request.PostForm.Get("grant_type") == "refresh_token" {
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(writer, `{"error":"invalid_grant","error_description":"refresh token is invalid, expired or revoked","status":"BAD_REFRESH_TOKEN","message":"refresh token is invalid, expired or revoked"}`)
+				return
+			}
+			// HubSpot lists the granted scopes in an array.
+			_, _ = io.WriteString(writer, `{"token_type":"bearer","refresh_token":"na1-refresh","access_token":"token","hub_id":1234567,"user_id":222222,"scopes":["oauth","crm.objects.contacts.read"],"expires_in":1800}`)
+		case "/api/account-info/2026-09/details":
+			if request.Header.Get("Authorization") != "Bearer token" {
+				writer.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"portalId":1234567,"portalName":" Acme ","accountType":"STANDARD","timeZone":"US/Eastern","companyCurrency":"USD","additionalCurrencies":[],"utcOffset":"-05:00","utcOffsetMilliseconds":-18000000,"uiDomain":"app.hubspot.com","dataHostingLocation":"na1"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(HubSpot(), server)
+
+	query := authorizationQuery(t, client, flow, "oauth", "crm.objects.contacts.write", "crm.objects.contacts.read")
+	if query.Get("scope") != "crm.objects.contacts.read crm.objects.contacts.write oauth" || query.Has("code_challenge") {
+		t.Fatalf("HubSpot authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code", "oauth", "crm.objects.contacts.read", "crm.objects.contacts.write"))
+	if err != nil || grant.RefreshToken != "na1-refresh" || !grant.Expiry.Equal(testNow.Add(30*time.Minute)) ||
+		!slices.Equal(grant.Scopes, []string{"crm.objects.contacts.read", "oauth"}) ||
+		!maps.Equal(grant.Metadata, map[string]string{"hub_id": "1234567", "user_id": "222222"}) {
+		t.Fatalf("Exchange() = %+v %v, want the scopes HubSpot granted", grant, err)
+	}
+	if account, err := client.Identity(ctx, flow, grant); err != nil || account != (domain.ProviderAccount{ID: "1234567", Name: "Acme"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	if _, err := client.Refresh(ctx, flow, RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "na1-refresh"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("refused refresh error = %v", err)
+	}
+	if _, err := client.Identity(ctx, flow, Grant{AccessToken: "revoked"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("revoked token error = %v", err)
+	}
+}
+
+func TestSalesforceFlow(t *testing.T) {
+	const userInfo = `{"sub":"https://login.salesforce.com/id/00Dxx0000001gPL/005xx000001X8Uz","user_id":"005xx000001X8Uz","organization_id":"00Dxx0000001gPL",
+		"preferred_username":"ada@acme.example","name":"Ada Lovelace","email":"ada@example.test","active":true,"user_type":"STANDARD"}`
+	refreshes := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if request.ParseForm() != nil || request.PostForm.Get("client_secret") != "secret-value" {
+				t.Errorf("token request = %v", request.PostForm)
+			}
+			if request.PostForm.Get("grant_type") == "authorization_code" {
+				if request.PostForm.Get("code_verifier") != "verifier" {
+					t.Errorf("exchange without its PKCE verifier: %v", request.PostForm)
+				}
+				// Salesforce says nothing of when the token expires.
+				_, _ = io.WriteString(writer, `{"access_token":"00Dxx!token","refresh_token":"5Aep-refresh","signature":"c2ln","scope":"id api refresh_token",
+					"instance_url":"https://acme.my.salesforce.com","id":"https://login.salesforce.com/id/00Dxx0000001gPL/005xx000001X8Uz","token_type":"Bearer","issued_at":"1558553873237"}`)
+				return
+			}
+			refreshes++
+			if refreshes == 1 {
+				// A refresh returns no refresh token, and the org may have moved.
+				_, _ = io.WriteString(writer, `{"access_token":"00Dxx!token-2","signature":"c2ln","scope":"id api refresh_token","instance_url":"https://acme2.my.salesforce.com",
+					"id":"https://login.salesforce.com/id/00Dxx0000001gPL/005xx000001X8Uz","token_type":"Bearer","issued_at":"1558554873237"}`)
+				return
+			}
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":"inactive_user","error_description":"user is inactive"}`)
+		case "/api/services/oauth2/userinfo":
+			if request.Header.Get("Authorization") != "Bearer 00Dxx!token" {
+				writer.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(writer, `Bad_OAuth_Token`)
+				return
+			}
+			_, _ = io.WriteString(writer, userInfo)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Salesforce(), server)
+
+	query := authorizationQuery(t, client, flow, "refresh_token", "id", "api")
+	if query.Get("scope") != "api id refresh_token" || query.Get("code_challenge_method") != "S256" {
+		t.Fatalf("Salesforce authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code", "api", "id", "refresh_token"))
+	if err != nil || grant.RefreshToken != "5Aep-refresh" || !grant.Expiry.Equal(testNow.Add(15*time.Minute)) ||
+		!slices.Equal(grant.Scopes, []string{"api", "id", "refresh_token"}) ||
+		!maps.Equal(grant.Metadata, map[string]string{"instance_url": "https://acme.my.salesforce.com"}) {
+		t.Fatalf("Exchange() = %+v %v, want the shortest session timeout as its expiry", grant, err)
+	}
+	if account, err := client.Identity(ctx, flow, grant); err != nil ||
+		account != (domain.ProviderAccount{ID: "00Dxx0000001gPL:005xx000001X8Uz", Name: "ada@acme.example"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	refresh := RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "5Aep-refresh", Scopes: grant.Scopes, Metadata: grant.Metadata}
+	refreshed, err := client.Refresh(ctx, flow, refresh)
+	if err != nil || refreshed.AccessToken != "00Dxx!token-2" || refreshed.RefreshToken != "5Aep-refresh" || !refreshed.Expiry.Equal(testNow.Add(15*time.Minute)) ||
+		refreshed.Metadata["instance_url"] != "https://acme2.my.salesforce.com" {
+		t.Fatalf("Refresh() = %+v %v", refreshed, err)
+	}
+	if _, err := client.Refresh(ctx, flow, refresh); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("inactive user refresh error = %v, want rejected", err)
+	}
+	if _, err := client.Identity(ctx, flow, Grant{AccessToken: "revoked"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("revoked token error = %v", err)
+	}
+}
+
+func TestSalesforceScopesAndDomains(t *testing.T) {
+	rules := Salesforce().Scopes
+	for _, allowed := range [][]string{nil, {"api", "id", "refresh_token"}, {"email", "offline_access"}, {"full", "offline_access"}} {
+		if _, err := domain.AppScopes(allowed, rules); err != nil {
+			t.Errorf("AppScopes(%v) error = %v", allowed, err)
+		}
+	}
+	// full covers every scope but a refresh token.
+	for _, allowed := range [][]string{{"api", "refresh_token"}, {"full"}, {"id", "web"}} {
+		if _, err := domain.AppScopes(allowed, rules); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("AppScopes(%v) error = %v, want invalid", allowed, err)
+		}
+	}
+	granted := []string{"full", "refresh_token"}
+	if missing := domain.MissingScopes([]string{"api", "chatter_api", "email", "offline_access", "profile"}, granted, granted, rules.Implications); len(missing) != 0 {
+		t.Errorf("scopes full and refresh_token do not cover = %v", missing)
+	}
+	if missing := domain.MissingScopes([]string{"api", "refresh_token"}, []string{"id", "offline_access"}, []string{"id", "offline_access"}, rules.Implications); !slices.Equal(missing, []string{"api"}) {
+		t.Errorf("missing = %v, want api alone", missing)
+	}
+
+	provider := Salesforce()
+	for given, want := range map[string]string{
+		"":                                         "login.salesforce.com",
+		"test.salesforce.com":                      "test.salesforce.com",
+		" Acme.My.Salesforce.com ":                 "acme.my.salesforce.com",
+		"acme--uat.sandbox.my.salesforce.com":      "acme--uat.sandbox.my.salesforce.com",
+		"acme-dev-ed.develop.my.salesforce.com":    "acme-dev-ed.develop.my.salesforce.com",
+		"computing-1234.scratch.my.salesforce.com": "computing-1234.scratch.my.salesforce.com",
+	} {
+		if accepted, err := provider.AppDomain(domain.CredentialOAuth2, given); err != nil || accepted != want {
+			t.Errorf("AppDomain(%q) = %q %v, want %q", given, accepted, err, want)
+		}
+	}
+	for _, given := range []string{
+		"acme.salesforce.com", "salesforce.com", "my.salesforce.com", "acme.my.salesforce.com.example.test", "https://acme.my.salesforce.com",
+		"acme.my.salesforce.com/services", "login.salesforce.com:443", "-acme.my.salesforce.com", "acme.two.words.my.salesforce.com",
+	} {
+		if _, err := provider.AppDomain(domain.CredentialOAuth2, given); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("AppDomain(%q) error = %v, want invalid", given, err)
+		}
+	}
+	filled := provider.WithDomain("acme.my.salesforce.com").OAuth2
+	if filled.TokenURL != "https://acme.my.salesforce.com/services/oauth2/token" || filled.RevokeURL != "https://acme.my.salesforce.com/services/oauth2/revoke" ||
+		filled.APIURL != "https://acme.my.salesforce.com" {
+		t.Errorf("filled flow = %+v", filled)
+	}
+}
+
+func TestZendeskFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			body := map[string]string{}
+			if request.Header.Get("Content-Type") != "application/json" || json.NewDecoder(request.Body).Decode(&body) != nil || body["client_secret"] != "secret-value" {
+				t.Errorf("token request = %v %v", request.Header, body)
+			}
+			switch {
+			case body["grant_type"] == "authorization_code" && body["code"] == "older-client":
+				// A client Zendesk created before expiring tokens may issue one that never expires.
+				_, _ = io.WriteString(writer, `{"access_token":"token","token_type":"bearer","scope":"users:read tickets:read"}`)
+			case body["grant_type"] == "authorization_code":
+				if body["code_verifier"] != "verifier" {
+					t.Errorf("exchange without its PKCE verifier: %v", body)
+				}
+				_, _ = io.WriteString(writer, `{"access_token":"token","expires_in":1800,"refresh_token":"refresh-1","refresh_token_expires_in":2592000,"scope":"tickets:read users:read","token_type":"bearer"}`)
+			case body["refresh_token"] == "refresh-1":
+				_, _ = io.WriteString(writer, `{"access_token":"token-2","expires_in":1800,"refresh_token":"refresh-2","refresh_token_expires_in":2592000,"scope":"tickets:read users:read","token_type":"bearer"}`)
+			default:
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(writer, `{"error":"invalid_grant","error_description":"The provided access grant is invalid, expired, or revoked"}`)
+			}
+		case "/api/users/me":
+			switch request.Header.Get("Authorization") {
+			case "Bearer token":
+			case "Bearer zero":
+				_, _ = io.WriteString(writer, `{"user":{"id":0,"name":"Anonymous user","role":"end-user"}}`)
+				return
+			default:
+				// Zendesk answers a request it could not authenticate as an anonymous user.
+				_, _ = io.WriteString(writer, `{"user":{"id":null,"url":null,"name":"Anonymous user","email":"invalid@example.com","role":"end-user"}}`)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"user":{"id":35436,"name":"Johnny Agent","email":"johnny@example.test","role":"agent","verified":true}}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Zendesk(), server)
+
+	query := authorizationQuery(t, client, flow, "users:read", "tickets:read")
+	if query.Get("scope") != "tickets:read users:read" || query.Get("code_challenge_method") != "S256" {
+		t.Fatalf("Zendesk authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code", "tickets:read", "users:read"))
+	if err != nil || grant.RefreshToken != "refresh-1" || !grant.Expiry.Equal(testNow.Add(30*time.Minute)) || !slices.Equal(grant.Scopes, []string{"tickets:read", "users:read"}) {
+		t.Fatalf("Exchange() = %+v %v", grant, err)
+	}
+	if account, err := client.Identity(ctx, flow, grant); err != nil || account != (domain.ProviderAccount{ID: "35436", Name: "johnny@example.test"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	if older, err := client.Exchange(ctx, flow, exchangeRequest("older-client", "tickets:read", "users:read")); err != nil || older.RefreshToken != "" || !older.Expiry.IsZero() {
+		t.Fatalf("Exchange() from an older client = %+v %v, want a token that never expires", older, err)
+	}
+	// Refresh tokens work once.
+	refresh := RefreshRequest{ClientID: "client", ClientSecret: "secret-value", RefreshToken: "refresh-1"}
+	if refreshed, err := client.Refresh(ctx, flow, refresh); err != nil || refreshed.AccessToken != "token-2" || refreshed.RefreshToken != "refresh-2" {
+		t.Fatalf("Refresh() = %+v %v", refreshed, err)
+	}
+	refresh.RefreshToken = "refresh-used"
+	if _, err := client.Refresh(ctx, flow, refresh); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("used refresh token error = %v", err)
+	}
+	for _, token := range []string{"revoked", "zero"} {
+		if _, err := client.Identity(ctx, flow, Grant{AccessToken: token}); !errors.Is(err, domain.ErrCredentialRejected) {
+			t.Fatalf("anonymous identity for %s error = %v, want rejected", token, err)
+		}
+	}
+}
+
+func TestZendeskScopesAndDomains(t *testing.T) {
+	rules := Zendesk().Scopes
+	if _, err := domain.AppScopes([]string{"read", "write"}, rules); err != nil {
+		t.Errorf("AppScopes(read write) error = %v, want users:read covered by read", err)
+	}
+	if _, err := domain.AppScopes([]string{"tickets:read"}, rules); !errors.Is(err, domain.ErrInvalid) {
+		t.Errorf("AppScopes(tickets:read) error = %v, want users:read required", err)
+	}
+	granted := []string{"read", "write"}
+	if missing := domain.MissingScopes([]string{"ai_agents:chat", "hc:read", "impersonate", "tickets:write"}, granted, granted, rules.Implications); !slices.Equal(missing, []string{"ai_agents:chat", "impersonate"}) {
+		t.Errorf("missing = %v, want only the scopes read and write do not cover", missing)
+	}
+	// Writing a resource is not reading it.
+	if missing := domain.MissingScopes([]string{"tickets:read"}, []string{"tickets:write", "write"}, []string{"tickets:write", "write"}, rules.Implications); !slices.Equal(missing, []string{"tickets:read"}) {
+		t.Errorf("missing = %v, want tickets:read", missing)
+	}
+
+	provider := Zendesk()
+	if accepted, err := provider.AppDomain(domain.CredentialOAuth2, " D3V-Acme "); err != nil || accepted != "d3v-acme" {
+		t.Errorf("AppDomain() = %q %v", accepted, err)
+	}
+	for _, given := range []string{"", "ab", "acme.zendesk.com", "-acme", "acme-", "acme_support", strings.Repeat("a", 64)} {
+		if _, err := provider.AppDomain(domain.CredentialOAuth2, given); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("AppDomain(%q) error = %v, want invalid", given, err)
+		}
+	}
+	if filled := provider.WithDomain("acme").OAuth2; filled.TokenURL != "https://acme.zendesk.com/oauth/tokens" || filled.APIURL != "https://acme.zendesk.com/api/v2" {
+		t.Errorf("filled flow = %+v", filled)
+	}
+}
+
+func TestIntercomFlow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			if request.ParseForm() != nil || request.PostForm.Get("code") != "code" || request.PostForm.Get("client_id") != "client" ||
+				request.PostForm.Get("client_secret") != "secret-value" {
+				t.Errorf("token request = %v", request.PostForm)
+			}
+			_, _ = io.WriteString(writer, `{"token_type":"Bearer","token":"dG9rOjE=","access_token":"dG9rOjE="}`)
+		case "/api/me":
+			if request.Header.Get("Authorization") != "Bearer dG9rOjE=" || request.Header.Get("Intercom-Version") != intercomVersion {
+				writer.WriteHeader(http.StatusUnauthorized)
+				_, _ = io.WriteString(writer, `{"type":"error.list","errors":[{"code":"token_revoked","message":"The token has been revoked"}]}`)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"type":"admin","id":"991267459","email":"ada@example.test","name":"Ada","email_verified":true,
+				"app":{"type":"app","id_code":"abc123de","name":"Acme Support","region":"US"}}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+	ctx, client, flow := context.Background(), testClient(server), pointAt(Intercom(), server)
+
+	if query := authorizationQuery(t, client, flow); query.Has("scope") || query.Has("code_challenge") {
+		t.Fatalf("Intercom authorization query = %v", query)
+	}
+	grant, err := client.Exchange(ctx, flow, exchangeRequest("code"))
+	if err != nil || grant.AccessToken != "dG9rOjE=" || grant.RefreshToken != "" || !grant.Expiry.IsZero() {
+		t.Fatalf("Exchange() = %+v %v, want a token that never expires", grant, err)
+	}
+	if account, err := client.Identity(ctx, flow, grant); err != nil || account != (domain.ProviderAccount{ID: "abc123de:991267459", Name: "ada@example.test (Acme Support)"}) {
+		t.Fatalf("Identity() = %+v %v", account, err)
+	}
+	if _, err := client.Identity(ctx, flow, Grant{AccessToken: "revoked"}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("revoked token error = %v", err)
+	}
+
+	// The US host is the default; each region's host fills only the authorization URL.
+	provider := Intercom()
+	for given, want := range map[string]string{"": "app.intercom.com", "APP.EU.intercom.com": "app.eu.intercom.com", "app.au.intercom.com": "app.au.intercom.com"} {
+		if accepted, err := provider.AppDomain(domain.CredentialOAuth2, given); err != nil || accepted != want {
+			t.Errorf("AppDomain(%q) = %q %v, want %q", given, accepted, err, want)
+		}
+	}
+	for _, given := range []string{"app.us.intercom.com", "api.eu.intercom.io", "eu", "intercom.com"} {
+		if _, err := provider.AppDomain(domain.CredentialOAuth2, given); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("AppDomain(%q) error = %v, want invalid", given, err)
+		}
+	}
+	if accepted, err := provider.AppDomain(domain.CredentialBearer, ""); err != nil || accepted != "" {
+		t.Errorf("bearer AppDomain() = %q %v, want no domain", accepted, err)
+	}
+	if filled := provider.WithDomain("app.eu.intercom.com").OAuth2; filled.AuthorizationURL != "https://app.eu.intercom.com/oauth" ||
+		filled.TokenURL != "https://api.intercom.io/auth/eagle/token" || filled.APIURL != "https://api.intercom.io" {
+		t.Errorf("filled flow = %+v", filled)
 	}
 }
