@@ -5,7 +5,7 @@ import { FormField } from "../components/auth/form-field";
 import { GoogleButton } from "../components/auth/google-button";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
-import { AuthRequestError, signUp } from "../lib/auth/client";
+import { authErrorMessage, signUp } from "../lib/auth/client";
 import {
 	fieldErrors,
 	type SignUpInput,
@@ -47,11 +47,7 @@ function SignUpPage() {
 			await signUp(result.data);
 			setSubmittedEmail(result.data.email);
 		} catch (error) {
-			setFormError(
-				error instanceof AuthRequestError
-					? error.message
-					: "Could not create account",
-			);
+			setFormError(authErrorMessage(error, "Could not create account"));
 		} finally {
 			setSubmitting(false);
 		}
@@ -70,7 +66,7 @@ function SignUpPage() {
 				</Alert>
 			) : (
 				<>
-					<GoogleButton returnTo="/onboarding" />
+					<GoogleButton returnTo="/app" />
 					<div className="auth-divider">or</div>
 
 					{formError ? (

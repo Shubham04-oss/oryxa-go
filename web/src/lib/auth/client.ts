@@ -1,3 +1,4 @@
+import { ApiError, apiRequest } from "../api/client";
 import type {
 	InviteMemberInput,
 	OrganizationInput,
@@ -5,85 +6,142 @@ import type {
 	SignUpInput,
 } from "./schemas";
 
-interface ErrorBody {
-	error?: string;
-}
+export type Role = "owner" | "admin" | "member";
 
-export class AuthRequestError extends Error {
-	readonly status: number;
-
-	constructor(message: string, status: number) {
-		super(message);
-		this.name = "AuthRequestError";
-		this.status = status;
-	}
-}
-
-function authEndpoint(path: string): string {
-	const configuredBase = import.meta.env.VITE_AUTH_API_URL;
-	const base =
-		configuredBase ?? (import.meta.env.DEV ? "http://localhost:8080" : "");
-	return `${base.replace(/\/$/, "")}${path}`;
-}
-
-async function post(path: string, body: unknown): Promise<Response> {
-	const response = await fetch(authEndpoint(path), {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		credentials: "include",
-		body: JSON.stringify(body),
-	});
-
-	if (!response.ok) {
-		let errorBody: ErrorBody = {};
-		try {
-			errorBody = (await response.json()) as ErrorBody;
-		} catch {
-			// The status still gives callers a stable failure when the body is unavailable.
-		}
-		throw new AuthRequestError(
-			errorBody.error ?? "Request failed",
-			response.status,
-		);
-	}
-
-	return response;
-}
-
-export async function signIn(input: SignInInput): Promise<void> {
-	await post("/v1/auth/password/login", input);
-}
-
-export async function signUp(input: SignUpInput): Promise<void> {
-	await post("/v1/auth/password/signup", {
-		display_name: input.displayName,
-		email: input.email,
-		password: input.password,
-	});
+export interface User {
+	avatar_url?: string;
+	created_at: string;
+	display_name?: string;
+	email: string;
+	id: string;
+	updated_at: string;
 }
 
 export interface Organization {
+	created_at: string;
+	created_by: string;
 	id: string;
 	name: string;
 	slug: string;
+	updated_at: string;
 }
 
-export async function createOrganization(
+export interface Membership {
+	display_name?: string;
+	email: string;
+	joined_at: string;
+	organization_id: string;
+	role: Role;
+	user_id: string;
+}
+
+export interface Session {
+	organizations: Organization[];
+	user: User;
+}
+
+export interface OrganizationDetail {
+	membership: Membership;
+	organization: Organization;
+}
+
+// A 401 from these calls is their answer, such as a wrong password, rather
+// than an expired session worth refreshing.
+const publicAuth = { refreshSession: false } as const;
+
+/** Auth's message when it suits a person; the fallback when it cannot. */
+export function authErrorMessage(error: unknown, fallback: string): string {
+	if (!(error instanceof ApiError) || error.status >= 500) {
+		return fallback;
+	}
+	if (error.status === 429) {
+		return "Too many attempts. Try again in a minute.";
+	}
+	return error.message;
+}
+
+export async function signIn(input: SignInInput): Promise<void> {
+	await apiRequest("/v1/auth/password/login", { ...publicAuth, body: input });
+}
+
+export async function signUp(input: SignUpInput): Promise<void> {
+	await apiRequest("/v1/auth/password/signup", {
+		...publicAuth,
+		body: {
+			display_name: input.displayName,
+			email: input.email,
+			password: input.password,
+		},
+	});
+}
+
+export async function signOut(): Promise<void> {
+	await apiRequest("/v1/auth/logout", { ...publicAuth, method: "POST" });
+}
+
+export async function verifyEmail(token: string): Promise<void> {
+	await apiRequest("/v1/auth/password/verify", {
+		...publicAuth,
+		body: { token },
+	});
+}
+
+export async function resendVerification(email: string): Promise<void> {
+	await apiRequest("/v1/auth/password/resend-verification", {
+		...publicAuth,
+		body: { email },
+	});
+}
+
+export async function requestPasswordReset(email: string): Promise<void> {
+	await apiRequest("/v1/auth/password/forgot", {
+		...publicAuth,
+		body: { email },
+	});
+}
+
+export async function resetPassword(
+	token: string,
+	password: string,
+): Promise<void> {
+	await apiRequest("/v1/auth/password/reset", {
+		...publicAuth,
+		body: { password, token },
+	});
+}
+
+export function getSession(): Promise<Session> {
+	return apiRequest<Session>("/v1/auth/me");
+}
+
+export function createOrganization(
 	input: OrganizationInput,
 ): Promise<Organization> {
-	const response = await post("/v1/organizations", {
-		name: input.name,
-		slug: "",
+	return apiRequest<Organization>("/v1/organizations", {
+		body: { name: input.name, slug: "" },
 	});
-	return (await response.json()) as Organization;
+}
+
+export function getOrganization(
+	organizationId: string,
+): Promise<OrganizationDetail> {
+	return apiRequest<OrganizationDetail>(
+		`/v1/organizations/${encodeURIComponent(organizationId)}`,
+	);
 }
 
 export async function inviteMember(
 	organizationId: string,
 	input: InviteMemberInput,
 ): Promise<void> {
-	await post(
+	await apiRequest(
 		`/v1/organizations/${encodeURIComponent(organizationId)}/invitations`,
-		input,
+		{ body: input },
 	);
+}
+
+export function acceptInvitation(token: string): Promise<Membership> {
+	return apiRequest<Membership>("/v1/invitations/accept", {
+		body: { token },
+	});
 }

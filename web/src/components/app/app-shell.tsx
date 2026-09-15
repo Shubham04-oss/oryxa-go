@@ -8,8 +8,10 @@ import {
 	SidebarProvider,
 	SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { useWorkspace } from "@/lib/auth/session";
 
 export function AppShell({ children }: { children: ReactNode }) {
+	const { organization } = useWorkspace();
 	const pathname = useLocation({ select: (location) => location.pathname });
 	const isOrganizationSettings = pathname.startsWith(
 		"/app/settings/organization",
@@ -31,7 +33,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 					<div className="app-topbar-context">
 						<SidebarTrigger aria-label="Toggle navigation" />
 						<span>
-							{isOrganizationSettings ? "Organization settings" : "Odd Works"}
+							{isOrganizationSettings
+								? "Organization settings"
+								: organization.name}
 						</span>
 					</div>
 					<Button className="app-search" size="sm" variant="ghost">

@@ -1,5 +1,14 @@
-import { Link, useLocation } from "@tanstack/react-router";
-import { ArrowLeft, ChevronsUpDown, Plus, ShieldCheck } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Link, useLocation, useNavigate } from "@tanstack/react-router";
+import {
+	ArrowLeft,
+	ChevronsUpDown,
+	CircleUserRound,
+	LogOut,
+	Plus,
+	ShieldCheck,
+} from "lucide-react";
+import { displayName, initials, roleLabel } from "@/components/app/identity";
 import {
 	accountSettingsNavigation,
 	type NavigationItem,
@@ -9,6 +18,16 @@ import {
 	settingsNavigation,
 	workspaceNavigation,
 } from "@/components/app/navigation";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuLabel,
+	DropdownMenuRadioGroup,
+	DropdownMenuRadioItem,
+	DropdownMenuSeparator,
+	DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
 	Sidebar,
 	SidebarContent,
@@ -21,7 +40,14 @@ import {
 	SidebarMenuButton,
 	SidebarMenuItem,
 	SidebarRail,
+	useSidebar,
 } from "@/components/ui/sidebar";
+import { type Role, signOut } from "@/lib/auth/client";
+import {
+	selectOrganization,
+	useMembership,
+	useWorkspace,
+} from "@/lib/auth/session";
 
 export function AppSidebar() {
 	const pathname = useLocation({ select: (location) => location.pathname });
@@ -52,20 +78,7 @@ function WorkspaceSidebar({ pathname }: { pathname: string }) {
 
 				<SidebarMenu>
 					<SidebarMenuItem>
-						<SidebarMenuButton
-							className="organization-switcher"
-							size="lg"
-							tooltip="Odd Works"
-						>
-							<span className="organization-mark" aria-hidden="true">
-								OW
-							</span>
-							<span className="organization-copy">
-								<strong>Odd Works</strong>
-								<small>Organization</small>
-							</span>
-							<ChevronsUpDown className="organization-switcher-icon" />
-						</SidebarMenuButton>
+						<OrganizationSwitcher />
 					</SidebarMenuItem>
 				</SidebarMenu>
 
@@ -109,19 +122,118 @@ function WorkspaceSidebar({ pathname }: { pathname: string }) {
 						/>
 					))}
 				</SidebarMenu>
-				<div className="sidebar-account">
-					<span aria-hidden="true">Y</span>
-					<div>
-						<strong>You</strong>
-						<small>Owner</small>
-					</div>
-				</div>
+				<AccountMenu />
 			</SidebarFooter>
 		</>
 	);
 }
 
+function OrganizationSwitcher() {
+	const { organization, organizations } = useWorkspace();
+	const { isMobile } = useSidebar();
+	const navigate = useNavigate();
+
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<SidebarMenuButton
+					className="organization-switcher"
+					size="lg"
+					tooltip={organization.name}
+				>
+					<span className="organization-mark" aria-hidden="true">
+						{initials(organization.name)}
+					</span>
+					<span className="organization-copy">
+						<strong>{organization.name}</strong>
+						<small>Organization</small>
+					</span>
+					<ChevronsUpDown className="organization-switcher-icon" />
+				</SidebarMenuButton>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent
+				className="organization-menu"
+				side={isMobile ? "bottom" : "right"}
+			>
+				<DropdownMenuLabel>Organizations</DropdownMenuLabel>
+				<DropdownMenuRadioGroup
+					onValueChange={selectOrganization}
+					value={organization.id}
+				>
+					{organizations.map((candidate) => (
+						<DropdownMenuRadioItem
+							className="organization-menu-item"
+							key={candidate.id}
+							value={candidate.id}
+						>
+							<span className="organization-menu-mark" aria-hidden="true">
+								{initials(candidate.name)}
+							</span>
+							<span className="organization-menu-name">{candidate.name}</span>
+						</DropdownMenuRadioItem>
+					))}
+				</DropdownMenuRadioGroup>
+				<DropdownMenuSeparator />
+				<DropdownMenuItem onSelect={() => navigate({ to: "/onboarding" })}>
+					<Plus />
+					Create organization
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+
+function AccountMenu() {
+	const { organization, user } = useWorkspace();
+	const membership = useMembership(organization.id);
+	const { isMobile } = useSidebar();
+	const navigate = useNavigate();
+	const queryClient = useQueryClient();
+	const name = displayName(user);
+
+	async function leave() {
+		// Even if signing out fails, sign-in lets the member choose an account.
+		await signOut().catch(() => undefined);
+		await navigate({ to: "/auth/sign-in" });
+		queryClient.clear();
+	}
+
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<button
+					className="sidebar-account sidebar-account-button"
+					type="button"
+				>
+					<span aria-hidden="true">{initials(name)}</span>
+					<span className="sidebar-account-copy">
+						<strong>{name}</strong>
+						<small>
+							{membership ? roleLabel(membership.role) : organization.name}
+						</small>
+					</span>
+					<ChevronsUpDown className="sidebar-account-icon" />
+				</button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent
+				align="end"
+				className="account-menu"
+				side={isMobile ? "top" : "right"}
+			>
+				<DropdownMenuLabel>{user.email}</DropdownMenuLabel>
+				<DropdownMenuSeparator />
+				<DropdownMenuItem onSelect={leave}>
+					<LogOut />
+					Sign out
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
+	);
+}
+
 function OrganizationSettingsSidebar({ pathname }: { pathname: string }) {
+	const { organization } = useWorkspace();
+
 	return (
 		<>
 			<SidebarHeader className="settings-sidebar-header">
@@ -141,10 +253,10 @@ function OrganizationSettingsSidebar({ pathname }: { pathname: string }) {
 				</SidebarMenu>
 
 				<div className="settings-sidebar-scope">
-					<span aria-hidden="true">OW</span>
+					<span aria-hidden="true">{initials(organization.name)}</span>
 					<div>
 						<strong>Organization settings</strong>
-						<small>Odd Works</small>
+						<small>{organization.name}</small>
 					</div>
 				</div>
 			</SidebarHeader>
@@ -169,17 +281,41 @@ function OrganizationSettingsSidebar({ pathname }: { pathname: string }) {
 						pathname={pathname}
 					/>
 				</SidebarMenu>
-				<div className="sidebar-account settings-admin-account">
-					<span aria-hidden="true">
-						<ShieldCheck />
-					</span>
-					<div>
-						<strong>Head admin</strong>
-						<small>Full organization access</small>
-					</div>
-				</div>
+				<OrganizationAccess />
 			</SidebarFooter>
 		</>
+	);
+}
+
+const accessSummaries: Record<Role, string> = {
+	admin: "Manages members and teams",
+	member: "Organization member",
+	owner: "Full organization access",
+};
+
+function OrganizationAccess() {
+	const { organization } = useWorkspace();
+	const membership = useMembership(organization.id);
+	const manages = membership?.role === "owner" || membership?.role === "admin";
+	const Icon = manages ? ShieldCheck : CircleUserRound;
+
+	return (
+		<div
+			className="sidebar-account settings-admin-account"
+			data-manages={manages}
+		>
+			<span aria-hidden="true">
+				<Icon />
+			</span>
+			<div>
+				<strong>
+					{membership ? roleLabel(membership.role) : "Organization access"}
+				</strong>
+				<small>
+					{membership ? accessSummaries[membership.role] : organization.name}
+				</small>
+			</div>
+		</div>
 	);
 }
 

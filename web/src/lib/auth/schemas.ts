@@ -38,10 +38,16 @@ export const inviteMemberSchema = z.object({
 	role: z.enum(["member", "admin"]),
 });
 
+export const emailSchema = z.object({ email });
+
+export const resetPasswordSchema = z.object({ password });
+
 export type SignInInput = z.infer<typeof signInSchema>;
 export type SignUpInput = z.infer<typeof signUpSchema>;
 export type OrganizationInput = z.infer<typeof organizationSchema>;
 export type InviteMemberInput = z.infer<typeof inviteMemberSchema>;
+export type EmailInput = z.infer<typeof emailSchema>;
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
 
 export function fieldErrors<T extends Record<string, unknown>>(
 	result: z.ZodSafeParseError<T>,

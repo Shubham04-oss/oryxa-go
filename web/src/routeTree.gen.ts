@@ -18,8 +18,12 @@ import { Route as AppFilesRouteImport } from './routes/app.files'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
 import { Route as AppTeamsRouteImport } from './routes/app.teams'
 import { Route as AppThreadsRouteImport } from './routes/app.threads'
+import { Route as AuthForgotPasswordRouteImport } from './routes/auth.forgot-password'
+import { Route as AuthResetPasswordRouteImport } from './routes/auth.reset-password'
 import { Route as AuthSignInRouteImport } from './routes/auth.sign-in'
 import { Route as AuthSignUpRouteImport } from './routes/auth.sign-up'
+import { Route as AuthVerifyEmailRouteImport } from './routes/auth.verify-email'
+import { Route as InvitationsAcceptRouteImport } from './routes/invitations.accept'
 import { Route as AppSettingsOrganizationRouteImport } from './routes/app.settings.organization'
 import { Route as AppSettingsProfileRouteImport } from './routes/app.settings.profile'
 import { Route as AppSettingsOrganizationIndexRouteImport } from './routes/app.settings.organization.index'
@@ -74,6 +78,16 @@ const AppThreadsRoute = AppThreadsRouteImport.update({
   path: '/threads',
   getParentRoute: () => AppRoute,
 } as any)
+const AuthForgotPasswordRoute = AuthForgotPasswordRouteImport.update({
+  id: '/auth/forgot-password',
+  path: '/auth/forgot-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthResetPasswordRoute = AuthResetPasswordRouteImport.update({
+  id: '/auth/reset-password',
+  path: '/auth/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthSignInRoute = AuthSignInRouteImport.update({
   id: '/auth/sign-in',
   path: '/auth/sign-in',
@@ -82,6 +96,16 @@ const AuthSignInRoute = AuthSignInRouteImport.update({
 const AuthSignUpRoute = AuthSignUpRouteImport.update({
   id: '/auth/sign-up',
   path: '/auth/sign-up',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthVerifyEmailRoute = AuthVerifyEmailRouteImport.update({
+  id: '/auth/verify-email',
+  path: '/auth/verify-email',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InvitationsAcceptRoute = InvitationsAcceptRouteImport.update({
+  id: '/invitations/accept',
+  path: '/invitations/accept',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppSettingsOrganizationRoute = AppSettingsOrganizationRouteImport.update({
@@ -140,8 +164,12 @@ export interface FileRoutesByFullPath {
   '/app/settings': typeof AppSettingsRouteWithChildren
   '/app/teams': typeof AppTeamsRoute
   '/app/threads': typeof AppThreadsRoute
+  '/auth/forgot-password': typeof AuthForgotPasswordRoute
+  '/auth/reset-password': typeof AuthResetPasswordRoute
   '/auth/sign-in': typeof AuthSignInRoute
   '/auth/sign-up': typeof AuthSignUpRoute
+  '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/invitations/accept': typeof InvitationsAcceptRoute
   '/app/': typeof AppIndexRoute
   '/app/settings/organization': typeof AppSettingsOrganizationRouteWithChildren
   '/app/settings/profile': typeof AppSettingsProfileRoute
@@ -160,8 +188,12 @@ export interface FileRoutesByTo {
   '/app/settings': typeof AppSettingsRouteWithChildren
   '/app/teams': typeof AppTeamsRoute
   '/app/threads': typeof AppThreadsRoute
+  '/auth/forgot-password': typeof AuthForgotPasswordRoute
+  '/auth/reset-password': typeof AuthResetPasswordRoute
   '/auth/sign-in': typeof AuthSignInRoute
   '/auth/sign-up': typeof AuthSignUpRoute
+  '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/invitations/accept': typeof InvitationsAcceptRoute
   '/app': typeof AppIndexRoute
   '/app/settings/profile': typeof AppSettingsProfileRoute
   '/app/settings/organization/billing': typeof AppSettingsOrganizationBillingRoute
@@ -181,8 +213,12 @@ export interface FileRoutesById {
   '/app/settings': typeof AppSettingsRouteWithChildren
   '/app/teams': typeof AppTeamsRoute
   '/app/threads': typeof AppThreadsRoute
+  '/auth/forgot-password': typeof AuthForgotPasswordRoute
+  '/auth/reset-password': typeof AuthResetPasswordRoute
   '/auth/sign-in': typeof AuthSignInRoute
   '/auth/sign-up': typeof AuthSignUpRoute
+  '/auth/verify-email': typeof AuthVerifyEmailRoute
+  '/invitations/accept': typeof InvitationsAcceptRoute
   '/app/': typeof AppIndexRoute
   '/app/settings/organization': typeof AppSettingsOrganizationRouteWithChildren
   '/app/settings/profile': typeof AppSettingsProfileRoute
@@ -204,8 +240,12 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/app/teams'
     | '/app/threads'
+    | '/auth/forgot-password'
+    | '/auth/reset-password'
     | '/auth/sign-in'
     | '/auth/sign-up'
+    | '/auth/verify-email'
+    | '/invitations/accept'
     | '/app/'
     | '/app/settings/organization'
     | '/app/settings/profile'
@@ -224,8 +264,12 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/app/teams'
     | '/app/threads'
+    | '/auth/forgot-password'
+    | '/auth/reset-password'
     | '/auth/sign-in'
     | '/auth/sign-up'
+    | '/auth/verify-email'
+    | '/invitations/accept'
     | '/app'
     | '/app/settings/profile'
     | '/app/settings/organization/billing'
@@ -244,8 +288,12 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/app/teams'
     | '/app/threads'
+    | '/auth/forgot-password'
+    | '/auth/reset-password'
     | '/auth/sign-in'
     | '/auth/sign-up'
+    | '/auth/verify-email'
+    | '/invitations/accept'
     | '/app/'
     | '/app/settings/organization'
     | '/app/settings/profile'
@@ -261,8 +309,12 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AppRoute: typeof AppRouteWithChildren
   OnboardingRoute: typeof OnboardingRoute
+  AuthForgotPasswordRoute: typeof AuthForgotPasswordRoute
+  AuthResetPasswordRoute: typeof AuthResetPasswordRoute
   AuthSignInRoute: typeof AuthSignInRoute
   AuthSignUpRoute: typeof AuthSignUpRoute
+  AuthVerifyEmailRoute: typeof AuthVerifyEmailRoute
+  InvitationsAcceptRoute: typeof InvitationsAcceptRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -330,6 +382,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppThreadsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/auth/forgot-password': {
+      id: '/auth/forgot-password'
+      path: '/auth/forgot-password'
+      fullPath: '/auth/forgot-password'
+      preLoaderRoute: typeof AuthForgotPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/reset-password': {
+      id: '/auth/reset-password'
+      path: '/auth/reset-password'
+      fullPath: '/auth/reset-password'
+      preLoaderRoute: typeof AuthResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth/sign-in': {
       id: '/auth/sign-in'
       path: '/auth/sign-in'
@@ -342,6 +408,20 @@ declare module '@tanstack/react-router' {
       path: '/auth/sign-up'
       fullPath: '/auth/sign-up'
       preLoaderRoute: typeof AuthSignUpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/auth/verify-email': {
+      id: '/auth/verify-email'
+      path: '/auth/verify-email'
+      fullPath: '/auth/verify-email'
+      preLoaderRoute: typeof AuthVerifyEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/invitations/accept': {
+      id: '/invitations/accept'
+      path: '/invitations/accept'
+      fullPath: '/invitations/accept'
+      preLoaderRoute: typeof InvitationsAcceptRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/app/settings/organization': {
@@ -465,8 +545,12 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AppRoute: AppRouteWithChildren,
   OnboardingRoute: OnboardingRoute,
+  AuthForgotPasswordRoute: AuthForgotPasswordRoute,
+  AuthResetPasswordRoute: AuthResetPasswordRoute,
   AuthSignInRoute: AuthSignInRoute,
   AuthSignUpRoute: AuthSignUpRoute,
+  AuthVerifyEmailRoute: AuthVerifyEmailRoute,
+  InvitationsAcceptRoute: InvitationsAcceptRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

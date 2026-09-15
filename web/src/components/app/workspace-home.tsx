@@ -3,6 +3,7 @@ import { ArrowUpRight, Blocks, Clock3, ListTodo, ScanText } from "lucide-react";
 import { useRef, useState } from "react";
 import { ThreadComposer } from "@/components/app/thread-composer";
 import { WorkspaceSection } from "@/components/app/workspace-section";
+import { useWorkspace } from "@/lib/auth/session";
 
 const recentThreads = [
 	{ title: "Plan the launch checklist", updated: "3 min" },
@@ -35,6 +36,7 @@ const starters = [
 ] as const;
 
 export function WorkspaceHome() {
+	const { organization } = useWorkspace();
 	const composerRef = useRef<HTMLTextAreaElement>(null);
 	const [draft, setDraft] = useState("");
 
@@ -46,7 +48,7 @@ export function WorkspaceHome() {
 	return (
 		<section className="workspace-launchpad">
 			<header className="workspace-launchpad-header">
-				<span>Odd Works</span>
+				<span>{organization.name}</span>
 				<h1>What are we working on?</h1>
 			</header>
 

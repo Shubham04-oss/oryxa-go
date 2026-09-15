@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	inviteMemberSchema,
 	organizationSchema,
+	resetPasswordSchema,
 	signInSchema,
 	signUpSchema,
 } from "./schemas";
@@ -31,6 +32,15 @@ describe("auth schemas", () => {
 				email: "ravi@example.com",
 				password: "LongEnough12!",
 			}).success,
+		).toBe(true);
+	});
+
+	it("applies the same password policy to a reset", () => {
+		expect(
+			resetPasswordSchema.safeParse({ password: "password" }).success,
+		).toBe(false);
+		expect(
+			resetPasswordSchema.safeParse({ password: "LongEnough12!" }).success,
 		).toBe(true);
 	});
 

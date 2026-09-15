@@ -9,6 +9,12 @@
         "set -a && . agents/primary/.env && go build -C agents/primary -o bin/devui ./cmd/devui && exec agents/primary/bin/devui"
       ],
       "port": 8087
+    },
+    {
+      "name": "web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--dir", "web", "dev"],
+      "port": 3000
     }
   ]
 }

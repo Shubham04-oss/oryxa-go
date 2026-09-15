@@ -1,4 +1,5 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { ArrowRight, Check, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { FormField } from "../components/auth/form-field";
@@ -18,7 +19,7 @@ import {
 	SelectValue,
 } from "../components/ui/select";
 import {
-	AuthRequestError,
+	authErrorMessage,
 	createOrganization,
 	inviteMember,
 	type Organization,
@@ -30,10 +31,22 @@ import {
 	type OrganizationInput,
 	organizationSchema,
 } from "../lib/auth/schemas";
+import {
+	ensureSession,
+	reloadSession,
+	selectOrganization,
+} from "../lib/auth/session";
 
 export const Route = createFileRoute("/onboarding")({
+	// Creating an organization needs the signed-in member; like /app, the page
+	// loads their session on the client.
+	ssr: false,
+	beforeLoad: async ({ context, location }) => {
+		await ensureSession(context.queryClient, location.href);
+	},
 	component: OnboardingIntroPage,
 	head: () => ({ meta: [{ title: "Welcome · The Weirdly ODD" }] }),
+	pendingComponent: OnboardingPending,
 });
 
 type OnboardingStep =
@@ -50,6 +63,8 @@ type InviteDraft = InviteMemberInput & {
 const emptyInvite: InviteMemberInput = { email: "", role: "member" };
 
 function OnboardingIntroPage() {
+	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const organizationNameRef = useRef<HTMLInputElement>(null);
 	const memberEmailRef = useRef<HTMLInputElement>(null);
 	const [step, setStep] = useState<OnboardingStep>("intro");
@@ -161,6 +176,7 @@ function OnboardingIntroPage() {
 			const organization =
 				createdOrganization ?? (await createOrganization(organizationDraft));
 			setCreatedOrganization(organization);
+			selectOrganization(organization.id);
 
 			for (const invitation of invitations) {
 				if (invitation.status === "sent") continue;
@@ -182,13 +198,10 @@ function OnboardingIntroPage() {
 				JSON.stringify([...selectedTools]),
 			);
 
+			await reloadSession(queryClient);
 			setStep("complete");
 		} catch (error) {
-			setFormError(
-				error instanceof AuthRequestError
-					? error.message
-					: "Could not finish setup",
-			);
+			setFormError(authErrorMessage(error, "Could not finish setup"));
 		} finally {
 			setSubmitting(false);
 		}
@@ -416,9 +429,23 @@ function OnboardingIntroPage() {
 								{createdOrganization.name} is ready.
 							</AlertDescription>
 						</Alert>
+						<div className="onboarding-actions">
+							<Button
+								className="auth-button auth-button-primary"
+								onClick={() => navigate({ to: "/app" })}
+								size="lg"
+								type="button"
+							>
+								Open workspace
+							</Button>
+						</div>
 					</Card>
 				</section>
 			) : null}
 		</main>
 	);
+}
+
+function OnboardingPending() {
+	return <main aria-busy="true" className="onboarding-canvas" />;
 }

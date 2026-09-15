@@ -1,23 +1,37 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQueryClient } from "@tanstack/react-query";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { AuthShell } from "../components/auth/auth-shell";
 import { FormField } from "../components/auth/form-field";
 import { GoogleButton } from "../components/auth/google-button";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
-import { AuthRequestError, signIn } from "../lib/auth/client";
+import { ApiError } from "../lib/api/client";
+import { authErrorMessage, signIn } from "../lib/auth/client";
 import {
 	fieldErrors,
 	type SignInInput,
 	signInSchema,
 } from "../lib/auth/schemas";
+import { safeRedirect } from "../lib/auth/session";
+
+interface SignInSearch {
+	redirect?: string;
+}
 
 export const Route = createFileRoute("/auth/sign-in")({
+	validateSearch: (search: Record<string, unknown>): SignInSearch => ({
+		redirect: safeRedirect(search.redirect),
+	}),
 	component: SignInPage,
 	head: () => ({ meta: [{ title: "Sign in · The Weirdly ODD" }] }),
 });
 
 function SignInPage() {
+	const { redirect } = Route.useSearch();
+	const destination = redirect ?? "/app";
+	const navigate = useNavigate();
+	const queryClient = useQueryClient();
 	const [errors, setErrors] = useState<
 		Partial<Record<keyof SignInInput, string>>
 	>({});
@@ -43,10 +57,14 @@ function SignInPage() {
 		setSubmitting(true);
 		try {
 			await signIn(result.data);
-			window.location.assign("/onboarding");
+			// Nothing cached may belong to whoever used this browser before.
+			queryClient.clear();
+			await navigate({ href: destination });
 		} catch (error) {
 			setFormError(
-				error instanceof AuthRequestError ? error.message : "Could not sign in",
+				error instanceof ApiError && error.status === 401
+					? "Email or password is incorrect."
+					: authErrorMessage(error, "Could not sign in"),
 			);
 			setSubmitting(false);
 		}
@@ -57,7 +75,7 @@ function SignInPage() {
 			<h1 className="auth-heading">Welcome back</h1>
 			<p className="auth-subheading">Sign in to The Weirdly ODD.</p>
 
-			<GoogleButton returnTo="/onboarding" />
+			<GoogleButton returnTo={destination} />
 			<div className="auth-divider">or</div>
 
 			{formError ? (
@@ -84,6 +102,11 @@ function SignInPage() {
 					name="password"
 					type="password"
 				/>
+				<div className="auth-field-link">
+					<Link className="auth-link" to="/auth/forgot-password">
+						Forgot password?
+					</Link>
+				</div>
 				<Button
 					className="auth-button auth-button-primary"
 					size="lg"
