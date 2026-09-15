@@ -14,11 +14,16 @@ import (
 //
 //   - a discriminator over inline schemas is dropped;
 //   - a parameter whose schema is a oneOf or anyOf takes a single type that
-//     still sends every value;
+//     still sends every value its style can send;
+//   - a name[] parameter whose Go field name would repeat another's is given
+//     its own;
 //   - a component whose Go type name would repeat an inline enum's is renamed.
 func normalize(slice map[string]any) error {
 	dropInapplicableDiscriminators(slice)
 	if err := collapseParameterUnions(slice); err != nil {
+		return err
+	}
+	if err := nameListParameters(slice); err != nil {
 		return err
 	}
 	return renameShadowedComponents(slice)
@@ -60,16 +65,18 @@ func variantsAreReferences(schema map[string]any) bool {
 // collapseParameterUnions gives each parameter whose schema is a oneOf or anyOf
 // a single type: its array variant if it has one, since a scalar is sent
 // exactly as a one-item array is, and otherwise a string, since every
-// parameter is sent as text. oapi-codegen generates union parameters that do
-// not compile. A union with a variant that is neither a scalar nor an array,
-// or with two arrays, is refused.
+// parameter is sent as text. A deepObject parameter takes its object variant
+// instead: OpenAPI defines that style for objects alone, so the object is the
+// only variant it can send. oapi-codegen generates union parameters that do
+// not compile. A union with a variant it cannot choose between, such as an
+// object in another style or two arrays, is refused.
 func collapseParameterUnions(slice map[string]any) error {
 	for _, parameter := range parameters(slice) {
 		schema, _ := parameter["schema"].(map[string]any)
 		if schema["oneOf"] == nil && schema["anyOf"] == nil {
 			continue
 		}
-		collapsed, err := collapseUnion(schema)
+		collapsed, err := collapseUnion(schema, parameter["style"] == "deepObject")
 		if err != nil {
 			name, _ := parameter["name"].(string)
 			return fmt.Errorf("parameter %q: %w", name, err)
@@ -79,9 +86,9 @@ func collapseParameterUnions(slice map[string]any) error {
 	return nil
 }
 
-func collapseUnion(schema map[string]any) (map[string]any, error) {
+func collapseUnion(schema map[string]any, deepObject bool) (map[string]any, error) {
 	chosen := map[string]any{"type": "string"}
-	arrays := 0
+	arrays, objects := 0, 0
 	for _, key := range []string{"oneOf", "anyOf"} {
 		variants, _ := schema[key].([]any)
 		for _, rawVariant := range variants {
@@ -91,12 +98,21 @@ func collapseUnion(schema map[string]any) (map[string]any, error) {
 			case "array":
 				arrays++
 				chosen = variant
+			case "object":
+				if !deepObject {
+					return nil, errors.New("its schema has an object variant, which only a deepObject parameter can send")
+				}
+				objects++
+				chosen = variant
 			default:
-				return nil, errors.New("its schema has a variant that is neither a scalar nor an array")
+				return nil, errors.New("its schema has a variant that is neither a scalar, an array nor an object")
 			}
 		}
 	}
-	if arrays > 1 {
+	switch {
+	case deepObject && (objects != 1 || arrays > 0):
+		return nil, errors.New("a deepObject parameter's schema needs exactly one object variant and no arrays")
+	case arrays > 1:
 		return nil, errors.New("its schema has more than one array variant")
 	}
 	collapsed := maps.Clone(schema)
@@ -134,6 +150,97 @@ func parameters(slice map[string]any) []map[string]any {
 		}
 	}
 	return found
+}
+
+// nameListParameters gives a parameter named with a trailing [], such as
+// role[], the Go name of its name followed by List, RoleList, where its Go
+// field name would repeat that of another parameter of the same operation, such
+// as role. oapi-codegen gives both fields one name, which does not compile; the
+// names parameters are sent under stay as they are. Parameters in the path are
+// arguments rather than fields, so they cannot collide. Any other pair of
+// fields named alike is refused.
+func nameListParameters(slice map[string]any) error {
+	components, _ := slice["components"].(map[string]any)
+	defined, _ := components["parameters"].(map[string]any)
+	paths, _ := slice["paths"].(map[string]any)
+	for _, path := range slices.Sorted(maps.Keys(paths)) {
+		item, _ := paths[path].(map[string]any)
+		for _, method := range methods {
+			operation, ok := item[method].(map[string]any)
+			if !ok {
+				continue
+			}
+			fields := map[string]map[string]any{}
+			for _, parameter := range operationParameters(item, operation, defined) {
+				if parameter["in"] == "path" {
+					continue
+				}
+				name, _ := parameter["name"].(string)
+				key := typeKey(name)
+				if goName, ok := parameter["x-go-name"].(string); ok {
+					key = typeKey(goName)
+				}
+				other, taken := fields[key]
+				if !taken {
+					fields[key] = parameter
+					continue
+				}
+				otherName, _ := other["name"].(string)
+				list := parameter
+				if base, ok := strings.CutSuffix(otherName, "[]"); ok && typeKey(base) == key {
+					list, fields[key] = other, parameter
+				}
+				listName, _ := list["name"].(string)
+				base, ok := strings.CutSuffix(listName, "[]")
+				_, listTaken := fields[typeKey(base+"List")]
+				if !ok || typeKey(base) != key || list["x-go-name"] != nil || listTaken {
+					return fmt.Errorf("%s %s: parameters %q and %q would both be named %s", strings.ToUpper(method), path, otherName, name, key)
+				}
+				list["x-go-name"] = goIdentifier(base) + "List"
+				fields[typeKey(base+"List")] = list
+			}
+		}
+	}
+	return nil
+}
+
+// operationParameters returns an operation's parameters, with those of its path
+// it does not replace, each reference to a component parameter resolved.
+func operationParameters(item, operation, defined map[string]any) []map[string]any {
+	var found []map[string]any
+	seen := map[[2]string]bool{}
+	for _, list := range []any{operation["parameters"], item["parameters"]} {
+		entries, _ := list.([]any)
+		for _, entry := range entries {
+			parameter, _ := entry.(map[string]any)
+			if ref, ok := parameter["$ref"].(string); ok {
+				if kind, name, err := componentOf(ref); err == nil && kind == "parameters" {
+					parameter, _ = defined[name].(map[string]any)
+				}
+			}
+			name, _ := parameter["name"].(string)
+			location, _ := parameter["in"].(string)
+			if parameter == nil || seen[[2]string{name, location}] {
+				continue
+			}
+			seen[[2]string{name, location}] = true
+			found = append(found, parameter)
+		}
+	}
+	return found
+}
+
+// goIdentifier is a name's words, each capitalized, joined: page_size becomes
+// PageSize.
+func goIdentifier(name string) string {
+	var identifier strings.Builder
+	for _, word := range strings.FieldsFunc(name, func(character rune) bool {
+		return !unicode.IsLetter(character) && !unicode.IsDigit(character)
+	}) {
+		runes := []rune(word)
+		identifier.WriteString(strings.ToUpper(string(runes[0])) + string(runes[1:]))
+	}
+	return identifier.String()
 }
 
 // sectionSuffixes are the component sections whose names become Go type names,

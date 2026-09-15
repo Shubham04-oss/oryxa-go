@@ -14,7 +14,7 @@
 //
 // writes dir/files/openapi.json, holding the operations tagged Files or File
 // versions, and dir/search/openapi.json. -spec is a file path or an https URL,
-// read once; only JSON descriptions are read.
+// read once, of a description in JSON or YAML; slices are written as JSON.
 //
 // Within a slice, an operationId that starts with its tag and a slash loses
 // that prefix, and any other slash becomes a hyphen, so generated names read
@@ -54,7 +54,7 @@ func main() {
 func run(args []string, log io.Writer) error {
 	flags := flag.NewFlagSet("openapi-slice", flag.ContinueOnError)
 	flags.SetOutput(log)
-	spec := flags.String("spec", "", "OpenAPI 3 JSON description: a file path or an https URL")
+	spec := flags.String("spec", "", "OpenAPI 3 description in JSON or YAML: a file path or an https URL")
 	tags := flags.String("tags", "", "comma-separated slices, each a tag or package=tag|tag")
 	out := flags.String("out", "", "directory to write each slice under, as <package>/"+sliceFile)
 	if err := flags.Parse(args); err != nil {
@@ -67,12 +67,9 @@ func run(args []string, log io.Writer) error {
 	if err != nil {
 		return err
 	}
-	var document map[string]any
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	// Numbers stay as written, so examples and limits are not rounded.
-	decoder.UseNumber()
-	if err := decoder.Decode(&document); err != nil {
-		return fmt.Errorf("decode %s as JSON: %w", *spec, err)
+	document, err := decodeDescription(raw)
+	if err != nil {
+		return fmt.Errorf("decode %s: %w", *spec, err)
 	}
 	written := map[string]bool{}
 	for _, entry := range strings.Split(*tags, ",") {

@@ -1,0 +1,914 @@
+{
+  "components": {
+    "examples": {
+      "AutomationCreateResponseExample": {
+        "value": {
+          "automation": {
+            "actions": [
+              {
+                "field": "priority",
+                "value": "high"
+              }
+            ],
+            "active": true,
+            "conditions": {
+              "all": [
+                {
+                  "field": "status",
+                  "operator": "is",
+                  "value": "open"
+                },
+                {
+                  "field": "priority",
+                  "operator": "less_than",
+                  "value": "high"
+                }
+              ],
+              "any": []
+            },
+            "id": 9873843,
+            "position": 8,
+            "raw_title": "Roger Wilco",
+            "title": "Roger Wilco"
+          }
+        }
+      },
+      "AutomationResponseExample": {
+        "value": {
+          "automation": {
+            "actions": [
+              {
+                "field": "status",
+                "value": "open"
+              },
+              {
+                "field": "assignee_id",
+                "value": "296220096"
+              }
+            ],
+            "active": true,
+            "conditions": {
+              "all": [
+                {
+                  "field": "status",
+                  "operator": "less_than",
+                  "value": "solved"
+                },
+                {
+                  "field": "assignee_id",
+                  "operator": "is",
+                  "value": "296220096"
+                }
+              ],
+              "any": [
+                {
+                  "field": "current_tags",
+                  "operator": "includes",
+                  "value": "hello"
+                }
+              ]
+            },
+            "id": 25,
+            "position": 8,
+            "raw_title": "Close and Save",
+            "title": "Close and Save"
+          }
+        }
+      },
+      "AutomationsResponseExample": {
+        "value": {
+          "automations": [
+            {
+              "actions": [
+                {
+                  "field": "status",
+                  "value": "open"
+                },
+                {
+                  "field": "assignee_id",
+                  "value": "296220096"
+                }
+              ],
+              "active": true,
+              "conditions": {
+                "all": [
+                  {
+                    "field": "status",
+                    "operator": "less_than",
+                    "value": "solved"
+                  },
+                  {
+                    "field": "assignee_id",
+                    "operator": "is",
+                    "value": "296220096"
+                  }
+                ],
+                "any": [
+                  {
+                    "field": "current_tags",
+                    "operator": "includes",
+                    "value": "hello"
+                  }
+                ]
+              },
+              "id": 25,
+              "position": 8,
+              "raw_title": "Close and Save",
+              "title": "Close and Save"
+            },
+            {
+              "actions": [
+                {
+                  "field": "status",
+                  "value": "open"
+                },
+                {
+                  "field": "assignee_id",
+                  "value": "296220096"
+                }
+              ],
+              "active": false,
+              "conditions": {
+                "all": [
+                  {
+                    "field": "status",
+                    "operator": "less_than",
+                    "value": "solved"
+                  },
+                  {
+                    "field": "assignee_id",
+                    "operator": "is",
+                    "value": "296220096"
+                  }
+                ],
+                "any": [
+                  {
+                    "field": "current_tags",
+                    "operator": "includes",
+                    "value": "hello"
+                  }
+                ]
+              },
+              "id": 26,
+              "position": 9,
+              "raw_title": "{{dc.assign_priority_tag}}",
+              "title": "Assign priority tag"
+            }
+          ],
+          "count": 2,
+          "next_page": null,
+          "previous_page": null
+        }
+      },
+      "AutomationsSearchResponseExample": {
+        "value": {
+          "automations": [
+            {
+              "actions": [
+                {
+                  "field": "status",
+                  "value": "open"
+                },
+                {
+                  "field": "assignee_id",
+                  "value": "296220096"
+                }
+              ],
+              "active": true,
+              "conditions": {
+                "all": [
+                  {
+                    "field": "status",
+                    "operator": "less_than",
+                    "value": "solved"
+                  },
+                  {
+                    "field": "assignee_id",
+                    "operator": "is",
+                    "value": "296220096"
+                  }
+                ],
+                "any": [
+                  {
+                    "field": "current_tags",
+                    "operator": "includes",
+                    "value": "hello"
+                  }
+                ]
+              },
+              "id": 25,
+              "position": 9,
+              "raw_title": "Close and Save",
+              "title": "Close and Save"
+            },
+            {
+              "actions": [
+                {
+                  "field": "status",
+                  "value": "open"
+                },
+                {
+                  "field": "assignee_id",
+                  "value": "296220096"
+                }
+              ],
+              "active": true,
+              "conditions": {
+                "all": [
+                  {
+                    "field": "status",
+                    "operator": "less_than",
+                    "value": "solved"
+                  },
+                  {
+                    "field": "assignee_id",
+                    "operator": "is",
+                    "value": "296220096"
+                  }
+                ],
+                "any": [
+                  {
+                    "field": "current_tags",
+                    "operator": "includes",
+                    "value": "hello"
+                  }
+                ]
+              },
+              "id": 28,
+              "position": 9,
+              "raw_title": "{{dc.close_and_redirect}}",
+              "title": "Close and redirect to topics"
+            }
+          ],
+          "count": 2,
+          "next_page": null,
+          "previous_page": null
+        }
+      },
+      "AutomationsUpdateManyResponseExample": {
+        "value": {
+          "automations": [
+            {
+              "actions": [
+                {
+                  "field": "status",
+                  "value": "open"
+                },
+                {
+                  "field": "assignee_id",
+                  "value": "296220096"
+                }
+              ],
+              "active": true,
+              "conditions": {
+                "all": [
+                  {
+                    "field": "status",
+                    "operator": "less_than",
+                    "value": "solved"
+                  },
+                  {
+                    "field": "assignee_id",
+                    "operator": "is",
+                    "value": "296220096"
+                  }
+                ],
+                "any": [
+                  {
+                    "field": "current_tags",
+                    "operator": "includes",
+                    "value": "hello"
+                  }
+                ]
+              },
+              "id": 25,
+              "position": 15,
+              "raw_title": "Close and Save",
+              "title": "Close and Save"
+            },
+            {
+              "actions": [
+                {
+                  "field": "status",
+                  "value": "open"
+                },
+                {
+                  "field": "assignee_id",
+                  "value": "296220096"
+                }
+              ],
+              "active": false,
+              "conditions": {
+                "all": [
+                  {
+                    "field": "status",
+                    "operator": "less_than",
+                    "value": "solved"
+                  },
+                  {
+                    "field": "assignee_id",
+                    "operator": "is",
+                    "value": "296220096"
+                  }
+                ],
+                "any": [
+                  {
+                    "field": "current_tags",
+                    "operator": "includes",
+                    "value": "hello"
+                  }
+                ]
+              },
+              "id": 26,
+              "position": 8,
+              "raw_title": "{{dc.assign_priority_tag}}",
+              "title": "Assign priority tag"
+            }
+          ],
+          "count": 2,
+          "next_page": null,
+          "previous_page": null
+        }
+      }
+    },
+    "parameters": {
+      "AutomationActive": {
+        "description": "Filter by active automations if true or inactive automations if false",
+        "example": true,
+        "in": "query",
+        "name": "active",
+        "schema": {
+          "type": "boolean"
+        }
+      },
+      "AutomationId": {
+        "description": "The ID of the automation",
+        "example": 25,
+        "in": "path",
+        "name": "automation_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "AutomationInclude": {
+        "description": "A sideload to include in the response. See [Sideloads](#sideloads-2)",
+        "example": "usage_24h",
+        "in": "query",
+        "name": "include",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "AutomationSearchQuery": {
+        "description": "Query string used to find all automations with matching title",
+        "example": "close",
+        "in": "query",
+        "name": "query",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "AutomationSortBy": {
+        "description": "Possible values are \"alphabetical\", \"created_at\", \"updated_at\", and \"position\". If unspecified, the automations are sorted by relevance",
+        "example": "position",
+        "in": "query",
+        "name": "sort_by",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "AutomationSortOrder": {
+        "description": "One of \"asc\" or \"desc\". Defaults to \"asc\" for alphabetical and position sort, \"desc\" for all others",
+        "example": "desc",
+        "in": "query",
+        "name": "sort_order",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "CursorPaginationSort": {
+        "description": "Field to sort results by. Prefix with `-` for descending order.\n\nWhen used with cursor pagination, this determines the cursor ordering.\n\nExample: `?sort=name` or `?sort=-created_at`\n",
+        "example": "name",
+        "in": "query",
+        "name": "sort",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "DualPaginationPage": {
+        "description": "Pagination parameter. Supports both traditional offset and cursor-based pagination:\n\n- Traditional: `?page=2` (integer page number)\n- Cursor: `?page[size]=50&page[after]=cursor` (deepObject with size, after, before)\n\nThese are mutually exclusive - use one format or the other, not both.\n",
+        "explode": true,
+        "in": "query",
+        "name": "page",
+        "schema": {
+          "description": "Cursor pagination parameters (JSON:API style)",
+          "properties": {
+            "after": {
+              "description": "Cursor token for next page",
+              "example": "eyJvIjoiaWQiLCJ2IjoiYVFFPSJ9",
+              "type": "string"
+            },
+            "before": {
+              "description": "Cursor token for previous page",
+              "example": "eyJvIjoiaWQiLCJ2IjoiYVFFPSJ9",
+              "type": "string"
+            },
+            "size": {
+              "description": "Number of records per page",
+              "example": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "style": "deepObject"
+      },
+      "PerPage": {
+        "description": "Number of records to return per page.\n\nNote: Default and maximum values vary by endpoint. Check endpoint-specific\ndocumentation for limits.\n",
+        "example": 50,
+        "in": "query",
+        "name": "per_page",
+        "schema": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      }
+    },
+    "schemas": {
+      "ActionObject": {
+        "properties": {
+          "field": {
+            "description": "The name of a ticket field to modify",
+            "type": "string"
+          },
+          "value": {
+            "description": "The new value of the field",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AutomationObject": {
+        "example": {
+          "actions": [
+            {
+              "field": "priority",
+              "value": "high"
+            }
+          ],
+          "active": true,
+          "conditions": {
+            "all": [
+              {
+                "field": "status",
+                "operator": "is",
+                "value": "open"
+              },
+              {
+                "field": "priority",
+                "operator": "less_than",
+                "value": "high"
+              }
+            ],
+            "any": []
+          },
+          "default": false,
+          "id": 9873843,
+          "position": 8,
+          "raw_title": "Roger Wilco",
+          "title": "Roger Wilco"
+        },
+        "properties": {
+          "actions": {
+            "description": "An object describing what the automation will do. See [Actions reference](/documentation/ticketing/reference-guides/actions-reference)",
+            "items": {
+              "$ref": "#/components/schemas/ActionObject"
+            },
+            "type": "array"
+          },
+          "active": {
+            "description": "Whether the automation is active",
+            "type": "boolean"
+          },
+          "conditions": {
+            "$ref": "#/components/schemas/ConditionsObject"
+          },
+          "created_at": {
+            "description": "The time the automation was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "default": {
+            "description": "If true, the automation is a default automation",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Automatically assigned when created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "position": {
+            "description": "The position of the automation which specifies the order it will be executed",
+            "type": "integer"
+          },
+          "raw_title": {
+            "description": "The raw title of the automation",
+            "readOnly": true,
+            "type": "string"
+          },
+          "title": {
+            "description": "The title of the automation",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "The time of the last update of the automation",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AutomationResponse": {
+        "properties": {
+          "automation": {
+            "$ref": "#/components/schemas/AutomationObject"
+          }
+        },
+        "type": "object"
+      },
+      "AutomationsResponse": {
+        "properties": {
+          "automations": {
+            "items": {
+              "$ref": "#/components/schemas/AutomationObject"
+            },
+            "type": "array"
+          },
+          "count": {
+            "readOnly": true,
+            "type": "integer"
+          },
+          "next_page": {
+            "nullable": true,
+            "readOnly": true,
+            "type": "string"
+          },
+          "previous_page": {
+            "nullable": true,
+            "readOnly": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ConditionObject": {
+        "properties": {
+          "field": {
+            "description": "The name of a ticket field",
+            "type": "string"
+          },
+          "operator": {
+            "description": "A comparison operator",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value of a ticket field",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ConditionsObject": {
+        "description": "An object that describes the conditions under which the automation will execute. See [Conditions reference](/documentation/ticketing/reference-guides/conditions-reference)",
+        "properties": {
+          "all": {
+            "description": "Logical AND. Tickets must fulfill all of the conditions to be considered matching",
+            "items": {
+              "$ref": "#/components/schemas/ConditionObject"
+            },
+            "type": "array"
+          },
+          "any": {
+            "description": "Logical OR. Tickets may satisfy any of the conditions to be considered matching",
+            "items": {
+              "$ref": "#/components/schemas/ConditionObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "basicAuth": {
+        "scheme": "basic",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Zendesk Support API endpoints",
+    "title": "Support API",
+    "version": "2.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/v2/automations": {
+      "get": {
+        "description": "Lists all automations for the current account.\n\n#### Allowed For\n\n* Agents\n\n#### Available Parameters\n\nYou can pass in any combination of the following optional filters:\n\n| Name       | Type    | Comment\n| ---------- | ------- | -------\n| active     | boolean | Only active automations if true, inactive automations if false\n| sort_by    | string  | Possible values are \"alphabetical\", \"created_at\", \"updated_at\", \"usage_1h\", \"usage_24h\", or \"usage_7d\". Defaults to \"position\"\n| sort_order | string  | One of \"asc\" or \"desc\". Defaults to \"asc\" for alphabetical and position sort, \"desc\" for all others\n\n#### Sideloads\n\nThe following sideloads are supported. The usage sideloads are only supported on the Support Professional or Suite Growth plan or above.\n\n| Name             | Will sideload\n| ---------------- | -------------\n| app_installation | The app installation that requires each automation, if present\n| permissions      | The permissions for each automation\n| usage_1h         | The number of tickets processed by an automation in the past hour\n| usage_24h        | The number of tickets processed by an automation in the past day\n| usage_7d         | The number of tickets processed by an automation in the past week\n| usage_30d        | The number of tickets processed by an automation in the past thirty days\n\n#### Pagination\n\n- Cursor pagination (recommended)\n- Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n\nReturns a maximum of 100 records per page.\n",
+        "operationId": "ListAutomations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DualPaginationPage"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "$ref": "#/components/parameters/CursorPaginationSort"
+          },
+          {
+            "$ref": "#/components/parameters/AutomationActive"
+          },
+          {
+            "$ref": "#/components/parameters/AutomationInclude"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/AutomationsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Automations",
+        "tags": [
+          "Automations"
+        ]
+      },
+      "post": {
+        "description": "Creates an automation.\n\nNew automations must be unique and have at least one condition that is true only once or an action that nullifies at least one of the conditions. Active automations can have overlapping conditions but can't be identical.\n\nThe request must include the following conditions in the `all` array:\n\n- At least one time-based condition\n- At least one condition that checks one of the following fields: `status`, `type`, `group_id`, `assignee_id`, or `requester_id`.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "CreateAutomation",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/AutomationCreateResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationResponse"
+                }
+              }
+            },
+            "description": "Created response"
+          }
+        },
+        "summary": "Create Automation",
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/active": {
+      "get": {
+        "description": "Lists all active automations.\n\n#### Allowed For\n\n* Agents\n\n#### Available Parameters\n\nYou can pass in any combination of the following optional filters:\n\n| Name       | Type   | Comment\n| ---------- | ------ | -------\n| sort_by    | string | Possible values are \"alphabetical\", \"created_at\", \"updated_at\", \"usage_1h\", \"usage_24h\", or \"usage_7d\". Defaults to \"position\"\n| sort_order | string | One of \"asc\" or \"desc\". Defaults to \"asc\" for alphabetical and position sort, \"desc\" for all others\n\n#### Sideloads\n\nThe following sideloads are supported:\n\n| Name             | Will sideload\n| ---------------- | -------------\n| app_installation | The app installation that requires each automation, if present\n| permissions      | The permissions for each automation\n| usage_1h         | The number of tickets processed by an automation in the past hour\n| usage_24h        | The number of tickets processed by an automation in the past day\n| usage_7d         | The number of tickets processed by an automation in the past week\n| usage_30d        | The number of tickets processed by an automation in the past thirty days\n",
+        "operationId": "ListActiveAutomations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/AutomationsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Active Automations",
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/destroy_many": {
+      "delete": {
+        "description": "Deletes the automations corresponding to the provided comma-separated list of IDs.\n\n**Note**: You might be restricted from deleting some default automations. If included in a bulk deletion, the unrestricted automations will be deleted.\n\n#### Allowed For\n\n* Agents\n\n#### Request Parameters\n\nThe DELETE request takes one parameter, an `ids` object that lists the automations to delete.\n\n| Name | Description\n| ---- | -----------\n| ids  | The IDs of the automations to delete\n\n#### Example request\n\n```js\n{\n  \"ids\": \"25,23,27,22\"\n}\n```\n",
+        "operationId": "BulkDeleteAutomations",
+        "parameters": [
+          {
+            "description": "The IDs of the automations to delete",
+            "in": "query",
+            "name": "ids",
+            "schema": {
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content response"
+          }
+        },
+        "summary": "Bulk Delete Automations",
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/search": {
+      "get": {
+        "description": "#### Pagination\n\n* Offset pagination only\n\nSee [Using Offset Pagination](/api-reference/introduction/pagination/#using-offset-pagination).\n\n#### Allowed For\n\n* Agents\n\n#### Sideloads\n\nThe following sideloads are supported. For more information, see [Side-loading](/documentation/ticketing/using-the-zendesk-api/side_loading/).\n\n| Name             | Will sideload\n| ---------------- | -------------\n| app_installation | The app installation that requires each automation, if present\n| permissions      | The permissions for each automation\n| usage_1h         | The number of tickets processed by an automation in the past hour\n| usage_24h        | The number of tickets processed by an automation in the past day\n| usage_7d         | The number of tickets processed by an automation in the past week\n| usage_30d        | The number of tickets processed by an automation in the past thirty days\n",
+        "operationId": "SearchAutomations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/AutomationsSearchResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Search Automations",
+        "tags": [
+          "Automations"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/AutomationSearchQuery"
+        },
+        {
+          "$ref": "#/components/parameters/AutomationActive"
+        },
+        {
+          "$ref": "#/components/parameters/AutomationSortBy"
+        },
+        {
+          "$ref": "#/components/parameters/AutomationSortOrder"
+        },
+        {
+          "$ref": "#/components/parameters/AutomationInclude"
+        }
+      ]
+    },
+    "/api/v2/automations/update_many": {
+      "put": {
+        "description": "**Note**: You might be restricted from updating some default automations. If included in a bulk update, the unrestricted automations will be updated.\n\n#### Allowed For\n\n* Agents\n\n#### Request Parameters\n\nThe PUT request expects an `automations` object that lists the automations to update.\n\nEach automation may have the following properties:\n\n| Name     | Mandatory | Description\n| -------- | --------- | -----------\n| id       | yes       | The ID of the automation to update\n| position | no        | The new position of the automation\n| active   | no        | The active status of the automation (true or false)\n\n#### Example Request\n\n```js\n{\n  \"automations\": [\n    {\"id\": 25, \"position\": 3},\n    {\"id\": 23, \"position\": 5},\n    {\"id\": 27, \"position\": 9},\n    {\"id\": 22, \"position\": 7}\n  ]\n}\n```\n",
+        "operationId": "UpdateManyAutomations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/AutomationsUpdateManyResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Update Many Automations",
+        "tags": [
+          "Automations"
+        ]
+      }
+    },
+    "/api/v2/automations/{automation_id}": {
+      "delete": {
+        "description": "**Note**: You might be restricted from deleting some default automations.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "DeleteAutomation",
+        "responses": {
+          "204": {
+            "description": "No Content response"
+          }
+        },
+        "summary": "Delete Automation",
+        "tags": [
+          "Automations"
+        ]
+      },
+      "get": {
+        "description": "#### Allowed For\n\n* Agents\n",
+        "operationId": "ShowAutomation",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/AutomationResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Show Automation",
+        "tags": [
+          "Automations"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/AutomationId"
+        }
+      ],
+      "put": {
+        "description": "Updates an automation.\n\nUpdated automations must be unique and have at least one condition that is true only once or an action that nullifies at least one of the conditions. Active automations can have overlapping conditions but can't be identical.\n\nThe request must include the following conditions in the `all` array:\n- At least one time-based condition\n- At least one condition that checks one of the following fields: 'status', 'type', 'group_id', 'assignee_id', or 'requester_id'\n\n**Note**: Updating a condition or action updates both the `conditions` and `actions` arrays, clearing all existing values of both arrays. Include all your conditions and actions when updating any condition or action.\n**Note**: You might be restricted from updating some default automations.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "UpdateAutomation",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/AutomationResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Update Automation",
+        "tags": [
+          "Automations"
+        ]
+      }
+    }
+  },
+  "security": [
+    {
+      "basicAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://{subdomain}.{domain}.com",
+      "variables": {
+        "domain": {
+          "default": "zendesk"
+        },
+        "subdomain": {
+          "default": "example"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Automations"
+    }
+  ]
+}

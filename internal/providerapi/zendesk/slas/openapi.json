@@ -1,0 +1,1573 @@
+{
+  "components": {
+    "examples": {
+      "GroupSLAPoliciesResponseExample": {
+        "value": {
+          "count": 1,
+          "group_sla_policies": [
+            {
+              "description": "For low priority tickets, the Tier 1 group will solve or reassign the ticket in one hour.",
+              "filter": {
+                "all": [
+                  {
+                    "field": "group_ownership_time",
+                    "operator": "includes",
+                    "value": [
+                      6
+                    ]
+                  }
+                ]
+              },
+              "id": "01H078CBDY28BZG7P6BONY09DN",
+              "policy_metrics": [
+                {
+                  "business_hours": false,
+                  "metric": "group_ownership_time",
+                  "priority": "low",
+                  "target": 3600
+                }
+              ],
+              "position": 3,
+              "title": "Incidents",
+              "url": "https://{subdomain}.zendesk.com/api/v2/group_sla/policies/01H078CBDY28BZG7P6BONY09DN"
+            }
+          ],
+          "next_page": null,
+          "previous_page": null
+        }
+      },
+      "GroupSLAPolicyCreateResponse": {
+        "value": {
+          "group_sla_policy": {
+            "description": "The group with id 6 will have to solve or reassign normal priority tickets in 30 minutes and urgent tickets in 10.",
+            "filter": {
+              "all": [
+                {
+                  "field": "group_ownership_time",
+                  "operator": "includes",
+                  "value": [
+                    6
+                  ]
+                }
+              ]
+            },
+            "id": "01H078CBDY28BZG7P6BONY09DN",
+            "policy_metrics": [
+              {
+                "business_hours": false,
+                "metric": "group_ownership_time",
+                "priority": "normal",
+                "target": 1800
+              },
+              {
+                "business_hours": false,
+                "metric": "group_ownership_time",
+                "priority": "urgent",
+                "target": 600
+              }
+            ],
+            "position": 3,
+            "title": "Incidents",
+            "url": "https://{subdomain}.zendesk.com/api/v2/group_slas/policies/01H078CBDY28BZG7P6BONY09DN"
+          }
+        }
+      },
+      "GroupSLAPolicyFilterDefinitionResponseExample": {
+        "value": {
+          "definitions": {
+            "all": [
+              {
+                "group": "ticket",
+                "operators": [
+                  {
+                    "title": "Contains at least one of the following",
+                    "value": "includes"
+                  },
+                  {
+                    "title": "Contains at least none of the following",
+                    "value": "not_includes"
+                  }
+                ],
+                "title": "Group ID",
+                "value": "group_id",
+                "values": {
+                  "list": [
+                    {
+                      "title": "Tier 1",
+                      "value": 6
+                    }
+                  ],
+                  "type": "list"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "GroupSLAPolicyResponseExample": {
+        "value": {
+          "group_sla_policy": {
+            "description": "Low priority tickets assigned to the group with id 6 will be completed or reassigned in one hour.",
+            "filter": {
+              "all": [
+                {
+                  "field": "group_id",
+                  "operator": "includes",
+                  "value": [
+                    6
+                  ]
+                }
+              ]
+            },
+            "id": "01H078CBDY28BZG7P6BONY09DN",
+            "policy_metrics": [
+              {
+                "business_hours": false,
+                "metric": "group_ownership_time",
+                "priority": "low",
+                "target": 3600
+              }
+            ],
+            "position": 3,
+            "title": "Incidents",
+            "url": "https://{subdomain}.zendesk.com/api/v2/group_sla/policies/01H078CBDY28BZG7P6BONY09DN"
+          }
+        }
+      },
+      "GroupSLAPolicyUpdateResponse": {
+        "value": {
+          "group_sla_policy": {
+            "description": "Normal priority tickets assigned to the groups 6 or 7 will be completed or reassigned in 30 minutes.",
+            "filter": {
+              "all": [
+                {
+                  "field": "group_id",
+                  "operator": "includes",
+                  "value": [
+                    6,
+                    7
+                  ]
+                }
+              ]
+            },
+            "id": "01H078CBDY28BZG7P6BONY09DN",
+            "policy_metrics": [
+              {
+                "business_hours": false,
+                "metric": "group_ownership_time",
+                "priority": "normal",
+                "target": 1800
+              }
+            ],
+            "position": 3,
+            "title": "Urgent Incidents",
+            "url": "https://{subdomain}.zendesk.com/api/v2/group_slas/policies/01H078CBDY28BZG7P6BONY09DN"
+          }
+        }
+      },
+      "SLAPoliciesResponseExample": {
+        "value": {
+          "count": 1,
+          "next_page": null,
+          "previous_page": null,
+          "sla_policies": [
+            {
+              "description": "For urgent incidents, we will respond to tickets in 10 minutes",
+              "filter": {
+                "all": [
+                  {
+                    "field": "type",
+                    "operator": "is",
+                    "value": "incident"
+                  },
+                  {
+                    "field": "via_id",
+                    "operator": "is",
+                    "value": "4"
+                  }
+                ],
+                "any": []
+              },
+              "id": 36,
+              "policy_metrics": [
+                {
+                  "business_hours": false,
+                  "metric": "first_reply_time",
+                  "priority": "low",
+                  "target": 60
+                }
+              ],
+              "position": 3,
+              "title": "Incidents",
+              "url": "https://{subdomain}.zendesk.com/api/v2/slas/policies/36"
+            }
+          ]
+        }
+      },
+      "SLAPolicyCreateResponse": {
+        "value": {
+          "sla_policy": {
+            "description": "For urgent incidents, we will respond to tickets in 10 minutes",
+            "filter": {
+              "all": [
+                {
+                  "field": "type",
+                  "operator": "is",
+                  "value": "incident"
+                }
+              ],
+              "any": []
+            },
+            "id": 36,
+            "policy_metrics": [
+              {
+                "business_hours": false,
+                "metric": "first_reply_time",
+                "priority": "normal",
+                "target": 30
+              },
+              {
+                "business_hours": false,
+                "metric": "first_reply_time",
+                "priority": "urgent",
+                "target": 10
+              },
+              {
+                "business_hours": false,
+                "metric": "requester_wait_time",
+                "priority": "low",
+                "target": 180
+              },
+              {
+                "business_hours": false,
+                "metric": "requester_wait_time",
+                "priority": "normal",
+                "target": 160
+              },
+              {
+                "business_hours": false,
+                "metric": "requester_wait_time",
+                "priority": "high",
+                "target": 140
+              },
+              {
+                "business_hours": false,
+                "metric": "requester_wait_time",
+                "priority": "urgent",
+                "target": 120
+              }
+            ],
+            "position": 3,
+            "title": "Incidents",
+            "url": "https://{subdomain}.zendesk.com/api/v2/slas/policies/36"
+          }
+        }
+      },
+      "SLAPolicyFilterDefinitionResponseExample": {
+        "value": {
+          "definitions": {
+            "all": [
+              {
+                "group": "ticket",
+                "operators": [
+                  {
+                    "title": "Is",
+                    "value": "is"
+                  },
+                  {
+                    "title": "Is not",
+                    "value": "is_not"
+                  }
+                ],
+                "target": null,
+                "title": "Brand",
+                "value": "brand_id",
+                "values": {
+                  "list": [
+                    {
+                      "title": "Support",
+                      "value": "10001"
+                    }
+                  ],
+                  "type": "list"
+                }
+              }
+            ],
+            "any": [
+              {
+                "group": "ticket",
+                "operators": [
+                  {
+                    "title": "Is",
+                    "value": "is"
+                  },
+                  {
+                    "title": "Is not",
+                    "value": "is_not"
+                  }
+                ],
+                "target": null,
+                "title": "Brand",
+                "value": "brand_id",
+                "values": {
+                  "list": [
+                    {
+                      "title": "Support",
+                      "value": "10001"
+                    }
+                  ],
+                  "type": "list"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "SLAPolicyResponseExample": {
+        "value": {
+          "sla_policy": {
+            "description": "For urgent incidents, we will respond to tickets in 10 minutes",
+            "filter": {
+              "all": [
+                {
+                  "field": "type",
+                  "operator": "is",
+                  "value": "incident"
+                },
+                {
+                  "field": "via_id",
+                  "operator": "is",
+                  "value": "4"
+                }
+              ],
+              "any": []
+            },
+            "id": 36,
+            "policy_metrics": [
+              {
+                "business_hours": false,
+                "metric": "first_reply_time",
+                "priority": "low",
+                "target": 60
+              }
+            ],
+            "position": 3,
+            "title": "Incidents",
+            "url": "https://{subdomain}.zendesk.com/api/v2/slas/policies/36"
+          }
+        }
+      },
+      "SLAPolicyUpdateResponse": {
+        "value": {
+          "sla_policy": {
+            "description": "For urgent incidents, we will resolve the ticket within 2 hours",
+            "filter": {
+              "all": [
+                {
+                  "field": "type",
+                  "operator": "is",
+                  "value": "incident"
+                }
+              ],
+              "any": []
+            },
+            "id": 36,
+            "policy_metrics": [
+              {
+                "business_hours": false,
+                "metric": "first_reply_time",
+                "priority": "normal",
+                "target": 30
+              },
+              {
+                "business_hours": false,
+                "metric": "first_reply_time",
+                "priority": "urgent",
+                "target": 10
+              },
+              {
+                "business_hours": false,
+                "metric": "requester_wait_time",
+                "priority": "low",
+                "target": 180
+              },
+              {
+                "business_hours": false,
+                "metric": "requester_wait_time",
+                "priority": "normal",
+                "target": 160
+              },
+              {
+                "business_hours": false,
+                "metric": "requester_wait_time",
+                "priority": "high",
+                "target": 140
+              },
+              {
+                "business_hours": false,
+                "metric": "requester_wait_time",
+                "priority": "urgent",
+                "target": 120
+              }
+            ],
+            "position": 3,
+            "title": "Urgent Incidents",
+            "url": "https://{subdomain}.zendesk.com/api/v2/slas/policies/36"
+          }
+        }
+      }
+    },
+    "parameters": {
+      "GroupSLAPolicyId": {
+        "description": "The id of the Group SLA policy",
+        "example": 36,
+        "in": "path",
+        "name": "group_sla_policy_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "SLAPolicyId": {
+        "description": "The ID of the SLA Policy",
+        "example": 36,
+        "in": "path",
+        "name": "sla_policy_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "TicketId": {
+        "description": "The ID of the ticket",
+        "example": 123456,
+        "in": "path",
+        "name": "ticket_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      }
+    },
+    "schemas": {
+      "GroupSLAPoliciesResponse": {
+        "properties": {
+          "count": {
+            "readOnly": true,
+            "type": "integer"
+          },
+          "group_sla_policies": {
+            "items": {
+              "$ref": "#/components/schemas/GroupSLAPolicyObject"
+            },
+            "type": "array"
+          },
+          "next_page": {
+            "nullable": true,
+            "readOnly": true,
+            "type": "string"
+          },
+          "previous_page": {
+            "nullable": true,
+            "readOnly": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GroupSLAPolicyFilterConditionObject": {
+        "properties": {
+          "field": {
+            "description": "The name of a ticket field",
+            "type": "string"
+          },
+          "operator": {
+            "description": "A comparison operator",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value of a ticket field",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "GroupSLAPolicyFilterDefinitionResponse": {
+        "properties": {
+          "definitions": {
+            "properties": {
+              "all": {
+                "items": {
+                  "properties": {
+                    "group": {
+                      "type": "string"
+                    },
+                    "operators": {
+                      "items": {
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "properties": {
+                        "list": {
+                          "items": {
+                            "properties": {
+                              "title": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "nullable": true,
+                                "type": "integer"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "type": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "GroupSLAPolicyFilterObject": {
+        "description": "An object that describes the conditions a ticket must match for a Group SLA policy to be applied to the ticket. See [Filter](#filter).",
+        "properties": {
+          "all": {
+            "items": {
+              "$ref": "#/components/schemas/GroupSLAPolicyFilterConditionObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "GroupSLAPolicyMetricObject": {
+        "properties": {
+          "business_hours": {
+            "description": "Whether the metric targets are being measured in business hours or calendar hours",
+            "type": "boolean"
+          },
+          "metric": {
+            "description": "The definition of the time that is being measured",
+            "type": "string"
+          },
+          "priority": {
+            "description": "Priority that a ticket must match",
+            "type": "string"
+          },
+          "target": {
+            "description": "The time within which the end-state for a metric should be met",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "GroupSLAPolicyObject": {
+        "example": {
+          "created_at": "2023-03-17T22:50:26Z",
+          "description": "Group: Tier 1",
+          "filter": {
+            "all": []
+          },
+          "id": "01H078CBDY28BZG7P6BONY09DN",
+          "policy_metrics": [
+            {
+              "business_hours": false,
+              "metric": "group_ownership_time",
+              "priority": "low",
+              "target": 3600
+            }
+          ],
+          "position": 3,
+          "title": "Tier 1",
+          "updated_at": "2023-03-17T22:50:26Z",
+          "url": "https://company.zendesk.com/api/v2/group_slas/policies/01H078CBDY28BZG7P6BONY09DN"
+        },
+        "properties": {
+          "created_at": {
+            "description": "The time the Group SLA policy was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "description": {
+            "description": "The description of the Group SLA policy",
+            "type": "string"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/GroupSLAPolicyFilterObject"
+          },
+          "id": {
+            "description": "Automatically assigned when created",
+            "readOnly": true,
+            "type": "string"
+          },
+          "policy_metrics": {
+            "description": "Array of [policy metric](#policy-metric) objects",
+            "items": {
+              "$ref": "#/components/schemas/GroupSLAPolicyMetricObject"
+            },
+            "type": "array"
+          },
+          "position": {
+            "description": "Position of the Group SLA policy. This position determines the order in which policies are matched to tickets. If not specified, the Group SLA policy is added at the last position",
+            "type": "integer"
+          },
+          "title": {
+            "description": "The title of the Group SLA policy",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "The time of the last update of the Group SLA policy",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "url": {
+            "description": "URL of the Group SLA policy record",
+            "readOnly": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "filter"
+        ],
+        "type": "object"
+      },
+      "GroupSLAPolicyResponse": {
+        "properties": {
+          "group_sla_policy": {
+            "$ref": "#/components/schemas/GroupSLAPolicyObject"
+          }
+        },
+        "type": "object"
+      },
+      "SLAPoliciesResponse": {
+        "properties": {
+          "count": {
+            "readOnly": true,
+            "type": "integer"
+          },
+          "next_page": {
+            "nullable": true,
+            "readOnly": true,
+            "type": "string"
+          },
+          "previous_page": {
+            "nullable": true,
+            "readOnly": true,
+            "type": "string"
+          },
+          "sla_policies": {
+            "items": {
+              "$ref": "#/components/schemas/SLAPolicyObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SLAPolicyFilterConditionObject": {
+        "properties": {
+          "field": {
+            "description": "The name of a ticket field",
+            "type": "string"
+          },
+          "operator": {
+            "description": "A comparison operator",
+            "type": "string"
+          },
+          "value": {
+            "description": "The value of a ticket field",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "SLAPolicyFilterDefinitionResponse": {
+        "properties": {
+          "definitions": {
+            "properties": {
+              "all": {
+                "items": {
+                  "properties": {
+                    "group": {
+                      "type": "string"
+                    },
+                    "operators": {
+                      "items": {
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "target": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "properties": {
+                        "list": {
+                          "items": {
+                            "properties": {
+                              "title": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "nullable": true,
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "type": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "any": {
+                "items": {
+                  "properties": {
+                    "group": {
+                      "type": "string"
+                    },
+                    "operators": {
+                      "items": {
+                        "properties": {
+                          "title": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "target": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "properties": {
+                        "list": {
+                          "items": {
+                            "properties": {
+                              "title": {
+                                "type": "string"
+                              },
+                              "value": {
+                                "nullable": true,
+                                "type": "string"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "type": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SLAPolicyFilterObject": {
+        "description": "An object that describes the conditions that a ticket must match in order for an SLA policy to be applied to that ticket. See [Filter](#filter).",
+        "properties": {
+          "all": {
+            "items": {
+              "$ref": "#/components/schemas/SLAPolicyFilterConditionObject"
+            },
+            "type": "array"
+          },
+          "any": {
+            "items": {
+              "$ref": "#/components/schemas/SLAPolicyFilterConditionObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "SLAPolicyMetricObject": {
+        "properties": {
+          "business_hours": {
+            "description": "Whether the metric targets are being measured in business hours or calendar hours",
+            "type": "boolean"
+          },
+          "metric": {
+            "description": "The definition of the time that is being measured",
+            "type": "string"
+          },
+          "priority": {
+            "description": "Priority that a ticket must match",
+            "type": "string"
+          },
+          "target": {
+            "description": "The time within which the end-state for a metric should be met",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "SLAPolicyObject": {
+        "example": {
+          "created_at": "2015-03-17T22:50:26Z",
+          "description": "Organizations: Silver Plan",
+          "filter": {
+            "all": [
+              {
+                "field": "type",
+                "operator": "is",
+                "value": "incident"
+              },
+              {
+                "field": "via_id",
+                "operator": "is",
+                "value": "4"
+              },
+              {
+                "field": "custom_status_id",
+                "operator": "includes",
+                "value": [
+                  "1",
+                  "2"
+                ]
+              }
+            ],
+            "any": []
+          },
+          "id": 25,
+          "policy_metrics": [
+            {
+              "business_hours": false,
+              "metric": "first_reply_time",
+              "priority": "low",
+              "target": 60
+            }
+          ],
+          "position": 3,
+          "title": "Silver Plan",
+          "updated_at": "2015-03-17T22:50:26Z",
+          "url": "https://company.zendesk.com/api/v2/slas/policies/25"
+        },
+        "properties": {
+          "created_at": {
+            "description": "The time the SLA policy was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "description": {
+            "description": "The description of the SLA policy",
+            "type": "string"
+          },
+          "filter": {
+            "$ref": "#/components/schemas/SLAPolicyFilterObject"
+          },
+          "id": {
+            "description": "Automatically assigned when created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "policy_metrics": {
+            "description": "Array of [Policy Metric](#policy-metric) objects",
+            "items": {
+              "$ref": "#/components/schemas/SLAPolicyMetricObject"
+            },
+            "type": "array"
+          },
+          "position": {
+            "description": "Position of the SLA policy that determines the order they will be matched. If not specified, the SLA policy is added as the last position",
+            "type": "integer"
+          },
+          "title": {
+            "description": "The title of the SLA policy",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "The time of the last update of the SLA policy",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "url": {
+            "description": "URL of the SLA policy record",
+            "readOnly": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "filter"
+        ],
+        "type": "object"
+      },
+      "SLAPolicyResponse": {
+        "properties": {
+          "sla_policy": {
+            "$ref": "#/components/schemas/SLAPolicyObject"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "basicAuth": {
+        "scheme": "basic",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Zendesk Support API endpoints",
+    "title": "Support API",
+    "version": "2.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/v2/group_slas/policies": {
+      "get": {
+        "description": "#### Allowed For\n\n* Admins\n",
+        "operationId": "ListGroupSLAPolicies",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/GroupSLAPoliciesResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/GroupSLAPoliciesResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Group SLA Policies",
+        "tags": [
+          "Group SLA Policies"
+        ]
+      },
+      "post": {
+        "description": "#### Allowed For\n\n* Admins\n",
+        "operationId": "CreateGroupSLAPolicy",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/GroupSLAPolicyCreateResponse"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/GroupSLAPolicyResponse"
+                }
+              }
+            },
+            "description": "Created response"
+          }
+        },
+        "summary": "Create Group SLA Policy",
+        "tags": [
+          "Group SLA Policies"
+        ]
+      }
+    },
+    "/api/v2/group_slas/policies/definitions": {
+      "get": {
+        "description": "#### Allowed For\n\n* Admins\n",
+        "operationId": "RetrieveGroupSLAPolicyFilterDefinitionItems",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/GroupSLAPolicyFilterDefinitionResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/GroupSLAPolicyFilterDefinitionResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Retrieve Supported Filter Definition Items",
+        "tags": [
+          "Group SLA Policies"
+        ]
+      }
+    },
+    "/api/v2/group_slas/policies/reorder": {
+      "put": {
+        "description": "#### Allowed For\n\n* Admins\n",
+        "operationId": "ReorderGroupSLAPolicies",
+        "parameters": [
+          {
+            "description": "The ids of the Group SLA policies to reorder",
+            "in": "query",
+            "name": "group_sla_policy_ids",
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": "",
+                "schema": {
+                  "description": "Empty response",
+                  "example": "",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Reorder Group SLA Policies",
+        "tags": [
+          "Group SLA Policies"
+        ]
+      }
+    },
+    "/api/v2/group_slas/policies/{group_sla_policy_id}": {
+      "delete": {
+        "description": "#### Allowed For\n\n* Admins\n",
+        "operationId": "DeleteGroupSLAPolicy",
+        "responses": {
+          "204": {
+            "description": "No Content response"
+          }
+        },
+        "summary": "Delete Group SLA Policy",
+        "tags": [
+          "Group SLA Policies"
+        ]
+      },
+      "get": {
+        "description": "#### Allowed For\n\n* Admins\n",
+        "operationId": "ShowGroupSLAPolicy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/GroupSLAPolicyResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/GroupSLAPolicyResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Show Group SLA Policy",
+        "tags": [
+          "Group SLA Policies"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/GroupSLAPolicyId"
+        }
+      ],
+      "put": {
+        "description": "Updates the specified policy.\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "UpdateGroupSLAPolicy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/GroupSLAPolicyUpdateResponse"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/GroupSLAPolicyResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Update Group SLA Policy",
+        "tags": [
+          "Group SLA Policies"
+        ]
+      }
+    },
+    "/api/v2/slas/policies": {
+      "get": {
+        "description": "#### Availability\n\n* Accounts on the Support Professional or Suite Growth plan or above\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "ListSLAPolicies",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/SLAPoliciesResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SLAPoliciesResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List SLA Policies",
+        "tags": [
+          "SLA Policies"
+        ]
+      },
+      "post": {
+        "description": "#### Availability\n\n* Accounts on the Support Professional or Suite Growth plan or above\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "CreateSLAPolicy",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/SLAPolicyCreateResponse"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SLAPolicyResponse"
+                }
+              }
+            },
+            "description": "Created response"
+          }
+        },
+        "summary": "Create SLA Policy",
+        "tags": [
+          "SLA Policies"
+        ]
+      }
+    },
+    "/api/v2/slas/policies/definitions": {
+      "get": {
+        "description": "#### Availability\n\n* Accounts on the Support Professional or Suite Growth plan or above\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "RetrieveSLAPolicyFilterDefinitionItems",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/SLAPolicyFilterDefinitionResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SLAPolicyFilterDefinitionResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Retrieve Supported Filter Definition Items",
+        "tags": [
+          "SLA Policies"
+        ]
+      }
+    },
+    "/api/v2/slas/policies/reorder": {
+      "put": {
+        "description": "#### Availability\n\n* Accounts on the Support Professional or Suite Growth plan or above\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "ReorderSLAPolicies",
+        "parameters": [
+          {
+            "description": "The IDs of the SLA Policies to reorder",
+            "in": "query",
+            "name": "sla_policy_ids",
+            "schema": {
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": "",
+                "schema": {
+                  "description": "Empty response",
+                  "example": "",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Reorder SLA Policies",
+        "tags": [
+          "SLA Policies"
+        ]
+      }
+    },
+    "/api/v2/slas/policies/{sla_policy_id}": {
+      "delete": {
+        "description": "#### Availability\n\n* Accounts on the Support Professional or Suite Growth plan or above\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "DeleteSLAPolicy",
+        "responses": {
+          "204": {
+            "description": "No Content response"
+          }
+        },
+        "summary": "Delete SLA Policy",
+        "tags": [
+          "SLA Policies"
+        ]
+      },
+      "get": {
+        "description": "#### Availability\n\n* Accounts on the Support Professional or Suite Growth plan or above\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "ShowSLAPolicy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/SLAPolicyResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SLAPolicyResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Show SLA Policy",
+        "tags": [
+          "SLA Policies"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/SLAPolicyId"
+        }
+      ],
+      "put": {
+        "description": "Updates the specified policy.\n\n#### Availability\n\n* Accounts on the Support Professional or Suite Growth plan or above\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "UpdateSLAPolicy",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/SLAPolicyUpdateResponse"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SLAPolicyResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Update SLA Policy",
+        "tags": [
+          "SLA Policies"
+        ]
+      }
+    },
+    "/api/v2/tickets/{ticket_id}/group_slas/policy_metrics": {
+      "get": {
+        "description": "Returns the Group SLA (OLA) policy metrics for a specific ticket.\n\n#### Availability\n\n* Accounts on the Enterprise plan\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "ListTicketGroupSlaPolicyMetrics",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "value": {
+                      "policy_metrics": [
+                        {
+                          "breach_at": "2023-01-19T02:14:27+00:00",
+                          "metric": "group_ownership_time",
+                          "minutes": -19,
+                          "stage": "active"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "policy_metrics": {
+                      "items": {
+                        "properties": {
+                          "breach_at": {
+                            "format": "date-time",
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "days": {
+                            "type": "integer"
+                          },
+                          "hours": {
+                            "type": "integer"
+                          },
+                          "metric": {
+                            "type": "string"
+                          },
+                          "minutes": {
+                            "type": "integer"
+                          },
+                          "stage": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Ticket Group SLA Policy Metrics",
+        "tags": [
+          "Group SLA Policies",
+          "Tickets"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
+      ]
+    },
+    "/api/v2/tickets/{ticket_id}/slas/policy_metrics": {
+      "get": {
+        "description": "Returns the SLA policy metrics for a specific ticket.\n\n#### Availability\n\n* Accounts on the Enterprise plan\n\n#### Allowed For\n\n* Admins\n",
+        "operationId": "ListTicketSlaPolicyMetrics",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "value": {
+                      "policy_metrics": [
+                        {
+                          "breach_at": "2023-01-19T02:14:27+00:00",
+                          "metric": "first_reply_time",
+                          "minutes": -19,
+                          "stage": "active"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "policy_metrics": {
+                      "items": {
+                        "properties": {
+                          "breach_at": {
+                            "format": "date-time",
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "days": {
+                            "type": "integer"
+                          },
+                          "hours": {
+                            "type": "integer"
+                          },
+                          "metric": {
+                            "type": "string"
+                          },
+                          "minutes": {
+                            "type": "integer"
+                          },
+                          "stage": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Ticket SLA Policy Metrics",
+        "tags": [
+          "SLA Policies",
+          "Tickets"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
+      ]
+    }
+  },
+  "security": [
+    {
+      "basicAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://{subdomain}.{domain}.com",
+      "variables": {
+        "domain": {
+          "default": "zendesk"
+        },
+        "subdomain": {
+          "default": "example"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Group SLA Policies"
+    },
+    {
+      "name": "SLA Policies"
+    }
+  ]
+}
