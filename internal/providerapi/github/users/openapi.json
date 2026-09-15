@@ -1,0 +1,4989 @@
+{
+  "components": {
+    "examples": {
+      "bulk-subject-digest-body": {
+        "value": {
+          "subject_digests": [
+            "sha256:abc123",
+            "sha512:def456"
+          ]
+        }
+      },
+      "bulk-subject-digest-body-with-predicate-type": {
+        "value": {
+          "predicateType": "provenance",
+          "subject_digests": [
+            "sha256:abc123",
+            "sha512:def456"
+          ]
+        }
+      },
+      "email-items": {
+        "value": [
+          {
+            "email": "octocat@octocat.org",
+            "primary": false,
+            "verified": false,
+            "visibility": "public"
+          },
+          {
+            "email": "octocat@github.com",
+            "primary": false,
+            "verified": false,
+            "visibility": null
+          },
+          {
+            "email": "mona@github.com",
+            "primary": false,
+            "verified": false,
+            "visibility": null
+          }
+        ]
+      },
+      "email-items-2": {
+        "value": [
+          {
+            "email": "octocat@github.com",
+            "primary": true,
+            "verified": true,
+            "visibility": "public"
+          }
+        ]
+      },
+      "email-items-3": {
+        "value": [
+          {
+            "email": "octocat@github.com",
+            "primary": true,
+            "verified": true,
+            "visibility": "private"
+          }
+        ]
+      },
+      "gpg-key": {
+        "value": {
+          "can_certify": true,
+          "can_encrypt_comms": false,
+          "can_encrypt_storage": false,
+          "can_sign": true,
+          "created_at": "2016-03-24T11:31:04-06:00",
+          "emails": [
+            {
+              "email": "octocat@users.noreply.github.com",
+              "verified": true
+            }
+          ],
+          "expires_at": "2016-03-24T11:31:04-07:00",
+          "id": 3,
+          "key_id": "3262EFF25BA0D270",
+          "name": "Octocat's GPG Key",
+          "primary_key_id": 2,
+          "public_key": "xsBNBFayYZ...",
+          "raw_key": "\"-----BEGIN PGP PUBLIC KEY BLOCK-----\\nVersion: GnuPG v2\\n\\nmQENBFayYZ0BCAC4hScoJXXpyR+MXGcrBxElqw3FzCVvkViuyeko+Jp76QJhg8kr\\nucRTxbnOoHfda/FmilEa/wxf9ch5/PSrrL26FxEoPHhJolp8fnIDLQeITn94NYdB\\nZtnnEKslpPrG97qSUWIchvyqCPtvOb8+8fWvGx9K/ZWcEEdh1X8+WFR2jMENMeoX\\nwxHWQoPnS7LpX/85/M7VUcJxvDVfv+eHsnQupmE5bGarKNih0oMe3LbdN3qA5PTz\\nSCm6Iudar1VsQ+xTz08ymL7t4pnEtLguQ7EyatFHCjxNblv5RzxoL0tDgN3HqoDz\\nc7TEA+q4RtDQl9amcvQ95emnXmZ974u7UkYdABEBAAG0HlNvbWUgVXNlciA8c29t\\nZXVzZXJAZ21haWwuY29tPokBOAQTAQIAIgUCVrJhnQIbAwYLCQgHAwIGFQgCCQoL\\nBBYCAwECHgECF4AACgkQMmLv8lug0nAViQgArWjI55+7p48URr2z9Jvak+yrBTx1\\nzkufltQAnHTJkq+Kl9dySSmTnOop8o3rE4++IOpYV5Y36PkKf9EZMk4n1RQiDPKE\\nAFtRVTkRaoWzOir9KQXJPfhKrl01j/QzY+utfiMvUoBJZ9ybq8Pa885SljW9lbaX\\nIYw+hl8ZdJ2KStvGrEyfQvRyq3aN5c9TV//4BdGnwx7Qabq/U+G18lizG6f/yq15\\ned7t0KELaCfeKPvytp4VE9/z/Ksah/h3+Qilx07/oG2Ae5kC1bEC9coD/ogPUhbv\\nb2bsBIoY9E9YwsLoif2lU+o1t76zLgUktuNscRRUKobW028H1zuFS/XQhrkBDQRW\\nsmGdAQgApnyyv3i144OLYy0O4UKQxd3e10Y3WpDwfnGIBefAI1m7RxnUxBag/DsU\\n7gi9qLEC4VHSfq4eiNfr1LJOyCL2edTgCWFgBhVjbXjZe6YAOrAnhxwCErnN0Y7N\\n6s8wVh9fObSOyf8ZE6G7JeKpcq9Q6gd/KxagfD48a1v+fyRHpyQc6J9pUEmtrDJ7\\nBjmsd2VWzLBvNWdHyxDNtZweIaqIO9VUYYpr1mtTliNBOZLUelmgrt7HBRcJpWMA\\nS8muVVbuP5MK0trLBq/JB8qUH3zRzB/PhMgzmkIfjEK1VYDWm4E8DYyTWEJcHqkb\\neqFsNjrIlwPaA122BWC6gUOPwwH+oQARAQABiQEfBBgBAgAJBQJWsmGdAhsMAAoJ\\nEDJi7/JboNJwAyAIALd4xcdmGbZD98gScJzqwzkOMcO8zFHqHNvJ42xIFvGny7c0\\n1Rx7iyrdypOby5AxE+viQcjG4rpLZW/xKYBNGrCfDyQO7511I0v8x20EICMlMfD/\\nNrWQCzesEPcUlKTP07d+sFyP8AyseOidbzY/92CpskTgdSBjY/ntLSaoknl/fjJE\\nQM8OkPqU7IraO1Jzzdnm20d5PZL9+PIwIWdSTedU/vBMTJyNcoqvSfKf1wNC66XP\\nhqfYgXJE564AdWZKA3C0IyCqiv+LHwxLnUHio1a4/r91C8KPzxs6tGxRDjXLd7ms\\nuYFGWymiUGOE/giHlcxdYcHzwLnPDliMQOLiTkK5AQ0EVuxMygEIAOD+bW1cDTmE\\nBxh5JECoqeHuwgl6DlLhnubWPkQ4ZeRzBRAsFcEJQlwlJjrzFDicL+lnm6Qq4tt0\\n560TwHdf15/AKTZIZu7H25axvGNzgeaUkJEJdYAq9zTKWwX7wKyzBszi485nQg97\\nMfAqwhMpDW0Qqf8+7Ug+WEmfBSGv9uL3aQC6WEeIsHfri0n0n8v4XgwhfShXguxO\\nCsOztEsuW7WWKW9P4TngKKv4lCHdPlV6FwxeMzODBJvc2fkHVHnqc0PqszJ5xcF8\\n6gZCpMM027SbpeYWCAD5zwJyYP9ntfO1p2HjnQ1dZaP9FeNcO7uIV1Lnd1eGCu6I\\nsrVp5k1f3isAEQEAAYkCPgQYAQIACQUCVuxMygIbAgEpCRAyYu/yW6DScMBdIAQZ\\nAQIABgUCVuxMygAKCRCKohN4dhq2b4tcCACHxmOHVXNpu47OvUGYQydLgMACUlXN\\nlj+HfE0VReqShxdDmpasAY9IRpuMB2RsGK8GbNP+4SlOlAiPf5SMhS7nZNkNDgQQ\\naZ3HFpgrFmFwmE10BKT4iQtoxELLM57z0qGOAfTsEjWFQa4sF+6IHAQR/ptkdkkI\\nBUEXiMnAwVwBysLIJiLO8qdjB6qp52QkT074JVrwywT/P+DkMfC2k4r/AfEbf6eF\\ndmPDuPk6KD87+hJZsSa5MaMUBQVvRO/mgEkhJRITVu58eWGaBOcQJ8gqurhCqM5P\\nDfUA4TJ7wiqM6sS764vV1rOioTTXkszzhClQqET7hPVnVQjenYgv0EZHNyQH/1f1\\n/CYqvV1vFjM9vJjMbxXsATCkZe6wvBVKD8vLsJAr8N+onKQz+4OPc3kmKq7aESu3\\nCi/iuie5KKVwnuNhr9AzT61vEkKxwHcVFEvHB77F6ZAAInhRvjzmQbD2dlPLLQCC\\nqDj71ODSSAPTEmUy6969bgD9PfWei7kNkBIx7s3eBv8yzytSc2EcuUgopqFazquw\\nFs1+tqGHjBvQfTo6bqbJjp/9Ci2pvde3ElV2rAgUlb3lqXyXjRDqrXosh5GcRPQj\\nK8Nhj1BNhnrCVskE4BP0LYbOHuzgm86uXwGCFsY+w2VOsSm16Jx5GHyG5S5WU3+D\\nIts/HFYRLiFgDLmTlxo=\\n=+OzK\\n-----END PGP PUBLIC KEY BLOCK-----\"",
+          "revoked": false,
+          "subkeys": [
+            {
+              "can_certify": false,
+              "can_encrypt_comms": true,
+              "can_encrypt_storage": true,
+              "can_sign": false,
+              "created_at": "2016-03-24T11:31:04-06:00",
+              "emails": [],
+              "expires_at": "2016-03-24T11:31:04-07:00",
+              "id": 4,
+              "key_id": "4A595D4C72EE49C7",
+              "primary_key_id": 3,
+              "public_key": "zsBNBFayYZ...",
+              "revoked": false
+            }
+          ]
+        }
+      },
+      "gpg-key-items": {
+        "value": [
+          {
+            "can_certify": true,
+            "can_encrypt_comms": false,
+            "can_encrypt_storage": false,
+            "can_sign": true,
+            "created_at": "2016-03-24T11:31:04-06:00",
+            "emails": [
+              {
+                "email": "octocat@users.noreply.github.com",
+                "verified": true
+              }
+            ],
+            "expires_at": "2016-03-24T11:31:04-07:00",
+            "id": 3,
+            "key_id": "3262EFF25BA0D270",
+            "name": "Octocat's GPG Key",
+            "primary_key_id": 2,
+            "public_key": "xsBNBFayYZ...",
+            "raw_key": "string",
+            "revoked": false,
+            "subkeys": [
+              {
+                "can_certify": false,
+                "can_encrypt_comms": true,
+                "can_encrypt_storage": true,
+                "can_sign": false,
+                "created_at": "2016-03-24T11:31:04-06:00",
+                "emails": [],
+                "expires_at": "2016-03-24T11:31:04-07:00",
+                "id": 4,
+                "key_id": "4A595D4C72EE49C7",
+                "primary_key_id": 3,
+                "public_key": "zsBNBFayYZ...",
+                "revoked": false
+              }
+            ]
+          }
+        ]
+      },
+      "hovercard": {
+        "value": {
+          "contexts": [
+            {
+              "message": "Owns this repository",
+              "octicon": "repo"
+            }
+          ]
+        }
+      },
+      "key": {
+        "value": {
+          "created_at": "2020-06-11T21:31:57Z",
+          "id": 2,
+          "key": "2Sg8iYjAxxmI2LvUXpJjkYrMxURPc8r+dB7TJyvv1234",
+          "read_only": false,
+          "title": "ssh-rsa AAAAB3NzaC1yc2EAAA",
+          "url": "https://api.github.com/user/keys/2",
+          "verified": false
+        }
+      },
+      "key-items": {
+        "value": [
+          {
+            "created_at": "2020-06-11T21:31:57Z",
+            "id": 2,
+            "key": "2Sg8iYjAxxmI2LvUXpJjkYrMxURPc8r+dB7TJyvv1234",
+            "read_only": false,
+            "title": "ssh-rsa AAAAB3NzaC1yc2EAAA",
+            "url": "https://api.github.com/user/keys/2",
+            "verified": false
+          },
+          {
+            "created_at": "2020-07-11T21:31:57Z",
+            "id": 3,
+            "key": "2Sg8iYjAxxmI2LvUXpJjkYrMxURPc8r+dB7TJy931234",
+            "read_only": false,
+            "title": "ssh-rsa AAAAB3NzaC1yc2EAAB",
+            "url": "https://api.github.com/user/keys/3",
+            "verified": false
+          }
+        ]
+      },
+      "key-simple-items": {
+        "value": [
+          {
+            "id": 1,
+            "key": "ssh-rsa AAA..."
+          }
+        ]
+      },
+      "list-attestations": {
+        "value": {
+          "attestations": [
+            {
+              "bundle_url": "https://tmastaging.blob.core.windows.net/attestations/1/2024/11/08/4.json.sn?se=2024-11-09T17%3A13%3A43Z&sig=jPSbbJnIEshUyCjBLU5Ykq0uuGc5UYxTZE1%2FhdBNMXk%3D&sp=r&spr=https%2Chttp&sr=b&st=2024-11-08T17%3A13%3A43Z&sv=2024-08-04",
+              "initiator": "user",
+              "repository_id": 1
+            },
+            {
+              "bundle_url": "https://tmastaging.blob.core.windows.net/attestations/1/2024/11/08/5.json.sn?se=2024-11-09T17%3A13%3A43Z&sig=jPSbbJnIEshUyCjBLU5Ykq0uuGc5UYxTZE1%2FhdBNMXk%3D&sp=r&spr=https%2Chttp&sr=b&st=2024-11-08T17%3A13%3A43Z&sv=2024-08-04",
+              "initiator": "user",
+              "repository_id": 1
+            }
+          ]
+        }
+      },
+      "list-attestations-bulk": {
+        "value": {
+          "attestations_subject_digests": [
+            {
+              "sha256:abc": [
+                {
+                  "bundle": {
+                    "dsseEnvelope": {
+                      "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJzdWJqZWN0IjpbeyJuYW1lIjoiZ2hfMi41MC4wX3dpbmRvd3NfYXJtNjQuemlwIiwiZGlnZXN0Ijp7InNoYTI1NiI6IjhhYWQxMjBiNDE2Mzg2YjQyNjllZjYyYzhmZGViY2FkMzFhNzA4NDcyOTc4MTdhMTQ5ZGFmOTI3ZWRjODU1NDgifX1dLCJwcmVkaWNhdGVUeXBlIjoiaHR0cHM6Ly9zbHNhLmRldi9wcm92ZW5hbmNlL3YxIiwicHJlZGljYXRlIjp7ImJ1aWxkRGVmaW5pdGlvbiI6eyJidWlsZFR5cGUiOiJodHRwczovL3Nsc2EtZnJhbWV3b3JrLmdpdGh1Yi5pby9naXRodWItYWN0aW9ucy1idWlsZHR5cGVzL3dvcmtmbG93L3YxIiwiZXh0ZXJuYWxQYXJhbWV0ZXJzIjp7IndvcmtmbG93Ijp7InJlZiI6InJlZnMvaGVhZHMvdHJ1bmsiLCJyZXBvc2l0b3J5IjoiaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkiLCJwYXRoIjoiLmdpdGh1Yi93b3JrZmxvd3MvZGVwbG95bWVudC55bWwifX0sImludGVybmFsUGFyYW1ldGVycyI6eyJnaXRodWIiOnsiZXZlbnRfbmFtZSI6IndvcmtmbG93X2Rpc3BhdGNoIiwicmVwb3NpdG9yeV9pZCI6IjIxMjYxMzA0OSIsInJlcG9zaXRvcnlfb3duZXJfaWQiOiI1OTcwNDcxMSJ9fSwicmVzb2x2ZWREZXBlbmRlbmNpZXMiOlt7InVyaSI6ImdpdCtodHRwczovL2dpdGh1Yi5jb20vY2xpL2NsaUByZWZzL2hlYWRzL3RydW5rIiwiZGlnZXN0Ijp7ImdpdENvbW1pdCI6ImZhZWYyZGRkODFiMDczNjc0ODQxM2E3YzY0NmNkMGJmYzI2YzAwYTAifX1dfSwicnVuRGV0YWlscyI6eyJidWlsZGVyIjp7ImlkIjoiaHR0cHM6Ly9naXRodWIuY29tL2FjdGlvbnMvcnVubmVyL2dpdGh1Yi1ob3N0ZWQifSwibWV0YWRhdGEiOnsiaW52b2NhdGlvbklkIjoiaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkvYWN0aW9ucy9ydW5zLzkyODkwNzU3NTIvYXR0ZW1wdHMvMSJ9fX19",
+                      "payloadType": "application/vnd.in-toto+json",
+                      "signatures": [
+                        {
+                          "sig": "MEQCIEGIGAm7gZVLLpsrPcjndEjiuctE2/c9+j9KGvazz3rlAiAd6O16T5hkzRM3IbRPzm+xT40mNQZxefd7laDP6x2XLQ=="
+                        }
+                      ]
+                    },
+                    "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                    "verificationMaterial": {
+                      "certificate": {
+                        "rawBytes": "MIIGjTCCBhSgAwIBAgIUWYxqKsrMS3Svl5Ij5ODfBgMJO/IwCgYIKoZIzj0EAwMwNzEVMBMGA1UEChMMc2lnc3RvcmUuZGV2MR4wHAYDVQQDExVzaWdzdG9yZS1pbnRlcm1lZGlhdGUwHhcNMjQwNTI5MTYwOTUyWhcNMjQwNTI5MTYxOTUyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdmghNNw3nU/KueQgspGHW7gh9XLD/WdI8YMB+0p0V4o1kHo6cM1sDJgrCgPQUzxpuYuo+xwPHyl/kDyf3ELjkaOCBTMwggUvMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUqfCPvXKAvS4CdhQ2hbZWJSOEvVowHwYDVR0jBBgwFoAU39Ppz1YkEZb5qNjpKFWixi4YZD8wWgYDVR0RAQH/BFAwToZMaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkvLmdpdGh1Yi93b3JrZmxvd3MvZGVwbG95bWVudC55bWxAcmVmcy9oZWFkcy90cnVuazA5BgorBgEEAYO/MAEBBCtodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tMB8GCisGAQQBg78wAQIEEXdvcmtmbG93X2Rpc3BhdGNoMDYGCisGAQQBg78wAQMEKGZhZWYyZGRkODFiMDczNjc0ODQxM2E3YzY0NmNkMGJmYzI2YzAwYTAwGAYKKwYBBAGDvzABBAQKRGVwbG95bWVudDAVBgorBgEEAYO/MAEFBAdjbGkvY2xpMB4GCisGAQQBg78wAQYEEHJlZnMvaGVhZHMvdHJ1bmswOwYKKwYBBAGDvzABCAQtDCtodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tMFwGCisGAQQBg78wAQkETgxMaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkvLmdpdGh1Yi93b3JrZmxvd3MvZGVwbG95bWVudC55bWxAcmVmcy9oZWFkcy90cnVuazA4BgorBgEEAYO/MAEKBCoMKGZhZWYyZGRkODFiMDczNjc0ODQxM2E3YzY0NmNkMGJmYzI2YzAwYTAwHQYKKwYBBAGDvzABCwQPDA1naXRodWItaG9zdGVkMCoGCisGAQQBg78wAQwEHAwaaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkwOAYKKwYBBAGDvzABDQQqDChmYWVmMmRkZDgxYjA3MzY3NDg0MTNhN2M2NDZjZDBiZmMyNmMwMGEwMCAGCisGAQQBg78wAQ4EEgwQcmVmcy9oZWFkcy90cnVuazAZBgorBgEEAYO/MAEPBAsMCTIxMjYxMzA0OTAmBgorBgEEAYO/MAEQBBgMFmh0dHBzOi8vZ2l0aHViLmNvbS9jbGkwGAYKKwYBBAGDvzABEQQKDAg1OTcwNDcxMTBcBgorBgEEAYO/MAESBE4MTGh0dHBzOi8vZ2l0aHViLmNvbS9jbGkvY2xpLy5naXRodWIvd29ya2Zsb3dzL2RlcGxveW1lbnQueW1sQHJlZnMvaGVhZHMvdHJ1bmswOAYKKwYBBAGDvzABEwQqDChmYWVmMmRkZDgxYjA3MzY3NDg0MTNhN2M2NDZjZDBiZmMyNmMwMGEwMCEGCisGAQQBg78wARQEEwwRd29ya2Zsb3dfZGlzcGF0Y2gwTQYKKwYBBAGDvzABFQQ/DD1odHRwczovL2dpdGh1Yi5jb20vY2xpL2NsaS9hY3Rpb25zL3J1bnMvOTI4OTA3NTc1Mi9hdHRlbXB0cy8xMBYGCisGAQQBg78wARYECAwGcHVibGljMIGLBgorBgEEAdZ5AgQCBH0EewB5AHcA3T0wasbHETJjGR4cmWc3AqJKXrjePK3/h4pygC8p7o4AAAGPxR1zbgAABAMASDBGAiEA+8glQIxOAhXBAOS6S+8ZqwJcdwwSr/TWihs3dLqVAvoCIQDby9h1IcuDEr+zsWiL8Pw5CSTtkltJ421sE81Vvu6ApTAKBggqhkjOPQQDAwNnADBkAjA+DH7P+hh4VHWfCWXtrKToBKubBkKpfWCYQxjXM2vV/nPqbZFYOVZObe6ANrgydoYCMFUMb3xzsFNQYvsEYOi2KnrvF0tgopmXGVoznZ+q/2AIDW9F1E7Y6Y061eouAYdHWw=="
+                      },
+                      "timestampVerificationData": {},
+                      "tlogEntries": [
+                        {
+                          "canonicalizedBody": "eyJhcGlWZXJzaW9uIjoiMC4wLjEiLCJraW5kIjoiZHNzZSIsInNwZWMiOnsiZW52ZWxvcGVIYXNoIjp7ImFsZ29yaXRobSI6InNoYTI1NiIsInZhbHVlIjoiM2I1YzkwNDk5MGFiYzE4NjI1ZWE3Njg4MzE1OGEwZmI4MTEwMjM4MGJkNjQwZjI5OWJlMzYwZWVkOTMxNjYwYiJ9LCJwYXlsb2FkSGFzaCI6eyJhbGdvcml0aG0iOiJzaGEyNTYiLCJ2YWx1ZSI6IjM4ZGNlZDJjMzE1MGU2OTQxMDViYjZiNDNjYjY3NzBiZTYzZDdhNGM4NjNiMTc2YTkwMmU1MGQ5ZTAyN2ZiMjMifSwic2lnbmF0dXJlcyI6W3sic2lnbmF0dXJlIjoiTUVRQ0lFR0lHQW03Z1pWTExwc3JQY2puZEVqaXVjdEUyL2M5K2o5S0d2YXp6M3JsQWlBZDZPMTZUNWhrelJNM0liUlB6bSt4VDQwbU5RWnhlZmQ3bGFEUDZ4MlhMUT09IiwidmVyaWZpZXIiOiJMUzB0TFMxQ1JVZEpUaUJEUlZKVVNVWkpRMEZVUlMwdExTMHRDazFKU1VkcVZFTkRRbWhUWjBGM1NVSkJaMGxWVjFsNGNVdHpjazFUTTFOMmJEVkphalZQUkdaQ1owMUtUeTlKZDBObldVbExiMXBKZW1vd1JVRjNUWGNLVG5wRlZrMUNUVWRCTVZWRlEyaE5UV015Ykc1ak0xSjJZMjFWZFZwSFZqSk5ValIzU0VGWlJGWlJVVVJGZUZaNllWZGtlbVJIT1hsYVV6RndZbTVTYkFwamJURnNXa2RzYUdSSFZYZElhR05PVFdwUmQwNVVTVFZOVkZsM1QxUlZlVmRvWTA1TmFsRjNUbFJKTlUxVVdYaFBWRlY1VjJwQlFVMUdhM2RGZDFsSUNrdHZXa2w2YWpCRFFWRlpTVXR2V2tsNmFqQkVRVkZqUkZGblFVVmtiV2RvVGs1M00yNVZMMHQxWlZGbmMzQkhTRmMzWjJnNVdFeEVMMWRrU1RoWlRVSUtLekJ3TUZZMGJ6RnJTRzgyWTAweGMwUktaM0pEWjFCUlZYcDRjSFZaZFc4cmVIZFFTSGxzTDJ0RWVXWXpSVXhxYTJGUFEwSlVUWGRuWjFWMlRVRTBSd3BCTVZWa1JIZEZRaTkzVVVWQmQwbElaMFJCVkVKblRsWklVMVZGUkVSQlMwSm5aM0pDWjBWR1FsRmpSRUY2UVdSQ1owNVdTRkUwUlVablVWVnhaa05RQ25aWVMwRjJVelJEWkdoUk1taGlXbGRLVTA5RmRsWnZkMGgzV1VSV1VqQnFRa0puZDBadlFWVXpPVkJ3ZWpGWmEwVmFZalZ4VG1wd1MwWlhhWGhwTkZrS1drUTRkMWRuV1VSV1VqQlNRVkZJTDBKR1FYZFViMXBOWVVoU01HTklUVFpNZVRsdVlWaFNiMlJYU1hWWk1qbDBUREpPYzJGVE9XcGlSMnQyVEcxa2NBcGtSMmd4V1drNU0ySXpTbkphYlhoMlpETk5kbHBIVm5kaVJ6azFZbGRXZFdSRE5UVmlWM2hCWTIxV2JXTjVPVzlhVjBaclkzazVNR051Vm5WaGVrRTFDa0puYjNKQ1owVkZRVmxQTDAxQlJVSkNRM1J2WkVoU2QyTjZiM1pNTTFKMllUSldkVXh0Um1wa1IyeDJZbTVOZFZveWJEQmhTRlpwWkZoT2JHTnRUbllLWW01U2JHSnVVWFZaTWpsMFRVSTRSME5wYzBkQlVWRkNaemM0ZDBGUlNVVkZXR1IyWTIxMGJXSkhPVE5ZTWxKd1l6TkNhR1JIVG05TlJGbEhRMmx6UndwQlVWRkNaemM0ZDBGUlRVVkxSMXBvV2xkWmVWcEhVbXRQUkVacFRVUmplazVxWXpCUFJGRjRUVEpGTTFsNldUQk9iVTVyVFVkS2JWbDZTVEpaZWtGM0NsbFVRWGRIUVZsTFMzZFpRa0pCUjBSMmVrRkNRa0ZSUzFKSFZuZGlSemsxWWxkV2RXUkVRVlpDWjI5eVFtZEZSVUZaVHk5TlFVVkdRa0ZrYW1KSGEzWUtXVEo0Y0UxQ05FZERhWE5IUVZGUlFtYzNPSGRCVVZsRlJVaEtiRnB1VFhaaFIxWm9Xa2hOZG1SSVNqRmliWE4zVDNkWlMwdDNXVUpDUVVkRWRucEJRZ3BEUVZGMFJFTjBiMlJJVW5kamVtOTJURE5TZG1FeVZuVk1iVVpxWkVkc2RtSnVUWFZhTW13d1lVaFdhV1JZVG14amJVNTJZbTVTYkdKdVVYVlpNamwwQ2sxR2QwZERhWE5IUVZGUlFtYzNPSGRCVVd0RlZHZDRUV0ZJVWpCalNFMDJUSGs1Ym1GWVVtOWtWMGwxV1RJNWRFd3lUbk5oVXpscVlrZHJka3h0WkhBS1pFZG9NVmxwT1ROaU0wcHlXbTE0ZG1RelRYWmFSMVozWWtjNU5XSlhWblZrUXpVMVlsZDRRV050Vm0xamVUbHZXbGRHYTJONU9UQmpibFoxWVhwQk5BcENaMjl5UW1kRlJVRlpUeTlOUVVWTFFrTnZUVXRIV21oYVYxbDVXa2RTYTA5RVJtbE5SR042VG1wak1FOUVVWGhOTWtVeldYcFpNRTV0VG10TlIwcHRDbGw2U1RKWmVrRjNXVlJCZDBoUldVdExkMWxDUWtGSFJIWjZRVUpEZDFGUVJFRXhibUZZVW05a1YwbDBZVWM1ZW1SSFZtdE5RMjlIUTJselIwRlJVVUlLWnpjNGQwRlJkMFZJUVhkaFlVaFNNR05JVFRaTWVUbHVZVmhTYjJSWFNYVlpNamwwVERKT2MyRlRPV3BpUjJ0M1QwRlpTMHQzV1VKQ1FVZEVkbnBCUWdwRVVWRnhSRU5vYlZsWFZtMU5iVkpyV2tSbmVGbHFRVE5OZWxrelRrUm5NRTFVVG1oT01rMHlUa1JhYWxwRVFtbGFiVTE1VG0xTmQwMUhSWGROUTBGSENrTnBjMGRCVVZGQ1p6YzRkMEZSTkVWRlozZFJZMjFXYldONU9XOWFWMFpyWTNrNU1HTnVWblZoZWtGYVFtZHZja0puUlVWQldVOHZUVUZGVUVKQmMwMEtRMVJKZUUxcVdYaE5la0V3VDFSQmJVSm5iM0pDWjBWRlFWbFBMMDFCUlZGQ1FtZE5SbTFvTUdSSVFucFBhVGgyV2pKc01HRklWbWxNYlU1MllsTTVhZ3BpUjJ0M1IwRlpTMHQzV1VKQ1FVZEVkbnBCUWtWUlVVdEVRV2N4VDFSamQwNUVZM2hOVkVKalFtZHZja0puUlVWQldVOHZUVUZGVTBKRk5FMVVSMmd3Q21SSVFucFBhVGgyV2pKc01HRklWbWxNYlU1MllsTTVhbUpIYTNaWk1uaHdUSGsxYm1GWVVtOWtWMGwyWkRJNWVXRXlXbk5pTTJSNlRESlNiR05IZUhZS1pWY3hiR0p1VVhWbFZ6RnpVVWhLYkZwdVRYWmhSMVpvV2toTmRtUklTakZpYlhOM1QwRlpTMHQzV1VKQ1FVZEVkbnBCUWtWM1VYRkVRMmh0V1ZkV2JRcE5iVkpyV2tSbmVGbHFRVE5OZWxrelRrUm5NRTFVVG1oT01rMHlUa1JhYWxwRVFtbGFiVTE1VG0xTmQwMUhSWGROUTBWSFEybHpSMEZSVVVKbk56aDNDa0ZTVVVWRmQzZFNaREk1ZVdFeVduTmlNMlJtV2tkc2VtTkhSakJaTW1kM1ZGRlpTMHQzV1VKQ1FVZEVkbnBCUWtaUlVTOUVSREZ2WkVoU2QyTjZiM1lLVERKa2NHUkhhREZaYVRWcVlqSXdkbGt5ZUhCTU1rNXpZVk01YUZrelVuQmlNalY2VEROS01XSnVUWFpQVkVrMFQxUkJNMDVVWXpGTmFUbG9aRWhTYkFwaVdFSXdZM2s0ZUUxQ1dVZERhWE5IUVZGUlFtYzNPSGRCVWxsRlEwRjNSMk5JVm1saVIyeHFUVWxIVEVKbmIzSkNaMFZGUVdSYU5VRm5VVU5DU0RCRkNtVjNRalZCU0dOQk0xUXdkMkZ6WWtoRlZFcHFSMUkwWTIxWFl6TkJjVXBMV0hKcVpWQkxNeTlvTkhCNVowTTRjRGR2TkVGQlFVZFFlRkl4ZW1KblFVRUtRa0ZOUVZORVFrZEJhVVZCS3pobmJGRkplRTlCYUZoQ1FVOVRObE1yT0ZweGQwcGpaSGQzVTNJdlZGZHBhSE16WkV4eFZrRjJiME5KVVVSaWVUbG9NUXBKWTNWRVJYSXJlbk5YYVV3NFVIYzFRMU5VZEd0c2RFbzBNakZ6UlRneFZuWjFOa0Z3VkVGTFFtZG5jV2hyYWs5UVVWRkVRWGRPYmtGRVFtdEJha0VyQ2tSSU4xQXJhR2cwVmtoWFprTlhXSFJ5UzFSdlFrdDFZa0pyUzNCbVYwTlpVWGhxV0UweWRsWXZibEJ4WWxwR1dVOVdXazlpWlRaQlRuSm5lV1J2V1VNS1RVWlZUV0l6ZUhwelJrNVJXWFp6UlZsUGFUSkxibkoyUmpCMFoyOXdiVmhIVm05NmJsb3JjUzh5UVVsRVZ6bEdNVVUzV1RaWk1EWXhaVzkxUVZsa1NBcFhkejA5Q2kwdExTMHRSVTVFSUVORlVsUkpSa2xEUVZSRkxTMHRMUzBLIn1dfX0=",
+                          "inclusionPromise": {
+                            "signedEntryTimestamp": "MEYCIQCeEsQAy+qXtULkh52wbnHrkt2R2JQ05P9STK/xmdpQ2AIhANiG5Gw6cQiMnwvUz1+9UKtG/vlC8dduq07wsFOViwSL"
+                          },
+                          "inclusionProof": {
+                            "checkpoint": {
+                              "envelope": "rekor.sigstore.dev - 2605736670972794746\\n93750551\\nKgKiXoOl8rM5d4y6Xlbm2QLftvj/FYvTs6z7dJlNO60=\\n\\n— rekor.sigstore.dev wNI9ajBEAiBkLzdjY8A9HReU7rmtjwZ+JpSuYtEr9SmvSwUIW7FBjgIgKo+vhkW3tqc+gc8fw9gza3xLoncA8a+MTaJYCaLGA9c=\\n"
+                            },
+                            "hashes": [
+                              "8LI21mzwxnUSo0fuZeFsUrz2ujZ4QAL+oGeTG+5toZg=",
+                              "nCb369rcIytNhGwWoqBv+eV49X3ZKpo/HJGKm9V+dck=",
+                              "hnNQ9mUdSwYCfdV21pd87NucrdRRNZATowlaRR1hJ4A=",
+                              "MBhhK33vlD4Tq/JKgAaXUI4VjmosWKe6+7RNpQ2ncNM=",
+                              "XKWUE3stvGV1OHsIGiCGfn047Ok6uD4mFkh7BaicaEc=",
+                              "Tgve40VPFfuei+0nhupdGpfPPR+hPpZjxgTiDT8WNoY=",
+                              "wV+S/7tLtYGzkLaSb6UDqexNyhMvumHK/RpTNvEZuLU=",
+                              "uwaWufty6sn6XqO1Tb9M3Vz6sBKPu0HT36mStxJNd7s=",
+                              "jUfeMOXQP0XF1JAnCEETVbfRKMUwCzrVUzYi8vnDMVs=",
+                              "xQKjzJAwwdlQG/YUYBKPXxbCmhMYKo1wnv+6vDuKWhQ=",
+                              "cX3Agx+hP66t1ZLbX/yHbfjU46/3m/VAmWyG/fhxAVc=",
+                              "sjohk/3DQIfXTgf/5XpwtdF7yNbrf8YykOMHr1CyBYQ=",
+                              "98enzMaC+x5oCMvIZQA5z8vu2apDMCFvE/935NfuPw8="
+                            ],
+                            "logIndex": "93750549",
+                            "rootHash": "KgKiXoOl8rM5d4y6Xlbm2QLftvj/FYvTs6z7dJlNO60=",
+                            "treeSize": "93750551"
+                          },
+                          "integratedTime": "1716998992",
+                          "kindVersion": {
+                            "kind": "dsse",
+                            "version": "0.0.1"
+                          },
+                          "logId": {
+                            "keyId": "wNI9atQGlz+VWfO6LRygH4QUfY/8W4RFwiT5i5WRgB0="
+                          },
+                          "logIndex": "97913980"
+                        }
+                      ]
+                    }
+                  },
+                  "repository_id": 1
+                },
+                {
+                  "bundle": {
+                    "dsseEnvelope": {
+                      "payload": "eyJfdHlwZSI6Imh0dHBzOi8vaW4tdG90by5pby9TdGF0ZW1lbnQvdjEiLCJzdWJqZWN0IjpbeyJuYW1lIjoiZ2hfMi41MC4wX3dpbmRvd3NfYXJtNjQuemlwIiwiZGlnZXN0Ijp7InNoYTI1NiI6IjhhYWQxMjBiNDE2Mzg2YjQyNjllZjYyYzhmZGViY2FkMzFhNzA4NDcyOTc4MTdhMTQ5ZGFmOTI3ZWRjODU1NDgifX1dLCJwcmVkaWNhdGVUeXBlIjoiaHR0cHM6Ly9zbHNhLmRldi9wcm92ZW5hbmNlL3YxIiwicHJlZGljYXRlIjp7ImJ1aWxkRGVmaW5pdGlvbiI6eyJidWlsZFR5cGUiOiJodHRwczovL3Nsc2EtZnJhbWV3b3JrLmdpdGh1Yi5pby9naXRodWItYWN0aW9ucy1idWlsZHR5cGVzL3dvcmtmbG93L3YxIiwiZXh0ZXJuYWxQYXJhbWV0ZXJzIjp7IndvcmtmbG93Ijp7InJlZiI6InJlZnMvaGVhZHMvdHJ1bmsiLCJyZXBvc2l0b3J5IjoiaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkiLCJwYXRoIjoiLmdpdGh1Yi93b3JrZmxvd3MvZGVwbG95bWVudC55bWwifX0sImludGVybmFsUGFyYW1ldGVycyI6eyJnaXRodWIiOnsiZXZlbnRfbmFtZSI6IndvcmtmbG93X2Rpc3BhdGNoIiwicmVwb3NpdG9yeV9pZCI6IjIxMjYxMzA0OSIsInJlcG9zaXRvcnlfb3duZXJfaWQiOiI1OTcwNDcxMSJ9fSwicmVzb2x2ZWREZXBlbmRlbmNpZXMiOlt7InVyaSI6ImdpdCtodHRwczovL2dpdGh1Yi5jb20vY2xpL2NsaUByZWZzL2hlYWRzL3RydW5rIiwiZGlnZXN0Ijp7ImdpdENvbW1pdCI6ImZhZWYyZGRkODFiMDczNjc0ODQxM2E3YzY0NmNkMGJmYzI2YzAwYTAifX1dfSwicnVuRGV0YWlscyI6eyJidWlsZGVyIjp7ImlkIjoiaHR0cHM6Ly9naXRodWIuY29tL2FjdGlvbnMvcnVubmVyL2dpdGh1Yi1ob3N0ZWQifSwibWV0YWRhdGEiOnsiaW52b2NhdGlvbklkIjoiaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkvYWN0aW9ucy9ydW5zLzkyODkwNzU3NTIvYXR0ZW1wdHMvMSJ9fX19",
+                      "payloadType": "application/vnd.in-toto+json",
+                      "signatures": [
+                        {
+                          "sig": "MEQCIEGIGAm7gZVLLpsrPcjndEjiuctE2/c9+j9KGvazz3rlAiAd6O16T5hkzRM3IbRPzm+xT40mNQZxefd7laDP6x2XLQ=="
+                        }
+                      ]
+                    },
+                    "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
+                    "verificationMaterial": {
+                      "certificate": {
+                        "rawBytes": "MIIGjTCCBhSgAwIBAgIUWYxqKsrMS3Svl5Ij5ODfBgMJO/IwCgYIKoZIzj0EAwMwNzEVMBMGA1UEChMMc2lnc3RvcmUuZGV2MR4wHAYDVQQDExVzaWdzdG9yZS1pbnRlcm1lZGlhdGUwHhcNMjQwNTI5MTYwOTUyWhcNMjQwNTI5MTYxOTUyWjAAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdmghNNw3nU/KueQgspGHW7gh9XLD/WdI8YMB+0p0V4o1kHo6cM1sDJgrCgPQUzxpuYuo+xwPHyl/kDyf3ELjkaOCBTMwggUvMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUqfCPvXKAvS4CdhQ2hbZWJSOEvVowHwYDVR0jBBgwFoAU39Ppz1YkEZb5qNjpKFWixi4YZD8wWgYDVR0RAQH/BFAwToZMaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkvLmdpdGh1Yi93b3JrZmxvd3MvZGVwbG95bWVudC55bWxAcmVmcy9oZWFkcy90cnVuazA5BgorBgEEAYO/MAEBBCtodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tMB8GCisGAQQBg78wAQIEEXdvcmtmbG93X2Rpc3BhdGNoMDYGCisGAQQBg78wAQMEKGZhZWYyZGRkODFiMDczNjc0ODQxM2E3YzY0NmNkMGJmYzI2YzAwYTAwGAYKKwYBBAGDvzABBAQKRGVwbG95bWVudDAVBgorBgEEAYO/MAEFBAdjbGkvY2xpMB4GCisGAQQBg78wAQYEEHJlZnMvaGVhZHMvdHJ1bmswOwYKKwYBBAGDvzABCAQtDCtodHRwczovL3Rva2VuLmFjdGlvbnMuZ2l0aHVidXNlcmNvbnRlbnQuY29tMFwGCisGAQQBg78wAQkETgxMaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkvLmdpdGh1Yi93b3JrZmxvd3MvZGVwbG95bWVudC55bWxAcmVmcy9oZWFkcy90cnVuazA4BgorBgEEAYO/MAEKBCoMKGZhZWYyZGRkODFiMDczNjc0ODQxM2E3YzY0NmNkMGJmYzI2YzAwYTAwHQYKKwYBBAGDvzABCwQPDA1naXRodWItaG9zdGVkMCoGCisGAQQBg78wAQwEHAwaaHR0cHM6Ly9naXRodWIuY29tL2NsaS9jbGkwOAYKKwYBBAGDvzABDQQqDChmYWVmMmRkZDgxYjA3MzY3NDg0MTNhN2M2NDZjZDBiZmMyNmMwMGEwMCAGCisGAQQBg78wAQ4EEgwQcmVmcy9oZWFkcy90cnVuazAZBgorBgEEAYO/MAEPBAsMCTIxMjYxMzA0OTAmBgorBgEEAYO/MAEQBBgMFmh0dHBzOi8vZ2l0aHViLmNvbS9jbGkwGAYKKwYBBAGDvzABEQQKDAg1OTcwNDcxMTBcBgorBgEEAYO/MAESBE4MTGh0dHBzOi8vZ2l0aHViLmNvbS9jbGkvY2xpLy5naXRodWIvd29ya2Zsb3dzL2RlcGxveW1lbnQueW1sQHJlZnMvaGVhZHMvdHJ1bmswOAYKKwYBBAGDvzABEwQqDChmYWVmMmRkZDgxYjA3MzY3NDg0MTNhN2M2NDZjZDBiZmMyNmMwMGEwMCEGCisGAQQBg78wARQEEwwRd29ya2Zsb3dfZGlzcGF0Y2gwTQYKKwYBBAGDvzABFQQ/DD1odHRwczovL2dpdGh1Yi5jb20vY2xpL2NsaS9hY3Rpb25zL3J1bnMvOTI4OTA3NTc1Mi9hdHRlbXB0cy8xMBYGCisGAQQBg78wARYECAwGcHVibGljMIGLBgorBgEEAdZ5AgQCBH0EewB5AHcA3T0wasbHETJjGR4cmWc3AqJKXrjePK3/h4pygC8p7o4AAAGPxR1zbgAABAMASDBGAiEA+8glQIxOAhXBAOS6S+8ZqwJcdwwSr/TWihs3dLqVAvoCIQDby9h1IcuDEr+zsWiL8Pw5CSTtkltJ421sE81Vvu6ApTAKBggqhkjOPQQDAwNnADBkAjA+DH7P+hh4VHWfCWXtrKToBKubBkKpfWCYQxjXM2vV/nPqbZFYOVZObe6ANrgydoYCMFUMb3xzsFNQYvsEYOi2KnrvF0tgopmXGVoznZ+q/2AIDW9F1E7Y6Y061eouAYdHWw=="
+                      },
+                      "timestampVerificationData": {},
+                      "tlogEntries": [
+                        {
+                          "canonicalizedBody": "eyJhcGlWZXJzaW9uIjoiMC4wLjEiLCJraW5kIjoiZHNzZSIsInNwZWMiOnsiZW52ZWxvcGVIYXNoIjp7ImFsZ29yaXRobSI6InNoYTI1NiIsInZhbHVlIjoiM2I1YzkwNDk5MGFiYzE4NjI1ZWE3Njg4MzE1OGEwZmI4MTEwMjM4MGJkNjQwZjI5OWJlMzYwZWVkOTMxNjYwYiJ9LCJwYXlsb2FkSGFzaCI6eyJhbGdvcml0aG0iOiJzaGEyNTYiLCJ2YWx1ZSI6IjM4ZGNlZDJjMzE1MGU2OTQxMDViYjZiNDNjYjY3NzBiZTYzZDdhNGM4NjNiMTc2YTkwMmU1MGQ5ZTAyN2ZiMjMifSwic2lnbmF0dXJlcyI6W3sic2lnbmF0dXJlIjoiTUVRQ0lFR0lHQW03Z1pWTExwc3JQY2puZEVqaXVjdEUyL2M5K2o5S0d2YXp6M3JsQWlBZDZPMTZUNWhrelJNM0liUlB6bSt4VDQwbU5RWnhlZmQ3bGFEUDZ4MlhMUT09IiwidmVyaWZpZXIiOiJMUzB0TFMxQ1JVZEpUaUJEUlZKVVNVWkpRMEZVUlMwdExTMHRDazFKU1VkcVZFTkRRbWhUWjBGM1NVSkJaMGxWVjFsNGNVdHpjazFUTTFOMmJEVkphalZQUkdaQ1owMUtUeTlKZDBObldVbExiMXBKZW1vd1JVRjNUWGNLVG5wRlZrMUNUVWRCTVZWRlEyaE5UV015Ykc1ak0xSjJZMjFWZFZwSFZqSk5ValIzU0VGWlJGWlJVVVJGZUZaNllWZGtlbVJIT1hsYVV6RndZbTVTYkFwamJURnNXa2RzYUdSSFZYZElhR05PVFdwUmQwNVVTVFZOVkZsM1QxUlZlVmRvWTA1TmFsRjNUbFJKTlUxVVdYaFBWRlY1VjJwQlFVMUdhM2RGZDFsSUNrdHZXa2w2YWpCRFFWRlpTVXR2V2tsNmFqQkVRVkZqUkZGblFVVmtiV2RvVGs1M00yNVZMMHQxWlZGbmMzQkhTRmMzWjJnNVdFeEVMMWRrU1RoWlRVSUtLekJ3TUZZMGJ6RnJTRzgyWTAweGMwUktaM0pEWjFCUlZYcDRjSFZaZFc4cmVIZFFTSGxzTDJ0RWVXWXpSVXhxYTJGUFEwSlVUWGRuWjFWMlRVRTBSd3BCTVZWa1JIZEZRaTkzVVVWQmQwbElaMFJCVkVKblRsWklVMVZGUkVSQlMwSm5aM0pDWjBWR1FsRmpSRUY2UVdSQ1owNVdTRkUwUlVablVWVnhaa05RQ25aWVMwRjJVelJEWkdoUk1taGlXbGRLVTA5RmRsWnZkMGgzV1VSV1VqQnFRa0puZDBadlFWVXpPVkJ3ZWpGWmEwVmFZalZ4VG1wd1MwWlhhWGhwTkZrS1drUTRkMWRuV1VSV1VqQlNRVkZJTDBKR1FYZFViMXBOWVVoU01HTklUVFpNZVRsdVlWaFNiMlJYU1hWWk1qbDBUREpPYzJGVE9XcGlSMnQyVEcxa2NBcGtSMmd4V1drNU0ySXpTbkphYlhoMlpETk5kbHBIVm5kaVJ6azFZbGRXZFdSRE5UVmlWM2hCWTIxV2JXTjVPVzlhVjBaclkzazVNR051Vm5WaGVrRTFDa0puYjNKQ1owVkZRVmxQTDAxQlJVSkNRM1J2WkVoU2QyTjZiM1pNTTFKMllUSldkVXh0Um1wa1IyeDJZbTVOZFZveWJEQmhTRlpwWkZoT2JHTnRUbllLWW01U2JHSnVVWFZaTWpsMFRVSTRSME5wYzBkQlVWRkNaemM0ZDBGUlNVVkZXR1IyWTIxMGJXSkhPVE5ZTWxKd1l6TkNhR1JIVG05TlJGbEhRMmx6UndwQlVWRkNaemM0ZDBGUlRVVkxSMXBvV2xkWmVWcEhVbXRQUkVacFRVUmplazVxWXpCUFJGRjRUVEpGTTFsNldUQk9iVTVyVFVkS2JWbDZTVEpaZWtGM0NsbFVRWGRIUVZsTFMzZFpRa0pCUjBSMmVrRkNRa0ZSUzFKSFZuZGlSemsxWWxkV2RXUkVRVlpDWjI5eVFtZEZSVUZaVHk5TlFVVkdRa0ZrYW1KSGEzWUtXVEo0Y0UxQ05FZERhWE5IUVZGUlFtYzNPSGRCVVZsRlJVaEtiRnB1VFhaaFIxWm9Xa2hOZG1SSVNqRmliWE4zVDNkWlMwdDNXVUpDUVVkRWRucEJRZ3BEUVZGMFJFTjBiMlJJVW5kamVtOTJURE5TZG1FeVZuVk1iVVpxWkVkc2RtSnVUWFZhTW13d1lVaFdhV1JZVG14amJVNTJZbTVTYkdKdVVYVlpNamwwQ2sxR2QwZERhWE5IUVZGUlFtYzNPSGRCVVd0RlZHZDRUV0ZJVWpCalNFMDJUSGs1Ym1GWVVtOWtWMGwxV1RJNWRFd3lUbk5oVXpscVlrZHJka3h0WkhBS1pFZG9NVmxwT1ROaU0wcHlXbTE0ZG1RelRYWmFSMVozWWtjNU5XSlhWblZrUXpVMVlsZDRRV050Vm0xamVUbHZXbGRHYTJONU9UQmpibFoxWVhwQk5BcENaMjl5UW1kRlJVRlpUeTlOUVVWTFFrTnZUVXRIV21oYVYxbDVXa2RTYTA5RVJtbE5SR042VG1wak1FOUVVWGhOTWtVeldYcFpNRTV0VG10TlIwcHRDbGw2U1RKWmVrRjNXVlJCZDBoUldVdExkMWxDUWtGSFJIWjZRVUpEZDFGUVJFRXhibUZZVW05a1YwbDBZVWM1ZW1SSFZtdE5RMjlIUTJselIwRlJVVUlLWnpjNGQwRlJkMFZJUVhkaFlVaFNNR05JVFRaTWVUbHVZVmhTYjJSWFNYVlpNamwwVERKT2MyRlRPV3BpUjJ0M1QwRlpTMHQzV1VKQ1FVZEVkbnBCUWdwRVVWRnhSRU5vYlZsWFZtMU5iVkpyV2tSbmVGbHFRVE5OZWxrelRrUm5NRTFVVG1oT01rMHlUa1JhYWxwRVFtbGFiVTE1VG0xTmQwMUhSWGROUTBGSENrTnBjMGRCVVZGQ1p6YzRkMEZSTkVWRlozZFJZMjFXYldONU9XOWFWMFpyWTNrNU1HTnVWblZoZWtGYVFtZHZja0puUlVWQldVOHZUVUZGVUVKQmMwMEtRMVJKZUUxcVdYaE5la0V3VDFSQmJVSm5iM0pDWjBWRlFWbFBMMDFCUlZGQ1FtZE5SbTFvTUdSSVFucFBhVGgyV2pKc01HRklWbWxNYlU1MllsTTVhZ3BpUjJ0M1IwRlpTMHQzV1VKQ1FVZEVkbnBCUWtWUlVVdEVRV2N4VDFSamQwNUVZM2hOVkVKalFtZHZja0puUlVWQldVOHZUVUZGVTBKRk5FMVVSMmd3Q21SSVFucFBhVGgyV2pKc01HRklWbWxNYlU1MllsTTVhbUpIYTNaWk1uaHdUSGsxYm1GWVVtOWtWMGwyWkRJNWVXRXlXbk5pTTJSNlRESlNiR05IZUhZS1pWY3hiR0p1VVhWbFZ6RnpVVWhLYkZwdVRYWmhSMVpvV2toTmRtUklTakZpYlhOM1QwRlpTMHQzV1VKQ1FVZEVkbnBCUWtWM1VYRkVRMmh0V1ZkV2JRcE5iVkpyV2tSbmVGbHFRVE5OZWxrelRrUm5NRTFVVG1oT01rMHlUa1JhYWxwRVFtbGFiVTE1VG0xTmQwMUhSWGROUTBWSFEybHpSMEZSVVVKbk56aDNDa0ZTVVVWRmQzZFNaREk1ZVdFeVduTmlNMlJtV2tkc2VtTkhSakJaTW1kM1ZGRlpTMHQzV1VKQ1FVZEVkbnBCUWtaUlVTOUVSREZ2WkVoU2QyTjZiM1lLVERKa2NHUkhhREZaYVRWcVlqSXdkbGt5ZUhCTU1rNXpZVk01YUZrelVuQmlNalY2VEROS01XSnVUWFpQVkVrMFQxUkJNMDVVWXpGTmFUbG9aRWhTYkFwaVdFSXdZM2s0ZUUxQ1dVZERhWE5IUVZGUlFtYzNPSGRCVWxsRlEwRjNSMk5JVm1saVIyeHFUVWxIVEVKbmIzSkNaMFZGUVdSYU5VRm5VVU5DU0RCRkNtVjNRalZCU0dOQk0xUXdkMkZ6WWtoRlZFcHFSMUkwWTIxWFl6TkJjVXBMV0hKcVpWQkxNeTlvTkhCNVowTTRjRGR2TkVGQlFVZFFlRkl4ZW1KblFVRUtRa0ZOUVZORVFrZEJhVVZCS3pobmJGRkplRTlCYUZoQ1FVOVRObE1yT0ZweGQwcGpaSGQzVTNJdlZGZHBhSE16WkV4eFZrRjJiME5KVVVSaWVUbG9NUXBKWTNWRVJYSXJlbk5YYVV3NFVIYzFRMU5VZEd0c2RFbzBNakZ6UlRneFZuWjFOa0Z3VkVGTFFtZG5jV2hyYWs5UVVWRkVRWGRPYmtGRVFtdEJha0VyQ2tSSU4xQXJhR2cwVmtoWFprTlhXSFJ5UzFSdlFrdDFZa0pyUzNCbVYwTlpVWGhxV0UweWRsWXZibEJ4WWxwR1dVOVdXazlpWlRaQlRuSm5lV1J2V1VNS1RVWlZUV0l6ZUhwelJrNVJXWFp6UlZsUGFUSkxibkoyUmpCMFoyOXdiVmhIVm05NmJsb3JjUzh5UVVsRVZ6bEdNVVUzV1RaWk1EWXhaVzkxUVZsa1NBcFhkejA5Q2kwdExTMHRSVTVFSUVORlVsUkpSa2xEUVZSRkxTMHRMUzBLIn1dfX0=",
+                          "inclusionPromise": {
+                            "signedEntryTimestamp": "MEYCIQCeEsQAy+qXtULkh52wbnHrkt2R2JQ05P9STK/xmdpQ2AIhANiG5Gw6cQiMnwvUz1+9UKtG/vlC8dduq07wsFOViwSL"
+                          },
+                          "inclusionProof": {
+                            "checkpoint": {
+                              "envelope": "rekor.sigstore.dev - 2605736670972794746\\n93750551\\nKgKiXoOl8rM5d4y6Xlbm2QLftvj/FYvTs6z7dJlNO60=\\n\\n— rekor.sigstore.dev wNI9ajBEAiBkLzdjY8A9HReU7rmtjwZ+JpSuYtEr9SmvSwUIW7FBjgIgKo+vhkW3tqc+gc8fw9gza3xLoncA8a+MTaJYCaLGA9c=\\n"
+                            },
+                            "hashes": [
+                              "8LI21mzwxnUSo0fuZeFsUrz2ujZ4QAL+oGeTG+5toZg=",
+                              "nCb369rcIytNhGwWoqBv+eV49X3ZKpo/HJGKm9V+dck=",
+                              "hnNQ9mUdSwYCfdV21pd87NucrdRRNZATowlaRR1hJ4A=",
+                              "MBhhK33vlD4Tq/JKgAaXUI4VjmosWKe6+7RNpQ2ncNM=",
+                              "XKWUE3stvGV1OHsIGiCGfn047Ok6uD4mFkh7BaicaEc=",
+                              "Tgve40VPFfuei+0nhupdGpfPPR+hPpZjxgTiDT8WNoY=",
+                              "wV+S/7tLtYGzkLaSb6UDqexNyhMvumHK/RpTNvEZuLU=",
+                              "uwaWufty6sn6XqO1Tb9M3Vz6sBKPu0HT36mStxJNd7s=",
+                              "jUfeMOXQP0XF1JAnCEETVbfRKMUwCzrVUzYi8vnDMVs=",
+                              "xQKjzJAwwdlQG/YUYBKPXxbCmhMYKo1wnv+6vDuKWhQ=",
+                              "cX3Agx+hP66t1ZLbX/yHbfjU46/3m/VAmWyG/fhxAVc=",
+                              "sjohk/3DQIfXTgf/5XpwtdF7yNbrf8YykOMHr1CyBYQ=",
+                              "98enzMaC+x5oCMvIZQA5z8vu2apDMCFvE/935NfuPw8="
+                            ],
+                            "logIndex": "93750549",
+                            "rootHash": "KgKiXoOl8rM5d4y6Xlbm2QLftvj/FYvTs6z7dJlNO60=",
+                            "treeSize": "93750551"
+                          },
+                          "integratedTime": "1716998992",
+                          "kindVersion": {
+                            "kind": "dsse",
+                            "version": "0.0.1"
+                          },
+                          "logId": {
+                            "keyId": "wNI9atQGlz+VWfO6LRygH4QUfY/8W4RFwiT5i5WRgB0="
+                          },
+                          "logIndex": "97913980"
+                        }
+                      ]
+                    }
+                  },
+                  "repository_id": 1
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "private-user": {
+        "value": {
+          "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+          "bio": "There once was...",
+          "blog": "https://github.com/blog",
+          "collaborators": 8,
+          "company": "GitHub",
+          "created_at": "2008-01-14T04:33:35Z",
+          "disk_usage": 10000,
+          "email": "octocat@github.com",
+          "events_url": "https://api.github.com/users/octocat/events{/privacy}",
+          "followers": 20,
+          "followers_url": "https://api.github.com/users/octocat/followers",
+          "following": 0,
+          "following_url": "https://api.github.com/users/octocat/following{/other_user}",
+          "gists_url": "https://api.github.com/users/octocat/gists{/gist_id}",
+          "gravatar_id": "",
+          "hireable": false,
+          "html_url": "https://github.com/octocat",
+          "id": 1,
+          "location": "San Francisco",
+          "login": "octocat",
+          "name": "monalisa octocat",
+          "node_id": "MDQ6VXNlcjE=",
+          "organizations_url": "https://api.github.com/users/octocat/orgs",
+          "owned_private_repos": 100,
+          "plan": {
+            "collaborators": 0,
+            "name": "Medium",
+            "private_repos": 20,
+            "space": 400
+          },
+          "private_gists": 81,
+          "public_gists": 1,
+          "public_repos": 2,
+          "received_events_url": "https://api.github.com/users/octocat/received_events",
+          "repos_url": "https://api.github.com/users/octocat/repos",
+          "site_admin": false,
+          "starred_url": "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/octocat/subscriptions",
+          "total_private_repos": 100,
+          "twitter_username": "monatheoctocat",
+          "two_factor_authentication": true,
+          "type": "User",
+          "updated_at": "2008-01-14T04:33:35Z",
+          "url": "https://api.github.com/users/octocat"
+        }
+      },
+      "private-user-response-with-public-and-private-profile-information": {
+        "summary": "Response with public and private profile information",
+        "value": {
+          "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+          "bio": "There once was...",
+          "blog": "https://github.com/blog",
+          "collaborators": 8,
+          "company": "GitHub",
+          "created_at": "2008-01-14T04:33:35Z",
+          "disk_usage": 10000,
+          "email": "octocat@github.com",
+          "events_url": "https://api.github.com/users/octocat/events{/privacy}",
+          "followers": 20,
+          "followers_url": "https://api.github.com/users/octocat/followers",
+          "following": 0,
+          "following_url": "https://api.github.com/users/octocat/following{/other_user}",
+          "gists_url": "https://api.github.com/users/octocat/gists{/gist_id}",
+          "gravatar_id": "",
+          "hireable": false,
+          "html_url": "https://github.com/octocat",
+          "id": 1,
+          "location": "San Francisco",
+          "login": "octocat",
+          "name": "monalisa octocat",
+          "node_id": "MDQ6VXNlcjE=",
+          "organizations_url": "https://api.github.com/users/octocat/orgs",
+          "owned_private_repos": 100,
+          "plan": {
+            "collaborators": 0,
+            "name": "Medium",
+            "private_repos": 20,
+            "space": 400
+          },
+          "private_gists": 81,
+          "public_gists": 1,
+          "public_repos": 2,
+          "received_events_url": "https://api.github.com/users/octocat/received_events",
+          "repos_url": "https://api.github.com/users/octocat/repos",
+          "site_admin": false,
+          "starred_url": "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/octocat/subscriptions",
+          "total_private_repos": 100,
+          "twitter_username": "monatheoctocat",
+          "two_factor_authentication": true,
+          "type": "User",
+          "updated_at": "2008-01-14T04:33:35Z",
+          "url": "https://api.github.com/users/octocat"
+        }
+      },
+      "private-user-response-with-public-profile-information": {
+        "summary": "Response with public profile information",
+        "value": {
+          "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+          "bio": "There once was...",
+          "blog": "https://github.com/blog",
+          "company": "GitHub",
+          "created_at": "2008-01-14T04:33:35Z",
+          "email": "octocat@github.com",
+          "events_url": "https://api.github.com/users/octocat/events{/privacy}",
+          "followers": 20,
+          "followers_url": "https://api.github.com/users/octocat/followers",
+          "following": 0,
+          "following_url": "https://api.github.com/users/octocat/following{/other_user}",
+          "gists_url": "https://api.github.com/users/octocat/gists{/gist_id}",
+          "gravatar_id": "",
+          "hireable": false,
+          "html_url": "https://github.com/octocat",
+          "id": 1,
+          "location": "San Francisco",
+          "login": "octocat",
+          "name": "monalisa octocat",
+          "node_id": "MDQ6VXNlcjE=",
+          "organizations_url": "https://api.github.com/users/octocat/orgs",
+          "public_gists": 1,
+          "public_repos": 2,
+          "received_events_url": "https://api.github.com/users/octocat/received_events",
+          "repos_url": "https://api.github.com/users/octocat/repos",
+          "site_admin": false,
+          "starred_url": "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/octocat/subscriptions",
+          "twitter_username": "monatheoctocat",
+          "type": "User",
+          "updated_at": "2008-01-14T04:33:35Z",
+          "url": "https://api.github.com/users/octocat"
+        }
+      },
+      "public-user-default-response": {
+        "summary": "Default response",
+        "value": {
+          "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+          "bio": "There once was...",
+          "blog": "https://github.com/blog",
+          "company": "GitHub",
+          "created_at": "2008-01-14T04:33:35Z",
+          "email": "octocat@github.com",
+          "events_url": "https://api.github.com/users/octocat/events{/privacy}",
+          "followers": 20,
+          "followers_url": "https://api.github.com/users/octocat/followers",
+          "following": 0,
+          "following_url": "https://api.github.com/users/octocat/following{/other_user}",
+          "gists_url": "https://api.github.com/users/octocat/gists{/gist_id}",
+          "gravatar_id": "",
+          "hireable": false,
+          "html_url": "https://github.com/octocat",
+          "id": 1,
+          "location": "San Francisco",
+          "login": "octocat",
+          "name": "monalisa octocat",
+          "node_id": "MDQ6VXNlcjE=",
+          "organizations_url": "https://api.github.com/users/octocat/orgs",
+          "public_gists": 1,
+          "public_repos": 2,
+          "received_events_url": "https://api.github.com/users/octocat/received_events",
+          "repos_url": "https://api.github.com/users/octocat/repos",
+          "site_admin": false,
+          "starred_url": "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/octocat/subscriptions",
+          "twitter_username": "monatheoctocat",
+          "type": "User",
+          "updated_at": "2008-01-14T04:33:35Z",
+          "url": "https://api.github.com/users/octocat"
+        }
+      },
+      "public-user-response-with-git-hub-plan-information": {
+        "summary": "Response with GitHub plan information",
+        "value": {
+          "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+          "bio": "There once was...",
+          "blog": "https://github.com/blog",
+          "company": "GitHub",
+          "created_at": "2008-01-14T04:33:35Z",
+          "email": "octocat@github.com",
+          "events_url": "https://api.github.com/users/octocat/events{/privacy}",
+          "followers": 20,
+          "followers_url": "https://api.github.com/users/octocat/followers",
+          "following": 0,
+          "following_url": "https://api.github.com/users/octocat/following{/other_user}",
+          "gists_url": "https://api.github.com/users/octocat/gists{/gist_id}",
+          "gravatar_id": "",
+          "hireable": false,
+          "html_url": "https://github.com/octocat",
+          "id": 1,
+          "location": "San Francisco",
+          "login": "octocat",
+          "name": "monalisa octocat",
+          "node_id": "MDQ6VXNlcjE=",
+          "organizations_url": "https://api.github.com/users/octocat/orgs",
+          "plan": {
+            "collaborators": 0,
+            "name": "pro",
+            "private_repos": 9999,
+            "space": 976562499
+          },
+          "public_gists": 1,
+          "public_repos": 2,
+          "received_events_url": "https://api.github.com/users/octocat/received_events",
+          "repos_url": "https://api.github.com/users/octocat/repos",
+          "site_admin": false,
+          "starred_url": "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+          "subscriptions_url": "https://api.github.com/users/octocat/subscriptions",
+          "twitter_username": "monatheoctocat",
+          "type": "User",
+          "updated_at": "2008-01-14T04:33:35Z",
+          "url": "https://api.github.com/users/octocat"
+        }
+      },
+      "simple-user-items": {
+        "value": [
+          {
+            "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+            "events_url": "https://api.github.com/users/octocat/events{/privacy}",
+            "followers_url": "https://api.github.com/users/octocat/followers",
+            "following_url": "https://api.github.com/users/octocat/following{/other_user}",
+            "gists_url": "https://api.github.com/users/octocat/gists{/gist_id}",
+            "gravatar_id": "",
+            "html_url": "https://github.com/octocat",
+            "id": 1,
+            "login": "octocat",
+            "node_id": "MDQ6VXNlcjE=",
+            "organizations_url": "https://api.github.com/users/octocat/orgs",
+            "received_events_url": "https://api.github.com/users/octocat/received_events",
+            "repos_url": "https://api.github.com/users/octocat/repos",
+            "site_admin": false,
+            "starred_url": "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+            "subscriptions_url": "https://api.github.com/users/octocat/subscriptions",
+            "type": "User",
+            "url": "https://api.github.com/users/octocat"
+          }
+        ]
+      },
+      "social-account-items": {
+        "value": [
+          {
+            "provider": "twitter",
+            "url": "https://twitter.com/github"
+          }
+        ]
+      },
+      "ssh-signing-key": {
+        "value": {
+          "created_at": "2020-06-11T21:31:57Z",
+          "id": 2,
+          "key": "2Sg8iYjAxxmI2LvUXpJjkYrMxURPc8r+dB7TJyvv1234",
+          "title": "ssh-rsa AAAAB3NzaC1yc2EAAA"
+        }
+      },
+      "ssh-signing-key-items": {
+        "value": [
+          {
+            "created_at": "2020-06-11T21:31:57Z",
+            "id": 2,
+            "key": "2Sg8iYjAxxmI2LvUXpJjkYrMxURPc8r+dB7TJyvv1234",
+            "title": "ssh-rsa AAAAB3NzaC1yc2EAAA"
+          },
+          {
+            "created_at": "2020-07-11T21:31:57Z",
+            "id": 3,
+            "key": "2Sg8iYjAxxmI2LvUXpJjkYrMxURPc8r+dB7TJy931234",
+            "title": "ssh-rsa AAAAB3NzaC1yc2EAAB"
+          }
+        ]
+      }
+    },
+    "headers": {
+      "link": {
+        "example": "<https://api.github.com/resource?page=2>; rel=\"next\", <https://api.github.com/resource?page=5>; rel=\"last\"",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "parameters": {
+      "account-id": {
+        "description": "account_id parameter",
+        "in": "path",
+        "name": "account_id",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "gpg-key-id": {
+        "description": "The unique identifier of the GPG key.",
+        "in": "path",
+        "name": "gpg_key_id",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "key-id": {
+        "description": "The unique identifier of the key.",
+        "in": "path",
+        "name": "key_id",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "page": {
+        "description": "The page number of the results to fetch. For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\"",
+        "in": "query",
+        "name": "page",
+        "schema": {
+          "default": 1,
+          "type": "integer"
+        }
+      },
+      "pagination-after": {
+        "description": "A cursor, as given in the [Link header](https://docs.github.com/rest/guides/using-pagination-in-the-rest-api#using-link-headers). If specified, the query only searches for results after this cursor. For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\"",
+        "in": "query",
+        "name": "after",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "pagination-before": {
+        "description": "A cursor, as given in the [Link header](https://docs.github.com/rest/guides/using-pagination-in-the-rest-api#using-link-headers). If specified, the query only searches for results before this cursor. For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\"",
+        "in": "query",
+        "name": "before",
+        "required": false,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "per-page": {
+        "description": "The number of results per page (max 100). For more information, see \"[Using pagination in the REST API](https://docs.github.com/rest/using-the-rest-api/using-pagination-in-the-rest-api).\"",
+        "in": "query",
+        "name": "per_page",
+        "schema": {
+          "default": 30,
+          "type": "integer"
+        }
+      },
+      "since-user": {
+        "description": "A user ID. Only return users with an ID greater than this ID.",
+        "in": "query",
+        "name": "since",
+        "required": false,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "ssh-signing-key-id": {
+        "description": "The unique identifier of the SSH signing key.",
+        "in": "path",
+        "name": "ssh_signing_key_id",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "username": {
+        "description": "The handle for the GitHub user account.",
+        "in": "path",
+        "name": "username",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "forbidden": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/basic-error"
+            }
+          }
+        },
+        "description": "Forbidden"
+      },
+      "not_found": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/basic-error"
+            }
+          }
+        },
+        "description": "Resource not found"
+      },
+      "not_modified": {
+        "description": "Not modified"
+      },
+      "requires_authentication": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/basic-error"
+            }
+          }
+        },
+        "description": "Requires authentication"
+      },
+      "validation_failed": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/validation-error"
+            }
+          }
+        },
+        "description": "Validation failed, or the endpoint has been spammed."
+      }
+    },
+    "schemas": {
+      "basic-error": {
+        "description": "Basic Error",
+        "properties": {
+          "documentation_url": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "title": "Basic Error",
+        "type": "object"
+      },
+      "email": {
+        "description": "Email",
+        "properties": {
+          "email": {
+            "example": "octocat@github.com",
+            "format": "email",
+            "type": "string"
+          },
+          "primary": {
+            "example": true,
+            "type": "boolean"
+          },
+          "verified": {
+            "example": true,
+            "type": "boolean"
+          },
+          "visibility": {
+            "example": "public",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "primary",
+          "verified",
+          "visibility"
+        ],
+        "title": "Email",
+        "type": "object"
+      },
+      "empty-object": {
+        "additionalProperties": false,
+        "description": "An object without any properties.",
+        "properties": {},
+        "title": "Empty Object",
+        "type": "object"
+      },
+      "gpg-key": {
+        "description": "A unique encryption key",
+        "properties": {
+          "can_certify": {
+            "example": true,
+            "type": "boolean"
+          },
+          "can_encrypt_comms": {
+            "type": "boolean"
+          },
+          "can_encrypt_storage": {
+            "type": "boolean"
+          },
+          "can_sign": {
+            "example": true,
+            "type": "boolean"
+          },
+          "created_at": {
+            "example": "2016-03-24T11:31:04-06:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "emails": {
+            "example": [
+              {
+                "email": "octocat@users.noreply.github.com",
+                "verified": true
+              }
+            ],
+            "items": {
+              "properties": {
+                "email": {
+                  "type": "string"
+                },
+                "verified": {
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "example": 3,
+            "format": "int64",
+            "type": "integer"
+          },
+          "key_id": {
+            "example": "3262EFF25BA0D270",
+            "type": "string"
+          },
+          "name": {
+            "example": "Octocat's GPG Key",
+            "nullable": true,
+            "type": "string"
+          },
+          "primary_key_id": {
+            "nullable": true,
+            "type": "integer"
+          },
+          "public_key": {
+            "example": "xsBNBFayYZ...",
+            "type": "string"
+          },
+          "raw_key": {
+            "nullable": true,
+            "type": "string"
+          },
+          "revoked": {
+            "example": true,
+            "type": "boolean"
+          },
+          "subkeys": {
+            "example": [
+              {
+                "can_certify": false,
+                "can_encrypt_comms": true,
+                "can_encrypt_storage": true,
+                "can_sign": false,
+                "created_at": "2016-03-24T11:31:04-06:00",
+                "emails": [],
+                "expires_at": null,
+                "id": 4,
+                "key_id": "4A595D4C72EE49C7",
+                "primary_key_id": 3,
+                "public_key": "zsBNBFayYZ...",
+                "revoked": false
+              }
+            ],
+            "items": {
+              "properties": {
+                "can_certify": {
+                  "type": "boolean"
+                },
+                "can_encrypt_comms": {
+                  "type": "boolean"
+                },
+                "can_encrypt_storage": {
+                  "type": "boolean"
+                },
+                "can_sign": {
+                  "type": "boolean"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "emails": {
+                  "items": {
+                    "properties": {
+                      "email": {
+                        "type": "string"
+                      },
+                      "verified": {
+                        "type": "boolean"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "type": "array"
+                },
+                "expires_at": {
+                  "nullable": true,
+                  "type": "string"
+                },
+                "id": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "key_id": {
+                  "type": "string"
+                },
+                "primary_key_id": {
+                  "type": "integer"
+                },
+                "public_key": {
+                  "type": "string"
+                },
+                "raw_key": {
+                  "nullable": true,
+                  "type": "string"
+                },
+                "revoked": {
+                  "type": "boolean"
+                },
+                "subkeys": {
+                  "items": {},
+                  "type": "array"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "primary_key_id",
+          "key_id",
+          "raw_key",
+          "public_key",
+          "created_at",
+          "expires_at",
+          "can_sign",
+          "can_encrypt_comms",
+          "can_encrypt_storage",
+          "can_certify",
+          "emails",
+          "subkeys",
+          "revoked"
+        ],
+        "title": "GPG Key",
+        "type": "object"
+      },
+      "hovercard": {
+        "description": "Hovercard",
+        "properties": {
+          "contexts": {
+            "items": {
+              "properties": {
+                "message": {
+                  "type": "string"
+                },
+                "octicon": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message",
+                "octicon"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "contexts"
+        ],
+        "title": "Hovercard",
+        "type": "object"
+      },
+      "key": {
+        "description": "Key",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "last_used": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "id",
+          "url",
+          "title",
+          "created_at",
+          "verified",
+          "read_only"
+        ],
+        "title": "Key",
+        "type": "object"
+      },
+      "key-simple": {
+        "description": "Key Simple",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "last_used": {
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "id"
+        ],
+        "title": "Key Simple",
+        "type": "object"
+      },
+      "private-user": {
+        "description": "Private User",
+        "properties": {
+          "avatar_url": {
+            "example": "https://github.com/images/error/octocat_happy.gif",
+            "format": "uri",
+            "type": "string"
+          },
+          "bio": {
+            "example": "There once was...",
+            "nullable": true,
+            "type": "string"
+          },
+          "blog": {
+            "example": "https://github.com/blog",
+            "nullable": true,
+            "type": "string"
+          },
+          "business_plus": {
+            "type": "boolean"
+          },
+          "collaborators": {
+            "example": 8,
+            "type": "integer"
+          },
+          "company": {
+            "example": "GitHub",
+            "nullable": true,
+            "type": "string"
+          },
+          "created_at": {
+            "example": "2008-01-14T04:33:35Z",
+            "format": "date-time",
+            "type": "string"
+          },
+          "disk_usage": {
+            "example": 10000,
+            "type": "integer"
+          },
+          "email": {
+            "example": "octocat@github.com",
+            "format": "email",
+            "nullable": true,
+            "type": "string"
+          },
+          "events_url": {
+            "example": "https://api.github.com/users/octocat/events{/privacy}",
+            "type": "string"
+          },
+          "followers": {
+            "example": 20,
+            "type": "integer"
+          },
+          "followers_url": {
+            "example": "https://api.github.com/users/octocat/followers",
+            "format": "uri",
+            "type": "string"
+          },
+          "following": {
+            "example": 0,
+            "type": "integer"
+          },
+          "following_url": {
+            "example": "https://api.github.com/users/octocat/following{/other_user}",
+            "type": "string"
+          },
+          "gists_url": {
+            "example": "https://api.github.com/users/octocat/gists{/gist_id}",
+            "type": "string"
+          },
+          "gravatar_id": {
+            "example": "41d064eb2195891e12d0413f63227ea7",
+            "nullable": true,
+            "type": "string"
+          },
+          "hireable": {
+            "nullable": true,
+            "type": "boolean"
+          },
+          "html_url": {
+            "example": "https://github.com/octocat",
+            "format": "uri",
+            "type": "string"
+          },
+          "id": {
+            "example": 1,
+            "format": "int64",
+            "type": "integer"
+          },
+          "ldap_dn": {
+            "type": "string"
+          },
+          "location": {
+            "example": "San Francisco",
+            "nullable": true,
+            "type": "string"
+          },
+          "login": {
+            "example": "octocat",
+            "type": "string"
+          },
+          "name": {
+            "example": "monalisa octocat",
+            "nullable": true,
+            "type": "string"
+          },
+          "node_id": {
+            "example": "MDQ6VXNlcjE=",
+            "type": "string"
+          },
+          "notification_email": {
+            "example": "octocat@github.com",
+            "format": "email",
+            "nullable": true,
+            "type": "string"
+          },
+          "organizations_url": {
+            "example": "https://api.github.com/users/octocat/orgs",
+            "format": "uri",
+            "type": "string"
+          },
+          "owned_private_repos": {
+            "example": 100,
+            "type": "integer"
+          },
+          "plan": {
+            "properties": {
+              "collaborators": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "private_repos": {
+                "type": "integer"
+              },
+              "space": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "collaborators",
+              "name",
+              "space",
+              "private_repos"
+            ],
+            "type": "object"
+          },
+          "private_gists": {
+            "example": 81,
+            "type": "integer"
+          },
+          "public_gists": {
+            "example": 1,
+            "type": "integer"
+          },
+          "public_repos": {
+            "example": 2,
+            "type": "integer"
+          },
+          "received_events_url": {
+            "example": "https://api.github.com/users/octocat/received_events",
+            "format": "uri",
+            "type": "string"
+          },
+          "repos_url": {
+            "example": "https://api.github.com/users/octocat/repos",
+            "format": "uri",
+            "type": "string"
+          },
+          "site_admin": {
+            "type": "boolean"
+          },
+          "starred_url": {
+            "example": "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+            "type": "string"
+          },
+          "subscriptions_url": {
+            "example": "https://api.github.com/users/octocat/subscriptions",
+            "format": "uri",
+            "type": "string"
+          },
+          "total_private_repos": {
+            "example": 100,
+            "type": "integer"
+          },
+          "twitter_username": {
+            "example": "monalisa",
+            "nullable": true,
+            "type": "string"
+          },
+          "two_factor_authentication": {
+            "example": true,
+            "type": "boolean"
+          },
+          "type": {
+            "example": "User",
+            "type": "string"
+          },
+          "updated_at": {
+            "example": "2008-01-14T04:33:35Z",
+            "format": "date-time",
+            "type": "string"
+          },
+          "url": {
+            "example": "https://api.github.com/users/octocat",
+            "format": "uri",
+            "type": "string"
+          },
+          "user_view_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "avatar_url",
+          "events_url",
+          "followers_url",
+          "following_url",
+          "gists_url",
+          "gravatar_id",
+          "html_url",
+          "id",
+          "node_id",
+          "login",
+          "organizations_url",
+          "received_events_url",
+          "repos_url",
+          "site_admin",
+          "starred_url",
+          "subscriptions_url",
+          "type",
+          "url",
+          "bio",
+          "blog",
+          "company",
+          "email",
+          "followers",
+          "following",
+          "hireable",
+          "location",
+          "name",
+          "public_gists",
+          "public_repos",
+          "created_at",
+          "updated_at",
+          "collaborators",
+          "disk_usage",
+          "owned_private_repos",
+          "private_gists",
+          "total_private_repos",
+          "two_factor_authentication"
+        ],
+        "title": "Private User",
+        "type": "object"
+      },
+      "public-user": {
+        "additionalProperties": false,
+        "description": "Public User",
+        "properties": {
+          "avatar_url": {
+            "format": "uri",
+            "type": "string"
+          },
+          "bio": {
+            "nullable": true,
+            "type": "string"
+          },
+          "blog": {
+            "nullable": true,
+            "type": "string"
+          },
+          "collaborators": {
+            "example": 3,
+            "type": "integer"
+          },
+          "company": {
+            "nullable": true,
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "disk_usage": {
+            "example": 1,
+            "type": "integer"
+          },
+          "email": {
+            "format": "email",
+            "nullable": true,
+            "type": "string"
+          },
+          "events_url": {
+            "type": "string"
+          },
+          "followers": {
+            "type": "integer"
+          },
+          "followers_url": {
+            "format": "uri",
+            "type": "string"
+          },
+          "following": {
+            "type": "integer"
+          },
+          "following_url": {
+            "type": "string"
+          },
+          "gists_url": {
+            "type": "string"
+          },
+          "gravatar_id": {
+            "nullable": true,
+            "type": "string"
+          },
+          "hireable": {
+            "nullable": true,
+            "type": "boolean"
+          },
+          "html_url": {
+            "format": "uri",
+            "type": "string"
+          },
+          "id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "location": {
+            "nullable": true,
+            "type": "string"
+          },
+          "login": {
+            "type": "string"
+          },
+          "name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "notification_email": {
+            "format": "email",
+            "nullable": true,
+            "type": "string"
+          },
+          "organizations_url": {
+            "format": "uri",
+            "type": "string"
+          },
+          "owned_private_repos": {
+            "example": 2,
+            "type": "integer"
+          },
+          "plan": {
+            "properties": {
+              "collaborators": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "private_repos": {
+                "type": "integer"
+              },
+              "space": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "collaborators",
+              "name",
+              "space",
+              "private_repos"
+            ],
+            "type": "object"
+          },
+          "private_gists": {
+            "example": 1,
+            "type": "integer"
+          },
+          "public_gists": {
+            "type": "integer"
+          },
+          "public_repos": {
+            "type": "integer"
+          },
+          "received_events_url": {
+            "format": "uri",
+            "type": "string"
+          },
+          "repos_url": {
+            "format": "uri",
+            "type": "string"
+          },
+          "site_admin": {
+            "type": "boolean"
+          },
+          "starred_url": {
+            "type": "string"
+          },
+          "subscriptions_url": {
+            "format": "uri",
+            "type": "string"
+          },
+          "total_private_repos": {
+            "example": 2,
+            "type": "integer"
+          },
+          "twitter_username": {
+            "nullable": true,
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "type": "string"
+          },
+          "user_view_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "avatar_url",
+          "events_url",
+          "followers_url",
+          "following_url",
+          "gists_url",
+          "gravatar_id",
+          "html_url",
+          "id",
+          "node_id",
+          "login",
+          "organizations_url",
+          "received_events_url",
+          "repos_url",
+          "site_admin",
+          "starred_url",
+          "subscriptions_url",
+          "type",
+          "url",
+          "bio",
+          "blog",
+          "company",
+          "email",
+          "followers",
+          "following",
+          "hireable",
+          "location",
+          "name",
+          "public_gists",
+          "public_repos",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Public User",
+        "type": "object"
+      },
+      "simple-user": {
+        "description": "A GitHub user.",
+        "properties": {
+          "avatar_url": {
+            "example": "https://github.com/images/error/octocat_happy.gif",
+            "format": "uri",
+            "type": "string"
+          },
+          "email": {
+            "nullable": true,
+            "type": "string"
+          },
+          "events_url": {
+            "example": "https://api.github.com/users/octocat/events{/privacy}",
+            "type": "string"
+          },
+          "followers_url": {
+            "example": "https://api.github.com/users/octocat/followers",
+            "format": "uri",
+            "type": "string"
+          },
+          "following_url": {
+            "example": "https://api.github.com/users/octocat/following{/other_user}",
+            "type": "string"
+          },
+          "gists_url": {
+            "example": "https://api.github.com/users/octocat/gists{/gist_id}",
+            "type": "string"
+          },
+          "gravatar_id": {
+            "example": "41d064eb2195891e12d0413f63227ea7",
+            "nullable": true,
+            "type": "string"
+          },
+          "html_url": {
+            "example": "https://github.com/octocat",
+            "format": "uri",
+            "type": "string"
+          },
+          "id": {
+            "example": 1,
+            "format": "int64",
+            "type": "integer"
+          },
+          "login": {
+            "example": "octocat",
+            "type": "string"
+          },
+          "name": {
+            "nullable": true,
+            "type": "string"
+          },
+          "node_id": {
+            "example": "MDQ6VXNlcjE=",
+            "type": "string"
+          },
+          "organizations_url": {
+            "example": "https://api.github.com/users/octocat/orgs",
+            "format": "uri",
+            "type": "string"
+          },
+          "received_events_url": {
+            "example": "https://api.github.com/users/octocat/received_events",
+            "format": "uri",
+            "type": "string"
+          },
+          "repos_url": {
+            "example": "https://api.github.com/users/octocat/repos",
+            "format": "uri",
+            "type": "string"
+          },
+          "site_admin": {
+            "type": "boolean"
+          },
+          "starred_at": {
+            "example": "\"2020-07-09T00:17:55Z\"",
+            "type": "string"
+          },
+          "starred_url": {
+            "example": "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+            "type": "string"
+          },
+          "subscriptions_url": {
+            "example": "https://api.github.com/users/octocat/subscriptions",
+            "format": "uri",
+            "type": "string"
+          },
+          "type": {
+            "example": "User",
+            "type": "string"
+          },
+          "url": {
+            "example": "https://api.github.com/users/octocat",
+            "format": "uri",
+            "type": "string"
+          },
+          "user_view_type": {
+            "example": "public",
+            "type": "string"
+          }
+        },
+        "required": [
+          "avatar_url",
+          "events_url",
+          "followers_url",
+          "following_url",
+          "gists_url",
+          "gravatar_id",
+          "html_url",
+          "id",
+          "node_id",
+          "login",
+          "organizations_url",
+          "received_events_url",
+          "repos_url",
+          "site_admin",
+          "starred_url",
+          "subscriptions_url",
+          "type",
+          "url"
+        ],
+        "title": "Simple User",
+        "type": "object"
+      },
+      "social-account": {
+        "description": "Social media account",
+        "properties": {
+          "provider": {
+            "example": "linkedin",
+            "type": "string"
+          },
+          "url": {
+            "example": "https://www.linkedin.com/company/github/",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "url"
+        ],
+        "title": "Social account",
+        "type": "object"
+      },
+      "ssh-signing-key": {
+        "description": "A public SSH key used to sign Git commits",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "id",
+          "title",
+          "created_at"
+        ],
+        "title": "SSH Signing Key",
+        "type": "object"
+      },
+      "validation-error": {
+        "description": "Validation Error",
+        "properties": {
+          "documentation_url": {
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "field": {
+                  "type": "string"
+                },
+                "index": {
+                  "type": "integer"
+                },
+                "message": {
+                  "type": "string"
+                },
+                "resource": {
+                  "type": "string"
+                },
+                "value": {
+                  "oneOf": [
+                    {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    {
+                      "nullable": true,
+                      "type": "integer"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "nullable": true,
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "code"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "documentation_url"
+        ],
+        "title": "Validation Error",
+        "type": "object"
+      }
+    }
+  },
+  "externalDocs": {
+    "description": "GitHub v3 REST API",
+    "url": "https://docs.github.com/rest/"
+  },
+  "info": {
+    "contact": {
+      "name": "Support",
+      "url": "https://support.github.com/contact?tags=dotcom-rest-api"
+    },
+    "description": "GitHub's v3 REST API.",
+    "license": {
+      "name": "MIT",
+      "url": "https://spdx.org/licenses/MIT"
+    },
+    "termsOfService": "https://docs.github.com/articles/github-terms-of-service",
+    "title": "GitHub v3 REST API",
+    "version": "1.1.4",
+    "x-github-plan": "api.github.com"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/user": {
+      "get": {
+        "description": "OAuth app tokens and personal access tokens (classic) need the `read:user` scope, or the broader `user` scope, for this endpoint to return the private user response. The private user response includes additional fields such as `private_gists`, `total_private_repos`, `owned_private_repos`, `disk_usage`, `collaborators`, and `two_factor_authentication`. Tokens without these scopes receive the public user response.\n\nThe private and public user response types are unrelated to the [private profile](https://docs.github.com/account-and-profile/concepts/personal-profile#private-profiles) setting. A token without scopes still authenticates as the token's owner, so values subject to private profile visibility, such as `followers` and `following`, may differ from an unauthenticated response.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/users#get-the-authenticated-user"
+        },
+        "operationId": "get-authenticated",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "response-with-public-and-private-profile-information": {
+                    "$ref": "#/components/examples/private-user-response-with-public-and-private-profile-information"
+                  },
+                  "response-with-public-profile-information": {
+                    "$ref": "#/components/examples/private-user-response-with-public-profile-information"
+                  }
+                },
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "private": "#/components/schemas/private-user",
+                      "public": "#/components/schemas/public-user"
+                    },
+                    "propertyName": "user_view_type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/private-user"
+                    },
+                    {
+                      "$ref": "#/components/schemas/public-user"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          }
+        },
+        "summary": "Get the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "users"
+        },
+        "x-original-operation-id": "users/get-authenticated"
+      },
+      "patch": {
+        "description": "**Note:** If your email is set to private and you send an `email` parameter as part of this request to update your profile, your privacy settings are still enforced: the email address will not be displayed on your public profile or via the API.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/users#update-the-authenticated-user"
+        },
+        "operationId": "update-authenticated",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "summary": "Example of updating blog and name",
+                  "value": {
+                    "blog": "https://github.com/blog",
+                    "name": "monalisa octocat"
+                  }
+                }
+              },
+              "schema": {
+                "properties": {
+                  "bio": {
+                    "description": "The new short biography of the user.",
+                    "type": "string"
+                  },
+                  "blog": {
+                    "description": "The new blog URL of the user.",
+                    "example": "blog.example.com",
+                    "type": "string"
+                  },
+                  "company": {
+                    "description": "The new company of the user.",
+                    "example": "Acme corporation",
+                    "type": "string"
+                  },
+                  "email": {
+                    "description": "The publicly visible email address of the user.",
+                    "example": "omar@example.com",
+                    "type": "string"
+                  },
+                  "hireable": {
+                    "description": "The new hiring availability of the user.",
+                    "type": "boolean"
+                  },
+                  "location": {
+                    "description": "The new location of the user.",
+                    "example": "Berlin, Germany",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "The new name of the user.",
+                    "example": "Omar Jahandar",
+                    "type": "string"
+                  },
+                  "twitter_username": {
+                    "description": "The new Twitter username of the user.",
+                    "example": "therealomarj",
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/private-user"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/private-user"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Update the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "users"
+        },
+        "x-original-operation-id": "users/update-authenticated"
+      }
+    },
+    "/user/blocks": {
+      "get": {
+        "description": "List the users you've blocked on your personal account.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/blocking#list-users-blocked-by-the-authenticated-user"
+        },
+        "operationId": "list-blocked-by-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/simple-user-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/simple-user"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "List users blocked by the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "blocking"
+        },
+        "x-original-operation-id": "users/list-blocked-by-authenticated-user"
+      }
+    },
+    "/user/blocks/{username}": {
+      "delete": {
+        "description": "Unblocks the given user and returns a 204.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/blocking#unblock-a-user"
+        },
+        "operationId": "unblock",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Unblock a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "blocking"
+        },
+        "x-original-operation-id": "users/unblock"
+      },
+      "get": {
+        "description": "Returns a 204 if the given user is blocked by the authenticated user. Returns a 404 if the given user is not blocked by the authenticated user, or if the given user account has been identified as spam by GitHub.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/blocking#check-if-a-user-is-blocked-by-the-authenticated-user"
+        },
+        "operationId": "check-blocked",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "If the user is blocked"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/basic-error"
+                }
+              }
+            },
+            "description": "If the user is not blocked"
+          }
+        },
+        "summary": "Check if a user is blocked by the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "blocking"
+        },
+        "x-original-operation-id": "users/check-blocked"
+      },
+      "put": {
+        "description": "Blocks the given user and returns a 204. If the authenticated user cannot block the given user a 422 is returned.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/blocking#block-a-user"
+        },
+        "operationId": "block",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Block a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "blocking"
+        },
+        "x-original-operation-id": "users/block"
+      }
+    },
+    "/user/email/visibility": {
+      "patch": {
+        "description": "Sets the visibility for your primary email addresses.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/emails#set-primary-email-visibility-for-the-authenticated-user"
+        },
+        "operationId": "set-primary-email-visibility-for-authenticated-user",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "summary": "Example setting the primary email address to private",
+                  "value": {
+                    "visibility": "private"
+                  }
+                }
+              },
+              "schema": {
+                "properties": {
+                  "visibility": {
+                    "description": "Denotes whether an email is publicly visible.",
+                    "enum": [
+                      "public",
+                      "private"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "visibility"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/email-items-3"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/email"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Set primary email visibility for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "emails"
+        },
+        "x-original-operation-id": "users/set-primary-email-visibility-for-authenticated-user"
+      }
+    },
+    "/user/emails": {
+      "delete": {
+        "description": "OAuth app tokens and personal access tokens (classic) need the `user` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/emails#delete-an-email-address-for-the-authenticated-user"
+        },
+        "operationId": "delete-email-for-authenticated-user",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "summary": "Example deleting multiple email accounts",
+                  "value": {
+                    "emails": [
+                      "octocat@github.com",
+                      "mona@github.com"
+                    ]
+                  }
+                }
+              },
+              "schema": {
+                "oneOf": [
+                  {
+                    "description": "Deletes one or more email addresses from your GitHub account. Must contain at least one email address. **Note:** Alternatively, you can pass a single email address or an `array` of emails addresses directly, but we recommend that you pass an object using the `emails` key.",
+                    "example": {
+                      "emails": [
+                        "octocat@github.com",
+                        "mona@github.com"
+                      ]
+                    },
+                    "properties": {
+                      "emails": {
+                        "description": "Email addresses associated with the GitHub user account.",
+                        "items": {
+                          "example": "username@example.com",
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "emails"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "items": {
+                      "example": "username@example.com",
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Delete an email address for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "emails"
+        },
+        "x-original-operation-id": "users/delete-email-for-authenticated-user"
+      },
+      "get": {
+        "description": "Lists all of your email addresses, and specifies which one is visible\nto the public.\n\nOAuth app tokens and personal access tokens (classic) need the `user:email` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/emails#list-email-addresses-for-the-authenticated-user"
+        },
+        "operationId": "list-emails-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/email-items-2"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/email"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "List email addresses for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "emails"
+        },
+        "x-original-operation-id": "users/list-emails-for-authenticated-user"
+      },
+      "post": {
+        "description": "OAuth app tokens and personal access tokens (classic) need the `user` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/emails#add-an-email-address-for-the-authenticated-user"
+        },
+        "operationId": "add-email-for-authenticated-user",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "summary": "Example adding multiple email addresses",
+                  "value": {
+                    "emails": [
+                      "octocat@github.com",
+                      "mona@github.com",
+                      "octocat@octocat.org"
+                    ]
+                  }
+                }
+              },
+              "schema": {
+                "oneOf": [
+                  {
+                    "example": {
+                      "emails": [
+                        "octocat@github.com",
+                        "mona@github.com"
+                      ]
+                    },
+                    "properties": {
+                      "emails": {
+                        "description": "Adds one or more email addresses to your GitHub account. Must contain at least one email address. **Note:** Alternatively, you can pass a single email address or an `array` of emails addresses directly, but we recommend that you pass an object using the `emails` key.",
+                        "example": [],
+                        "items": {
+                          "example": "username@example.com",
+                          "type": "string"
+                        },
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "emails"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "items": {
+                      "example": "username@example.com",
+                      "type": "string"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/email-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/email"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Add an email address for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "emails"
+        },
+        "x-original-operation-id": "users/add-email-for-authenticated-user"
+      }
+    },
+    "/user/followers": {
+      "get": {
+        "description": "Lists the people following the authenticated user.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/followers#list-followers-of-the-authenticated-user"
+        },
+        "operationId": "list-followers-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/simple-user-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/simple-user"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          }
+        },
+        "summary": "List followers of the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "followers"
+        },
+        "x-original-operation-id": "users/list-followers-for-authenticated-user"
+      }
+    },
+    "/user/following": {
+      "get": {
+        "description": "Lists the people who the authenticated user follows.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/followers#list-the-people-the-authenticated-user-follows"
+        },
+        "operationId": "list-followed-by-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/simple-user-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/simple-user"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          }
+        },
+        "summary": "List the people the authenticated user follows",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "followers"
+        },
+        "x-original-operation-id": "users/list-followed-by-authenticated-user"
+      }
+    },
+    "/user/following/{username}": {
+      "delete": {
+        "description": "OAuth app tokens and personal access tokens (classic) need the `user:follow` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/followers#unfollow-a-user"
+        },
+        "operationId": "unfollow",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Unfollow a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "followers"
+        },
+        "x-original-operation-id": "users/unfollow"
+      },
+      "get": {
+        "description": "",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/followers#check-if-a-person-is-followed-by-the-authenticated-user"
+        },
+        "operationId": "check-person-is-followed-by-authenticated",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "if the person is followed by the authenticated user"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/basic-error"
+                }
+              }
+            },
+            "description": "if the person is not followed by the authenticated user"
+          }
+        },
+        "summary": "Check if a person is followed by the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "followers"
+        },
+        "x-original-operation-id": "users/check-person-is-followed-by-authenticated"
+      },
+      "put": {
+        "description": "Note that you'll need to set `Content-Length` to zero when calling out to this endpoint. For more information, see \"[HTTP verbs](https://docs.github.com/rest/guides/getting-started-with-the-rest-api#http-method).\"\n\nOAuth app tokens and personal access tokens (classic) need the `user:follow` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/followers#follow-a-user"
+        },
+        "operationId": "follow",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Follow a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "followers"
+        },
+        "x-original-operation-id": "users/follow"
+      }
+    },
+    "/user/gpg_keys": {
+      "get": {
+        "description": "Lists the current user's GPG keys.\n\nOAuth app tokens and personal access tokens (classic) need the `read:gpg_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/gpg-keys#list-gpg-keys-for-the-authenticated-user"
+        },
+        "operationId": "list-gpg-keys-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/gpg-key-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/gpg-key"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "List GPG keys for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "gpg-keys"
+        },
+        "x-original-operation-id": "users/list-gpg-keys-for-authenticated-user"
+      },
+      "post": {
+        "description": "Adds a GPG key to the authenticated user's GitHub account.\n\nOAuth app tokens and personal access tokens (classic) need the `write:gpg_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/gpg-keys#create-a-gpg-key-for-the-authenticated-user"
+        },
+        "operationId": "create-gpg-key-for-authenticated-user",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "value": {
+                    "armored_public_key": "-----BEGIN PGP PUBLIC KEY BLOCK-----\nVersion: GnuPG v1\n\nmQINBFnZ2ZIBEADQ2Z7Z7\n-----END PGP PUBLIC KEY BLOCK-----",
+                    "name": "Octocat's GPG Key"
+                  }
+                }
+              },
+              "schema": {
+                "properties": {
+                  "armored_public_key": {
+                    "description": "A GPG key in ASCII-armored format.",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "A descriptive name for the new key.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "armored_public_key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/gpg-key"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/gpg-key"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Create a GPG key for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "gpg-keys"
+        },
+        "x-original-operation-id": "users/create-gpg-key-for-authenticated-user"
+      }
+    },
+    "/user/gpg_keys/{gpg_key_id}": {
+      "delete": {
+        "description": "Removes a GPG key from the authenticated user's GitHub account.\n\nOAuth app tokens and personal access tokens (classic) need the `admin:gpg_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/gpg-keys#delete-a-gpg-key-for-the-authenticated-user"
+        },
+        "operationId": "delete-gpg-key-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/gpg-key-id"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Delete a GPG key for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "gpg-keys"
+        },
+        "x-original-operation-id": "users/delete-gpg-key-for-authenticated-user"
+      },
+      "get": {
+        "description": "View extended details for a single GPG key.\n\nOAuth app tokens and personal access tokens (classic) need the `read:gpg_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/gpg-keys#get-a-gpg-key-for-the-authenticated-user"
+        },
+        "operationId": "get-gpg-key-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/gpg-key-id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/gpg-key"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/gpg-key"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Get a GPG key for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "gpg-keys"
+        },
+        "x-original-operation-id": "users/get-gpg-key-for-authenticated-user"
+      }
+    },
+    "/user/keys": {
+      "get": {
+        "description": "Lists the public SSH keys for the authenticated user's GitHub account.\n\nOAuth app tokens and personal access tokens (classic) need the `read:public_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/keys#list-public-ssh-keys-for-the-authenticated-user"
+        },
+        "operationId": "list-public-ssh-keys-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/key-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/key"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "List public SSH keys for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "keys"
+        },
+        "x-original-operation-id": "users/list-public-ssh-keys-for-authenticated-user"
+      },
+      "post": {
+        "description": "Adds a public SSH key to the authenticated user's GitHub account.\n\nOAuth app tokens and personal access tokens (classic) need the `write:public_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/keys#create-a-public-ssh-key-for-the-authenticated-user"
+        },
+        "operationId": "create-public-ssh-key-for-authenticated-user",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "value": {
+                    "key": "2Sg8iYjAxxmI2LvUXpJjkYrMxURPc8r+dB7TJyvv1234",
+                    "title": "ssh-rsa AAAAB3NzaC1yc2EAAA"
+                  }
+                }
+              },
+              "schema": {
+                "properties": {
+                  "key": {
+                    "description": "The public SSH key to add to your GitHub account.",
+                    "pattern": "^ssh-(rsa|dss|ed25519) |^ecdsa-sha2-nistp(256|384|521) ",
+                    "type": "string"
+                  },
+                  "title": {
+                    "description": "A descriptive name for the new key.",
+                    "example": "Personal MacBook Air",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/key"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/key"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Create a public SSH key for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "keys"
+        },
+        "x-original-operation-id": "users/create-public-ssh-key-for-authenticated-user"
+      }
+    },
+    "/user/keys/{key_id}": {
+      "delete": {
+        "description": "Removes a public SSH key from the authenticated user's GitHub account.\n\nOAuth app tokens and personal access tokens (classic) need the `admin:public_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/keys#delete-a-public-ssh-key-for-the-authenticated-user"
+        },
+        "operationId": "delete-public-ssh-key-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/key-id"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Delete a public SSH key for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "keys"
+        },
+        "x-original-operation-id": "users/delete-public-ssh-key-for-authenticated-user"
+      },
+      "get": {
+        "description": "View extended details for a single public SSH key.\n\nOAuth app tokens and personal access tokens (classic) need the `read:public_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/keys#get-a-public-ssh-key-for-the-authenticated-user"
+        },
+        "operationId": "get-public-ssh-key-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/key-id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/key"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/key"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Get a public SSH key for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "keys"
+        },
+        "x-original-operation-id": "users/get-public-ssh-key-for-authenticated-user"
+      }
+    },
+    "/user/public_emails": {
+      "get": {
+        "description": "Lists your publicly visible email address, which you can set with the\n[Set primary email visibility for the authenticated user](https://docs.github.com/rest/users/emails#set-primary-email-visibility-for-the-authenticated-user)\nendpoint.\n\nOAuth app tokens and personal access tokens (classic) need the `user:email` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/emails#list-public-email-addresses-for-the-authenticated-user"
+        },
+        "operationId": "list-public-emails-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/email-items-2"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/email"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "List public email addresses for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "emails"
+        },
+        "x-original-operation-id": "users/list-public-emails-for-authenticated-user"
+      }
+    },
+    "/user/social_accounts": {
+      "delete": {
+        "description": "Deletes one or more social accounts from the authenticated user's profile.\n\nOAuth app tokens and personal access tokens (classic) need the `user` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/social-accounts#delete-social-accounts-for-the-authenticated-user"
+        },
+        "operationId": "delete-social-account-for-authenticated-user",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "summary": "Deleting multiple social accounts",
+                  "value": {
+                    "account_urls": [
+                      "https://facebook.com/GitHub",
+                      "https://www.youtube.com/@GitHub"
+                    ]
+                  }
+                }
+              },
+              "schema": {
+                "example": {
+                  "account_urls": [
+                    "https://www.linkedin.com/company/github/",
+                    "https://twitter.com/github"
+                  ]
+                },
+                "properties": {
+                  "account_urls": {
+                    "description": "Full URLs for the social media profiles to delete.",
+                    "example": [],
+                    "items": {
+                      "example": "https://twitter.com/github",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "account_urls"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Delete social accounts for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "social-accounts"
+        },
+        "x-original-operation-id": "users/delete-social-account-for-authenticated-user"
+      },
+      "get": {
+        "description": "Lists all of your social accounts.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/social-accounts#list-social-accounts-for-the-authenticated-user"
+        },
+        "operationId": "list-social-accounts-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/social-account-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/social-account"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "List social accounts for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "social-accounts"
+        },
+        "x-original-operation-id": "users/list-social-accounts-for-authenticated-user"
+      },
+      "post": {
+        "description": "Add one or more social accounts to the authenticated user's profile.\n\nOAuth app tokens and personal access tokens (classic) need the `user` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/social-accounts#add-social-accounts-for-the-authenticated-user"
+        },
+        "operationId": "add-social-account-for-authenticated-user",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "summary": "Adding multiple social accounts",
+                  "value": {
+                    "account_urls": [
+                      "https://facebook.com/GitHub",
+                      "https://www.youtube.com/@GitHub"
+                    ]
+                  }
+                }
+              },
+              "schema": {
+                "example": {
+                  "account_urls": [
+                    "https://www.linkedin.com/company/github/",
+                    "https://twitter.com/github"
+                  ]
+                },
+                "properties": {
+                  "account_urls": {
+                    "description": "Full URLs for the social media profiles to add.",
+                    "example": [],
+                    "items": {
+                      "example": "https://twitter.com/github",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "account_urls"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/social-account-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/social-account"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Add social accounts for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "social-accounts"
+        },
+        "x-original-operation-id": "users/add-social-account-for-authenticated-user"
+      }
+    },
+    "/user/ssh_signing_keys": {
+      "get": {
+        "description": "Lists the SSH signing keys for the authenticated user's GitHub account.\n\nOAuth app tokens and personal access tokens (classic) need the `read:ssh_signing_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/ssh-signing-keys#list-ssh-signing-keys-for-the-authenticated-user"
+        },
+        "operationId": "list-ssh-signing-keys-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ssh-signing-key-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ssh-signing-key"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "List SSH signing keys for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "previews": [],
+          "subcategory": "ssh-signing-keys"
+        },
+        "x-original-operation-id": "users/list-ssh-signing-keys-for-authenticated-user"
+      },
+      "post": {
+        "description": "Creates an SSH signing key for the authenticated user's GitHub account.\n\nOAuth app tokens and personal access tokens (classic) need the `write:ssh_signing_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/ssh-signing-keys#create-a-ssh-signing-key-for-the-authenticated-user"
+        },
+        "operationId": "create-ssh-signing-key-for-authenticated-user",
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "value": {
+                    "key": "2Sg8iYjAxxmI2LvUXpJjkYrMxURPc8r+dB7TJyvv1234",
+                    "title": "ssh-rsa AAAAB3NzaC1yc2EAAA"
+                  }
+                }
+              },
+              "schema": {
+                "properties": {
+                  "key": {
+                    "description": "The public SSH key to add to your GitHub account. For more information, see \"[Checking for existing SSH keys](https://docs.github.com/authentication/connecting-to-github-with-ssh/checking-for-existing-ssh-keys).\"",
+                    "pattern": "^ssh-(rsa|dss|ed25519) |^ecdsa-sha2-nistp(256|384|521) |^(sk-ssh-ed25519|sk-ecdsa-sha2-nistp256)@openssh.com ",
+                    "type": "string"
+                  },
+                  "title": {
+                    "description": "A descriptive name for the new key.",
+                    "example": "Personal MacBook Air",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "key"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ssh-signing-key"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ssh-signing-key"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Create a SSH signing key for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "ssh-signing-keys"
+        },
+        "x-original-operation-id": "users/create-ssh-signing-key-for-authenticated-user"
+      }
+    },
+    "/user/ssh_signing_keys/{ssh_signing_key_id}": {
+      "delete": {
+        "description": "Deletes an SSH signing key from the authenticated user's GitHub account.\n\nOAuth app tokens and personal access tokens (classic) need the `admin:ssh_signing_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/ssh-signing-keys#delete-an-ssh-signing-key-for-the-authenticated-user"
+        },
+        "operationId": "delete-ssh-signing-key-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ssh-signing-key-id"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Delete an SSH signing key for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "ssh-signing-keys"
+        },
+        "x-original-operation-id": "users/delete-ssh-signing-key-for-authenticated-user"
+      },
+      "get": {
+        "description": "Gets extended details for an SSH signing key.\n\nOAuth app tokens and personal access tokens (classic) need the `read:ssh_signing_key` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/ssh-signing-keys#get-an-ssh-signing-key-for-the-authenticated-user"
+        },
+        "operationId": "get-ssh-signing-key-for-authenticated-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ssh-signing-key-id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ssh-signing-key"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ssh-signing-key"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          },
+          "401": {
+            "$ref": "#/components/responses/requires_authentication"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Get an SSH signing key for the authenticated user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "ssh-signing-keys"
+        },
+        "x-original-operation-id": "users/get-ssh-signing-key-for-authenticated-user"
+      }
+    },
+    "/user/{account_id}": {
+      "get": {
+        "description": "Provides publicly available information about someone with a GitHub account. This method takes their durable user `ID` instead of their `login`, which can change over time.\n\nIf you are requesting information about an [Enterprise Managed User](https://docs.github.com/enterprise-cloud@latest/admin/managing-iam/understanding-iam-for-enterprises/about-enterprise-managed-users), or a GitHub App bot that is installed in an organization that uses Enterprise Managed Users, your requests must be authenticated as a user or GitHub App that has access to the organization to view that account's information. If you are not authorized, the request will return a `404 Not Found` status.\n\nThe `email` key in the following response is the publicly visible email address from your GitHub [profile page](https://github.com/settings/profile). When setting up your profile, you can select a primary email address to be public which provides an email entry for this endpoint. If you do not set a public email address for `email`, then it will have a value of `null`. You only see publicly visible email addresses when authenticated with GitHub. For more information, see [Authentication](https://docs.github.com/rest/guides/getting-started-with-the-rest-api#authentication).\n\nThe Emails API enables you to list all of your email addresses, and toggle a primary email to be visible publicly. For more information, see [Emails API](https://docs.github.com/rest/users/emails).",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/users#get-a-user-using-their-id"
+        },
+        "operationId": "get-by-id",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/account-id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default-response": {
+                    "$ref": "#/components/examples/public-user-default-response"
+                  },
+                  "response-with-git-hub-plan-information": {
+                    "$ref": "#/components/examples/public-user-response-with-git-hub-plan-information"
+                  }
+                },
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "private": "#/components/schemas/private-user",
+                      "public": "#/components/schemas/public-user"
+                    },
+                    "propertyName": "user_view_type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/private-user"
+                    },
+                    {
+                      "$ref": "#/components/schemas/public-user"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Get a user using their ID",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "users"
+        },
+        "x-original-operation-id": "users/get-by-id"
+      }
+    },
+    "/users": {
+      "get": {
+        "description": "Lists all users, in the order that they signed up on GitHub. This list includes personal user accounts and organization accounts.\n\nNote: Pagination is powered exclusively by the `since` parameter. Use the [Link header](https://docs.github.com/rest/guides/using-pagination-in-the-rest-api#using-link-headers) to get the URL for the next page of users.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/users#list-users"
+        },
+        "operationId": "list",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/since-user"
+          },
+          {
+            "$ref": "#/components/parameters/per-page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/simple-user-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/simple-user"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "example": "<https://api.github.com/users?since=135>; rel=\"next\"",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/not_modified"
+          }
+        },
+        "summary": "List users",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "users"
+        },
+        "x-original-operation-id": "users/list"
+      }
+    },
+    "/users/{username}": {
+      "get": {
+        "description": "Provides publicly available information about someone with a GitHub account.\n\nIf the specified user has a [private profile](https://docs.github.com/account-and-profile/concepts/personal-profile#private-profiles), the `followers` and `following` values are `0` unless the request is authenticated as that user. A request authenticated as the specified user returns the actual values even if the token has no OAuth scopes.\n\nThe `events_url` value is a URI template. Replace `{/privacy}` with `/public` to retrieve only public events. Omit it to retrieve public events and, when authenticated as the user, private events. For more information, see \"[List events for the authenticated user](https://docs.github.com/rest/activity/events#list-events-for-the-authenticated-user).\"\n\nIf you are requesting information about an [Enterprise Managed User](https://docs.github.com/enterprise-cloud@latest/admin/managing-iam/understanding-iam-for-enterprises/about-enterprise-managed-users), or a GitHub App bot that is installed in an organization that uses Enterprise Managed Users, your requests must be authenticated as a user or GitHub App that has access to the organization to view that account's information. If you are not authorized, the request will return a `404 Not Found` status.\n\nThe `email` key in the following response is the publicly visible email address from your GitHub [profile page](https://github.com/settings/profile). When setting up your profile, you can select a primary email address to be public which provides an email entry for this endpoint. If you do not set a public email address for `email`, then it will have a value of `null`. You only see publicly visible email addresses when authenticated with GitHub. For more information, see [Authentication](https://docs.github.com/rest/guides/getting-started-with-the-rest-api#authentication).\n\nThe Emails API enables you to list all of your email addresses, and toggle a primary email to be visible publicly. For more information, see [Emails API](https://docs.github.com/rest/users/emails).",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/users#get-a-user"
+        },
+        "operationId": "get-by-username",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default-response": {
+                    "$ref": "#/components/examples/public-user-default-response"
+                  },
+                  "response-with-git-hub-plan-information": {
+                    "$ref": "#/components/examples/public-user-response-with-git-hub-plan-information"
+                  }
+                },
+                "schema": {
+                  "discriminator": {
+                    "mapping": {
+                      "private": "#/components/schemas/private-user",
+                      "public": "#/components/schemas/public-user"
+                    },
+                    "propertyName": "user_view_type"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/private-user"
+                    },
+                    {
+                      "$ref": "#/components/schemas/public-user"
+                    }
+                  ]
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Get a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "users"
+        },
+        "x-original-operation-id": "users/get-by-username"
+      }
+    },
+    "/users/{username}/attestations/bulk-list": {
+      "post": {
+        "description": "List a collection of artifact attestations associated with any entry in a list of subject digests owned by a user.\n\nThe collection of attestations returned by this endpoint is filtered according to the authenticated user's permissions; if the authenticated user cannot read a repository, the attestations associated with that repository will not be included in the response. In addition, when using a fine-grained access token the `attestations:read` permission is required.\n\n**Please note:** in order to offer meaningful security benefits, an attestation's signature and timestamps **must** be cryptographically verified, and the identity of the attestation signer **must** be validated. Attestations can be verified using the [GitHub CLI `attestation verify` command](https://cli.github.com/manual/gh_attestation_verify). For more information, see [our guide on how to use artifact attestations to establish a build's provenance](https://docs.github.com/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds).",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/attestations#list-attestations-by-bulk-subject-digests"
+        },
+        "operationId": "list-attestations-bulk",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/pagination-before"
+          },
+          {
+            "$ref": "#/components/parameters/pagination-after"
+          },
+          {
+            "$ref": "#/components/parameters/username"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "$ref": "#/components/examples/bulk-subject-digest-body"
+                },
+                "withPredicateType": {
+                  "$ref": "#/components/examples/bulk-subject-digest-body-with-predicate-type"
+                }
+              },
+              "schema": {
+                "properties": {
+                  "predicate_type": {
+                    "description": "Optional filter for fetching attestations with a given predicate type.\nThis option accepts `provenance`, `sbom`, `release`, or freeform text\nfor custom predicate types.",
+                    "type": "string"
+                  },
+                  "subject_digests": {
+                    "description": "List of subject digests to fetch attestations for.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 1024,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "subject_digests"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/list-attestations-bulk"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "attestations_subject_digests": {
+                      "additionalProperties": {
+                        "items": {
+                          "properties": {
+                            "bundle": {
+                              "description": "The bundle of the attestation.",
+                              "properties": {
+                                "dsseEnvelope": {
+                                  "additionalProperties": true,
+                                  "properties": {},
+                                  "type": "object"
+                                },
+                                "mediaType": {
+                                  "type": "string"
+                                },
+                                "verificationMaterial": {
+                                  "additionalProperties": true,
+                                  "properties": {},
+                                  "type": "object"
+                                }
+                              },
+                              "type": "object"
+                            },
+                            "bundle_url": {
+                              "type": "string"
+                            },
+                            "repository_id": {
+                              "type": "integer"
+                            }
+                          },
+                          "type": "object"
+                        },
+                        "nullable": true,
+                        "type": "array"
+                      },
+                      "description": "Mapping of subject digest to bundles.",
+                      "type": "object"
+                    },
+                    "page_info": {
+                      "description": "Information about the current page.",
+                      "properties": {
+                        "has_next": {
+                          "description": "Indicates whether there is a next page.",
+                          "type": "boolean"
+                        },
+                        "has_previous": {
+                          "description": "Indicates whether there is a previous page.",
+                          "type": "boolean"
+                        },
+                        "next": {
+                          "description": "The cursor to the next page.",
+                          "type": "string"
+                        },
+                        "previous": {
+                          "description": "The cursor to the previous page.",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response"
+          }
+        },
+        "summary": "List attestations by bulk subject digests",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "attestations"
+        },
+        "x-original-operation-id": "users/list-attestations-bulk"
+      }
+    },
+    "/users/{username}/attestations/delete-request": {
+      "post": {
+        "description": "Delete artifact attestations in bulk by either subject digests or unique ID.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/attestations#delete-attestations-in-bulk"
+        },
+        "operationId": "delete-attestations-bulk",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "by-attestation-ids": {
+                  "summary": "Delete by attestation IDs",
+                  "value": {
+                    "attestation_ids": [
+                      111,
+                      222
+                    ]
+                  }
+                },
+                "by-subject-digests": {
+                  "summary": "Delete by subject digests",
+                  "value": {
+                    "subject_digests": [
+                      "sha256:abc123",
+                      "sha512:def456"
+                    ]
+                  }
+                }
+              },
+              "schema": {
+                "description": "The request body must include either `subject_digests` or `attestation_ids`, but not both.",
+                "oneOf": [
+                  {
+                    "properties": {
+                      "subject_digests": {
+                        "description": "List of subject digests associated with the artifact attestations to delete.",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 1024,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "subject_digests"
+                    ]
+                  },
+                  {
+                    "properties": {
+                      "attestation_ids": {
+                        "description": "List of unique IDs associated with the artifact attestations to delete.",
+                        "items": {
+                          "type": "integer"
+                        },
+                        "maxItems": 1024,
+                        "minItems": 1,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "attestation_ids"
+                    ]
+                  }
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Response"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Delete attestations in bulk",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "attestations"
+        },
+        "x-original-operation-id": "users/delete-attestations-bulk"
+      }
+    },
+    "/users/{username}/attestations/digest/{subject_digest}": {
+      "delete": {
+        "description": "Delete an artifact attestation by subject digest.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/attestations#delete-attestations-by-subject-digest"
+        },
+        "operationId": "delete-attestations-by-subject-digest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "description": "Subject Digest",
+            "in": "path",
+            "name": "subject_digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-multi-segment": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response"
+          },
+          "204": {
+            "description": "Response"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Delete attestations by subject digest",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "attestations"
+        },
+        "x-original-operation-id": "users/delete-attestations-by-subject-digest"
+      }
+    },
+    "/users/{username}/attestations/{attestation_id}": {
+      "delete": {
+        "description": "Delete an artifact attestation by unique ID that is associated with a repository owned by a user.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/attestations#delete-attestations-by-id"
+        },
+        "operationId": "delete-attestations-by-id",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "description": "Attestation ID",
+            "in": "path",
+            "name": "attestation_id",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response"
+          },
+          "204": {
+            "description": "Response"
+          },
+          "403": {
+            "$ref": "#/components/responses/forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "Delete attestations by ID",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "attestations"
+        },
+        "x-original-operation-id": "users/delete-attestations-by-id"
+      }
+    },
+    "/users/{username}/attestations/{subject_digest}": {
+      "get": {
+        "description": "List a collection of artifact attestations with a given subject digest that are associated with repositories owned by a user.\n\nThe collection of attestations returned by this endpoint is filtered according to the authenticated user's permissions; if the authenticated user cannot read a repository, the attestations associated with that repository will not be included in the response. In addition, when using a fine-grained access token the `attestations:read` permission is required.\n\n**Please note:** in order to offer meaningful security benefits, an attestation's signature and timestamps **must** be cryptographically verified, and the identity of the attestation signer **must** be validated. Attestations can be verified using the [GitHub CLI `attestation verify` command](https://cli.github.com/manual/gh_attestation_verify). For more information, see [our guide on how to use artifact attestations to establish a build's provenance](https://docs.github.com/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds).",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/attestations#list-attestations"
+        },
+        "operationId": "list-attestations",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/pagination-before"
+          },
+          {
+            "$ref": "#/components/parameters/pagination-after"
+          },
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "description": "Subject Digest",
+            "in": "path",
+            "name": "subject_digest",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "x-multi-segment": true
+          },
+          {
+            "description": "Optional filter for fetching attestations with a given predicate type.\nThis option accepts `provenance`, `sbom`, `release`, or freeform text\nfor custom predicate types.",
+            "in": "query",
+            "name": "predicate_type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/list-attestations"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "attestations": {
+                      "items": {
+                        "properties": {
+                          "bundle": {
+                            "description": "The attestation's Sigstore Bundle.\nRefer to the [Sigstore Bundle Specification](https://github.com/sigstore/protobuf-specs/blob/main/protos/sigstore_bundle.proto) for more information.",
+                            "properties": {
+                              "dsseEnvelope": {
+                                "additionalProperties": true,
+                                "properties": {},
+                                "type": "object"
+                              },
+                              "mediaType": {
+                                "type": "string"
+                              },
+                              "verificationMaterial": {
+                                "additionalProperties": true,
+                                "properties": {},
+                                "type": "object"
+                              }
+                            },
+                            "type": "object"
+                          },
+                          "bundle_url": {
+                            "type": "string"
+                          },
+                          "initiator": {
+                            "type": "string"
+                          },
+                          "repository_id": {
+                            "type": "integer"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "value": null
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/empty-object"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "204": {
+            "description": "Response"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          }
+        },
+        "summary": "List attestations",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "attestations"
+        },
+        "x-original-operation-id": "users/list-attestations"
+      }
+    },
+    "/users/{username}/followers": {
+      "get": {
+        "description": "Lists the people following the specified user.\n\nIf the specified user has a [private profile](https://docs.github.com/account-and-profile/concepts/personal-profile#private-profiles), this endpoint returns an empty list unless the request is authenticated as that user. A request authenticated as the specified user returns the list even if the token has no OAuth scopes.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/followers#list-followers-of-a-user"
+        },
+        "operationId": "list-followers-for-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/simple-user-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/simple-user"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          }
+        },
+        "summary": "List followers of a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "followers"
+        },
+        "x-original-operation-id": "users/list-followers-for-user"
+      }
+    },
+    "/users/{username}/following": {
+      "get": {
+        "description": "Lists the people who the specified user follows.\n\nIf the specified user has a [private profile](https://docs.github.com/account-and-profile/concepts/personal-profile#private-profiles), this endpoint returns an empty list unless the request is authenticated as that user. A request authenticated as the specified user returns the list even if the token has no OAuth scopes.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/followers#list-the-people-a-user-follows"
+        },
+        "operationId": "list-following-for-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/simple-user-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/simple-user"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          }
+        },
+        "summary": "List the people a user follows",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "followers"
+        },
+        "x-original-operation-id": "users/list-following-for-user"
+      }
+    },
+    "/users/{username}/following/{target_user}": {
+      "get": {
+        "description": "",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/followers#check-if-a-user-follows-another-user"
+        },
+        "operationId": "check-following-for-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "in": "path",
+            "name": "target_user",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "if the user follows the target user"
+          },
+          "404": {
+            "description": "if the user does not follow the target user"
+          }
+        },
+        "summary": "Check if a user follows another user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "followers"
+        },
+        "x-original-operation-id": "users/check-following-for-user"
+      }
+    },
+    "/users/{username}/gpg_keys": {
+      "get": {
+        "description": "Lists the GPG keys for a user. This information is accessible by anyone.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/gpg-keys#list-gpg-keys-for-a-user"
+        },
+        "operationId": "list-gpg-keys-for-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/gpg-key-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/gpg-key"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          }
+        },
+        "summary": "List GPG keys for a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "gpg-keys"
+        },
+        "x-original-operation-id": "users/list-gpg-keys-for-user"
+      }
+    },
+    "/users/{username}/hovercard": {
+      "get": {
+        "description": "Provides hovercard information. You can find out more about someone in relation to their pull requests, issues, repositories, and organizations.\n\n  The `subject_type` and `subject_id` parameters provide context for the person's hovercard, which returns more information than without the parameters. For example, if you wanted to find out more about `octocat` who owns the `Spoon-Knife` repository, you would use a `subject_type` value of `repository` and a `subject_id` value of `1300192` (the ID of the `Spoon-Knife` repository).\n\nOAuth app tokens and personal access tokens (classic) need the `repo` scope to use this endpoint.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/users#get-contextual-information-for-a-user"
+        },
+        "operationId": "get-context-for-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "description": "Identifies which additional information you'd like to receive about the person's hovercard. Can be `organization`, `repository`, `issue`, `pull_request`. **Required** when using `subject_id`.",
+            "in": "query",
+            "name": "subject_type",
+            "required": false,
+            "schema": {
+              "enum": [
+                "organization",
+                "repository",
+                "issue",
+                "pull_request"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Uses the ID for the `subject_type` you specified. **Required** when using `subject_type`.",
+            "in": "query",
+            "name": "subject_id",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/hovercard"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/hovercard"
+                }
+              }
+            },
+            "description": "Response"
+          },
+          "404": {
+            "$ref": "#/components/responses/not_found"
+          },
+          "422": {
+            "$ref": "#/components/responses/validation_failed"
+          }
+        },
+        "summary": "Get contextual information for a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": false,
+          "githubCloudOnly": false,
+          "subcategory": "users"
+        },
+        "x-original-operation-id": "users/get-context-for-user"
+      }
+    },
+    "/users/{username}/keys": {
+      "get": {
+        "description": "Lists the _verified_ public SSH keys for a user. This is accessible by anyone.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/keys#list-public-keys-for-a-user"
+        },
+        "operationId": "list-public-keys-for-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/key-simple-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/key-simple"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          }
+        },
+        "summary": "List public keys for a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "keys"
+        },
+        "x-original-operation-id": "users/list-public-keys-for-user"
+      }
+    },
+    "/users/{username}/social_accounts": {
+      "get": {
+        "description": "Lists social media accounts for a user. This endpoint is accessible by anyone.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/social-accounts#list-social-accounts-for-a-user"
+        },
+        "operationId": "list-social-accounts-for-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/social-account-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/social-account"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          }
+        },
+        "summary": "List social accounts for a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "social-accounts"
+        },
+        "x-original-operation-id": "users/list-social-accounts-for-user"
+      }
+    },
+    "/users/{username}/ssh_signing_keys": {
+      "get": {
+        "description": "Lists the SSH signing keys for a user. This operation is accessible by anyone.",
+        "externalDocs": {
+          "description": "API method documentation",
+          "url": "https://docs.github.com/rest/users/ssh-signing-keys#list-ssh-signing-keys-for-a-user"
+        },
+        "operationId": "list-ssh-signing-keys-for-user",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/username"
+          },
+          {
+            "$ref": "#/components/parameters/per-page"
+          },
+          {
+            "$ref": "#/components/parameters/page"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ssh-signing-key-items"
+                  }
+                },
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ssh-signing-key"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Response",
+            "headers": {
+              "Link": {
+                "$ref": "#/components/headers/link"
+              }
+            }
+          }
+        },
+        "summary": "List SSH signing keys for a user",
+        "tags": [
+          "users"
+        ],
+        "x-github": {
+          "category": "users",
+          "enabledForGitHubApps": true,
+          "githubCloudOnly": false,
+          "subcategory": "ssh-signing-keys"
+        },
+        "x-original-operation-id": "users/list-ssh-signing-keys-for-user"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.github.com"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Interact with and view information about users and also current user.",
+      "name": "users"
+    }
+  ]
+}

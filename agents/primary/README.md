@@ -21,7 +21,7 @@ krude              chat: the member's assistant
 ├── planner        single-turn sub-agent: plans work or a session with teammates
 ├── researcher     single-turn sub-agent: answers from the live web with Google Search
 ├── teams          task sub-agent: teams and people (teams tools not wired yet)
-├── toolboxes      list_tools, load_tools: sandbox, browser and integrations, loaded on demand
+├── toolboxes      list_tools, load_tools: sandbox, browser and provider tools, loaded on demand
 ├── helpers        list_helpers, spawn_helper: temporary agents for big or separate work
 ├── skills         list_skills, load_skill, load_skill_resource: instructions on demand
 └── set_nickname   saves the nickname the member gives Krude
@@ -42,9 +42,11 @@ loader is a native ADK toolset: `Tools` selects the session's loaded toolboxes,
 and the toolset's request preprocessing picks up one loaded midway through an
 invocation. Every tool in a toolbox must be a declarative ADK tool named after
 it, as in `slack_post_message`, or the toolbox will not load.
-`Providers` lists Slack, GitHub, Google and Microsoft, but their tools will
-come from the integrations service, which is not wired to primary yet. The
-`sandbox` and `browser` toolboxes are connected today. Sandbox supplies native ADK function tools for
+`Providers` lists Slack, GitHub, Google and Microsoft, but their tools are not
+wired to primary yet. Provider operations will use the shared provider clients
+and ask `/connections` for credentials with primary's signed service identity
+and the member's forwarded Cognito bearer token. The `sandbox` and `browser`
+toolboxes are connected today. Sandbox supplies native ADK function tools for
 Python/JavaScript/TypeScript, shell commands and temporary file list/read/write/
 remove operations. Execution happens in Bedrock AgentCore Code Interpreter,
 never in the primary container. One isolated AgentCore session is reused by one

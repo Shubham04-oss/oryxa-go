@@ -28,7 +28,7 @@ type Toolbox struct {
 }
 
 // Providers returns the provider toolboxes Krude lists today. Their tools will
-// come from the integrations service, which is not wired to primary yet, so
+// use the connections service for credentials; they are not wired yet, so
 // none of them can be loaded.
 func Providers() []Toolbox {
 	return []Toolbox{
