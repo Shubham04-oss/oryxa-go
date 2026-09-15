@@ -439,6 +439,12 @@ go test ./connections/... ./internal/serviceauth
 CONNECTIONS_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/oryxa?sslmode=disable' go test ./connections/...
 ```
 
+`TestLiveGitHubPersonalToken` runs the same flow against the real GitHub when
+`CONNECTIONS_LIVE_GITHUB_TOKEN` also holds a personal access token: it connects
+the token, has a service request it, and calls GitHub with it through the
+generated clients in `internal/providerapi/github`. It only reads from GitHub
+and never prints the token.
+
 ## Later
 
 - Custom providers from OpenAPI specs, called through the same hardened client.
