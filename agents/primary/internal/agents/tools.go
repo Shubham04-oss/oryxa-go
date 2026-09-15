@@ -18,25 +18,17 @@ import (
 const loadedToolsKey = "loaded_tools"
 
 // Toolbox is a named set of tools Krude loads when a task needs them, such as
-// one provider's actions. Every tool in it must be named after the toolbox, as
-// in slack_post_message, so loaded tools never collide with Krude's own. A
-// toolbox without a Toolset is listed but cannot be loaded yet.
+// AgentCore's sandbox or browser. Every tool in it must be named after the
+// toolbox, as in sandbox_execute_code, so loaded tools never collide with
+// Krude's own. A toolbox without a Toolset is listed but cannot be loaded yet.
+//
+// Instructions is the toolbox's skill: how its tools are meant to be used.
+// While the toolbox is loaded, Krude's system prompt carries it.
 type Toolbox struct {
-	Name        string
-	Description string
-	Toolset     tool.Toolset
-}
-
-// Providers returns the provider toolboxes Krude lists today. Their tools will
-// use the connections service for credentials; they are not wired yet, so
-// none of them can be loaded.
-func Providers() []Toolbox {
-	return []Toolbox{
-		{Name: "slack", Description: "Messages, reactions and channels in the member's Slack workspace."},
-		{Name: "github", Description: "Issues, comments and pull requests in the member's GitHub repositories."},
-		{Name: "google", Description: "Gmail, Google Calendar and Google Drive for the member's Google account."},
-		{Name: "microsoft", Description: "Outlook mail, Outlook Calendar and OneDrive for the member's Microsoft account."},
-	}
+	Name         string
+	Description  string
+	Instructions string
+	Toolset      tool.Toolset
 }
 
 type toolCatalog struct {
@@ -64,6 +56,26 @@ func (c *toolCatalog) find(name string) (Toolbox, bool) {
 		}
 	}
 	return Toolbox{}, false
+}
+
+// hasTool reports whether any toolbox already exposes a tool with this name,
+// so a dynamic sub-agent never takes a name a toolbox tool already has.
+func (c *toolCatalog) hasTool(ctx agent.ReadonlyContext, name string) (bool, error) {
+	for _, box := range c.toolboxes {
+		if box.Toolset == nil {
+			continue
+		}
+		tools, err := box.Toolset.Tools(ctx)
+		if err != nil {
+			return false, fmt.Errorf("toolbox %q: %w", box.Name, err)
+		}
+		for _, t := range tools {
+			if t.Name() == name {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // loaded returns the native ADK toolset of every toolbox loaded in this
@@ -158,7 +170,7 @@ type listToolsResult struct {
 func (c *toolCatalog) listTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "list_tools",
-		Description: "Lists the toolboxes you can load, such as Slack or GitHub, and which are loaded or not available yet.",
+		Description: "Lists the toolboxes you can load, such as sandbox or browser, and which are loaded or not available yet.",
 	}, func(ctx agent.Context, _ listToolsArgs) (listToolsResult, error) {
 		loaded := loadedToolboxes(ctx.ReadonlyState())
 		result := listToolsResult{Toolboxes: []listedToolbox{}}
@@ -191,7 +203,7 @@ type loadToolsResult struct {
 func (c *toolCatalog) loadTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "load_tools",
-		Description: "Loads toolboxes by name. Their tools are yours from your next step onward in this session.",
+		Description: "Loads toolboxes by name. Their tools are yours from your next step onward, and each loaded toolbox's instructions join your system prompt.",
 	}, func(ctx agent.Context, args loadToolsArgs) (loadToolsResult, error) {
 		loaded := loadedToolboxes(ctx.ReadonlyState())
 		var unavailable []unavailableToolbox

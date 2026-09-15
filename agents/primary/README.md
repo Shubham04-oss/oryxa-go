@@ -6,10 +6,15 @@ its model. The Cloudflare chat layer, `durable-agent`, talks to it over HTTP,
 and the supporting services in `secondary` sit beside it.
 
 Status: the engine is in. adk-go v2.4.0 runs Krude, a Gemini assistant with
-dedicated sub-agents, loadable toolboxes, temporary helpers and skills, and
-`cmd/devui` opens it in ADK's development web UI. The service itself,
-`cmd/primary`, still serves only `GET /healthz`; the run and stream API and
-storage land as their design is agreed.
+dedicated sub-agents, dynamic sub-agents, temporary helpers and toolboxes that
+load on demand with their own skills; the AgentCore sandbox and browser are
+wired today. A model router sends planning and bulk work to the lite model, a
+prompt cache layer holds large stable prefixes on Vertex, and the events
+outbox, publisher and dispatcher are in with contracts in
+`contracts/events/agents/v1`. `cmd/devui` opens it in ADK's development web UI.
+The service itself, `cmd/primary`, still serves only `GET /healthz`; the run
+and stream API, and the wiring of the events and cache components into it,
+land next.
 
 ## Agents
 
@@ -18,42 +23,45 @@ assembles it:
 
 ```text
 krude              chat: the member's assistant
-├── planner        single-turn sub-agent: plans work or a session with teammates
-├── researcher     single-turn sub-agent: answers from the live web with Google Search
-├── teams          task sub-agent: teams and people (teams tools not wired yet)
-├── toolboxes      list_tools, load_tools: sandbox, browser and provider tools, loaded on demand
-├── helpers        list_helpers, spawn_helper: temporary agents for big or separate work
-├── skills         list_skills, load_skill, load_skill_resource: instructions on demand
-└── set_nickname   saves the nickname the member gives Krude
+├── planner        single-turn sub-agent: turns multi-step work into a plan
+├── researcher     single-turn sub-agent: answers from the live web with Google Search and URL context
+├── toolboxes      list_tools, load_tools: sandbox and browser tools, loaded on demand
+├── subagents      create_subagent, list_subagents, remove_subagent: specialists Krude writes and reuses in a session
+└── helpers        list_helpers, spawn_helper: temporary agents for big or separate work
 ```
 
 **Sub-agents.** Krude calls a sub-agent the way it calls a tool, and the result
 comes back to it. Single-turn sub-agents run without talking to the member,
-and the ones Krude calls in the same model turn run concurrently. The task
-sub-agent may ask the member a question and returns its result through
-`finish_task`; ADK tells Krude never to call it in parallel with anything else.
+and the ones Krude calls in the same model turn run concurrently.
 A sub-agent sees only the request Krude hands it, and cannot transfer the
 conversation to another agent.
 
-**Toolboxes.** A `Toolbox` is a named set of tools, such as one provider's
-actions. `list_tools` shows them and `load_tools` loads the ones a task needs
-into the session, and their tools are usable from Krude's very next step. The
-loader is a native ADK toolset: `Tools` selects the session's loaded toolboxes,
-and the toolset's request preprocessing picks up one loaded midway through an
-invocation. Every tool in a toolbox must be a declarative ADK tool named after
-it, as in `slack_post_message`, or the toolbox will not load.
-`Providers` lists Slack, GitHub, Google and Microsoft, but their tools are not
-wired to primary yet. Provider operations will use the shared provider clients
-and ask `/connections` for credentials with primary's signed service identity
-and the member's forwarded Cognito bearer token. The `sandbox` and `browser`
-toolboxes are connected today. Sandbox supplies native ADK function tools for
-Python/JavaScript/TypeScript, shell commands and temporary file list/read/write/
-remove operations. Execution happens in Bedrock AgentCore Code Interpreter,
-never in the primary container. One isolated AgentCore session is reused by one
-ADK conversation so its language context and files survive across calls;
-different conversations are isolated. Remove and reset require ADK human
-confirmation, returned content is bounded before it enters model context, and
-active sessions are stopped during graceful shutdown with AWS's TTL as fallback.
+**Native tools.** The researcher's search and link reading are not function
+tools: Google Search grounding and URL context are Gemini built-ins, so ADK
+puts them on the model request and Gemini invokes them server-side, returning a
+grounded answer. Nothing executes in the primary service, and because the
+built-ins do not mix with function tools they live on an agent of their own,
+with transfers off.
+
+**Toolboxes.** A `Toolbox` is a named set of tools, such as AgentCore's
+sandbox or browser. `list_tools` shows them and `load_tools` loads the ones a
+task needs into the session, and their tools are usable from Krude's very next
+step. Every toolbox carries its skill: how its tools are meant to be used.
+While the toolbox is loaded, that skill is part of Krude's system prompt, so a
+loaded tool arrives with its instructions and Krude reads them again instead of
+guessing. The loader is a native ADK toolset: `Tools` selects the session's
+loaded toolboxes, and the toolset's request preprocessing picks up one loaded
+midway through an invocation. Every tool in a toolbox must be a declarative ADK
+tool named after it, as in `sandbox_execute_code`, or the toolbox will not
+load. `loaded_tools` holds the session's loaded toolboxes.
+
+Sandbox supplies native ADK function tools for Python/JavaScript/TypeScript,
+shell commands and temporary file list/read/write/remove operations. Execution
+happens in Bedrock AgentCore Code Interpreter, never in the primary container.
+One isolated AgentCore session is reused by one ADK conversation so its
+language context and files survive across calls; different conversations are
+isolated. Remove and reset require ADK human confirmation, and active sessions
+are stopped during graceful shutdown with AWS's TTL as fallback.
 
 Browser supplies navigation, bounded semantic DOM snapshots, selector clicks,
 field fills, screenshots and reset through Bedrock AgentCore Browser. It signs
@@ -62,59 +70,158 @@ talks CDP directly to the remote page; no browser executable or browser state
 lives in primary. Browser sessions are isolated by ADK conversation and stopped
 on reset, expiry replacement or graceful shutdown. Click, fill and reset always
 use ADK confirmation. Web content is treated as untrusted data, secret values
-are forbidden in model-driven fill calls, common password/OTP/payment/file
-fields are rejected again inside the remote page, and screenshots become bounded ADK
-PNG artifacts instead of base64 model output. ADK's `load_artifacts` tool is
-always available so the model can inspect a screenshot on demand. The ADK
-launcher currently keeps those artifacts in memory, so production still needs
-a durable artifact service.
+are forbidden in model-driven fill calls, and common password/OTP/payment/file
+fields are rejected again inside the remote page. Screenshots become bounded
+ADK PNG artifacts instead of base64 model output; the ADK launcher keeps those
+artifacts in memory, so production still needs a durable artifact service.
+
+**Dynamic sub-agents.** `create_subagent` registers a specialist for the rest
+of the conversation: Krude writes its name, a one-line description and its
+instruction, and from the very next step it can call it by name with a complete
+task. `list_subagents` shows them and `remove_subagent` drops one. Each call
+runs through ADK's agent tool in its own runner and throwaway session, so a
+sub-agent sees only the task, never the conversation, and has no tools; like
+helpers, it returns what it prepared for Krude to confirm. The toolset packs
+each registered sub-agent into the model request in its request preprocessing,
+which ADK runs before every model step, so creating or dropping one takes
+effect on the next step rather than the next invocation. Names are lowercase,
+at most 30 characters, cannot be reserved names, and cannot collide with a
+toolbox tool; a session holds at most 12.
 
 **Helpers.** `list_helpers` describes the dedicated sub-agents. `spawn_helper`
 builds a temporary single-turn agent from an instruction and a complete task,
 runs it, and returns its result; helpers started in the same turn run
-concurrently. They get the session's loaded toolboxes and the skills, but no
-helper can spawn another, load toolboxes or set the nickname. A helper cannot
-reach the member, so its instruction forbids sending, posting or changing
-anything: it returns what it prepared for Krude to confirm.
-
-**Skills.** `internal/agents/skills/` holds one folder per skill, each with a
-`SKILL.md` whose frontmatter names and describes it. Every request lists the
-skills by name and description; Krude loads a skill's full instructions only
-when it fits the work. Helpers get the same skills.
+concurrently. No helper can spawn another. A helper cannot reach the member,
+so its instruction forbids sending, posting or changing anything: it returns
+what it prepared for Krude to confirm.
 
 **Session state.** Krude is assigned to one member per session, and its
 instruction reads these values:
 
 | Key | Set by | Meaning | When missing |
 | --- | --- | --- | --- |
-| `user_name` | Session creator | The member Krude assists | "the member you are talking with" |
-| `user_about` | Session creator | A few words about the member | Left out |
-| `org_name` | Session creator | The member's organization | "their organization" |
-| `user:agent_nickname` | Krude, via `set_nickname` | What the member calls Krude | Left out |
+| `user_name` | Session runtime from auth | The member Krude assists | "the member you are talking with" |
+| `user_about` | Session runtime from auth | A few words about the member, from their role | Left out |
+| `user_email` | Session runtime from auth | The member's sign-in address | Left out |
+| `user_role` | Session runtime from auth | The member's role in the organization | Left out |
+| `org_name` | Session runtime from auth | The member's organization | "their organization" |
+| `organization_id` | Session runtime from auth | The member's organization ID, for tools that need it | Left out |
+| `loaded_tools` | `load_tools` | The toolboxes loaded in this session | Left out |
+| `subagents` | `create_subagent`, `remove_subagent` | The dynamic sub-agents of this session | Left out |
 
-The `user:` prefix makes the nickname user-scoped state, so it follows the
-member into their other sessions. Every value is collapsed to one line of at
-most 60 characters before it reaches the prompt, because members write them.
-`loaded_tools` holds the session's loaded toolboxes.
+The session runtime seeds a member's state on session creation, reading the
+member's name and first organization from the auth tables over the same shared
+PostgreSQL pool the ADK session service uses. A user who belongs to no
+organization, such as the development UI's `user`, keeps the state the caller
+sent. Callers can always override any seeded key by setting it themselves.
+
+Every value is collapsed to one line of at most 60 characters before it
+reaches the prompt, because members write them.
 
 Each agent's instruction is a Markdown file in `internal/agents/instructions/`,
 embedded at build time. Krude's, `krude.md`, is a Go `text/template` rendered
 on every turn. The sub-agents' are ADK templates: `{key}` is replaced with that
 session state value, and a turn fails when the key is missing unless it is
-written `{key?}`. ADK adds text of its own to what the model sees: an identity
-line for Krude and the task agents, `finish_task` rules for the task agents,
-and a warning against parallel calls on each task agent's tool.
+written `{key?}`. A dynamic sub-agent uses an instruction provider instead, so
+braces in the instruction Krude wrote are read as written. ADK adds an identity
+line of its own to what the model sees.
 
 To add a dedicated sub-agent, give it a constructor beside the others with a
 name, the description Krude picks it by, a mode, an instruction and transfers
-switched off, add it to `Root`, and name it in `instructions/krude.md`. To add a
-skill, add a folder under `skills/`. To add a toolbox, pass it to `Root`.
+switched off, add it to `Root`, and name it in `instructions/krude.md`.
 
-Every agent runs on the model `Gemini` returns. Gemini runs on Vertex AI and
-authenticates with Application Default Credentials, so there is no API key to
-hold: locally ADC is your `gcloud` login, and a deployment points
-`GOOGLE_APPLICATION_CREDENTIALS` at its credential configuration. Researcher's
-Google Search grounding is priced separately from model tokens.
+## Models and routing
+
+`Gemini` builds each model on Vertex AI with Application Default Credentials,
+so there is no API key to hold: locally ADC is your `gcloud` login, and a
+deployment points `GOOGLE_APPLICATION_CREDENTIALS` at its credential
+configuration. `internal/modelrouter` routes every role to its tier, lite
+wherever it can carry the work:
+
+| Role | Runs on | Default |
+| --- | --- | --- |
+| `chat` — the member's conversation | main | `gemini-3.8-flash` |
+| `research` — grounded web research | main | same; Google Search grounding is not on every lite model |
+| `plan` — structured planning | lite | `gemini-3.8-flash-lite` |
+| `work` — helpers and dynamic sub-agents | lite | same |
+
+Set `AGENTS_PRIMARY_MODEL` and `AGENTS_PRIMARY_MODEL_LITE` to change the two
+models; a policy missing a role is refused at startup, so a new role cannot
+silently get no model.
+
+## Prompt caching
+
+`internal/modelcache` wraps each model. When a request's stable prefix — the
+system instruction and tool declarations — reaches
+`AGENTS_PRIMARY_CACHE_MIN_TOKENS`, the wrapper puts it in an explicit Vertex
+cached content, sends its name with the request and drops the duplicated
+prefix, reusing the cache until two minutes before its TTL. Vertex enforces its
+own floor: for the flash models that is 4096 tokens, so the default matches it
+and a smaller prefix is never sent to a cache that would reject it. Below the
+floor, or when Vertex refuses the cache, the request goes out untouched so
+Vertex's implicit caching still applies; both kinds of cached tokens come back
+in the model's usage metadata. Caches the process created are deleted on
+shutdown.
+
+## Guardrails
+
+`internal/guardrail` screens input and output with Amazon Bedrock Guardrails.
+The models run on Vertex, not through Bedrock's Converse API, so the
+Converse-time `guardrailConfig` and `guardContent` modes cannot apply; the
+wrapper uses the standalone `ApplyGuardrail` API, evaluating the newest content
+of every request (a member message or a tool result) and every answer. It is
+built and tested but not wired yet, and therefore off; when wired, it turns
+streaming off for the model call (a partial answer that the completed one would
+block cannot be unsent) and `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` decides
+what a failed screen does.
+
+## Measure it
+
+`cmd/agentbench` hands the agents a few tasks and reports what each run cost:
+latency, time to first text, tokens, cached tokens and the priced cost. It
+needs the same ADC and `GOOGLE_CLOUD_PROJECT` as `cmd/devui`.
+
+```sh
+(set -a && . agents/primary/.env && go run -C agents/primary ./cmd/agentbench -repeat 2)
+```
+
+Each task runs in a fresh session with the same member state, so the first
+attempt pays for creating a cache and later attempts can hit it. Flags:
+`-tasks` picks tasks by name, `-cache=false` runs without explicit caching for
+comparison, `-v` logs every agent event, and `-with-notes` registers a notes
+fixture toolbox whose skill is long enough to take the prefix over the cache
+floor, so `-tasks tools -with-notes` shows a real cache hit (measured: about
+21s cold against 7s warm, with 10,344 of 12,204 input tokens cached). The
+report's cost is model tokens only: Google Search grounding and, later, tool
+calls are priced separately, and token usage inside sub-agent and helper runs
+is not visible in the event stream.
+
+## Events
+
+Agents primary publishes on EventBridge source `oryxa.agents` in the envelope
+every Oryxa publisher uses (`event_id`, `version`, `occurred_at`, `data`).
+Contracts live in `/contracts/events/agents/v1`:
+
+| Detail type | When |
+| --- | --- |
+| `agents.session.created.v1` | A session is created |
+| `agents.session.deleted.v1` | A session is deleted |
+| `agents.run.completed.v1` | A run finishes, with the model usage it cost |
+| `agents.run.failed.v1` | A run ends in an error |
+
+`internal/events` holds the outbox, publisher and dispatcher: events are
+recorded in `agents_primary.agents_outbox` with the state they describe and
+the dispatcher publishes them at least once, with exponential retry; consumers
+deduplicate by `event_id`. The session runtime records `session.created` and
+`session.deleted` as sessions come and go, best-effort after the session
+service has already succeeded. `cmd/devui` creates the outbox table at
+startup, and starts the dispatcher when `EVENTBRIDGE_ENDPOINT` is set — with
+dummy credentials for the emulator, like auth — so
+`EVENTBRIDGE_ENDPOINT=http://localhost:4566` publishes session events to the
+LocalStack bus from `docker-compose.yml`. Without an endpoint the rows wait in
+the outbox for the service to drain. `run.completed` and `run.failed` need the
+run API and land with it; the pricing table that fills their cost and prices is
+already in `internal/pricing`.
 
 ## Development UI
 
@@ -122,18 +229,19 @@ ADK's web UI runs the agents locally. Its sessions, conversation events and
 state live in PostgreSQL, while artifacts and searchable memory remain in
 memory for now. The session store uses ADK's native relational service through
 the repository's instrumented PostgreSQL pool and keeps its tables in the
-`agents_primary` schema. Log in for ADC and AWS once, start PostgreSQL, and set
-`GOOGLE_CLOUD_PROJECT` in `.env` to a project with the Vertex AI API enabled;
-without the database, ADC or the project the command exits at startup. AWS
-credentials are resolved lazily, so the UI can start without them. A sandbox
-tool call needs `bedrock-agentcore:StartCodeInterpreterSession`,
+`agents_primary` schema. Log in for ADC and AWS once, start PostgreSQL, and
+set `GOOGLE_CLOUD_PROJECT` in `.env` to a project with the Vertex AI API
+enabled; without the database, ADC or the project the command exits at
+startup. AWS credentials are resolved lazily, so the UI can start without
+them. A sandbox tool call needs
+`bedrock-agentcore:StartCodeInterpreterSession`,
 `bedrock-agentcore:InvokeCodeInterpreter` and
 `bedrock-agentcore:StopCodeInterpreterSession` for the configured interpreter.
 A browser call needs `bedrock-agentcore:StartBrowserSession`,
 `bedrock-agentcore:ConnectBrowserAutomationStream` and
 `bedrock-agentcore:StopBrowserSession` for the configured browser. Scope the
-workload role to the selected AgentCore resource identifiers and use CloudTrail
-for control-plane auditing; do not give the agent AWS credentials as tool input.
+workload role to the selected AgentCore resource identifiers; do not give the
+agent AWS credentials as tool input.
 
 ```sh
 docker compose up -d postgres
@@ -144,18 +252,21 @@ cp agents/primary/.env.example agents/primary/.env
 ```
 
 Open http://localhost:8087/ui/. The REST API the UI calls is under
-http://localhost:8087/api. Sessions the UI creates start with no state, so
-Krude assists "the member you are talking with" in "their organization". To try
-a member, create a session with state for the UI's `user`, then pick it in the
-UI:
+http://localhost:8087/api. A session the UI creates for its own `user` starts
+with no state, because that user belongs to no organization, so Krude assists
+"the member you are talking with" in "their organization". A session created
+for a real auth user seeds the member's state from the auth tables. To try a
+member, create a session with their user ID as the UI's user, then pick it in
+the UI:
 
 ```sh
-curl -X POST http://localhost:8087/api/apps/krude/users/user/sessions \
-  -H 'Content-Type: application/json' \
-  -d '{"state":{"user_name":"Asha","user_about":"a product designer","org_name":"Acme"}}'
+curl -X POST http://localhost:8087/api/apps/krude/users/user-owner/sessions
 ```
 
-Tell Krude a nickname in the chat and it saves it with `set_nickname`.
+The session for `user-owner` then starts with `user_name`, `user_about`,
+`user_email`, `user_role`, `org_name` and `organization_id` read from auth, so
+Krude greets the member by name and knows their organization without any
+manual state.
 
 Arguments to `devui` replace its web UI defaults and go straight to ADK's
 launcher, so `console` chats in the terminal instead:
@@ -202,10 +313,16 @@ docker run --rm -p 8086:8080 oryxa-agents-primary:dev
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `AGENTS_PRIMARY_ADDRESS` | `:8080` | Listen address |
-| `AGENTS_PRIMARY_MODEL` | `gemini-3.8-flash` | Gemini model the agents run on |
-| `DATABASE_URL` | unset | PostgreSQL connection for ADK sessions, events and state; required by the ADK launcher |
+| `AGENTS_PRIMARY_MODEL` | `gemini-3.8-flash` | Main model: conversation and grounded research |
+| `AGENTS_PRIMARY_MODEL_LITE` | `gemini-3.8-flash-lite` | Lite model: planning and bulk single-turn work |
+| `AGENTS_PRIMARY_PROMPT_CACHE` | `true` | Use explicit Vertex cached contents for large stable prefixes |
+| `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |
+| `AGENTS_PRIMARY_CACHE_MIN_TOKENS` | `4096` | Smallest prefix worth an explicit cache; Vertex's floor for these models. Below it, implicit caching applies |
+| `EVENT_BUS_NAME` | `default` | EventBridge bus events publish on |
+| `EVENTBRIDGE_ENDPOINT` | unset | EventBridge endpoint override for the LocalStack emulator |
+| `DATABASE_URL` | unset | PostgreSQL connection for ADK sessions, events and state, and the read of the member's auth tables when a session is created; required by the ADK launcher |
 | `AGENTS_PRIMARY_AUTO_MIGRATE` | `true` | Create the `agents_primary` schema and migrate ADK session tables at startup |
-| `AWS_REGION` | `ap-south-1` | AWS Region for Bedrock AgentCore; Mumbai supports AgentCore tools |
+| `AWS_REGION` | `ap-south-1` | AWS Region for Bedrock AgentCore; Mumbai supports the AgentCore tools |
 | `AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID` | `aws.codeinterpreter.v1` | Built-in or provisioned AgentCore Code Interpreter identifier |
 | `AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS` | `900` | Per-conversation sandbox lifetime; 60–28800 seconds |
 | `AGENTS_PRIMARY_BROWSER_ID` | `aws.browser.v1` | Built-in or provisioned AgentCore Browser identifier |

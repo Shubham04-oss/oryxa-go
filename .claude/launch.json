@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "primary-devui",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "set -a && . agents/primary/.env && go build -C agents/primary -o bin/devui ./cmd/devui && exec agents/primary/bin/devui"
+      ],
+      "port": 8087
+    }
+  ]
+}

@@ -21,6 +21,8 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 )
 
 // treeModel plays every agent in the tree. It tells the agents apart by their
@@ -39,14 +41,16 @@ func (m *treeModel) Name() string { return "tree" }
 
 func (m *treeModel) GenerateContent(_ context.Context, request *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
 	instruction := text(request.Config.SystemInstruction)
-	name := RootName
-	if strings.Contains(instruction, "You are a temporary helper") {
+	name := "subagent"
+	switch {
+	case strings.Contains(instruction, "You are Krude"):
+		name = RootName
+	case strings.Contains(instruction, "You are a temporary helper"):
 		name = "helper"
-	}
-	for _, subAgent := range []string{plannerName, researcherName, teamsName} {
-		if strings.Contains(instruction, "You are the "+subAgent+" sub-agent") {
-			name = subAgent
-		}
+	case strings.Contains(instruction, "You are the planner sub-agent"):
+		name = plannerName
+	case strings.Contains(instruction, "You are the researcher sub-agent"):
+		name = researcherName
 	}
 	m.mu.Lock()
 	m.requests[name] = append(m.requests[name], request)
@@ -67,7 +71,7 @@ func TestKrudeAnswersATurn(t *testing.T) {
 	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
 		return genai.NewContentFromText("Hello from Krude.", genai.RoleModel)
 	})
-	answer := runTurn(t, llm, "hi", nil)
+	answer := runTurn(t, llm, "hi")
 
 	if answer != "Hello from Krude." {
 		t.Fatalf("answer = %q", answer)
@@ -77,13 +81,15 @@ func TestKrudeAnswersATurn(t *testing.T) {
 	if !strings.Contains(instruction, want) {
 		t.Fatalf("instruction is missing %q:\n%s", want, instruction)
 	}
-	if strings.Contains(instruction, "calls you") || strings.Contains(instruction, "Oryxa") {
-		t.Fatalf("instruction names a nickname or Oryxa:\n%s", instruction)
-	}
 	declared := declaredFunctions(llm.requestsFor(RootName)[0])
-	for _, name := range []string{plannerName, researcherName, teamsName, "set_nickname", "list_tools", "load_tools", "list_helpers", "spawn_helper", "load_artifacts", "list_skills", "load_skill"} {
+	for _, name := range []string{plannerName, researcherName, "list_tools", "load_tools", "get_user_details", "list_helpers", "spawn_helper", "create_subagent", "list_subagents", "remove_subagent", "load_artifacts"} {
 		if !slices.Contains(declared, name) {
 			t.Fatalf("Krude can call %v, missing %q", declared, name)
+		}
+	}
+	for _, removed := range []string{"teams", "set_nickname", "list_skills", "load_skill"} {
+		if slices.Contains(declared, removed) {
+			t.Fatalf("Krude can still call the stripped %q", removed)
 		}
 	}
 }
@@ -92,10 +98,10 @@ func TestKrudeInstructionReadsSessionState(t *testing.T) {
 	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
 		return genai.NewContentFromText("Hi Asha.", genai.RoleModel)
 	})
-	runTurn(t, llm, "hi", map[string]any{UserNameKey: "Asha", UserAboutKey: "a nice lady", OrgNameKey: "Acme", NicknameKey: "Kru"})
+	runTurn(t, llm, "hi", map[string]any{UserNameKey: "Asha", UserAboutKey: "a nice lady", OrgNameKey: "Acme"})
 
 	instruction := text(llm.requestsFor(RootName)[0].Config.SystemInstruction)
-	want := "You are Krude, though Asha calls you Kru. You will be assisting Asha, a nice lady in Acme."
+	want := "You are Krude. You will be assisting Asha, a nice lady in Acme."
 	if !strings.Contains(instruction, want) {
 		t.Fatalf("instruction is missing %q:\n%s", want, instruction)
 	}
@@ -125,35 +131,10 @@ func TestStateTextKeepsMemberValuesToOneShortLine(t *testing.T) {
 	}
 }
 
-func TestKrudeKeepsItsNicknameForTheMember(t *testing.T) {
-	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
-		switch {
-		case hasFunctionResponse(request):
-			return genai.NewContentFromText("Kru it is.", genai.RoleModel)
-		case strings.Contains(contentsText(request), "Your nickname is Kru."):
-			return functionCalls(&genai.FunctionCall{ID: "call_nickname", Name: "set_nickname", Args: map[string]any{"nickname": " Kru\n"}})
-		default:
-			return genai.NewContentFromText("Hello.", genai.RoleModel)
-		}
-	})
-	h := newHarness(t, llm, nil)
-	if answer := h.turn("member_1", map[string]any{UserNameKey: "Asha"}, "Your nickname is Kru."); answer != "Kru it is." {
-		t.Fatalf("answer = %q", answer)
-	}
-
-	h.turn("member_1", map[string]any{UserNameKey: "Asha"}, "hi")
-	if instruction := lastInstruction(llm); !strings.Contains(instruction, "You are Krude, though Asha calls you Kru.") {
-		t.Fatalf("a later session of the same member lost the nickname:\n%s", instruction)
-	}
-	h.turn("member_2", map[string]any{UserNameKey: "Ravi"}, "hi")
-	if instruction := lastInstruction(llm); strings.Contains(instruction, "calls you") {
-		t.Fatalf("another member's session got the nickname:\n%s", instruction)
-	}
-}
-
 func TestKrudeLoadsToolboxesWhenATaskNeedsThem(t *testing.T) {
 	notes := Toolbox{Name: "notes", Description: "Notes.", Toolset: staticToolset{echoTool(t, "notes_add")}}
 	misnamed := Toolbox{Name: "bad", Description: "Misnamed tools.", Toolset: staticToolset{echoTool(t, "add_thing")}}
+	orphan := Toolbox{Name: "orphan", Description: "No tools yet."}
 	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
 		switch {
 		case functionResponse(request, "notes_add") != "":
@@ -161,10 +142,10 @@ func TestKrudeLoadsToolboxesWhenATaskNeedsThem(t *testing.T) {
 		case functionResponse(request, "load_tools") != "":
 			return functionCalls(&genai.FunctionCall{ID: "call_note", Name: "notes_add", Args: map[string]any{"text": "buy milk"}})
 		default:
-			return functionCalls(&genai.FunctionCall{ID: "call_load", Name: "load_tools", Args: map[string]any{"names": []any{"notes", "slack", "bad", "nope"}}})
+			return functionCalls(&genai.FunctionCall{ID: "call_load", Name: "load_tools", Args: map[string]any{"names": []any{"notes", "bad", "orphan", "nope"}}})
 		}
 	})
-	h := newHarness(t, llm, append(Providers(), notes, misnamed))
+	h := newHarness(t, llm, notes, misnamed, orphan)
 	if answer := h.turn("member_1", nil, "Add a note."); answer != "Noted." {
 		t.Fatalf("answer = %q", answer)
 	}
@@ -184,7 +165,7 @@ func TestKrudeLoadsToolboxesWhenATaskNeedsThem(t *testing.T) {
 		t.Fatal("a misnamed toolbox was loaded")
 	}
 	result := functionResponse(krude[1], "load_tools")
-	for _, want := range []string{"loaded:[notes]", "slack", "not connected yet", "bad", "not named after the toolbox", "nope", "no toolbox with this name"} {
+	for _, want := range []string{"loaded:[notes]", "bad", "not named after the toolbox", "orphan", "not connected yet", "nope", "no toolbox with this name"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("load_tools result %s is missing %q", result, want)
 		}
@@ -202,7 +183,7 @@ func TestKrudeUsesAToolboxLoadedBeforeTheTurn(t *testing.T) {
 		}
 		return functionCalls(&genai.FunctionCall{ID: "call_note", Name: "notes_add", Args: map[string]any{"text": "buy tea"}})
 	})
-	h := newHarness(t, llm, []Toolbox{notes})
+	h := newHarness(t, llm, notes)
 	answer := h.turn("member_1", map[string]any{loadedToolsKey: []string{"notes"}}, "Add another note.")
 
 	if answer != "Noted again." {
@@ -214,6 +195,24 @@ func TestKrudeUsesAToolboxLoadedBeforeTheTurn(t *testing.T) {
 	}
 }
 
+func TestRootRejectsInvalidToolboxes(t *testing.T) {
+	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
+		return genai.NewContentFromText("Hello.", genai.RoleModel)
+	})
+	router, err := modelrouter.New(llm, llm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, toolboxes := range [][]Toolbox{
+		{{Name: "Bad Name"}},
+		{{Name: "notes"}, {Name: "notes"}},
+	} {
+		if _, err := Root(router, toolboxes); err == nil {
+			t.Fatalf("Root() error = nil for %+v", toolboxes)
+		}
+	}
+}
+
 func TestKrudeListsItsHelpers(t *testing.T) {
 	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
 		if hasFunctionResponse(request) {
@@ -221,13 +220,16 @@ func TestKrudeListsItsHelpers(t *testing.T) {
 		}
 		return functionCalls(&genai.FunctionCall{ID: "call_list", Name: "list_helpers", Args: map[string]any{}})
 	})
-	runTurn(t, llm, "Who helps you?", nil)
+	runTurn(t, llm, "Who helps you?")
 
 	result := functionResponse(llm.requestsFor(RootName)[1], "list_helpers")
-	for _, want := range []string{plannerName, researcherName, teamsName, "call it alone", "spawn_helper"} {
+	for _, want := range []string{plannerName, researcherName, "spawn_helper"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("list_helpers result %s is missing %q", result, want)
 		}
+	}
+	if strings.Contains(result, "teams") {
+		t.Fatalf("list_helpers still lists teams: %s", result)
 	}
 }
 
@@ -247,7 +249,7 @@ func TestKrudeSpawnsTemporaryHelpersTogether(t *testing.T) {
 			)
 		}
 	})
-	answer := runTurn(t, llm, "Write and check a launch note.", nil)
+	answer := runTurn(t, llm, "Write and check a launch note.")
 
 	if answer != "Both helpers are done." {
 		t.Fatalf("answer = %q", answer)
@@ -260,7 +262,7 @@ func TestKrudeSpawnsTemporaryHelpersTogether(t *testing.T) {
 		if !strings.Contains(contentsText(request), "launch note") {
 			t.Fatalf("helper was not given its task: %q", contentsText(request))
 		}
-		for _, forbidden := range []string{"spawn_helper", "set_nickname", "list_tools", "load_tools", "list_helpers"} {
+		for _, forbidden := range []string{"spawn_helper", "list_helpers"} {
 			if slices.Contains(declaredFunctions(request), forbidden) {
 				t.Fatalf("helper was offered %q", forbidden)
 			}
@@ -274,21 +276,280 @@ func TestKrudeSpawnsTemporaryHelpersTogether(t *testing.T) {
 	}
 }
 
-func TestKrudeLoadsASkill(t *testing.T) {
+func TestKrudeCreatesASubagentAndCallsIt(t *testing.T) {
+	llm := newTreeModel(func(agentName string, request *model.LLMRequest) *genai.Content {
+		switch {
+		case agentName == "subagent":
+			return genai.NewContentFromText("Two claims need sources.", genai.RoleModel)
+		case functionResponse(request, "fact_checker") != "":
+			return genai.NewContentFromText("The checker is done.", genai.RoleModel)
+		case functionResponse(request, "create_subagent") != "":
+			return functionCalls(&genai.FunctionCall{ID: "call_facts", Name: "fact_checker", Args: map[string]any{"request": "Check the launch note."}})
+		default:
+			return functionCalls(&genai.FunctionCall{ID: "call_create", Name: "create_subagent", Args: map[string]any{
+				"name":        "fact_checker",
+				"description": "Checks the claims in a note.",
+				"instruction": "You check claims and name what you cannot verify.",
+			}})
+		}
+	})
+	answer := runTurn(t, llm, "Create a fact checker and use it.")
+
+	if answer != "The checker is done." {
+		t.Fatalf("answer = %q", answer)
+	}
+	krude := llm.requestsFor(RootName)
+	if len(krude) != 3 {
+		t.Fatalf("Krude made %d model calls, want 3", len(krude))
+	}
+	if slices.Contains(declaredFunctions(krude[0]), "fact_checker") {
+		t.Fatal("the sub-agent was declared before it was created")
+	}
+	if !slices.Contains(declaredFunctions(krude[1]), "fact_checker") {
+		t.Fatalf("the sub-agent was not declared right after creation, got %v", declaredFunctions(krude[1]))
+	}
+	result := functionResponse(krude[1], "create_subagent")
+	for _, want := range []string{"fact_checker", "Checks the claims in a note.", "Call fact_checker by name"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("create_subagent result %s is missing %q", result, want)
+		}
+	}
+
+	workers := llm.requestsFor("subagent")
+	if len(workers) != 1 {
+		t.Fatalf("the sub-agent made %d model calls, want 1", len(workers))
+	}
+	if got := text(workers[0].Config.SystemInstruction); !strings.HasPrefix(got, "You check claims and name what you cannot verify.") {
+		t.Fatalf("sub-agent instruction = %q", got)
+	}
+	if !strings.Contains(contentsText(workers[0]), "Check the launch note.") {
+		t.Fatal("the sub-agent was not given its task")
+	}
+	if tools := declaredFunctions(workers[0]); len(tools) != 0 {
+		t.Fatalf("the sub-agent was offered tools %v", tools)
+	}
+}
+
+func TestKrudeCallsASubagentFromSessionState(t *testing.T) {
+	llm := newTreeModel(func(agentName string, request *model.LLMRequest) *genai.Content {
+		if agentName == "subagent" {
+			return genai.NewContentFromText("The note is consistent.", genai.RoleModel)
+		}
+		if functionResponse(request, "note_reviewer") != "" {
+			return genai.NewContentFromText("Reviewed.", genai.RoleModel)
+		}
+		return functionCalls(&genai.FunctionCall{ID: "call_review", Name: "note_reviewer", Args: map[string]any{"request": "Review the note."}})
+	})
+	state := map[string]any{subagentsKey: []subagent{
+		{Name: "note_reviewer", Description: "Reviews notes.", Instruction: "You review notes for consistency."},
+	}}
+	answer := runTurn(t, llm, "Have the reviewer look at it.", state)
+
+	if answer != "Reviewed." {
+		t.Fatalf("answer = %q", answer)
+	}
+	if !slices.Contains(declaredFunctions(llm.requestsFor(RootName)[0]), "note_reviewer") {
+		t.Fatal("a sub-agent registered before the turn was not declared")
+	}
+	workers := llm.requestsFor("subagent")
+	if len(workers) != 1 || !strings.Contains(contentsText(workers[0]), "Review the note.") {
+		t.Fatalf("the stored sub-agent did not run with its task: %v", workers)
+	}
+}
+
+func TestKrudeListsAndRemovesSubagents(t *testing.T) {
+	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		switch {
+		case functionResponse(request, "remove_subagent") != "":
+			return genai.NewContentFromText("Removed.", genai.RoleModel)
+		case functionResponse(request, "list_subagents") != "":
+			return functionCalls(&genai.FunctionCall{ID: "call_remove", Name: "remove_subagent", Args: map[string]any{"name": "note_reviewer"}})
+		default:
+			return functionCalls(&genai.FunctionCall{ID: "call_list", Name: "list_subagents", Args: map[string]any{}})
+		}
+	})
+	state := map[string]any{subagentsKey: []subagent{
+		{Name: "note_reviewer", Description: "Reviews notes.", Instruction: "You review notes."},
+	}}
+	answer := runTurn(t, llm, "Who is on your team, and drop the reviewer.", state)
+
+	if answer != "Removed." {
+		t.Fatalf("answer = %q", answer)
+	}
+	krude := llm.requestsFor(RootName)
+	if listed := functionResponse(krude[1], "list_subagents"); !strings.Contains(listed, "note_reviewer") {
+		t.Fatalf("list_subagents result %s is missing the sub-agent", listed)
+	}
+	if removed := functionResponse(krude[2], "remove_subagent"); !strings.Contains(removed, "note_reviewer") {
+		t.Fatalf("remove_subagent result %s is missing the name", removed)
+	}
+	last := declaredFunctions(krude[len(krude)-1])
+	if slices.Contains(last, "note_reviewer") {
+		t.Fatalf("the removed sub-agent is still declared: %v", last)
+	}
+}
+
+func TestKrudeRefusesASubagentNamedLikeATool(t *testing.T) {
+	notes := Toolbox{Name: "notes", Description: "Notes.", Toolset: staticToolset{echoTool(t, "notes_add")}}
+	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		if functionResponse(request, "create_subagent") != "" {
+			return genai.NewContentFromText("Could not.", genai.RoleModel)
+		}
+		return functionCalls(&genai.FunctionCall{ID: "call_create", Name: "create_subagent", Args: map[string]any{
+			"name": "notes_add", "description": "Adds notes.", "instruction": "You add notes.",
+		}})
+	})
+	h := newHarness(t, llm, notes)
+	h.turn("member_1", nil, "Create a notes helper.")
+
+	result := functionResponse(llm.requestsFor(RootName)[1], "create_subagent")
+	if !strings.Contains(result, "already has a tool named") {
+		t.Fatalf("create_subagent result %s did not refuse the toolbox name", result)
+	}
+}
+
+func TestSubagentsFromStateDecodesStoredValues(t *testing.T) {
+	state := mapState{subagentsKey: []any{
+		map[string]any{"name": "fact_checker", "description": "Checks claims.", "instruction": "You check claims."},
+		map[string]any{"name": 42},
+		"nonsense",
+	}}
+	specs := subagentsFromState(state)
+	if len(specs) != 1 || specs[0].Name != "fact_checker" || specs[0].Instruction != "You check claims." {
+		t.Fatalf("subagentsFromState() = %+v", specs)
+	}
+}
+
+func TestValidateSubagentName(t *testing.T) {
+	for _, valid := range []string{"fact_checker", "reviewer2", "a"} {
+		if err := validateSubagentName(valid); err != nil {
+			t.Errorf("validateSubagentName(%q) = %v", valid, err)
+		}
+	}
+	for _, invalid := range []string{"", "Fact Checker", "planner", "list_tools", "create_subagent", "krude", "user", "9lives", strings.Repeat("a", maxSubagentNameRunes+1)} {
+		if err := validateSubagentName(invalid); err == nil {
+			t.Errorf("validateSubagentName(%q) = nil", invalid)
+		}
+	}
+}
+
+func TestInstructionCarriesMemberDetails(t *testing.T) {
+	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
+		return genai.NewContentFromText("Hi Asha.", genai.RoleModel)
+	})
+	runTurn(t, llm, "hi", map[string]any{
+		UserNameKey: "Asha", UserAboutKey: "a product designer", UserEmailKey: "asha@acme.dev",
+		UserRoleKey: "admin", OrgNameKey: "Acme", OrganizationIDKey: "org_1",
+	})
+
+	instruction := text(llm.requestsFor(RootName)[0].Config.SystemInstruction)
+	for _, want := range []string{
+		"- Name: Asha",
+		"- About: a product designer",
+		"- Email: asha@acme.dev",
+		"- Role: admin",
+		"- Organization: Acme",
+		"- Organization ID: org_1",
+	} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("instruction is missing %q:\n%s", want, instruction)
+		}
+	}
+}
+
+func TestLoadedToolboxSkillJoinsTheInstruction(t *testing.T) {
+	notes := Toolbox{Name: "notes", Description: "Notes.", Instructions: "Use notes_add for every note.", Toolset: staticToolset{echoTool(t, "notes_add")}}
+	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
+		return genai.NewContentFromText("Noted.", genai.RoleModel)
+	})
+	h := newHarness(t, llm, notes)
+
+	h.turn("member_1", nil, "hi")
+	instruction := text(llm.requestsFor(RootName)[0].Config.SystemInstruction)
+	if strings.Contains(instruction, "## Loaded toolboxes") {
+		t.Fatal("a skill was in the instruction before its toolbox was loaded")
+	}
+
+	h.turn("member_1", map[string]any{loadedToolsKey: []string{"notes"}}, "hi")
+	instruction = text(llm.requestsFor(RootName)[1].Config.SystemInstruction)
+	for _, want := range []string{"## Loaded toolboxes", "### notes", "Use notes_add for every note."} {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("instruction is missing %q:\n%s", want, instruction)
+		}
+	}
+}
+
+func TestGetUserDetailsReturnsSeededState(t *testing.T) {
 	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
 		if hasFunctionResponse(request) {
-			return genai.NewContentFromText("Here is the plan.", genai.RoleModel)
+			return genai.NewContentFromText("Checked.", genai.RoleModel)
 		}
-		return functionCalls(&genai.FunctionCall{ID: "call_skill", Name: "load_skill", Args: map[string]any{"name": "team-session-planning"}})
+		return functionCalls(&genai.FunctionCall{ID: "call_details", Name: "get_user_details", Args: map[string]any{}})
 	})
-	runTurn(t, llm, "Plan a design review with my team.", nil)
+	runTurn(t, llm, "who am I?", map[string]any{
+		UserNameKey: "Asha", UserAboutKey: "a product designer", UserEmailKey: "asha@acme.dev",
+		UserRoleKey: "admin", OrgNameKey: "Acme", OrganizationIDKey: "org_1",
+	})
 
-	krude := llm.requestsFor(RootName)
-	if !strings.Contains(text(krude[0].Config.SystemInstruction), "team-session-planning") {
-		t.Fatal("Krude was not told which skills exist")
+	result := functionResponse(llm.requestsFor(RootName)[1], "get_user_details")
+	for _, want := range []string{"Asha", "a product designer", "asha@acme.dev", "admin", "Acme", "org_1"} {
+		if !strings.Contains(result, want) {
+			t.Fatalf("get_user_details result %s is missing %q", result, want)
+		}
 	}
-	if result := functionResponse(krude[1], "load_skill"); !strings.Contains(result, "Planning a working session") {
-		t.Fatalf("load_skill did not return the skill's instructions: %s", result)
+}
+
+func TestToolboxConstructorsCarryTheirSkills(t *testing.T) {
+	toolboxes := map[string]Toolbox{
+		"sandbox": SandboxToolbox(staticToolset{echoTool(t, "sandbox_execute_code")}),
+		"browser": BrowserToolbox(staticToolset{echoTool(t, "browser_navigate")}),
+	}
+	for name, box := range toolboxes {
+		if box.Name != name {
+			t.Errorf("toolbox name = %q, want %q", box.Name, name)
+		}
+		if box.Description == "" || strings.TrimSpace(box.Instructions) == "" {
+			t.Errorf("the %s toolbox is missing its description or skill", name)
+		}
+	}
+}
+
+func TestRootRoutesEachRoleToItsTier(t *testing.T) {
+	main := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		switch {
+		case functionResponse(request, "fact_checker") != "":
+			return genai.NewContentFromText("Done on main.", genai.RoleModel)
+		case functionResponse(request, "create_subagent") != "":
+			return functionCalls(&genai.FunctionCall{ID: "call_facts", Name: "fact_checker", Args: map[string]any{"request": "Check it."}})
+		default:
+			return functionCalls(
+				&genai.FunctionCall{ID: "call_planner", Name: plannerName, Args: map[string]any{"request": "Plan it."}},
+				&genai.FunctionCall{ID: "call_create", Name: "create_subagent", Args: map[string]any{
+					"name": "fact_checker", "description": "Checks facts.", "instruction": "You check facts.",
+				}},
+			)
+		}
+	})
+	lite := newTreeModel(func(agentName string, _ *model.LLMRequest) *genai.Content {
+		if agentName == plannerName {
+			return genai.NewContentFromText(`{"steps":[{"agent":"krude","task":"answer"}]}`, genai.RoleModel)
+		}
+		return genai.NewContentFromText("Facts checked.", genai.RoleModel)
+	})
+	router, err := modelrouter.New(main, lite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newRouterHarness(t, router)
+
+	if answer := h.turn("member_1", nil, "Plan and check."); answer != "Done on main." {
+		t.Fatalf("answer = %q", answer)
+	}
+	if len(lite.requestsFor(plannerName)) != 1 || len(main.requestsFor(plannerName)) != 0 {
+		t.Fatalf("planner ran %d times on lite and %d on main, want 1 and 0", len(lite.requestsFor(plannerName)), len(main.requestsFor(plannerName)))
+	}
+	if len(lite.requestsFor("subagent")) != 1 || len(main.requestsFor("subagent")) != 0 {
+		t.Fatalf("the sub-agent ran %d times on lite and %d on main, want 1 and 0", len(lite.requestsFor("subagent")), len(main.requestsFor("subagent")))
 	}
 }
 
@@ -308,7 +569,7 @@ func TestKrudeRunsSingleTurnSubAgentsTogether(t *testing.T) {
 			)
 		}
 	})
-	answer := runTurn(t, llm, "Write a launch note.", nil)
+	answer := runTurn(t, llm, "Write a launch note.")
 
 	if answer != "Planned and researched." {
 		t.Fatalf("answer = %q", answer)
@@ -323,32 +584,11 @@ func TestKrudeRunsSingleTurnSubAgentsTogether(t *testing.T) {
 	if !usesGoogleSearch(research) {
 		t.Fatal("researcher was not given Google Search")
 	}
+	if !usesURLContext(research) {
+		t.Fatal("researcher was not given URL context")
+	}
 	if tools := declaredFunctions(research); len(tools) != 0 {
-		t.Fatalf("researcher was offered function tools %v beside Google Search", tools)
-	}
-}
-
-func TestKrudeGetsATaskSubAgentsResult(t *testing.T) {
-	llm := newTreeModel(func(agentName string, request *model.LLMRequest) *genai.Content {
-		switch {
-		case agentName == teamsName:
-			return functionCalls(&genai.FunctionCall{ID: "call_finish", Name: "finish_task", Args: map[string]any{"result": "Teams tools are not connected yet."}})
-		case hasFunctionResponse(request):
-			return genai.NewContentFromText("I can't reach teams yet.", genai.RoleModel)
-		default:
-			return functionCalls(&genai.FunctionCall{ID: "call_teams", Name: teamsName, Args: map[string]any{"request": "Find the design team."}})
-		}
-	})
-	answer := runTurn(t, llm, "Who is on the design team?", nil)
-
-	if answer != "I can't reach teams yet." {
-		t.Fatalf("answer = %q", answer)
-	}
-	if tools := declaredFunctions(llm.requestsFor(teamsName)[0]); !slices.Equal(tools, []string{"finish_task"}) {
-		t.Fatalf("teams was offered %v, want only finish_task", tools)
-	}
-	if result := functionResponse(llm.requestsFor(RootName)[1], teamsName); !strings.Contains(result, "Teams tools are not connected yet.") {
-		t.Fatalf("Krude did not get teams' result back, got %q", result)
+		t.Fatalf("researcher was offered function tools %v beside its native tools", tools)
 	}
 }
 
@@ -379,17 +619,25 @@ func TestGeminiUsesApplicationDefaultCredentials(t *testing.T) {
 	}
 }
 
-// harness runs Krude against one in-memory session service, so state scoped to
-// a member carries from one of their sessions to the next.
+// harness runs Krude against one in-memory session service.
 type harness struct {
 	t        *testing.T
 	sessions session.Service
 	turns    *runner.Runner
 }
 
-func newHarness(t *testing.T, llm model.LLM, toolboxes []Toolbox) *harness {
+func newHarness(t *testing.T, llm model.LLM, toolboxes ...Toolbox) *harness {
 	t.Helper()
-	root, err := Root(context.Background(), llm, toolboxes)
+	router, err := modelrouter.New(llm, llm)
+	if err != nil {
+		t.Fatalf("modelrouter.New() error = %v", err)
+	}
+	return newRouterHarness(t, router, toolboxes...)
+}
+
+func newRouterHarness(t *testing.T, router *modelrouter.Router, toolboxes ...Toolbox) *harness {
+	t.Helper()
+	root, err := Root(router, toolboxes)
 	if err != nil {
 		t.Fatalf("Root() error = %v", err)
 	}
@@ -401,8 +649,8 @@ func newHarness(t *testing.T, llm model.LLM, toolboxes []Toolbox) *harness {
 	return &harness{t: t, sessions: sessions, turns: turns}
 }
 
-// turn sends one message to Krude in a new session for the member, starting
-// with state, and returns Krude's reply.
+// turn sends one message to Krude in a new session, starting with state, and
+// returns Krude's reply.
 func (h *harness) turn(userID string, state map[string]any, message string) string {
 	h.t.Helper()
 	ctx := context.Background()
@@ -422,14 +670,33 @@ func (h *harness) turn(userID string, state map[string]any, message string) stri
 	return answer.String()
 }
 
-func runTurn(t *testing.T, llm model.LLM, message string, state map[string]any) string {
+func runTurn(t *testing.T, llm model.LLM, message string, state ...map[string]any) string {
 	t.Helper()
-	return newHarness(t, llm, nil).turn("member_1", state, message)
+	var initial map[string]any
+	if len(state) > 0 {
+		initial = state[0]
+	}
+	return newHarness(t, llm).turn("member_1", initial, message)
 }
 
-func lastInstruction(llm *treeModel) string {
-	requests := llm.requestsFor(RootName)
-	return text(requests[len(requests)-1].Config.SystemInstruction)
+type mapState map[string]any
+
+func (s mapState) Get(key string) (any, error) {
+	value, ok := s[key]
+	if !ok {
+		return nil, session.ErrStateKeyNotExist
+	}
+	return value, nil
+}
+
+func (s mapState) All() iter.Seq2[string, any] {
+	return func(yield func(string, any) bool) {
+		for key, value := range s {
+			if !yield(key, value) {
+				return
+			}
+		}
+	}
 }
 
 type staticToolset []tool.Tool
@@ -453,24 +720,14 @@ func echoTool(t *testing.T, name string) tool.Tool {
 	return echo
 }
 
-type mapState map[string]any
-
-func (s mapState) Get(key string) (any, error) {
-	value, ok := s[key]
-	if !ok {
-		return nil, session.ErrStateKeyNotExist
-	}
-	return value, nil
-}
-
-func (s mapState) All() iter.Seq2[string, any] {
-	return func(yield func(string, any) bool) {
-		for key, value := range s {
-			if !yield(key, value) {
-				return
-			}
+func countName(names []string, want string) int {
+	count := 0
+	for _, name := range names {
+		if name == want {
+			count++
 		}
 	}
+	return count
 }
 
 func functionCalls(calls ...*genai.FunctionCall) *genai.Content {
@@ -537,22 +794,24 @@ func declaredFunctions(request *model.LLMRequest) []string {
 	return names
 }
 
-func countName(names []string, want string) int {
-	count := 0
-	for _, name := range names {
-		if name == want {
-			count++
-		}
-	}
-	return count
-}
-
 func usesGoogleSearch(request *model.LLMRequest) bool {
 	if request.Config == nil {
 		return false
 	}
 	for _, declared := range request.Config.Tools {
 		if declared.GoogleSearch != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func usesURLContext(request *model.LLMRequest) bool {
+	if request.Config == nil {
+		return false
+	}
+	for _, declared := range request.Config.Tools {
+		if declared.URLContext != nil {
 			return true
 		}
 	}

@@ -25,12 +25,11 @@ var helperNameCleaner = regexp.MustCompile(`[^a-z0-9_]+`)
 type helpers struct {
 	llm       model.LLM
 	subAgents []agent.Agent
-	toolsets  []tool.Toolset
 	spawned   atomic.Int64
 }
 
-func newHelpers(llm model.LLM, subAgents []agent.Agent, toolsets []tool.Toolset) *helpers {
-	return &helpers{llm: llm, subAgents: subAgents, toolsets: toolsets}
+func newHelpers(llm model.LLM, subAgents []agent.Agent) *helpers {
+	return &helpers{llm: llm, subAgents: subAgents}
 }
 
 type listHelpersArgs struct{}
@@ -52,14 +51,10 @@ func (h *helpers) listTool() (tool.Tool, error) {
 		Description: "Lists your dedicated sub-agents and how each works, and explains temporary helpers.",
 	}, func(agent.Context, listHelpersArgs) (listHelpersResult, error) {
 		result := listHelpersResult{
-			Temporary: "spawn_helper starts a temporary helper for work that needs an agent of its own or is too big for one agent. Helpers started in the same turn work at the same time, use the toolboxes and skills you have, and return a result without talking to the member.",
+			Temporary: "spawn_helper starts a temporary helper for work that needs an agent of its own or is too big for one agent. Helpers started in the same turn work at the same time and return a result without talking to the member.",
 		}
 		for _, subAgent := range h.subAgents {
-			works := "runs on its own and returns a result"
-			if subAgent.Name() == teamsName {
-				works = "may ask the member a question before it returns; call it alone"
-			}
-			result.Dedicated = append(result.Dedicated, listedHelper{Name: subAgent.Name(), Description: subAgent.Description(), Works: works})
+			result.Dedicated = append(result.Dedicated, listedHelper{Name: subAgent.Name(), Description: subAgent.Description(), Works: "runs on its own and returns a result"})
 		}
 		return result, nil
 	})
@@ -95,7 +90,6 @@ func (h *helpers) spawnTool() (tool.Tool, error) {
 			// A provider returns the instruction as written, so braces in it are
 			// not read as session state placeholders.
 			InstructionProvider:      func(agent.ReadonlyContext) (string, error) { return full, nil },
-			Toolsets:                 h.toolsets,
 			DisallowTransferToParent: true,
 			DisallowTransferToPeers:  true,
 		})

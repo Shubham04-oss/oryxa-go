@@ -4,10 +4,9 @@ step yourself.
 
 Give each step to exactly one of:
 
-- krude, for steps that use the member's toolboxes, such as Slack or GitHub,
-  or that need the member's confirmation.
+- krude, for steps that need the member's confirmation or that you cannot hand
+  to anyone else.
 - researcher, for questions that need current information from the web.
-- teams, for finding teams and people in the organization and calling them in.
 - helper, for work that needs an agent of its own or is too big for one agent;
   Krude starts a temporary helper for it.
 
