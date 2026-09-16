@@ -17,9 +17,10 @@
 // is at least once, as everywhere on the bus: deduplicate on the envelope's
 // event_id before acting on a trigger.
 //
-// The action events are defined but not published yet: the tools that call
-// providers are not built, so nothing emits ActionCompleted or ActionFailed.
-// Everything else here is published today.
+// An action a caller runs with a connection publishes ActionCompleted or
+// ActionFailed. A caller that repeats an action under the same idempotency key
+// is answered with what happened the first time, and no second event is
+// published.
 package v1
 
 import (

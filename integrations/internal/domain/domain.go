@@ -43,6 +43,9 @@ type OrgMembership struct {
 	OrganizationID string
 	UserID         string
 	Role           OrgRole
+	// Agent says the caller is an agent acting for this member with a token
+	// auth issued to its agent client: it acts as the member, with less reach.
+	Agent bool
 }
 
 type ProviderAccount struct {
@@ -82,6 +85,7 @@ type Purpose string
 const (
 	PurposeTrigger Purpose = "trigger"
 	PurposeCleanup Purpose = "cleanup"
+	PurposeAction  Purpose = "action"
 )
 
 // Holder is the hold integrations keeps on a connection while a registration
@@ -255,6 +259,63 @@ func CheckTarget(target map[string]string, events []string) (map[string]string, 
 }
 
 // CheckWebhookSecret checks an app's signing secret as an admin gives it.
+type ActionStatus string
+
+const (
+	ActionRunning   ActionStatus = "running"
+	ActionCompleted ActionStatus = "completed"
+	ActionFailed    ActionStatus = "failed"
+)
+
+// ActionResource is what an action created or changed at the provider.
+type ActionResource struct {
+	Type string `json:"type"`
+	ID   string `json:"id,omitempty"`
+	Name string `json:"name,omitempty"`
+	URL  string `json:"url,omitempty"`
+}
+
+// Action is one action a caller ran with a connection. An action a connection
+// already ran under the same idempotency key is never run twice: the first
+// outcome answers again.
+type Action struct {
+	ID              string          `json:"id"`
+	OrganizationID  string          `json:"organization_id"`
+	ConnectionID    string          `json:"connection_id"`
+	AppID           string          `json:"app_id"`
+	Provider        string          `json:"provider"`
+	Name            string          `json:"action"`
+	Scope           string          `json:"scope"`
+	TeamID          string          `json:"team_id,omitempty"`
+	MemberID        string          `json:"member_id,omitempty"`
+	ProviderAccount ProviderAccount `json:"provider_account"`
+	// RequestedBy is the member the action ran as.
+	RequestedBy string          `json:"requested_by"`
+	Status      ActionStatus    `json:"status"`
+	Error       string          `json:"error,omitempty"`
+	Resource    *ActionResource `json:"resource,omitempty"`
+	Result      json.RawMessage `json:"result,omitempty"`
+	StartedAt   time.Time       `json:"started_at"`
+	EndedAt     *time.Time      `json:"ended_at,omitempty"`
+
+	IdempotencyKey string `json:"-"`
+}
+
+const (
+	MinIdempotencyKey = 8
+	MaxIdempotencyKey = 200
+)
+
+// CheckIdempotencyKey checks the key a caller repeats an action under, which
+// must be its own: two different actions never share one.
+func CheckIdempotencyKey(key string) (string, error) {
+	key = strings.TrimSpace(key)
+	if len(key) < MinIdempotencyKey || len(key) > MaxIdempotencyKey || strings.ContainsFunc(key, isControl) {
+		return "", fmt.Errorf("idempotency_key must be %d to %d printable characters: %w", MinIdempotencyKey, MaxIdempotencyKey, ErrInvalid)
+	}
+	return key, nil
+}
+
 func CheckWebhookSecret(secret string) (string, error) {
 	secret = strings.TrimSpace(secret)
 	if len(secret) < MinWebhookSecret || len(secret) > MaxWebhookSecret || strings.ContainsFunc(secret, isControl) {

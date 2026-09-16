@@ -23,6 +23,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/connectionsclient"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/mcpserver"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/secrets"
@@ -102,7 +103,7 @@ func run(ctx context.Context) error {
 		Providers:   providers.Builtin(),
 		HTTP:        providers.NewHTTPClient(),
 		Logger:      logger,
-	}, application.Config{PublicBaseURL: config.PublicBaseURL})
+	}, application.Config{PublicBaseURL: config.PublicBaseURL, ServiceName: config.ServiceName})
 	dispatcher := events.NewDispatcher(store, events.NewPublisher(eventClient, config.EventBusName), logger)
 	go dispatcher.Run(ctx)
 	// Renewal and cleanup claim under leases, so every replica may run them.
@@ -114,8 +115,10 @@ func run(ctx context.Context) error {
 	}
 
 	server := &http.Server{
-		Addr:              config.Address,
-		Handler:           observability.HTTPHandler("oryxa-integrations", httpserver.New(service, httpserver.Config{AllowedOrigins: config.AllowedOrigins}, logger)),
+		Addr: config.Address,
+		Handler: observability.HTTPHandler("oryxa-integrations", httpserver.New(service, httpserver.Config{
+			AllowedOrigins: config.AllowedOrigins, MCP: mcpserver.New(service, logger),
+		}, logger)),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,

@@ -95,3 +95,25 @@ func TestCredentialsAccessToken(t *testing.T) {
 		}
 	}
 }
+
+func TestMembershipSaysWhenTheCallerIsAnAgent(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		agent string
+		want  bool
+	}{
+		{name: "an agent token", agent: `,"agent":true`, want: true},
+		{name: "the member's own token", want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				_, _ = writer.Write([]byte(`{"organization":{"id":"org_1"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"member"}` + test.agent + `}`))
+			}))
+			defer server.Close()
+			membership, err := New(server.URL).Membership(context.Background(), "org_1", Credentials{Authorization: "Bearer token"})
+			if err != nil || membership.Agent != test.want {
+				t.Fatalf("Membership() = %+v, %v, want Agent %v", membership, err, test.want)
+			}
+		})
+	}
+}

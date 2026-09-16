@@ -90,7 +90,9 @@ func (s *Service) admin(ctx context.Context, credentials authclient.Credentials,
 	if err != nil {
 		return domain.OrgMembership{}, err
 	}
-	if !membership.Role.IsOrgAdmin() {
+	// An app's signing secret is organization configuration, which an agent
+	// never changes even for an admin it acts for.
+	if !membership.Role.IsOrgAdmin() || membership.Agent {
 		return domain.OrgMembership{}, domain.ErrForbidden
 	}
 	return membership, nil

@@ -63,6 +63,15 @@ func microsoftProvider(apiURL string) Provider {
 			return microsoftUnregister(ctx, client, apiURL, request)
 		},
 		Receive: microsoftReceive,
+		TargetFields: []TargetField{
+			{Name: "resource", Description: "What to watch: me/messages, me/mailFolders('<id>')/messages, me/events or me/drive/root.", Required: true, Example: "me/messages"},
+		},
+		Events: EventsDescription{
+			Names:   []string{"created", "updated", "deleted"},
+			Default: "every change the resource reports",
+		},
+		Actions: microsoftActions(apiURL),
+		Skill:   skill("microsoft"),
 	}
 }
 

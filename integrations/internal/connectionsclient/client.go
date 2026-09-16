@@ -130,6 +130,18 @@ func (client *Client) App(ctx context.Context, organizationID, appID, accessToke
 	return App{}, domain.ErrNotFound
 }
 
+// Connections are an organization's connections as the member whose access
+// token is given sees them on connections' public API.
+func (client *Client) Connections(ctx context.Context, organizationID, accessToken string) ([]domain.Connection, error) {
+	var list struct {
+		Connections []domain.Connection `json:"connections"`
+	}
+	if err := client.call(ctx, http.MethodGet, "/v1/organizations/"+url.PathEscape(organizationID)+"/connections", "", accessToken, nil, &list); err != nil {
+		return nil, err
+	}
+	return list.Connections, nil
+}
+
 type errorBody struct {
 	Error struct {
 		Code string `json:"code"`

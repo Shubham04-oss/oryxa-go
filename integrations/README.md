@@ -5,14 +5,16 @@ connections an organization already has: GitHub repository webhooks, Slack
 Events API deliveries, Linear webhooks and Microsoft Graph change
 notifications; webhook ingress with per-provider verification; renewal,
 removal and the holds that keep a disconnected connection's credentials until
-its registrations are gone; and the `oryxa.integrations` events every other
-service listens to. Not built yet: the actions and tools that call providers,
-whose outcome events this contract already defines (see Later).
+its registrations are gone; actions a caller runs with a connection; the
+catalogue that reads every provider aloud; an MCP endpoint per provider that
+offers those actions as tools; and the `oryxa.integrations` events every other
+service listens to. Not built yet: the agent toolboxes that consume those
+endpoints, which wait on the agents service's run API (see Later).
 
-Integrations owns what a provider sends Oryxa. Connections owns the apps,
+Integrations owns what passes between Oryxa and a provider: what the provider
+sends, and what a caller does with a connection. Connections owns the apps,
 connections and credentials: integrations never stores a provider credential,
-and asks connections for one whenever it registers, renews or removes
-something. Auth remains the identity and membership boundary. Everything a
+and asks connections for one whenever it registers, renews, removes or acts. Auth remains the identity and membership boundary. Everything a
 provider delivers leaves this service as one event, `integrations.trigger.received.v1`,
 so a workflow, an agent or any other consumer subscribes to provider events
 without knowing a provider.
@@ -113,6 +115,77 @@ Webhook paths must reach integrations untouched:
 - **TLS 1.2 or better**, with a certificate chain the provider trusts. Graph refuses anything less, and Slack and Linear refuse self-signed certificates.
 - **Keep the path public.** Access policies (Cloudflare Access, IP allowlists) block providers.
 
+## Actions
+
+An action is one thing a caller does with a connection — open an issue, post a
+message — carried out with a credential connections issues for the member
+asking, as `action`. Every action is recorded and published, as
+`integrations.action.completed.v1` or `.failed.v1`, so what a service or an
+agent did with someone's connection is auditable.
+
+- **The member's reach is the boundary.** Connections decides whether the member the work runs as may use the connection, exactly as it does for the API and for triggers. An agent acting for a member reaches their connections, their teams' and the organization's — nothing more.
+- **An action that writes carries an `idempotency_key`.** A caller that asks again under the same key is answered with what happened the first time, and the provider is not asked twice: the key is what makes a model's retry safe. An action that only reads needs no key.
+- **Failures say what to do.** `needs_reconnect`, `scope_required`, `credential_rejected`, `not_found`, `rate_limited`, `provider_unavailable`: the caller sees the same reason the event carries, and never the provider's own error body.
+- **Results are small.** An action reports what a caller needs to act next, not the provider's whole answer; anything over 128 KiB is left out of the event and flagged.
+
+Actions live with their provider, in `internal/providers`, beside the code
+that verifies that provider's deliveries:
+
+| Provider | Reads | Writes |
+| --- | --- | --- |
+| `github` | `get_issue`, `list_issues` | `create_issue`, `comment_on_issue`, `close_issue` |
+| `slack` | `list_channels` | `post_message`, `reply_in_thread`, `add_reaction` |
+| `linear` | `get_issue`, `list_issues` | `create_issue`, `comment_on_issue`, `close_issue` |
+| `microsoft` | `list_messages`, `get_message`, `list_events` | `send_mail`, `create_event` |
+
+## The catalogue
+
+`GET /v1/catalog` reads the registry aloud: for each provider, how it
+delivers, what a subscription's target takes, the events it sends, the actions
+a connection may run with their input schemas, and the provider's **skill** —
+markdown saying how its events and tools are meant to be used. It is built
+from `Builtin()` rather than a list of its own, so a provider or an action
+added there appears at once. It is the same for every organization and holds
+nothing of one, so it takes no credentials: a caller needs it before it has a
+connection.
+
+A skill is behaviour, not reference: which identifier to use, what to confirm
+before writing, what an error means. An agent carries the skill of the
+provider it is working with alongside that provider's tools.
+
+## Tools over MCP
+
+`POST /v1/organizations/{organizationID}/mcp/{provider}` offers one provider's
+actions as MCP tools. It is **stateless**, as the 2026-07-28 protocol is: no
+`initialize` handshake, no session header, each request standing alone, so any
+replica may answer one and ordinary HTTP infrastructure may route it. A
+stateful server would silently negotiate down to an older protocol, so the
+handler sets `Stateless` and a test asserts the version it settles on.
+
+One endpoint per provider, rather than one for everything, because the
+provider's **skill** rides along as the server's `instructions`: an agent that
+loads GitHub's toolbox gets GitHub's tools and GitHub's guidance together, and
+nothing about Slack.
+
+- **A tool is `provider_action`** — `github_create_issue`, `slack_post_message` — named so a toolbox's tools never collide with an agent's own.
+- **Every tool takes `connection_id`**, and a write also requires `idempotency_key`; both are added to the action's own schema. Without a connection the member's one connection to that provider is used, and a member with several is asked which.
+- **`provider_connections`** lists the member's connections for that provider, so an agent can ask what it would be acting as before it acts.
+- **The member is the boundary**, carried per request as a bearer token or the access cookie: an agent reaches exactly what that member reaches, and no more. A request without credentials is `401` with `WWW-Authenticate`.
+- **One fixed URL per provider**: `POST /v1/mcp/{provider}` is the same endpoint, taking the organization from the `X-Oryxa-Organization` header, so an agent's toolset is configured once and names the organization per request.
+- **A failure is a result, not a protocol error**: the tool answers `IsError` with `needs_reconnect`, `scope_required`, `not_found` and the rest, so a model can reconnect or stop rather than guess. An error nothing recognises reports only its shape.
+
+## Agents acting for a member
+
+An agent acts **as the member it works for, with that member's Cognito
+identity** — never as a service impersonating them. While the member is
+present, the agent forwards the member's own access token. When they are not,
+as when a trigger starts a run, the agent uses a token auth issues from the
+member's **agent grant**: still the member's identity, but minted for auth's
+agent client with the `oryxa/agent.actions` scope. Auth's organization answer
+says which it is, and integrations lets an agent token run actions, use MCP
+and manage subscriptions, but never change an app's signing secret, even for
+an admin. Auth's README describes the grant.
+
 ## Renewal and removal
 
 A provider registration outlives the request that made it, so two workers keep
@@ -151,11 +224,15 @@ registration or account key.
 | Method | Path | Who | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |
+| `GET` | `/v1/catalog` | Anyone | Every provider read aloud: targets, events, actions and skills |
 | `POST` | `/v1/webhooks/{provider}/{route}` | The provider | A delivery |
 | `GET` | `/v1/organizations/{organizationID}/subscriptions` | Members | The caller's subscriptions, or an org admin's view of the organization's. `connection_id` narrows to one connection, for anyone who can see it |
 | `POST` | `/v1/organizations/{organizationID}/subscriptions` | Members | Subscribe: `{connection_id, target, events}` → `201` |
 | `GET` | `/v1/organizations/{organizationID}/subscriptions/{subscriptionID}` | Its creator, an org admin, or anyone who can see its connection | One subscription |
 | `DELETE` | `/v1/organizations/{organizationID}/subscriptions/{subscriptionID}` | Its creator or an org admin | Stop it → `204` |
+| `POST` | `/v1/organizations/{organizationID}/actions` | Members | Run an action: `{connection_id, action, input, idempotency_key}` → the action, with its result |
+| `POST` | `/v1/organizations/{organizationID}/mcp/{provider}` | Members | That provider's actions as MCP tools, stateless, carrying its skill |
+| `POST` | `/v1/mcp/{provider}` | Members | The same, naming the organization in `X-Oryxa-Organization` |
 | `GET` | `/v1/organizations/{organizationID}/apps/{appID}/webhook` | Org admins | An app's webhook URL, never its secret |
 | `PUT` | `/v1/organizations/{organizationID}/apps/{appID}/webhook` | Org admins | Set or rotate the app's signing secret: `{secret}` → `200` with the URL, which does not change |
 | `DELETE` | `/v1/organizations/{organizationID}/apps/{appID}/webhook` | Org admins | Forget it; deliveries are then refused |
@@ -184,8 +261,8 @@ envelope every Oryxa publisher uses, through the outbox. Contracts are in
 | `integrations.subscription.created.v1` | A subscription is registered and active |
 | `integrations.subscription.stopped.v1` | A member stopped it, or a disconnect, a member leaving, or an organization's deletion did |
 | `integrations.subscription.failed.v1` | The provider removed, refused or expired its registration |
-| `integrations.action.completed.v1` | An action a service ran with a connection succeeded — defined, not yet published |
-| `integrations.action.failed.v1` | It did not — defined, not yet published |
+| `integrations.action.completed.v1` | An action a caller ran with a connection succeeded |
+| `integrations.action.failed.v1` | It did not, with the reason a caller can act on |
 
 Every trigger carries the subscription, connection, app, provider, scope and
 owner, `created_by` — the member whose subscription it is, and whom the work a
@@ -224,6 +301,7 @@ tables.
 | `integrations_subscriptions` | The subscription, its owner and scope, target and events, the opaque route, the provider's registration ID, the encrypted secret, status and reason, expiry, renewal and removal times with their lease, and a version |
 | `integrations_app_webhooks` | One signing secret and route per app whose provider delivers through its app |
 | `integrations_deliveries` | `(subscription, delivery key)` for 7 days, so a redelivery publishes nothing new |
+| `integrations_actions` | Every action run with a connection, under `(connection, action, idempotency key)`, kept for 30 days so a repeat answers what happened the first time |
 | `integrations_outbox` | Events written in the same transaction as the change they describe |
 
 ## Security
@@ -240,8 +318,9 @@ tables.
 A provider is one file in `internal/providers` returning a `Provider`,
 registered in `Builtin()`. The application, store and API need no change. A
 definition says how a target and events are checked, how a delivery is
-verified and read, and, for webhook delivery, how a registration is created,
-renewed and removed. `Receive` returns what to answer, which subscriptions the
+verified and read, for webhook delivery how a registration is created, renewed
+and removed, what actions a connection may run, and the skill that says how to
+use any of it. Whatever it declares appears in the catalogue at once. `Receive` returns what to answer, which subscriptions the
 delivery reaches, the events to publish, and whether the provider is asking
 for renewal or saying the registration is gone.
 
@@ -271,7 +350,7 @@ pings, signs and delivers the way the real one does.
 Connections must allow integrations to call it, with the purposes it uses:
 
 ```json
-CONNECTIONS_SERVICE_CALLERS=[{"service": "integrations", "key_id": "alias/oryxa-integrations-identity", "purposes": ["trigger", "cleanup"]}]
+CONNECTIONS_SERVICE_CALLERS=[{"service": "integrations", "key_id": "alias/oryxa-integrations-identity", "purposes": ["trigger", "cleanup", "action"]}]
 ```
 
 ## Run locally
@@ -324,6 +403,7 @@ go test -run TestLive -v ./integrations/internal/e2e
 | Test | Needs | Does |
 | --- | --- | --- |
 | `TestLiveGitHubWebhook` | `INTEGRATIONS_LIVE_GITHUB_TOKEN` (repo or admin:repo_hook), `INTEGRATIONS_LIVE_GITHUB_REPOSITORY` | Creates a webhook, waits for GitHub's ping, asks GitHub to redeliver the repository's latest push, checks the trigger, then removes the webhook |
+| `TestLiveGitHubAction` | The same two, and no public URL, since actions reach out rather than being reached | Opens an issue, checks the same idempotency key opens no second one, reads it back, comments on it, then closes it. It leaves a closed issue behind, since GitHub's API cannot delete one |
 | `TestLiveSlackEvents` | `INTEGRATIONS_LIVE_SLACK_SIGNING_SECRET`, `INTEGRATIONS_LIVE_SLACK_BOT_TOKEN`, `INTEGRATIONS_LIVE_SLACK_CHANNEL`, optionally `INTEGRATIONS_LIVE_SLACK_ROUTE` | Posts a message as the bot and waits for Slack to deliver it, then deletes it. The app's Request URL must already be the URL the test logs; set `INTEGRATIONS_LIVE_SLACK_ROUTE` (32 to 64 characters) to keep that URL between runs |
 | `TestLiveLinearWebhook` | `INTEGRATIONS_LIVE_LINEAR_TOKEN` (a workspace admin's), `INTEGRATIONS_LIVE_LINEAR_TEAM` | Creates a webhook and an issue, waits for the delivery, then deletes both |
 | `TestLiveMicrosoftGraphSubscription` | `INTEGRATIONS_LIVE_MICROSOFT_TOKEN` (delegated, `Mail.ReadWrite`) | Creates a subscription, which Graph validates against the public URL, drafts a message, waits for the notification, renews the subscription, then deletes the draft and the subscription |
@@ -333,8 +413,10 @@ throwaway repository, workspace, team or mailbox.
 
 ## Later
 
-- Actions: calling providers with a connection, publishing `integrations.action.completed.v1` and `integrations.action.failed.v1`, which this contract already defines.
-- MCP tools over the same adapters, and user-provided integrations from OpenAPI specs.
+- Triggers into agent runs: something has to turn `integrations.trigger.received.v1` into a run, as the member the subscription belongs to. Subscriptions are not tools yet either, so an agent can act but not watch, although each provider's skill already describes its events.
+- User-provided integrations from OpenAPI specs, offered through the same endpoint behind a filter.
 - A sweeper for subscriptions left `pending` by a process that died mid-registration; today they are only cleaned up when something stops them.
-- More providers, and more of each provider's surface: Graph subscriptions are limited to mail, a mail folder, calendar events and the drive root.
+- More providers, and more of each provider's surface: connections connects 17 providers and only these four have triggers and actions, and Graph subscriptions are limited to mail, a mail folder, calendar events and the drive root.
+- Per-request headers on provider calls: Graph's `Prefer` cannot be sent yet, so `microsoft_get_message` strips a message's HTML itself.
+- Live runs of everything but GitHub's webhook. Linear's `issue(id:)` resolving an identifier such as `ENG-42`, which its actions rely on, has only been checked against the fake.
 - Shared envelope encryption: `internal/secrets` is the same code as connections', which belongs in one place.

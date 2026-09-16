@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +42,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/connectionsclient"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/integrations/internal/mcpserver"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/providers"
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/secrets"
@@ -259,7 +261,7 @@ func newFakeConnections(t *testing.T, key serviceKey) (*fakeConnections, *httpte
 	t.Helper()
 	verifier, err := serviceauth.NewVerifier(serviceauth.VerifierConfig{
 		Keys: key, Audience: connectionsclient.Audience,
-		Callers: []serviceauth.Caller{{Service: "integrations", KeyID: serviceKeyID, Purposes: []string{"trigger", "cleanup"}}},
+		Callers: []serviceauth.Caller{{Service: "integrations", KeyID: serviceKeyID, Purposes: []string{"trigger", "cleanup", "action"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -274,6 +276,7 @@ func newFakeConnections(t *testing.T, key serviceKey) (*fakeConnections, *httpte
 	mux.HandleFunc("POST /v1/internal/connections/{connectionID}/holds", fake.addHold)
 	mux.HandleFunc("DELETE /v1/internal/connections/{connectionID}/holds/{holder}", fake.releaseHold)
 	mux.HandleFunc("GET /v1/organizations/{organizationID}/apps", fake.listApps)
+	mux.HandleFunc("GET /v1/organizations/{organizationID}/connections", fake.listConnections)
 	server := httptest.NewServer(mux)
 	t.Cleanup(server.Close)
 	return fake, server
@@ -426,6 +429,31 @@ func (fake *fakeConnections) releaseHold(writer http.ResponseWriter, request *ht
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// listConnections answers the connections the forwarded member may see, as
+// connections' public API does.
+func (fake *fakeConnections) listConnections(writer http.ResponseWriter, request *http.Request) {
+	member, known := members[strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")]
+	if !known {
+		fake.fail(writer, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	listed := []domain.Connection{}
+	for _, connection := range fake.connections {
+		if connection.OrganizationID != request.PathValue("organizationID") {
+			continue
+		}
+		if connection.Scope == "member" && connection.MemberID != member.user && member.role != "admin" {
+			continue
+		}
+		listed = append(listed, connection)
+	}
+	slices.SortFunc(listed, func(a, b domain.Connection) int { return strings.Compare(a.ID, b.ID) })
+	writer.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(writer).Encode(map[string]any{"connections": listed})
+}
+
 func (fake *fakeConnections) listApps(writer http.ResponseWriter, request *http.Request) {
 	if _, known := members[strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")]; !known || request.Header.Get(serviceauth.Header) != "" {
 		fake.fail(writer, http.StatusUnauthorized, "unauthorized")
@@ -548,7 +576,7 @@ func newStackWith(t *testing.T, options stackOptions) *stack {
 		Logger:      logger,
 		Clock:       now,
 	}, application.Config{PublicBaseURL: s.publicURL})
-	handler = httpserver.New(s.service, httpserver.Config{}, logger)
+	handler = httpserver.New(s.service, httpserver.Config{MCP: mcpserver.New(s.service, logger)}, logger)
 	return s
 }
 

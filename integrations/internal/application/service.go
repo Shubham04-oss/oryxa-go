@@ -34,6 +34,13 @@ type Store interface {
 	StopSubscriptions(ctx context.Context, selector domain.SubscriptionSelector, reason, stoppedBy string, at time.Time, eventFor func(domain.Subscription) (domain.Event, error)) ([]domain.Subscription, error)
 	FailSubscription(ctx context.Context, organizationID, subscriptionID, leaseToken, reason string, cleanup bool, at time.Time, eventFor func(domain.Subscription) (domain.Event, error)) (domain.Subscription, error)
 	RecordDelivery(ctx context.Context, subscriptionID, key string, at time.Time, event domain.Event) (bool, error)
+	// StartAction records an action about to run. When this connection already
+	// ran this action under the same idempotency key, it answers that action
+	// and false, and the action is not run again.
+	StartAction(ctx context.Context, action domain.Action) (domain.Action, bool, error)
+	// FinishAction records how an action ended, with its event.
+	FinishAction(ctx context.Context, action domain.Action, event domain.Event) error
+	DeleteActionsBefore(ctx context.Context, before time.Time) (int64, error)
 	ScheduleRenewal(ctx context.Context, subscriptionID string, at time.Time) error
 	DeleteDeliveriesBefore(ctx context.Context, before time.Time) (int64, error)
 	ClaimRenewals(ctx context.Context, now time.Time, limit int, leaseToken string, leaseUntil time.Time) ([]domain.Subscription, error)
@@ -61,6 +68,7 @@ type Connections interface {
 	AddHold(ctx context.Context, organizationID, connectionID string) error
 	ReleaseHold(ctx context.Context, organizationID, connectionID string) error
 	App(ctx context.Context, organizationID, appID, accessToken string) (connectionsclient.App, error)
+	Connections(ctx context.Context, organizationID, accessToken string) ([]domain.Connection, error)
 }
 
 // Sealer envelope-encrypts secrets.
@@ -84,6 +92,9 @@ type Config struct {
 	// PublicBaseURL is where providers reach integrations; webhook URLs are
 	// built on it.
 	PublicBaseURL string
+	// ServiceName is what an action's event says ran it. It defaults to
+	// integrations, which is what a member calling the API directly gets.
+	ServiceName string
 }
 
 type Service struct {
@@ -96,6 +107,7 @@ type Service struct {
 	logger        *slog.Logger
 	clock         func() time.Time
 	publicBaseURL string
+	serviceName   string
 }
 
 func New(dependencies Dependencies, config Config) *Service {
@@ -109,6 +121,7 @@ func New(dependencies Dependencies, config Config) *Service {
 		logger:        dependencies.Logger,
 		clock:         dependencies.Clock,
 		publicBaseURL: strings.TrimRight(config.PublicBaseURL, "/"),
+		serviceName:   config.ServiceName,
 	}
 	if service.http == nil {
 		service.http = providers.NewHTTPClient()
@@ -118,6 +131,9 @@ func New(dependencies Dependencies, config Config) *Service {
 	}
 	if service.clock == nil {
 		service.clock = time.Now
+	}
+	if service.serviceName == "" {
+		service.serviceName = "integrations"
 	}
 	return service
 }

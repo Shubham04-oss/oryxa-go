@@ -35,6 +35,9 @@ type integrationsService interface {
 	GetSubscription(ctx context.Context, credentials authclient.Credentials, organizationID, subscriptionID string) (domain.Subscription, error)
 	StopSubscription(ctx context.Context, credentials authclient.Credentials, organizationID, subscriptionID string) error
 
+	RunAction(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.RunActionInput) (domain.Action, error)
+	Catalog() []providers.Description
+
 	GetAppWebhook(ctx context.Context, credentials authclient.Credentials, organizationID, appID string) (application.AppWebhookView, error)
 	PutAppWebhook(ctx context.Context, credentials authclient.Credentials, organizationID, appID, secret string) (application.AppWebhookView, error)
 	DeleteAppWebhook(ctx context.Context, credentials authclient.Credentials, organizationID, appID string) error
@@ -43,6 +46,9 @@ type integrationsService interface {
 type Config struct {
 	// AllowedOrigins may send cookie-authenticated mutations.
 	AllowedOrigins []string
+	// MCP, when set, serves the provider's actions as MCP tools under
+	// /v1/organizations/{organizationID}/mcp/{provider}.
+	MCP http.Handler
 }
 
 type Server struct {
@@ -71,6 +77,17 @@ func New(service integrationsService, config Config, logger *slog.Logger) *Serve
 	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/subscriptions", server.createSubscription)
 	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/subscriptions/{subscriptionID}", server.getSubscription)
 	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/subscriptions/{subscriptionID}", server.stopSubscription)
+
+	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/actions", server.runAction)
+	server.mux.HandleFunc("GET /v1/catalog", server.catalog)
+	if config.MCP != nil {
+		// An MCP endpoint keeps no session and answers only POST; the mux
+		// refuses the other methods for it.
+		server.mux.Handle("POST /v1/organizations/{organizationID}/mcp/{provider}", config.MCP)
+		// The same endpoint at one fixed URL per provider, naming the
+		// organization in a header, as an agent's toolset is configured.
+		server.mux.Handle("POST /v1/mcp/{provider}", config.MCP)
+	}
 
 	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/apps/{appID}/webhook", server.getAppWebhook)
 	server.mux.HandleFunc("PUT /v1/organizations/{organizationID}/apps/{appID}/webhook", server.putAppWebhook)
@@ -166,6 +183,38 @@ func (server *Server) createSubscription(writer http.ResponseWriter, request *ht
 		return
 	}
 	writeJSON(writer, http.StatusCreated, subscription)
+}
+
+// runAction carries out one action with a connection, as the member asking.
+func (server *Server) runAction(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	var body struct {
+		ConnectionID   string          `json:"connection_id"`
+		Action         string          `json:"action"`
+		Input          json.RawMessage `json:"input"`
+		IdempotencyKey string          `json:"idempotency_key"`
+	}
+	if !server.decode(writer, request, &body) {
+		return
+	}
+	action, err := server.service.RunAction(request.Context(), credentials, request.PathValue("organizationID"), application.RunActionInput{
+		ConnectionID: body.ConnectionID, Action: body.Action, Input: body.Input, IdempotencyKey: body.IdempotencyKey,
+	})
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, action)
+}
+
+// catalog answers what every provider watches, delivers and can do. It is the
+// same for everyone and holds nothing of an organization's, so a caller needs
+// it before it has a connection and sends no credentials for it.
+func (server *Server) catalog(writer http.ResponseWriter, _ *http.Request) {
+	writeJSON(writer, http.StatusOK, map[string]any{"providers": server.service.Catalog()})
 }
 
 func (server *Server) getSubscription(writer http.ResponseWriter, request *http.Request) {

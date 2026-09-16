@@ -49,6 +49,9 @@ type organizationResponse struct {
 		UserID         string `json:"user_id"`
 		Role           string `json:"role"`
 	} `json:"membership"`
+	// Agent is true when the caller's token is one auth issued to an agent
+	// acting for the member.
+	Agent bool `json:"agent"`
 }
 
 func (client *Client) Membership(ctx context.Context, organizationID string, credentials Credentials) (domain.OrgMembership, error) {
@@ -63,6 +66,7 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		OrganizationID: organizationID,
 		UserID:         decoded.Membership.UserID,
 		Role:           domain.OrgRole(decoded.Membership.Role),
+		Agent:          decoded.Agent,
 	}, nil
 }
 
