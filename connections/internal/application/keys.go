@@ -24,7 +24,7 @@ type CreateConnectionInput struct {
 // check accepts the key, or a client-credentials connection once a token
 // mints in its tenant.
 func (s *Service) CreateConnection(ctx context.Context, credentials authclient.Credentials, organizationID string, input CreateConnectionInput) (domain.Connection, error) {
-	membership, err := s.caller(ctx, credentials, organizationID)
+	membership, err := s.callerForWrite(ctx, credentials, organizationID)
 	if err != nil {
 		return domain.Connection{}, err
 	}
@@ -102,7 +102,7 @@ func (s *Service) CreateConnection(ctx context.Context, credentials authclient.C
 // ReplaceCredential replaces a key-based connection's secret in place. The new
 // key must belong to the same provider account.
 func (s *Service) ReplaceCredential(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string, credential domain.CredentialInput) (domain.Connection, error) {
-	membership, err := s.caller(ctx, credentials, organizationID)
+	membership, err := s.callerForWrite(ctx, credentials, organizationID)
 	if err != nil {
 		return domain.Connection{}, err
 	}

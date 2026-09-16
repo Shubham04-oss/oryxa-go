@@ -913,3 +913,96 @@ func TestInternalAPIServesOnlyServices(t *testing.T) {
 		t.Fatalf("InternalConnection() for a service = %+v %v", connection, err)
 	}
 }
+
+// TestAgentMembershipCannotWriteOnThePublicAPI is the direct proof of
+// callerForWrite: an agent's membership — the member's own identity, granted
+// through the agent client — still reads every public route, but every route
+// that changes something answers domain.ErrAgentForbidden before any of that
+// route's own rules, such as who may manage an app, are even reached. The
+// internal API is unaffected: a forwarded agent token is checked with caller
+// exactly like a member's own, and token issuance works for it.
+func TestAgentMembershipCannotWriteOnThePublicAPI(t *testing.T) {
+	const agentToken = "Bearer agent"
+	h := newHarness(t, func(dependencies *Dependencies) {
+		// The agent token names the same member as memberToken: an agent acts
+		// as the member it works for, never as a separate identity.
+		dependencies.Directory.(fakeDirectory)[agentToken] = []domain.OrgMembership{
+			{OrganizationID: organization, UserID: "user-1", Role: domain.OrgRoleMember, Agent: true},
+		}
+	})
+	app := h.createApp(t, "github", "read:user", "repo")
+	mine, err := h.connect(t, memberToken, "github", AuthorizeInput{AppID: app.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.service.ListApps(ctx, as(agentToken), organization); err != nil {
+		t.Fatalf("ListApps() for an agent error = %v", err)
+	}
+	if _, err := h.service.ListConnections(ctx, as(agentToken), organization, ConnectionFilter{}); err != nil {
+		t.Fatalf("ListConnections() for an agent error = %v", err)
+	}
+	if got, err := h.service.GetConnection(ctx, as(agentToken), organization, mine.Connection.ID); err != nil || got.ID != mine.Connection.ID {
+		t.Fatalf("GetConnection() for an agent = %+v %v", got, err)
+	}
+
+	label, makeDefault := "New label", true
+	for name, call := range map[string]func() error{
+		"CreateApp": func() error {
+			_, err := h.service.CreateApp(ctx, as(agentToken), organization, CreateAppInput{Provider: "github", ClientID: "c", ClientSecret: "s"})
+			return err
+		},
+		"UpdateApp": func() error {
+			_, err := h.service.UpdateApp(ctx, as(agentToken), organization, app.ID, UpdateAppInput{ClientSecret: "secret-2"})
+			return err
+		},
+		"SetAppStatus": func() error {
+			_, err := h.service.SetAppStatus(ctx, as(agentToken), organization, app.ID, domain.AppStatusDisabled)
+			return err
+		},
+		"DeleteApp": func() error {
+			return h.service.DeleteApp(ctx, as(agentToken), organization, app.ID)
+		},
+		"Authorize": func() error {
+			_, err := h.service.Authorize(ctx, as(agentToken), organization, AuthorizeInput{AppID: app.ID, ReturnURI: returnTo})
+			return err
+		},
+		"Complete": func() error {
+			_, err := h.service.Complete(ctx, as(agentToken), organization, "whatever")
+			return err
+		},
+		"Reconnect": func() error {
+			_, err := h.service.Reconnect(ctx, as(agentToken), organization, mine.Connection.ID, returnTo)
+			return err
+		},
+		"CreateConnection": func() error {
+			_, err := h.service.CreateConnection(ctx, as(agentToken), organization, CreateConnectionInput{AppID: app.ID, Credential: domain.CredentialInput{APIKey: "x"}})
+			return err
+		},
+		"ReplaceCredential": func() error {
+			_, err := h.service.ReplaceCredential(ctx, as(agentToken), organization, mine.Connection.ID, domain.CredentialInput{APIKey: "x"})
+			return err
+		},
+		"UpdateConnection": func() error {
+			_, err := h.service.UpdateConnection(ctx, as(agentToken), organization, mine.Connection.ID, UpdateConnectionInput{Label: &label, Default: &makeDefault})
+			return err
+		},
+		"Disconnect": func() error {
+			return h.service.Disconnect(ctx, as(agentToken), organization, mine.Connection.ID)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); !errors.Is(err, domain.ErrAgentForbidden) {
+				t.Fatalf("%s() for an agent error = %v, want ErrAgentForbidden", name, err)
+			}
+		})
+	}
+
+	forwarded := Actor{Service: "integrations", Purpose: domain.PurposeAction, Credentials: as(agentToken)}
+	if token, err := h.service.IssueToken(ctx, forwarded, mine.Connection.ID, TokenRequest{OrganizationID: organization, Purpose: domain.PurposeAction}); err != nil || token.AccessToken == "" {
+		t.Fatalf("IssueToken() for a forwarded agent token = %+v %v", token, err)
+	}
+	if connection, err := h.service.InternalConnection(ctx, forwarded, organization, mine.Connection.ID); err != nil || connection.ID != mine.Connection.ID {
+		t.Fatalf("InternalConnection() for a forwarded agent token = %+v %v", connection, err)
+	}
+}

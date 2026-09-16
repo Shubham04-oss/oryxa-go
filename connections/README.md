@@ -289,6 +289,12 @@ never enough on an internal route.
 Cookie-authenticated mutations on public routes must come from an origin in
 `CONNECTIONS_ALLOWED_ORIGINS`. Team-scoped operations need `TEAMS_URL`.
 
+An agent token reads but does not change anything here: its membership may
+use any `GET` route below, and every other one answers `403 forbidden` with
+`"an agent cannot change this"`. A service acting for a member with an agent
+token still reaches the internal API below exactly as with the member's own
+token, so integrations can act, issue tokens and manage subscriptions for it.
+
 | Method | Path | Who | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |

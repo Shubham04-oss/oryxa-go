@@ -71,6 +71,36 @@ func TestMembershipRejectsAnswersForAnotherOrganization(t *testing.T) {
 	}
 }
 
+func TestMembershipDecodesAgent(t *testing.T) {
+	for name, test := range map[string]struct {
+		body      string
+		wantAgent bool
+	}{
+		"agent token": {
+			`{"organization":{"id":"org_1"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"member"},"agent":true}`,
+			true,
+		},
+		"member's own token, agent absent": {
+			`{"organization":{"id":"org_1"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"member"}}`,
+			false,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				_, _ = writer.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			membership, err := New(server.URL).Membership(context.Background(), "org_1", Credentials{Authorization: "Bearer token-1"})
+			if err != nil {
+				t.Fatalf("Membership() error = %v", err)
+			}
+			if membership.Agent != test.wantAgent {
+				t.Fatalf("membership.Agent = %v, want %v", membership.Agent, test.wantAgent)
+			}
+		})
+	}
+}
+
 func TestMembershipWithoutCredentials(t *testing.T) {
 	if _, err := New("http://auth.invalid").Membership(context.Background(), "org_1", Credentials{}); !errors.Is(err, domain.ErrUnauthorized) {
 		t.Fatalf("Membership() error = %v, want ErrUnauthorized", err)

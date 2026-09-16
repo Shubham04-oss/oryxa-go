@@ -83,7 +83,7 @@ type obtained struct {
 // Authorize starts connecting a provider account at a scope: OAuth consent,
 // a GitHub App installation, or an admin's consent for client credentials.
 func (s *Service) Authorize(ctx context.Context, credentials authclient.Credentials, organizationID string, input AuthorizeInput) (Authorization, error) {
-	membership, err := s.caller(ctx, credentials, organizationID)
+	membership, err := s.callerForWrite(ctx, credentials, organizationID)
 	if err != nil {
 		return Authorization{}, err
 	}
@@ -123,7 +123,7 @@ func (s *Service) Authorize(ctx context.Context, credentials authclient.Credenti
 // scopes are requested, so reconnecting is also how a connection gains scopes
 // its app newly allows.
 func (s *Service) Reconnect(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID, returnURI string) (Authorization, error) {
-	membership, err := s.caller(ctx, credentials, organizationID)
+	membership, err := s.callerForWrite(ctx, credentials, organizationID)
 	if err != nil {
 		return Authorization{}, err
 	}
@@ -230,7 +230,7 @@ func callbackOutcome(credentialType domain.CredentialType, params CallbackParams
 // repeated request never exchanges a code twice, and any failure after that
 // uses the session up.
 func (s *Service) Complete(ctx context.Context, credentials authclient.Credentials, organizationID, sessionID string) (Completion, error) {
-	membership, err := s.caller(ctx, credentials, organizationID)
+	membership, err := s.callerForWrite(ctx, credentials, organizationID)
 	if err != nil {
 		return Completion{}, err
 	}

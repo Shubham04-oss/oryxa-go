@@ -44,6 +44,7 @@ const (
 	organization  = "org_e2e"
 	adminToken    = "admin-token"
 	memberToken   = "member-token"
+	agentToken    = "agent-token"
 	returnURI     = "http://localhost:3000/connected"
 	accessToken   = "gho_e2e_access_token"
 	personalToken = "ghp_e2e_personal_token"
@@ -152,9 +153,16 @@ func (keys localKeys) DecryptDataKey(_ context.Context, encrypted []byte, encryp
 // fakeAuth answers GET /v1/organizations/{organizationID} as auth does.
 func fakeAuth(t *testing.T) *httptest.Server {
 	t.Helper()
-	members := map[string]struct{ user, role string }{
-		"Bearer " + adminToken:  {"user-admin", "admin"},
-		"Bearer " + memberToken: {"user-1", "member"},
+	members := map[string]struct {
+		user, role string
+		agent      bool
+	}{
+		"Bearer " + adminToken:  {"user-admin", "admin", false},
+		"Bearer " + memberToken: {"user-1", "member", false},
+		// The agent token names the same member as memberToken, with the
+		// custom agent client: an agent acts as the member it works for,
+		// never as a separate identity.
+		"Bearer " + agentToken: {"user-1", "member", true},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		member, ok := members[request.Header.Get("Authorization")]
@@ -164,10 +172,14 @@ func fakeAuth(t *testing.T) *httptest.Server {
 		case request.URL.Path != "/v1/organizations/"+organization:
 			writer.WriteHeader(http.StatusNotFound)
 		default:
-			_ = json.NewEncoder(writer).Encode(map[string]any{
+			response := map[string]any{
 				"organization": map[string]string{"id": organization},
 				"membership":   map[string]string{"organization_id": organization, "user_id": member.user, "role": member.role},
-			})
+			}
+			if member.agent {
+				response["agent"] = true
+			}
+			_ = json.NewEncoder(writer).Encode(response)
 		}
 	}))
 	t.Cleanup(server.Close)
@@ -641,5 +653,47 @@ func TestServiceUsesAKeyConnectionEndToEnd(t *testing.T) {
 	var leaked bool
 	if err := database.QueryRow(ctx, `SELECT bool_or(detail::text LIKE '%' || $1 || '%') FROM connections_outbox`, personalToken).Scan(&leaked); err != nil || leaked {
 		t.Fatalf("outbox leaked the token = %v %v", leaked, err)
+	}
+}
+
+// TestAgentTokenIsReadOnlyEndToEnd runs the whole stack — the HTTP API, the
+// application and PostgreSQL — against fake auth answering an agent token's
+// organization request with the top-level "agent" field. It proves the public
+// API enforces the rule connections/README.md documents: an agent token can
+// list connections but cannot disconnect one, while the member it acts for
+// still can.
+func TestAgentTokenIsReadOnlyEndToEnd(t *testing.T) {
+	store, _ := openStore(t)
+	stack := newStack(t, store, fakeAuth(t), newFakeGitHub(t), nil)
+
+	status, _, body := stack.api.do(http.MethodPost, "/apps", adminToken, map[string]any{"provider": "github", "credential_type": "bearer"})
+	var app domain.App
+	if status != http.StatusCreated || json.Unmarshal(body, &app) != nil {
+		t.Fatalf("POST apps = %d %s", status, body)
+	}
+	status, _, body = stack.api.do(http.MethodPost, "/connections", memberToken, map[string]any{
+		"app_id": app.ID, "label": "Personal token", "credential": map[string]string{"token": personalToken},
+	})
+	var connection domain.Connection
+	if status != http.StatusCreated || json.Unmarshal(body, &connection) != nil {
+		t.Fatalf("POST connections = %d %s", status, body)
+	}
+
+	status, _, body = stack.api.do(http.MethodGet, "/connections", agentToken, nil)
+	var listed struct {
+		Connections []domain.Connection `json:"connections"`
+	}
+	if status != http.StatusOK || json.Unmarshal(body, &listed) != nil || len(listed.Connections) != 1 || listed.Connections[0].ID != connection.ID {
+		t.Fatalf("GET connections with an agent token = %d %s", status, body)
+	}
+
+	status, _, body = stack.api.do(http.MethodDelete, "/connections/"+connection.ID, agentToken, nil)
+	if status != http.StatusForbidden || !strings.Contains(string(body), `"an agent cannot change this"`) {
+		t.Fatalf("DELETE connection with an agent token = %d %s", status, body)
+	}
+
+	// The member it acts for can still disconnect it themselves.
+	if status, _, body := stack.api.do(http.MethodDelete, "/connections/"+connection.ID, memberToken, nil); status != http.StatusNoContent {
+		t.Fatalf("DELETE connection with the member's own token = %d %s", status, body)
 	}
 }

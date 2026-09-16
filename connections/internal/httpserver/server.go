@@ -432,6 +432,8 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusBadRequest, "invalid_request", strings.TrimSuffix(err.Error(), ": "+domain.ErrInvalid.Error()))
 	case errors.Is(err, domain.ErrUnauthorized):
 		writeError(writer, http.StatusUnauthorized, "unauthorized", "authentication failed")
+	case errors.Is(err, domain.ErrAgentForbidden):
+		writeError(writer, http.StatusForbidden, "forbidden", domain.ErrAgentForbidden.Error())
 	case errors.Is(err, domain.ErrForbidden):
 		writeError(writer, http.StatusForbidden, "forbidden", "operation is not allowed")
 	case errors.Is(err, domain.ErrNotFound):

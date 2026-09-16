@@ -63,7 +63,7 @@ func (s *Service) GetConnection(ctx context.Context, credentials authclient.Cred
 // disconnected changes nothing. Its credentials stay until the holds on it
 // are released.
 func (s *Service) Disconnect(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) error {
-	membership, err := s.caller(ctx, credentials, organizationID)
+	membership, err := s.callerForWrite(ctx, credentials, organizationID)
 	if err != nil {
 		return err
 	}
