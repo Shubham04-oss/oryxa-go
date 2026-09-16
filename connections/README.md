@@ -74,6 +74,11 @@ token has the permissions set on the GitHub App, a client-credentials token the
 application permissions an admin granted, and a key whatever its owner gave it,
 so requested scopes are checked only for `oauth2` connections.
 
+`GET /v1/providers` describes the catalogue, so that a caller offering
+providers to people need not keep its own copy of what each one takes. It
+holds nothing of an organization's and is the same for everyone, so it takes
+no credentials. A provider added to `Builtin()` appears in it at once.
+
 Some providers differ in ways callers notice:
 
 - `atlassian` covers Jira and Confluence Cloud. An `oauth2` grant reaches every site the member lets the app use; callers list those sites, with the cloud IDs their API URLs need, at `https://api.atlassian.com/oauth/token/accessible-resources`. `offline_access` and `read:me` are always requested, and refresh tokens rotate on every refresh. Classic and granular scopes are both offered; Jira Software's boards, sprints and epics have only granular ones. A `basic` app names its site as its `domain`, such as `acme.atlassian.net`, and its API tokens work there alone.
@@ -287,6 +292,7 @@ Cookie-authenticated mutations on public routes must come from an origin in
 | Method | Path | Who | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |
+| `GET` | `/v1/providers` | Anyone | The built-in providers: for each credential type, whether it takes a client, whether members connect through a redirect, the credential fields it takes, its required, allowed and exclusive scopes, and the domain it needs |
 | `GET` | `/v1/organizations/{organizationID}/apps` | Members | Enabled apps: provider, credential type, allowed scopes, settings, status. Never secrets |
 | `POST` | `/v1/organizations/{organizationID}/apps` | Org admins | Enable a provider: `{provider, credential_type, client_id, client_secret, scopes}`, plus `{github_app_id, github_app_slug, private_key}` for an installation app, and `domain` where the provider needs one |
 | `PATCH` | `/v1/organizations/{organizationID}/apps/{appID}` | Org admins | `{scopes}`, `{client_secret}`, `{private_key}`, or `{client_id, client_secret}` |

@@ -27,6 +27,8 @@ type connectionsService interface {
 	SetAppStatus(context.Context, authclient.Credentials, string, string, domain.AppStatus) (domain.App, error)
 	DeleteApp(context.Context, authclient.Credentials, string, string) error
 
+	Providers() []application.ProviderDescription
+
 	ListConnections(context.Context, authclient.Credentials, string, application.ConnectionFilter) ([]domain.Connection, error)
 	Authorize(context.Context, authclient.Credentials, string, application.AuthorizeInput) (application.Authorization, error)
 	Callback(ctx context.Context, provider string, params application.CallbackParams) (string, error)
@@ -82,6 +84,8 @@ func New(service connectionsService, config Config, logger *slog.Logger) *Server
 		writer.WriteHeader(http.StatusNoContent)
 	})
 
+	server.mux.HandleFunc("GET /v1/providers", server.listProviders)
+
 	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/apps", server.listApps)
 	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/apps", server.createApp)
 	server.mux.HandleFunc("PATCH /v1/organizations/{organizationID}/apps/{appID}", server.updateApp)
@@ -133,6 +137,13 @@ func viewApp(app domain.App, admin bool) appView {
 		view.Scopes = []string{}
 	}
 	return view
+}
+
+// listProviders answers with the built-in providers. The catalogue is the
+// same for everyone and holds nothing of an organization's, so it takes no
+// credentials: a caller needs it to offer providers before it has an app.
+func (server *Server) listProviders(writer http.ResponseWriter, _ *http.Request) {
+	writeJSON(writer, http.StatusOK, map[string]any{"providers": server.service.Providers()})
 }
 
 func (server *Server) listApps(writer http.ResponseWriter, request *http.Request) {

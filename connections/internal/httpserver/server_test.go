@@ -117,6 +117,20 @@ func (service *fakeService) DeleteApp(_ context.Context, credentials authclient.
 	return service.err
 }
 
+func (service *fakeService) Providers() []application.ProviderDescription {
+	service.calls++
+	return []application.ProviderDescription{{
+		Provider: "atlassian",
+		CredentialTypes: []application.CredentialTypeDescription{
+			{CredentialType: domain.CredentialOAuth2, Client: true, Authorizes: true, RequiredScopes: []string{"read:me"}},
+			{
+				CredentialType: domain.CredentialBasic, Fields: []string{"username", "password"},
+				Domain: &application.DomainDescription{Required: true, Example: "acme.atlassian.net"},
+			},
+		},
+	}}
+}
+
 func (service *fakeService) ListConnections(_ context.Context, credentials authclient.Credentials, organizationID string, filter application.ConnectionFilter) ([]domain.Connection, error) {
 	service.record(credentials, organizationID)
 	service.filter = filter
@@ -291,6 +305,22 @@ func TestCredentialsAndOrigin(t *testing.T) {
 	if recorder := serve(service, http.MethodDelete, "/v1/organizations/org_1/connections/con_2", ""); recorder.Code != http.StatusNoContent ||
 		service.credentials.Authorization != "Bearer token-1" || service.id != "con_2" {
 		t.Fatalf("bearer DELETE = %d %+v", recorder.Code, service.credentials)
+	}
+}
+
+func TestProviders(t *testing.T) {
+	service := &fakeService{}
+	recorder := serve(service, http.MethodGet, "/v1/providers", "")
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, `"provider":"atlassian"`) ||
+		!strings.Contains(body, `"credential_type":"basic"`) || !strings.Contains(body, `"example":"acme.atlassian.net"`) {
+		t.Fatalf("GET providers = %d %s", recorder.Code, recorder.Body)
+	}
+	// The catalogue is the same for everyone, so it answers without a session
+	// and names no organization.
+	recorder = serve(service, http.MethodGet, "/v1/providers", "", "Authorization", "")
+	if recorder.Code != http.StatusOK || service.organization != "" {
+		t.Fatalf("GET providers without credentials = %d %q", recorder.Code, service.organization)
 	}
 }
 

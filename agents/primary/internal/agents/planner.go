@@ -26,7 +26,7 @@ var planSchema = &genai.Schema{
 				Properties: map[string]*genai.Schema{
 					"agent": {
 						Type: genai.TypeString,
-						Enum: []string{RootName, researcherName, teamsName, "helper"},
+						Enum: []string{RootName, researcherName, "helper"},
 					},
 					"task": {
 						Type:        genai.TypeString,
@@ -50,7 +50,7 @@ var planSchema = &genai.Schema{
 func planner(llm model.LLM) (agent.Agent, error) {
 	return llmagent.New(llmagent.Config{
 		Name:                     plannerName,
-		Description:              "Turns a request that needs several steps into a plan that gives each step to Krude, researcher, teams or a temporary helper.",
+		Description:              "Turns a request that needs several steps into a plan that gives each step to Krude, researcher or a temporary helper.",
 		Model:                    llm,
 		Mode:                     llmagent.ModeSingleTurn,
 		Instruction:              plannerInstruction,

@@ -7,7 +7,14 @@ import (
 
 func clearEnv(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{"AGENTS_PRIMARY_ADDRESS", "AGENTS_PRIMARY_MODEL", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "DATABASE_URL", "AGENTS_PRIMARY_AUTO_MIGRATE", "AWS_REGION", "AGENTS_PRIMARY_AWS_ROLE_ARN", "AGENTS_PRIMARY_AWS_ROLE_SESSION_NAME", "AGENTS_PRIMARY_AWS_ROLE_EXTERNAL_ID", "AGENTS_PRIMARY_WORKLOAD_IDENTITY_NAME", "AGENTS_PRIMARY_TRUST_RUNTIME_IDENTITY_HEADER", "AGENTS_PRIMARY_ALLOW_UNVERIFIED_IDENTITY_USER_ID", "AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID", "AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", "AGENTS_PRIMARY_BROWSER_ID", "AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS"} {
+	for _, name := range []string{
+		"AGENTS_PRIMARY_ADDRESS", "AGENTS_PRIMARY_MODEL", "AGENTS_PRIMARY_MODEL_LITE", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "DATABASE_URL", "AGENTS_PRIMARY_AUTO_MIGRATE",
+		"AGENTS_PRIMARY_PROMPT_CACHE", "AGENTS_PRIMARY_CACHE_TTL_SECONDS", "AGENTS_PRIMARY_CACHE_MIN_TOKENS",
+		"AWS_REGION", "AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID", "AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS",
+		"AGENTS_PRIMARY_BROWSER_ID", "AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS",
+		"EVENT_BUS_NAME", "EVENTBRIDGE_ENDPOINT",
+		"AGENTS_PRIMARY_GUARDRAIL_ID", "AGENTS_PRIMARY_GUARDRAIL_VERSION", "AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED", "AGENTS_PRIMARY_MODEL_PRICES",
+	} {
 		t.Setenv(name, "")
 	}
 }
@@ -19,61 +26,74 @@ func TestFromEnvDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.Address != ":8080" || config.Model != "gemini-3.8-flash" || config.GoogleCloudProject != "" || config.GoogleCloudLocation != "global" || config.DatabaseURL != "" || !config.AutoMigrate || config.AWSRegion != defaultAWSRegion || config.AWSRoleARN != "" || config.AWSRoleSessionName != "oryxa-agents-primary" || config.AWSRoleExternalID != "" || config.WorkloadIdentityName != "oryxa-primary" || config.TrustRuntimeIdentityHeader || config.AllowUnverifiedIdentityUserID || config.SandboxCodeInterpreter != "aws.codeinterpreter.v1" || config.SandboxSessionTimeout != 15*time.Minute || config.BrowserIdentifier != "aws.browser.v1" || config.BrowserSessionTimeout != 15*time.Minute {
+	if config.Address != ":8080" || config.Model != "gemini-3.8-flash" || config.ModelLite != "gemini-3.8-flash-lite" || config.GoogleCloudProject != "" || config.GoogleCloudLocation != "global" || config.DatabaseURL != "" || !config.AutoMigrate {
 		t.Fatalf("config = %+v", config)
+	}
+	if !config.Cache || config.CacheTTL != time.Hour || config.CacheMinTokens != 4096 {
+		t.Fatalf("cache config = %+v", config)
+	}
+	if config.AWSRegion != "ap-south-1" || config.SandboxCodeInterpreter != "aws.codeinterpreter.v1" || config.SandboxSessionTimeout != 15*time.Minute {
+		t.Fatalf("sandbox config = %+v", config)
+	}
+	if config.BrowserIdentifier != "aws.browser.v1" || config.BrowserSessionTimeout != 15*time.Minute {
+		t.Fatalf("browser config = %+v", config)
+	}
+	if config.EventBusName != "default" || config.EventBridgeEndpoint != "" {
+		t.Fatalf("events config = %+v", config)
+	}
+	if config.GuardrailIdentifier != "" || config.GuardrailVersion != "" || config.GuardrailFailClosed || config.ModelPrices != "" {
+		t.Fatalf("guardrail/pricing config = %+v", config)
 	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("AGENTS_PRIMARY_ADDRESS", " :8086 ")
-	t.Setenv("AGENTS_PRIMARY_MODEL", " gemini-3.5-flash-lite ")
+	t.Setenv("AGENTS_PRIMARY_MODEL", " gemini-3.5-flash ")
+	t.Setenv("AGENTS_PRIMARY_MODEL_LITE", " gemini-3.5-flash-lite ")
 	t.Setenv("GOOGLE_CLOUD_PROJECT", " oryxa-dev ")
 	t.Setenv("GOOGLE_CLOUD_LOCATION", " eu ")
 	t.Setenv("DATABASE_URL", " postgres://oryxa@localhost:5435/oryxa ")
 	t.Setenv("AGENTS_PRIMARY_AUTO_MIGRATE", " false ")
+	t.Setenv("AGENTS_PRIMARY_PROMPT_CACHE", " false ")
+	t.Setenv("AGENTS_PRIMARY_CACHE_TTL_SECONDS", "7200")
+	t.Setenv("AGENTS_PRIMARY_CACHE_MIN_TOKENS", "2048")
 	t.Setenv("AWS_REGION", " us-east-1 ")
-	t.Setenv("AGENTS_PRIMARY_AWS_ROLE_ARN", " arn:aws:iam::123456789012:role/oryxa-agent ")
-	t.Setenv("AGENTS_PRIMARY_AWS_ROLE_SESSION_NAME", " local-primary ")
-	t.Setenv("AGENTS_PRIMARY_AWS_ROLE_EXTERNAL_ID", " tenant-secret ")
-	t.Setenv("AGENTS_PRIMARY_WORKLOAD_IDENTITY_NAME", " oryxa-primary-dev ")
-	t.Setenv("AGENTS_PRIMARY_TRUST_RUNTIME_IDENTITY_HEADER", " true ")
-	t.Setenv("AGENTS_PRIMARY_ALLOW_UNVERIFIED_IDENTITY_USER_ID", " true ")
-	t.Setenv("AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID", " ci-custom ")
-	t.Setenv("AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", " 3600 ")
-	t.Setenv("AGENTS_PRIMARY_BROWSER_ID", " browser-custom ")
-	t.Setenv("AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS", " 1800 ")
+	t.Setenv("AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID", " interpreter-1 ")
+	t.Setenv("AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", "3600")
+	t.Setenv("AGENTS_PRIMARY_BROWSER_ID", " browser-1 ")
+	t.Setenv("AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS", "120")
+	t.Setenv("EVENT_BUS_NAME", " oryxa-local ")
+	t.Setenv("EVENTBRIDGE_ENDPOINT", " http://localhost:4566 ")
+	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_ID", " gr-123 ")
+	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_VERSION", " 7 ")
+	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED", " true ")
+	t.Setenv("AGENTS_PRIMARY_MODEL_PRICES", ` {"gemini-3.8-flash":{"input":0.30,"output":2.50,"cached":0.075}} `)
 
 	config, err := FromEnv()
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.Address != ":8086" || config.Model != "gemini-3.5-flash-lite" || config.GoogleCloudProject != "oryxa-dev" || config.GoogleCloudLocation != "eu" || config.DatabaseURL != "postgres://oryxa@localhost:5435/oryxa" || config.AutoMigrate || config.AWSRegion != "us-east-1" || config.AWSRoleARN != "arn:aws:iam::123456789012:role/oryxa-agent" || config.AWSRoleSessionName != "local-primary" || config.AWSRoleExternalID != "tenant-secret" || config.WorkloadIdentityName != "oryxa-primary-dev" || !config.TrustRuntimeIdentityHeader || !config.AllowUnverifiedIdentityUserID || config.SandboxCodeInterpreter != "ci-custom" || config.SandboxSessionTimeout != time.Hour || config.BrowserIdentifier != "browser-custom" || config.BrowserSessionTimeout != 30*time.Minute {
+	if config.Address != ":8086" || config.Model != "gemini-3.5-flash" || config.ModelLite != "gemini-3.5-flash-lite" || config.GoogleCloudProject != "oryxa-dev" || config.GoogleCloudLocation != "eu" || config.DatabaseURL != "postgres://oryxa@localhost:5435/oryxa" || config.AutoMigrate {
 		t.Fatalf("config = %+v", config)
 	}
-}
-
-func TestFromEnvRejectsInvalidSandboxTimeout(t *testing.T) {
-	clearEnv(t)
-	for _, value := range []string{"sometimes", "59", "28801"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", value)
-			if _, err := FromEnv(); err == nil {
-				t.Fatal("FromEnv() error = nil")
-			}
-		})
+	if config.Cache || config.CacheTTL != 2*time.Hour || config.CacheMinTokens != 2048 {
+		t.Fatalf("cache config = %+v", config)
 	}
-}
-
-func TestFromEnvRejectsInvalidBrowserTimeout(t *testing.T) {
-	clearEnv(t)
-	for _, value := range []string{"sometimes", "59", "28801"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS", value)
-			if _, err := FromEnv(); err == nil {
-				t.Fatal("FromEnv() error = nil")
-			}
-		})
+	if config.AWSRegion != "us-east-1" || config.SandboxCodeInterpreter != "interpreter-1" || config.SandboxSessionTimeout != time.Hour {
+		t.Fatalf("sandbox config = %+v", config)
+	}
+	if config.BrowserIdentifier != "browser-1" || config.BrowserSessionTimeout != 2*time.Minute {
+		t.Fatalf("browser config = %+v", config)
+	}
+	if config.EventBusName != "oryxa-local" || config.EventBridgeEndpoint != "http://localhost:4566" {
+		t.Fatalf("events config = %+v", config)
+	}
+	if config.GuardrailIdentifier != "gr-123" || config.GuardrailVersion != "7" || !config.GuardrailFailClosed {
+		t.Fatalf("guardrail config = %+v", config)
+	}
+	if config.ModelPrices == "" {
+		t.Fatalf("model prices were dropped: %+v", config)
 	}
 }
 
@@ -85,14 +105,45 @@ func TestFromEnvRejectsInvalidAutoMigrate(t *testing.T) {
 	}
 }
 
-func TestFromEnvRejectsInvalidIdentityBooleans(t *testing.T) {
+func TestFromEnvRejectsInvalidCacheMinTokens(t *testing.T) {
 	clearEnv(t)
-	for _, name := range []string{"AGENTS_PRIMARY_TRUST_RUNTIME_IDENTITY_HEADER", "AGENTS_PRIMARY_ALLOW_UNVERIFIED_IDENTITY_USER_ID"} {
-		t.Run(name, func(t *testing.T) {
-			t.Setenv(name, "sometimes")
-			if _, err := FromEnv(); err == nil {
-				t.Fatal("FromEnv() error = nil")
-			}
-		})
+	t.Setenv("AGENTS_PRIMARY_CACHE_MIN_TOKENS", "many")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() error = nil for a min-token count that is not a number")
+	}
+	t.Setenv("AGENTS_PRIMARY_CACHE_MIN_TOKENS", "-1")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() error = nil for a negative min-token count")
+	}
+}
+
+func TestFromEnvRejectsInvalidGuardrail(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_ID", "gr-123")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() error = nil when the guardrail version is missing")
+	}
+	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_VERSION", "DRAFT")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() error = nil for the mutable DRAFT guardrail version")
+	}
+	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_VERSION", "")
+	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_ID", "")
+	t.Setenv("AGENTS_PRIMARY_MODEL_PRICES", "not json")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() error = nil for model prices that are not JSON")
+	}
+}
+
+func TestFromEnvRejectsInvalidSessionTimeout(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", "30")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() error = nil for a sandbox timeout below one minute")
+	}
+	t.Setenv("AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", "")
+	t.Setenv("AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS", "later")
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() error = nil for a browser timeout that is not a number")
 	}
 }

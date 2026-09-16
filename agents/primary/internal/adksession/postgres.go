@@ -80,8 +80,21 @@ func Open(ctx context.Context, databaseURL string, autoMigrate bool) (*Store, er
 }
 
 // Sessions returns the persistent service passed to ADK's launcher or runner.
-func (s *Store) Sessions() session.Service {
-	return s.sessions
+// A session created for a member starts with the member's state read from the
+// auth tables over this store's own pool. When a SessionEvents is given, the
+// service also reports session creation and deletion to it.
+func (s *Store) Sessions(events ...SessionEvents) session.Service {
+	service := seedingSessionService{Service: s.sessions, members: memberReader{database: s.database}}
+	if len(events) > 0 {
+		service.events = events[0]
+	}
+	return service
+}
+
+// Database returns the PostgreSQL pool this store owns, so the rest of the
+// service, such as the events outbox, shares one connection budget.
+func (s *Store) Database() *postgreskit.Database {
+	return s.database
 }
 
 // Close releases the PostgreSQL pool.

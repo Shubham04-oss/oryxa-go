@@ -1,6 +1,6 @@
 // Package agents defines primary's agents: Krude, the assistant members talk
-// to, the dedicated sub-agents Krude hands work to, and the tools, helpers and
-// skills Krude reaches for while it works.
+// to, the dedicated sub-agents Krude hands work to, and the helpers Krude
+// starts for work that needs an agent of its own.
 package agents
 
 import (
@@ -20,6 +20,8 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/loadartifactstool"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 )
 
 // RootName names Krude, the agent every conversation starts with. ADK also uses
@@ -31,18 +33,17 @@ const RootName = "krude"
 const (
 	plannerName    = "planner"
 	researcherName = "researcher"
-	teamsName      = "teams"
 )
 
-// Session state keys Krude's instruction reads. Whoever creates a session sets
-// the member's name, a short description of them and their organization's
-// name. Krude sets the nickname itself when the member gives it one; the user:
-// prefix keeps it with the member across their sessions.
+// Session state keys Krude's instruction reads. The session runtime seeds them
+// from the member's auth record when the session is created.
 const (
-	UserNameKey  = "user_name"
-	UserAboutKey = "user_about"
-	OrgNameKey   = "org_name"
-	NicknameKey  = "user:agent_nickname"
+	UserNameKey       = "user_name"
+	UserAboutKey      = "user_about"
+	UserEmailKey      = "user_email"
+	UserRoleKey       = "user_role"
+	OrgNameKey        = "org_name"
+	OrganizationIDKey = "organization_id"
 )
 
 // maxStateTextRunes bounds a member-written value placed in Krude's
@@ -74,50 +75,70 @@ func Gemini(ctx context.Context, name, project, location string) (model.LLM, err
 	})
 }
 
+// GeminiClient returns a Gen AI client on the same Vertex AI project and
+// location as the agents, for services that share their configuration such as
+// explicit prompt caching.
+func GeminiClient(ctx context.Context, project, location string) (*genai.Client, error) {
+	if project == "" {
+		return nil, errors.New("a Google Cloud project is required: Vertex AI serves the models")
+	}
+	return genai.NewClient(ctx, &genai.ClientConfig{
+		Backend:  genai.BackendVertexAI,
+		Project:  project,
+		Location: location,
+	})
+}
+
 // Root returns Krude with everything it works with:
 //
 //   - dedicated sub-agents it calls like tools: planner and researcher run on
 //     their own, and those called in the same model turn run concurrently;
-//     teams is a task agent, which may ask the member a question first;
-//   - the toolboxes it can load, such as one provider's actions;
+//   - sub-agents Krude writes itself: create_subagent registers a specialist
+//     for the session, and it is callable by name from the next step;
+//   - toolboxes it loads on demand: list_tools shows them and load_tools loads
+//     the ones a task needs, such as the AgentCore sandbox or browser;
 //   - helpers: list_helpers describes the sub-agents, and spawn_helper runs a
-//     temporary agent for work that needs its own agent or is too big for one;
-//   - skills, whose full instructions it loads only when one fits;
-//   - set_nickname, for the nickname the member gives it.
-func Root(ctx context.Context, llm model.LLM, toolboxes []Toolbox) (agent.Agent, error) {
+//     temporary agent for work that needs its own agent or is too big for one.
+//
+// The router decides which model each role runs on: the member's conversation
+// on the main model, planning and single-turn work on the lite model, and
+// grounded research on the main model.
+func Root(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
+	if router == nil {
+		return nil, errors.New("a model router is required")
+	}
 	catalog, err := newToolCatalog(toolboxes)
 	if err != nil {
 		return nil, err
 	}
-	skills, err := newSkills(ctx)
+
+	plannerAgent, err := planner(router.For(modelrouter.RolePlan))
 	if err != nil {
 		return nil, err
 	}
-
-	var subAgents []agent.Agent
-	for _, build := range []func(model.LLM) (agent.Agent, error){planner, researcher, teams} {
-		subAgent, err := build(llm)
-		if err != nil {
-			return nil, err
-		}
-		subAgents = append(subAgents, subAgent)
+	researcherAgent, err := researcher(router.For(modelrouter.RoleResearch))
+	if err != nil {
+		return nil, err
 	}
+	subAgents := []agent.Agent{plannerAgent, researcherAgent}
 
-	// Helpers work with what Krude has loaded, but never spawn helpers of their
-	// own or set Krude's nickname.
-	helpers := newHelpers(llm, subAgents, []tool.Toolset{catalog.loaded(), skills})
-	tools, err := buildTools(setNicknameTool, catalog.listTool, catalog.loadTool, helpers.listTool, helpers.spawnTool, loadArtifactsTool)
+	work := router.For(modelrouter.RoleWork)
+	// Helpers never spawn helpers of their own.
+	helpers := newHelpers(work, subAgents)
+	// Dynamic sub-agents: Krude creates, calls and drops them in a session.
+	subagents := newSubagents(work, catalog)
+	tools, err := buildTools(catalog.listTool, catalog.loadTool, userDetailsTool, subagents.createTool, subagents.listTool, subagents.removeTool, helpers.listTool, helpers.spawnTool, loadArtifactsTool)
 	if err != nil {
 		return nil, err
 	}
 	return llmagent.New(llmagent.Config{
 		Name:                RootName,
 		Description:         "Krude, a member's assistant.",
-		Model:               llm,
-		InstructionProvider: instruction,
+		Model:               router.For(modelrouter.RoleChat),
+		InstructionProvider: instructionFor(catalog),
 		SubAgents:           subAgents,
 		Tools:               tools,
-		Toolsets:            []tool.Toolset{catalog.loaded(), skills},
+		Toolsets:            []tool.Toolset{catalog.loaded(), subagents},
 	})
 }
 
@@ -137,17 +158,64 @@ func buildTools(builders ...func() (tool.Tool, error)) ([]tool.Tool, error) {
 	return tools, nil
 }
 
-// instruction renders Krude's instruction for the member in this session.
-func instruction(ctx agent.ReadonlyContext) (string, error) {
-	state := ctx.ReadonlyState()
-	var rendered strings.Builder
-	err := krudeInstruction.Execute(&rendered, struct{ UserName, UserAbout, OrgName, Nickname string }{
-		UserName:  stateText(state, UserNameKey, "the member you are talking with"),
-		UserAbout: stateText(state, UserAboutKey, ""),
-		OrgName:   stateText(state, OrgNameKey, "their organization"),
-		Nickname:  stateText(state, NicknameKey, ""),
-	})
-	return rendered.String(), err
+// instructionFor renders Krude's instruction for the member in this session,
+// then appends the skill of every loaded toolbox, so a toolbox that is loaded
+// brings its usage instructions with it.
+func instructionFor(catalog *toolCatalog) func(agent.ReadonlyContext) (string, error) {
+	return func(ctx agent.ReadonlyContext) (string, error) {
+		state := ctx.ReadonlyState()
+		var rendered strings.Builder
+		err := krudeInstruction.Execute(&rendered, struct{ UserName, UserAbout, OrgName, Member string }{
+			UserName:  stateText(state, UserNameKey, "the member you are talking with"),
+			UserAbout: stateText(state, UserAboutKey, ""),
+			OrgName:   stateText(state, OrgNameKey, "their organization"),
+			Member:    memberDetails(state),
+		})
+		if err != nil {
+			return "", err
+		}
+		appendToolboxSkills(&rendered, catalog, state)
+		return rendered.String(), nil
+	}
+}
+
+// memberDetails renders the member's account details as the prompt's bullet
+// list.
+func memberDetails(state session.ReadonlyState) string {
+	lines := []string{"- Name: " + stateText(state, UserNameKey, "the member you are talking with")}
+	for _, optional := range []struct{ label, key string }{
+		{"About", UserAboutKey},
+		{"Email", UserEmailKey},
+		{"Role", UserRoleKey},
+	} {
+		if value := stateText(state, optional.key, ""); value != "" {
+			lines = append(lines, "- "+optional.label+": "+value)
+		}
+	}
+	lines = append(lines, "- Organization: "+stateText(state, OrgNameKey, "their organization"))
+	if id := stateText(state, OrganizationIDKey, ""); id != "" {
+		lines = append(lines, "- Organization ID: "+id)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// appendToolboxSkills adds the skill of every loaded toolbox to the rendered
+// instruction.
+func appendToolboxSkills(rendered *strings.Builder, catalog *toolCatalog, state session.ReadonlyState) {
+	var skills []string
+	for _, name := range loadedToolboxes(state) {
+		box, ok := catalog.find(name)
+		if !ok || strings.TrimSpace(box.Instructions) == "" {
+			continue
+		}
+		skills = append(skills, "### "+box.Name+"\n\n"+strings.TrimSpace(box.Instructions))
+	}
+	if len(skills) == 0 {
+		return
+	}
+	rendered.WriteString("\n## Loaded toolboxes\n\nEach loaded toolbox comes with its skill. Follow it, and when you are unsure how to use one of its tools, read it again instead of guessing.\n\n")
+	rendered.WriteString(strings.Join(skills, "\n\n"))
+	rendered.WriteString("\n")
 }
 
 // stateText returns the state value at key as one short line, or fallback when
@@ -169,9 +237,14 @@ func stateText(state session.ReadonlyState, key, fallback string) string {
 
 // oneLine collapses text to a single line of at most maxStateTextRunes runes.
 func oneLine(text string) string {
+	return boundedText(text, maxStateTextRunes)
+}
+
+// boundedText collapses text to a single line of at most max runes.
+func boundedText(text string, max int) string {
 	text = strings.Join(strings.Fields(text), " ")
-	if utf8.RuneCountInString(text) > maxStateTextRunes {
-		text = string([]rune(text)[:maxStateTextRunes])
+	if utf8.RuneCountInString(text) > max {
+		text = string([]rune(text)[:max])
 	}
 	return text
 }

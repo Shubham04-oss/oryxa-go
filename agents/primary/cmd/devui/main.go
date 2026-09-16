@@ -5,12 +5,16 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
@@ -25,6 +29,9 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcorebrowser"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcoresandbox"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 )
 
@@ -51,11 +58,31 @@ func main() {
 	defer sessionStore.Close()
 	log.Printf("ADK sessions connected to PostgreSQL")
 
+	outbox := events.NewOutbox(sessionStore.Database())
+	if err := outbox.Ensure(ctx); err != nil {
+		log.Fatalf("events outbox: %v", err)
+	}
+	recorder := events.NewSessionRecorder(outbox)
+
 	awsConfig, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(settings.AWSRegion))
 	if err != nil {
 		log.Fatalf("AWS configuration: %v", err)
 	}
 	otelaws.AppendMiddlewares(&awsConfig.APIOptions)
+	if settings.EventBridgeEndpoint != "" {
+		// The emulator takes any signature, so the client carries dummy
+		// credentials instead of asking for real ones.
+		eventConfig := awsConfig
+		eventConfig.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
+		eventClient := eventbridge.NewFromConfig(eventConfig, func(options *eventbridge.Options) {
+			options.BaseEndpoint = aws.String(settings.EventBridgeEndpoint)
+		})
+		dispatcher := events.NewDispatcher(outbox, events.NewPublisher(eventClient, settings.EventBusName), slog.Default())
+		go dispatcher.Run(ctx)
+		log.Printf("events dispatcher publishing to bus %q at %s", settings.EventBusName, settings.EventBridgeEndpoint)
+	} else {
+		log.Printf("session events are recorded in the outbox; set EVENTBRIDGE_ENDPOINT to publish them now")
+	}
 	sandbox, err := agentcoresandbox.New(awsConfig, agentcoresandbox.Options{
 		CodeInterpreterIdentifier: settings.SandboxCodeInterpreter,
 		SessionTimeout:            settings.SandboxSessionTimeout,
@@ -74,7 +101,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("AgentCore sandbox tools: %v", err)
 	}
-	log.Printf("AWS AgentCore sandbox configured in %s", settings.AWSRegion)
 	browser, err := agentcorebrowser.New(awsConfig, agentcorebrowser.Options{
 		BrowserIdentifier: settings.BrowserIdentifier,
 		SessionTimeout:    settings.BrowserSessionTimeout,
@@ -93,25 +119,47 @@ func main() {
 	if err != nil {
 		log.Fatalf("AgentCore browser tools: %v", err)
 	}
-	log.Printf("AWS AgentCore browser configured in %s", settings.AWSRegion)
+	log.Printf("AWS AgentCore sandbox and browser configured in %s", settings.AWSRegion)
 
-	llm, err := agents.Gemini(ctx, settings.Model, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+	mainModel, err := agents.Gemini(ctx, settings.Model, settings.GoogleCloudProject, settings.GoogleCloudLocation)
 	if err != nil {
-		log.Fatalf("gemini: %v", err)
+		log.Fatalf("main model: %v", err)
 	}
-	toolboxes := append(agents.Providers(),
-		agents.Toolbox{
-			Name:        "sandbox",
-			Description: "Isolated code, shell and file operations in AWS Bedrock AgentCore for computation and data work.",
-			Toolset:     sandboxTools,
-		},
-		agents.Toolbox{
-			Name:        "browser",
-			Description: "Isolated web navigation, semantic page inspection, screenshots and confirmed interactions in AWS Bedrock AgentCore Browser.",
-			Toolset:     browserTools,
-		},
+	liteModel, err := agents.Gemini(ctx, settings.ModelLite, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+	if err != nil {
+		log.Fatalf("lite model: %v", err)
+	}
+
+	var promptCache modelcache.Store
+	if settings.Cache {
+		client, err := agents.GeminiClient(ctx, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+		if err != nil {
+			log.Fatalf("prompt cache client: %v", err)
+		}
+		cacheStore := modelcache.NewGenaiStore(client, settings.CacheTTL)
+		promptCache = cacheStore
+		defer func() {
+			closeContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := cacheStore.Close(closeContext); err != nil {
+				log.Printf("delete prompt caches: %v", err)
+			}
+		}()
+	}
+	cacheConfig := modelcache.Config{TTL: settings.CacheTTL, MinTokens: settings.CacheMinTokens}
+	router, err := modelrouter.New(
+		modelcache.Cached(mainModel, promptCache, cacheConfig),
+		modelcache.Cached(liteModel, promptCache, cacheConfig),
 	)
-	root, err := agents.Root(ctx, llm, toolboxes)
+	if err != nil {
+		log.Fatalf("model router: %v", err)
+	}
+	log.Printf("models: %s with %s for planning and bulk work; prompt cache %t", settings.Model, settings.ModelLite, settings.Cache)
+
+	root, err := agents.Root(router, []agents.Toolbox{
+		agents.SandboxToolbox(sandboxTools),
+		agents.BrowserToolbox(browserTools),
+	})
 	if err != nil {
 		log.Fatalf("root agent: %v", err)
 	}
@@ -123,7 +171,7 @@ func main() {
 	adk := universal.NewLauncher(console.NewLauncher(), web.NewLauncher(api.NewLauncher(), webui.NewLauncher()))
 	if err := adk.Execute(ctx, &launcher.Config{
 		AgentLoader:     agent.NewSingleLoader(root),
-		SessionService:  sessionStore.Sessions(),
+		SessionService:  sessionStore.Sessions(recorder),
 		ArtifactService: artifact.InMemoryService(),
 	}, args); err != nil {
 		log.Fatalf("%v\n\n%s", err, adk.CommandLineSyntax())
