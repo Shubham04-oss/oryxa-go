@@ -53,6 +53,9 @@ type fakeAuthService struct {
 	authService
 	user          domain.User
 	organizations []domain.Organization
+	organization  domain.Organization
+	membership    domain.Membership
+	members       []domain.Membership
 	err           error
 	signedOutUser string
 }
@@ -180,6 +183,26 @@ func TestBearerLogoutDoesNotRequireBrowserOrigin(t *testing.T) {
 
 	if response.Code != http.StatusNoContent || service.signedOutUser != "user-1" {
 		t.Fatalf("logout status=%d signed-out-user=%q", response.Code, service.signedOutUser)
+	}
+}
+
+func TestAgentLogoutDoesNotSignTheMemberOut(t *testing.T) {
+	service := &fakeAuthService{}
+	handler := New(
+		fakeVerifier{claims: authn.Claims{Subject: "user-1", ClientID: "agent-client-id"}},
+		&fakeAuthFlow{},
+		&fakePasswordAuth{},
+		service,
+		Config{AllowedOrigins: []string{"https://app.example.com"}, AgentClientID: "agent-client-id"},
+	)
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+	request.Header.Set("Authorization", "Bearer agent-token")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNoContent || service.signedOutUser != "" {
+		t.Fatalf("logout with an agent token status=%d signed-out-user=%q, want no sign-out", response.Code, service.signedOutUser)
 	}
 }
 

@@ -26,23 +26,41 @@ type IdentityClaims struct {
 }
 
 type Verifier struct {
-	clientID         string
-	accessVerifier   *oidc.IDTokenVerifier
-	identityVerifier *oidc.IDTokenVerifier
+	clientID              string
+	agentClientID         string
+	accessVerifier        *oidc.IDTokenVerifier
+	identityVerifier      *oidc.IDTokenVerifier
+	agentIdentityVerifier *oidc.IDTokenVerifier
 }
 
-func New(provider *oidc.Provider, clientID string) *Verifier {
-	return &Verifier{
-		clientID: clientID,
-		accessVerifier: provider.Verifier(&oidc.Config{
+// New verifies tokens Cognito issues to the web app client clientID and, when
+// agentClientID is set, to the agent app client too: an agent's access token
+// is the member's own, issued to the agent client, and verifies here like
+// the member's; what it may do is for the caller to decide.
+func New(provider *oidc.Provider, clientID, agentClientID string) *Verifier {
+	return newVerifier(provider.Verifier, clientID, agentClientID)
+}
+
+func newVerifier(verifierFor func(*oidc.Config) *oidc.IDTokenVerifier, clientID, agentClientID string) *Verifier {
+	verifier := &Verifier{
+		clientID:      clientID,
+		agentClientID: agentClientID,
+		accessVerifier: verifierFor(&oidc.Config{
 			SkipClientIDCheck:    true,
 			SupportedSigningAlgs: []string{oidc.RS256},
 		}),
-		identityVerifier: provider.Verifier(&oidc.Config{
+		identityVerifier: verifierFor(&oidc.Config{
 			ClientID:             clientID,
 			SupportedSigningAlgs: []string{oidc.RS256},
 		}),
 	}
+	if agentClientID != "" {
+		verifier.agentIdentityVerifier = verifierFor(&oidc.Config{
+			ClientID:             agentClientID,
+			SupportedSigningAlgs: []string{oidc.RS256},
+		})
+	}
+	return verifier
 }
 
 func (v *Verifier) Verify(ctx context.Context, rawToken string) (Claims, error) {
@@ -62,7 +80,7 @@ func (v *Verifier) Verify(ctx context.Context, rawToken string) (Claims, error) 
 	if claims.TokenUse != "access" {
 		return Claims{}, errors.New("token_use must be access")
 	}
-	if claims.ClientID != v.clientID {
+	if claims.ClientID != v.clientID && (v.agentClientID == "" || claims.ClientID != v.agentClientID) {
 		return Claims{}, errors.New("token client_id does not match")
 	}
 	if claims.Subject == "" {
@@ -91,4 +109,32 @@ func (v *Verifier) VerifyIdentityToken(ctx context.Context, rawToken, expectedNo
 		return IdentityClaims{}, errors.New("identity token nonce does not match")
 	}
 	return claims, nil
+}
+
+// VerifyAgentIdentityToken verifies an ID token issued to the agent app
+// client and returns whose it is. Unlike VerifyIdentityToken it asks nothing
+// of the member's profile: an agent grant only needs to know which member
+// signed in, and that it answers the nonce its flow sent.
+func (v *Verifier) VerifyAgentIdentityToken(ctx context.Context, rawToken, expectedNonce string) (string, error) {
+	if v.agentIdentityVerifier == nil {
+		return "", errors.New("no agent app client is configured")
+	}
+	if strings.TrimSpace(rawToken) == "" || expectedNonce == "" {
+		return "", errors.New("identity token and nonce are required")
+	}
+	token, err := v.agentIdentityVerifier.Verify(ctx, rawToken)
+	if err != nil {
+		return "", fmt.Errorf("verify agent identity token: %w", err)
+	}
+	var claims IdentityClaims
+	if err := token.Claims(&claims); err != nil {
+		return "", fmt.Errorf("decode agent identity claims: %w", err)
+	}
+	if claims.Subject == "" {
+		return "", errors.New("agent identity token subject is required")
+	}
+	if claims.Nonce != expectedNonce {
+		return "", errors.New("agent identity token nonce does not match")
+	}
+	return claims.Subject, nil
 }

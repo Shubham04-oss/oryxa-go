@@ -15,10 +15,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/coreos/go-oidc/v3/oidc"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/agentgrant"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/authn"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/billingevents"
@@ -27,10 +29,15 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/oauthflow"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/passwordflow"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/postgres"
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/serviceconfig"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
+
+// serviceAudience is the audience other services name in tokens for auth.
+const serviceAudience = "auth"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -56,7 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("discover Cognito issuer: %v", err)
 	}
-	verifier := authn.New(provider, config.CognitoClientID)
+	verifier := authn.New(provider, config.CognitoClientID, config.CognitoAgentClientID)
 	store, err := postgres.Open(ctx, config.DatabaseURL, config.PostgresExtensions...)
 	if err != nil {
 		log.Fatal(err)
@@ -125,6 +132,36 @@ func main() {
 		slog.Warn("billing entitlement events are disabled", "reason", "AUTH_EVENTS_QUEUE_URL is not set")
 	}
 
+	kmsClient := kms.NewFromConfig(awsConfig)
+
+	var agentGrants httpserver.AgentGrantsFlow
+	if config.AgentGrantsEnabled() {
+		manager, err := agentgrant.New(agentgrant.Config{
+			CognitoDomain:   config.CognitoDomain,
+			ClientID:        config.CognitoAgentClientID,
+			ClientSecret:    config.CognitoAgentClientSecret,
+			CallbackURL:     config.CognitoAgentCallbackURL,
+			AllowedReturnTo: config.AllowedReturnURLs,
+		}, store, verifier, secrets.Envelope{Keys: secrets.KMSDataKeys{Client: kmsClient, KeyID: config.AuthKMSKeyID}, KeyID: config.AuthKMSKeyID})
+		if err != nil {
+			log.Fatal(err)
+		}
+		agentGrants = manager
+	} else {
+		slog.Warn("agent grants are disabled", "reason", "COGNITO_AGENT_CLIENT_ID, COGNITO_AGENT_CLIENT_SECRET, COGNITO_AGENT_CALLBACK_URL, and AUTH_KMS_KEY_ID are not all set")
+	}
+
+	var services httpserver.ServiceVerifier
+	if len(config.ServiceCallers) > 0 {
+		serviceVerifier, err := serviceauth.NewVerifier(serviceauth.VerifierConfig{Keys: kmsClient, Audience: serviceAudience, Callers: config.ServiceCallers})
+		if err != nil {
+			log.Fatal(err)
+		}
+		services = serviceVerifier
+	} else {
+		slog.Warn("AUTH_SERVICE_CALLERS is not set: the internal API refuses every call, so no service can mint agent tokens")
+	}
+
 	server := &http.Server{
 		Addr: config.Address,
 		Handler: observability.HTTPHandler("oryxa-auth", httpserver.New(verifier, oauth, passwords, service, httpserver.Config{
@@ -134,6 +171,9 @@ func main() {
 			AllowedOrigins:     config.AllowedReturnURLs,
 			CookieDomain:       config.CookieDomain,
 			CookieSecure:       config.CookieSecure,
+			AgentClientID:      config.CognitoAgentClientID,
+			AgentGrants:        agentGrants,
+			Services:           services,
 		})),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

@@ -42,6 +42,88 @@ func TestFromEnvRejectsInvalidBoolean(t *testing.T) {
 	}
 }
 
+func TestAgentGrantsDisabledUnlessAllFourAreSet(t *testing.T) {
+	setRequiredEnv(t)
+
+	config, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.AgentGrantsEnabled() {
+		t.Fatal("AgentGrantsEnabled() = true with nothing set")
+	}
+
+	agentEnv := map[string]string{
+		"COGNITO_AGENT_CLIENT_ID":     "agent-client-id",
+		"COGNITO_AGENT_CLIENT_SECRET": "agent-client-secret",
+		"COGNITO_AGENT_CALLBACK_URL":  "https://auth.example.com/v1/agent-grant/callback",
+		"AUTH_KMS_KEY_ID":             "alias/oryxa-auth",
+	}
+	// Setting any three of the four still leaves grants disabled.
+	for missing := range agentEnv {
+		setRequiredEnv(t)
+		for name, value := range agentEnv {
+			if name != missing {
+				t.Setenv(name, value)
+			}
+		}
+		config, err := FromEnv()
+		if err != nil {
+			t.Fatalf("FromEnv() error = %v (missing %s)", err, missing)
+		}
+		if config.AgentGrantsEnabled() {
+			t.Fatalf("AgentGrantsEnabled() = true without %s", missing)
+		}
+	}
+
+	setRequiredEnv(t)
+	for name, value := range agentEnv {
+		t.Setenv(name, value)
+	}
+	config, err = FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if !config.AgentGrantsEnabled() {
+		t.Fatalf("AgentGrantsEnabled() = false with all four set: %+v", config)
+	}
+	if config.CognitoAgentClientID != "agent-client-id" || config.CognitoAgentClientSecret != "agent-client-secret" ||
+		config.CognitoAgentCallbackURL != "https://auth.example.com/v1/agent-grant/callback" || config.AuthKMSKeyID != "alias/oryxa-auth" {
+		t.Fatalf("unexpected agent config: %+v", config)
+	}
+}
+
+func TestFromEnvRejectsInvalidAgentCallbackURL(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("COGNITO_AGENT_CALLBACK_URL", "not-a-url")
+
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() error = nil, want an absolute URL error")
+	}
+}
+
+func TestFromEnvParsesServiceCallers(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("AUTH_SERVICE_CALLERS", `[{"service":"agents","key_id":"alias/agents","purposes":["agent"]}]`)
+
+	config, err := FromEnv()
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if len(config.ServiceCallers) != 1 || config.ServiceCallers[0].Service != "agents" || config.ServiceCallers[0].Purposes[0] != "agent" {
+		t.Fatalf("service callers = %+v", config.ServiceCallers)
+	}
+}
+
+func TestFromEnvRejectsInvalidServiceCallersJSON(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("AUTH_SERVICE_CALLERS", "not-json")
+
+	if _, err := FromEnv(); err == nil {
+		t.Fatal("FromEnv() error = nil, want invalid callers JSON error")
+	}
+}
+
 func setRequiredEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("AWS_REGION", "")
@@ -60,4 +142,9 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("AUTH_EVENTS_QUEUE_URL", "")
 	t.Setenv("SQS_ENDPOINT", "")
 	t.Setenv("POSTGRES_REQUIRED_EXTENSIONS", "")
+	t.Setenv("COGNITO_AGENT_CLIENT_ID", "")
+	t.Setenv("COGNITO_AGENT_CLIENT_SECRET", "")
+	t.Setenv("COGNITO_AGENT_CALLBACK_URL", "")
+	t.Setenv("AUTH_KMS_KEY_ID", "")
+	t.Setenv("AUTH_SERVICE_CALLERS", "")
 }

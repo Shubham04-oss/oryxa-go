@@ -17,6 +17,9 @@ var (
 	// ErrLimitReached means the organization's plan allows no more of what
 	// was asked for.
 	ErrLimitReached = errors.New("limit reached")
+	// ErrUnavailable means a dependency the request needed, such as Cognito,
+	// did not answer.
+	ErrUnavailable = errors.New("unavailable")
 )
 
 type Role string
@@ -130,4 +133,25 @@ type Event struct {
 type OutboxEvent struct {
 	Event
 	Attempts int
+}
+
+// SealedData is an envelope-encrypted value. The plaintext data key is never
+// stored; EncryptedDataKey opens only with the same KMS encryption context.
+type SealedData struct {
+	Version          int    `json:"version"`
+	Nonce            []byte `json:"nonce"`
+	Ciphertext       []byte `json:"ciphertext"`
+	EncryptedDataKey []byte `json:"encrypted_data_key"`
+}
+
+// AgentGrant is a member's consent for the Cognito agent app client to act as
+// them while they are absent: an envelope-encrypted refresh token auth
+// exchanges for short-lived access tokens on request. UserID is the member
+// who granted it, and Scope records what was granted.
+type AgentGrant struct {
+	UserID                string
+	EncryptedRefreshToken SealedData
+	Scope                 string
+	CreatedAt             time.Time
+	RefreshedAt           *time.Time
 }

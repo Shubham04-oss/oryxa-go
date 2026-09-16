@@ -2,10 +2,13 @@ package serviceconfig
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
 const defaultRegion = "ap-south-1"
@@ -33,6 +36,24 @@ type Config struct {
 	CookieDomain         string
 	CookieSecure         bool
 	AutoMigrate          bool
+
+	// Agent grants let an agent act for a member while the member is absent.
+	// All four of the following are optional; AgentGrantsEnabled reports
+	// whether every one of them is set. ServiceCallers gates only the
+	// internal token-mint route, separately: a caller named there needs
+	// purpose "agent" to use it.
+	CognitoAgentClientID     string
+	CognitoAgentClientSecret string
+	CognitoAgentCallbackURL  string
+	AuthKMSKeyID             string
+	ServiceCallers           []serviceauth.Caller
+}
+
+// AgentGrantsEnabled reports whether every setting agent grants need to
+// store and exchange a member's refresh token is present. Without all four,
+// every agent grant route answers 404.
+func (c Config) AgentGrantsEnabled() bool {
+	return c.CognitoAgentClientID != "" && c.CognitoAgentClientSecret != "" && c.CognitoAgentCallbackURL != "" && c.AuthKMSKeyID != ""
 }
 
 func FromEnv() (Config, error) {
@@ -65,6 +86,11 @@ func FromEnv() (Config, error) {
 		CookieDomain:         strings.TrimSpace(os.Getenv("AUTH_COOKIE_DOMAIN")),
 		CookieSecure:         cookieSecure,
 		AutoMigrate:          autoMigrate,
+
+		CognitoAgentClientID:     strings.TrimSpace(os.Getenv("COGNITO_AGENT_CLIENT_ID")),
+		CognitoAgentClientSecret: strings.TrimSpace(os.Getenv("COGNITO_AGENT_CLIENT_SECRET")),
+		CognitoAgentCallbackURL:  strings.TrimSpace(os.Getenv("COGNITO_AGENT_CALLBACK_URL")),
+		AuthKMSKeyID:             strings.TrimSpace(os.Getenv("AUTH_KMS_KEY_ID")),
 	}
 	if config.CognitoIssuer == "" || config.CognitoUserPoolID == "" || config.CognitoClientID == "" || config.CognitoDomain == "" || config.CognitoCallbackURL == "" {
 		return Config{}, errors.New("COGNITO_ISSUER, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, COGNITO_DOMAIN, and COGNITO_CALLBACK_URL are required")
@@ -79,6 +105,15 @@ func FromEnv() (Config, error) {
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 			return Config{}, errors.New("auth callback, return, invitation, verification, and reset URLs must be absolute")
 		}
+	}
+	if config.CognitoAgentCallbackURL != "" {
+		parsed, err := url.Parse(config.CognitoAgentCallbackURL)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return Config{}, errors.New("COGNITO_AGENT_CALLBACK_URL must be an absolute URL")
+		}
+	}
+	if config.ServiceCallers, err = serviceauth.ParseCallers(os.Getenv("AUTH_SERVICE_CALLERS")); err != nil {
+		return Config{}, fmt.Errorf("AUTH_SERVICE_CALLERS: %w", err)
 	}
 	return config, nil
 }

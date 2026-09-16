@@ -40,6 +40,11 @@ Access JWTs are verified locally against Cognito's signed OIDC keys. The auth st
 | `GET`, `POST` | `/v1/organizations/{organizationID}/invitations` | List or create invitations |
 | `DELETE` | `/v1/organizations/{organizationID}/invitations/{invitationID}` | Revoke an invitation |
 | `POST` | `/v1/invitations/accept` | Accept an invitation token |
+| `GET` | `/v1/agent-grant` | Whether the caller has granted agent access |
+| `POST` | `/v1/agent-grant/authorize` | Start granting it: `{return_to}` → `{authorization_url}` |
+| `GET` | `/v1/agent-grant/callback` | Complete the agent grant authorization-code flow |
+| `DELETE` | `/v1/agent-grant` | Revoke it |
+| `POST` | `/v1/internal/agent-tokens` | A service token exchanges a member's grant for a short-lived access token |
 
 Owners can update/delete organizations and change any member role. Owners and admins can list invitations and invite/remove members; admins cannot manage owners/admins or create admin invitations. The final owner cannot be demoted or removed, including under concurrent requests.
 
@@ -72,6 +77,8 @@ docker --context mac-mini compose -f compose.auth.yaml up -d auth
 ```
 
 `DATABASE_URL` should address `oryxa-go-postgres-1:5432`; `EVENTBRIDGE_ENDPOINT` should address `oryxa-go-eventbridge-1:4566` for the local EventBridge emulator.
+
+The store tests run when `AUTH_TEST_DATABASE_URL` is set. Unlike connections' and integrations', they migrate straight into that database rather than a throwaway schema and leave outbox rows behind, so point them at a disposable database, never the shared one auth itself runs on.
 
 ### PostgreSQL client and extensions
 
@@ -134,6 +141,36 @@ go run ./auth/infra/events/cmd/provision
 ```
 
 The command is repeatable. It creates or updates the `auth-events` queue with its dead-letter queue, and an `auth-billing-entitlements` rule on `EVENT_BUS_NAME` whose target is the queue and which the queue policy admits alone. Against the local emulators, run it with `AWS_ENDPOINT_URL=http://localhost:4566` and dummy credentials, and give auth `SQS_ENDPOINT=http://oryxa-go-eventbridge-1:4566`.
+
+## Agent grants
+
+An agent acts as the member it works for, with that member's own Cognito identity, never as a service impersonating them. While the member is present, whatever calls auth on the agent's behalf simply forwards the member's own access token. While the member is absent — a trigger or a schedule runs with no one watching — auth instead holds a refresh token the member once granted to a second, confidential Cognito app client (the "agent" client, custom scope `oryxa/agent.actions`) and exchanges it for a short-lived access token on request. The token that comes back is still the member's own (its `sub` is the member), but its `client_id` is the agent client's, and auth, connections and integrations all answer it with less than they answer the member's own token.
+
+The refresh token is stored envelope-encrypted with AWS KMS (`internal/secrets`, the same pattern integrations and connections use for their own secrets), bound to `{service: oryxa-auth, resource_type: agent-grant, resource_id: <user_id>}` so a sealed value can never be opened for a different member or by another service.
+
+The authorize/callback pair reuses the member sign-in flow's own machinery: PKCE, a state hash, and the same `auth_login_flows` storage `internal/oauthflow` uses, with the state additionally bound to the member who started it. Unlike sign-in it names no identity provider, so a member who signs in with a password can grant as well as one who signs in with Google; Cognito passes straight through for a member already signed in there. The callback checks the ID token was issued to the agent client, refuses a code whose ID token names a different member, refuses a state it does not itself recognize, and independently re-checks the return URL it stored before ever redirecting to it, rather than trusting what `authorize` validated earlier. The agent client is confidential, so its token exchange and revocation authenticate with `client_secret` over HTTP Basic, the way Cognito expects from a confidential client, rather than the bare `client_id` the public web client uses.
+
+An agent token is an access token whose `client_id` is the agent client's; auth verifies it like the member's own. On every authenticated route except `GET /v1/auth/me`, `GET /v1/organizations`, `GET /v1/organizations/{organizationID}` and `GET /v1/organizations/{organizationID}/members`, it is refused with `403 {"error": "agents cannot do this"}` — the agent grant routes above included, since only a member's own token may manage its own grant. `GET /v1/organizations/{organizationID}` adds a top-level `"agent": true` to its response for an agent token and omits the field otherwise, so connections and integrations can tell the two apart without decoding the token themselves. `POST /v1/auth/logout` with an agent token signs nobody out.
+
+`POST /v1/internal/agent-tokens` is called the way connections' internal API is called: a service proves its identity with a signed `X-Oryxa-Service-Token` (`internal/serviceauth`, audience `auth`, purpose `agent`), then sends `{user_id}` and gets back `{access_token, expires_in}`. It answers `404` if the member has no grant, `409` if Cognito refuses the stored refresh token as `invalid_grant` (the now-useless grant is deleted so the next attempt fails fast instead of retrying a dead token — unless another mint rotated the stored token meanwhile, in which case the exchange is retried with that one and the grant kept), `503` if Cognito fails or does not answer, `500` if Cognito refuses the agent client itself, such as for a wrong secret, which never costs a member their grant, and `401`/`403` for a missing, invalid or wrongly-purposed service token. A refresh token Cognito rotates during the exchange is sealed and saved before the access token is returned.
+
+The web app has no screen for granting or withdrawing yet, and the flow has not run against a provisioned agent client.
+
+### Configuration
+
+All optional; without every one of the first four, agent grants are disabled and every route above answers `404`:
+
+| Variable | Meaning |
+| --- | --- |
+| `COGNITO_AGENT_CLIENT_ID` | The agent app client's ID |
+| `COGNITO_AGENT_CLIENT_SECRET` | Its secret (the agent client is confidential) |
+| `COGNITO_AGENT_CALLBACK_URL` | `{auth public URL}/v1/agent-grant/callback` |
+| `AUTH_KMS_KEY_ID` | Envelope-encrypts stored agent refresh tokens |
+| `AUTH_SERVICE_CALLERS` | `serviceauth.ParseCallers` JSON; the internal route additionally needs a caller with purpose `agent` |
+
+### Provisioning
+
+`go run ./auth/infra/cognito/cmd/provision` also provisions the agent client whenever `COGNITO_AGENT_CALLBACK_URL` is set: a resource server identified `oryxa` with scope `agent.actions`, and a confidential `<pool name>-agents` app client (authorization-code flow only, scopes `openid` and `oryxa/agent.actions`, the same identity providers as the web client, a 1-hour access token, a 365-day refresh token with rotation enabled, and token revocation enabled). Like the rest of provisioning, it is repeatable and idempotent, and it prints the new client's ID but never its secret.
 
 ## Domain events
 
