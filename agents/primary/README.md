@@ -130,6 +130,72 @@ To add a dedicated sub-agent, give it a constructor beside the others with a
 name, the description Krude picks it by, a mode, an instruction and transfers
 switched off, add it to `Root`, and name it in `instructions/krude.md`.
 
+## Acting for a member
+
+An agent acts **as the member it works for, with that member's own
+identity** — never as a service impersonating them. `internal/memberauth`
+carries that identity from a session to every call an integrations tool
+makes.
+
+**Member present.** A chat turn forwards the member's own access token —
+the same bearer token auth issues today — onto the run's context with
+`memberauth.WithAccessToken`; it is never written to session state or a log.
+
+**Member absent.** A trigger or a schedule runs with nobody watching, so
+there is no token to forward. The member has instead, once, granted "agents
+may act for me"; `memberauth.TokenSource` exchanges that standing grant for a
+short-lived access token by calling auth's `POST /v1/internal/agent-tokens`,
+signed with a `serviceauth.Signer` naming agents as the caller. `AuthClient`
+implements it, caching each user's token until two minutes before it expires
+and safe for concurrent runs asking for the same user at once. It maps
+auth's `404` and `409` — no grant, or Cognito refused the stored refresh
+token and auth deleted it — to `ErrGrantRequired`, a typed error a tool
+result can turn into words the model says to the member, not a crash; `5xx`
+and an unreachable auth map to a retryable `ErrUnavailable`.
+
+Either way, the acting member — the session's own user, in the organization
+its `organization_id` state names — has to reach the credential that signs
+an outgoing MCP request, and a credential provider only ever sees that
+request's plain context, never ADK's session state. `memberauth.WrapToolset`
+closes that gap: it wraps an MCP toolset so both its tool listing and every
+tool's `Run` attach the member — and any access token already on the
+context — to the context the call actually uses, right before the call is
+made. `CredentialProvider.Credential` reads it back off that context and
+sets `Authorization: Bearer <token>` and `X-Oryxa-Organization:
+<organization>` on the request: the member's own token when the run carries
+one, otherwise an agent token for the session's user.
+
+**Integrations toolboxes.** `agents.IntegrationsToolboxes` fetches
+integrations' `GET /v1/catalog` once and turns every provider with at least
+one action into a `Toolbox`: its tools are that provider's MCP endpoint at
+`POST /v1/mcp/{provider}`, wrapped as above, and its skill is the provider's
+own — carried into Krude's instruction like any other toolbox's, while it is
+loaded. Every tool requires confirmation before it runs, the same
+Human-in-the-Loop flow toolbox tools already use, except the reads the
+catalogue names and each provider's `_connections` tool; so a write
+integrations gains after primary read the catalogue still asks first. A
+provider with no actions gets no toolbox.
+
+Integrations serves every member the same tools, so a toolbox lists them once,
+as whichever member first loads it; after that a loaded toolbox costs no call
+per model step, and only tool calls go out, each as its own member. One MCP
+client serves every member: each request carries the credential of the run
+that made it, never another member's. When acting for the member fails — no
+grant, no member, auth not answering — the model gets the reason in plain
+words, without the request that carried it, and a loaded toolbox whose tools
+cannot be listed is left out of the turn rather than failing it, with
+`load_tools` saying why. A sub-agent may not take a name starting with a
+toolbox's name and an underscore, so checking a name never lists a toolbox.
+
+`cmd/devui` builds these toolboxes when `INTEGRATIONS_URL` is set, logging a
+warning and running without them if the catalogue cannot be reached —
+integrations being unreachable never keeps the agents from starting.
+
+**Not yet.** `cmd/primary` serves no runs, so outside tests nothing calls
+`memberauth.WithAccessToken`: every development UI run acts through the
+member's grant, and a member who has not granted one cannot use integrations
+tools. No run starts from an integrations trigger either.
+
 ## Models and routing
 
 `Gemini` builds each model on Vertex AI with Application Default Credentials,
@@ -281,7 +347,8 @@ Primary is its own Go module, `github.com/Shubham04-oss/oryxa-go/agents/primary`
 adk-go releases every few weeks and brings its own dependency tree; a separate
 module keeps those upgrades away from the module every other service shares.
 `go.mod` replaces the root module with `../..`, which is how primary imports
-`/internal/observability`.
+`/internal/observability` and, for `memberauth`'s service tokens,
+`/internal/serviceauth`.
 
 The root module's `go test ./...` and `go mod tidy` do not reach primary, so
 run its checks with `-C` from the repository root:
@@ -333,6 +400,9 @@ docker run --rm -p 8086:8080 oryxa-agents-primary:dev
 | `DEPLOYMENT_ENVIRONMENT` | `development` | Environment on logs and telemetry |
 | `LOG_LEVEL` | `info` | Structured log level |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/gRPC export; without it, logs stay on and telemetry export is a no-op |
+| `INTEGRATIONS_URL` | unset | Integrations' own URL; when set, `cmd/devui` builds one toolbox per provider its catalogue offers (see Acting for a member) |
+| `AUTH_URL` | unset | Auth's own URL; where a member-absent run exchanges the member's standing grant for an agent token |
+| `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |
 
 The HTTP server sets no write timeout: agent streams outlive any fixed write
 deadline, so each streaming handler sets its own.

@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"os"
@@ -403,8 +404,63 @@ func TestKrudeRefusesASubagentNamedLikeATool(t *testing.T) {
 	h.turn("member_1", nil, "Create a notes helper.")
 
 	result := functionResponse(llm.requestsFor(RootName)[1], "create_subagent")
-	if !strings.Contains(result, "already has a tool named") {
+	if !strings.Contains(result, "kept for the notes toolbox") {
 		t.Fatalf("create_subagent result %s did not refuse the toolbox name", result)
+	}
+}
+
+// failingToolset is a toolbox whose tools cannot be listed, such as a remote
+// one that is down; calls reports each attempt.
+type failingToolset struct{ calls *int }
+
+func (f failingToolset) Name() string { return "failing" }
+
+func (f failingToolset) Tools(agent.ReadonlyContext) ([]tool.Tool, error) {
+	*f.calls++
+	return nil, errors.New("dial tcp: connection refused")
+}
+
+func TestKrudeAnswersWhenALoadedToolboxCannotListItsTools(t *testing.T) {
+	var calls int
+	remote := Toolbox{Name: "remote", Description: "Remote tools.", Toolset: failingToolset{calls: &calls}}
+	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		if functionResponse(request, "load_tools") != "" {
+			return genai.NewContentFromText("Remote tools are down.", genai.RoleModel)
+		}
+		return functionCalls(&genai.FunctionCall{ID: "call_load", Name: "load_tools", Args: map[string]any{"names": []any{"remote"}}})
+	})
+	h := newHarness(t, llm, remote)
+
+	// Loaded in an earlier turn: the turn goes on without its tools, and
+	// loading it again says why they are missing.
+	if answer := h.turn("member_1", map[string]any{loadedToolsKey: []string{"remote"}}, "Use the remote tools."); answer != "Remote tools are down." {
+		t.Fatalf("answer = %q", answer)
+	}
+	result := functionResponse(llm.requestsFor(RootName)[1], "load_tools")
+	if !strings.Contains(result, "could not be listed right now") || strings.Contains(result, "dial tcp") {
+		t.Fatalf("load_tools result %s, want the toolbox unavailable without transport detail", result)
+	}
+}
+
+func TestKrudeCreatesASubagentWithoutListingToolboxes(t *testing.T) {
+	var calls int
+	remote := Toolbox{Name: "remote", Description: "Remote tools.", Toolset: failingToolset{calls: &calls}}
+	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		if functionResponse(request, "create_subagent") != "" {
+			return genai.NewContentFromText("Created.", genai.RoleModel)
+		}
+		return functionCalls(&genai.FunctionCall{ID: "call_create", Name: "create_subagent", Args: map[string]any{
+			"name": "note_reviewer", "description": "Reviews notes.", "instruction": "You review notes.",
+		}})
+	})
+	h := newHarness(t, llm, remote)
+	h.turn("member_1", nil, "Create a reviewer.")
+
+	if result := functionResponse(llm.requestsFor(RootName)[1], "create_subagent"); !strings.Contains(result, "note_reviewer") || strings.Contains(result, "error") {
+		t.Fatalf("create_subagent result %s, want the sub-agent created", result)
+	}
+	if calls != 0 {
+		t.Fatalf("creating a sub-agent listed a toolbox's tools %d times, want none", calls)
 	}
 }
 
@@ -653,7 +709,13 @@ func newRouterHarness(t *testing.T, router *modelrouter.Router, toolboxes ...Too
 // returns Krude's reply.
 func (h *harness) turn(userID string, state map[string]any, message string) string {
 	h.t.Helper()
-	ctx := context.Background()
+	return h.turnWith(context.Background(), userID, state, message)
+}
+
+// turnWith is turn on a context of the caller's, such as one carrying the
+// member's own access token.
+func (h *harness) turnWith(ctx context.Context, userID string, state map[string]any, message string) string {
+	h.t.Helper()
 	created, err := h.sessions.Create(ctx, &session.CreateRequest{AppName: RootName, UserID: userID, State: state})
 	if err != nil {
 		h.t.Fatalf("create session: %v", err)
