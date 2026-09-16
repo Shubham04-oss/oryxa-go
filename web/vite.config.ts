@@ -31,6 +31,7 @@ function serviceProxy(
 		),
 		"^/v1/organizations/[^/]+/(apps|connections)([/?]|$)": connections,
 		"^/v1/oauth/": connections,
+		"^/v1/providers([/?]|$)": connections,
 		"^/v1/billing/": service("BILLING_SERVICE_URL", "http://localhost:8081"),
 		"^/v1/": service("AUTH_SERVICE_URL", "http://localhost:8080"),
 	};

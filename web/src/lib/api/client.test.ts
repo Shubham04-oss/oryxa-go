@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiRequest } from "./client";
+import { ApiError, apiErrorMessage, apiPath, apiRequest } from "./client";
 
 function json(status: number, body: unknown): Response {
 	return new Response(JSON.stringify(body), {
@@ -31,6 +31,23 @@ describe("apiRequest", () => {
 			expect.objectContaining({
 				body: '{"name":"Odd Works"}',
 				credentials: "include",
+				method: "POST",
+			}),
+		);
+	});
+
+	it("sends form data as it is, for the browser to frame", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(json(201, { id: "file_1" }));
+		vi.stubGlobal("fetch", fetchMock);
+		const form = new FormData();
+		form.set("scope", "member");
+
+		await apiRequest("/v1/organizations/org_1/files", { body: form });
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/organizations/org_1/files",
+			expect.objectContaining({
+				body: form,
+				headers: undefined,
 				method: "POST",
 			}),
 		);
@@ -139,5 +156,45 @@ describe("apiRequest", () => {
 			status: 401,
 		});
 		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+});
+
+describe("apiPath", () => {
+	it("encodes each value as one path segment", () => {
+		expect(apiPath`/v1/organizations/${"org 1"}/members/${"a/b"}`).toBe(
+			"/v1/organizations/org%201/members/a%2Fb",
+		);
+	});
+});
+
+describe("apiErrorMessage", () => {
+	it("keeps what services explain and words the rest plainly", () => {
+		expect(
+			apiErrorMessage(
+				new ApiError("organization slug must contain 2-63 characters", 400),
+				"Could not save",
+			),
+		).toBe("Organization slug must contain 2-63 characters.");
+		expect(
+			apiErrorMessage(
+				new ApiError("operation is not allowed", 403),
+				"Could not save",
+			),
+		).toBe("You do not have permission to do that.");
+		expect(
+			apiErrorMessage(
+				new ApiError("resource state conflicts with the request", 409),
+				"Could not save",
+			),
+		).toBe("Something changed in the meantime. Refresh and try again.");
+		expect(
+			apiErrorMessage(
+				new ApiError("internal server error", 500),
+				"Could not save",
+			),
+		).toBe("Could not save");
+		expect(apiErrorMessage(new Error("offline"), "Could not save")).toBe(
+			"Could not save",
+		);
 	});
 });

@@ -17,6 +17,7 @@ export class ApiError extends Error {
 }
 
 export interface ApiRequestOptions {
+	/** JSON to send, or `FormData` for a multipart upload. */
 	body?: unknown;
 	method?: "DELETE" | "GET" | "PATCH" | "POST" | "PUT";
 	/**
@@ -32,6 +33,17 @@ export interface ApiRequestOptions {
 export function apiUrl(path: string): string {
 	const base: string = import.meta.env.VITE_API_URL ?? "";
 	return `${base.replace(/\/$/, "")}${path}`;
+}
+
+/** Builds an API path, encoding each interpolated value as a path segment. */
+export function apiPath(
+	strings: TemplateStringsArray,
+	...values: string[]
+): string {
+	return strings.reduce(
+		(path, part, index) =>
+			`${path}${encodeURIComponent(values[index - 1])}${part}`,
+	);
 }
 
 let pendingRefresh: Promise<boolean> | undefined;
@@ -53,6 +65,15 @@ function refreshSession(): Promise<boolean> {
 	return pendingRefresh;
 }
 
+// The browser writes a multipart body's boundary into its Content-Type itself,
+// so only JSON gets a header of its own.
+function requestBody(body: unknown): BodyInit | undefined {
+	if (body === undefined || body instanceof FormData) {
+		return body;
+	}
+	return JSON.stringify(body);
+}
+
 export async function apiRequest<T = void>(
 	path: string,
 	{
@@ -64,10 +85,12 @@ export async function apiRequest<T = void>(
 ): Promise<T> {
 	const send = () =>
 		fetch(apiUrl(path), {
-			body: body === undefined ? undefined : JSON.stringify(body),
+			body: requestBody(body),
 			credentials: "include",
 			headers:
-				body === undefined ? undefined : { "Content-Type": "application/json" },
+				body === undefined || body instanceof FormData
+					? undefined
+					: { "Content-Type": "application/json" },
 			method: method ?? (body === undefined ? "GET" : "POST"),
 			signal,
 		});
@@ -100,4 +123,37 @@ async function requestError(response: Response): Promise<ApiError> {
 		response.status,
 		body.error?.code,
 	);
+}
+
+const statusMessages: Partial<Record<number, string>> = {
+	401: "Your session has ended. Sign in again to continue.",
+	403: "You do not have permission to do that.",
+	404: "That no longer exists, or you do not have access to it.",
+	429: "Too many requests. Try again in a minute.",
+};
+
+// Auth, teams and files answer every conflict with the same words.
+const unexplainedConflict = "resource state conflicts with the request";
+
+/**
+ * A failed request in words a person can act on. Services explain bad input
+ * and most conflicts themselves; other statuses get a plain sentence.
+ */
+export function apiErrorMessage(error: unknown, fallback: string): string {
+	if (!(error instanceof ApiError) || error.status >= 500) {
+		return fallback;
+	}
+	if (error.message === unexplainedConflict) {
+		return "Something changed in the meantime. Refresh and try again.";
+	}
+	return statusMessages[error.status] ?? sentence(error.message);
+}
+
+function sentence(message: string): string {
+	const text = message.trim();
+	if (text === "") {
+		return "The request failed.";
+	}
+	const capitalized = `${text[0].toUpperCase()}${text.slice(1)}`;
+	return /[.!?]$/.test(capitalized) ? capitalized : `${capitalized}.`;
 }

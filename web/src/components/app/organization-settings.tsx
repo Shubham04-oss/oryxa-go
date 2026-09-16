@@ -3,10 +3,11 @@ import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface SettingsSectionProps {
 	children: ReactNode;
-	description: string;
+	description: ReactNode;
 	footer?: ReactNode;
 	id: string;
 	title: string;
@@ -35,7 +36,7 @@ export function SettingsSection({
 
 interface SettingsRowProps {
 	children: ReactNode;
-	description: string;
+	description: ReactNode;
 	htmlFor?: string;
 	title: string;
 }
@@ -64,7 +65,7 @@ export function SettingsPageBody({ children }: { children: ReactNode }) {
 interface StatusBadgeProps {
 	children: ReactNode;
 	icon?: LucideIcon;
-	tone: "active" | "admin" | "neutral";
+	tone: "active" | "admin" | "danger" | "neutral" | "warning";
 }
 
 export function StatusBadge({ children, icon: Icon, tone }: StatusBadgeProps) {
@@ -78,4 +79,27 @@ export function StatusBadge({ children, icon: Icon, tone }: StatusBadgeProps) {
 			{children}
 		</Badge>
 	);
+}
+
+const placeholderRows = ["first", "second", "third"];
+
+/** Rows standing in for a list while it loads. */
+export function SettingsListSkeleton() {
+	return (
+		<div aria-busy="true" className="settings-list">
+			{placeholderRows.map((row) => (
+				<div className="settings-list-row" key={row}>
+					<Skeleton className="size-8 rounded-full" />
+					<div className="settings-list-copy">
+						<Skeleton className="h-3 w-40" />
+						<Skeleton className="h-2.5 w-24" />
+					</div>
+				</div>
+			))}
+		</div>
+	);
+}
+
+export function SettingsListEmpty({ children }: { children: ReactNode }) {
+	return <p className="settings-list-empty">{children}</p>;
 }

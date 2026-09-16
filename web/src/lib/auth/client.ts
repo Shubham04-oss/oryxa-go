@@ -1,4 +1,4 @@
-import { ApiError, apiRequest } from "../api/client";
+import { ApiError, apiPath, apiRequest } from "../api/client";
 import type {
 	InviteMemberInput,
 	OrganizationInput,
@@ -35,6 +35,18 @@ export interface Membership {
 	user_id: string;
 }
 
+export interface Invitation {
+	accepted_at?: string;
+	created_at: string;
+	email: string;
+	expires_at: string;
+	id: string;
+	invited_by: string;
+	organization_id: string;
+	role: Role;
+	status: "pending" | "accepted" | "revoked" | "expired";
+}
+
 export interface Session {
 	organizations: Organization[];
 	user: User;
@@ -43,6 +55,11 @@ export interface Session {
 export interface OrganizationDetail {
 	membership: Membership;
 	organization: Organization;
+}
+
+/** Owners and admins manage members, though admins only ever manage members. */
+export function managesMembers(role: Role | undefined): boolean {
+	return role === "owner" || role === "admin";
 }
 
 // A 401 from these calls is their answer, such as a wrong password, rather
@@ -122,21 +139,89 @@ export function createOrganization(
 	});
 }
 
+function organizationPath(organizationId: string): string {
+	return apiPath`/v1/organizations/${organizationId}`;
+}
+
 export function getOrganization(
 	organizationId: string,
 ): Promise<OrganizationDetail> {
-	return apiRequest<OrganizationDetail>(
-		`/v1/organizations/${encodeURIComponent(organizationId)}`,
+	return apiRequest<OrganizationDetail>(organizationPath(organizationId));
+}
+
+export function updateOrganization(
+	organizationId: string,
+	input: { name: string; slug: string },
+): Promise<Organization> {
+	return apiRequest<Organization>(organizationPath(organizationId), {
+		body: input,
+		method: "PATCH",
+	});
+}
+
+export async function deleteOrganization(
+	organizationId: string,
+): Promise<void> {
+	await apiRequest(organizationPath(organizationId), { method: "DELETE" });
+}
+
+export async function listMembers(
+	organizationId: string,
+): Promise<Membership[]> {
+	const { members } = await apiRequest<{ members: Membership[] }>(
+		`${organizationPath(organizationId)}/members`,
+	);
+	return members;
+}
+
+export function changeMemberRole(
+	organizationId: string,
+	userId: string,
+	role: Role,
+): Promise<Membership> {
+	return apiRequest<Membership>(
+		`${organizationPath(organizationId)}${apiPath`/members/${userId}`}`,
+		{ body: { role }, method: "PATCH" },
 	);
 }
 
-export async function inviteMember(
+/** Removes a member, or leaves the organization when `userId` is the caller. */
+export async function removeMember(
 	organizationId: string,
-	input: InviteMemberInput,
+	userId: string,
 ): Promise<void> {
 	await apiRequest(
-		`/v1/organizations/${encodeURIComponent(organizationId)}/invitations`,
+		`${organizationPath(organizationId)}${apiPath`/members/${userId}`}`,
+		{ method: "DELETE" },
+	);
+}
+
+export async function listInvitations(
+	organizationId: string,
+): Promise<Invitation[]> {
+	const { invitations } = await apiRequest<{ invitations: Invitation[] }>(
+		`${organizationPath(organizationId)}/invitations`,
+	);
+	return invitations;
+}
+
+export function inviteMember(
+	organizationId: string,
+	input: InviteMemberInput,
+): Promise<Invitation> {
+	return apiRequest<Invitation>(
+		`${organizationPath(organizationId)}/invitations`,
 		{ body: input },
+	);
+}
+
+export async function revokeInvitation(
+	organizationId: string,
+	invitationId: string,
+): Promise<void> {
+	await apiRequest(
+		`${organizationPath(organizationId)}${apiPath`/invitations/${invitationId}`}`,
+		{ method: "DELETE" },
 	);
 }
 

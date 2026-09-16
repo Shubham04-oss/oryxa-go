@@ -27,7 +27,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 			},
 			{
 				name: "theme-color",
-				content: "#111111",
+				content: "#f4f1ea",
 			},
 		],
 		links: [
@@ -42,7 +42,7 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 
 function RootDocument({ children }: { children: React.ReactNode }) {
 	return (
-		<html className="dark" lang="en">
+		<html lang="en">
 			<head>
 				<HeadContent />
 			</head>

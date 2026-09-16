@@ -1,11 +1,14 @@
+import { useQuery } from "@tanstack/react-query";
 import { Blocks } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ToolGlyph, type ToolProvider, toolOptions } from "@/lib/tools/catalog";
+import { providersQueryOptions } from "@/lib/connections/client";
+import { describeTools, ToolGlyph } from "@/lib/tools/catalog";
 
-export type { ToolProvider } from "@/lib/tools/catalog";
+/** A provider key, as connections names it. */
+export type ToolProvider = string;
 
 interface ToolEnablementProps {
 	error: string;
@@ -22,6 +25,9 @@ export function ToolEnablement({
 	selected,
 	submitting,
 }: ToolEnablementProps) {
+	const providers = useQuery(providersQueryOptions());
+	const tools = providers.data ? describeTools(providers.data) : [];
+
 	return (
 		<section className="onboarding-organization" aria-labelledby="tools-title">
 			<Card className="onboarding-form-card onboarding-tools-card">
@@ -41,8 +47,17 @@ export function ToolEnablement({
 					</Alert>
 				) : null}
 
+				{providers.isPending ? (
+					<p className="onboarding-tools-note">Loading the tools…</p>
+				) : null}
+				{providers.isError ? (
+					<p className="onboarding-tools-note">
+						The tool list did not load. You can choose tools in settings after
+						setup.
+					</p>
+				) : null}
 				<div className="onboarding-tool-grid">
-					{toolOptions.map((tool) => {
+					{tools.map((tool) => {
 						const checked = selected.has(tool.provider);
 						const checkboxId = `tool-${tool.provider}`;
 
