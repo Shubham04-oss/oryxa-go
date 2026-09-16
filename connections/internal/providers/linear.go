@@ -15,7 +15,8 @@ func Linear() Provider {
 		Name:            "linear",
 		CredentialTypes: []domain.CredentialType{domain.CredentialOAuth2, domain.CredentialAPIKey},
 		Scopes: ScopeRules{
-			Ceiling:  []string{"comments:create", "issues:create", "read", "write"},
+			// admin is the only way an OAuth app may create webhooks.
+			Ceiling:  []string{"admin", "comments:create", "issues:create", "read", "write"},
 			Required: []string{"read"},
 			Implications: domain.Implications{
 				"comments:create": {"write"},

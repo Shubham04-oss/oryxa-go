@@ -2,8 +2,8 @@
 
 Status: built. Apps; OAuth 2.0, GitHub App installation, client-credentials and
 key-based connections for Airtable, Asana, Atlassian (Jira and Confluence),
-Box, ClickUp, Dropbox, Figma, GitHub, Google, Linear, Microsoft, Notion and
-Slack;
+Box, ClickUp, Dropbox, Figma, GitHub, Google, HubSpot, Intercom, Linear,
+Microsoft, Notion, Salesforce, Slack and Zendesk;
 reconnect, labels, defaults and disconnect; token issuance with refresh and
 minting under a lease; holds, revocation and credential deletion; the
 heartbeat; the auth and teams event consumer; and service identity. Not built
