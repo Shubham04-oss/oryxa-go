@@ -12,6 +12,15 @@ import (
 
 const googleProviderName = "Google"
 
+// Agent app client constants. See the "Auth" section of the agent identity
+// contract: a resource server identifier "oryxa" with scope "agent.actions",
+// and an app client named "<pool name>-agents".
+const (
+	agentResourceServerIdentifier = "oryxa"
+	agentActionsScopeName         = "agent.actions"
+	agentAppClientSuffix          = "-agents"
+)
+
 type Output struct {
 	Region            string `json:"region"`
 	UserPoolID        string `json:"user_pool_id"`
@@ -19,6 +28,10 @@ type Output struct {
 	CognitoDomain     string `json:"cognito_domain"`
 	Issuer            string `json:"issuer"`
 	GoogleRedirectURI string `json:"google_redirect_uri"`
+	// AgentAppClientID is the agent app client's ID, set only when
+	// config.AgentCallbackURL provisioned one. Its secret is never returned
+	// or logged.
+	AgentAppClientID string `json:"agent_app_client_id,omitempty"`
 }
 
 func Run(ctx context.Context, client *cognitoidentityprovider.Client, config Config) (Output, error) {
@@ -41,14 +54,27 @@ func Run(ctx context.Context, client *cognitoidentityprovider.Client, config Con
 	}
 
 	domain := fmt.Sprintf("https://%s.auth.%s.amazoncognito.com", config.DomainPrefix, config.Region)
-	return Output{
+	output := Output{
 		Region:            config.Region,
 		UserPoolID:        poolID,
 		AppClientID:       clientID,
 		CognitoDomain:     domain,
 		Issuer:            fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", config.Region, poolID),
 		GoogleRedirectURI: domain + "/oauth2/idpresponse",
-	}, nil
+	}
+
+	if config.AgentCallbackURL == "" {
+		return output, nil
+	}
+	if err := ensureAgentResourceServer(ctx, client, poolID); err != nil {
+		return Output{}, err
+	}
+	agentClientID, err := ensureAgentAppClient(ctx, client, poolID, config)
+	if err != nil {
+		return Output{}, err
+	}
+	output.AgentAppClientID = agentClientID
+	return output, nil
 }
 
 func ensureUserPool(ctx context.Context, client *cognitoidentityprovider.Client, config Config) (string, error) {
@@ -329,6 +355,150 @@ func appClientSettings(_ Config) clientSettings {
 			RetryGracePeriodSeconds: aws.Int32(10),
 		},
 	}
+}
+
+// ensureAgentResourceServer creates or updates the "oryxa" resource server
+// and its "agent.actions" scope, idempotent like the rest of provisioning.
+func ensureAgentResourceServer(ctx context.Context, client *cognitoidentityprovider.Client, poolID string) error {
+	scopes := []types.ResourceServerScopeType{{
+		ScopeName:        aws.String(agentActionsScopeName),
+		ScopeDescription: aws.String("Act for the member who granted this, while they are absent."),
+	}}
+
+	_, err := client.DescribeResourceServer(ctx, &cognitoidentityprovider.DescribeResourceServerInput{
+		Identifier: aws.String(agentResourceServerIdentifier),
+		UserPoolId: aws.String(poolID),
+	})
+	if err == nil {
+		_, err = client.UpdateResourceServer(ctx, &cognitoidentityprovider.UpdateResourceServerInput{
+			Identifier: aws.String(agentResourceServerIdentifier),
+			Name:       aws.String(agentResourceServerIdentifier),
+			UserPoolId: aws.String(poolID),
+			Scopes:     scopes,
+		})
+		if err != nil {
+			return fmt.Errorf("update agent resource server: %w", err)
+		}
+		return nil
+	}
+
+	var notFound *types.ResourceNotFoundException
+	if !errors.As(err, &notFound) {
+		return fmt.Errorf("describe agent resource server: %w", err)
+	}
+	_, err = client.CreateResourceServer(ctx, &cognitoidentityprovider.CreateResourceServerInput{
+		Identifier: aws.String(agentResourceServerIdentifier),
+		Name:       aws.String(agentResourceServerIdentifier),
+		UserPoolId: aws.String(poolID),
+		Scopes:     scopes,
+	})
+	if err != nil {
+		return fmt.Errorf("create agent resource server: %w", err)
+	}
+	return nil
+}
+
+// agentAppClientName is the agent app client's name: "<pool name>-agents".
+func agentAppClientName(poolName string) string {
+	return poolName + agentAppClientSuffix
+}
+
+// agentAppClientSettings is the pure, testable part of the agent app
+// client's configuration: a confidential, code-flow-only client scoped to
+// OpenID Connect and the custom "oryxa/agent.actions" scope, with refresh
+// token rotation on so a mint can save the rotated token the contract
+// describes.
+func agentAppClientSettings() clientSettings {
+	return clientSettings{
+		allowedFlows:  []types.OAuthFlowType{types.OAuthFlowTypeCode},
+		allowedScopes: []string{"openid", agentResourceServerIdentifier + "/" + agentActionsScopeName},
+		refreshTokenRotation: &types.RefreshTokenRotationType{
+			Feature:                 types.FeatureTypeEnabled,
+			RetryGracePeriodSeconds: aws.Int32(10),
+		},
+	}
+}
+
+// ensureAgentAppClient creates or updates the confidential "<pool
+// name>-agents" app client, idempotent like ensureAppClient. It returns only
+// the client ID: CreateUserPoolClient's response also carries the new
+// client's secret, and this function never reads or returns that field, so
+// it can never be logged.
+func ensureAgentAppClient(ctx context.Context, client *cognitoidentityprovider.Client, poolID string, config Config) (string, error) {
+	name := agentAppClientName(config.PoolName)
+	var existingID string
+	var nextToken *string
+	for {
+		output, err := client.ListUserPoolClients(ctx, &cognitoidentityprovider.ListUserPoolClientsInput{
+			MaxResults: aws.Int32(60),
+			NextToken:  nextToken,
+			UserPoolId: aws.String(poolID),
+		})
+		if err != nil {
+			return "", fmt.Errorf("list Cognito app clients: %w", err)
+		}
+		for _, appClient := range output.UserPoolClients {
+			if aws.ToString(appClient.ClientName) == name {
+				existingID = aws.ToString(appClient.ClientId)
+				break
+			}
+		}
+		if existingID != "" || output.NextToken == nil {
+			break
+		}
+		nextToken = output.NextToken
+	}
+
+	settings := agentAppClientSettings()
+	tokenValidityUnits := &types.TokenValidityUnitsType{
+		AccessToken:  types.TimeUnitsTypeMinutes,
+		RefreshToken: types.TimeUnitsTypeDays,
+	}
+	if existingID == "" {
+		output, err := client.CreateUserPoolClient(ctx, &cognitoidentityprovider.CreateUserPoolClientInput{
+			UserPoolId:                      aws.String(poolID),
+			ClientName:                      aws.String(name),
+			GenerateSecret:                  true,
+			AccessTokenValidity:             aws.Int32(60),
+			RefreshTokenValidity:            365,
+			AllowedOAuthFlowsUserPoolClient: true,
+			AllowedOAuthFlows:               settings.allowedFlows,
+			AllowedOAuthScopes:              settings.allowedScopes,
+			CallbackURLs:                    []string{config.AgentCallbackURL},
+			DefaultRedirectURI:              aws.String(config.AgentCallbackURL),
+			EnableTokenRevocation:           aws.Bool(true),
+			PreventUserExistenceErrors:      types.PreventUserExistenceErrorTypesEnabled,
+			RefreshTokenRotation:            settings.refreshTokenRotation,
+			TokenValidityUnits:              tokenValidityUnits,
+			SupportedIdentityProviders:      []string{"COGNITO", googleProviderName},
+		})
+		if err != nil {
+			return "", fmt.Errorf("create Cognito agent app client: %w", err)
+		}
+		return aws.ToString(output.UserPoolClient.ClientId), nil
+	}
+
+	_, err := client.UpdateUserPoolClient(ctx, &cognitoidentityprovider.UpdateUserPoolClientInput{
+		UserPoolId:                      aws.String(poolID),
+		ClientId:                        aws.String(existingID),
+		ClientName:                      aws.String(name),
+		AccessTokenValidity:             aws.Int32(60),
+		RefreshTokenValidity:            365,
+		AllowedOAuthFlowsUserPoolClient: true,
+		AllowedOAuthFlows:               settings.allowedFlows,
+		AllowedOAuthScopes:              settings.allowedScopes,
+		CallbackURLs:                    []string{config.AgentCallbackURL},
+		DefaultRedirectURI:              aws.String(config.AgentCallbackURL),
+		EnableTokenRevocation:           aws.Bool(true),
+		PreventUserExistenceErrors:      types.PreventUserExistenceErrorTypesEnabled,
+		RefreshTokenRotation:            settings.refreshTokenRotation,
+		TokenValidityUnits:              tokenValidityUnits,
+		SupportedIdentityProviders:      []string{"COGNITO", googleProviderName},
+	})
+	if err != nil {
+		return "", fmt.Errorf("update Cognito agent app client: %w", err)
+	}
+	return existingID, nil
 }
 
 func ensureManagedLoginBranding(ctx context.Context, client *cognitoidentityprovider.Client, poolID, clientID string) error {

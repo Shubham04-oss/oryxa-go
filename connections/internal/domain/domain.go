@@ -28,6 +28,9 @@ var (
 	ErrSessionExpired      = errors.New("authorization session expired")
 	ErrProviderUnavailable = errors.New("provider unavailable")
 	ErrRateLimited         = errors.New("too many requests")
+	// ErrAgentForbidden is what the public API answers when an agent's
+	// membership asks for anything but a GET route.
+	ErrAgentForbidden = errors.New("an agent cannot change this")
 )
 
 // ScopeRequiredError names the provider scopes a request is missing. It
@@ -63,6 +66,10 @@ type OrgMembership struct {
 	OrganizationID string
 	UserID         string
 	Role           OrgRole
+	// Agent is whether the caller's token is an agent's, as auth's
+	// organization response named it. An agent's membership may only read on
+	// the public API.
+	Agent bool
 }
 
 // TeamAccess is what teams answered for the caller and one team.

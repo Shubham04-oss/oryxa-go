@@ -63,6 +63,15 @@ func linearProvider(graphqlURL string) Provider {
 			return linearUnregister(ctx, client, graphqlURL, request)
 		},
 		Receive: linearReceive,
+		TargetFields: []TargetField{
+			{Name: "team", Description: "The team to watch, by key or ID. Without it, every public team is watched.", Example: "ENG"},
+		},
+		Events: EventsDescription{
+			Names:   linearResourceTypes,
+			Default: "the resource types Linear documents webhooks for",
+		},
+		Actions: linearActions(graphqlURL),
+		Skill:   skill("linear"),
 	}
 }
 

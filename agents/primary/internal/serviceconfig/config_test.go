@@ -14,6 +14,7 @@ func clearEnv(t *testing.T) {
 		"AGENTS_PRIMARY_BROWSER_ID", "AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS",
 		"EVENT_BUS_NAME", "EVENTBRIDGE_ENDPOINT",
 		"AGENTS_PRIMARY_GUARDRAIL_ID", "AGENTS_PRIMARY_GUARDRAIL_VERSION", "AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED", "AGENTS_PRIMARY_MODEL_PRICES",
+		"INTEGRATIONS_URL", "AUTH_URL", "AGENTS_PRIMARY_SERVICE_KEY_ID",
 	} {
 		t.Setenv(name, "")
 	}
@@ -44,6 +45,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.GuardrailIdentifier != "" || config.GuardrailVersion != "" || config.GuardrailFailClosed || config.ModelPrices != "" {
 		t.Fatalf("guardrail/pricing config = %+v", config)
 	}
+	if config.IntegrationsURL != "" || config.AuthURL != "" || config.ServiceKeyID != "" {
+		t.Fatalf("integrations config = %+v", config)
+	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
@@ -69,6 +73,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_VERSION", " 7 ")
 	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED", " true ")
 	t.Setenv("AGENTS_PRIMARY_MODEL_PRICES", ` {"gemini-3.8-flash":{"input":0.30,"output":2.50,"cached":0.075}} `)
+	t.Setenv("INTEGRATIONS_URL", " http://localhost:8090 ")
+	t.Setenv("AUTH_URL", " http://localhost:8081 ")
+	t.Setenv("AGENTS_PRIMARY_SERVICE_KEY_ID", " arn:aws:kms:ap-south-1:1:key/agents ")
 
 	config, err := FromEnv()
 	if err != nil {
@@ -94,6 +101,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if config.ModelPrices == "" {
 		t.Fatalf("model prices were dropped: %+v", config)
+	}
+	if config.IntegrationsURL != "http://localhost:8090" || config.AuthURL != "http://localhost:8081" || config.ServiceKeyID != "arn:aws:kms:ap-south-1:1:key/agents" {
+		t.Fatalf("integrations config = %+v", config)
 	}
 }
 

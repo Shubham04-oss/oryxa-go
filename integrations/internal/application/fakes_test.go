@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -25,6 +26,8 @@ type fakeStore struct {
 	leases        map[string]string
 	webhooks      map[string]domain.AppWebhook
 	deliveries    map[[2]string]time.Time
+	actions       map[string]domain.Action
+	actionKeys    map[[3]string]string
 	events        []domain.Event
 	activateErr   error
 	// onActivate runs before a subscription is activated, as when something
@@ -38,6 +41,8 @@ func newFakeStore() *fakeStore {
 		leases:        map[string]string{},
 		webhooks:      map[string]domain.AppWebhook{},
 		deliveries:    map[[2]string]time.Time{},
+		actions:       map[string]domain.Action{},
+		actionKeys:    map[[3]string]string{},
 	}
 }
 
@@ -195,6 +200,43 @@ func (store *fakeStore) RecordDelivery(_ context.Context, subscriptionID, key st
 	store.deliveries[[2]string{subscriptionID, key}] = at
 	store.events = append(store.events, event)
 	return true, nil
+}
+
+func (store *fakeStore) StartAction(_ context.Context, action domain.Action) (domain.Action, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := [3]string{action.ConnectionID, action.Name, action.IdempotencyKey}
+	if id, ok := store.actionKeys[key]; ok {
+		return store.actions[id], false, nil
+	}
+	store.actionKeys[key] = action.ID
+	store.actions[action.ID] = action
+	return action, true, nil
+}
+
+func (store *fakeStore) FinishAction(_ context.Context, action domain.Action, event domain.Event) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	stored, ok := store.actions[action.ID]
+	if !ok || stored.Status != domain.ActionRunning {
+		return domain.ErrConflict
+	}
+	store.actions[action.ID] = action
+	store.events = append(store.events, event)
+	return nil
+}
+
+func (store *fakeStore) DeleteActionsBefore(_ context.Context, before time.Time) (int64, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var deleted int64
+	for id, action := range store.actions {
+		if action.EndedAt != nil && action.EndedAt.Before(before) {
+			delete(store.actions, id)
+			deleted++
+		}
+	}
+	return deleted, nil
 }
 
 func (store *fakeStore) ScheduleRenewal(_ context.Context, subscriptionID string, at time.Time) error {
@@ -472,6 +514,20 @@ func (connections *fakeConnections) App(_ context.Context, organizationID, appID
 	return app, nil
 }
 
+func (connections *fakeConnections) Connections(_ context.Context, organizationID, accessToken string) ([]domain.Connection, error) {
+	connections.mu.Lock()
+	defer connections.mu.Unlock()
+	found := []domain.Connection{}
+	for _, connection := range connections.connections {
+		if connection.OrganizationID != organizationID || slices.Contains(connections.hidden[accessToken], connection.ID) {
+			continue
+		}
+		found = append(found, connection)
+	}
+	slices.SortFunc(found, func(a, b domain.Connection) int { return strings.Compare(a.ID, b.ID) })
+	return found, nil
+}
+
 func (connections *fakeConnections) held(connectionID string) bool {
 	connections.mu.Lock()
 	defer connections.mu.Unlock()
@@ -523,6 +579,9 @@ type fakeProvider struct {
 	// onRegister runs while the provider registers, as a provider's handshake
 	// or a concurrent change would.
 	onRegister   func(providers.RegisterRequest)
+	result       providers.ActionResult
+	actionErr    error
+	ran          []providers.ActionRequest
 	registered   []providers.RegisterRequest
 	renewed      []providers.RenewRequest
 	unregistered []providers.UnregisterRequest
@@ -556,6 +615,7 @@ func (fake *fakeProvider) webhook(name string) providers.Provider {
 			return fake.unregisterErr
 		},
 		Receive: fake.receive,
+		Actions: fake.actions(),
 	}
 }
 
@@ -572,6 +632,25 @@ func (fake *fakeProvider) app(name string) providers.Provider {
 			return team, nil
 		},
 		Receive: fake.receive,
+		Actions: fake.actions(),
+	}
+}
+
+// actions are one action that only reads and one that writes, so a test can
+// see what each rule does.
+func (fake *fakeProvider) actions() []providers.Action {
+	run := func(_ context.Context, _ *http.Client, request providers.ActionRequest) (providers.ActionResult, error) {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		fake.ran = append(fake.ran, request)
+		if fake.actionErr != nil {
+			return providers.ActionResult{}, fake.actionErr
+		}
+		return fake.result, nil
+	}
+	return []providers.Action{
+		{Name: "read_thing", Summary: "Read a thing.", Input: json.RawMessage(`{"type":"object"}`), Run: run},
+		{Name: "write_thing", Summary: "Write a thing.", Input: json.RawMessage(`{"type":"object"}`), Writes: true, Run: run},
 	}
 }
 

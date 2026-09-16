@@ -66,6 +66,16 @@ func githubProvider(apiURL string) Provider {
 			return githubUnregister(ctx, client, apiURL, request)
 		},
 		Receive: githubReceive,
+		TargetFields: []TargetField{
+			{Name: "repository", Description: "The repository to watch, as owner/name.", Required: true, Example: "acme/api"},
+		},
+		Events: EventsDescription{
+			Names:   []string{"issues", "issue_comment", "pull_request", "pull_request_review", "pull_request_review_comment", "push", "release", "workflow_run"},
+			Open:    true,
+			Default: "every event the repository sends",
+		},
+		Actions: githubActions(apiURL),
+		Skill:   skill("github"),
 	}
 }
 

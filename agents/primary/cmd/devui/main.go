@@ -6,6 +6,7 @@ import (
 	"context"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +16,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
@@ -30,9 +32,11 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcoresandbox"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
 // defaultArgs serves the web UI and the REST API behind it on one port, clear
@@ -156,10 +160,34 @@ func main() {
 	}
 	log.Printf("models: %s with %s for planning and bulk work; prompt cache %t", settings.Model, settings.ModelLite, settings.Cache)
 
-	root, err := agents.Root(router, []agents.Toolbox{
+	toolboxes := []agents.Toolbox{
 		agents.SandboxToolbox(sandboxTools),
 		agents.BrowserToolbox(browserTools),
-	})
+	}
+	if settings.IntegrationsURL != "" {
+		if settings.AuthURL == "" || settings.ServiceKeyID == "" {
+			log.Printf("integrations toolboxes: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
+		}
+		tokens := memberauth.NewAuthClient(memberauth.AuthClientConfig{
+			BaseURL: settings.AuthURL,
+			Signer:  serviceauth.Signer{Client: kms.NewFromConfig(awsConfig), KeyID: settings.ServiceKeyID, Service: "agents"},
+		})
+		integrationsToolboxes, err := agents.IntegrationsToolboxes(ctx, agents.IntegrationsConfig{
+			URL:    settings.IntegrationsURL,
+			HTTP:   &http.Client{},
+			Tokens: tokens,
+		})
+		if err != nil {
+			// The agents still run without them: a member simply cannot reach
+			// integrations' tools until the catalogue comes back.
+			log.Printf("integrations toolboxes unavailable, running without them: %v", err)
+		} else {
+			toolboxes = append(toolboxes, integrationsToolboxes...)
+			log.Printf("integrations toolboxes: %d provider(s) from %s", len(integrationsToolboxes), settings.IntegrationsURL)
+		}
+	}
+
+	root, err := agents.Root(router, toolboxes)
 	if err != nil {
 		log.Fatalf("root agent: %v", err)
 	}

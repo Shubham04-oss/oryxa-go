@@ -42,6 +42,9 @@ func (s *Service) RunWorkers(ctx context.Context) {
 			if _, err := s.store.DeleteDeliveriesBefore(ctx, s.now().Add(-deliveryMemory)); err != nil && ctx.Err() == nil {
 				s.logger.ErrorContext(ctx, "forget old deliveries", "error", err)
 			}
+			if _, err := s.store.DeleteActionsBefore(ctx, s.now().Add(-actionMemory)); err != nil && ctx.Err() == nil {
+				s.logger.ErrorContext(ctx, "forget old actions", "error", err)
+			}
 			lastPrune = s.now()
 		}
 		select {

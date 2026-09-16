@@ -26,12 +26,24 @@ var slackEventPattern = regexp.MustCompile(`^[a-z_]{1,64}$`)
 // subscriptions of the workspaces whose installation received it; the Slack
 // app must subscribe to the event types subscriptions ask for.
 func Slack() Provider {
+	return slackProvider("https://slack.com/api")
+}
+
+func slackProvider(apiURL string) Provider {
 	return Provider{
-		Name:       "slack",
-		Delivery:   DeliveryApp,
-		Target:     slackTarget,
-		AccountKey: slackAccountKey,
-		Receive:    slackReceive,
+		Name:         "slack",
+		Delivery:     DeliveryApp,
+		Target:       slackTarget,
+		AccountKey:   slackAccountKey,
+		Receive:      slackReceive,
+		TargetFields: []TargetField{},
+		Events: EventsDescription{
+			Names:   []string{"message", "app_mention", "reaction_added", "reaction_removed", "channel_created", "team_join", "file_shared"},
+			Open:    true,
+			Default: "every event the Slack app subscribes to",
+		},
+		Actions: slackActions(apiURL),
+		Skill:   skill("slack"),
 	}
 }
 

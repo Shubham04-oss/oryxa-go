@@ -462,3 +462,202 @@ func TestLiveMicrosoftGraphSubscription(t *testing.T) {
 		t.Fatalf("the subscription is still at Graph: GET = %d", status)
 	}
 }
+
+// liveActionStack serves integrations for the action live tests. Actions reach
+// out rather than being reached, so this stack needs no public URL.
+func liveActionStack(t *testing.T) *stack {
+	t.Helper()
+	return newStackWith(t, stackOptions{realClock: true})
+}
+
+func TestLiveGitHubAction(t *testing.T) {
+	token := liveValue(t, "INTEGRATIONS_LIVE_GITHUB_TOKEN", "a GitHub token that may open and close issues in the repository")
+	repository := liveValue(t, "INTEGRATIONS_LIVE_GITHUB_REPOSITORY", "the owner/name of a repository where an issue may be opened and closed")
+	s := liveActionStack(t)
+	s.connections.issues(token, bearerPlacement)
+	s.connections.add(domain.Connection{
+		ID: "conn_live_github", AppID: "app_live_github", Provider: "github", CredentialType: "bearer", Scope: "member", MemberID: "user-1",
+		ProviderAccount: domain.ProviderAccount{ID: "live", Name: strings.SplitN(repository, "/", 2)[0]}, Status: "active",
+	})
+	title := fmt.Sprintf("Oryxa integrations live test %d", time.Now().UnixNano())
+
+	// The member opens an issue through integrations.
+	status, opened, body := s.runAction("create_issue", "conn_live_github", "live-"+title, map[string]any{
+		"repository": repository, "title": title, "body": "Opened and closed by a live test.",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("create_issue = %d %s", status, body)
+	}
+	if opened.Status != domain.ActionCompleted || opened.Resource == nil || opened.Resource.URL == "" {
+		t.Fatalf("create_issue = %+v", opened)
+	}
+	var created struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(opened.Result, &created); err != nil || created.Number == 0 {
+		t.Fatalf("create_issue answered %s, %v", opened.Result, err)
+	}
+	t.Logf("opened %s#%d at %s", repository, created.Number, opened.Resource.URL)
+	t.Cleanup(func() {
+		// Whatever the test finds, the issue does not stay open.
+		s.runAction("close_issue", "conn_live_github", fmt.Sprintf("live-close-%d", created.Number), map[string]any{
+			"repository": repository, "number": created.Number, "reason": "not_planned",
+		})
+	})
+
+	// Asking again under the same key changes nothing at GitHub.
+	_, again, _ := s.runAction("create_issue", "conn_live_github", "live-"+title, map[string]any{
+		"repository": repository, "title": title, "body": "This must not open a second issue.",
+	})
+	if again.ID != opened.ID {
+		t.Fatalf("the same idempotency key opened a second issue: %+v", again)
+	}
+
+	// The issue reads back, and a comment lands on it.
+	status, got, body := s.runAction("get_issue", "conn_live_github", "", map[string]any{"repository": repository, "number": created.Number})
+	if status != http.StatusOK || got.Status != domain.ActionCompleted {
+		t.Fatalf("get_issue = %d %s", status, body)
+	}
+	if !strings.Contains(string(got.Result), title) {
+		t.Fatalf("get_issue answered %s, want the issue just opened", got.Result)
+	}
+	status, _, body = s.runAction("comment_on_issue", "conn_live_github", fmt.Sprintf("live-comment-%d", created.Number), map[string]any{
+		"repository": repository, "number": created.Number, "body": "Integrations ran this action.",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("comment_on_issue = %d %s", status, body)
+	}
+
+	// Closing it ends the test's trace in the repository.
+	status, closed, body := s.runAction("close_issue", "conn_live_github", fmt.Sprintf("live-close-%d", created.Number), map[string]any{
+		"repository": repository, "number": created.Number, "reason": "not_planned",
+	})
+	if status != http.StatusOK || closed.Status != domain.ActionCompleted {
+		t.Fatalf("close_issue = %d %s", status, body)
+	}
+	if !strings.Contains(string(closed.Result), "closed") {
+		t.Fatalf("close_issue answered %s, want the issue closed", closed.Result)
+	}
+
+	// Every action was published, and nothing carried the token.
+	published := completed(s)
+	if len(published) != 4 {
+		t.Fatalf("action.completed events = %d, want four: create, get, comment, close", len(published))
+	}
+	s.noSecrets(token)
+	t.Logf("four actions published, %s#%d closed", repository, created.Number)
+}
+
+func TestLiveLinearAction(t *testing.T) {
+	token := liveValue(t, "INTEGRATIONS_LIVE_LINEAR_TOKEN", "a Linear API key that may create and delete issues")
+	team := liveValue(t, "INTEGRATIONS_LIVE_LINEAR_TEAM", "the key or ID of a Linear team where an issue may be created and deleted")
+	s := liveActionStack(t)
+	keyPlacement := placement{In: "header", Name: "Authorization"}
+	s.connections.issues(token, keyPlacement)
+	s.connections.add(domain.Connection{
+		ID: "conn_live_linear", AppID: "app_live_linear", Provider: "linear", CredentialType: "api_key", Scope: "organization",
+		ProviderAccount: domain.ProviderAccount{ID: "live", Name: "Linear"}, Status: "active",
+	})
+	title := fmt.Sprintf("Oryxa integrations live test %d", time.Now().UnixNano())
+
+	// Creating an issue proves the team key resolves and the mutation lands.
+	status, created, body := s.runAction("create_issue", "conn_live_linear", "live-"+title, map[string]any{
+		"team": team, "title": title, "description": "Created and deleted by a live test.",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("create_issue = %d %s", status, body)
+	}
+	var issue struct {
+		ID         string `json:"id"`
+		Identifier string `json:"identifier"`
+	}
+	if err := json.Unmarshal(created.Result, &issue); err != nil || issue.ID == "" {
+		t.Fatalf("create_issue answered %s, %v", created.Result, err)
+	}
+	t.Logf("created %s (%s)", issue.Identifier, issue.ID)
+	t.Cleanup(func() {
+		var answer struct {
+			Data json.RawMessage `json:"data"`
+		}
+		callProvider(t, http.MethodPost, "https://api.linear.app/graphql", http.Header{"Authorization": {token}},
+			map[string]any{
+				"query":     `mutation DeleteIssue($id: String!) { issueDelete(id: $id) { success } }`,
+				"variables": map[string]any{"id": issue.ID},
+			}, &answer)
+	})
+
+	// Reading it back by identifier is the assumption worth checking live:
+	// Linear's issue(id:) taking ENG-42 as well as a UUID.
+	status, got, body := s.runAction("get_issue", "conn_live_linear", "", map[string]any{"issue": issue.Identifier})
+	if status != http.StatusOK {
+		t.Fatalf("get_issue by identifier = %d %s", status, body)
+	}
+	if !strings.Contains(string(got.Result), title) {
+		t.Fatalf("get_issue answered %s, want the issue just created", got.Result)
+	}
+
+	status, _, body = s.runAction("comment_on_issue", "conn_live_linear", "live-comment-"+issue.ID, map[string]any{
+		"issue": issue.Identifier, "body": "Integrations ran this action.",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("comment_on_issue = %d %s", status, body)
+	}
+
+	// Closing exercises the workflow-state lookup, the other assumption.
+	status, closed, body := s.runAction("close_issue", "conn_live_linear", "live-close-"+issue.ID, map[string]any{"issue": issue.ID})
+	if status != http.StatusOK {
+		t.Fatalf("close_issue = %d %s", status, body)
+	}
+	t.Logf("closed %s: %s", issue.Identifier, closed.Result)
+	if len(completed(s)) != 4 {
+		t.Fatalf("action.completed events = %d, want four", len(completed(s)))
+	}
+	s.noSecrets(token)
+}
+
+func TestLiveMicrosoftAction(t *testing.T) {
+	token := liveValue(t, "INTEGRATIONS_LIVE_MICROSOFT_TOKEN", "a Microsoft Graph delegated access token with Mail.Read and Calendars.ReadWrite")
+	s := liveActionStack(t)
+	s.connections.issues(token, bearerPlacement)
+	s.connections.add(domain.Connection{
+		ID: "conn_live_microsoft", AppID: "app_live_microsoft", Provider: "microsoft", CredentialType: "oauth2", Scope: "member", MemberID: "user-1",
+		ProviderAccount: domain.ProviderAccount{ID: "live", Name: "Microsoft"}, Status: "active",
+	})
+
+	// Reading is safe: the mailbox and calendar are only listed.
+	status, messages, body := s.runAction("list_messages", "conn_live_microsoft", "", map[string]any{"limit": 5})
+	if status != http.StatusOK {
+		t.Fatalf("list_messages = %d %s", status, body)
+	}
+	t.Logf("list_messages answered %d bytes", len(messages.Result))
+	status, _, body = s.runAction("list_events", "conn_live_microsoft", "", map[string]any{"limit": 5})
+	if status != http.StatusOK {
+		t.Fatalf("list_events = %d %s", status, body)
+	}
+
+	// One event is created and then deleted, so the calendar is left as it
+	// was. Sending mail is never exercised live.
+	start := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Hour)
+	subject := fmt.Sprintf("Oryxa integrations live test %d", time.Now().UnixNano())
+	status, created, body := s.runAction("create_event", "conn_live_microsoft", "live-"+subject, map[string]any{
+		"subject": subject, "start": start.Format(time.RFC3339), "end": start.Add(30 * time.Minute).Format(time.RFC3339),
+	})
+	if status != http.StatusOK {
+		t.Fatalf("create_event = %d %s", status, body)
+	}
+	var event struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(created.Result, &event); err != nil || event.ID == "" {
+		t.Fatalf("create_event answered %s, %v", created.Result, err)
+	}
+	t.Logf("created the calendar event %s", event.ID)
+	t.Cleanup(func() {
+		callProvider(t, http.MethodDelete, "https://graph.microsoft.com/v1.0/me/events/"+event.ID,
+			http.Header{"Authorization": {"Bearer " + token}}, nil, nil)
+	})
+	if len(completed(s)) != 3 {
+		t.Fatalf("action.completed events = %d, want three", len(completed(s)))
+	}
+	s.noSecrets(token)
+}

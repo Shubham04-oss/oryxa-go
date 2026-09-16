@@ -14,7 +14,7 @@ Each service owns a lowercase, hyphen-free directory at the repository root. The
 ├── connections/           # Third-party apps, connections and their credentials
 ├── email/                 # Email delivery service
 ├── files/                 # Organization object storage on S3
-├── integrations/          # Provider events: subscriptions, webhook ingress, triggers
+├── integrations/          # Provider triggers and actions, over HTTP and MCP
 ├── teams/                 # Teams service
 ├── contracts/             # Versioned event contracts services publish
 ├── internal/              # Module-private shared runtime boundaries
@@ -42,7 +42,9 @@ consumers.
 
 `/auth` owns Cognito-based Google and email/password sign-in,
 PostgreSQL-backed verification/reset actions and
-users/organizations/memberships, and transactional EventBridge publishing.
+users/organizations/memberships, transactional EventBridge publishing, and
+agent grants: a member's standing consent for agents to act as them while they
+are away.
 `/billing` owns organizations' Dodo Payments subscriptions and the
 entitlements they grant, which auth enforces as member limits. `/email`
 remains a delivery boundary: it sends what auth, billing and teams events call
@@ -54,10 +56,13 @@ and issuing tokens to services that call providers. A credential leaves it
 only in a token-issuance response; its contract lives in
 `connections/README.md`. `/integrations` owns what providers send Oryxa: the subscriptions members
 make on their connections, the webhook URLs providers deliver to, and the
-`oryxa.integrations` events every delivery becomes. It stores no credential;
-it asks connections for one whenever it registers, renews or removes
-something. Its contract lives in `integrations/README.md`. `/files` owns
-organization object storage: a private S3
+`oryxa.integrations` events every delivery becomes. It also owns what Oryxa
+does in a provider for a member: the actions a connection can run, offered
+over HTTP and as one MCP endpoint per provider with a skill that says how to
+use it. It stores no credential; it asks connections for one whenever it
+registers, renews or removes something, or runs an action. Its contract lives
+in `integrations/README.md`. `/files` owns organization object storage: a
+private S3
 bucket, PostgreSQL metadata, and credential-free `oryxa.files` events. Other
 services never talk to the bucket; they ask files. `/teams` owns teams inside an
 organization and who is on them: organization admins and team admins share the
@@ -65,11 +70,40 @@ same control. An AI has three tools: `list_teams`, `call_team`, and
 `call_team_members`. It publishes as `oryxa.teams` and consumes from its own
 EventBridge queue. Its contract lives in `teams/README.md`.
 
-`/agents` holds the agent system. `/agents/primary` is its adk-go engine and
-the first service with its own Go module: it replaces the root module with
-`../..` for `/internal`, so adk-go's dependency upgrades stay out of the module
+`/agents` holds the agent system. `/agents/primary` is its adk-go engine,
+where Krude loads each integrations provider as a toolbox and calls it as the
+member it works for. It is the first service with its own Go module: it
+replaces the root module with `../..` for `/internal`, so adk-go's dependency
+upgrades stay out of the module
 the other services share. The root `go test ./...` does not reach it;
 `agents/primary/README.md` has its checks.
+
+## Agents and connected providers
+
+An agent acts as the member it works for, with that member's own Cognito
+identity, never as a service impersonating them: a run the member is present
+for forwards their own token, and a run they are absent for asks auth for a
+short-lived token under the grant they gave. Auth, connections and
+integrations each let an agent's token do less than the member's own.
+
+| | Where it stands |
+| --- | --- |
+| Connecting a provider | Members connect any of connections' 17 providers from the web app. An agent can list the member's connections but never change one |
+| Acting in a provider | GitHub, Slack, Linear and Microsoft have actions, over integrations' HTTP API and one MCP endpoint each. Krude loads each as a toolbox, and every write asks the member first |
+| Reacting to a provider | Integrations turns deliveries into `integrations.trigger.received.v1` events, but nothing starts an agent run from one, and no tool lets an agent subscribe |
+| Running an agent as a member | Only `agents/primary`'s development UI runs Krude, acting through the member's grant. `cmd/primary` has no run API, and the web app has no screen to grant or withdraw agent access |
+
+Not yet:
+
+- Triggers into agent runs, and subscription tools, so an agent can watch as
+  well as act. Each provider's skill already describes its events.
+- Actions and triggers for the 13 other providers members can connect, such
+  as Google, Notion, Atlassian, HubSpot and Salesforce.
+- A run API in `cmd/primary` that forwards the member's own token, and a web
+  screen for agent grants.
+- Live runs: only GitHub's webhook has run against the real provider. The live
+  action tests, the Slack, Linear and Microsoft trigger tests, and the agent
+  grant against a provisioned Cognito agent client have not run yet.
 
 ## Shared PostgreSQL and observability
 

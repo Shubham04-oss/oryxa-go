@@ -68,6 +68,18 @@ type Config struct {
 	AllowedOrigins     []string
 	CookieDomain       string
 	CookieSecure       bool
+
+	// AgentClientID is COGNITO_AGENT_CLIENT_ID: the Cognito agent app
+	// client's ID. Whenever it is set, a verified access token whose
+	// client_id matches it is an agent token, restricted in authenticated
+	// regardless of whether AgentGrants below is configured.
+	AgentClientID string
+	// AgentGrants issues and revokes agent grants. Nil means agent grants
+	// are disabled and every agent grant route answers 404.
+	AgentGrants AgentGrantsFlow
+	// Services verifies a signed service token on the internal API. Nil
+	// means service tokens are not accepted.
+	Services ServiceVerifier
 }
 
 type Server struct {
@@ -128,6 +140,11 @@ func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, s
 	server.mux.Handle("POST /v1/invitations/accept", server.authenticated(http.HandlerFunc(server.acceptInvitation)))
 	server.mux.Handle("PATCH /v1/organizations/{organizationID}/members/{userID}", server.authenticated(http.HandlerFunc(server.changeMemberRole)))
 	server.mux.Handle("DELETE /v1/organizations/{organizationID}/members/{userID}", server.authenticated(http.HandlerFunc(server.removeMember)))
+	server.mux.Handle("GET /v1/agent-grant", server.authenticated(http.HandlerFunc(server.agentGrantStatus)))
+	server.mux.Handle("POST /v1/agent-grant/authorize", server.authenticated(http.HandlerFunc(server.agentGrantAuthorize)))
+	server.mux.HandleFunc("GET /v1/agent-grant/callback", server.agentGrantCallback)
+	server.mux.Handle("DELETE /v1/agent-grant", server.authenticated(http.HandlerFunc(server.agentGrantRevoke)))
+	server.mux.HandleFunc("POST /v1/internal/agent-tokens", server.mintAgentToken)
 
 	return server
 }
@@ -377,7 +394,9 @@ func (server *Server) logout(writer http.ResponseWriter, request *http.Request) 
 		log.Printf("revoke Cognito token: %v", err)
 	}
 	if rawToken, _, ok := server.requestToken(request); ok {
-		if claims, err := server.verifier.Verify(request.Context(), rawToken); err == nil {
+		// An agent's token is the member's identity, but signing the member
+		// out is theirs alone to do.
+		if claims, err := server.verifier.Verify(request.Context(), rawToken); err == nil && !server.isAgentToken(claims) {
 			if err := server.service.SignOut(request.Context(), claims.Subject); err != nil {
 				log.Printf("enqueue sign-out event: %v", err)
 			}
@@ -433,7 +452,11 @@ func (server *Server) organization(writer http.ResponseWriter, request *http.Req
 		server.handleError(writer, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"organization": organization, "membership": membership})
+	response := map[string]any{"organization": organization, "membership": membership}
+	if server.isAgentToken(authenticated.Claims) {
+		response["agent"] = true
+	}
+	writeJSON(writer, http.StatusOK, response)
 }
 
 func (server *Server) updateOrganization(writer http.ResponseWriter, request *http.Request) {
@@ -587,6 +610,18 @@ func (server *Server) removeMember(writer http.ResponseWriter, request *http.Req
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+// agentAllowedPatterns are the only authenticated-route patterns an agent
+// token may use; every other authenticated route answers 403. Matched
+// against request.Pattern, the exact pattern net/http's ServeMux resolved
+// the request to, never a prefix of the raw path, so no path trick can make
+// a different route look like one of these.
+var agentAllowedPatterns = map[string]bool{
+	"GET /v1/auth/me":                                true,
+	"GET /v1/organizations":                          true,
+	"GET /v1/organizations/{organizationID}":         true,
+	"GET /v1/organizations/{organizationID}/members": true,
+}
+
 func (server *Server) authenticated(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		rawToken, fromCookie, ok := server.requestToken(request)
@@ -603,9 +638,22 @@ func (server *Server) authenticated(next http.Handler) http.Handler {
 			writeError(writer, http.StatusUnauthorized, "access token is invalid")
 			return
 		}
+		if server.isAgentToken(claims) && !agentAllowedPatterns[request.Pattern] {
+			writeError(writer, http.StatusForbidden, "agents cannot do this")
+			return
+		}
 		value := authenticatedRequest{Claims: claims, FromCookie: fromCookie}
 		next.ServeHTTP(writer, request.WithContext(context.WithValue(request.Context(), authContextKey{}, value)))
 	})
+}
+
+// isAgentToken reports whether claims belongs to an agent, not the member's
+// own session: an access token whose client_id is the Cognito agent app
+// client's. It only ever recognizes agent tokens when AgentClientID is
+// configured, independent of whether AgentGrants itself is enabled, since
+// Cognito can issue such a token as soon as the agent app client exists.
+func (server *Server) isAgentToken(claims authn.Claims) bool {
+	return server.config.AgentClientID != "" && claims.ClientID == server.config.AgentClientID
 }
 
 func (server *Server) requestToken(request *http.Request) (string, bool, bool) {
@@ -700,6 +748,8 @@ func (server *Server) handleError(writer http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrRateLimited):
 		writer.Header().Set("Retry-After", "60")
 		writeError(writer, http.StatusTooManyRequests, "too many authentication attempts")
+	case errors.Is(err, domain.ErrUnavailable):
+		writeError(writer, http.StatusServiceUnavailable, "identity provider did not respond; retry")
 	default:
 		log.Printf("auth request failed: %v", err)
 		writeError(writer, http.StatusInternalServerError, "internal server error")

@@ -64,6 +64,27 @@ type Provider struct {
 	// cannot be verified returns an error wrapping ErrUnverified, and nothing
 	// in it may be used.
 	Receive func(delivery Delivered, secret []byte, now time.Time) (Reception, error)
+
+	// TargetFields describe what Target takes, for a caller offering
+	// subscriptions to people.
+	TargetFields []TargetField
+	// Events describe what a subscription may ask for.
+	Events EventsDescription
+	// Actions are what a caller may do with a connection to this provider.
+	Actions []Action
+	// Skill is how the provider's tools and events are meant to be used, as
+	// markdown, carried into an agent's prompt with its tools.
+	Skill string
+}
+
+// Action finds one of the provider's actions.
+func (provider Provider) Action(name string) (Action, bool) {
+	for _, action := range provider.Actions {
+		if action.Name == name {
+			return action, true
+		}
+	}
+	return Action{}, false
 }
 
 // Registry maps provider names to providers.

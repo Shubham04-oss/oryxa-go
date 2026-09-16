@@ -526,6 +526,7 @@ func TestErrorCodes(t *testing.T) {
 		{fmt.Errorf("return_uri must use https: %w", domain.ErrInvalid), http.StatusBadRequest, "invalid_request", "return_uri must use https"},
 		{domain.ErrUnauthorized, http.StatusUnauthorized, "unauthorized", ""},
 		{domain.ErrForbidden, http.StatusForbidden, "forbidden", ""},
+		{domain.ErrAgentForbidden, http.StatusForbidden, "forbidden", "an agent cannot change this"},
 		{domain.ErrNotFound, http.StatusNotFound, "not_found", ""},
 		{domain.ErrAlreadyConnected, http.StatusConflict, "already_connected", ""},
 		{domain.ErrAccountChanged, http.StatusConflict, "account_changed", ""},
@@ -562,6 +563,20 @@ func TestIssueToken(t *testing.T) {
 	}
 	if recorder := serveInternal(service, "action", http.MethodPost, "/v1/internal/connections/con_1/token", `{"organization_id":"org_1","bogus":1}`); recorder.Code != http.StatusBadRequest {
 		t.Fatalf("POST token with an unknown field = %d", recorder.Code)
+	}
+}
+
+// TestIssueTokenForwardsAnAgentToken proves the internal API places no extra
+// restriction on a forwarded agent token: connections never resolves a
+// membership for an internal route at all, so token issuance for one runs
+// exactly as it does for any forwarded member, which integrations relies on.
+func TestIssueTokenForwardsAnAgentToken(t *testing.T) {
+	service := &fakeService{}
+	recorder := serveInternal(service, "action", http.MethodPost, "/v1/internal/connections/con_1/token",
+		`{"organization_id":"org_1","purpose":"action","acting_member_id":"user-1"}`, "Authorization", "Bearer agent-access-token")
+	if recorder.Code != http.StatusOK || service.actor.Service != "integrations" ||
+		service.actor.Credentials.Authorization != "Bearer agent-access-token" {
+		t.Fatalf("POST token with a forwarded agent token = %d %+v", recorder.Code, service.actor)
 	}
 }
 

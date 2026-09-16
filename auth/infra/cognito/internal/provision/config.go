@@ -20,6 +20,10 @@ type Config struct {
 	GoogleClientSecret string
 	CallbackURLs       []string
 	LogoutURLs         []string
+	// AgentCallbackURL is COGNITO_AGENT_CALLBACK_URL: {auth public
+	// URL}/v1/agent-grant/callback. Optional; the agent resource server and
+	// app client are provisioned only when it is set.
+	AgentCallbackURL string
 }
 
 func FromEnv() (Config, error) {
@@ -32,6 +36,7 @@ func FromEnv() (Config, error) {
 		GoogleClientSecret: strings.TrimSpace(os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET")),
 		CallbackURLs:       splitList(os.Getenv("COGNITO_CALLBACK_URLS")),
 		LogoutURLs:         splitList(os.Getenv("COGNITO_LOGOUT_URLS")),
+		AgentCallbackURL:   strings.TrimSpace(os.Getenv("COGNITO_AGENT_CALLBACK_URL")),
 	}
 
 	if config.DomainPrefix == "" || config.GoogleClientID == "" || config.GoogleClientSecret == "" {
@@ -45,6 +50,11 @@ func FromEnv() (Config, error) {
 	}
 	for _, value := range append(append([]string{}, config.CallbackURLs...), config.LogoutURLs...) {
 		if err := validateRedirectURL(value); err != nil {
+			return Config{}, err
+		}
+	}
+	if config.AgentCallbackURL != "" {
+		if err := validateRedirectURL(config.AgentCallbackURL); err != nil {
 			return Config{}, err
 		}
 	}

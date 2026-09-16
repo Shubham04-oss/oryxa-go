@@ -37,6 +37,14 @@ type fakeGitHub struct {
 	deleted []int
 	// authorizations are the Authorization headers GitHub API calls carried.
 	authorizations []string
+	issues         []githubIssue
+	comments       []string
+}
+
+// githubIssue is an issue the fake opened, as the request asked for it.
+type githubIssue struct {
+	repository, title, body string
+	number                  int
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
@@ -45,6 +53,8 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /repos/{owner}/{repo}/hooks", github.createHook)
 	mux.HandleFunc("DELETE /repos/{owner}/{repo}/hooks/{hookID}", github.deleteHook)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/issues", github.createIssue)
+	mux.HandleFunc("POST /repos/{owner}/{repo}/issues/{number}/comments", github.commentOnIssue)
 	github.server = httptest.NewServer(mux)
 	t.Cleanup(github.server.Close)
 	return github
@@ -318,4 +328,63 @@ func TestGitHubSubscriptionStoppedByDisconnectRemovesItsWebhook(t *testing.T) {
 	if status != http.StatusConflict || !strings.Contains(string(body), `"conflict"`) {
 		t.Fatalf("POST subscriptions on a disconnected connection = %d %s", status, body)
 	}
+}
+
+func (github *fakeGitHub) createIssue(writer http.ResponseWriter, request *http.Request) {
+	var body struct {
+		Title string `json:"title"`
+		Body  string `json:"body"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body.Title == "" {
+		http.Error(writer, `{"message":"Validation Failed"}`, http.StatusUnprocessableEntity)
+		return
+	}
+	repository := request.PathValue("owner") + "/" + request.PathValue("repo")
+	github.mu.Lock()
+	issue := githubIssue{repository: repository, title: body.Title, body: body.Body, number: 11 + len(github.issues)}
+	github.issues = append(github.issues, issue)
+	github.authorizations = append(github.authorizations, request.Header.Get("Authorization"))
+	github.mu.Unlock()
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"id": 1000 + issue.number, "number": issue.number, "title": issue.title, "body": issue.body, "state": "open",
+		"html_url": "https://github.com/" + repository + "/issues/" + strconv.Itoa(issue.number),
+		"url":      github.server.URL + "/repos/" + repository + "/issues/" + strconv.Itoa(issue.number),
+		"user":     map[string]any{"id": 583231, "login": "octocat"},
+		"comments": 0, "labels": []any{},
+	})
+}
+
+func (github *fakeGitHub) commentOnIssue(writer http.ResponseWriter, request *http.Request) {
+	number, _ := strconv.Atoi(request.PathValue("number"))
+	var body struct {
+		Body string `json:"body"`
+	}
+	_ = json.NewDecoder(request.Body).Decode(&body)
+	github.mu.Lock()
+	known := number-11 >= 0 && number-11 < len(github.issues)
+	if known {
+		github.comments = append(github.comments, body.Body)
+	}
+	github.mu.Unlock()
+	if !known {
+		writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+		http.Error(writer, `{"message":"Not Found"}`, http.StatusNotFound)
+		return
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(writer).Encode(map[string]any{
+		"id": 99, "body": body.Body, "html_url": "https://github.com/" + request.PathValue("owner") + "/" + request.PathValue("repo") +
+			"/issues/" + strconv.Itoa(number) + "#issuecomment-99",
+		"user": map[string]any{"id": 583231, "login": "octocat"},
+	})
+}
+
+// created are the issues the fake opened.
+func (github *fakeGitHub) created() []githubIssue {
+	github.mu.Lock()
+	defer github.mu.Unlock()
+	return append([]githubIssue(nil), github.issues...)
 }

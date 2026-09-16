@@ -148,10 +148,8 @@ func (s *subagents) validSpec(ctx agent.Context, args createSubagentArgs) (subag
 			return subagent{}, fmt.Errorf("a sub-agent named %q already exists", name)
 		}
 	}
-	if conflict, err := s.catalog.hasTool(ctx, name); err != nil {
-		return subagent{}, err
-	} else if conflict {
-		return subagent{}, fmt.Errorf("a toolbox already has a tool named %q; pick another name", name)
+	if box, ok := s.catalog.toolboxFor(name); ok {
+		return subagent{}, fmt.Errorf("names starting %q are kept for the %s toolbox's tools; pick another name", box.Name+"_", box.Name)
 	}
 	return subagent{Name: name, Description: description, Instruction: instruction}, nil
 }

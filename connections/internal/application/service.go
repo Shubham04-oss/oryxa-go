@@ -212,12 +212,30 @@ func (s *Service) caller(ctx context.Context, credentials authclient.Credentials
 }
 
 func (s *Service) admin(ctx context.Context, credentials authclient.Credentials, organizationID string) (domain.OrgMembership, error) {
-	membership, err := s.caller(ctx, credentials, organizationID)
+	membership, err := s.callerForWrite(ctx, credentials, organizationID)
 	if err != nil {
 		return domain.OrgMembership{}, err
 	}
 	if err := domain.MayManageApps(domain.Caller{Membership: membership}); err != nil {
 		return domain.OrgMembership{}, err
+	}
+	return membership, nil
+}
+
+// callerForWrite is the one place the public API resolves a caller's
+// membership for a route that changes something. An agent's membership may
+// only read: every public route but GET calls this instead of caller, so
+// resolving membership and enforcing the rule cannot drift apart, and a new
+// write route gets the rule for free by following the same pattern. The
+// internal API is unaffected: it resolves a forwarded member with caller
+// directly, never through here.
+func (s *Service) callerForWrite(ctx context.Context, credentials authclient.Credentials, organizationID string) (domain.OrgMembership, error) {
+	membership, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.OrgMembership{}, err
+	}
+	if membership.Agent {
+		return domain.OrgMembership{}, domain.ErrAgentForbidden
 	}
 	return membership, nil
 }

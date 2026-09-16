@@ -33,7 +33,7 @@ func (s *Service) UpdateConnection(ctx context.Context, credentials authclient.C
 		}
 		change.Label = &label
 	}
-	membership, err := s.caller(ctx, credentials, organizationID)
+	membership, err := s.callerForWrite(ctx, credentials, organizationID)
 	if err != nil {
 		return domain.Connection{}, err
 	}

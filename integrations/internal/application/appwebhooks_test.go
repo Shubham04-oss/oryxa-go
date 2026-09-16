@@ -102,3 +102,40 @@ func TestGetAndDeleteAppWebhook(t *testing.T) {
 		t.Fatalf("GetAppWebhook() after deletion error = %v, want domain.ErrNotFound", err)
 	}
 }
+
+func TestAnAgentCannotManageAppWebhooks(t *testing.T) {
+	h := newHarness(t)
+	// The agent acts for an org admin, and still may not touch configuration.
+	admin := h.directory.members[adminToken]
+	admin.Agent = true
+	h.directory.members["agent-token"] = admin
+
+	if _, err := h.service.PutAppWebhook(context.Background(), bearer("agent-token"), testOrganization, "app_chat", "chat-signing-secret-1234"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("PutAppWebhook() by an agent error = %v, want domain.ErrForbidden", err)
+	}
+	if _, err := h.service.GetAppWebhook(context.Background(), bearer("agent-token"), testOrganization, "app_chat"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("GetAppWebhook() by an agent error = %v, want domain.ErrForbidden", err)
+	}
+	if err := h.service.DeleteAppWebhook(context.Background(), bearer("agent-token"), testOrganization, "app_chat"); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("DeleteAppWebhook() by an agent error = %v, want domain.ErrForbidden", err)
+	}
+	if len(h.store.webhooks) != 0 {
+		t.Fatal("an agent stored a webhook secret")
+	}
+}
+
+func TestAnAgentCanRunActionsForItsMember(t *testing.T) {
+	h := newHarness(t)
+	member := h.directory.members[memberToken]
+	member.Agent = true
+	h.directory.members["agent-token"] = member
+
+	if _, err := h.service.RunAction(context.Background(), bearer("agent-token"), testOrganization, RunActionInput{
+		ConnectionID: "conn_hooks", Action: "read_thing", Input: []byte(`{}`),
+	}); err != nil {
+		t.Fatalf("RunAction() by an agent error = %v", err)
+	}
+	if calls := tokenCalls(h); len(calls) != 1 || calls[0].accessToken != "agent-token" {
+		t.Fatalf("Token calls = %+v, want the agent's token forwarded as the member's", calls)
+	}
+}

@@ -11,6 +11,8 @@ import (
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 	"google.golang.org/adk/v2/tool/toolutils"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 )
 
 // loadedToolsKey is the session state key listing the toolboxes Krude has
@@ -58,30 +60,26 @@ func (c *toolCatalog) find(name string) (Toolbox, bool) {
 	return Toolbox{}, false
 }
 
-// hasTool reports whether any toolbox already exposes a tool with this name,
-// so a dynamic sub-agent never takes a name a toolbox tool already has.
-func (c *toolCatalog) hasTool(ctx agent.ReadonlyContext, name string) (bool, error) {
+// toolboxFor returns the toolbox whose tools a name would be among, so a
+// dynamic sub-agent never takes a name a toolbox tool has or could have.
+// Every toolbox tool is named after its toolbox, as load_tools requires, so
+// the name alone answers it: no toolbox is asked for its tools, which for
+// some is a call over the network as the member.
+func (c *toolCatalog) toolboxFor(name string) (Toolbox, bool) {
 	for _, box := range c.toolboxes {
-		if box.Toolset == nil {
-			continue
-		}
-		tools, err := box.Toolset.Tools(ctx)
-		if err != nil {
-			return false, fmt.Errorf("toolbox %q: %w", box.Name, err)
-		}
-		for _, t := range tools {
-			if t.Name() == name {
-				return true, nil
-			}
+		if strings.HasPrefix(name, box.Name+"_") {
+			return box, true
 		}
 	}
-	return false, nil
+	return Toolbox{}, false
 }
 
 // loaded returns the native ADK toolset of every toolbox loaded in this
 // session. Its Tools method handles toolboxes loaded before an invocation;
 // ProcessRequest also makes a toolbox loaded during an invocation available
-// on the next model step.
+// on the next model step. A loaded toolbox whose tools cannot be listed right
+// now, such as integrations' when the member has withdrawn their grant, is
+// left out rather than failing the turn; load_tools says why.
 func (c *toolCatalog) loaded() tool.Toolset {
 	return loadedToolset{catalog: c}
 }
@@ -101,7 +99,7 @@ func (l loadedToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 		}
 		boxTools, err := box.Toolset.Tools(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("toolbox %q: %w", name, err)
+			continue
 		}
 		tools = append(tools, boxTools...)
 	}
@@ -218,14 +216,16 @@ func (c *toolCatalog) loadTool() (tool.Tool, error) {
 				unavailable = append(unavailable, unavailableToolbox{Name: name, Reason: "its tools are not connected yet"})
 				continue
 			}
-			if slices.Contains(loaded, name) {
-				continue
-			}
+			// Checked even when already loaded: a loaded toolbox whose tools
+			// cannot be listed now is left out of the turn, and this is where
+			// the model learns why.
 			if reason := misnamedTool(ctx, box); reason != "" {
 				unavailable = append(unavailable, unavailableToolbox{Name: name, Reason: reason})
 				continue
 			}
-			loaded = append(loaded, name)
+			if !slices.Contains(loaded, name) {
+				loaded = append(loaded, name)
+			}
 		}
 		if err := ctx.State().Set(loadedToolsKey, loaded); err != nil {
 			return loadToolsResult{}, err
@@ -235,11 +235,15 @@ func (c *toolCatalog) loadTool() (tool.Tool, error) {
 }
 
 // misnamedTool reports a toolbox whose tools are not all named after it, which
-// could otherwise collide with Krude's own tools once loaded.
+// could otherwise collide with Krude's own tools once loaded, or whose tools
+// cannot be listed now.
 func misnamedTool(ctx agent.ReadonlyContext, box Toolbox) string {
 	tools, err := box.Toolset.Tools(ctx)
+	if explained := memberauth.Explain(err); explained != nil {
+		return "its tools could not be listed: " + explained.Error()
+	}
 	if err != nil {
-		return "its tools could not be listed"
+		return "its tools could not be listed right now"
 	}
 	for _, t := range tools {
 		if !strings.HasPrefix(t.Name(), box.Name+"_") {
