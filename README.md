@@ -4,7 +4,7 @@ Oryxa is an AWS-backed Go monorepo. It starts with a single Go module and will g
 
 ## Service layout
 
-Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/auth`, `/billing`, `/connections`, `/email`, `/files` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
+Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/auth`, `/billing`, `/connections`, `/email`, `/files`, `/integrations` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
 
 ```text
 /
@@ -14,6 +14,7 @@ Each service owns a lowercase, hyphen-free directory at the repository root. The
 ├── connections/           # Third-party apps, connections and their credentials
 ├── email/                 # Email delivery service
 ├── files/                 # Organization object storage on S3
+├── integrations/          # Provider events: subscriptions, webhook ingress, triggers
 ├── teams/                 # Teams service
 ├── contracts/             # Versioned event contracts services publish
 ├── internal/              # Module-private shared runtime boundaries
@@ -51,7 +52,12 @@ organization reaches third-party accounts: the apps it enables, the
 connections its members, teams and admins make, the credentials behind them,
 and issuing tokens to services that call providers. A credential leaves it
 only in a token-issuance response; its contract lives in
-`connections/README.md`. `/files` owns organization object storage: a private S3
+`connections/README.md`. `/integrations` owns what providers send Oryxa: the subscriptions members
+make on their connections, the webhook URLs providers deliver to, and the
+`oryxa.integrations` events every delivery becomes. It stores no credential;
+it asks connections for one whenever it registers, renews or removes
+something. Its contract lives in `integrations/README.md`. `/files` owns
+organization object storage: a private S3
 bucket, PostgreSQL metadata, and credential-free `oryxa.files` events. Other
 services never talk to the bucket; they ask files. `/teams` owns teams inside an
 organization and who is on them: organization admins and team admins share the
@@ -67,8 +73,8 @@ the other services share. The root `go test ./...` does not reach it;
 
 ## Shared PostgreSQL and observability
 
-Auth, billing, connections, files, teams and the ADK session runtime use
-`/internal/postgreskit`. Each process owns one native `pgxpool`; `sqlx` wraps
+Auth, billing, connections, files, integrations, teams and the ADK session
+runtime use `/internal/postgreskit`. Each process owns one native `pgxpool`; `sqlx` wraps
 that same pool through pgx's `database/sql` adapter, so it does not create a
 second connection budget. PostgreSQL statements and transactions remain on
 native pgx where its semantics matter. ADK's GORM session service shares that
@@ -99,7 +105,7 @@ docker --context mac-mini exec oryxa-go-postgres-1 \
 ```
 
 `/internal/observability` gives agents primary, auth, billing, connections,
-email, files and teams structured JSON logs,
+email, files, integrations and teams structured JSON logs,
 W3C trace propagation, HTTP/AWS SDK/pgx spans, PostgreSQL pool metrics, and Go
 runtime metrics. Set `OTEL_EXPORTER_OTLP_ENDPOINT` for OTLP/gRPC export, or use
 the standard signal-specific trace and metric endpoint variables. With no

@@ -1,0 +1,1149 @@
+{
+  "components": {
+    "examples": {
+      "RequestCreateResponseExample": {
+        "value": {
+          "request": {
+            "custom_status_id": 1,
+            "description": "My printer is on fire!",
+            "id": 33,
+            "status": "new",
+            "subject": "Help!"
+          }
+        }
+      },
+      "RequestGetCommentResponseExample": {
+        "value": {
+          "comment": {
+            "body": "Thanks!",
+            "id": 43
+          }
+        }
+      },
+      "RequestListCommentsResponseExample": {
+        "value": {
+          "comments": [
+            {
+              "body": "Thanks for your help",
+              "id": 43
+            }
+          ]
+        }
+      },
+      "RequestResponseExample": {
+        "value": {
+          "request": {
+            "custom_status_id": 123,
+            "description": "My printer is on fire!",
+            "id": 33,
+            "status": "open",
+            "subject": "Help!"
+          }
+        }
+      },
+      "RequestsResponseExample": {
+        "value": {
+          "requests": [
+            {
+              "custom_status_id": 123,
+              "description": "My printer is on fire!",
+              "id": 33,
+              "status": "open",
+              "subject": "Help!"
+            },
+            {
+              "custom_status_id": 234,
+              "description": "I can't find my keys",
+              "id": 34,
+              "status": "closed",
+              "subject": "Help!"
+            }
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "DualPaginationPage": {
+        "description": "Pagination parameter. Supports both traditional offset and cursor-based pagination:\n\n- Traditional: `?page=2` (integer page number)\n- Cursor: `?page[size]=50&page[after]=cursor` (deepObject with size, after, before)\n\nThese are mutually exclusive - use one format or the other, not both.\n",
+        "explode": true,
+        "in": "query",
+        "name": "page",
+        "schema": {
+          "description": "Cursor pagination parameters (JSON:API style)",
+          "properties": {
+            "after": {
+              "description": "Cursor token for next page",
+              "example": "eyJvIjoiaWQiLCJ2IjoiYVFFPSJ9",
+              "type": "string"
+            },
+            "before": {
+              "description": "Cursor token for previous page",
+              "example": "eyJvIjoiaWQiLCJ2IjoiYVFFPSJ9",
+              "type": "string"
+            },
+            "size": {
+              "description": "Number of records per page",
+              "example": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "style": "deepObject"
+      },
+      "OrganizationId": {
+        "description": "The ID of an organization",
+        "example": 16,
+        "in": "path",
+        "name": "organization_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "PerPage": {
+        "description": "Number of records to return per page.\n\nNote: Default and maximum values vary by endpoint. Check endpoint-specific\ndocumentation for limits.\n",
+        "example": 50,
+        "in": "query",
+        "name": "per_page",
+        "schema": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "RequestId": {
+        "description": "The ID of the request",
+        "example": 33,
+        "in": "path",
+        "name": "request_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "TicketCommentId": {
+        "description": "The ID of the ticket comment",
+        "example": 35436,
+        "in": "path",
+        "name": "ticket_comment_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "UserId": {
+        "description": "The id of the user",
+        "example": 35436,
+        "in": "path",
+        "name": "user_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      }
+    },
+    "schemas": {
+      "AttachmentBaseObject": {
+        "properties": {
+          "content_type": {
+            "description": "The content type of the image. Example value: \"image/png\"",
+            "readOnly": true,
+            "type": "string"
+          },
+          "content_url": {
+            "description": "A full URL where the attachment image file can be downloaded. The file may be hosted externally so take care not to inadvertently send Zendesk authentication credentials. See [Working with url properties](/documentation/api-basics/best-practices/working-with-url-properties/)",
+            "readOnly": true,
+            "type": "string"
+          },
+          "deleted": {
+            "description": "If true, the attachment has been deleted",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "file_name": {
+            "description": "The name of the image file",
+            "readOnly": true,
+            "type": "string"
+          },
+          "height": {
+            "description": "The height of the image file in pixels. If height is unknown, returns null",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "id": {
+            "description": "Automatically assigned when created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "inline": {
+            "description": "If true, the attachment is excluded from the attachment list and the attachment's URL\ncan be referenced within the comment of a ticket. Default is false\n",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "malware_access_override": {
+            "description": "If true, you can download an attachment flagged as malware. If false, you can't download such an attachment.",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "malware_scan_result": {
+            "description": "The result of the malware scan. There is a delay between the time the attachment is uploaded and when the malware scan is completed. Usually the scan is done within a few seconds, but high load conditions can delay the scan results. Possible values: \"malware_found\", \"malware_not_found\", \"failed_to_scan\", \"not_scanned\"",
+            "readOnly": true,
+            "type": "string"
+          },
+          "mapped_content_url": {
+            "description": "The URL the attachment image file has been mapped to",
+            "readOnly": true,
+            "type": "string"
+          },
+          "size": {
+            "description": "The size of the image file in bytes",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "url": {
+            "description": "A URL to access the attachment details",
+            "readOnly": true,
+            "type": "string"
+          },
+          "width": {
+            "description": "The width of the image file in pixels. If width is unknown, returns null",
+            "readOnly": true,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "AttachmentObject": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AttachmentBaseObject"
+          },
+          {
+            "$ref": "#/components/schemas/AttachmentThumbnails"
+          }
+        ],
+        "description": "A file represented as an [Attachment](/api-reference/ticketing/tickets/ticket-attachments/) object",
+        "example": {
+          "content_type": "image/png",
+          "content_url": "https://company.zendesk.com/attachments/my_funny_profile_pic.png",
+          "file_name": "my_funny_profile_pic.png",
+          "id": 928374,
+          "size": 166144,
+          "thumbnails": [
+            {
+              "content_type": "image/png",
+              "content_url": "https://company.zendesk.com/attachments/my_funny_profile_pic_thumb.png",
+              "file_name": "my_funny_profile_pic_thumb.png",
+              "id": 928375,
+              "size": 58298
+            }
+          ]
+        },
+        "type": "object"
+      },
+      "AttachmentThumbnails": {
+        "properties": {
+          "thumbnails": {
+            "description": "An array of attachment objects. Note that photo thumbnails do not have thumbnails",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentBaseObject"
+            },
+            "readOnly": true,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "RequestObject": {
+        "example": {
+          "assignee_id": 72983,
+          "can_be_solved_by_me": false,
+          "collaborator_ids": [],
+          "created_at": "2009-07-20T22:55:29Z",
+          "description": "The fire is very colorful.",
+          "due_at": "2011-05-24T12:00:00Z",
+          "group_id": 8665,
+          "id": 35436,
+          "organization_id": 509974,
+          "priority": "normal",
+          "requester_id": 1462,
+          "status": "open",
+          "subject": "Help, my printer is on fire!",
+          "ticket_form_id": 2,
+          "type": "problem",
+          "updated_at": "2011-05-05T10:38:52Z",
+          "url": "https://company.zendesk.com/api/v2/requests/35436",
+          "via": {
+            "channel": "web"
+          }
+        },
+        "properties": {
+          "assignee_id": {
+            "description": "The id of the assignee if the field is visible to end users",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "can_be_solved_by_me": {
+            "description": "If true, an end user can mark the request as solved. See [Update Request](/api-reference/ticketing/tickets/ticket-requests/#update-request)",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "collaborator_ids": {
+            "description": "The ids of users currently CC'ed on the ticket",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "readOnly": true,
+            "type": "array"
+          },
+          "created_at": {
+            "description": "When this record was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "custom_fields": {
+            "description": "Custom fields for the request. See [Setting custom field values](/api-reference/ticketing/tickets/tickets/#setting-custom-field-values) in the Tickets doc",
+            "items": {
+              "properties": {
+                "id": {
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "custom_status_id": {
+            "description": "The custom ticket status id of the ticket",
+            "format": "int64",
+            "type": "integer"
+          },
+          "description": {
+            "description": "Read-only first comment on the request. When [creating a request](#create-request), use `comment` to set the description",
+            "readOnly": true,
+            "type": "string"
+          },
+          "due_at": {
+            "description": "When the task is due (only applies if the request is of type \"task\")",
+            "format": "date-time",
+            "type": "string"
+          },
+          "email_cc_ids": {
+            "description": "The ids of users who are currently email CCs on the ticket. See [CCs and followers resources](https://support.zendesk.com/hc/en-us/articles/4408822451482) in the Support Help Center",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "readOnly": true,
+            "type": "array"
+          },
+          "followup_source_id": {
+            "description": "The id of the original ticket if this request is a follow-up ticket. See [Create Request](#create-request)",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "group_id": {
+            "description": "The id of the assigned group if the field is visible to end users",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "id": {
+            "description": "Automatically assigned when creating requests",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "is_public": {
+            "description": "Is true if any comments are public, false otherwise",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "organization_id": {
+            "description": "The organization of the requester",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "priority": {
+            "description": "The priority of the request, \"low\", \"normal\", \"high\", \"urgent\"",
+            "type": "string"
+          },
+          "recipient": {
+            "description": "The original recipient e-mail address of the request",
+            "type": "string"
+          },
+          "requester_id": {
+            "description": "The id of the requester",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "solved": {
+            "description": "Whether or not request is solved (an end user can set this if \"can_be_solved_by_me\", above, is true for that user)",
+            "type": "boolean"
+          },
+          "status": {
+            "description": "The state of the request, \"new\", \"open\", \"pending\", \"hold\", \"solved\", \"closed\"",
+            "type": "string"
+          },
+          "subject": {
+            "description": "The value of the subject field for this request if the subject field is visible to end users; a truncated version of the description otherwise",
+            "type": "string"
+          },
+          "ticket_form_id": {
+            "description": "The numeric id of the ticket form associated with this request if the form is visible to end users - only applicable for enterprise accounts",
+            "format": "int64",
+            "type": "integer"
+          },
+          "type": {
+            "description": "The type of the request, \"question\", \"incident\", \"problem\", \"task\"",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When this record last got updated",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "url": {
+            "description": "The API url of this request",
+            "readOnly": true,
+            "type": "string"
+          },
+          "via": {
+            "$ref": "#/components/schemas/TicketAuditViaObject"
+          }
+        },
+        "required": [
+          "subject"
+        ],
+        "type": "object"
+      },
+      "RequestResponse": {
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/RequestObject"
+          }
+        },
+        "type": "object"
+      },
+      "RequestsResponse": {
+        "properties": {
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/RequestObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "TicketAuditViaObject": {
+        "description": "Describes how the object was created. See the [Via object reference](/documentation/ticketing/reference-guides/via-object-reference)",
+        "properties": {
+          "channel": {
+            "description": "This tells you how the ticket or event was created. Examples: \"web\", \"mobile\", \"rule\", \"system\"",
+            "readOnly": true,
+            "type": "string"
+          },
+          "source": {
+            "additionalProperties": true,
+            "description": "For some channels a source object gives more information about how or why the ticket or event was created",
+            "readOnly": true,
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "TicketCommentObject": {
+        "example": {
+          "attachments": [
+            {
+              "content_type": "text/plain",
+              "content_url": "https://company.zendesk.com/attachments/crash.log",
+              "file_name": "crash.log",
+              "id": 498483,
+              "size": 2532,
+              "thumbnails": []
+            }
+          ],
+          "author_id": 123123,
+          "body": "Thanks for your help!",
+          "created_at": "2009-07-20T22:55:29Z",
+          "id": 1274,
+          "metadata": {
+            "system": {
+              "client": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36",
+              "ip_address": "1.1.1.1",
+              "latitude": -37.000000000001,
+              "location": "Melbourne, 07, Australia",
+              "longitude": 144.0000000000002
+            },
+            "via": {
+              "channel": "web",
+              "source": {
+                "from": {},
+                "rel": "web_widget",
+                "to": {}
+              }
+            }
+          },
+          "public": true,
+          "type": "Comment"
+        },
+        "properties": {
+          "add_short_url": {
+            "description": "Internal flag for adding short URLs to the comment",
+            "type": "boolean"
+          },
+          "attachments": {
+            "description": "Attachments, if any. See [Attachment](/api-reference/ticketing/tickets/ticket-attachments/)",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentObject"
+            },
+            "readOnly": true,
+            "type": "array"
+          },
+          "audit_id": {
+            "description": "The id of the ticket audit record. See [Show Audit](/api-reference/ticketing/tickets/ticket_audits/#show-audit)",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "author_id": {
+            "description": "The id of the comment author. If null or omitted on create, defaults to the authenticated user. See [Author id](#author-id)",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "body": {
+            "description": "The comment string. See [Bodies](#bodies)",
+            "type": "string"
+          },
+          "channel_back": {
+            "description": "Internal channel back identifier for the comment",
+            "type": "string"
+          },
+          "channel_source_id": {
+            "description": "Internal channel source identifier for the comment",
+            "nullable": true,
+            "type": "string"
+          },
+          "created_at": {
+            "description": "The time the comment was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "html_body": {
+            "description": "The comment formatted as HTML. See [Bodies](#bodies)",
+            "type": "string"
+          },
+          "id": {
+            "description": "Automatically assigned when the comment is created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "description": "System information (web client, IP address, etc.) and comment flags, if any. See [Comment flags](#comment-flags)",
+            "readOnly": true,
+            "type": "object"
+          },
+          "plain_body": {
+            "description": "The comment presented as plain text. See [Bodies](#bodies)",
+            "readOnly": true,
+            "type": "string"
+          },
+          "public": {
+            "description": "true if a public comment; false if an internal note. The initial value set on ticket creation persists for any additional comment unless you change it",
+            "type": "boolean"
+          },
+          "translate_to": {
+            "description": "The locale code to translate the comment body to.",
+            "nullable": true,
+            "type": "string"
+          },
+          "type": {
+            "description": "`Comment` or `VoiceComment`. The JSON object for adding voice comments to tickets is different. See [Adding voice comments to tickets](/documentation/ticketing/managing-tickets/adding-voice-comments-to-tickets)",
+            "readOnly": true,
+            "type": "string"
+          },
+          "uploads": {
+            "description": "List of tokens received from [uploading files](/api-reference/ticketing/tickets/ticket-attachments/#upload-files) for comment attachments. The files are attached by creating or updating tickets with the tokens. See [Attaching files](/api-reference/ticketing/tickets/tickets/#attaching-files) in Tickets",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "via": {
+            "$ref": "#/components/schemas/TicketAuditViaObject"
+          }
+        },
+        "type": "object"
+      },
+      "TicketCommentResponse": {
+        "properties": {
+          "comment": {
+            "$ref": "#/components/schemas/TicketCommentObject"
+          }
+        },
+        "type": "object"
+      },
+      "TicketCommentsResponse": {
+        "properties": {
+          "comments": {
+            "items": {
+              "$ref": "#/components/schemas/TicketCommentObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "basicAuth": {
+        "scheme": "basic",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Zendesk Support API endpoints",
+    "title": "Support API",
+    "version": "2.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/v2/organizations/{organization_id}/requests": {
+      "get": {
+        "description": "Returns a list of requests for a specific organization.\n\n#### Allowed for\n\n* End Users\n\n#### Pagination\n\n* Cursor pagination (recommended)\n* Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n",
+        "operationId": "ListOrganizationRequests",
+        "parameters": [
+          {
+            "description": "Possible values are \"updated_at\", \"created_at\"",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"asc\", \"desc\". Defaults to \"asc\"",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Organization Requests",
+        "tags": [
+          "Requests"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/OrganizationId"
+        }
+      ]
+    },
+    "/api/v2/requests": {
+      "get": {
+        "description": "#### Allowed for\n\n* End Users\n\n#### Pagination\n\n* Cursor pagination (recommended)\n* Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n\n#### High volume requests\n\nRequesting a large number of tickets may return intermittent \"503 Service Unavailable\" errors. Workarounds:\n\n- Use cursor pagination with a smaller page size. Example: GET /api/v2/requests?page[size]=100. If you continue to see timeouts, try a smaller value, such as 50 or 25. \n- Use [Search Requests](/api-reference/ticketing/tickets/ticket-requests/#search-requests) instead.  \n",
+        "operationId": "ListRequests",
+        "parameters": [
+          {
+            "description": "Possible values are \"updated_at\", \"created_at\"",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"asc\", \"desc\". Defaults to \"asc\"",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/DualPaginationPage"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Requests",
+        "tags": [
+          "Requests"
+        ]
+      },
+      "post": {
+        "description": "Accepts a `request` object that sets one or more properties.\n\n#### Allowed for\n\n* End users\n* Anonymous users (rate limit of 5 requests per hour for [trial accounts](/documentation/developer-tools/getting-started/getting-a-trial-or-sponsored-account-for-development/))\n\n#### Additional properties\n\nIn addition to the writable request properties in the [JSON Format table](#json-format) above, you can set the following properties when creating a request.\n\n| Name                | Type   | Mandatory | Comment\n| ----------------    | -------| --------- | -------\n| comment             | object | yes       | Describes the problem, incident, question, or task. See [Request comments](#request-comments)\n| collaborators       | array  | no        | Adds collaborators (cc's) to the request. An email notification is sent to them when the ticket is created. See [Setting collaborators](/documentation/ticketing/managing-tickets/creating-and-managing-requests#setting-collaborators)\n| requester           | object | yes*      | \\*Required for anonymous requests. Specifies the requester of the anonymous request. See [Creating anonymous requests](/documentation/ticketing/managing-tickets/creating-and-managing-requests#creating-anonymous-requests)\n\n#### Creating follow-up requests\n\nOnce a ticket is closed (as distinct from solved), it can't be reopened. However, you can create a new request that references the closed ticket. To create the follow-up request, include a `via_followup_source_id` property in the `request` object that specifies the closed ticket. The parameter only works with closed tickets. It has no effect with other tickets.\n",
+        "operationId": "CreateRequest",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestCreateResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestResponse"
+                }
+              }
+            },
+            "description": "Created response"
+          }
+        },
+        "summary": "Create Request",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/api/v2/requests/ccd": {
+      "get": {
+        "description": "Lists requests where the authenticated end user is CC'd.\n\n#### Allowed for\n\n* End Users\n\n#### Pagination\n\n* Cursor pagination (recommended)\n* Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n",
+        "operationId": "ListCCDRequests",
+        "parameters": [
+          {
+            "description": "Possible values are \"updated_at\", \"created_at\"",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"asc\", \"desc\". Defaults to \"asc\"",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List CCD Requests",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/api/v2/requests/open": {
+      "get": {
+        "description": "Lists requests with the \"open\" status for the authenticated end user.\n\n#### Allowed for\n\n* End Users\n\n#### Pagination\n\n* Cursor pagination (recommended)\n* Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n",
+        "operationId": "ListOpenRequests",
+        "parameters": [
+          {
+            "description": "Possible values are \"updated_at\", \"created_at\"",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"asc\", \"desc\". Defaults to \"asc\"",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Open Requests",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/api/v2/requests/search": {
+      "get": {
+        "description": "Examples:\n\n* `GET /api/v2/requests/search?query=printer`\n* `GET /api/v2/requests/search?query=printer&organization_id=1`\n* `GET /api/v2/requests/search?query=printer&cc_id=true`\n* `GET /api/v2/requests/search?query=printer&status=hold,open`\n\n#### Pagination\n\n* Offset pagination only\n\nSee [Using Offset Pagination](/api-reference/introduction/pagination/#using-offset-pagination).\n\n#### Results limit\n\nThe Search Requests endpoint returns up to 1,000 results per query, with a maximum of 100 results per page. See [Pagination](/api-reference/ticketing/introduction/#pagination). If you request a page past the limit (`page=11` at 100 results per page), a 422 Insufficient Resource Error is returned.\n\n#### Allowed For\n\n* End Users\n",
+        "operationId": "SearchRequests",
+        "parameters": [
+          {
+            "description": "The syntax and matching logic for the string is detailed in the [Zendesk Support search reference](https://support.zendesk.com/hc/en-us/articles/4408886879258). See also [Query basics](/api-reference/ticketing/ticket-management/search/#query-basics) in the Tickets API doc.",
+            "in": "query",
+            "name": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Search Requests",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/api/v2/requests/solved": {
+      "get": {
+        "description": "Lists requests with the \"solved\" status for the authenticated end user.\n\n#### Allowed for\n\n* End Users\n\n#### Pagination\n\n* Cursor pagination (recommended)\n* Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n",
+        "operationId": "ListSolvedRequests",
+        "parameters": [
+          {
+            "description": "Possible values are \"updated_at\", \"created_at\"",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"asc\", \"desc\". Defaults to \"asc\"",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Solved Requests",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/api/v2/requests/{request_id}": {
+      "get": {
+        "description": "#### Sideloads\n\nThe following sideloads are supported:\n\n| Name             | Will sideload\n| ---------------- | -------------\n| users            | The email ccs for a request by side-loading users\n\n#### Allowed For\n\n* End Users\n",
+        "operationId": "ShowRequest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Show Request",
+        "tags": [
+          "Requests"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RequestId"
+        }
+      ],
+      "put": {
+        "description": "Updates a request with a comment or collaborators (cc's). The end user who created the request can also use it to mark the request as solved. The endpoint can't be used to update other request attributes.\n\n#### Writable properties\nThis endpoint can only update the following properties in the request.\n\n| Name                     | Type    | Required | Description                                          |\n| ------------------------ | ------- | -------- | ---------------------------------------------------- |\n| comment                  | object  | no       | Adds a comment to the request. See [Request comments](#request-comments) |\n| solved                   | boolean | no       | Marks the request as solved. Example: `{\"request\": {\"solved\": \"true\"}}`. End users can mark requests as solved only if the request's `can_be_solved_by_me` property is true. The property is true only when the ticket is assigned to an agent and the ticket type is not a problem but a question, task, or incident |\n| additional_collaborators | array   | no       | Adds collaborators to the request. An email notification is sent to them when the ticket is updated. See [Adding collaborators](/documentation/ticketing/managing-tickets/creating-and-managing-requests#adding-collaborators) |\n\n#### Allowed For\n\n* End users\n",
+        "operationId": "UpdateRequest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestCreateResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Update Request",
+        "tags": [
+          "Requests"
+        ]
+      }
+    },
+    "/api/v2/requests/{request_id}/comments": {
+      "get": {
+        "description": "#### Pagination\n\n- Cursor pagination (recommended)\n- Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n\n#### Sorting\n\nBy default, comments are sorted by creation date in ascending order.\n\nWhen using cursor pagination, use the following parameter to change the sort order:\n\n| Name   | Type   | Required | Comments\n| ------ | ------ | -------- | --------\n| `sort` | string | no       | Possible values are \"created_at\" (ascending order) or \"-created_at\" (descending order)\n\nWhen using offset pagination, use the following parameters to change the sort order:\n\n| Name         | Type   | Required | Comments\n| ------------ | ------ | -------- | --------\n| `sort_by`    | string | no       | One of `created_at`, `updated_at`\n| `sort_order` | string | no       | One of `asc`, `desc`\n\n#### Allowed For\n\n* End Users\n",
+        "operationId": "ListComments",
+        "parameters": [
+          {
+            "description": "Filters the comments from the given datetime",
+            "in": "query",
+            "name": "since",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"agent\", \"end_user\". If not specified it does not filter",
+            "in": "query",
+            "name": "role",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestListCommentsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/TicketCommentsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Listing Comments",
+        "tags": [
+          "Requests"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RequestId"
+        }
+      ]
+    },
+    "/api/v2/requests/{request_id}/comments/{ticket_comment_id}": {
+      "get": {
+        "description": "#### Allowed For\n\n* End Users\n",
+        "operationId": "ShowComment",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestGetCommentResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/TicketCommentResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Getting Comments",
+        "tags": [
+          "Requests"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/RequestId"
+        },
+        {
+          "$ref": "#/components/parameters/TicketCommentId"
+        }
+      ]
+    },
+    "/api/v2/users/{user_id}/requests": {
+      "get": {
+        "description": "Lists requests for the specified user.\n\n#### Allowed for\n\n* End Users\n",
+        "operationId": "ListUserRequests",
+        "parameters": [
+          {
+            "description": "Possible values are \"updated_at\", \"created_at\"",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"asc\", \"desc\". Defaults to \"asc\"",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/RequestsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/RequestsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List User Requests",
+        "tags": [
+          "Requests"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/UserId"
+        }
+      ]
+    }
+  },
+  "security": [
+    {
+      "basicAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://{subdomain}.{domain}.com",
+      "variables": {
+        "domain": {
+          "default": "zendesk"
+        },
+        "subdomain": {
+          "default": "example"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Requests"
+    }
+  ]
+}

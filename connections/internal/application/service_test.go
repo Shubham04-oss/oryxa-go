@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -193,6 +194,51 @@ func TestCreateAppSealsTheClientSecret(t *testing.T) {
 				t.Fatalf("CreateApp() error = %v, want %v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestAppDomains(t *testing.T) {
+	registry := providers.Builtin()
+	registry["zendesk"] = providers.Provider{
+		Name: "zendesk", CredentialTypes: []domain.CredentialType{domain.CredentialOAuth2},
+		OAuth2: &providers.OAuth2{
+			AuthorizationURL: "https://{domain}.zendesk.test/oauth/authorizations/new",
+			TokenURL:         "https://{domain}.zendesk.test/oauth/tokens",
+			APIURL:           "https://{domain}.zendesk.test/api/v2",
+		},
+		Domain: &providers.DomainRule{Pattern: regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`), Example: "acme"},
+	}
+	h := newHarness(t, func(dependencies *Dependencies) { dependencies.Providers = registry })
+
+	for name, input := range map[string]CreateAppInput{
+		"an API token app without its site": {Provider: "atlassian", CredentialType: domain.CredentialBasic},
+		"a site Atlassian does not host":    {Provider: "atlassian", CredentialType: domain.CredentialBasic, Domain: "jira.example.test"},
+		"an OAuth app given a domain":       {Provider: "atlassian", ClientID: "c", ClientSecret: "s", Scopes: []string{"offline_access", "read:me"}, Domain: "acme.atlassian.net"},
+		"a provider that takes none":        {Provider: "github", ClientID: "c", ClientSecret: "s", Domain: "github.com"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := h.service.CreateApp(ctx, as(adminToken), organization, input); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("CreateApp() error = %v, want invalid", err)
+			}
+		})
+	}
+	site, err := h.service.CreateApp(ctx, as(adminToken), organization, CreateAppInput{Provider: "atlassian", CredentialType: domain.CredentialBasic, Domain: " ACME.atlassian.net "})
+	if err != nil || site.Settings.Domain != "acme.atlassian.net" {
+		t.Fatalf("CreateApp() on a site = %+v %v", site, err)
+	}
+
+	// Every flow for the app runs against the provider with its domain filled
+	// in, while the registry's provider keeps its placeholder.
+	app, err := h.service.CreateApp(ctx, as(adminToken), organization, CreateAppInput{Provider: "zendesk", ClientID: "client-1", ClientSecret: "secret-1", Domain: "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := h.service.Authorize(ctx, as(memberToken), organization, AuthorizeInput{AppID: app.ID, ReturnURI: returnTo})
+	if err != nil || !strings.HasPrefix(authorization.URL, "https://acme.zendesk.test/oauth/authorizations/new?") {
+		t.Fatalf("Authorize() = %+v %v", authorization, err)
+	}
+	if registry["zendesk"].OAuth2.AuthorizationURL != "https://{domain}.zendesk.test/oauth/authorizations/new" {
+		t.Fatal("an app's domain was written into the registry's provider")
 	}
 }
 

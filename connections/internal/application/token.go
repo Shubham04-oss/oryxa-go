@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -181,6 +182,7 @@ func (s *Service) issue(ctx context.Context, connection domain.Connection, app d
 		}
 		token := issuedFor(connection)
 		token.TokenType, token.AccessToken, token.Placement = string(connection.CredentialType), value, placement
+		token.Domain = app.Settings.Domain
 		return token, connection, nil
 	}
 
@@ -190,6 +192,7 @@ func (s *Service) issue(ctx context.Context, connection domain.Connection, app d
 	}
 	token := issuedFor(current)
 	token.TokenType, token.AccessToken, token.Placement = "Bearer", grant.AccessToken, bearerPlacement
+	token.Domain, token.Metadata = app.Settings.Domain, maps.Clone(grant.Metadata)
 	if tokenName != "" {
 		if token.AccessToken = grant.Tokens[tokenName]; token.AccessToken == "" {
 			return domain.IssuedToken{}, domain.Connection{}, fmt.Errorf("token %q is not in this connection's token set: %w", tokenName, domain.ErrInvalid)
@@ -345,6 +348,7 @@ func (s *Service) renewWithProvider(ctx context.Context, connection domain.Conne
 	case domain.CredentialOAuth2:
 		renewed, err := s.oauth.Refresh(ctx, *provider.OAuth2, providers.RefreshRequest{
 			ClientID: app.ClientID, ClientSecret: opened.ClientSecret, RefreshToken: sealed.Grant.RefreshToken, Scopes: connection.Scopes,
+			Metadata: sealed.Grant.Metadata,
 		})
 		if err != nil {
 			return providers.Grant{}, err
@@ -413,11 +417,11 @@ func (s *Service) markNeedsReconnect(ctx context.Context, connection domain.Conn
 	return marked, err
 }
 
-// providerFor returns an app's provider.
+// providerFor returns an app's provider, with the app's domain in its URLs.
 func (s *Service) providerFor(app domain.App) (providers.Provider, error) {
 	provider, ok := s.providers.Lookup(app.Provider)
 	if !ok || !provider.Supports(app.CredentialType) {
 		return providers.Provider{}, fmt.Errorf("provider %q no longer supports %s apps", app.Provider, app.CredentialType)
 	}
-	return provider, nil
+	return provider.WithDomain(app.Settings.Domain), nil
 }

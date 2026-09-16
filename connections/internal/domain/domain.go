@@ -331,6 +331,9 @@ type AppSettings struct {
 	// app.
 	GitHubAppID   string `json:"github_app_id,omitempty"`
 	GitHubAppSlug string `json:"github_app_slug,omitempty"`
+	// Domain is the organization's own address at a provider reached through
+	// one, such as the Atlassian site API tokens work on.
+	Domain string `json:"domain,omitempty"`
 }
 
 // Connection is one provider account reached from a scope. Its credentials

@@ -68,15 +68,36 @@ func TestNormalizeGivesUnionParametersOneType(t *testing.T) {
 		t.Errorf("a parameter reference became %v", ref)
 	}
 
-	for name, schema := range map[string]string{
-		"an object variant":    `{"oneOf": [{"type": "object"}, {"type": "string"}]}`,
-		"a referenced variant": `{"anyOf": [{"$ref": "#/components/schemas/id"}, {"type": "string"}]}`,
-		"two array variants":   `{"oneOf": [{"type": "array", "items": {"type": "string"}}, {"type": "array", "items": {"type": "integer"}}]}`,
+	for name, parameter := range map[string]string{
+		"an object variant":                     `"schema": {"oneOf": [{"type": "object"}, {"type": "string"}]}`,
+		"a referenced variant":                  `"schema": {"anyOf": [{"$ref": "#/components/schemas/id"}, {"type": "string"}]}`,
+		"two array variants":                    `"schema": {"oneOf": [{"type": "array", "items": {"type": "string"}}, {"type": "array", "items": {"type": "integer"}}]}`,
+		"a deepObject without an object":        `"style": "deepObject", "schema": {"oneOf": [{"type": "integer"}, {"type": "string"}]}`,
+		"a deepObject with two objects":         `"style": "deepObject", "schema": {"oneOf": [{"type": "object"}, {"type": "object"}]}`,
+		"a deepObject with an array and object": `"style": "deepObject", "schema": {"oneOf": [{"type": "object"}, {"type": "array", "items": {"type": "string"}}]}`,
 	} {
-		slice := decode(t, `{"components": {"parameters": {"id": {"name": "id", "in": "query", "schema": `+schema+`}}}}`)
+		slice := decode(t, `{"components": {"parameters": {"id": {"name": "id", "in": "query", `+parameter+`}}}}`)
 		if err := normalize(slice); err == nil || !strings.Contains(err.Error(), `parameter "id"`) {
 			t.Errorf("%s: normalize() error = %v, want parameter \"id\" refused", name, err)
 		}
+	}
+}
+
+func TestNormalizeGivesDeepObjectUnionsTheirObject(t *testing.T) {
+	// Zendesk's page is a page number or a cursor, sent as page[size]=50.
+	slice := decode(t, `{"components": {"parameters": {"page": {"name": "page", "in": "query", "style": "deepObject", "explode": true,
+		"schema": {"description": "A page.", "oneOf": [
+			{"type": "integer", "example": 1},
+			{"type": "object", "properties": {"after": {"type": "string"}, "size": {"type": "integer"}}}
+		]}}}}}`)
+	if err := normalize(slice); err != nil {
+		t.Fatal(err)
+	}
+	got := encoded(t, at(t, slice, "components", "parameters", "page"))
+	want := encoded(t, decode(t, `{"name": "page", "in": "query", "style": "deepObject", "explode": true,
+		"schema": {"description": "A page.", "type": "object", "properties": {"after": {"type": "string"}, "size": {"type": "integer"}}}}`))
+	if got != want {
+		t.Errorf("page = %s, want %s", got, want)
 	}
 }
 
@@ -157,5 +178,65 @@ func TestTypeKey(t *testing.T) {
 	}
 	if typeKey("team-type") == typeKey("team-types") {
 		t.Error("different names share a type key")
+	}
+}
+
+func TestNormalizeNamesListParametersApart(t *testing.T) {
+	// Zendesk filters users by role, or by several with role[]=agent&role[]=admin.
+	slice := decode(t, `{"openapi": "3.0.3", "paths": {
+	  "/users": {"get": {"operationId": "list", "responses": {}, "parameters": [
+	    {"$ref": "#/components/parameters/roles"}, {"$ref": "#/components/parameters/role"}, {"name": "role", "in": "path", "required": true, "schema": {"type": "string"}}
+	  ]}},
+	  "/groups/{id}/users": {
+	    "parameters": [{"$ref": "#/components/parameters/role"}],
+	    "get": {"operationId": "group-users", "responses": {}, "parameters": [{"$ref": "#/components/parameters/roles"}, {"name": "tag[]", "in": "query", "schema": {"type": "array", "items": {"type": "string"}}}]}
+	  },
+	  "/tags": {"get": {"operationId": "tags", "responses": {}, "parameters": [
+	    {"name": "tag", "in": "query", "schema": {"type": "string"}}, {"name": "tag[]", "in": "query", "schema": {"type": "array", "items": {"type": "string"}}},
+	    {"name": "custom_field[]", "in": "query", "schema": {"type": "array", "items": {"type": "string"}}}, {"name": "custom_field", "in": "query", "schema": {"type": "string"}}
+	  ]}},
+	  "/teams/{id}/users": {
+	    "parameters": [{"$ref": "#/components/parameters/role"}],
+	    "get": {"operationId": "team-users", "responses": {}, "parameters": [{"name": "role", "in": "query", "description": "Replaces the path's role.", "schema": {"type": "string"}}]}
+	  }
+	}, "components": {"parameters": {
+	  "role": {"name": "role", "in": "query", "schema": {"type": "string"}},
+	  "roles": {"name": "role[]", "in": "query", "schema": {"type": "array", "items": {"type": "string"}}}
+	}}}`)
+	if err := normalize(slice); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		parameter any
+		want      any
+	}{
+		// role[] is renamed where the component is defined, for every use.
+		{at(t, slice, "components", "parameters", "roles"), "RoleList"},
+		{at(t, slice, "components", "parameters", "role"), nil},
+		{at(t, slice, "paths", "/tags", "get", "parameters", 1), "TagList"},
+		{at(t, slice, "paths", "/tags", "get", "parameters", 0), nil},
+		{at(t, slice, "paths", "/tags", "get", "parameters", 2), "CustomFieldList"},
+		{at(t, slice, "paths", "/tags", "get", "parameters", 3), nil},
+		// An operation's parameter replaces its path's of the same name.
+		{at(t, slice, "paths", "/teams/{id}/users", "get", "parameters", 0), nil},
+		// A list parameter with nothing of its name beside it is left alone,
+		// as is a path parameter, which is an argument rather than a field.
+		{at(t, slice, "paths", "/groups/{id}/users", "get", "parameters", 1), nil},
+		{at(t, slice, "paths", "/users", "get", "parameters", 2), nil},
+	} {
+		parameter := test.parameter.(map[string]any)
+		if got := parameter["x-go-name"]; got != test.want {
+			t.Errorf("parameter %v x-go-name = %v, want %v", parameter["name"], got, test.want)
+		}
+	}
+
+	for name, parameters := range map[string]string{
+		"two names alike without []": `[{"name": "page_size", "in": "query"}, {"name": "page-size", "in": "query"}]`,
+		"a list named after another": `[{"name": "role_list", "in": "header"}, {"name": "role", "in": "query"}, {"name": "role[]", "in": "query"}]`,
+	} {
+		slice := decode(t, `{"paths": {"/p": {"get": {"operationId": "p", "responses": {}, "parameters": `+parameters+`}}}}`)
+		if err := normalize(slice); err == nil || !strings.Contains(err.Error(), "GET /p: parameters") {
+			t.Errorf("%s: normalize() error = %v, want the pair refused", name, err)
+		}
 	}
 }

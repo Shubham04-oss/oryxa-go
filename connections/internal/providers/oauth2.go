@@ -5,6 +5,7 @@
 package providers
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -13,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -40,16 +42,13 @@ type Grant struct {
 	// Tokens holds extra named tokens from the same grant, such as Slack's
 	// user token next to its bot token.
 	Tokens map[string]string `json:"tokens,omitempty"`
+	// Metadata holds the token response fields the provider's
+	// OAuth2.Metadata names.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
-type ScopeRules struct {
-	// Ceiling is every scope an app for the provider may allow.
-	Ceiling []string
-	// Required scopes are part of every app's allowed scopes.
-	Required []string
-	// Implications lists the broader scopes that satisfy narrower ones.
-	Implications domain.Implications
-}
+// ScopeRules are domain.ScopeRules, which apps are validated against.
+type ScopeRules = domain.ScopeRules
 
 type Provider struct {
 	Name            string
@@ -66,6 +65,9 @@ type Provider struct {
 	Installation *Installation
 	// Keys says how each key-based credential type is sent and checked.
 	Keys map[domain.CredentialType]KeyAuth
+	// Domain is the rule for the domain an app supplies when the URLs its
+	// credential type uses name {domain}, such as an Atlassian site.
+	Domain *DomainRule
 }
 
 func (provider Provider) Supports(credentialType domain.CredentialType) bool {
@@ -122,6 +124,22 @@ type OAuth2 struct {
 	// Params are fixed authorization parameters, such as Google's
 	// access_type=offline.
 	Params map[string]string
+	// RefreshURL is where refreshes go when it is not TokenURL, as with Figma.
+	RefreshURL string
+	// TokenHeaders are sent with every token request, such as Notion's
+	// Notion-Version.
+	TokenHeaders map[string]string
+	// JSONTokenRequests sends token requests as a JSON object rather than a
+	// form, for providers that document only JSON, such as Atlassian.
+	JSONTokenRequests bool
+	// ClientSecretBasic sends the client ID and secret as HTTP Basic
+	// credentials rather than in the token request, for providers that
+	// require it, such as Notion.
+	ClientSecretBasic bool
+	// Metadata names token response fields that are not secret and that
+	// callers need with the token, such as Salesforce's instance_url. They are
+	// kept with the grant and issued alongside its token.
+	Metadata []string
 	// UserScopes are requested on Slack's separate user_scope parameter.
 	UserScopes []string
 	PKCE       bool
@@ -130,6 +148,11 @@ type OAuth2 struct {
 	SendScopeOnRefresh bool
 	// RequireRefreshToken rejects an exchange that issues no refresh token.
 	RequireRefreshToken bool
+	// Lifetime is how long an access token is taken to last when the token
+	// response gives no expires_in, for a provider whose tokens expire on a
+	// schedule it does not report, such as Salesforce's session timeout. Zero
+	// takes such a token to last until the provider refuses it.
+	Lifetime time.Duration
 	// PermanentErrors are token endpoint error codes meaning the grant or
 	// client is gone for good, so the connection needs reconnecting.
 	PermanentErrors []string
@@ -176,6 +199,7 @@ type TokenResponse struct {
 	ExpiresIn    int64
 	Error        string
 	Tokens       map[string]string
+	Metadata     map[string]string
 }
 
 type AuthorizationRequest struct {
@@ -200,6 +224,9 @@ type RefreshRequest struct {
 	ClientSecret string
 	RefreshToken string
 	Scopes       []string
+	// Metadata is the grant's metadata before this refresh, kept for any
+	// field the refresh response leaves out.
+	Metadata map[string]string
 }
 
 // Client runs OAuth requests for any provider. Errors wrap
@@ -307,7 +334,11 @@ func (client Client) Refresh(ctx context.Context, provider OAuth2, request Refre
 	if provider.SendScopeOnRefresh && len(scopes) > 0 {
 		values.Set("scope", strings.Join(scopes, provider.separator()))
 	}
-	token, err := client.token(ctx, provider, values)
+	endpoint := provider
+	if provider.RefreshURL != "" {
+		endpoint.TokenURL = provider.RefreshURL
+	}
+	token, err := client.token(ctx, endpoint, values)
 	if err != nil {
 		return Grant{}, err
 	}
@@ -321,6 +352,14 @@ func (client Client) Refresh(ctx context.Context, provider OAuth2, request Refre
 	grant := client.grant(provider, token, scopes)
 	if grant.RefreshToken == "" {
 		grant.RefreshToken = request.RefreshToken
+	}
+	for name, value := range request.Metadata {
+		if _, sent := grant.Metadata[name]; !sent && slices.Contains(provider.Metadata, name) {
+			if grant.Metadata == nil {
+				grant.Metadata = map[string]string{}
+			}
+			grant.Metadata[name] = value
+		}
 	}
 	return grant, nil
 }
@@ -341,12 +380,28 @@ func (client Client) Identity(ctx context.Context, provider OAuth2, grant Grant)
 }
 
 func (client Client) token(ctx context.Context, provider OAuth2, values url.Values) (TokenResponse, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.TokenURL, strings.NewReader(values.Encode()))
+	clientID, clientSecret := values.Get("client_id"), values.Get("client_secret")
+	if provider.ClientSecretBasic {
+		values = url.Values(maps.Clone(values))
+		values.Del("client_id")
+		values.Del("client_secret")
+	}
+	requestBody, contentType, err := tokenRequestBody(provider, values)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("%w: token request could not be built", domain.ErrProviderUnavailable)
 	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.TokenURL, requestBody)
+	if err != nil {
+		return TokenResponse{}, fmt.Errorf("%w: token request could not be built", domain.ErrProviderUnavailable)
+	}
+	for name, value := range provider.TokenHeaders {
+		request.Header.Set(name, value)
+	}
+	request.Header.Set("Content-Type", contentType)
 	request.Header.Set("Accept", "application/json")
+	if provider.ClientSecretBasic {
+		setClientBasicAuth(request, clientID, clientSecret)
+	}
 	response, err := client.httpClient().Do(request)
 	if err != nil {
 		return TokenResponse{}, fmt.Errorf("%w: token request failed", domain.ErrProviderUnavailable)
@@ -373,7 +428,47 @@ func (client Client) token(ctx context.Context, provider OAuth2, values url.Valu
 	if response.StatusCode >= http.StatusMultipleChoices && token.Error == "" {
 		token.Error = "oauth_request_rejected"
 	}
+	if token.Error == "" && len(provider.Metadata) > 0 {
+		token.Metadata = tokenMetadata(body, provider.Metadata)
+	}
 	return token, nil
+}
+
+// tokenMetadata reads the named top-level fields of a token response: strings,
+// and whole numbers as their digits, such as HubSpot's hub_id. A field that is
+// missing, is of another type, or is not a safe value is left out.
+func tokenMetadata(body []byte, names []string) map[string]string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil {
+		return nil
+	}
+	metadata := map[string]string{}
+	for _, name := range names {
+		if value, ok := metadataValue(fields[name]); ok && safeValue(value) {
+			metadata[name] = value
+		}
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
+}
+
+// metadataValue reads a token response field as text: a string as it is, or a
+// whole number as its digits.
+func metadataValue(raw json.RawMessage) (string, bool) {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text, true
+	}
+	var number json.Number
+	if json.Unmarshal(raw, &number) != nil {
+		return "", false
+	}
+	if _, err := strconv.ParseInt(number.String(), 10, 64); err != nil {
+		return "", false
+	}
+	return number.String(), true
 }
 
 func (client Client) grant(provider OAuth2, token TokenResponse, requested []string) Grant {
@@ -387,11 +482,38 @@ func (client Client) grant(provider OAuth2, token TokenResponse, requested []str
 		TokenType:    token.TokenType,
 		Scopes:       granted(token.Scope, requested),
 		Tokens:       token.Tokens,
+		Metadata:     token.Metadata,
 	}
-	if token.ExpiresIn > 0 {
+	switch {
+	case token.ExpiresIn > 0:
 		grant.Expiry = client.now().Add(time.Duration(token.ExpiresIn) * time.Second)
+	case provider.Lifetime > 0:
+		grant.Expiry = client.now().Add(provider.Lifetime)
 	}
 	return grant
+}
+
+// setClientBasicAuth sends a client's ID and secret as HTTP Basic credentials,
+// form-encoded first as RFC 6749 section 2.3.1 says.
+func setClientBasicAuth(request *http.Request, clientID, clientSecret string) {
+	request.SetBasicAuth(url.QueryEscape(clientID), url.QueryEscape(clientSecret))
+}
+
+// tokenRequestBody encodes a token request's fields as a form, or as a JSON
+// object of strings for a provider with JSONTokenRequests.
+func tokenRequestBody(provider OAuth2, values url.Values) (io.Reader, string, error) {
+	if !provider.JSONTokenRequests {
+		return strings.NewReader(values.Encode()), "application/x-www-form-urlencoded", nil
+	}
+	fields := make(map[string]string, len(values))
+	for name := range values {
+		fields[name] = values.Get(name)
+	}
+	encoded, err := json.Marshal(fields)
+	if err != nil {
+		return nil, "", err
+	}
+	return bytes.NewReader(encoded), "application/json", nil
 }
 
 func decodeStandardToken(body []byte) (TokenResponse, error) {

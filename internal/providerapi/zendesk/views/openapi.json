@@ -1,0 +1,2973 @@
+{
+  "components": {
+    "examples": {
+      "ViewCountResponseExample": {
+        "value": {
+          "view_count": {
+            "fresh": true,
+            "pretty": "~700",
+            "url": "https://company.zendesk.com/api/v2/views/25/count",
+            "value": 719,
+            "view_id": 25
+          }
+        }
+      },
+      "ViewCountsResponseExample": {
+        "value": {
+          "view_counts": [
+            {
+              "fresh": true,
+              "pretty": "~700",
+              "url": "https://company.zendesk.com/api/v2/views/25/count",
+              "value": 719,
+              "view_id": 25
+            },
+            {
+              "fresh": false,
+              "pretty": "...",
+              "url": "https://company.zendesk.com/api/v2/views/78/count",
+              "value": null,
+              "view_id": 78
+            }
+          ]
+        }
+      },
+      "ViewCreateResponseExample": {
+        "value": {
+          "view": {
+            "active": true,
+            "conditions": {
+              "all": [
+                {
+                  "field": "status",
+                  "operator": "is",
+                  "value": "open"
+                },
+                {
+                  "field": "priority",
+                  "operator": "less_than",
+                  "value": "high"
+                }
+              ],
+              "any": [
+                {
+                  "field": "current_tags",
+                  "operator": "includes",
+                  "value": "hello"
+                }
+              ]
+            },
+            "id": 9873843,
+            "title": "Roger Wilco"
+          }
+        }
+      },
+      "ViewExecuteResponseExample": {
+        "value": {
+          "columns": [
+            {
+              "id": "locale",
+              "title": "Locale"
+            },
+            {
+              "id": 5,
+              "title": "Account"
+            }
+          ],
+          "groups": [],
+          "rows": [
+            {
+              "group": 1,
+              "locale": "en-US",
+              "ticket": {}
+            }
+          ],
+          "view": {
+            "id": 25
+          }
+        }
+      },
+      "ViewExportResponseExample": {
+        "value": {
+          "export": {
+            "status": "starting",
+            "view_id": 25
+          }
+        }
+      },
+      "ViewListTicketsResponseEXample": {
+        "value": {
+          "tickets": [
+            {
+              "id": 35436,
+              "requester_id": 20978392,
+              "subject": "Help I need somebody!"
+            },
+            {
+              "id": 20057623,
+              "requester_id": 20978392,
+              "subject": "Not just anybody!"
+            }
+          ]
+        }
+      },
+      "ViewPreviewResponseExample": {
+        "value": {
+          "columns": [
+            {
+              "id": "subject",
+              "title": "Subject"
+            }
+          ],
+          "rows": [
+            {
+              "subject": "en-US",
+              "ticket": {}
+            }
+          ]
+        }
+      },
+      "ViewResponseExample": {
+        "value": {
+          "view": {
+            "active": true,
+            "conditions": {},
+            "description": "View for recent tickets",
+            "execution": {},
+            "id": 25,
+            "position": 3,
+            "restriction": {},
+            "title": "Tickets updated less than 12 Hours"
+          }
+        }
+      },
+      "ViewUpdateResponseExample": {
+        "value": {
+          "view": {
+            "active": true,
+            "conditions": {},
+            "description": "View for recent tickets",
+            "execution": {},
+            "id": 25,
+            "position": 3,
+            "restriction": {},
+            "title": "Roger Wilco II"
+          }
+        }
+      },
+      "ViewsActiveResponseExample": {
+        "value": {
+          "count": 2,
+          "next_page": null,
+          "previous_page": null,
+          "views": [
+            {
+              "active": true,
+              "conditions": {},
+              "description": "View for recent tickets",
+              "execution": {},
+              "id": 25,
+              "position": 3,
+              "restriction": {},
+              "title": "Tickets updated less than 12 Hours"
+            },
+            {
+              "active": true,
+              "conditions": {},
+              "description": "View for tickets that are not assigned",
+              "execution": {},
+              "id": 23,
+              "position": 7,
+              "restriction": {},
+              "title": "Unassigned tickets"
+            }
+          ]
+        }
+      },
+      "ViewsCountResponseExample": {
+        "value": {
+          "count": {
+            "refreshed_at": "2020-04-06T02:18:17Z",
+            "value": 16
+          }
+        }
+      },
+      "ViewsResponseExample": {
+        "value": {
+          "count": 2,
+          "next_page": null,
+          "previous_page": null,
+          "views": [
+            {
+              "active": true,
+              "conditions": {},
+              "description": "View for recent tickets",
+              "execution": {},
+              "id": 25,
+              "position": 3,
+              "restriction": {},
+              "title": "Tickets updated less than 12 Hours"
+            },
+            {
+              "active": false,
+              "conditions": {},
+              "description": "View for tickets that are not assigned",
+              "execution": {},
+              "id": 23,
+              "position": 7,
+              "restriction": {},
+              "title": "Unassigned tickets"
+            }
+          ]
+        }
+      },
+      "ViewsUpdateManyResponseExample": {
+        "value": {
+          "views": [
+            {
+              "active": true,
+              "conditions": {},
+              "description": "View for recent tickets",
+              "execution": {},
+              "id": 123,
+              "position": 8,
+              "restriction": {},
+              "title": "Tickets updated less than 12 Hours"
+            }
+          ]
+        }
+      }
+    },
+    "parameters": {
+      "DualPaginationPage": {
+        "description": "Pagination parameter. Supports both traditional offset and cursor-based pagination:\n\n- Traditional: `?page=2` (integer page number)\n- Cursor: `?page[size]=50&page[after]=cursor` (deepObject with size, after, before)\n\nThese are mutually exclusive - use one format or the other, not both.\n",
+        "explode": true,
+        "in": "query",
+        "name": "page",
+        "schema": {
+          "description": "Cursor pagination parameters (JSON:API style)",
+          "properties": {
+            "after": {
+              "description": "Cursor token for next page",
+              "example": "eyJvIjoiaWQiLCJ2IjoiYVFFPSJ9",
+              "type": "string"
+            },
+            "before": {
+              "description": "Cursor token for previous page",
+              "example": "eyJvIjoiaWQiLCJ2IjoiYVFFPSJ9",
+              "type": "string"
+            },
+            "size": {
+              "description": "Number of records per page",
+              "example": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "style": "deepObject"
+      },
+      "ExcludeSideloads": {
+        "description": "A comma-separated list of sideloads to exclude from the response.\n",
+        "in": "query",
+        "name": "exclude",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "IncludeSideloads": {
+        "description": "A comma-separated list of sideloads to include in the response.\n",
+        "in": "query",
+        "name": "include",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "PerPage": {
+        "description": "Number of records to return per page.\n\nNote: Default and maximum values vary by endpoint. Check endpoint-specific\ndocumentation for limits.\n",
+        "example": 50,
+        "in": "query",
+        "name": "per_page",
+        "schema": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "ViewId": {
+        "description": "The ID of the view",
+        "example": 25,
+        "in": "path",
+        "name": "view_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      }
+    },
+    "schemas": {
+      "AttachmentBaseObject": {
+        "properties": {
+          "content_type": {
+            "description": "The content type of the image. Example value: \"image/png\"",
+            "readOnly": true,
+            "type": "string"
+          },
+          "content_url": {
+            "description": "A full URL where the attachment image file can be downloaded. The file may be hosted externally so take care not to inadvertently send Zendesk authentication credentials. See [Working with url properties](/documentation/api-basics/best-practices/working-with-url-properties/)",
+            "readOnly": true,
+            "type": "string"
+          },
+          "deleted": {
+            "description": "If true, the attachment has been deleted",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "file_name": {
+            "description": "The name of the image file",
+            "readOnly": true,
+            "type": "string"
+          },
+          "height": {
+            "description": "The height of the image file in pixels. If height is unknown, returns null",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "id": {
+            "description": "Automatically assigned when created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "inline": {
+            "description": "If true, the attachment is excluded from the attachment list and the attachment's URL\ncan be referenced within the comment of a ticket. Default is false\n",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "malware_access_override": {
+            "description": "If true, you can download an attachment flagged as malware. If false, you can't download such an attachment.",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "malware_scan_result": {
+            "description": "The result of the malware scan. There is a delay between the time the attachment is uploaded and when the malware scan is completed. Usually the scan is done within a few seconds, but high load conditions can delay the scan results. Possible values: \"malware_found\", \"malware_not_found\", \"failed_to_scan\", \"not_scanned\"",
+            "readOnly": true,
+            "type": "string"
+          },
+          "mapped_content_url": {
+            "description": "The URL the attachment image file has been mapped to",
+            "readOnly": true,
+            "type": "string"
+          },
+          "size": {
+            "description": "The size of the image file in bytes",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "url": {
+            "description": "A URL to access the attachment details",
+            "readOnly": true,
+            "type": "string"
+          },
+          "width": {
+            "description": "The width of the image file in pixels. If width is unknown, returns null",
+            "readOnly": true,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "AttachmentObject": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AttachmentBaseObject"
+          },
+          {
+            "$ref": "#/components/schemas/AttachmentThumbnails"
+          }
+        ],
+        "description": "A file represented as an [Attachment](/api-reference/ticketing/tickets/ticket-attachments/) object",
+        "example": {
+          "content_type": "image/png",
+          "content_url": "https://company.zendesk.com/attachments/my_funny_profile_pic.png",
+          "file_name": "my_funny_profile_pic.png",
+          "id": 928374,
+          "size": 166144,
+          "thumbnails": [
+            {
+              "content_type": "image/png",
+              "content_url": "https://company.zendesk.com/attachments/my_funny_profile_pic_thumb.png",
+              "file_name": "my_funny_profile_pic_thumb.png",
+              "id": 928375,
+              "size": 58298
+            }
+          ]
+        },
+        "type": "object"
+      },
+      "AttachmentThumbnails": {
+        "properties": {
+          "thumbnails": {
+            "description": "An array of attachment objects. Note that photo thumbnails do not have thumbnails",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentBaseObject"
+            },
+            "readOnly": true,
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "CollaboratorObject": {
+        "example": {
+          "email": "someone@example.com",
+          "name": "Someone Special"
+        },
+        "properties": {
+          "email": {
+            "format": "email",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "EmailCCObject": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FollowerObject"
+          },
+          {
+            "properties": {
+              "action": {
+                "enum": [
+                  "put",
+                  "delete"
+                ],
+                "type": "string"
+              },
+              "user_email": {
+                "type": "string"
+              },
+              "user_id": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "user_name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        ],
+        "type": "object"
+      },
+      "Error": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "links": {
+            "type": "object"
+          },
+          "source": {
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "title"
+        ],
+        "type": "object"
+      },
+      "Errors": {
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "FollowerObject": {
+        "properties": {
+          "action": {
+            "enum": [
+              "put",
+              "delete"
+            ],
+            "type": "string"
+          },
+          "user_email": {
+            "format": "email",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "user_name": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SharingAgreementInput": {
+        "description": "A sharing agreement configuration to apply to a ticket",
+        "properties": {
+          "custom_fields": {
+            "items": {
+              "$ref": "#/components/schemas/TicketFieldValueInput"
+            },
+            "type": "array"
+          },
+          "id": {
+            "description": "The ID of the sharing agreement",
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "TicketAuditViaObject": {
+        "description": "Describes how the object was created. See the [Via object reference](/documentation/ticketing/reference-guides/via-object-reference)",
+        "properties": {
+          "channel": {
+            "description": "This tells you how the ticket or event was created. Examples: \"web\", \"mobile\", \"rule\", \"system\"",
+            "readOnly": true,
+            "type": "string"
+          },
+          "source": {
+            "additionalProperties": true,
+            "description": "For some channels a source object gives more information about how or why the ticket or event was created",
+            "readOnly": true,
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "TicketCommentObject": {
+        "example": {
+          "attachments": [
+            {
+              "content_type": "text/plain",
+              "content_url": "https://company.zendesk.com/attachments/crash.log",
+              "file_name": "crash.log",
+              "id": 498483,
+              "size": 2532,
+              "thumbnails": []
+            }
+          ],
+          "author_id": 123123,
+          "body": "Thanks for your help!",
+          "created_at": "2009-07-20T22:55:29Z",
+          "id": 1274,
+          "metadata": {
+            "system": {
+              "client": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.100 Safari/537.36",
+              "ip_address": "1.1.1.1",
+              "latitude": -37.000000000001,
+              "location": "Melbourne, 07, Australia",
+              "longitude": 144.0000000000002
+            },
+            "via": {
+              "channel": "web",
+              "source": {
+                "from": {},
+                "rel": "web_widget",
+                "to": {}
+              }
+            }
+          },
+          "public": true,
+          "type": "Comment"
+        },
+        "properties": {
+          "add_short_url": {
+            "description": "Internal flag for adding short URLs to the comment",
+            "type": "boolean"
+          },
+          "attachments": {
+            "description": "Attachments, if any. See [Attachment](/api-reference/ticketing/tickets/ticket-attachments/)",
+            "items": {
+              "$ref": "#/components/schemas/AttachmentObject"
+            },
+            "readOnly": true,
+            "type": "array"
+          },
+          "audit_id": {
+            "description": "The id of the ticket audit record. See [Show Audit](/api-reference/ticketing/tickets/ticket_audits/#show-audit)",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "author_id": {
+            "description": "The id of the comment author. If null or omitted on create, defaults to the authenticated user. See [Author id](#author-id)",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "body": {
+            "description": "The comment string. See [Bodies](#bodies)",
+            "type": "string"
+          },
+          "channel_back": {
+            "description": "Internal channel back identifier for the comment",
+            "type": "string"
+          },
+          "channel_source_id": {
+            "description": "Internal channel source identifier for the comment",
+            "nullable": true,
+            "type": "string"
+          },
+          "created_at": {
+            "description": "The time the comment was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "html_body": {
+            "description": "The comment formatted as HTML. See [Bodies](#bodies)",
+            "type": "string"
+          },
+          "id": {
+            "description": "Automatically assigned when the comment is created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "description": "System information (web client, IP address, etc.) and comment flags, if any. See [Comment flags](#comment-flags)",
+            "readOnly": true,
+            "type": "object"
+          },
+          "plain_body": {
+            "description": "The comment presented as plain text. See [Bodies](#bodies)",
+            "readOnly": true,
+            "type": "string"
+          },
+          "public": {
+            "description": "true if a public comment; false if an internal note. The initial value set on ticket creation persists for any additional comment unless you change it",
+            "type": "boolean"
+          },
+          "translate_to": {
+            "description": "The locale code to translate the comment body to.",
+            "nullable": true,
+            "type": "string"
+          },
+          "type": {
+            "description": "`Comment` or `VoiceComment`. The JSON object for adding voice comments to tickets is different. See [Adding voice comments to tickets](/documentation/ticketing/managing-tickets/adding-voice-comments-to-tickets)",
+            "readOnly": true,
+            "type": "string"
+          },
+          "uploads": {
+            "description": "List of tokens received from [uploading files](/api-reference/ticketing/tickets/ticket-attachments/#upload-files) for comment attachments. The files are attached by creating or updating tickets with the tokens. See [Attaching files](/api-reference/ticketing/tickets/tickets/#attaching-files) in Tickets",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "via": {
+            "$ref": "#/components/schemas/TicketAuditViaObject"
+          }
+        },
+        "type": "object"
+      },
+      "TicketFieldValueInput": {
+        "description": "A ticket custom field value assignment",
+        "properties": {
+          "id": {
+            "description": "The ID of the custom field",
+            "example": 27642,
+            "format": "int64",
+            "type": "integer"
+          },
+          "value": {
+            "description": "The value to assign to the custom field.\nType depends on the field configuration:\n- Text/textarea: string\n- Checkbox: boolean or \"true\"/\"false\" string\n- Dropdown/tagger: string or array of strings (multi-select)\n- Number/decimal: number or string representation\n- Date: string (ISO 8601 format)\n- Lookup: the target record's id, or an id prefixed with `external_id:` or `name:`\n- Multi-lookup: an array of target record ids, up to `max_selections` entries. Each write replaces the\n  entire set of selections. Unresolved ids are silently dropped. See\n  [Setting multi-lookup field values](/api-reference/ticketing/lookup_relationships/lookup_relationships/#setting-multi-lookup-field-values)\n",
+            "example": "745",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "TicketObject": {
+        "example": {
+          "assignee_id": 235323,
+          "collaborator_ids": [
+            35334,
+            234
+          ],
+          "created_at": "2009-07-20T22:55:29Z",
+          "custom_fields": [
+            {
+              "id": 27642,
+              "value": "745"
+            },
+            {
+              "id": 27648,
+              "value": "yes"
+            }
+          ],
+          "custom_status_id": 123,
+          "description": "The fire is very colorful.",
+          "due_at": null,
+          "external_id": "ahg35h3jh",
+          "follower_ids": [
+            35334,
+            234
+          ],
+          "from_messaging_channel": false,
+          "generated_timestamp": 1304553600,
+          "group_id": 98738,
+          "has_incidents": false,
+          "id": 35436,
+          "organization_id": 509974,
+          "priority": "high",
+          "problem_id": 9873764,
+          "raw_subject": "{{dc.printer_on_fire}}",
+          "recipient": "support@company.com",
+          "requester_id": 20978392,
+          "satisfaction_rating": {
+            "comment": "Great support!",
+            "id": 1234,
+            "score": "good"
+          },
+          "sharing_agreement_ids": [
+            84432
+          ],
+          "status": "open",
+          "subject": "Help, my printer is on fire!",
+          "submitter_id": 76872,
+          "tags": [
+            "enterprise",
+            "other_tag"
+          ],
+          "type": "incident",
+          "updated_at": "2011-05-05T10:38:52Z",
+          "url": "https://company.zendesk.com/api/v2/tickets/35436",
+          "via": {
+            "channel": "web"
+          }
+        },
+        "properties": {
+          "additional_collaborators": {
+            "description": "Write only. An array of numeric IDs, emails, or objects containing name and email properties. See [Setting Collaborators](/api-reference/ticketing/tickets/tickets/#setting-collaborators). An email notification is sent to them when the ticket is updated",
+            "items": {
+              "$ref": "#/components/schemas/CollaboratorObject"
+            },
+            "type": "array",
+            "writeOnly": true
+          },
+          "allow_attachments": {
+            "description": "Permission for agents to add add attachments to a comment. Defaults to true",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "allow_channelback": {
+            "description": "Is false if channelback is disabled, true otherwise. Only applicable for channels framework ticket",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "assignee_email": {
+            "description": "Write only. The email address of the agent to assign the ticket to",
+            "format": "email",
+            "type": "string",
+            "writeOnly": true
+          },
+          "assignee_id": {
+            "description": "The agent currently assigned to the ticket",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "attribute_value_ids": {
+            "description": "Write only. An array of the IDs of attribute values to be associated with the ticket",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array",
+            "writeOnly": true
+          },
+          "brand_id": {
+            "description": "The id of the brand this ticket is associated with. See [Setting up multiple brands](https://support.zendesk.com/hc/en-us/articles/4408829476378)",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "collaborator_ids": {
+            "description": "The ids of users currently CC'ed on the ticket",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "collaborators": {
+            "description": "Write only. Users to add as cc's when creating a ticket. See [Setting Collaborators](/documentation/ticketing/managing-tickets/creating-and-updating-tickets#setting-collaborators)",
+            "items": {
+              "$ref": "#/components/schemas/CollaboratorObject"
+            },
+            "type": "array",
+            "writeOnly": true
+          },
+          "comment": {
+            "$ref": "#/components/schemas/TicketCommentObject"
+          },
+          "created_at": {
+            "description": "When this record was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "custom_fields": {
+            "description": "Custom field values to set on the ticket.\nEach entry specifies a field ID and its value.\nSee [Setting custom field values](/documentation/ticketing/managing-tickets/creating-and-updating-tickets#setting-custom-field-values)\n",
+            "items": {
+              "$ref": "#/components/schemas/TicketFieldValueInput"
+            },
+            "type": "array"
+          },
+          "custom_status_id": {
+            "description": "The custom ticket status id of the ticket. See [custom ticket statuses](#custom-ticket-statuses)",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "description": {
+            "description": "The first comment on the ticket. When [creating a ticket](#create-ticket), use `comment` to set the description.\nSee [Description and first comment](#description-and-first-comment).\nOn create, can be set directly as an alternative to `comment`. Silently ignored on update.\n",
+            "type": "string"
+          },
+          "due_at": {
+            "description": "If this is a ticket of type \"task\" it has a due date.  Due date format uses [ISO 8601](http://en.wikipedia.org/wiki/ISO_8601) format",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "email_cc_ids": {
+            "description": "The ids of agents or end users currently CC'ed on the ticket. See [CCs and followers resources](https://support.zendesk.com/hc/en-us/articles/4408822451482) in the Support Help Center",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "readOnly": true,
+            "type": "array"
+          },
+          "email_ccs": {
+            "description": "Write only. An array of objects that represent agent or end users email CCs to add or delete from the ticket. See [Setting email CCs](/documentation/ticketing/managing-tickets/creating-and-updating-tickets/#setting-email-ccs). Ignored when [CCs and followers](https://support.zendesk.com/hc/en-us/articles/4408822451482) is not enabled",
+            "items": {
+              "$ref": "#/components/schemas/EmailCCObject"
+            },
+            "nullable": true,
+            "type": "array",
+            "writeOnly": true
+          },
+          "encoded_id": {
+            "description": "An encoded string representing the ticket's unique identifier",
+            "readOnly": true,
+            "type": "string"
+          },
+          "external_id": {
+            "description": "An id you can use to link Zendesk Support tickets to local records",
+            "nullable": true,
+            "type": "string"
+          },
+          "fields": {
+            "description": "Alias for custom_fields. Custom field values to set on the ticket.\nEach entry specifies a field ID and its value.\n",
+            "items": {
+              "$ref": "#/components/schemas/TicketFieldValueInput"
+            },
+            "type": "array"
+          },
+          "follower_ids": {
+            "description": "The ids of agents currently following the ticket. Ignored when [CCs and followers](https://support.zendesk.com/hc/en-us/articles/4408822451482) is not enabled",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "readOnly": true,
+            "type": "array"
+          },
+          "followers": {
+            "description": "Write only. An array of objects that represents agent followers to add or delete from the ticket. See [Setting followers](/documentation/ticketing/managing-tickets/creating-and-updating-tickets/#setting-followers). Ignored when [CCs and followers](https://support.zendesk.com/hc/en-us/articles/4408822451482) is not enabled",
+            "items": {
+              "$ref": "#/components/schemas/FollowerObject"
+            },
+            "type": "array",
+            "writeOnly": true
+          },
+          "followup_ids": {
+            "description": "The ids of the followups created from this ticket. Ids are only visible once the ticket is closed",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "readOnly": true,
+            "type": "array"
+          },
+          "forum_topic_id": {
+            "description": "The topic in the Zendesk Web portal this ticket originated from, if any. The Web portal is deprecated",
+            "format": "int64",
+            "type": "integer"
+          },
+          "from_messaging_channel": {
+            "description": "If true, the ticket's [via type](/documentation/ticketing/reference-guides/via-object-reference/) is a messaging channel.",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "generated_timestamp": {
+            "description": "A Unix timestamp that represents the most accurate reading of when this record was last updated. It is updated for all ticket updates, including system updates",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "group_id": {
+            "description": "The group this ticket is assigned to",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "has_incidents": {
+            "description": "Is true if a ticket is a problem type and has one or more incidents linked to it. Otherwise, the value is false.",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "id": {
+            "description": "Automatically assigned when the ticket is created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "is_public": {
+            "description": "Is true if any comments are public, false otherwise",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "macro_id": {
+            "description": "Write only. A single macro ID to be recorded in the ticket audit",
+            "format": "int64",
+            "type": "integer",
+            "writeOnly": true
+          },
+          "macro_ids": {
+            "description": "Write only. List of macro IDs to be recorded in the ticket audit",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array",
+            "writeOnly": true
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "description": "Write only. Metadata for the audit. In the `audit` object, the data is specified in the `custom` property of the `metadata` object. See [Setting Metadata](/documentation/ticketing/managing-tickets/creating-and-updating-tickets/#setting-metadata)",
+            "type": "object",
+            "writeOnly": true
+          },
+          "organization_id": {
+            "description": "The organization of the requester. You can only specify the ID of an organization associated with the requester. See [Organization Memberships](/api-reference/ticketing/organizations/organization_memberships/)",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "origin_zrn": {
+            "description": "Write only. The Zendesk Resource Name (ZRN) of the origin for this ticket",
+            "type": "string",
+            "writeOnly": true
+          },
+          "priority": {
+            "description": "The urgency with which the ticket should be addressed",
+            "enum": [
+              "urgent",
+              "high",
+              "normal",
+              "low"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "problem_id": {
+            "description": "For tickets of type \"incident\", the ID of the problem the incident is linked to",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "raw_subject": {
+            "description": "The dynamic content placeholder, if present, or the \"subject\" value, if not. See [Dynamic Content Items](/api-reference/ticketing/ticket-management/dynamic_content/).\nWhen set on create or update, overrides the `subject` field.\n",
+            "type": "string"
+          },
+          "recipient": {
+            "description": "The original recipient e-mail address of the ticket. Notification emails for the ticket are sent from this address",
+            "type": "string"
+          },
+          "requester": {
+            "description": "Write only. Alternative to requester_id for specifying the ticket requester.\n\nCan be provided as:\n- Email string: \"user@example.com\"\n- User ID integer: 12345\n- User object: {name: \"John Doe\", email: \"john@example.com\"}\n\nIf both requester and requester_id are provided, requester_id takes precedence.\n\nWhen creating a ticket, if the user doesn't exist, they may be created\nautomatically depending on account settings.\n",
+            "oneOf": [
+              {
+                "description": "Email address or username",
+                "type": "string"
+              },
+              {
+                "description": "User ID",
+                "type": "integer"
+              },
+              {
+                "description": "User creation attributes",
+                "properties": {
+                  "email": {
+                    "description": "The user's primary email address",
+                    "format": "email",
+                    "type": "string"
+                  },
+                  "locale": {
+                    "description": "The user's locale (e.g., \"en-US\")",
+                    "type": "string"
+                  },
+                  "locale_id": {
+                    "description": "The user's locale ID",
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "name": {
+                    "description": "The user's name",
+                    "type": "string"
+                  },
+                  "organization_id": {
+                    "description": "The organization ID to associate with the user",
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "role": {
+                    "description": "The user's role (e.g., \"end-user\", \"agent\", \"admin\")",
+                    "type": "string"
+                  },
+                  "verified": {
+                    "description": "Whether the user's email is verified",
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              }
+            ],
+            "writeOnly": true
+          },
+          "requester_id": {
+            "description": "The user who requested this ticket",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "safe_update": {
+            "description": "Write only. Optional boolean. When true and an `updated_stamp` date is included, protects against ticket update collisions and returns a message to let you know if one occurs. See [Protecting against ticket update collisions](/documentation/ticketing/managing-tickets/creating-and-updating-tickets/#protecting-against-ticket-update-collisions). A value of false has the same effect as true. Omit the property to force the updates to not be safe",
+            "type": "boolean",
+            "writeOnly": true
+          },
+          "satisfaction_probability": {
+            "description": "The predicted satisfaction probability score",
+            "readOnly": true,
+            "type": "number"
+          },
+          "satisfaction_rating": {
+            "additionalProperties": true,
+            "description": "The satisfaction rating of the ticket, if it exists, or the state of satisfaction, \"offered\" or \"unoffered\". The value is null for plan types that don't support CSAT",
+            "readOnly": true,
+            "type": "object"
+          },
+          "sharing_agreement_ids": {
+            "description": "An array of the numeric IDs of sharing agreements. Note that this replaces any existing agreements",
+            "items": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          "sharing_agreements": {
+            "description": "Write only. Sharing agreement configuration for the ticket.\nAccepts a single object or an array of objects.\n",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SharingAgreementInput"
+              },
+              {
+                "items": {
+                  "$ref": "#/components/schemas/SharingAgreementInput"
+                },
+                "type": "array"
+              }
+            ],
+            "writeOnly": true
+          },
+          "status": {
+            "description": "The state of the ticket.\n\nIf your account has activated custom ticket statuses, this is the ticket's\nstatus category. See [custom ticket statuses](#custom-ticket-statuses)\n",
+            "enum": [
+              "new",
+              "open",
+              "pending",
+              "hold",
+              "solved",
+              "closed"
+            ],
+            "type": "string"
+          },
+          "subject": {
+            "description": "The value of the subject field for this ticket. See [Subject](/api-reference/ticketing/tickets/tickets/#subject)\n",
+            "nullable": true,
+            "type": "string"
+          },
+          "submitter_id": {
+            "description": "The user who submitted the ticket. The submitter always becomes the\nauthor of the first comment on the ticket.\n\nIf not specified, defaults to the authenticated user.\n",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "support_type": {
+            "description": "The type of support that handled the ticket",
+            "enum": [
+              "agent",
+              "ai_agent"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "suspended_ticket_id": {
+            "description": "Write only. The ID of the suspended ticket being recovered",
+            "format": "int64",
+            "type": "integer",
+            "writeOnly": true
+          },
+          "suspension_type_id": {
+            "description": "Write only. The suspension type ID when recovering a suspended ticket",
+            "format": "int64",
+            "type": "integer",
+            "writeOnly": true
+          },
+          "system_metadata": {
+            "description": "Write only. System metadata for the ticket, typically set by internal clients",
+            "properties": {
+              "client": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "writeOnly": true
+          },
+          "tags": {
+            "description": "The tags applied to this ticket. Unless otherwise specified, the [set tag](/api-reference/ticketing/ticket-management/tags/#set-tags) behavior is used, which overwrites and replaces existing tags",
+            "oneOf": [
+              {
+                "description": "An array of tag strings",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "description": "A single tag string",
+                "type": "string"
+              }
+            ]
+          },
+          "tde_workspace": {
+            "description": "Write only. TDE workspace information for the ticket",
+            "properties": {
+              "previous_workspace": {
+                "properties": {
+                  "id": {
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "type": {
+                "enum": [
+                  "ADD",
+                  "CHANGE",
+                  "DELETE"
+                ],
+                "type": "string"
+              },
+              "workspace": {
+                "properties": {
+                  "id": {
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object",
+            "writeOnly": true
+          },
+          "ticket_form_id": {
+            "description": "Enterprise only. The id of the ticket form to render for the ticket",
+            "format": "int64",
+            "nullable": true,
+            "type": "integer"
+          },
+          "tpe_voice_comment": {
+            "description": "Write only. A TPE voice comment for Talk Partner Edition tickets",
+            "properties": {
+              "agent_id": {
+                "format": "int64",
+                "nullable": true,
+                "type": "integer"
+              },
+              "answering_machine_detection_status": {
+                "nullable": true,
+                "type": "string"
+              },
+              "app_id": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "app_name": {
+                "nullable": true,
+                "type": "string"
+              },
+              "author_id": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "call_connected_at": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "call_disposition": {
+                "nullable": true,
+                "type": "string"
+              },
+              "call_ended_at": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "call_id": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "call_recording_consent": {
+                "nullable": true,
+                "type": "string"
+              },
+              "call_recording_consent_action": {
+                "nullable": true,
+                "type": "string"
+              },
+              "call_recording_consent_keypress": {
+                "nullable": true,
+                "type": "string"
+              },
+              "call_started_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "call_type": {
+                "nullable": true,
+                "type": "string"
+              },
+              "callback_number": {
+                "nullable": true,
+                "type": "string"
+              },
+              "callback_requested_at": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "completion_status": {
+                "nullable": true,
+                "type": "string"
+              },
+              "connection_attempts": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "consultation_time": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "direction": {
+                "type": "string"
+              },
+              "disconnection_reason": {
+                "nullable": true,
+                "type": "string"
+              },
+              "dnis": {
+                "nullable": true,
+                "type": "string"
+              },
+              "duration": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "end_user_id": {
+                "format": "int64",
+                "nullable": true,
+                "type": "integer"
+              },
+              "end_user_location": {
+                "nullable": true,
+                "type": "string"
+              },
+              "exceeded_queue_time": {
+                "nullable": true,
+                "type": "boolean"
+              },
+              "extension": {
+                "nullable": true,
+                "type": "string"
+              },
+              "external_id": {
+                "type": "string"
+              },
+              "from_line": {
+                "type": "string"
+              },
+              "from_line_nickname": {
+                "nullable": true,
+                "type": "string"
+              },
+              "hold_time": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "intent": {
+                "nullable": true,
+                "type": "string"
+              },
+              "ivr_destination_group_name": {
+                "nullable": true,
+                "type": "string"
+              },
+              "ivr_time_spent": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "language": {
+                "nullable": true,
+                "type": "string"
+              },
+              "line_type": {
+                "type": "string"
+              },
+              "longest_hold_time": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "number_of_holds": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "outside_business_hours": {
+                "nullable": true,
+                "type": "boolean"
+              },
+              "overflowed_to": {
+                "nullable": true,
+                "type": "string"
+              },
+              "phone_name": {
+                "nullable": true,
+                "type": "string"
+              },
+              "public": {
+                "type": "boolean"
+              },
+              "quality_score": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "queue_name": {
+                "nullable": true,
+                "type": "string"
+              },
+              "queue_time": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "recorded": {
+                "type": "boolean"
+              },
+              "recording_time": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "recording_type": {
+                "type": "string"
+              },
+              "recording_url": {
+                "nullable": true,
+                "type": "string"
+              },
+              "sentiment_agent": {
+                "nullable": true,
+                "type": "string"
+              },
+              "sentiment_call": {
+                "nullable": true,
+                "type": "string"
+              },
+              "sentiment_customer": {
+                "nullable": true,
+                "type": "string"
+              },
+              "sentiment_trend": {
+                "nullable": true,
+                "type": "string"
+              },
+              "short_summary": {
+                "nullable": true,
+                "type": "string"
+              },
+              "summary": {
+                "nullable": true,
+                "type": "string"
+              },
+              "talk_time": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "time_to_answer": {
+                "nullable": true,
+                "type": "integer"
+              },
+              "title": {
+                "type": "string"
+              },
+              "to_line": {
+                "type": "string"
+              },
+              "to_line_nickname": {
+                "nullable": true,
+                "type": "string"
+              },
+              "transcript": {
+                "nullable": true,
+                "type": "string"
+              },
+              "via_id": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "video_recording_url": {
+                "nullable": true,
+                "type": "string"
+              },
+              "voicemail": {
+                "nullable": true,
+                "type": "boolean"
+              },
+              "voicemail_requested_at": {
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "wait_time": {
+                "nullable": true,
+                "type": "integer"
+              }
+            },
+            "type": "object",
+            "writeOnly": true
+          },
+          "type": {
+            "description": "The type of this ticket",
+            "enum": [
+              "problem",
+              "incident",
+              "question",
+              "task"
+            ],
+            "nullable": true,
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "When this record last got updated. It is updated only if the update generates a [ticket event](#incremental-ticket-event-export)",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "updated_stamp": {
+            "description": "Write only. Datetime of last update received from API. See the `safe_update` property",
+            "format": "date-time",
+            "type": "string",
+            "writeOnly": true
+          },
+          "url": {
+            "description": "The API url of this ticket",
+            "readOnly": true,
+            "type": "string"
+          },
+          "via": {
+            "$ref": "#/components/schemas/ViaObject"
+          },
+          "via_followup_source_id": {
+            "description": "Write only. The id of a closed ticket when creating a follow-up ticket. See [Creating a follow-up ticket](/documentation/ticketing/managing-tickets/creating-and-updating-tickets#creating-a-follow-up-ticket)",
+            "format": "int64",
+            "type": "integer",
+            "writeOnly": true
+          },
+          "via_id": {
+            "description": "Write only. For more information, see the [Via object reference](/documentation/ticketing/reference-guides/via-object-reference/)",
+            "format": "int64",
+            "type": "integer",
+            "writeOnly": true
+          },
+          "voice_comment": {
+            "additionalProperties": true,
+            "description": "Write only. A voice comment for Talk tickets. See [Adding voice comments to tickets](/documentation/ticketing/managing-tickets/adding-voice-comments-to-tickets/)",
+            "properties": {
+              "answered_by_id": {
+                "description": "The agent who answered the call",
+                "format": "int64",
+                "nullable": true,
+                "type": "integer"
+              },
+              "call_duration": {
+                "description": "Duration of the call in seconds",
+                "type": "integer"
+              },
+              "from": {
+                "description": "Incoming phone number",
+                "type": "string"
+              },
+              "location": {
+                "description": "Location of the caller",
+                "nullable": true,
+                "type": "string"
+              },
+              "recording_url": {
+                "description": "URL of the recording",
+                "nullable": true,
+                "type": "string"
+              },
+              "to": {
+                "description": "Dialed phone number",
+                "type": "string"
+              },
+              "transcription_text": {
+                "description": "Transcription of the call",
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "type": "object",
+            "writeOnly": true
+          }
+        },
+        "type": "object"
+      },
+      "TicketsResponse": {
+        "properties": {
+          "tickets": {
+            "items": {
+              "$ref": "#/components/schemas/TicketObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ViaObject": {
+        "description": "An object explaining how the ticket was created. See the [Via object reference](/documentation/ticketing/reference-guides/via-object-reference)\n",
+        "example": {
+          "channel": "rule",
+          "source": {
+            "from": {
+              "id": 22472716,
+              "title": "Assign to first responder"
+            },
+            "rel": "trigger",
+            "to": {}
+          }
+        },
+        "properties": {
+          "channel": {
+            "description": "This tells you how the ticket or event was created. Examples: \"web\", \"mobile\", \"rule\", \"system\".\nMay be a string name or an integer channel ID.\n",
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "source": {
+            "additionalProperties": true,
+            "description": "For some channels a source object gives more information about how or why the ticket or event was created\n",
+            "properties": {
+              "from": {
+                "properties": {
+                  "address": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "id": {
+                    "format": "int64",
+                    "nullable": true,
+                    "type": "integer"
+                  },
+                  "name": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "title": {
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "rel": {
+                "nullable": true,
+                "type": "string"
+              },
+              "to": {
+                "properties": {
+                  "address": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "readOnly": true,
+        "type": "object"
+      },
+      "ViewCountObject": {
+        "properties": {
+          "active": {
+            "description": "Only active views if true, inactive views if false, all views if null.",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "fresh": {
+            "description": "false if the cached data is stale and the system is still loading and caching new data",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "pretty": {
+            "description": "A pretty-printed text approximation of the view count",
+            "readOnly": true,
+            "type": "string"
+          },
+          "url": {
+            "description": "The API url of the count",
+            "readOnly": true,
+            "type": "string"
+          },
+          "value": {
+            "description": "The cached number of tickets in the view. Can also be null if the system is loading and caching new data. Not to be confused with 0 tickets",
+            "nullable": true,
+            "readOnly": true,
+            "type": "integer"
+          },
+          "view_id": {
+            "description": "The id of the view",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ViewCountResponse": {
+        "properties": {
+          "view_count": {
+            "$ref": "#/components/schemas/ViewCountObject"
+          }
+        },
+        "type": "object"
+      },
+      "ViewCountsResponse": {
+        "properties": {
+          "view_counts": {
+            "items": {
+              "$ref": "#/components/schemas/ViewCountObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ViewExportResponse": {
+        "properties": {
+          "export": {
+            "properties": {
+              "status": {
+                "readOnly": true,
+                "type": "string"
+              },
+              "view_id": {
+                "format": "int64",
+                "readOnly": true,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ViewObject": {
+        "example": {
+          "active": true,
+          "conditions": {
+            "all": [
+              {
+                "field": "status",
+                "operator": "less_than",
+                "value": "solved"
+              },
+              {
+                "field": "assignee_id",
+                "operator": "is",
+                "value": "296220096"
+              }
+            ],
+            "any": []
+          },
+          "default": false,
+          "description": "View for recent tickets",
+          "execution": {
+            "columns": [
+              {
+                "id": "status",
+                "title": "Status"
+              },
+              {
+                "id": "updated",
+                "title": "Updated"
+              },
+              {
+                "id": 5,
+                "title": "Account",
+                "type": "text",
+                "url": "https://example.zendesk.com/api/v2/ticket_fields/5"
+              }
+            ],
+            "group": {
+              "id": "status",
+              "order": "desc",
+              "title": "Status"
+            },
+            "sort": {
+              "id": "updated",
+              "order": "desc",
+              "title": "Updated"
+            }
+          },
+          "id": 25,
+          "position": 8,
+          "restriction": {
+            "id": 4,
+            "type": "User"
+          },
+          "title": "Tickets updated <12 Hours"
+        },
+        "properties": {
+          "active": {
+            "description": "Whether the view is active",
+            "type": "boolean"
+          },
+          "conditions": {
+            "additionalProperties": true,
+            "description": "Describes how the view is constructed. See [Conditions reference](/documentation/ticketing/reference-guides/conditions-reference)",
+            "type": "object"
+          },
+          "created_at": {
+            "description": "The time the view was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "default": {
+            "description": "If true, the view is a default view",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "description": {
+            "description": "The description of the view",
+            "type": "string"
+          },
+          "execution": {
+            "additionalProperties": true,
+            "description": "Describes how the view should be executed. See [Execution](#execution)",
+            "type": "object"
+          },
+          "id": {
+            "description": "Automatically assigned when created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "position": {
+            "description": "The position of the view",
+            "type": "integer"
+          },
+          "restriction": {
+            "additionalProperties": true,
+            "description": "Who may access this view. Is null when everyone in the account can access it",
+            "type": "object"
+          },
+          "title": {
+            "description": "The title of the view",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "The time the view was last updated",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ViewResponse": {
+        "properties": {
+          "columns": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "groups": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "view": {
+            "$ref": "#/components/schemas/ViewObject"
+          }
+        },
+        "type": "object"
+      },
+      "ViewsCountResponse": {
+        "properties": {
+          "count": {
+            "properties": {
+              "refreshed_at": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "value": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ViewsResponse": {
+        "properties": {
+          "count": {
+            "readOnly": true,
+            "type": "integer"
+          },
+          "next_page": {
+            "nullable": true,
+            "readOnly": true,
+            "type": "string"
+          },
+          "previous_page": {
+            "nullable": true,
+            "readOnly": true,
+            "type": "string"
+          },
+          "views": {
+            "items": {
+              "$ref": "#/components/schemas/ViewObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "basicAuth": {
+        "scheme": "basic",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Zendesk Support API endpoints",
+    "title": "Support API",
+    "version": "2.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/v2/views": {
+      "get": {
+        "description": "Lists shared and personal views available to the current user.\n\n#### Sideloads\n\nThe following sideloads are supported:\n\n| Name             | Will sideload\n| ---------------- | -------------\n| app_installation | The app installation that requires each view, if present\n| permissions      | The permissions for each view\n\n#### Pagination\n\n- Cursor pagination (recommended)\n- Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n\nReturns a maximum of 100 records per page.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ListViews",
+        "parameters": [
+          {
+            "description": "Only views with given access. May be \"personal\", \"shared\", or \"account\"",
+            "in": "query",
+            "name": "access",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only active views if true, inactive views if false",
+            "in": "query",
+            "name": "active",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Only views belonging to given group",
+            "in": "query",
+            "name": "group_id",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "The sort parameter used with cursor pagination. Defaults to \"created_at\". Prefix with '-' for descending order",
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The sort_by parameter used with offset pagination. Possible values are \"alphabetical\", \"created_at\", or \"updated_at\". Defaults to \"position\"",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The sort_order parameter used with offset pagination. One of \"asc\" or \"desc\". Defaults to \"asc\" for alphabetical and position sort, \"desc\" for all others",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/DualPaginationPage"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Views",
+        "tags": [
+          "Views"
+        ]
+      },
+      "post": {
+        "description": "#### Allowed For\n\n* Agents\n\n#### JSON Format\n\nThe JSON format consists of one property, a `view` object that lists the values to set when the view is created.\n\n**Note**: The request must include at least one condition in the `all` array that checks one of the following fields: `status`, `type`, `group_id`, `assignee_id`, or `requester_id`.\n\n| Name        | Description\n| ----------- | -----------\n| title       | Required. The title of the view\n| all         | Required. An array of one or more conditions. A ticket must meet all of them to be included in the view. See [Conditions reference](/documentation/ticketing/reference-guides/conditions-reference)\n| any         | An array of one or more conditions. A ticket must meet any of them to be included in the view. See [Conditions reference](/documentation/ticketing/reference-guides/conditions-reference)\n| description | The description of the view\n| active      | Allowed values are true or false. Determines if the view is displayed or not\n| output      | An object that specifies the columns to display. Example: `\"output\": {\"columns\": [\"status\", \"description\", \"priority\"]}`. See [View columns](#view-columns)\n| restriction | An object that describes who can access the view. To give all agents access to the view, omit this property\n\nThe `restriction` object has the following properties.\n\n| Name | Comment\n| ---- | -------\n| type | Allowed values are \"Group\" or \"User\"\n| id   | The numeric ID of a single group or user\n| ids  | The numeric IDs of a single or more groups. Recommended for \"Group\" `type`\n\nIf `type` is \"Group\", the `ids` property is the preferred method of specifying the group id or ids.\n\n#### Example Request Body\n\n```js\n{\n  \"view\": {\n    \"title\": \"Kelly's tickets\",\n    \"raw_title\": \"{{dc.tickets_assigned_to_kelly}}\",\n    \"description\": \"Tickets that are assigned to Kelly\",\n    \"active\": true,\n    \"restriction\": {\n      \"type\": \"User\",\n      \"id\": \"213977756\"\n    },\n    \"all\": [\n      {\n        \"field\": \"status\",\n        \"operator\": \"less_than\",\n        \"value\": \"solved\"\n      },\n      {\n        \"field\": \"group_id\",\n        \"operator\": \"is\",\n        \"value\": \"24000932\"\n      },\n      {\n        \"field\": \"custom_fields_360011872073\",\n        \"operator\": \"is\",\n        \"value\": \"Canada\"\n      },\n      ...\n    ],\n    \"output\": {\n      \"columns\": [\"status\", \"requester\", \"assignee\"],\n      \"group_by\": \"assignee\",\n      \"group_order\": \"desc\",\n      \"sort_by\": \"status\",\n      \"sort_order\": \"desc\"\n    }\n  }\n}\n```\n\n#### View columns\n\nThe `output` request parameter lets you specify what columns to include in the view in the agent interface. Example: `\"output\": {\"columns\": [\"status\", \"description\", \"priority\"]}`. The following table lists possible columns for views in the agent UI and the corresponding values in the `columns` array.\n\nFor custom fields, specify the id of the custom field in the `columns` array.\n\nYou can specify a total of 10 columns to a view.\n\n| View column title in UI     | Value                |\n|---------------------------- | -------------------- |\n| Assigned                    | `assigned`           |\n| Assignee                    | `assignee`           |\n| Due Date                    | `due_date`           |\n| Group                       | `group`              |\n| ID                          | `nice_id`            |\n| Updated                     | `updated`            |\n| Assignee updated            | `updated_assignee`   |\n| Requester updated           | `updated_requester`  |\n| Updater                     | `updated_by_type`    |\n| Organization                | `organization`       |\n| Priority                    | `priority`           |\n| Requested                   | `created`            |\n| Requester                   | `requester`          |\n| Requester language          | `locale_id`          |\n| Satisfaction                | `satisfaction_score` |\n| Solved                      | `solved`             |\n| Status category             | `status`             |\n| Subject                     | `description`        |\n| Submitter                   | `submitter`          |\n| Ticket form                 | `ticket_form`        |\n| Type                        | `type`               |\n| Brand                       | `brand`              |\n| Ticket status               | `custom_status_id`   |\n\n#### View sorting\n\nYou can group and sort items in the view by adding items to the `output` parameter:\n\n| Attribute                   | Description\n|-----------------------------| -----------\n| `group_by`, `sort_by`       | Sort or group the tickets by a column in the [View columns](#view-columns) table. The `description`, `submitter` and `custom_status_id` columns are not supported\n| `group_order`, `sort_order` | Either \"asc\" or \"desc\"\n",
+        "operationId": "CreateView",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewCreateResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Create View",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/active": {
+      "get": {
+        "description": "Lists active shared and personal views available to the current user.\n\n#### Sideloads\n\nThe following sideloads are supported:\n\n| Name             | Will sideload\n| ---------------- | -------------\n| app_installation | The app installation that requires each view, if present\n| permissions      | The permissions for each view\n\n#### Pagination\n\n- Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n\nReturns a maximum of 100 records per page.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ListActiveViews",
+        "parameters": [
+          {
+            "description": "Only views with given access. May be \"personal\", \"shared\", or \"account\"",
+            "in": "query",
+            "name": "access",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only views belonging to given group",
+            "in": "query",
+            "name": "group_id",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Possible values are \"alphabetical\", \"created_at\", or \"updated_at\". Defaults to \"position\"",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"asc\" or \"desc\". Defaults to \"asc\" for alphabetical and position sort, \"desc\" for all others",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewsActiveResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Active Views",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/compact": {
+      "get": {
+        "description": "A compacted list of shared and personal views available to the current user. This endpoint never returns more than 32 records and does not respect the \"per_page\" option.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ListCompactViews",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Views - Compact",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/count": {
+      "get": {
+        "description": "Returns an approximate count of shared and personal views available to the current user. If the count exceeds 100,000, the count will return a cached result.  This cached result will update every 24 hours.\n\nThe `count[refreshed_at]` property is a timestamp that indicates when the count was last updated.\n\n**Note**: When the count exceeds 100,000, `count[refreshed_at]` may occasionally be null.\nThis indicates that the count is being updated in the background, and `count[value]` is limited to 100,000 until the update is complete.\n\n#### Allowed For\n* Agents",
+        "operationId": "CountViews",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewsCountResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewsCountResponse"
+                }
+              }
+            },
+            "description": "Count of views"
+          }
+        },
+        "summary": "Count Views",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/count_many": {
+      "get": {
+        "description": "Returns the ticket count of each view in a list of views. Accepts up to 20 view ids per request. For the ticket count of a single view, see [Count Tickets in View](#count-tickets-in-view).\n\nOnly returns values for personal and shared views accessible to the user performing the request.\n\n***Note:***\nDue to the asynchronous operation of computing the counts for the requested views, some of the views' counts could be null. This means that the system is still computing the count for that view.\nPeriodically issue another request until all of the views' counts in the response are integers greater than zero. \n\n#### Rate limiting\n\nThis endpoint is rate limited to 6 requests every 1 minute.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "GetViewCounts",
+        "parameters": [
+          {
+            "description": "List of view's ids separated by commas.",
+            "example": "1,2,3",
+            "in": "query",
+            "name": "ids",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewCountsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewCountsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "value": {
+                      "errors": [
+                        {
+                          "code": "TooManyRequests",
+                          "title": "Too many requests to update"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/Errors"
+                }
+              }
+            },
+            "description": "Too Many Requests"
+          }
+        },
+        "summary": "Count Tickets in Views",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/definitions": {
+      "get": {
+        "description": "Returns the definitions of the conditions and actions a view can perform.\nThe definitions include conditions, output columns, groupable fields, and\nsortable fields.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ListViewDefinitions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "value": {
+                      "definitions": {
+                        "conditions_all": [
+                          {
+                            "group": "ticket",
+                            "nullable": false,
+                            "operators": [
+                              {
+                                "terminal": false,
+                                "title": "Is",
+                                "value": "is"
+                              },
+                              {
+                                "terminal": false,
+                                "title": "Is not",
+                                "value": "is_not"
+                              }
+                            ],
+                            "repeatable": false,
+                            "subject": "status",
+                            "title": "Status",
+                            "type": "list",
+                            "values": [
+                              {
+                                "enabled": true,
+                                "title": "New",
+                                "value": "new"
+                              },
+                              {
+                                "enabled": true,
+                                "title": "Open",
+                                "value": "open"
+                              }
+                            ]
+                          }
+                        ],
+                        "conditions_any": [
+                          {
+                            "group": "ticket",
+                            "nullable": false,
+                            "operators": [
+                              {
+                                "terminal": false,
+                                "title": "Is",
+                                "value": "is"
+                              }
+                            ],
+                            "repeatable": false,
+                            "subject": "status",
+                            "title": "Status",
+                            "type": "list",
+                            "values": [
+                              {
+                                "enabled": true,
+                                "title": "New",
+                                "value": "new"
+                              }
+                            ]
+                          }
+                        ],
+                        "groupables": [
+                          {
+                            "group": "ticket",
+                            "title": "Status",
+                            "type": "list",
+                            "value": "status"
+                          }
+                        ],
+                        "output": [
+                          {
+                            "group": "ticket",
+                            "title": "ID",
+                            "type": "tagger",
+                            "value": "nice_id"
+                          }
+                        ],
+                        "sortables": [
+                          {
+                            "group": "ticket",
+                            "title": "ID",
+                            "type": "number",
+                            "value": "nice_id"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "definitions": {
+                      "properties": {
+                        "conditions_all": {
+                          "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "conditions_any": {
+                          "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "groupables": {
+                          "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "output": {
+                          "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "sortables": {
+                          "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List View Filter Definitions",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/destroy_many": {
+      "delete": {
+        "description": "Deletes the views corresponding to the provided list of IDs.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "BulkDeleteViews",
+        "parameters": [
+          {
+            "description": "The IDs of the views to delete",
+            "example": "1,2,3",
+            "in": "query",
+            "name": "ids",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content response"
+          }
+        },
+        "summary": "Bulk Delete Views",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/preview": {
+      "post": {
+        "description": "You can preview views by constructing the conditions in the proper format and nesting them under the `view` property. See [Conditions reference](/documentation/ticketing/reference-guides/conditions-reference/). The output can also be controlled by passing in any of the following parameters and nesting them under the `output` property.\n\n| Name            | Type    | Comment\n| --------------- | ------- | -------\n| columns         | Array   | The ticket fields to display. System fields are looked up by name, custom fields by title or id. See the [View columns](#view-columns) table\n| group_by        | String  | When present, the field by which the tickets are grouped\n| group_order     | String  | The direction the tickets are grouped. May be one of \"asc\" or \"desc\"\n| sort_order      | String  | The direction the tickets are sorted. May be one of \"asc\" or \"desc\"\n| sort_by         | String  | The ticket field used for sorting. This will either be a title or a custom field id.\n\nThis endpoint is rate limited to 5 requests per minute, per view, per agent.\n\n#### Pagination\n\n- Cursor pagination (recommended)\n- Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "PreviewViews",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DualPaginationPage"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          },
+          {
+            "$ref": "#/components/parameters/IncludeSideloads"
+          },
+          {
+            "$ref": "#/components/parameters/ExcludeSideloads"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewPreviewResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Preview Views",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/preview/count": {
+      "post": {
+        "description": "Returns the ticket count for a single preview.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "PreviewCount",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewCountResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewCountResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Preview Ticket Count",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/search": {
+      "get": {
+        "description": "#### Pagination\n\n* Offset pagination only\n\nSee [Using Offset Pagination](/api-reference/introduction/pagination/#using-offset-pagination).\n\n#### Allowed For\n\n* Agents\n\n#### Sideloads\n\nThe following sideloads are supported. For more information, see [Side-loading](/documentation/ticketing/using-the-zendesk-api/side_loading/).\n\n| Name             | Will sideload\n| ---------------- | -------------\n| app_installation | The app installation that requires each view, if present\n| permissions      | The permissions for each view\n",
+        "operationId": "SearchViews",
+        "parameters": [
+          {
+            "description": "Query string used to find all views with matching title",
+            "example": "sales&group_id=25789188",
+            "in": "query",
+            "name": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter views by access. May be \"personal\", \"shared\", or \"account\"",
+            "in": "query",
+            "name": "access",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by active views if true or inactive views if false",
+            "in": "query",
+            "name": "active",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Filter views by group",
+            "in": "query",
+            "name": "group_id",
+            "schema": {
+              "format": "int64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Possible values are \"alphabetical\", \"created_at\", \"updated_at\", and \"position\". If unspecified, the views are sorted by relevance",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"asc\" or \"desc\". Defaults to \"asc\" for alphabetical and position sort, \"desc\" for all others",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A sideload to include in the response. See [Sideloads](#sideloads-3)",
+            "example": "permissions",
+            "in": "query",
+            "name": "include",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Search Views",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/show_many": {
+      "get": {
+        "description": "#### Allowed For\n\n* Agents\n\n#### Sideloads\n\nThe following sideloads are supported:\n\n| Name             | Will sideload\n| ---------------- | -------------\n| app_installation | The app installation that requires each view, if present\n| permissions      | The permissions for each view\n",
+        "operationId": "ListViewsById",
+        "parameters": [
+          {
+            "description": "List of view's ids separated by commas.",
+            "example": "1,2,3",
+            "in": "query",
+            "name": "ids",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only active views if true, inactive views if false",
+            "in": "query",
+            "name": "active",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Views By ID",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/update_many": {
+      "put": {
+        "description": "#### Allowed For\n\n* Agents\n\n#### Request Parameters\n\nThe PUT request expects a `views` object that lists the views to update.\n\nEach view may have the following properties:\n\n| Name     | Mandatory | Description\n| -------- | --------- | -----------\n| id       | yes       | The ID of the view to update\n| position | no        | The new position of the view\n| active   | no        | The active status of the view (true or false)\n\n#### Example Request Body\n\n```js\n{\n  \"views\": [\n    {\"id\": 25, \"position\": 3},\n    {\"id\": 23, \"position\": 5},\n    {\"id\": 27, \"position\": 9},\n    {\"id\": 22, \"position\": 7}\n  ]\n}\n```\n",
+        "operationId": "UpdateManyViews",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewsUpdateManyResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Update Many Views",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/{view_id}": {
+      "delete": {
+        "description": "#### Allowed For\n* Agents\n",
+        "operationId": "DeleteView",
+        "responses": {
+          "204": {
+            "description": "No Content response"
+          }
+        },
+        "summary": "Delete View",
+        "tags": [
+          "Views"
+        ]
+      },
+      "get": {
+        "description": "In addition to numeric IDs, the `view_id` path parameter accepts the string\naliases `\"incoming\"`, `\"my\"`, and `\"my_groups\"` to retrieve the\ncorresponding built-in views.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ShowView",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IncludeSideloads"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Show View",
+        "tags": [
+          "Views"
+        ]
+      },
+      "parameters": [
+        {
+          "description": "The ID of the view, or one of the string aliases `\"incoming\"`, `\"my\"`, or `\"my_groups\"`.",
+          "example": 25,
+          "in": "path",
+          "name": "view_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "put": {
+        "description": "#### Allowed For\n\n* Agents\n\n#### JSON Format\n\n The PUT request takes one property, a `view` object that lists the values to update. All properties are optional.\n\n**Note**: Updating a condition updates the containing array, clearing the other conditions. Include all your conditions when updating any condition.\n\n| Name        | Description\n| ----------- | -----------\n| title       | The title of the view\n| all         | An array of one or more conditions. A ticket must meet all the conditions to be included in the view. The PUT request replaces all existing conditions. See [Conditions reference](/documentation/ticketing/reference-guides/conditions-reference)\n| any         | An array of one or more conditions. A ticket must meet any of them to be included in the view. At least one `all` condition must be defined with the `any` conditions. The PUT request replaces all existing `any` conditions. See [Conditions reference](/documentation/ticketing/reference-guides/conditions-reference)\n| active      | Allowed values are true or false. Determines if the view is displayed or not\n| output      | An object that specifies the columns to display. Example: `\"output\": {\"columns\": [\"status\", \"description,\" \"priority\"]}`. See [View columns](#view-columns)\n| restriction | An object that describes who can access the view. To give all agents access to the view, omit this property\n\nThe `restriction` object has the following properties.\n\n| Name | Comment\n| ---- | -------\n| type | Allowed values are \"Group\" or \"User\"\n| id   | The numeric ID of a single group or user\n| ids  | The numeric IDs of a single or more groups. Recommended for \"Group\" `type`\n\nIf `type` is \"Group\", the `ids` property is the preferred method of specifying the group id or ids.\n\nYou can also update how items are sorted and grouped. See [View sorting](#view-sorting) in Create View.\n\n#### Example Request Body\n\n```js\n{\n  \"view\": {\n    \"title\": \"Code red tickets\",\n    \"restriction\": {\n      \"type\": \"Group\",\n      \"ids\": [10052, 10057, 10062, 10002]\n    },\n    \"all\": [\n      {\n        \"field\": \"priority\",\n        \"operator\": \"is\",\n        \"value\": \"urgent\"\n      }\n    ],\n    \"output\": {\n      \"columns\": [\"status\", \"requester\", \"assignee\", \"updated\"]\n    }\n  }\n}\n```\n",
+        "operationId": "UpdateView",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewUpdateResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Update View",
+        "tags": [
+          "Views"
+        ]
+      }
+    },
+    "/api/v2/views/{view_id}/count": {
+      "get": {
+        "description": "Returns the ticket count for a single view.\n\nThis endpoint is rate limited to 5 requests per minute, per view, per agent.\n\n#### View Counts\n\nThe view count endpoints, Count Tickets in View (this endpoint) and [Count Tickets in Views](#count-tickets-in-views), let you estimate how many tickets remain in a view without having to retrieve the entire view. They're designed to help estimate view size. From a business perspective, accuracy becomes less relevant as view size increases.\n\nTo ensure quality of service, these counts are cached more heavily as the number of tickets in a view grows. For a view with thousands of tickets, you can expect the count to be cached for 60-90 minutes. As a result, the count may not reflect the actual number of tickets in your view.\n\nView counts are represented as JSON objects with the following attributes:\n\n| Name            | Type        | Comment\n| --------------- | ------------| -------\n| view_id         | integer     | The id of the view\n| url             | string      | The API url of the count\n| value           | integer     | The cached number of tickets in the view. Can also be null if the system is loading and caching new data. Not to be confused with 0 tickets\n| pretty          | string      | A pretty-printed text approximation of the view count\n| fresh           | boolean     | false if the cached data is stale and the system is still loading and caching new data\n| active          | boolean     | Only active views if true, inactive views if false, all views if null.\n\n#### Example\n```js\n{\n  \"view_count\": {\n    \"view_id\": 25,\n    \"url\":     \"https://company.zendesk.com/api/v2/views/25/count\",\n    \"value\":   719,\n    \"pretty\":  \"~700\",\n    \"fresh\":   true\n  }\n}\n```\n",
+        "operationId": "GetViewCount",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewCountResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewCountResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Count Tickets in View",
+        "tags": [
+          "Views"
+        ]
+      },
+      "parameters": [
+        {
+          "description": "The ID of the view, or one of the string aliases `\"incoming\"`, `\"my\"`, or `\"my_groups\"`.",
+          "example": 25,
+          "in": "path",
+          "name": "view_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/v2/views/{view_id}/execute": {
+      "get": {
+        "description": "Returns the column titles and the rows of the specified view.\n\nThe `columns` array lists the view's column titles and includes only views parameters.\n\nThe `rows` array lists the values of each column for each ticket and includes parameters from both views and tickets. Though not displayed in the view, a partial ticket object is included with each row object.\n\n**Note**: To get the full ticket objects for a specified view, use [List Tickets from a View](#list-tickets-from-a-view).\n\nThis endpoint is rate limited to 5 requests per minute, per view, per agent. This rate limit includes activity in Zendesk Support. An API script is more likely to encounter rate limit errors if the authenticating agent or admin is concurrently active in Zendesk Support.\n\nThe view execution system is designed for periodic rather than high-frequency API usage. In particular, views called very frequently may be cached by Zendesk. This means that the API client will still receive a result, but that result may have been computed at any time within the last 10 minutes.\n\nZendesk recommends using the Incremental Ticket Export endpoint to get the latest changes. You can call it more often, and it returns all the tickets that changed since the last poll. For details and rate limits, see [Incremental Exports](/api-reference/ticketing/ticket-management/incremental_exports/).\n\nView output sorting can be controlled by passing the `sort_by` and `sort_order` parameters in the format described in the table in [Preview Views](#preview-views).\n\n#### Allowed For\n\n* Agents\n\n#### Pagination\n\n* Cursor pagination (recommended)\n* Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n",
+        "operationId": "ExecuteView",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DualPaginationPage"
+          },
+          {
+            "description": "The ticket field used for sorting. This will either be a title or a custom field id.",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The direction the tickets are sorted. May be one of 'asc' or 'desc'",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IncludeSideloads"
+          },
+          {
+            "$ref": "#/components/parameters/ExcludeSideloads"
+          },
+          {
+            "description": "The ticket field used for grouping. This will either be a title or a custom field id.",
+            "in": "query",
+            "name": "group_by",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewExecuteResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Execute View",
+        "tags": [
+          "Views"
+        ]
+      },
+      "parameters": [
+        {
+          "description": "The ID of the view, or one of the string aliases `\"incoming\"`, `\"my\"`, or `\"my_groups\"`.",
+          "example": 25,
+          "in": "path",
+          "name": "view_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    },
+    "/api/v2/views/{view_id}/export": {
+      "get": {
+        "description": "Returns the csv attachment of the specified view if possible. Enqueues a job to produce the csv if necessary.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ExportView",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewExportResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ViewExportResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "Export View",
+        "tags": [
+          "Views"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/ViewId"
+        }
+      ]
+    },
+    "/api/v2/views/{view_id}/tickets": {
+      "get": {
+        "description": "#### Allowed For\n\n* Agents\n\n#### Pagination\n* Cursor pagination (recommended)\n* Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n",
+        "operationId": "ListTicketsFromView",
+        "parameters": [
+          {
+            "description": "Sort or group the tickets by a column in the [View columns](#view-columns) table. The `subject` and `submitter` columns are not supported",
+            "in": "query",
+            "name": "sort_by",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of \"asc\" or \"desc\". Defaults to \"asc\" for alphabetical and position sort, \"desc\" for all others",
+            "in": "query",
+            "name": "sort_order",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ViewListTicketsResponseEXample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/TicketsResponse"
+                }
+              }
+            },
+            "description": "Success response"
+          }
+        },
+        "summary": "List Tickets From a View",
+        "tags": [
+          "Views"
+        ]
+      },
+      "parameters": [
+        {
+          "description": "The ID of the view, or one of the string aliases `\"incoming\"`, `\"my\"`, or `\"my_groups\"`.",
+          "example": 25,
+          "in": "path",
+          "name": "view_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ]
+    }
+  },
+  "security": [
+    {
+      "basicAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://{subdomain}.{domain}.com",
+      "variables": {
+        "domain": {
+          "default": "zendesk"
+        },
+        "subdomain": {
+          "default": "example"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Views"
+    }
+  ]
+}

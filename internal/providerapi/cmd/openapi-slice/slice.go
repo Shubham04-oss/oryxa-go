@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -12,12 +13,20 @@ const componentsRef = "#/components/"
 // methods are the path item fields that hold operations.
 var methods = []string{"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 
-// Slice returns a description holding only the operations tagged tag, the
-// path-level fields of their paths, the tag's definition, the security schemes
-// the operations use, and every component they reference, directly or through
-// other components, adjusted by normalize. The slice shares nothing with
-// document, which is not changed.
-func Slice(document map[string]any, tag string) (map[string]any, error) {
+// Slice returns a description holding only the operations tagged with any of
+// tags, the path-level fields of their paths, the tags' definitions, the
+// security schemes the operations use, and every component they reference,
+// directly or through other components, adjusted by normalize. The slice
+// shares nothing with document, which is not changed. Each tag must have an
+// operation, so a misspelled tag is refused rather than left out.
+func Slice(document map[string]any, tags ...string) (map[string]any, error) {
+	if len(tags) == 0 {
+		return nil, errors.New("no tags to slice")
+	}
+	label := fmt.Sprintf("tag %q", tags[0])
+	if len(tags) > 1 {
+		label = fmt.Sprintf("tags %q", tags)
+	}
 	version, _ := document["openapi"].(string)
 	if !strings.HasPrefix(version, "3.") {
 		return nil, fmt.Errorf("only OpenAPI 3 descriptions are supported, not %q", version)
@@ -27,6 +36,7 @@ func Slice(document map[string]any, tag string) (map[string]any, error) {
 	keptPaths := map[string]any{}
 	var keptOperations []map[string]any
 	named := map[string]string{}
+	used := map[string]bool{}
 	for path, rawItem := range paths {
 		item, ok := rawItem.(map[string]any)
 		if !ok {
@@ -35,14 +45,21 @@ func Slice(document map[string]any, tag string) (map[string]any, error) {
 		kept := map[string]any{}
 		for _, method := range methods {
 			operation, ok := item[method].(map[string]any)
-			if !ok || !hasTag(operation, tag) {
+			if !ok {
 				continue
+			}
+			own := ownTags(operation, tags)
+			if len(own) == 0 {
+				continue
+			}
+			for _, tag := range own {
+				used[tag] = true
 			}
 			operation = maps.Clone(operation)
 			if id, ok := operation["operationId"].(string); ok {
-				renamed := operationID(id, tag)
+				renamed := operationID(id, own)
 				if other, taken := named[renamed]; taken {
-					return nil, fmt.Errorf("tag %q: operations %q and %q would both be named %q", tag, other, id, renamed)
+					return nil, fmt.Errorf("%s: operations %q and %q would both be named %q", label, other, id, renamed)
 				}
 				named[renamed] = id
 				if renamed != id {
@@ -63,8 +80,10 @@ func Slice(document map[string]any, tag string) (map[string]any, error) {
 		}
 		keptPaths[path] = kept
 	}
-	if len(keptOperations) == 0 {
-		return nil, fmt.Errorf("tag %q has no operations", tag)
+	for _, tag := range tags {
+		if !used[tag] {
+			return nil, fmt.Errorf("tag %q has no operations", tag)
+		}
 	}
 
 	slice := map[string]any{"openapi": document["openapi"], "info": document["info"], "paths": keptPaths}
@@ -74,14 +93,19 @@ func Slice(document map[string]any, tag string) (map[string]any, error) {
 		}
 	}
 	definitions, _ := document["tags"].([]any)
+	var keptDefinitions []any
 	for _, definition := range definitions {
-		if object, _ := definition.(map[string]any); object["name"] == tag {
-			slice["tags"] = []any{definition}
+		object, _ := definition.(map[string]any)
+		if name, _ := object["name"].(string); slices.Contains(tags, name) {
+			keptDefinitions = append(keptDefinitions, definition)
 		}
+	}
+	if len(keptDefinitions) > 0 {
+		slice["tags"] = keptDefinitions
 	}
 	components, err := referencedComponents(document, slice, keptOperations)
 	if err != nil {
-		return nil, fmt.Errorf("tag %q: %w", tag, err)
+		return nil, fmt.Errorf("%s: %w", label, err)
 	}
 	if len(components) > 0 {
 		slice["components"] = components
@@ -90,7 +114,7 @@ func Slice(document map[string]any, tag string) (map[string]any, error) {
 	// copied before normalize changes it.
 	copied := deepCopy(slice).(map[string]any)
 	if err := normalize(copied); err != nil {
-		return nil, fmt.Errorf("tag %q: %w", tag, err)
+		return nil, fmt.Errorf("%s: %w", label, err)
 	}
 	return copied, nil
 }
@@ -116,15 +140,28 @@ func deepCopy(node any) any {
 	}
 }
 
-func hasTag(operation map[string]any, tag string) bool {
-	tags, _ := operation["tags"].([]any)
-	return slices.Contains(tags, any(tag))
+// ownTags returns those of tags the operation is tagged with.
+func ownTags(operation map[string]any, tags []string) []string {
+	own, _ := operation["tags"].([]any)
+	var found []string
+	for _, tag := range tags {
+		if slices.Contains(own, any(tag)) {
+			found = append(found, tag)
+		}
+	}
+	return found
 }
 
-// operationID names an operation within its tag's slice: repos/get becomes
-// get, and api-insights/get-stats in orgs becomes api-insights-get-stats.
-func operationID(id, tag string) string {
-	id = strings.TrimPrefix(id, tag+"/")
+// operationID names an operation within a slice, given the operation's tags
+// there: repos/get tagged repos becomes get, and api-insights/get-stats tagged
+// orgs becomes api-insights-get-stats.
+func operationID(id string, tags []string) string {
+	for _, tag := range tags {
+		if trimmed, ok := strings.CutPrefix(id, tag+"/"); ok {
+			id = trimmed
+			break
+		}
+	}
 	return strings.ReplaceAll(id, "/", "-")
 }
 

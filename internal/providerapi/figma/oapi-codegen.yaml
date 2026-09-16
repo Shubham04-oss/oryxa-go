@@ -1,8 +1,11 @@
-# Shared by every API area; go generate passes each area's -package and -o.
+# The shared ../oapi-codegen.yaml, except that response wrappers are named
+# <Operation>Result: Figma's description already names its responses
+# <Operation>Response, which would leave the wrappers numbered.
 generate:
   models: true
   client: true
 output-options:
+  response-type-suffix: Result
   # A name that collides across component sections takes the section as a
   # suffix, such as RuleSuiteResultParameter.
   resolve-type-name-collisions: true
