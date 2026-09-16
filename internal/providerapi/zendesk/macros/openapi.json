@@ -1,0 +1,1959 @@
+{
+  "components": {
+    "examples": {
+      "CreateMacroResponseExample": {
+        "value": {
+          "macro": {
+            "actions": [
+              {
+                "field": "status",
+                "value": "solved"
+              }
+            ],
+            "id": 25,
+            "restriction": {},
+            "title": "Roger Wilco"
+          }
+        }
+      },
+      "GroupsResponseExample": {
+        "value": {
+          "groups": [
+            {
+              "created_at": "2009-05-13T00:07:08Z",
+              "id": 211,
+              "is_public": true,
+              "name": "DJs",
+              "updated_at": "2011-07-22T00:11:12Z"
+            },
+            {
+              "created_at": "2009-08-26T00:07:08Z",
+              "id": 122,
+              "is_public": true,
+              "name": "MCs",
+              "updated_at": "2010-05-13T00:07:08Z"
+            }
+          ]
+        }
+      },
+      "MacroActionsResponseExample": {
+        "value": {
+          "actions": [
+            {
+              "group": "ticket",
+              "operators": [
+                {
+                  "title": "Is",
+                  "value": "is"
+                }
+              ],
+              "output_key": null,
+              "target": null,
+              "title": "Set subject",
+              "title_for_field": "Set subject",
+              "value": "subject",
+              "values": {
+                "list": [],
+                "type": "text"
+              }
+            },
+            {
+              "group": "ticket",
+              "operators": [
+                {
+                  "title": "Is",
+                  "value": "is"
+                }
+              ],
+              "output_key": null,
+              "target": null,
+              "title": "Status",
+              "title_for_field": "Set subject",
+              "value": "subject",
+              "values": {
+                "list": [
+                  {
+                    "enabled": true,
+                    "title": "Open",
+                    "value": "open"
+                  },
+                  {
+                    "enabled": true,
+                    "title": "Pending",
+                    "value": "pending"
+                  },
+                  {
+                    "enabled": true,
+                    "title": "Solved",
+                    "value": "solved"
+                  }
+                ],
+                "type": "list"
+              }
+            },
+            {
+              "field": "priority",
+              "group": "ticket",
+              "operators": [
+                {
+                  "title": "Is",
+                  "value": "is"
+                }
+              ],
+              "output_key": null,
+              "title": "Priority",
+              "title_for_field": "Priority",
+              "value": "priority",
+              "values": {
+                "list": [
+                  {
+                    "enabled": false,
+                    "title": "Low",
+                    "value": "low"
+                  },
+                  {
+                    "enabled": true,
+                    "title": "Normal",
+                    "value": "normal"
+                  },
+                  {
+                    "enabled": true,
+                    "title": "High",
+                    "value": "high"
+                  },
+                  {
+                    "enabled": false,
+                    "title": "Urgent",
+                    "value": "urgent"
+                  }
+                ],
+                "type": "list"
+              }
+            }
+          ]
+        }
+      },
+      "MacroAttachmentResponseExample": {
+        "value": {
+          "macro_attachment": {
+            "content_type": "image/jpeg",
+            "content_url": "https://company.zendesk.com/api/v2/macros/attachments/100/content",
+            "created_at": "2016-08-15T16:04:06Z",
+            "filename": "foobar.jpg",
+            "id": 100,
+            "size": 2532
+          }
+        }
+      },
+      "MacroAttachmentsResponseExample": {
+        "value": {
+          "macro_attachments": [
+            {
+              "content_type": "image/jpeg",
+              "content_url": "https://company.zendesk.com/api/v2/macros/attachments/100/content",
+              "created_at": "2016-08-15T16:04:06Z",
+              "filename": "foobar.jpg",
+              "id": 100,
+              "size": 2532
+            },
+            {
+              "content_type": "image/jpeg",
+              "content_url": "https://company.zendesk.com/api/v2/macros/attachments/342/content",
+              "created_at": "2016-08-16T12:42:25Z",
+              "filename": "bazbat.jpg",
+              "id": 342,
+              "size": 5028
+            }
+          ]
+        }
+      },
+      "MacroCategoriesResponseExample": {
+        "value": {
+          "categories": [
+            "FAQ",
+            "Triage"
+          ]
+        }
+      },
+      "MacroChangesToTicketsResponseExample": {
+        "value": {
+          "result": {
+            "ticket": {
+              "assignee_id": 235323,
+              "comment": {
+                "body": "Assigned to Agent Uno.",
+                "public": false,
+                "scoped_body": [
+                  [
+                    "channel:all",
+                    "Assigned to Agent Uno."
+                  ]
+                ]
+              },
+              "fields": {
+                "id": 27642,
+                "value": "745"
+              },
+              "group_id": 98738
+            }
+          }
+        }
+      },
+      "MacroResponseExample": {
+        "value": {
+          "macro": {
+            "actions": [],
+            "active": true,
+            "description": "Sets the ticket status to `solved`",
+            "id": 25,
+            "position": 42,
+            "restriction": {},
+            "title": "Close and Save"
+          }
+        }
+      },
+      "MacrosResponseExample": {
+        "value": {
+          "count": 2,
+          "macros": [
+            {
+              "actions": [],
+              "active": true,
+              "description": "Sets the ticket status to `solved`",
+              "id": 25,
+              "position": 42,
+              "restriction": {},
+              "title": "Close and Save"
+            },
+            {
+              "actions": [],
+              "active": false,
+              "description": "Adds a `priority` tag to the ticket",
+              "id": 26,
+              "restriction": {},
+              "title": "Assign priority tag"
+            }
+          ],
+          "next_page": null,
+          "previous_page": null
+        }
+      },
+      "MostUsedMacrosResponseExample": {
+        "value": {
+          "most_used_macros": [
+            {
+              "active": true,
+              "availability_type": "everyone",
+              "created_at": "2019-09-16T02:17:38Z",
+              "description": "Sets the ticket status to solved",
+              "id": 25,
+              "position": 42,
+              "raw_title": "Close and Save",
+              "title": "Close and Save",
+              "updated_at": "2019-09-16T02:17:38Z"
+            },
+            {
+              "active": false,
+              "availability_type": "everyone",
+              "created_at": "2019-09-16T02:17:38Z",
+              "description": "Adds a priority tag to the ticket",
+              "id": 26,
+              "position": 43,
+              "raw_title": "{{dc.assign_priority_tag}}",
+              "title": "Assign priority tag",
+              "updated_at": "2019-09-16T02:17:38Z"
+            }
+          ]
+        }
+      },
+      "ShowDerivedMacroResponseExample": {
+        "value": {
+          "definitions": {
+            "actions": [
+              {
+                "group": "ticket",
+                "nullable": false,
+                "repeatable": false,
+                "subject": "status",
+                "title": "Status",
+                "type": "list",
+                "values": [
+                  {
+                    "enabled": true,
+                    "title": "Open",
+                    "value": "1"
+                  },
+                  {
+                    "enabled": true,
+                    "title": "Pending",
+                    "value": "2"
+                  },
+                  {
+                    "enabled": true,
+                    "title": "Solved",
+                    "value": "3"
+                  },
+                  {
+                    "enabled": true,
+                    "title": "Closed",
+                    "value": "4"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "UpdateMacroResponseExample": {
+        "value": {
+          "macro": {
+            "actions": [
+              {
+                "field": "status",
+                "value": "solved"
+              }
+            ],
+            "active": true,
+            "description": "Sets the ticket status to `solved`",
+            "id": 25,
+            "position": 42,
+            "restriction": {},
+            "title": "Close and Save"
+          }
+        }
+      }
+    },
+    "parameters": {
+      "AttachmentId": {
+        "description": "The ID of the attachment",
+        "example": 498483,
+        "in": "path",
+        "name": "attachment_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "DualPaginationPage": {
+        "description": "Pagination parameter. Supports both traditional offset and cursor-based pagination:\n\n- Traditional: `?page=2` (integer page number)\n- Cursor: `?page[size]=50&page[after]=cursor` (deepObject with size, after, before)\n\nThese are mutually exclusive - use one format or the other, not both.\n",
+        "explode": true,
+        "in": "query",
+        "name": "page",
+        "schema": {
+          "description": "Cursor pagination parameters (JSON:API style)",
+          "properties": {
+            "after": {
+              "description": "Cursor token for next page",
+              "example": "eyJvIjoiaWQiLCJ2IjoiYVFFPSJ9",
+              "type": "string"
+            },
+            "before": {
+              "description": "Cursor token for previous page",
+              "example": "eyJvIjoiaWQiLCJ2IjoiYVFFPSJ9",
+              "type": "string"
+            },
+            "size": {
+              "description": "Number of records per page",
+              "example": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "style": "deepObject"
+      },
+      "MacroAccess": {
+        "description": "Filter macros by access. Possible values are \"personal\", \"agents\", \"shared\", or \"account\". The \"agents\" value returns all personal macros for the account's agents and is only available to admins.",
+        "example": "personal",
+        "in": "query",
+        "name": "access",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "MacroActive": {
+        "description": "Filter by active macros if true or inactive macros if false",
+        "example": true,
+        "in": "query",
+        "name": "active",
+        "schema": {
+          "type": "boolean"
+        }
+      },
+      "MacroCategory": {
+        "description": "Filter macros by category",
+        "example": 25,
+        "in": "query",
+        "name": "category",
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "MacroGroupId": {
+        "description": "Filter macros by group",
+        "example": 25,
+        "in": "query",
+        "name": "group_id",
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "MacroId": {
+        "description": "The ID of the macro",
+        "example": 25,
+        "in": "path",
+        "name": "macro_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "MacroIdQuery": {
+        "description": "The ID of the macro to replicate",
+        "example": 25,
+        "in": "query",
+        "name": "macro_id",
+        "required": true,
+        "schema": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "MacroInclude": {
+        "description": "A sideload to include in the response. See [Sideloads](#sideloads-2)",
+        "example": "usage_7d",
+        "in": "query",
+        "name": "include",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "MacroOnlyViewable": {
+        "description": "If true, returns only macros that can be applied to tickets. If false, returns all macros the current user can manage. Default is false",
+        "example": false,
+        "in": "query",
+        "name": "only_viewable",
+        "schema": {
+          "type": "boolean"
+        }
+      },
+      "MacroQuery": {
+        "description": "Query string used to find macros with matching titles",
+        "example": "close",
+        "in": "query",
+        "name": "query",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "MacroSearchSortBy": {
+        "description": "Possible values are \"alphabetical\", \"created_at\", \"updated_at\", or \"position\". Defaults to alphabetical",
+        "example": "alphabetical",
+        "in": "query",
+        "name": "sort_by",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "MacroSortBy": {
+        "description": "Possible values are \"alphabetical\", \"created_at\", \"updated_at\", \"usage_1h\", \"usage_24h\", \"usage_7d\", or \"usage_30d\". Defaults to alphabetical",
+        "example": "alphabetical",
+        "in": "query",
+        "name": "sort_by",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "MacroSortOrder": {
+        "description": "One of \"asc\" or \"desc\". Defaults to \"asc\" for alphabetical and position sort, \"desc\" for all others",
+        "example": "asc",
+        "in": "query",
+        "name": "sort_order",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "PerPage": {
+        "description": "Number of records to return per page.\n\nNote: Default and maximum values vary by endpoint. Check endpoint-specific\ndocumentation for limits.\n",
+        "example": 50,
+        "in": "query",
+        "name": "per_page",
+        "schema": {
+          "minimum": 1,
+          "type": "integer"
+        }
+      }
+    },
+    "schemas": {
+      "ActionObject": {
+        "properties": {
+          "field": {
+            "description": "The name of a ticket field to modify",
+            "type": "string"
+          },
+          "value": {
+            "description": "The new value of the field",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "GroupObject": {
+        "example": {
+          "created_at": "2009-07-20T22:55:29Z",
+          "default": true,
+          "deleted": false,
+          "description": "Some clever description here",
+          "id": 3432,
+          "is_public": true,
+          "name": "First Level Support",
+          "updated_at": "2011-05-05T10:38:52Z",
+          "url": "https://company.zendesk.com/api/v2/groups/3432"
+        },
+        "properties": {
+          "created_at": {
+            "description": "The time the group was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "default": {
+            "description": "If the group is the default one for the account",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "deleted": {
+            "description": "Deleted groups get marked as such",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "description": {
+            "description": "The description of the group",
+            "type": "string"
+          },
+          "id": {
+            "description": "Automatically assigned when creating groups",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "is_public": {
+            "description": "If true, the group is public.\nIf false, the group is private.\nYou can't change a private group to a public group\n",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "The name of the group",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "The time of the last update of the group",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "url": {
+            "description": "The API url of the group",
+            "readOnly": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "GroupsResponse": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/GroupObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MacroApplyTicketResponse": {
+        "properties": {
+          "result": {
+            "properties": {
+              "ticket": {
+                "properties": {
+                  "assignee_id": {
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "comment": {
+                    "properties": {
+                      "body": {
+                        "type": "string"
+                      },
+                      "public": {
+                        "type": "boolean"
+                      },
+                      "scoped_body": {
+                        "items": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "fields": {
+                    "properties": {
+                      "id": {
+                        "format": "int64",
+                        "type": "integer"
+                      },
+                      "value": {
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "group_id": {
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "id": {
+                    "format": "int64",
+                    "type": "integer"
+                  },
+                  "url": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "MacroAttachmentObject": {
+        "properties": {
+          "content_type": {
+            "description": "The content type of the image. Example value: \"image/png\"",
+            "readOnly": true,
+            "type": "string"
+          },
+          "content_url": {
+            "description": "A full URL where the attachment image file can be downloaded",
+            "readOnly": true,
+            "type": "string"
+          },
+          "created_at": {
+            "description": "The time when this attachment was created",
+            "format": "date-time",
+            "type": "string"
+          },
+          "filename": {
+            "description": "The name of the image file",
+            "readOnly": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "Automatically assigned when created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "size": {
+            "description": "The size of the image file in bytes",
+            "readOnly": true,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "MacroAttachmentResponse": {
+        "properties": {
+          "macro_attachment": {
+            "$ref": "#/components/schemas/MacroAttachmentObject"
+          }
+        },
+        "type": "object"
+      },
+      "MacroAttachmentsResponse": {
+        "properties": {
+          "macro_attachments": {
+            "items": {
+              "$ref": "#/components/schemas/MacroAttachmentObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MacroCategoriesResponse": {
+        "properties": {
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MacroCommonObject": {
+        "example": {
+          "actions": [
+            {
+              "field": "status",
+              "value": "solved"
+            },
+            {
+              "field": "priority",
+              "value": "normal"
+            },
+            {
+              "field": "type",
+              "value": "incident"
+            },
+            {
+              "field": "assignee_id",
+              "value": "current_user"
+            },
+            {
+              "field": "group_id",
+              "value": "current_groups"
+            },
+            {
+              "field": "comment_value",
+              "value": "Thanks for your request. This issue you reported is a known issue. For more information, please visit our forums. "
+            }
+          ],
+          "active": true,
+          "created_at": "2019-09-16T02:17:38Z",
+          "default": false,
+          "description": null,
+          "id": 360111062754,
+          "position": 9999,
+          "raw_title": "Close and redirect to topics",
+          "restriction": null,
+          "title": "Close and redirect to topics",
+          "updated_at": "2019-09-16T02:17:38Z",
+          "url": "https://subdomain.zendesk.com/api/v2/macros/360111062754"
+        },
+        "properties": {
+          "actions": {
+            "description": "Each action describes what the macro will do. See [Actions reference](/documentation/ticketing/reference-guides/actions-reference)",
+            "items": {
+              "$ref": "#/components/schemas/ActionObject"
+            },
+            "type": "array"
+          },
+          "active": {
+            "description": "Useful for determining if the macro should be displayed",
+            "type": "boolean"
+          },
+          "created_at": {
+            "description": "The time the macro was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "default": {
+            "description": "If true, the macro is a default macro",
+            "readOnly": true,
+            "type": "boolean"
+          },
+          "description": {
+            "description": "The description of the macro",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "The id automatically assigned when a macro is created",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "position": {
+            "description": "The position of the macro",
+            "type": "integer"
+          },
+          "raw_title": {
+            "description": "The raw format of the title of the macro",
+            "type": "string"
+          },
+          "restriction": {
+            "additionalProperties": true,
+            "description": "Access to this macro. A null value allows unrestricted access for all users in the account",
+            "nullable": true,
+            "type": "object"
+          },
+          "title": {
+            "description": "The title of the macro",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "The time of the last update of the macro",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "url": {
+            "description": "A URL to access the macro's details",
+            "readOnly": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "actions",
+          "title"
+        ],
+        "type": "object"
+      },
+      "MacroInput": {
+        "properties": {
+          "actions": {
+            "description": "Each action describes what the macro will do",
+            "items": {
+              "$ref": "#/components/schemas/ActionObject"
+            },
+            "type": "array"
+          },
+          "active": {
+            "description": "Useful for determining if the macro should be displayed",
+            "type": "boolean"
+          },
+          "description": {
+            "description": "The description of the macro",
+            "nullable": true,
+            "type": "string"
+          },
+          "restriction": {
+            "additionalProperties": true,
+            "description": "Who may access this macro. Will be null when everyone in the account can access it",
+            "nullable": true,
+            "properties": {
+              "id": {
+                "description": "The numeric ID of the group or user",
+                "format": "int64",
+                "type": "integer"
+              },
+              "ids": {
+                "description": "The numeric IDs of the groups",
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "type": {
+                "description": "Allowed values are Group or User",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "title": {
+            "description": "The title of the macro",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "actions"
+        ],
+        "type": "object"
+      },
+      "MacroObject": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/MacroCommonObject"
+          },
+          {
+            "properties": {
+              "app_installation": {
+                "description": "The app installation that requires each macro, if present",
+                "nullable": true,
+                "type": "string"
+              },
+              "categories": {
+                "description": "The macro categories",
+                "nullable": true,
+                "type": "string"
+              },
+              "permissions": {
+                "description": "Permissions for each macro",
+                "nullable": true,
+                "type": "string"
+              },
+              "usage_1h": {
+                "description": "The number of times each macro has been used in the past hour",
+                "type": "integer"
+              },
+              "usage_24h": {
+                "description": "The number of times each macro has been used in the past day",
+                "type": "integer"
+              },
+              "usage_30d": {
+                "description": "The number of times each macro has been used in the past thirty days",
+                "type": "integer"
+              },
+              "usage_7d": {
+                "description": "The number of times each macro has been used in the past week",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          }
+        ],
+        "example": {
+          "actions": [],
+          "active": true,
+          "description": "Sets the ticket status to `solved`",
+          "id": 25,
+          "position": 42,
+          "restriction": {
+            "id": 4,
+            "type": "User"
+          },
+          "title": "Close and Save"
+        },
+        "type": "object"
+      },
+      "MacroResponse": {
+        "properties": {
+          "macro": {
+            "$ref": "#/components/schemas/MacroObject"
+          }
+        },
+        "type": "object"
+      },
+      "MacroUpdateManyInput": {
+        "properties": {
+          "macros": {
+            "items": {
+              "properties": {
+                "active": {
+                  "description": "The active status of the macro (true or false)",
+                  "type": "boolean"
+                },
+                "id": {
+                  "description": "The ID of the macro to update",
+                  "format": "int64",
+                  "type": "integer"
+                },
+                "position": {
+                  "description": "The new position of the macro",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MacrosResponse": {
+        "allOf": [
+          {
+            "properties": {
+              "macros": {
+                "items": {
+                  "$ref": "#/components/schemas/MacroObject"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          {
+            "$ref": "#/components/schemas/OffsetPaginationObject"
+          }
+        ],
+        "type": "object"
+      },
+      "MostUsedMacroObject": {
+        "properties": {
+          "active": {
+            "description": "Whether the macro is active",
+            "type": "boolean"
+          },
+          "availability_type": {
+            "description": "The scope of availability of this macro",
+            "type": "string"
+          },
+          "created_at": {
+            "description": "The time the macro was created",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          },
+          "description": {
+            "description": "The description of the macro",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "Automatically assigned when creating macros",
+            "format": "int64",
+            "readOnly": true,
+            "type": "integer"
+          },
+          "position": {
+            "description": "The position of the macro",
+            "type": "integer"
+          },
+          "raw_title": {
+            "description": "The raw title of the macro with unparsed dynamic content",
+            "type": "string"
+          },
+          "title": {
+            "description": "The title of the macro",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "The time of the last update of the macro",
+            "format": "date-time",
+            "readOnly": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MostUsedMacrosResponse": {
+        "properties": {
+          "most_used_macros": {
+            "items": {
+              "$ref": "#/components/schemas/MostUsedMacroObject"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "OffsetPaginationObject": {
+        "properties": {
+          "count": {
+            "description": "the total record count",
+            "type": "integer"
+          },
+          "next_page": {
+            "description": "the URL of the next page",
+            "format": "uri",
+            "nullable": true,
+            "type": "string"
+          },
+          "previous_page": {
+            "description": "the URL of the previous page",
+            "format": "uri",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "basicAuth": {
+        "scheme": "basic",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Zendesk Support API endpoints",
+    "title": "Support API",
+    "version": "2.0.0"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/api/v2/macros": {
+      "get": {
+        "description": "Lists all shared and personal macros available to the current user. For admins, the API returns all macros for the account, including the personal macros of agents and other admins.\n\n#### Pagination\n\n- Cursor pagination (recommended)\n- Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n\nReturns a maximum of 100 records per page.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "ListMacros",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MacroInclude"
+          },
+          {
+            "$ref": "#/components/parameters/MacroAccess"
+          },
+          {
+            "$ref": "#/components/parameters/MacroActive"
+          },
+          {
+            "$ref": "#/components/parameters/MacroCategory"
+          },
+          {
+            "$ref": "#/components/parameters/MacroGroupId"
+          },
+          {
+            "$ref": "#/components/parameters/MacroOnlyViewable"
+          },
+          {
+            "$ref": "#/components/parameters/MacroSortBy"
+          },
+          {
+            "$ref": "#/components/parameters/MacroSortOrder"
+          },
+          {
+            "$ref": "#/components/parameters/DualPaginationPage"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacrosResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacrosResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "List Macros",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "post": {
+        "description": "#### Allowed For\n* Agents\n",
+        "operationId": "CreateMacro",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "value": {
+                    "macro": {
+                      "actions": [
+                        {
+                          "field": "status",
+                          "value": "solved"
+                        }
+                      ],
+                      "title": "Roger Wilco"
+                    }
+                  }
+                }
+              },
+              "schema": {
+                "properties": {
+                  "macro": {
+                    "$ref": "#/components/schemas/MacroInput"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/CreateMacroResponseExample"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "macro": {
+                      "$ref": "#/components/schemas/MacroObject"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Create Macro",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/actions": {
+      "get": {
+        "description": "#### Allowed For\n* Agents\n",
+        "operationId": "ListMacrosActions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroActionsResponseExample"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "actions": {
+                      "items": {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "List Supported Actions for Macros",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/active": {
+      "get": {
+        "description": "Lists all active shared and personal macros available to the current user.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "ListActiveMacros",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/MacroInclude"
+          },
+          {
+            "$ref": "#/components/parameters/MacroAccess"
+          },
+          {
+            "$ref": "#/components/parameters/MacroCategory"
+          },
+          {
+            "$ref": "#/components/parameters/MacroGroupId"
+          },
+          {
+            "$ref": "#/components/parameters/MacroSortBy"
+          },
+          {
+            "$ref": "#/components/parameters/MacroSortOrder"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacrosResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacrosResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "List Active Macros",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/attachments": {
+      "post": {
+        "description": "Allows an attachment to be uploaded that can be associated with a macro at a later time.\n\n**Note:** To ensure an uploaded attachment is not lost, associate it with a macro as soon as possible. From time to time, old attachments that are not not associated with any macro are purged.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "CreateMacroAttachment",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroAttachmentResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacroAttachmentResponse"
+                }
+              }
+            },
+            "description": "Created Response"
+          }
+        },
+        "summary": "Create Unassociated Macro Attachment",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/attachments/{attachment_id}": {
+      "get": {
+        "description": "Shows the properties of the specified macro attachment.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "ShowMacroAttachment",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroAttachmentResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacroAttachmentResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "Show Macro Attachment",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/AttachmentId"
+        }
+      ]
+    },
+    "/api/v2/macros/attachments/{attachment_id}/content": {
+      "get": {
+        "description": "Downloads the file content of the specified macro attachment.\n\nThe response `Content-Type` matches the attachment's content type.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "DownloadMacroAttachment",
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "Download Macro Attachment",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/AttachmentId"
+        }
+      ]
+    },
+    "/api/v2/macros/categories": {
+      "get": {
+        "description": "Lists all macro categories available to the current user.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "ListMacroCategories",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroCategoriesResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacroCategoriesResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "List Macro Categories",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/definitions": {
+      "get": {
+        "description": "Returns the definitions of the actions a macro can perform. For example,\none action can set the status of a ticket. The definition of the action\nincludes a title (\"Status\"), a type (\"list\"), and possible values. For a\nlist of support actions, see [Actions reference](/documentation/ticketing/reference-guides/actions-reference).\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ListMacroActionDefinitions",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/ShowDerivedMacroResponseExample"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "definitions": {
+                      "properties": {
+                        "actions": {
+                          "items": {
+                            "additionalProperties": true,
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "List Macro Action Definitions",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/destroy_many": {
+      "delete": {
+        "description": "Deletes the macros corresponding to the provided comma-separated list of IDs.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "DeleteManyMacros",
+        "parameters": [
+          {
+            "description": "The IDs of the macros to delete",
+            "example": [
+              1,
+              2,
+              3
+            ],
+            "in": "query",
+            "name": "ids",
+            "required": true,
+            "schema": {
+              "items": {
+                "format": "int64",
+                "type": "integer"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Bulk Delete Macros",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/groups": {
+      "get": {
+        "description": "Lists active groups associated with at least one macro.\n\n#### Pagination\n\n- Cursor pagination (recommended)\n- Offset pagination\n\nSee [Pagination](/api-reference/introduction/pagination/).\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ListMacroGroups",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DualPaginationPage"
+          },
+          {
+            "$ref": "#/components/parameters/PerPage"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/GroupsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/GroupsResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "List Macro Groups",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/most_used": {
+      "get": {
+        "description": "Returns up to 10 most used macros for the current user.\nWhen there are no most used macros, an empty array is returned.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ListMostUsedMacros",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MostUsedMacrosResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MostUsedMacrosResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "List Most Used Macros",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/new": {
+      "get": {
+        "description": "Returns an unpersisted macro representation derived from a ticket or macro.\n\nThe endpoint takes one of the following query parameters: `macro_id` or `ticket_id`. If you include both, `macro_id` is used.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "ShowDerivedMacro",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacroResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "Show Macro Replica",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MacroIdQuery"
+        },
+        {
+          "description": "The ID of the ticket from which to build a macro replica",
+          "example": 35436,
+          "in": "query",
+          "name": "ticket_id",
+          "required": true,
+          "schema": {
+            "format": "int64",
+            "type": "integer"
+          }
+        }
+      ]
+    },
+    "/api/v2/macros/search": {
+      "get": {
+        "description": "#### Pagination\n\n* Offset pagination only\n\nSee [Using Offset Pagination](/api-reference/introduction/pagination/#using-offset-pagination).\n\n#### Allowed For\n* Agents\n",
+        "operationId": "SearchMacro",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacrosResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacrosResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "Search Macros",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MacroInclude"
+        },
+        {
+          "$ref": "#/components/parameters/MacroAccess"
+        },
+        {
+          "$ref": "#/components/parameters/MacroActive"
+        },
+        {
+          "$ref": "#/components/parameters/MacroCategory"
+        },
+        {
+          "$ref": "#/components/parameters/MacroGroupId"
+        },
+        {
+          "$ref": "#/components/parameters/MacroOnlyViewable"
+        },
+        {
+          "$ref": "#/components/parameters/MacroSearchSortBy"
+        },
+        {
+          "$ref": "#/components/parameters/MacroSortOrder"
+        },
+        {
+          "$ref": "#/components/parameters/MacroQuery"
+        }
+      ]
+    },
+    "/api/v2/macros/update_many": {
+      "put": {
+        "description": "Updates the provided macros with the specified changes.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "UpdateManyMacros",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "value": {
+                    "macros": [
+                      {
+                        "active": false,
+                        "id": 25
+                      },
+                      {
+                        "id": 23,
+                        "position": 5
+                      }
+                    ]
+                  }
+                }
+              },
+              "schema": {
+                "$ref": "#/components/schemas/MacroUpdateManyInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacrosResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacrosResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "Update Many Macros",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/{macro_id}": {
+      "delete": {
+        "description": "#### Allowed For\n* Agents, with restrictions applying on certain actions\n",
+        "operationId": "DeleteMacro",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Delete Macro",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "get": {
+        "description": "#### Allowed For\n* Agents\n",
+        "operationId": "ShowMacro",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacroResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "Show Macro",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MacroId"
+        }
+      ],
+      "put": {
+        "description": "#### Allowed For\n* Agents\n",
+        "operationId": "UpdateMacro",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "examples": {
+                "default": {
+                  "value": {
+                    "macro": {
+                      "actions": [
+                        {
+                          "field": "status",
+                          "value": "solved"
+                        }
+                      ],
+                      "title": "Sets the ticket status to `solved`"
+                    }
+                  }
+                }
+              },
+              "schema": {
+                "properties": {
+                  "macro": {
+                    "$ref": "#/components/schemas/MacroInput"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/UpdateMacroResponseExample"
+                  }
+                },
+                "schema": {
+                  "properties": {
+                    "macro": {
+                      "$ref": "#/components/schemas/MacroObject"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Update Macro",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/macros/{macro_id}/apply": {
+      "get": {
+        "description": "Returns the changes the macro would make to a ticket. It doesn't actually\nchange a ticket. You can use the response data in a subsequent API call\nto the [Tickets](/api-reference/ticketing/tickets/tickets/) endpoint to update the ticket.\n\nThe response includes only the ticket fields that would be changed by the\nmacro. To get the full ticket object after the macro is applied,\nsee [Show Ticket After Changes](#show-ticket-after-changes).\n\n#### Allowed For\n* Agents\n",
+        "operationId": "ShowChangesToTicket",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroChangesToTicketsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacroApplyTicketResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "Show Changes to Ticket",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MacroId"
+        },
+        {
+          "description": "If true, normalizes the newline formatting of the macro's comment to more closely match the formatting produced by the ticket comment editor",
+          "in": "query",
+          "name": "normalize_comment",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ]
+    },
+    "/api/v2/macros/{macro_id}/attachments": {
+      "get": {
+        "description": "Lists the attachments associated with a macro.\n\n#### Allowed For\n* Agents\n",
+        "operationId": "ListMacroAttachments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroAttachmentsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacroAttachmentsResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "List Macro Attachments",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MacroId"
+        }
+      ],
+      "post": {
+        "description": "Allows an attachment to be uploaded and associated with a macro at the same time.\n\n**Note:** A macro can be associated with up to five attachments.\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "CreateAssociatedMacroAttachment",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroAttachmentResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacroAttachmentResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "Create Macro Attachment",
+        "tags": [
+          "Macros"
+        ]
+      }
+    },
+    "/api/v2/tickets/{ticket_id}/macros/{macro_id}/apply": {
+      "get": {
+        "description": "Returns the full ticket object as it would be after applying the macro to the ticket.\nIt doesn't actually change the ticket.\n\nTo get only the ticket fields that would be changed by the macro,\nsee [Show Changes to Ticket](#show-changes-to-ticket).\n\n#### Allowed For\n\n* Agents\n",
+        "operationId": "ShowTicketAfterChanges",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "$ref": "#/components/examples/MacroChangesToTicketsResponseExample"
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/MacroApplyTicketResponse"
+                }
+              }
+            },
+            "description": "Success Response"
+          }
+        },
+        "summary": "Show Ticket After Changes",
+        "tags": [
+          "Macros"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/MacroId"
+        },
+        {
+          "description": "The ID of the ticket",
+          "example": 35436,
+          "in": "path",
+          "name": "ticket_id",
+          "required": true,
+          "schema": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        {
+          "description": "If true, normalizes the newline formatting of the macro's comment to more closely match the formatting produced by the ticket comment editor",
+          "in": "query",
+          "name": "normalize_comment",
+          "schema": {
+            "type": "boolean"
+          }
+        }
+      ]
+    }
+  },
+  "security": [
+    {
+      "basicAuth": []
+    }
+  ],
+  "servers": [
+    {
+      "url": "https://{subdomain}.{domain}.com",
+      "variables": {
+        "domain": {
+          "default": "zendesk"
+        },
+        "subdomain": {
+          "default": "example"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Macros"
+    }
+  ]
+}

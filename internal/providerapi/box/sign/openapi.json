@@ -1,0 +1,2232 @@
+{
+  "components": {
+    "schemas": {
+      "ClientError": {
+        "description": "A generic error.",
+        "properties": {
+          "code": {
+            "description": "A Box-specific error code.",
+            "enum": [
+              "created",
+              "accepted",
+              "no_content",
+              "redirect",
+              "not_modified",
+              "bad_request",
+              "unauthorized",
+              "forbidden",
+              "not_found",
+              "method_not_allowed",
+              "conflict",
+              "precondition_failed",
+              "too_many_requests",
+              "internal_server_error",
+              "unavailable",
+              "item_name_invalid",
+              "insufficient_scope"
+            ],
+            "example": "item_name_invalid",
+            "type": "string"
+          },
+          "context_info": {
+            "additionalProperties": {},
+            "description": "A free-form object that contains additional context\nabout the error. The possible fields are defined on\na per-endpoint basis. `message` is only one example.",
+            "example": {
+              "message": "Something went wrong"
+            },
+            "nullable": true,
+            "type": "object"
+          },
+          "help_url": {
+            "description": "A URL that links to more information about why this error occurred.",
+            "example": "https://developer.box.com/guides/api-calls/permissions-and-errors/common-errors/",
+            "nullable": false,
+            "type": "string"
+          },
+          "message": {
+            "description": "A short message describing the error.",
+            "example": "Method Not Allowed",
+            "nullable": false,
+            "type": "string"
+          },
+          "request_id": {
+            "description": "A unique identifier for this response, which can be used\nwhen contacting Box support.",
+            "example": "abcdef123456",
+            "nullable": false,
+            "type": "string"
+          },
+          "status": {
+            "description": "The HTTP status of the response.",
+            "example": 400,
+            "format": "int32",
+            "nullable": false,
+            "type": "integer"
+          },
+          "type": {
+            "description": "The value will always be `error`.",
+            "enum": [
+              "error"
+            ],
+            "example": "error",
+            "nullable": false,
+            "type": "string"
+          }
+        },
+        "title": "Client error",
+        "type": "object",
+        "x-box-resource-id": "client_error"
+      },
+      "File--Base": {
+        "description": "The bare basic representation of a file, the minimal\namount of fields returned when using the `fields` query\nparameter.",
+        "nullable": true,
+        "properties": {
+          "etag": {
+            "description": "The HTTP `etag` of this file. This can be used within some API\nendpoints in the `If-Match` and `If-None-Match` headers to only\nperform changes on the file if (no) changes have happened.",
+            "example": "1",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "The unique identifier that represent a file.\n\nThe ID for any file can be determined\nby visiting a file in the web application\nand copying the ID from the URL. For example,\nfor the URL `https://*.app.box.com/files/123`\nthe `file_id` is `123`.",
+            "example": "12345",
+            "nullable": false,
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `file`.",
+            "enum": [
+              "file"
+            ],
+            "example": "file",
+            "nullable": false,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "title": "File (Base)",
+        "type": "object",
+        "x-box-resource-id": "file--base",
+        "x-box-tag": "files",
+        "x-box-variant": "base",
+        "x-box-variants": [
+          "base",
+          "mini",
+          "standard",
+          "full"
+        ]
+      },
+      "File--Mini": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/File--Base"
+          },
+          {
+            "properties": {
+              "file_version": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/FileVersion--Mini"
+                  },
+                  {
+                    "description": "The information about the current version of the file."
+                  }
+                ]
+              },
+              "name": {
+                "description": "The name of the file.",
+                "example": "Contract.pdf",
+                "type": "string"
+              },
+              "sequence_id": {
+                "allOf": [
+                  {
+                    "description": "A numeric identifier that represents the most recent user event\nthat has been applied to this item.\n\nThis can be used in combination with the `GET /events`-endpoint\nto filter out user events that would have occurred before this\nidentifier was read.\n\nAn example would be where a Box Drive-like application\nwould fetch an item via the API, and then listen to incoming\nuser events for changes to the item. The application would\nignore any user events where the `sequence_id` in the event\nis smaller than or equal to the `sequence_id` in the originally\nfetched resource.",
+                    "example": "3",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  {
+                    "nullable": false
+                  }
+                ]
+              },
+              "sha1": {
+                "description": "The SHA1 hash of the file. This can be used to compare the contents\nof a file on Box with a local file.",
+                "example": "85136C79CBF9FE36BB9D05D0639C70C265C18D37",
+                "format": "digest",
+                "nullable": false,
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A mini representation of a file, used when\nnested under another resource.",
+        "nullable": true,
+        "title": "File (Mini)",
+        "type": "object",
+        "x-box-resource-id": "file--mini",
+        "x-box-tag": "files",
+        "x-box-variant": "mini"
+      },
+      "FileVersion--Base": {
+        "description": "The bare basic representation of a file version, the minimal\namount of fields returned when using the `fields` query\nparameter.",
+        "properties": {
+          "id": {
+            "description": "The unique identifier that represent a file version.",
+            "example": "12345",
+            "nullable": false,
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `file_version`.",
+            "enum": [
+              "file_version"
+            ],
+            "example": "file_version",
+            "nullable": false,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "title": "File version (Base)",
+        "type": "object",
+        "x-box-resource-id": "file_version--base",
+        "x-box-variant": "base",
+        "x-box-variants": [
+          "base",
+          "mini",
+          "standard",
+          "full"
+        ]
+      },
+      "FileVersion--Mini": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FileVersion--Base"
+          },
+          {
+            "properties": {
+              "sha1": {
+                "description": "The SHA1 hash of this version of the file.",
+                "example": "134b65991ed521fcfe4724b7d814ab8ded5185dc",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A mini representation of a file version, used when\nnested within another resource.",
+        "title": "File version (Mini)",
+        "type": "object",
+        "x-box-resource-id": "file_version--mini",
+        "x-box-variant": "mini"
+      },
+      "Folder--Base": {
+        "description": "The bare basic representation of a folder, the minimal\namount of fields returned when using the `fields` query\nparameter.",
+        "properties": {
+          "etag": {
+            "description": "The HTTP `etag` of this folder. This can be used within some API\nendpoints in the `If-Match` and `If-None-Match` headers to only\nperform changes on the folder if (no) changes have happened.",
+            "example": "1",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "The unique identifier that represent a folder.\n\nThe ID for any folder can be determined\nby visiting a folder in the web application\nand copying the ID from the URL. For example,\nfor the URL `https://*.app.box.com/folders/123`\nthe `folder_id` is `123`.",
+            "example": "12345",
+            "nullable": false,
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `folder`.",
+            "enum": [
+              "folder"
+            ],
+            "example": "folder",
+            "nullable": false,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "title": "Folder (Base)",
+        "type": "object",
+        "x-box-resource-id": "folder--base",
+        "x-box-tag": "folders",
+        "x-box-variant": "base",
+        "x-box-variants": [
+          "base",
+          "mini",
+          "standard",
+          "full"
+        ]
+      },
+      "Folder--Mini": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Folder--Base"
+          },
+          {
+            "properties": {
+              "name": {
+                "description": "The name of the folder.",
+                "example": "Contracts",
+                "nullable": false,
+                "type": "string"
+              },
+              "sequence_id": {
+                "allOf": [
+                  {
+                    "description": "A numeric identifier that represents the most recent user event\nthat has been applied to this item.\n\nThis can be used in combination with the `GET /events`-endpoint\nto filter out user events that would have occurred before this\nidentifier was read.\n\nAn example would be where a Box Drive-like application\nwould fetch an item via the API, and then listen to incoming\nuser events for changes to the item. The application would\nignore any user events where the `sequence_id` in the event\nis smaller than or equal to the `sequence_id` in the originally\nfetched resource.",
+                    "example": "3",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  {
+                    "nullable": false
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A mini representation of a file version, used when\nnested under another resource.",
+        "title": "Folder (Mini)",
+        "type": "object",
+        "x-box-resource-id": "folder--mini",
+        "x-box-tag": "folders",
+        "x-box-variant": "mini"
+      },
+      "SignRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SignRequest--Base"
+          },
+          {
+            "properties": {
+              "auto_expire_at": {
+                "description": "Uses `days_valid` to calculate the date and time, in GMT, the sign request will expire if unsigned.",
+                "example": "2021-04-26T08:12:13.982Z",
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "collaborator_level": {
+                "description": "The collaborator level of the user to the sign request. Values can include \"owner\", \"editor\", and \"viewer\".",
+                "example": "owner",
+                "nullable": true,
+                "type": "string"
+              },
+              "created_at": {
+                "description": "Timestamp marking when the sign request was created.",
+                "example": "2025-02-01T12:00:00Z",
+                "format": "date-time",
+                "nullable": false,
+                "type": "string"
+              },
+              "error_code": {
+                "description": "When the sign request is in an error state, identifies the specific\nreason. Null when no error code applies.",
+                "example": "cfr11_validation_failed",
+                "nullable": true,
+                "readOnly": true,
+                "type": "string"
+              },
+              "finished_at": {
+                "description": "Timestamp indicating when all signing actions completed.",
+                "example": "2025-02-02T12:00:00Z",
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "id": {
+                "description": "Box Sign request ID.",
+                "example": "12345",
+                "type": "string"
+              },
+              "parent_folder": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Folder--Mini"
+                  },
+                  {
+                    "description": "The destination folder to place final, signed document and signing\nlog.\n\nWhen this value was not passed in when the signature request was\ncreated, then we will use a default folder which is either the parent\nfolder of the first source file in the payload if we have the permission\nto upload to that folder or a folder called \"My Sign Requests\"."
+                  }
+                ],
+                "nullable": false
+              },
+              "prepare_url": {
+                "description": "This URL is returned if `is_document_preparation_needed` is\nset to `true` in the request. The parameter is used to prepare\nthe signature request\nusing the UI. The signature request is not\nsent until the preparation\nphase is complete.",
+                "example": "https://prepareurl.com",
+                "nullable": true,
+                "type": "string"
+              },
+              "sender_email": {
+                "description": "The email address of the sender of the sign request.",
+                "example": "sender@box.com",
+                "nullable": true,
+                "type": "string"
+              },
+              "sender_id": {
+                "description": "The user ID of the sender of the sign request.",
+                "example": 12345,
+                "nullable": true,
+                "type": "integer"
+              },
+              "short_id": {
+                "description": "Short identifier for the sign request.",
+                "example": "SR-12345",
+                "nullable": false,
+                "type": "string"
+              },
+              "sign_files": {
+                "description": "List of files that will be signed, which are copies of the original\nsource files. A new version of these files are created as signers sign\nand can be downloaded at any point in the signing process.",
+                "properties": {
+                  "files": {
+                    "items": {
+                      "$ref": "#/components/schemas/File--Mini"
+                    },
+                    "type": "array"
+                  },
+                  "is_ready_for_download": {
+                    "description": "Indicates whether the `sign_files` documents are processing\nand the PDFs may be out of date. A change to any document\nrequires processing on all `sign_files`. We\nrecommended waiting until processing is finished\n(and this value is true) before downloading the PDFs.",
+                    "example": true,
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "signature_color": {
+                "description": "Force a specific color for the signature (blue, black, or red).",
+                "example": "blue",
+                "nullable": true,
+                "type": "string"
+              },
+              "signers": {
+                "description": "Array of signers for the signature request.",
+                "items": {
+                  "$ref": "#/components/schemas/SignRequestSigner"
+                },
+                "type": "array"
+              },
+              "signing_log": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/File--Mini"
+                  },
+                  {
+                    "description": "Reference to a file that holds a log of all signer activity for\nthe request."
+                  }
+                ]
+              },
+              "source_files": {
+                "description": "List of files to create a signing document from. This is currently limited to ten files. Only the ID and type fields are required for each file.",
+                "items": {
+                  "$ref": "#/components/schemas/File--Base"
+                },
+                "type": "array"
+              },
+              "status": {
+                "description": "Describes the status of the signature request.",
+                "enum": [
+                  "converting",
+                  "created",
+                  "sent",
+                  "viewed",
+                  "signed",
+                  "cancelled",
+                  "declined",
+                  "error",
+                  "error_converting",
+                  "error_sending",
+                  "expired",
+                  "finalizing",
+                  "error_finalizing"
+                ],
+                "example": "converting",
+                "type": "string"
+              },
+              "type": {
+                "description": "The value will always be `sign-request`.",
+                "enum": [
+                  "sign-request"
+                ],
+                "example": "sign-request",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A Box Sign request object.",
+        "title": "Box Sign request",
+        "type": "object",
+        "x-box-resource-id": "sign_request",
+        "x-box-tag": "sign_requests"
+      },
+      "SignRequest--Base": {
+        "description": "A standard representation of a signature request object.",
+        "properties": {
+          "are_reminders_enabled": {
+            "description": "Reminds signers to sign a document on day 3, 8, 13 and 18. Reminders are only sent to outstanding signers.",
+            "example": true,
+            "type": "boolean"
+          },
+          "are_text_signatures_enabled": {
+            "default": true,
+            "description": "Disables the usage of signatures generated by typing (text).",
+            "example": true,
+            "type": "boolean"
+          },
+          "days_valid": {
+            "description": "Set the number of days after which the created signature request will automatically expire if not completed. By default, we do not apply any expiration date on signature requests, and the signature request does not expire.",
+            "example": 2,
+            "maximum": 730,
+            "minimum": 0,
+            "nullable": true,
+            "type": "integer"
+          },
+          "declined_redirect_url": {
+            "description": "The uri that a signer will be redirected to after declining to sign a document.",
+            "example": "https://declined-redirect.com",
+            "nullable": true,
+            "type": "string"
+          },
+          "email_message": {
+            "description": "Message to include in sign request email. The field is cleaned through sanitization of specific characters. However, some html tags are allowed. Links included in the message are also converted to hyperlinks in the email. The message may contain the following html tags including `a`, `abbr`, `acronym`, `b`, `blockquote`, `code`, `em`, `i`, `ul`, `li`, `ol`, and `strong`. Be aware that when the text to html ratio is too high, the email may end up in spam filters. Custom styles on these tags are not allowed. If this field is not passed, a default message will be used.",
+            "example": "Hello! Please sign the document below",
+            "nullable": true,
+            "type": "string"
+          },
+          "email_subject": {
+            "description": "Subject of sign request email. This is cleaned by sign request. If this field is not passed, a default subject will be used.",
+            "example": "Sign Request from Acme",
+            "nullable": true,
+            "type": "string"
+          },
+          "external_id": {
+            "description": "This can be used to reference an ID in an external system that the sign request is related to.",
+            "example": "123",
+            "nullable": true,
+            "type": "string"
+          },
+          "external_system_name": {
+            "description": "Used as an optional system name to appear in the signature log next to the signers who have been assigned the `embed_url_external_id`.",
+            "example": "Box",
+            "nullable": true,
+            "type": "string"
+          },
+          "is_document_preparation_needed": {
+            "description": "Indicates if the sender should receive a `prepare_url` in the response to complete document preparation using the UI.",
+            "example": true,
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Name of the signature request.",
+            "example": "name",
+            "type": "string"
+          },
+          "prefill_tags": {
+            "description": "When a document contains sign-related tags in the content, you can prefill them using this `prefill_tags` by referencing the 'id' of the tag as the `external_id` field of the prefill tag.",
+            "items": {
+              "$ref": "#/components/schemas/SignRequestPrefillTag"
+            },
+            "type": "array"
+          },
+          "redirect_url": {
+            "description": "When specified, the signature request will be redirected to this url when a document is signed.",
+            "example": "https://www.example.com",
+            "nullable": true,
+            "type": "string"
+          },
+          "request_flow": {
+            "description": "The flow type of the sign request. Values can include `standard` or `cfr11`.\nWhen not specified during creation, a default is chosen based on admin settings.",
+            "example": "standard",
+            "nullable": true,
+            "type": "string"
+          },
+          "template_id": {
+            "description": "When a signature request is created from a template this field will indicate the id of that template.",
+            "example": "123075213-af2c8822-3ef2-4952-8557-52d69c2fe9cb",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "title": "Box Sign request (Base)",
+        "type": "object",
+        "x-box-tag": "sign_requests"
+      },
+      "SignRequestCancelRequest": {
+        "description": "Request body for cancelling a sign request.",
+        "properties": {
+          "reason": {
+            "description": "An optional reason for cancelling the sign request.",
+            "example": "Project cancelled",
+            "type": "string"
+          }
+        },
+        "title": "Sign request cancel request",
+        "type": "object"
+      },
+      "SignRequestCreateRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SignRequest--Base"
+          },
+          {
+            "properties": {
+              "parent_folder": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Folder--Mini"
+                  },
+                  {
+                    "description": "The destination folder to place final, signed document and signing\nlog. Only `ID` and `type` fields are required. The root folder,\nfolder ID `0`, cannot be used and can also not be null.\n\nWhen this value is not passed in when the signature request, then\nwe will use a default folder which is either the parent folder of\nthe first source file in the payload if we have the permission to\nupload to that folder or a folder called \"My Sign Requests\"."
+                  }
+                ]
+              },
+              "signature_color": {
+                "description": "Force a specific color for the signature (blue, black, or red).",
+                "enum": [
+                  "blue",
+                  "black",
+                  "red"
+                ],
+                "example": "blue",
+                "nullable": true,
+                "type": "string"
+              },
+              "signers": {
+                "description": "Array of signers for the signature request. 35 is the\nmax number of signers permitted.\n\n**Note**: It may happen that some signers belong to conflicting [segments](https://developer.box.com/reference/resources/shield-information-barrier-segment-member) (user groups).\nThis means that due to the security policies, users are assigned to segments to prevent exchanges or communication that could lead to ethical conflicts.\nIn such a case, an attempt to send the sign request will result in an error.\n\nRead more about [segments and ethical walls](https://support.box.com/hc/en-us/articles/9920431507603-Understanding-Information-Barriers#h_01GFVJEHQA06N7XEZ4GCZ9GFAQ).",
+                "items": {
+                  "$ref": "#/components/schemas/SignRequestCreateSigner"
+                },
+                "type": "array"
+              },
+              "source_files": {
+                "description": "List of files to create a signing document from. This is currently limited to ten files. Only the ID and type fields are required for each file.",
+                "items": {
+                  "$ref": "#/components/schemas/File--Base"
+                },
+                "maxItems": 10,
+                "nullable": true,
+                "type": "array"
+              }
+            }
+          }
+        ],
+        "description": "Creates a Box Sign request object.",
+        "required": [
+          "signers"
+        ],
+        "title": "Create a Box Sign request",
+        "type": "object",
+        "x-box-resource-id": "sign_request_create_request"
+      },
+      "SignRequestCreateSigner": {
+        "description": "The schema for a Signer object used in\nfor creating a Box Sign request object.",
+        "properties": {
+          "declined_redirect_url": {
+            "description": "The URL that a signer will be redirect\nto after declining to sign a document.\nDefining this URL overrides default or global\ndeclined redirect URL settings for a specific signer.",
+            "example": "https://declined-example.com",
+            "nullable": true,
+            "type": "string"
+          },
+          "email": {
+            "description": "Email address of the signer.\nThe email address of the signer is required when making signature requests, except when using templates that are configured to include emails.",
+            "example": "example@gmail.com",
+            "nullable": true,
+            "type": "string"
+          },
+          "embed_url_external_user_id": {
+            "description": "User ID for the signer in an external application responsible\nfor authentication when accessing the embed URL.",
+            "example": "1234",
+            "nullable": true,
+            "type": "string"
+          },
+          "is_in_person": {
+            "description": "Used in combination with an embed URL for a sender. After the\nsender signs, they are redirected to the next `in_person` signer.",
+            "example": true,
+            "type": "boolean"
+          },
+          "language": {
+            "description": "The language of the user, formatted in modified version of the\n[ISO 639-1](https://developer.box.com/guides/api-calls/language-codes) format.",
+            "example": "en",
+            "nullable": true,
+            "type": "string"
+          },
+          "login_required": {
+            "description": "If set to true, the signer will need to log in to a Box account\nbefore signing the request. If the signer does not have\nan existing account, they will have the option to create\na free Box account.",
+            "example": true,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "order": {
+            "description": "Order of the signer.",
+            "example": 2,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "password": {
+            "description": "If set, the signer is required to enter the password before they are able\nto sign a document. This field is write only.",
+            "example": "SecretPassword123",
+            "nullable": true,
+            "type": "string",
+            "writeOnly": true
+          },
+          "redirect_url": {
+            "description": "The URL that a signer will be redirected\nto after signing a document. Defining this URL\noverrides default or global redirect URL\nsettings for a specific signer.\nIf no declined redirect URL is specified,\nthis URL will be used for decline actions as well.",
+            "example": "https://example.com",
+            "nullable": true,
+            "type": "string"
+          },
+          "role": {
+            "default": "signer",
+            "description": "Defines the role of the signer in the signature request. A `signer`\nmust sign the document and an `approver` must approve the document. A\n`final_copy_reader` only receives the final signed document and signing\nlog.",
+            "enum": [
+              "signer",
+              "approver",
+              "final_copy_reader"
+            ],
+            "example": "signer",
+            "type": "string"
+          },
+          "signer_group_id": {
+            "description": "If set, signers who have the same value will be assigned to the same input and to the same signer group.\nA signer group is not a Box Group. It is an entity that belongs to a Sign Request and can only be\nused/accessed within this Sign Request. A signer group is expected to have more than one signer.\nIf the provided value is only used for one signer, this value will be ignored and request will be handled\nas it was intended for an individual signer. The value provided can be any string and only used to\ndetermine which signers belongs to same group. A successful response will provide a generated UUID value\ninstead for signers in the same signer group.",
+            "example": "cd4ff89-8fc1-42cf-8b29-1890dedd26d7",
+            "nullable": true,
+            "type": "string"
+          },
+          "suppress_notifications": {
+            "description": "If true, no emails about the sign request will be sent.",
+            "example": false,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "verification_phone_number": {
+            "description": "If set, this phone number will be used to verify the signer\nvia two-factor authentication before they are able to sign the document.\nCannot be selected in combination with `login_required`.",
+            "example": "6314578901",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "title": "Signer fields used to create a Box Sign request object.",
+        "type": "object"
+      },
+      "SignRequestPrefillTag": {
+        "description": "Prefill tags are used to prefill placeholders with signer input data. Only\none value field can be included.",
+        "properties": {
+          "checkbox_value": {
+            "description": "Checkbox prefill value.",
+            "example": true,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "date_value": {
+            "description": "Date prefill value.",
+            "example": "2021-04-26",
+            "format": "date",
+            "nullable": true,
+            "type": "string"
+          },
+          "document_tag_id": {
+            "description": "This references the ID of a specific tag contained in a file of the signature request.",
+            "example": "1234",
+            "nullable": true,
+            "type": "string"
+          },
+          "text_value": {
+            "description": "Text prefill value.",
+            "example": "text",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "title": "Sign request prefill tag",
+        "type": "object"
+      },
+      "SignRequestSigner": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SignRequestCreateSigner"
+          },
+          {
+            "properties": {
+              "attachments": {
+                "description": "Attachments that the signer uploaded.",
+                "items": {
+                  "$ref": "#/components/schemas/SignRequestSignerAttachment"
+                },
+                "nullable": true,
+                "type": "array"
+              },
+              "embed_url": {
+                "description": "URL to direct a signer to for signing.",
+                "example": "https://example.com",
+                "nullable": true,
+                "readOnly": true,
+                "type": "string"
+              },
+              "has_viewed_document": {
+                "description": "Set to `true` if the signer views the document.",
+                "example": true,
+                "readOnly": true,
+                "type": "boolean"
+              },
+              "iframeable_embed_url": {
+                "description": "This URL is specifically designed for\nsigning documents within an HTML `iframe` tag.\nIt will be returned in the response\nonly if the `embed_url_external_user_id`\nparameter was passed in the\n`create Box Sign request` call.",
+                "example": "https://app.box.com/embed/sign/document/gfhr4222-a331-494b-808b-79bc7f3992a3/f14d7098-a331-494b-808b-79bc7f3992a4",
+                "nullable": true,
+                "type": "string"
+              },
+              "inputs": {
+                "items": {
+                  "$ref": "#/components/schemas/SignRequestSignerInput"
+                },
+                "readOnly": true,
+                "type": "array"
+              },
+              "signer_decision": {
+                "description": "Final decision made by the signer.",
+                "nullable": true,
+                "properties": {
+                  "additional_info": {
+                    "description": "Additional info about the decision, such as the decline reason from the signer.",
+                    "example": "Requesting changes before signing.",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "finalized_at": {
+                    "description": "Date and Time that the decision was made.",
+                    "example": "2021-04-26T08:12:13.982Z",
+                    "format": "date-time",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "Type of decision made by the signer.",
+                    "enum": [
+                      "signed",
+                      "declined"
+                    ],
+                    "example": "signed",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        ],
+        "description": "The schema for a Signer object used\non the body of a Box Sign request object.",
+        "required": [
+          "email"
+        ],
+        "title": "Signer fields for Box Sign request response",
+        "type": "object"
+      },
+      "SignRequestSignerAttachment": {
+        "description": "Metadata describing a file uploaded by a signer as an attachment.",
+        "properties": {
+          "id": {
+            "description": "Identifier of the attachment file.",
+            "example": "12345",
+            "nullable": true,
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name of the attachment file.",
+            "example": "proof_of_identity.pdf",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "title": "Signer Attachment",
+        "type": "object"
+      },
+      "SignRequestSignerInput": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SignRequestPrefillTag"
+          },
+          {
+            "properties": {
+              "content_type": {
+                "description": "Content type of input.",
+                "enum": [
+                  "signature",
+                  "initial",
+                  "stamp",
+                  "date",
+                  "checkbox",
+                  "text",
+                  "full_name",
+                  "first_name",
+                  "last_name",
+                  "company",
+                  "title",
+                  "email",
+                  "attachment",
+                  "radio",
+                  "dropdown"
+                ],
+                "example": "signature",
+                "type": "string"
+              },
+              "is_validated": {
+                "description": "Indicates whether the signer's input has been validated through re-authentication.\nApplicable only for signature or initial content types in a `cfr11` request flow.\nThe value is `null` for standard request flows or non-applicable input types.",
+                "example": true,
+                "nullable": true,
+                "type": "boolean"
+              },
+              "page_index": {
+                "description": "Index of page that the input is on.",
+                "example": 4,
+                "type": "integer"
+              },
+              "read_only": {
+                "description": "Indicates whether this input is read-only (cannot be modified by signers).",
+                "example": true,
+                "type": "boolean"
+              },
+              "reason": {
+                "description": "The reason for the signer's input, applicable to signature or initial content types\nin a `cfr11` request flow. The value is `null` when not applicable.",
+                "example": "I read and approve this document",
+                "nullable": true,
+                "type": "string"
+              },
+              "type": {
+                "description": "Type of input.",
+                "enum": [
+                  "signature",
+                  "date",
+                  "text",
+                  "checkbox",
+                  "radio",
+                  "dropdown"
+                ],
+                "example": "text",
+                "type": "string"
+              },
+              "validation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SignRequestSignerInputValidation"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "description": "The definition for a null schema type in OpenAPI `3.0`.",
+                    "nullable": true,
+                    "title": "OpenAPI 3.0 null schema type",
+                    "type": "object"
+                  }
+                ],
+                "description": "Specifies the formatting rules that signers must follow for text field inputs.\nIf set, this validation is mandatory.",
+                "example": {
+                  "validation_type": "email"
+                }
+              }
+            }
+          }
+        ],
+        "description": "Input created by a Signer on a Sign Request.",
+        "required": [
+          "page_index"
+        ],
+        "title": "Sign Request Signer Input",
+        "type": "object"
+      },
+      "SignRequestSignerInputCustomValidation": {
+        "description": "Specifies the custom validation rules for a text field input by the signer.\nIf set, this validation is mandatory.",
+        "properties": {
+          "custom_error_message": {
+            "description": "Error message shown if input fails custom regular expression validation.",
+            "example": "Please enter a valid value.",
+            "nullable": true,
+            "type": "string"
+          },
+          "custom_regex": {
+            "description": "Regular expression used for validation.",
+            "example": "(^[a-zA-Z0-9._%+-]+)",
+            "nullable": true,
+            "type": "string"
+          },
+          "validation_type": {
+            "description": "Defines the validation format for the text input as custom.\nA custom regular expression is used for validation.",
+            "enum": [
+              "custom"
+            ],
+            "example": "custom",
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_type",
+          "custom_regex",
+          "custom_error_message"
+        ],
+        "title": "Sign Request Signer Input Custom Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputDateAsiaValidation": {
+        "description": "Specifies the date formatting rules used in Asia for a text field input by the signer. \nIf set, this validation is mandatory. \nThe date format follows `YYYY/MM/DD` pattern.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input uses the Asian date format `YYYY/MM/DD`.",
+            "enum": [
+              "date_asia"
+            ],
+            "example": "date_asia",
+            "type": "string"
+          }
+        },
+        "title": "Sign Request Signer Input Date Asia Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputDateEUValidation": {
+        "description": "Specifies the date formatting rules used in Europe for a text field input by the signer. \nIf set, this validation is mandatory. \nThe date format follows `DD/MM/YYYY` pattern.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input uses the European date format `DD/MM/YYYY`.",
+            "enum": [
+              "date_eu"
+            ],
+            "example": "date_eu",
+            "type": "string"
+          }
+        },
+        "title": "Sign Request Signer Input Date EU Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputDateISOValidation": {
+        "description": "Specifies the ISO date formatting rules for a text field input by the signer. \nIf set, this validation is mandatory. \nThe date format follows `YYYY-MM-DD` pattern.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input uses the ISO date format `YYYY-MM-DD`.",
+            "enum": [
+              "date_iso"
+            ],
+            "example": "date_iso",
+            "type": "string"
+          }
+        },
+        "title": "Sign Request Signer Input Date ISO Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputDateUSValidation": {
+        "description": "Specifies the US date formatting rules for a text field input by the signer. \nIf set, this validation is mandatory. \nThe date format follows `MM/DD/YYYY` pattern.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input uses the US date format `MM/DD/YYYY`.",
+            "enum": [
+              "date_us"
+            ],
+            "example": "date_us",
+            "type": "string"
+          }
+        },
+        "title": "Sign Request Signer Input Date US Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputEmailValidation": {
+        "description": "Specifies the formatting rules that signers must follow for text field inputs.\nIf set, this validation is mandatory.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input is an email address.",
+            "enum": [
+              "email"
+            ],
+            "example": "email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_type"
+        ],
+        "title": "Sign Request Signer Input Email Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputNumberWithCommaValidation": {
+        "description": "Specifies the number with comma formatting rules for a text field input by the signer.\nIf set, this validation is mandatory.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input uses a number format with a comma as the decimal separator (for example, 1,23).",
+            "enum": [
+              "number_with_comma"
+            ],
+            "example": "number_with_comma",
+            "type": "string"
+          }
+        },
+        "title": "Sign Request Signer Input Number With Comma Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputNumberWithPeriodValidation": {
+        "description": "Specifies the number with period formatting rules for a text field input by the signer.\nIf set, this validation is mandatory.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input uses a number format with a period as the decimal separator (for example, 1.23).",
+            "enum": [
+              "number_with_period"
+            ],
+            "example": "number_with_period",
+            "type": "string"
+          }
+        },
+        "title": "Sign Request Signer Input Number With Period Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputSSNValidation": {
+        "description": "Specifies the validation rules for a text field input by the signer.\nIf set, this validation is mandatory.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input is a Social Security Number (SSN).",
+            "enum": [
+              "ssn"
+            ],
+            "example": "ssn",
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_type"
+        ],
+        "title": "Sign Request Signer Input SSN Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputValidation": {
+        "description": "Specifies the formatting rules that signers must follow for text field inputs.\nIf set, this validation is mandatory. \nThe format can be selected from a predefined list of options (e.g., email, phone number, date) or\ndefined using a custom regular expression.",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputEmailValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputCustomValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputZIPValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputZIP4Validation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputZIPJPValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputSSNValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputNumberWithPeriodValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputNumberWithCommaValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputDateISOValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputDateUSValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputDateEUValidation"
+          },
+          {
+            "$ref": "#/components/schemas/SignRequestSignerInputDateAsiaValidation"
+          }
+        ],
+        "title": "Sign Request Signer Input Validation"
+      },
+      "SignRequestSignerInputZIP4Validation": {
+        "description": "Specifies the validation rules for a text field input by the signer.\nIf set, this validation is mandatory.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input is a ZIP+4 code.",
+            "enum": [
+              "zip_4"
+            ],
+            "example": "zip_4",
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_type"
+        ],
+        "title": "Sign Request Signer Input ZIP 4 Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputZIPJPValidation": {
+        "description": "Specifies the validation rules for a text field input by the signer.\nIf set, this validation is mandatory.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input is a Japanese ZIP code.",
+            "enum": [
+              "zip_jp"
+            ],
+            "example": "zip_jp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_type"
+        ],
+        "title": "Sign Request Signer Input ZIP JP Validation",
+        "type": "object"
+      },
+      "SignRequestSignerInputZIPValidation": {
+        "description": "Specifies the validation rules for a text field input by the signer.\nIf set, this validation is mandatory.",
+        "properties": {
+          "validation_type": {
+            "description": "Validates that the text input is a ZIP code.",
+            "enum": [
+              "zip"
+            ],
+            "example": "zip",
+            "type": "string"
+          }
+        },
+        "required": [
+          "validation_type"
+        ],
+        "title": "Sign Request Signer Input ZIP Validation",
+        "type": "object"
+      },
+      "SignRequests": {
+        "allOf": [
+          {
+            "description": "The part of an API response that describes marker\nbased pagination.",
+            "properties": {
+              "limit": {
+                "description": "The limit that was used for these entries. This will be the same as the\n`limit` query parameter unless that value exceeded the maximum value\nallowed. The maximum value varies by API.",
+                "example": 1000,
+                "format": "int64",
+                "type": "integer"
+              },
+              "next_marker": {
+                "description": "The marker for the start of the next page of results.",
+                "example": "JV9IRGZmieiBasejOG9yDCRNgd2ymoZIbjsxbJMjIs3kioVii",
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          {
+            "properties": {
+              "entries": {
+                "description": "A list of Box Sign requests.",
+                "items": {
+                  "$ref": "#/components/schemas/SignRequest"
+                },
+                "type": "array"
+              }
+            }
+          }
+        ],
+        "description": "A standard representation of a signature request, as returned from any Box Sign\nAPI endpoints by default.",
+        "title": "Box Sign requests",
+        "type": "object",
+        "x-box-resource-id": "sign_requests",
+        "x-box-tag": "sign_requests"
+      },
+      "SignTemplate": {
+        "allOf": [
+          {
+            "properties": {
+              "additional_info": {
+                "description": "Additional information on which fields are\nrequired and which fields are not editable.",
+                "properties": {
+                  "non_editable": {
+                    "description": "Non editable fields.",
+                    "example": [
+                      "email_subject",
+                      "name"
+                    ],
+                    "items": {
+                      "enum": [
+                        "email_subject",
+                        "email_message",
+                        "name",
+                        "days_valid",
+                        "signers",
+                        "source_files"
+                      ],
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "required": {
+                    "description": "Required fields.",
+                    "properties": {
+                      "signers": {
+                        "description": "Required signer fields.",
+                        "example": [
+                          [
+                            "email"
+                          ],
+                          [
+                            "email"
+                          ]
+                        ],
+                        "items": {
+                          "example": [
+                            "email"
+                          ],
+                          "items": {
+                            "enum": [
+                              "email"
+                            ],
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              },
+              "are_email_settings_locked": {
+                "description": "Indicates if the template email settings are editable or not.",
+                "example": true,
+                "type": "boolean"
+              },
+              "are_fields_locked": {
+                "description": "Indicates if the template input\nfields are editable or not.",
+                "example": false,
+                "type": "boolean"
+              },
+              "are_files_locked": {
+                "description": "Indicates if the template files are editable or not.\nThis includes deleting or renaming template files.",
+                "example": true,
+                "type": "boolean"
+              },
+              "are_options_locked": {
+                "description": "Indicates if the template document options\nare editable or not,\nfor example renaming the document.",
+                "example": true,
+                "type": "boolean"
+              },
+              "are_recipients_locked": {
+                "description": "Indicates if the template signers are editable or not.",
+                "example": false,
+                "type": "boolean"
+              },
+              "custom_branding": {
+                "description": "Custom branding applied to notifications\nand signature requests.",
+                "nullable": true,
+                "properties": {
+                  "branding_color": {
+                    "description": "Custom branding color in hex.",
+                    "example": "9E5E6F",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "company_name": {
+                    "description": "Name of the company.",
+                    "example": "Corporation inc.",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "email_footer_text": {
+                    "description": "Content of the email footer.",
+                    "example": "Contact email email@mail.com",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "logo_uri": {
+                    "description": "Custom branding logo URI in the form of a base64 image.",
+                    "example": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA\nAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A\n8AAQUBAScY42YAAAAASUVORK5CYII=",
+                    "nullable": true,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "days_valid": {
+                "description": "Set the number of days after which the\ncreated signature request will automatically\nexpire if not completed. By default, we do\nnot apply any expiration date on signature\nrequests, and the signature request does not expire.",
+                "example": 2,
+                "maximum": 730,
+                "minimum": 0,
+                "nullable": true,
+                "type": "integer"
+              },
+              "email_message": {
+                "description": "Message to include in signature request email. The field\nis cleaned through sanitization of specific characters. However,\nsome html tags are allowed. Links included in the\nmessage are also converted to hyperlinks in the email. The\nmessage may contain the following html tags including `a`, `abbr`,\n`acronym`, `b`, `blockquote`, `code`, `em`, `i`, `ul`, `li`, `ol`, and\n`strong`. Be aware that when the text\nto html ratio is too high, the email\nmay end up in spam filters. Custom styles on\nthese tags are not allowed.\nIf this field is not passed, a default message will be used.",
+                "example": "Hello! Please sign the document below",
+                "nullable": true,
+                "type": "string"
+              },
+              "email_subject": {
+                "description": "Subject of signature request email. This is cleaned by sign\nrequest. If this field is not passed, a default subject will be used.",
+                "example": "Sign Request from Acme",
+                "nullable": true,
+                "type": "string"
+              },
+              "id": {
+                "description": "Template identifier.",
+                "example": "4206996024-14944f75-c34b-478a-95a1-264b1ff80d35",
+                "type": "string"
+              },
+              "name": {
+                "description": "The name of the template.",
+                "example": "Official contract",
+                "nullable": true,
+                "type": "string"
+              },
+              "parent_folder": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Folder--Mini"
+                  },
+                  {
+                    "description": "The destination folder to place final, signed document and signing\nlog. Only `ID` and `type` fields are required. The root folder,\nfolder ID `0`, cannot be used."
+                  }
+                ]
+              },
+              "ready_sign_link": {
+                "description": "Box's ready-sign link feature enables you to create a\nlink to a signature request that\nyou've created from a template. Use this link\nwhen you want to post a signature request\non a public form — such as an email, social media post,\nor web page — without knowing who the signers will be.\nNote: The ready-sign link feature is\nlimited to Enterprise Plus customers and not\navailable to Box Verified Enterprises.",
+                "nullable": true,
+                "properties": {
+                  "folder_id": {
+                    "description": "The destination folder to place final,\nsigned document and signing\nlog. Only `ID` and `type` fields are required.\nThe root folder,\nfolder ID `0`, cannot be used.",
+                    "example": "12345",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "instructions": {
+                    "description": "Extra instructions for all signers.",
+                    "example": "Hello! Please sign the document below",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "is_active": {
+                    "description": "Whether the ready sign link is enabled or not.",
+                    "example": false,
+                    "type": "boolean"
+                  },
+                  "is_notification_disabled": {
+                    "description": "Whether to disable notifications when\na signer has signed.",
+                    "example": true,
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "description": "Request name.",
+                    "example": "Official contract",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "url": {
+                    "description": "The URL that can be sent to signers.",
+                    "example": "\"https://app.box.com/sign/\nready-sign-link/a1cdf2c7-fa81-4a67-8163-1e5f4dbe5178\"",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "request_flow": {
+                "description": "The sign flow of sign requests created from the template. Values can include `standard` or `cfr11`.",
+                "example": "standard",
+                "nullable": true,
+                "type": "string"
+              },
+              "signers": {
+                "description": "Array of signers for the template.\n\n**Note**: It may happen that some signers specified in the template belong to conflicting [segments](https://developer.box.com/reference/resources/shield-information-barrier-segment-member) (user groups).\nThis means that due to the security policies, users are assigned to segments to prevent exchanges or communication that could lead to ethical conflicts.\nIn such a case, an attempt to send a sign request based on a template that lists signers in conflicting segments will result in an error.\n\nRead more about [segments and ethical walls](https://support.box.com/hc/en-us/articles/9920431507603-Understanding-Information-Barriers#h_01GFVJEHQA06N7XEZ4GCZ9GFAQ).",
+                "items": {
+                  "$ref": "#/components/schemas/TemplateSigner"
+                },
+                "type": "array"
+              },
+              "source_files": {
+                "description": "List of files to create a signing document from.\nOnly the ID and type fields are required\nfor each file.",
+                "items": {
+                  "$ref": "#/components/schemas/File--Mini"
+                },
+                "type": "array"
+              },
+              "type": {
+                "description": "The value will always be `sign-template`.",
+                "enum": [
+                  "sign-template"
+                ],
+                "example": "sign-template",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A Box Sign template object.",
+        "title": "Box Sign template",
+        "type": "object",
+        "x-box-resource-id": "sign_template",
+        "x-box-tag": "sign_templates"
+      },
+      "SignTemplates": {
+        "allOf": [
+          {
+            "description": "The part of an API response that describes marker\nbased pagination.",
+            "properties": {
+              "limit": {
+                "description": "The limit that was used for these entries. This will be the same as the\n`limit` query parameter unless that value exceeded the maximum value\nallowed. The maximum value varies by API.",
+                "example": 1000,
+                "format": "int64",
+                "type": "integer"
+              },
+              "next_marker": {
+                "description": "The marker for the start of the next page of results.",
+                "example": "JV9IRGZmieiBasejOG9yDCRNgd2ymoZIbjsxbJMjIs3kioVii",
+                "nullable": true,
+                "type": "string"
+              },
+              "prev_marker": {
+                "description": "The marker for the start of the previous page of results.",
+                "example": "JV9IRGZmieiBasejOG9yDCRNgd2ymoZIbjsxbJMjIs3kioVih",
+                "nullable": true,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          {
+            "properties": {
+              "entries": {
+                "description": "A list of templates.",
+                "items": {
+                  "$ref": "#/components/schemas/SignTemplate"
+                },
+                "type": "array"
+              }
+            }
+          }
+        ],
+        "description": "A list of templates, as returned from any Box Sign\nAPI endpoints by default.",
+        "title": "Box Sign templates",
+        "type": "object",
+        "x-box-resource-id": "sign_templates",
+        "x-box-tag": "sign_templates"
+      },
+      "TemplateSigner": {
+        "description": "The schema for a Signer for Templates.",
+        "properties": {
+          "email": {
+            "description": "Email address of the signer.",
+            "example": "example@mail.com",
+            "nullable": true,
+            "type": "string"
+          },
+          "inputs": {
+            "items": {
+              "$ref": "#/components/schemas/TemplateSignerInput"
+            },
+            "readOnly": true,
+            "type": "array"
+          },
+          "is_in_person": {
+            "description": "Used in combination with an embed URL for a sender.\nAfter the sender signs, they will be\nredirected to the next `in_person` signer.",
+            "example": true,
+            "type": "boolean"
+          },
+          "is_password_required": {
+            "description": "If true for signers with a defined email, the password provided when the template was created is used by default. \nIf true for signers without a specified / defined email, the creator needs to provide a password when using the template.",
+            "example": true,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "is_phone_number_required": {
+            "description": "If true for signers with a defined email, the phone number provided when the template was created is used by default. \nIf true for signers without a specified / defined email, the template creator needs to provide a phone number when creating a request.",
+            "example": true,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "label": {
+            "description": "A placeholder label for the signer set by the template creator to differentiate between signers.",
+            "example": "Jane Doe",
+            "nullable": true,
+            "type": "string"
+          },
+          "login_required": {
+            "description": "If true, the signer is required to login to access the document.",
+            "example": true,
+            "nullable": true,
+            "type": "boolean"
+          },
+          "order": {
+            "description": "Order of the signer.",
+            "example": 2,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "public_id": {
+            "description": "An identifier for the signer. This can be used to identify a signer within the template.",
+            "example": "RJZYYVPR",
+            "type": "string"
+          },
+          "role": {
+            "default": "signer",
+            "description": "Defines the role of the signer in the signature request. A role of\n`signer` needs to sign the document, a role `approver`\napproves the document and\na `final_copy_reader` role only\nreceives the final signed document and signing log.",
+            "enum": [
+              "signer",
+              "approver",
+              "final_copy_reader"
+            ],
+            "example": "signer",
+            "type": "string"
+          },
+          "signer_group_id": {
+            "description": "If provided, this value points signers that are assigned the same inputs and belongs to same signer group.\nA signer group is not a Box Group. It is an entity that belongs to the template itself and can only be used\nwithin Box Sign requests created from it.",
+            "example": "cd4ff89-8fc1-42cf-8b29-1890dedd26d7",
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "title": "Signer fields for Templates",
+        "type": "object"
+      },
+      "TemplateSignerInput": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SignRequestPrefillTag"
+          },
+          {
+            "properties": {
+              "content_type": {
+                "description": "Content type of input.",
+                "enum": [
+                  "signature",
+                  "initial",
+                  "stamp",
+                  "date",
+                  "checkbox",
+                  "text",
+                  "full_name",
+                  "first_name",
+                  "last_name",
+                  "company",
+                  "title",
+                  "email",
+                  "attachment",
+                  "radio",
+                  "dropdown"
+                ],
+                "example": "text",
+                "type": "string"
+              },
+              "coordinates": {
+                "description": "Where the input is located on a page.",
+                "properties": {
+                  "x": {
+                    "description": "Relative x coordinate to the page the input is on, ranging from 0 to 1.",
+                    "example": 0.672258592471358,
+                    "type": "number"
+                  },
+                  "y": {
+                    "description": "Relative y coordinate to the page the input is on, ranging from 0 to 1.",
+                    "example": 0.18654283173599448,
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "dimensions": {
+                "description": "The size of the input.",
+                "properties": {
+                  "height": {
+                    "description": "Relative height to the page the input is on, ranging from 0 to 1.",
+                    "example": 0.05311728090109673,
+                    "type": "number"
+                  },
+                  "width": {
+                    "description": "Relative width to the page the input is on, ranging from 0 to 1.",
+                    "example": 0.2618657937806874,
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "document_id": {
+                "description": "Document identifier.",
+                "example": "123075213-eb54b537-8b25-445e-87c1-5a1c67d8cbd7",
+                "nullable": true,
+                "type": "string"
+              },
+              "dropdown_choices": {
+                "description": "When the input is of the type `dropdown` this\nvalues will be filled with all the\ndropdown options.",
+                "example": [
+                  "Yes",
+                  "No",
+                  "Maybe"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "nullable": true,
+                "type": "array"
+              },
+              "group_id": {
+                "description": "When the input is of type `radio` they can be\ngrouped to gather with this identifier.",
+                "example": "da317330-225a-4c72-89ad-0d6dcaaf4df6",
+                "nullable": true,
+                "type": "string"
+              },
+              "is_required": {
+                "description": "Whether or not the input is required.",
+                "example": true,
+                "type": "boolean"
+              },
+              "label": {
+                "description": "The label field is used especially for text, attachment, radio, and checkbox type inputs.",
+                "example": "Legal name",
+                "nullable": true,
+                "type": "string"
+              },
+              "page_index": {
+                "description": "Index of page that the input is on.",
+                "example": 4,
+                "type": "integer"
+              },
+              "read_only": {
+                "description": "Indicates whether this input is read-only (cannot be modified by signers).",
+                "example": true,
+                "type": "boolean"
+              },
+              "type": {
+                "description": "Type of input.",
+                "enum": [
+                  "signature",
+                  "date",
+                  "text",
+                  "checkbox",
+                  "attachment",
+                  "radio",
+                  "dropdown"
+                ],
+                "example": "text",
+                "type": "string"
+              },
+              "validation": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SignRequestSignerInputValidation"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "description": "The definition for a null schema type in OpenAPI `3.0`.",
+                    "nullable": true,
+                    "title": "OpenAPI 3.0 null schema type",
+                    "type": "object"
+                  }
+                ],
+                "description": "Specifies the formatting rules that signers must follow for text field inputs.\nIf set, this validation is mandatory.",
+                "example": {
+                  "validation_type": "email"
+                }
+              }
+            }
+          }
+        ],
+        "description": "Input created by a Signer on a Template.",
+        "required": [
+          "page_index"
+        ],
+        "title": "Template Signer Input",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2Security": {
+        "description": "The access token received from the authorization server in the OAuth 2.0 flow.",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://account.box.com/api/oauth2/authorize",
+            "scopes": {
+              "manage_app_users": "Provision and manage app users",
+              "manage_data_retention": "Manage data retention polices",
+              "manage_enterprise_properties": "Manage enterprise properties",
+              "manage_groups": "Manage an enterprise's groups",
+              "manage_legal_hold": "Manage Legal Holds",
+              "manage_managed_users": "Provision and manage managed users",
+              "manage_webhook": "Create webhooks programmatically through the API",
+              "root_readonly": "Read all files and folders stored in Box",
+              "root_readwrite": "Read and write all files and folders stored in Box"
+            },
+            "tokenUrl": "https://api.box.com/oauth2/token"
+          }
+        },
+        "type": "oauth2"
+      }
+    }
+  },
+  "externalDocs": {
+    "description": "Box Developer Documentation.",
+    "url": "https://developer.box.com"
+  },
+  "info": {
+    "contact": {
+      "email": "devrel@box.com",
+      "name": "Box, Inc",
+      "url": "https://developer.box.com"
+    },
+    "description": "[Box Platform](https://developer.box.com) provides functionality to provide access to content stored within [Box](https://box.com). It provides endpoints for basic manipulation of files and folders, management of users within an enterprise, as well as more complex topics such as legal holds and retention policies.",
+    "license": {
+      "name": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    "termsOfService": "https://cloud.app.box.com/s/rmwxu64h1ipr41u49w3bbuvbsa29wku9",
+    "title": "Box Platform API",
+    "version": "2024.0",
+    "x-box-commit-hash": "21e370b9bd"
+  },
+  "openapi": "3.0.2",
+  "paths": {
+    "/sign_requests": {
+      "get": {
+        "description": "Gets signature requests created by a user. If the `sign_files` and/or\n`parent_folder` are deleted, the signature request will not return in the list.",
+        "operationId": "get_sign_requests",
+        "parameters": [
+          {
+            "description": "Defines the position marker at which to begin returning results. This is\nused when paginating using marker-based pagination.\n\nThis requires `usemarker` to be set to `true`.",
+            "example": "JV9IRGZmieiBasejOG9yDCRNgd2ymoZIbjsxbJMjIs3kioVii",
+            "in": "query",
+            "name": "marker",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The maximum number of items to return per page.",
+            "example": 1000,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "maximum": 1000,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "A list of sender emails to filter the signature requests by sender.\nIf provided, `shared_requests` must be set to `true`.",
+            "example": [
+              "sender1@boxdemo.com",
+              "sender2@boxdemo.com"
+            ],
+            "in": "query",
+            "name": "senders",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "If set to `true`, only includes requests that user is not an owner,\nbut user is a collaborator. Collaborator access is determined by the\nuser access level of the sign files of the request.\nDefault is `false`. Must be set to `true` if `senders` are provided.",
+            "example": true,
+            "in": "query",
+            "name": "shared_requests",
+            "required": false,
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignRequests"
+                }
+              }
+            },
+            "description": "Returns a collection of sign requests."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "List Box Sign requests",
+        "tags": [
+          "Box Sign requests"
+        ],
+        "x-box-tag": "sign_requests"
+      },
+      "post": {
+        "description": "Creates a signature request. This involves preparing a document for signing and\nsending the signature request to signers.",
+        "operationId": "post_sign_requests",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignRequestCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignRequest"
+                }
+              }
+            },
+            "description": "Returns a Box Sign request object."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Create Box Sign request",
+        "tags": [
+          "Box Sign requests"
+        ],
+        "x-box-tag": "sign_requests"
+      }
+    },
+    "/sign_requests/{sign_request_id}": {
+      "get": {
+        "description": "Gets a sign request by ID.",
+        "operationId": "get_sign_requests_id",
+        "parameters": [
+          {
+            "description": "The ID of the signature request.",
+            "example": "33243242",
+            "in": "path",
+            "name": "sign_request_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignRequest"
+                }
+              }
+            },
+            "description": "Returns a signature request."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error when the signature request cannot be found, the user does\nnot have access to the signature request, or `sign_files` and/or\n`parent_folder` is deleted."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Get Box Sign request by ID",
+        "tags": [
+          "Box Sign requests"
+        ],
+        "x-box-tag": "sign_requests"
+      }
+    },
+    "/sign_requests/{sign_request_id}/cancel": {
+      "post": {
+        "description": "Cancels a sign request.",
+        "operationId": "post_sign_requests_id_cancel",
+        "parameters": [
+          {
+            "description": "The ID of the signature request.",
+            "example": "33243242",
+            "in": "path",
+            "name": "sign_request_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignRequestCancelRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignRequest"
+                }
+              }
+            },
+            "description": "Returns a Sign Request object."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error when the sign request cannot be found or the user does\nnot have access to the sign request."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Cancel Box Sign request",
+        "tags": [
+          "Box Sign requests"
+        ],
+        "x-box-tag": "sign_requests"
+      }
+    },
+    "/sign_requests/{sign_request_id}/resend": {
+      "post": {
+        "description": "Resends a signature request email to all outstanding signers.",
+        "operationId": "post_sign_requests_id_resend",
+        "parameters": [
+          {
+            "description": "The ID of the signature request.",
+            "example": "33243242",
+            "in": "path",
+            "name": "sign_request_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Returns an empty response when the API call was successful.\nThe email notifications will be sent asynchronously."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error when the signature request cannot be found or the user does\nnot have access to the signature request."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Resend Box Sign request",
+        "tags": [
+          "Box Sign requests"
+        ],
+        "x-box-tag": "sign_requests"
+      }
+    },
+    "/sign_templates": {
+      "get": {
+        "description": "Gets Box Sign templates created by a user.",
+        "operationId": "get_sign_templates",
+        "parameters": [
+          {
+            "description": "Defines the position marker at which to begin returning results. This is\nused when paginating using marker-based pagination.\n\nThis requires `usemarker` to be set to `true`.",
+            "example": "JV9IRGZmieiBasejOG9yDCRNgd2ymoZIbjsxbJMjIs3kioVii",
+            "in": "query",
+            "name": "marker",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The maximum number of items to return per page.",
+            "example": 1000,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int64",
+              "maximum": 1000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignTemplates"
+                }
+              }
+            },
+            "description": "Returns a collection of templates."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned when the access token provided in the `Authorization` header\nis not recognized or not provided."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "List Box Sign templates",
+        "tags": [
+          "Box Sign templates"
+        ],
+        "x-box-tag": "sign_templates"
+      }
+    },
+    "/sign_templates/{template_id}": {
+      "get": {
+        "description": "Fetches details of a specific Box Sign template.",
+        "operationId": "get_sign_templates_id",
+        "parameters": [
+          {
+            "description": "The ID of a Box Sign template.",
+            "example": "123075213-7d117509-8f05-42e4-a5ef-5190a319d41d",
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignTemplate"
+                }
+              }
+            },
+            "description": "Returns details of a template."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned when the access token provided in the `Authorization` header\nis not recognized or not provided."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the template is not found or the user does not\nhave access to the associated template."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Get Box Sign template by ID",
+        "tags": [
+          "Box Sign templates"
+        ],
+        "x-box-tag": "sign_templates"
+      }
+    }
+  },
+  "security": [
+    {
+      "OAuth2Security": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Box Platform API server.",
+      "url": "https://api.box.com/2.0"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Box Sign requests are used\nto submit a file for\nsignature.",
+      "name": "Box Sign requests",
+      "x-box-tag": "sign_requests"
+    },
+    {
+      "description": "Sign templates allow you to use a predefined Box Sign\ntemplate when creating a signature request.\nThe template includes placeholders that\nare automatically populated with data when creating the request.",
+      "name": "Box Sign templates",
+      "x-box-tag": "sign_templates"
+    }
+  ]
+}

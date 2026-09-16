@@ -316,7 +316,13 @@ func newStack(t *testing.T, store *postgres.Store, auth *httptest.Server, github
 		provider.Keys[credentialType] = keys
 	}
 	registry["github"] = provider
+	return serveStack(t, store, auth, registry, &http.Client{Timeout: 10 * time.Second}, services)
+}
 
+// serveStack serves connections over HTTP with registry's providers, calling
+// them through providerHTTP.
+func serveStack(t *testing.T, store *postgres.Store, auth *httptest.Server, registry providers.Registry, providerHTTP *http.Client, services httpserver.ServiceVerifier) stack {
+	t.Helper()
 	var handler http.Handler
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		handler.ServeHTTP(writer, request)
@@ -325,7 +331,7 @@ func newStack(t *testing.T, store *postgres.Store, auth *httptest.Server, github
 	envelope := secrets.Envelope{Keys: newLocalKeys(t), KeyID: "alias/oryxa-connections-e2e"}
 	service := application.New(application.Dependencies{
 		Store: store, Directory: authclient.New(auth.URL), Sealer: envelope,
-		ProviderClient: providers.Client{HTTP: &http.Client{Timeout: 10 * time.Second}}, Providers: registry,
+		ProviderClient: providers.Client{HTTP: providerHTTP}, Providers: registry,
 	}, application.Config{PublicBaseURL: server.URL, AllowedOrigins: []string{"http://localhost:3000"}})
 	handler = httpserver.New(service, httpserver.Config{AllowedOrigins: []string{"http://localhost:3000"}, Services: services}, nil)
 	noRedirects := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}

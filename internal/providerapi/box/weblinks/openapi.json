@@ -1,0 +1,2367 @@
+{
+  "components": {
+    "schemas": {
+      "ClientError": {
+        "description": "A generic error.",
+        "properties": {
+          "code": {
+            "description": "A Box-specific error code.",
+            "enum": [
+              "created",
+              "accepted",
+              "no_content",
+              "redirect",
+              "not_modified",
+              "bad_request",
+              "unauthorized",
+              "forbidden",
+              "not_found",
+              "method_not_allowed",
+              "conflict",
+              "precondition_failed",
+              "too_many_requests",
+              "internal_server_error",
+              "unavailable",
+              "item_name_invalid",
+              "insufficient_scope"
+            ],
+            "example": "item_name_invalid",
+            "type": "string"
+          },
+          "context_info": {
+            "additionalProperties": {},
+            "description": "A free-form object that contains additional context\nabout the error. The possible fields are defined on\na per-endpoint basis. `message` is only one example.",
+            "example": {
+              "message": "Something went wrong"
+            },
+            "nullable": true,
+            "type": "object"
+          },
+          "help_url": {
+            "description": "A URL that links to more information about why this error occurred.",
+            "example": "https://developer.box.com/guides/api-calls/permissions-and-errors/common-errors/",
+            "nullable": false,
+            "type": "string"
+          },
+          "message": {
+            "description": "A short message describing the error.",
+            "example": "Method Not Allowed",
+            "nullable": false,
+            "type": "string"
+          },
+          "request_id": {
+            "description": "A unique identifier for this response, which can be used\nwhen contacting Box support.",
+            "example": "abcdef123456",
+            "nullable": false,
+            "type": "string"
+          },
+          "status": {
+            "description": "The HTTP status of the response.",
+            "example": 400,
+            "format": "int32",
+            "nullable": false,
+            "type": "integer"
+          },
+          "type": {
+            "description": "The value will always be `error`.",
+            "enum": [
+              "error"
+            ],
+            "example": "error",
+            "nullable": false,
+            "type": "string"
+          }
+        },
+        "title": "Client error",
+        "type": "object",
+        "x-box-resource-id": "client_error"
+      },
+      "Collection": {
+        "description": "A collection of items, including files and folders.\n\nCurrently, the only collection available\nis the `favorites` collection.\n\nThe contents of a collection can be explored in a\nsimilar way to which the contents of a folder is\nexplored.",
+        "properties": {
+          "collection_type": {
+            "description": "The type of the collection. This is used to\ndetermine the proper visual treatment for\ncollections.",
+            "enum": [
+              "favorites"
+            ],
+            "example": "favorites",
+            "type": "string"
+          },
+          "id": {
+            "description": "The unique identifier for this collection.",
+            "example": "11446498",
+            "type": "string"
+          },
+          "name": {
+            "description": "The name of the collection.",
+            "enum": [
+              "Favorites"
+            ],
+            "example": "Favorites",
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `collection`.",
+            "enum": [
+              "collection"
+            ],
+            "example": "collection",
+            "type": "string"
+          }
+        },
+        "title": "Collection",
+        "type": "object",
+        "x-box-resource-id": "collection",
+        "x-box-tag": "collections"
+      },
+      "Folder--Base": {
+        "description": "The bare basic representation of a folder, the minimal\namount of fields returned when using the `fields` query\nparameter.",
+        "properties": {
+          "etag": {
+            "description": "The HTTP `etag` of this folder. This can be used within some API\nendpoints in the `If-Match` and `If-None-Match` headers to only\nperform changes on the folder if (no) changes have happened.",
+            "example": "1",
+            "nullable": true,
+            "type": "string"
+          },
+          "id": {
+            "description": "The unique identifier that represent a folder.\n\nThe ID for any folder can be determined\nby visiting a folder in the web application\nand copying the ID from the URL. For example,\nfor the URL `https://*.app.box.com/folders/123`\nthe `folder_id` is `123`.",
+            "example": "12345",
+            "nullable": false,
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `folder`.",
+            "enum": [
+              "folder"
+            ],
+            "example": "folder",
+            "nullable": false,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "title": "Folder (Base)",
+        "type": "object",
+        "x-box-resource-id": "folder--base",
+        "x-box-tag": "folders",
+        "x-box-variant": "base",
+        "x-box-variants": [
+          "base",
+          "mini",
+          "standard",
+          "full"
+        ]
+      },
+      "Folder--Mini": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Folder--Base"
+          },
+          {
+            "properties": {
+              "name": {
+                "description": "The name of the folder.",
+                "example": "Contracts",
+                "nullable": false,
+                "type": "string"
+              },
+              "sequence_id": {
+                "allOf": [
+                  {
+                    "description": "A numeric identifier that represents the most recent user event\nthat has been applied to this item.\n\nThis can be used in combination with the `GET /events`-endpoint\nto filter out user events that would have occurred before this\nidentifier was read.\n\nAn example would be where a Box Drive-like application\nwould fetch an item via the API, and then listen to incoming\nuser events for changes to the item. The application would\nignore any user events where the `sequence_id` in the event\nis smaller than or equal to the `sequence_id` in the originally\nfetched resource.",
+                    "example": "3",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  {
+                    "nullable": false
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "A mini representation of a file version, used when\nnested under another resource.",
+        "title": "Folder (Mini)",
+        "type": "object",
+        "x-box-resource-id": "folder--mini",
+        "x-box-tag": "folders",
+        "x-box-variant": "mini"
+      },
+      "TrashWebLink": {
+        "description": "Represents a trashed web link.",
+        "properties": {
+          "created_at": {
+            "description": "When this file was created on Box’s servers.",
+            "example": "2012-12-12T10:53:43-08:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/User--Mini"
+              },
+              {
+                "description": "The user who created this web link."
+              }
+            ]
+          },
+          "description": {
+            "description": "The description accompanying the web link. This is\nvisible within the Box web application.",
+            "example": "Example page",
+            "type": "string"
+          },
+          "etag": {
+            "description": "The entity tag of this web link. Used with `If-Match`\nheaders.",
+            "example": "1",
+            "type": "string"
+          },
+          "id": {
+            "description": "The unique identifier for this web link.",
+            "example": "11446498",
+            "type": "string"
+          },
+          "item_status": {
+            "description": "Whether this item is deleted or not. Values include `active`,\n`trashed` if the file has been moved to the trash, and `deleted` if\nthe file has been permanently deleted.",
+            "enum": [
+              "active",
+              "trashed",
+              "deleted"
+            ],
+            "example": "trashed",
+            "type": "string"
+          },
+          "modified_at": {
+            "description": "When this file was last updated on the Box\nservers.",
+            "example": "2012-12-12T10:53:43-08:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "modified_by": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/User--Mini"
+              },
+              {
+                "description": "The user who last modified this web link."
+              }
+            ]
+          },
+          "name": {
+            "description": "The name of the web link.",
+            "example": "My Bookmark",
+            "type": "string"
+          },
+          "owned_by": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/User--Mini"
+              },
+              {
+                "description": "The user who owns this web link."
+              }
+            ]
+          },
+          "parent": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Folder--Mini"
+              },
+              {
+                "description": "The parent object the web link belongs to."
+              }
+            ]
+          },
+          "path_collection": {
+            "allOf": [
+              {
+                "description": "A list of parent folders for an item in the trash.",
+                "properties": {
+                  "entries": {
+                    "description": "Array of folders for this item's path collection.",
+                    "items": {
+                      "description": "The parent folder for this item.",
+                      "properties": {
+                        "etag": {
+                          "description": "This field is null for the Trash folder.",
+                          "example": null,
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "id": {
+                          "description": "The unique identifier that represent a folder.",
+                          "example": "123456789",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "The name of the Trash folder.",
+                          "example": "Trash",
+                          "nullable": false,
+                          "type": "string"
+                        },
+                        "sequence_id": {
+                          "description": "This field is null for the Trash folder.",
+                          "example": null,
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "type": {
+                          "description": "The value will always be `folder`.",
+                          "enum": [
+                            "folder"
+                          ],
+                          "example": "folder",
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "total_count": {
+                    "description": "The number of folders in this list.",
+                    "example": 1,
+                    "format": "int64",
+                    "nullable": false,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "total_count",
+                  "entries"
+                ],
+                "title": "Path collection (Trash)",
+                "type": "object"
+              },
+              {
+                "description": "The tree of folders that this web link is contained in,\nstarting at the root."
+              },
+              {
+                "nullable": false
+              }
+            ]
+          },
+          "purged_at": {
+            "description": "When this file will be permanently deleted.",
+            "example": "2012-12-12T10:53:43-08:00",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "sequence_id": {
+            "allOf": [
+              {
+                "description": "A numeric identifier that represents the most recent user event\nthat has been applied to this item.\n\nThis can be used in combination with the `GET /events`-endpoint\nto filter out user events that would have occurred before this\nidentifier was read.\n\nAn example would be where a Box Drive-like application\nwould fetch an item via the API, and then listen to incoming\nuser events for changes to the item. The application would\nignore any user events where the `sequence_id` in the event\nis smaller than or equal to the `sequence_id` in the originally\nfetched resource.",
+                "example": "3",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "nullable": false
+              }
+            ]
+          },
+          "shared_link": {
+            "description": "The shared link for this bookmark. This will\nbe `null` if a bookmark has been trashed, since the link will no longer\nbe active.",
+            "example": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "trashed_at": {
+            "description": "When this file was last moved to the trash.",
+            "example": "2012-12-12T10:53:43-08:00",
+            "format": "date-time",
+            "nullable": true,
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `web_link`.",
+            "enum": [
+              "web_link"
+            ],
+            "example": "web_link",
+            "type": "string"
+          },
+          "url": {
+            "description": "The URL this web link points to.",
+            "example": "https://www.example.com/example/1234",
+            "type": "string"
+          }
+        },
+        "title": "Trashed Web Link",
+        "type": "object",
+        "x-box-resource-id": "trash_web_link",
+        "x-box-tag": "trashed_web_links"
+      },
+      "TrashWebLinkRestored": {
+        "description": "Represents a web link restored from the trash.",
+        "properties": {
+          "created_at": {
+            "description": "When this file was created on Box’s servers.",
+            "example": "2012-12-12T10:53:43-08:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "created_by": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/User--Mini"
+              },
+              {
+                "description": "The user who created this web link."
+              }
+            ]
+          },
+          "description": {
+            "description": "The description accompanying the web link. This is\nvisible within the Box web application.",
+            "example": "Example page",
+            "type": "string"
+          },
+          "etag": {
+            "description": "The entity tag of this web link. Used with `If-Match`\nheaders.",
+            "example": "1",
+            "type": "string"
+          },
+          "id": {
+            "description": "The unique identifier for this web link.",
+            "example": "11446498",
+            "type": "string"
+          },
+          "item_status": {
+            "description": "Whether this item is deleted or not. Values include `active`,\n`trashed` if the file has been moved to the trash, and `deleted` if\nthe file has been permanently deleted.",
+            "enum": [
+              "active",
+              "trashed",
+              "deleted"
+            ],
+            "example": "trashed",
+            "type": "string"
+          },
+          "modified_at": {
+            "description": "When this file was last updated on the Box\nservers.",
+            "example": "2012-12-12T10:53:43-08:00",
+            "format": "date-time",
+            "type": "string"
+          },
+          "modified_by": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/User--Mini"
+              },
+              {
+                "description": "The user who last modified this web link."
+              }
+            ]
+          },
+          "name": {
+            "description": "The name of the web link.",
+            "example": "My Bookmark",
+            "type": "string"
+          },
+          "owned_by": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/User--Mini"
+              },
+              {
+                "description": "The user who owns this web link."
+              }
+            ]
+          },
+          "parent": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Folder--Mini"
+              },
+              {
+                "description": "The parent object the web link belongs to."
+              }
+            ]
+          },
+          "path_collection": {
+            "allOf": [
+              {
+                "description": "A list of parent folders for an item.",
+                "properties": {
+                  "entries": {
+                    "description": "The parent folders for this item.",
+                    "items": {
+                      "$ref": "#/components/schemas/Folder--Mini"
+                    },
+                    "nullable": false,
+                    "type": "array"
+                  },
+                  "total_count": {
+                    "description": "The number of folders in this list.",
+                    "example": 1,
+                    "format": "int64",
+                    "nullable": false,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "total_count",
+                  "entries"
+                ],
+                "title": "Path collection",
+                "type": "object"
+              },
+              {
+                "description": "The tree of folders that this web link is contained in,\nstarting at the root."
+              },
+              {
+                "nullable": false
+              }
+            ]
+          },
+          "purged_at": {
+            "description": "The time at which this bookmark will be permanently\ndeleted - becomes `null` after restore.",
+            "example": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "sequence_id": {
+            "allOf": [
+              {
+                "description": "A numeric identifier that represents the most recent user event\nthat has been applied to this item.\n\nThis can be used in combination with the `GET /events`-endpoint\nto filter out user events that would have occurred before this\nidentifier was read.\n\nAn example would be where a Box Drive-like application\nwould fetch an item via the API, and then listen to incoming\nuser events for changes to the item. The application would\nignore any user events where the `sequence_id` in the event\nis smaller than or equal to the `sequence_id` in the originally\nfetched resource.",
+                "example": "3",
+                "nullable": true,
+                "type": "string"
+              },
+              {
+                "nullable": false
+              }
+            ]
+          },
+          "shared_link": {
+            "description": "The shared link for this bookmark. This will\nbe `null` if a bookmark had been trashed, even though the original shared\nlink does become active again.",
+            "example": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "trashed_at": {
+            "description": "The time at which this bookmark was put in the\ntrash - becomes `null` after restore.",
+            "example": null,
+            "nullable": true,
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `web_link`.",
+            "enum": [
+              "web_link"
+            ],
+            "example": "web_link",
+            "type": "string"
+          },
+          "url": {
+            "description": "The URL this web link points to.",
+            "example": "https://www.example.com/example/1234",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence_id",
+          "path_collection"
+        ],
+        "title": "Trashed Web Link (Restored)",
+        "type": "object",
+        "x-box-resource-id": "trash_web_link_restored",
+        "x-box-tag": "trashed_web_links"
+      },
+      "User--Base": {
+        "description": "A mini representation of a user, used when\nnested within another resource.",
+        "properties": {
+          "id": {
+            "description": "The unique identifier for this user.",
+            "example": "11446498",
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `user`.",
+            "enum": [
+              "user"
+            ],
+            "example": "user",
+            "nullable": false,
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "id"
+        ],
+        "title": "User (Base)",
+        "type": "object",
+        "x-box-resource-id": "user--base",
+        "x-box-tag": "users",
+        "x-box-variant": "base",
+        "x-box-variants": [
+          "base",
+          "mini",
+          "standard",
+          "full"
+        ]
+      },
+      "User--Mini": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/User--Base"
+          },
+          {
+            "properties": {
+              "login": {
+                "description": "The primary email address of this user.",
+                "example": "ceo@example.com",
+                "format": "email",
+                "nullable": false,
+                "type": "string"
+              },
+              "name": {
+                "description": "The display name of this user.",
+                "example": "Aaron Levie",
+                "maxLength": 50,
+                "nullable": false,
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "A mini representation of a user, as can be returned when nested within other\nresources.",
+        "title": "User (Mini)",
+        "type": "object",
+        "x-box-resource-id": "user--mini",
+        "x-box-tag": "users",
+        "x-box-variant": "mini"
+      },
+      "WebLink": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebLink--Mini"
+          },
+          {
+            "properties": {
+              "allowed_shared_link_access_levels": {
+                "description": "The shared link access levels the authenticated user is allowed to\nuse when creating or updating a shared link for this web link.\n\nThe list depends on item policy and user authorization, so it may be\nnarrower than the levels available to the owner. An empty array means\nno access level is available to this user.",
+                "example": [
+                  "open"
+                ],
+                "items": {
+                  "description": "The access level for a shared link.",
+                  "enum": [
+                    "open",
+                    "company",
+                    "collaborators"
+                  ],
+                  "example": "open",
+                  "title": "Shared link access level",
+                  "type": "string"
+                },
+                "nullable": false,
+                "type": "array"
+              },
+              "collections": {
+                "description": "The collections that this web link belongs to.\n\nFor more information, see the\n[collections guide](https://developer.box.com/guides/collections).",
+                "items": {
+                  "$ref": "#/components/schemas/Collection"
+                },
+                "type": "array"
+              },
+              "created_at": {
+                "description": "When this file was created on Box’s servers.",
+                "example": "2012-12-12T10:53:43-08:00",
+                "format": "date-time",
+                "type": "string"
+              },
+              "created_by": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/User--Mini"
+                  },
+                  {
+                    "description": "The user who created this web link."
+                  }
+                ]
+              },
+              "description": {
+                "description": "The description accompanying the web link. This is\nvisible within the Box web application.",
+                "example": "Example page",
+                "type": "string"
+              },
+              "item_status": {
+                "description": "Whether this item is deleted or not. Values include `active`,\n`trashed` if the file has been moved to the trash, and `deleted` if\nthe file has been permanently deleted.",
+                "enum": [
+                  "active",
+                  "trashed",
+                  "deleted"
+                ],
+                "example": "active",
+                "type": "string"
+              },
+              "modified_at": {
+                "description": "When this file was last updated on the Box\nservers.",
+                "example": "2012-12-12T10:53:43-08:00",
+                "format": "date-time",
+                "type": "string"
+              },
+              "modified_by": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/User--Mini"
+                  },
+                  {
+                    "description": "The user who last modified this web link."
+                  }
+                ]
+              },
+              "owned_by": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/User--Mini"
+                  },
+                  {
+                    "description": "The user who owns this web link."
+                  }
+                ]
+              },
+              "parent": {
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Folder--Mini"
+                  },
+                  {
+                    "description": "The parent object the web link belongs to."
+                  }
+                ]
+              },
+              "path_collection": {
+                "allOf": [
+                  {
+                    "description": "A list of parent folders for an item.",
+                    "properties": {
+                      "entries": {
+                        "description": "The parent folders for this item.",
+                        "items": {
+                          "$ref": "#/components/schemas/Folder--Mini"
+                        },
+                        "nullable": false,
+                        "type": "array"
+                      },
+                      "total_count": {
+                        "description": "The number of folders in this list.",
+                        "example": 1,
+                        "format": "int64",
+                        "nullable": false,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "total_count",
+                      "entries"
+                    ],
+                    "title": "Path collection",
+                    "type": "object"
+                  },
+                  {
+                    "description": "The tree of folders that this web link is contained in,\nstarting at the root."
+                  },
+                  {
+                    "nullable": false
+                  }
+                ]
+              },
+              "purged_at": {
+                "description": "When this file will be permanently deleted.",
+                "example": "2012-12-12T10:53:43-08:00",
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              },
+              "shared_link": {
+                "allOf": [
+                  {
+                    "description": "Shared links provide direct, read-only access to files or folder on Box.\n\nShared links with open access level allow anyone with the URL\nto access the item, while shared links with company or collaborators access\nlevels can only be accessed by appropriately authenticated Box users.",
+                    "properties": {
+                      "access": {
+                        "description": "The access level for this shared link.\n\n* `open` - provides access to this item to anyone with this link\n* `company` - only provides access to this item to people the same company\n* `collaborators` - only provides access to this item to people who are\n   collaborators on this item\n\nIf this field is omitted when creating the shared link, the access level\nwill be set to the default access level specified by the enterprise admin.",
+                        "enum": [
+                          "open",
+                          "company",
+                          "collaborators"
+                        ],
+                        "example": "open",
+                        "nullable": false,
+                        "type": "string"
+                      },
+                      "download_count": {
+                        "description": "The number of times this item has been downloaded.",
+                        "example": 3,
+                        "nullable": false,
+                        "type": "integer"
+                      },
+                      "download_url": {
+                        "description": "A URL that can be used to download the file. This URL can be used in\na browser to download the file. This URL includes the file\nextension so that the file will be saved with the right file type.\n\nThis property will be `null` for folders.",
+                        "example": "https://www.box.com/shared/static/rh935iit6ewrmw0unyul.jpeg",
+                        "format": "url",
+                        "nullable": true,
+                        "type": "string",
+                        "x-box-premium-feature": true
+                      },
+                      "effective_access": {
+                        "description": "The effective access level for the shared link. This can be a more\nrestrictive access level than the value in the `access` field when the\nenterprise settings restrict the allowed access levels.",
+                        "enum": [
+                          "open",
+                          "company",
+                          "collaborators"
+                        ],
+                        "example": "company",
+                        "nullable": false,
+                        "type": "string"
+                      },
+                      "effective_permission": {
+                        "description": "The effective permissions for this shared link.\nThese result in the more restrictive combination of\nthe share link permissions and the item permissions set\nby the administrator, the owner, and any ancestor item\nsuch as a folder.",
+                        "enum": [
+                          "can_edit",
+                          "can_download",
+                          "can_preview",
+                          "no_access"
+                        ],
+                        "example": "can_download",
+                        "nullable": false,
+                        "type": "string"
+                      },
+                      "is_password_enabled": {
+                        "description": "Defines if the shared link requires a password to access the item.",
+                        "example": true,
+                        "nullable": false,
+                        "type": "boolean"
+                      },
+                      "permissions": {
+                        "description": "Defines if this link allows a user to preview, edit, and download an item.\nThese permissions refer to the shared link only and\ndo not supersede permissions applied to the item itself.",
+                        "properties": {
+                          "can_download": {
+                            "description": "Defines if the shared link allows for the item to be downloaded. For\nshared links on folders, this also applies to any items in the folder.\n\nThis value can be set to `true` when the effective access level is\nset to `open` or `company`, not `collaborators`.",
+                            "example": true,
+                            "nullable": false,
+                            "type": "boolean"
+                          },
+                          "can_edit": {
+                            "description": "Defines if the shared link allows for the item to be edited.\n\nThis value can only be `true` if `can_download` is also `true` and if\nthe item has a type of `file`.",
+                            "example": false,
+                            "nullable": false,
+                            "type": "boolean"
+                          },
+                          "can_preview": {
+                            "description": "Defines if the shared link allows for the item to be previewed.\n\nThis value is always `true`. For shared links on folders this also\napplies to any items in the folder.",
+                            "example": true,
+                            "nullable": false,
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "can_download",
+                          "can_preview",
+                          "can_edit"
+                        ],
+                        "type": "object"
+                      },
+                      "preview_count": {
+                        "description": "The number of times this item has been previewed.",
+                        "example": 3,
+                        "nullable": false,
+                        "type": "integer"
+                      },
+                      "unshared_at": {
+                        "description": "The date and time when this link will be unshared. This field can only be\nset by users with paid accounts.",
+                        "example": "2018-04-13T13:53:23-07:00",
+                        "format": "date-time",
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "url": {
+                        "description": "The URL that can be used to access the item on Box.\n\nThis URL will display the item in Box's preview UI where the file\ncan be downloaded if allowed.\n\nThis URL will continue to work even when a custom `vanity_url`\nhas been set for this shared link.",
+                        "example": "https://www.box.com/s/vspke7y05sb214wjokpk",
+                        "format": "url",
+                        "nullable": false,
+                        "type": "string"
+                      },
+                      "vanity_name": {
+                        "description": "The custom name of a shared link, as used in the `vanity_url` field.",
+                        "example": "my_url",
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "vanity_url": {
+                        "description": "The \"Custom URL\" that can also be used to preview the item on Box.  Custom\nURLs can only be created or modified in the Box Web application.",
+                        "example": "https://acme.app.box.com/v/my_url/",
+                        "format": "url",
+                        "nullable": true,
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "url",
+                      "accessed",
+                      "effective_access",
+                      "effective_permission",
+                      "is_password_enabled",
+                      "download_count",
+                      "preview_count"
+                    ],
+                    "title": "Shared link",
+                    "type": "object"
+                  },
+                  {
+                    "description": "The shared link object for this item. Will be\n`null` if no shared link has been created."
+                  },
+                  {
+                    "nullable": true
+                  }
+                ]
+              },
+              "trashed_at": {
+                "description": "When this file was moved to the trash.",
+                "example": "2012-12-12T10:53:43-08:00",
+                "format": "date-time",
+                "nullable": true,
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Web links are objects that point to URLs. These objects\nare also known as bookmarks within the Box web application.\n\nWeb link objects are treated similarly to file objects,\nthey will also support most actions that apply to regular files.",
+        "title": "Web link",
+        "type": "object",
+        "x-box-resource-id": "web_link",
+        "x-box-tag": "web_links",
+        "x-box-variant": "standard"
+      },
+      "WebLink--Base": {
+        "description": "Web links are objects that point to URLs. These objects\nare also known as bookmarks within the Box web application.\n\nWeb link objects are treated similarly to file objects,\nthey will also support most actions that apply to regular files.",
+        "properties": {
+          "etag": {
+            "description": "The entity tag of this web link. Used with `If-Match`\nheaders.",
+            "example": "1",
+            "type": "string"
+          },
+          "id": {
+            "description": "The unique identifier for this web link.",
+            "example": "11446498",
+            "type": "string"
+          },
+          "type": {
+            "description": "The value will always be `web_link`.",
+            "enum": [
+              "web_link"
+            ],
+            "example": "web_link",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "type"
+        ],
+        "title": "Web link (Base)",
+        "type": "object",
+        "x-box-resource-id": "web_link--base",
+        "x-box-tag": "web_links",
+        "x-box-variant": "base",
+        "x-box-variants": [
+          "base",
+          "mini",
+          "standard"
+        ]
+      },
+      "WebLink--Mini": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebLink--Base"
+          },
+          {
+            "properties": {
+              "name": {
+                "description": "The name of the web link.",
+                "example": "My Bookmark",
+                "type": "string"
+              },
+              "sequence_id": {
+                "allOf": [
+                  {
+                    "description": "A numeric identifier that represents the most recent user event\nthat has been applied to this item.\n\nThis can be used in combination with the `GET /events`-endpoint\nto filter out user events that would have occurred before this\nidentifier was read.\n\nAn example would be where a Box Drive-like application\nwould fetch an item via the API, and then listen to incoming\nuser events for changes to the item. The application would\nignore any user events where the `sequence_id` in the event\nis smaller than or equal to the `sequence_id` in the originally\nfetched resource.",
+                    "example": "3",
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  {
+                    "nullable": false
+                  }
+                ]
+              },
+              "url": {
+                "description": "The URL this web link points to.",
+                "example": "https://www.example.com/example/1234",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Web links are objects that point to URLs. These objects\nare also known as bookmarks within the Box web application.\n\nWeb link objects are treated similarly to file objects,\nthey will also support most actions that apply to regular files.",
+        "title": "Web link (Mini)",
+        "type": "object",
+        "x-box-resource-id": "web_link--mini",
+        "x-box-tag": "web_links",
+        "x-box-variant": "mini"
+      }
+    },
+    "securitySchemes": {
+      "OAuth2Security": {
+        "description": "The access token received from the authorization server in the OAuth 2.0 flow.",
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://account.box.com/api/oauth2/authorize",
+            "scopes": {
+              "manage_app_users": "Provision and manage app users",
+              "manage_data_retention": "Manage data retention polices",
+              "manage_enterprise_properties": "Manage enterprise properties",
+              "manage_groups": "Manage an enterprise's groups",
+              "manage_legal_hold": "Manage Legal Holds",
+              "manage_managed_users": "Provision and manage managed users",
+              "manage_webhook": "Create webhooks programmatically through the API",
+              "root_readonly": "Read all files and folders stored in Box",
+              "root_readwrite": "Read and write all files and folders stored in Box"
+            },
+            "tokenUrl": "https://api.box.com/oauth2/token"
+          }
+        },
+        "type": "oauth2"
+      }
+    }
+  },
+  "externalDocs": {
+    "description": "Box Developer Documentation.",
+    "url": "https://developer.box.com"
+  },
+  "info": {
+    "contact": {
+      "email": "devrel@box.com",
+      "name": "Box, Inc",
+      "url": "https://developer.box.com"
+    },
+    "description": "[Box Platform](https://developer.box.com) provides functionality to provide access to content stored within [Box](https://box.com). It provides endpoints for basic manipulation of files and folders, management of users within an enterprise, as well as more complex topics such as legal holds and retention policies.",
+    "license": {
+      "name": "Apache-2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0"
+    },
+    "termsOfService": "https://cloud.app.box.com/s/rmwxu64h1ipr41u49w3bbuvbsa29wku9",
+    "title": "Box Platform API",
+    "version": "2024.0",
+    "x-box-commit-hash": "21e370b9bd"
+  },
+  "openapi": "3.0.2",
+  "paths": {
+    "/shared_items#web_links": {
+      "get": {
+        "description": "Returns the web link represented by a shared link.\n\nA shared web link can be represented by a shared link,\nwhich can originate within the current enterprise or within another.\n\nThis endpoint allows an application to retrieve information about a\nshared web link when only given a shared link.",
+        "operationId": "get_shared_items#web_links",
+        "parameters": [
+          {
+            "description": "Ensures an item is only returned if it has changed.\n\nPass in the item's last observed `etag` value\ninto this header and the endpoint will fail\nwith a `304 Not Modified` if the item has not\nchanged since.",
+            "example": "1",
+            "in": "header",
+            "name": "if-none-match",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A comma-separated list of attributes to include in the\nresponse. This can be used to request fields that are\nnot normally returned in a standard response.\n\nBe aware that specifying this parameter will have the\neffect that none of the standard fields are returned in\nthe response unless explicitly specified, instead only\nfields for the mini representation are returned, additional\nto the fields requested.",
+            "example": [
+              "id",
+              "type",
+              "name"
+            ],
+            "explode": false,
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "A header containing the shared link and optional password for the\nshared link.\n\nThe format for this header is as follows:\n\n`shared_link=[link]&shared_link_password=[password]`.",
+            "example": "shared_link=[link]&shared_link_password=[password]",
+            "in": "header",
+            "name": "boxapi",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            },
+            "description": "Returns a full web link resource if the shared link is valid and\nthe user has access to it."
+          },
+          "304": {
+            "description": "Returns an empty response when the `If-None-Match` header matches\nthe current `etag` value of the web link. This indicates that the web link\nhas not changed since it was last requested."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Find web link for shared link",
+        "tags": [
+          "Shared links (Web Links)"
+        ],
+        "x-box-tag": "shared_links_web_links"
+      }
+    },
+    "/web_links": {
+      "post": {
+        "description": "Creates a web link object within a folder.",
+        "operationId": "post_web_links",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "description": {
+                    "description": "Description of the web link.",
+                    "example": "Cloud Content Management",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Name of the web link. Defaults to the URL if not set.",
+                    "example": "Box Website",
+                    "type": "string"
+                  },
+                  "parent": {
+                    "description": "The parent folder to create the web link within.",
+                    "properties": {
+                      "id": {
+                        "description": "The ID of parent folder.",
+                        "example": "0",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ],
+                    "type": "object"
+                  },
+                  "url": {
+                    "description": "The URL that this web link links to. Must start with\n`\"http://\"` or `\"https://\"`.",
+                    "example": "https://box.com",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "parent",
+                  "url"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            },
+            "description": "Returns the newly created web link object."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Create web link",
+        "tags": [
+          "Web links"
+        ],
+        "x-box-tag": "web_links"
+      }
+    },
+    "/web_links/{web_link_id}": {
+      "delete": {
+        "description": "Deletes a web link.",
+        "operationId": "delete_web_links_id",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "An empty response will be returned when the web link\nwas successfully deleted."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Remove web link",
+        "tags": [
+          "Web links"
+        ],
+        "x-box-tag": "web_links"
+      },
+      "get": {
+        "description": "Retrieve information about a web link.",
+        "operationId": "get_web_links_id",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The URL, and optional password, for the shared link of this item.\n\nThis header can be used to access items that have not been\nexplicitly shared with a user.\n\nUse the format `shared_link=[link]` or if a password is required then\nuse `shared_link=[link]&shared_link_password=[password]`.\n\nThis header can be used on the file or folder shared, as well as on any files\nor folders nested within the item.",
+            "example": "shared_link=[link]&shared_link_password=[password]",
+            "in": "header",
+            "name": "boxapi",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            },
+            "description": "Returns the web link object."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Get web link",
+        "tags": [
+          "Web links"
+        ],
+        "x-box-tag": "web_links"
+      },
+      "post": {
+        "description": "Restores a web link that has been moved to the trash.\n\nAn optional new parent ID can be provided to restore the  web link to in case\nthe original folder has been deleted.",
+        "operationId": "post_web_links_id",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A comma-separated list of attributes to include in the\nresponse. This can be used to request fields that are\nnot normally returned in a standard response.\n\nBe aware that specifying this parameter will have the\neffect that none of the standard fields are returned in\nthe response unless explicitly specified, instead only\nfields for the mini representation are returned, additional\nto the fields requested.",
+            "example": [
+              "id",
+              "type",
+              "name"
+            ],
+            "explode": false,
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "name": {
+                    "description": "An optional new name for the web link.",
+                    "example": "Restored.docx",
+                    "type": "string"
+                  },
+                  "parent": {
+                    "allOf": [
+                      {
+                        "description": "The parent for this item.",
+                        "properties": {
+                          "id": {
+                            "description": "The ID of parent item.",
+                            "example": "123",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "description": "Specifies an optional ID of a folder to restore the web link\nto when the original folder no longer exists.\n\nPlease be aware that this ID will only be used if the original\nfolder no longer exists. Use this ID to provide a fallback\nlocation to restore the web link to if the original location\nhas been deleted."
+                      }
+                    ]
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrashWebLinkRestored"
+                }
+              }
+            },
+            "description": "Returns a web link object when it has been restored."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the user does not have access to the folder\nthe web link is being restored to, or the user does not have permission\nto restore web link from the trash."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the web link is not in the trash."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if there is an web link with the same name\nin the folder the web link is being restored to."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Restore web link",
+        "tags": [
+          "Trashed web links"
+        ],
+        "x-box-tag": "trashed_web_links"
+      },
+      "put": {
+        "description": "Updates a web link object.",
+        "operationId": "put_web_links_id",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "description": {
+                    "description": "A new description of the web link.",
+                    "example": "Cloud Content Management",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "A new name for the web link. Defaults to the URL if not set.",
+                    "example": "Box Website",
+                    "type": "string"
+                  },
+                  "parent": {
+                    "allOf": [
+                      {
+                        "description": "The parent for this item.",
+                        "properties": {
+                          "id": {
+                            "description": "The ID of parent item.",
+                            "example": "123",
+                            "type": "string"
+                          },
+                          "user_id": {
+                            "description": "The input for `user_id` is optional. Moving to non-root folder is not allowed when `user_id` is present. Parent folder id should be zero when `user_id` is provided.",
+                            "example": "12346930",
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      {
+                        "description": "The new parent folder to put the web link in.\nUse this to move the web link to a different folder."
+                      }
+                    ]
+                  },
+                  "shared_link": {
+                    "description": "The settings for the shared link to update.",
+                    "properties": {
+                      "access": {
+                        "description": "The level of access for the shared link. This can be\nrestricted to anyone with the link (`open`), only people\nwithin the company (`company`) and only those who\nhave been invited to the folder (`collaborators`).\n\nIf not set, this field defaults to the access level specified\nby the enterprise admin. To create a shared link with this\ndefault setting pass the `shared_link` object with\nno `access` field, for example `{ \"shared_link\": {} }`.\n\nThe `company` access level is only available to paid\naccounts.",
+                        "enum": [
+                          "open",
+                          "company",
+                          "collaborators"
+                        ],
+                        "example": "open",
+                        "type": "string"
+                      },
+                      "password": {
+                        "description": "The password required to access the shared link. Set the\npassword to `null` to remove it.\nPasswords must now be at least eight characters\nlong and include a number, upper case letter, or\na non-numeric or non-alphabetic character.\nA password can only be set when `access` is set to `open`.",
+                        "example": "do-not-use-this-password",
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "unshared_at": {
+                        "description": "The timestamp at which this shared link will\nexpire. This field can only be set by\nusers with paid accounts. The value must be greater than the\ncurrent date and time.",
+                        "example": "2012-12-12T10:53:43-08:00",
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "vanity_name": {
+                        "description": "Defines a custom vanity name to use in the shared link URL,\nfor example `https://app.box.com/v/my-shared-link`.\n\nCustom URLs should not be used when sharing sensitive content\nas vanity URLs are a lot easier to guess than regular shared\nlinks.",
+                        "example": "my-shared-link",
+                        "minLength": 12,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  "url": {
+                    "description": "The new URL that the web link links to. Must start with\n`\"http://\"` or `\"https://\"`.",
+                    "example": "https://box.com",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            },
+            "description": "Returns the updated web link object."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Update web link",
+        "tags": [
+          "Web links"
+        ],
+        "x-box-tag": "web_links"
+      }
+    },
+    "/web_links/{web_link_id}#add_shared_link": {
+      "put": {
+        "description": "Adds a shared link to a web link.",
+        "operationId": "put_web_links_id#add_shared_link",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicitly request the `shared_link` fields\nto be returned for this item.",
+            "example": "shared_link",
+            "in": "query",
+            "name": "fields",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "shared_link": {
+                    "description": "The settings for the shared link to create on the web link.\n\nUse an empty object (`{}`) to use the default settings for shared\nlinks.",
+                    "properties": {
+                      "access": {
+                        "description": "The level of access for the shared link. This can be\nrestricted to anyone with the link (`open`), only people\nwithin the company (`company`) and only those who\nhave been invited to the file (`collaborators`).\n\nIf not set, this field defaults to the access level specified\nby the enterprise admin. To create a shared link with this\ndefault setting pass the `shared_link` object with\nno `access` field, for example `{ \"shared_link\": {} }`.\n\nThe `company` access level is only available to paid\naccounts.",
+                        "enum": [
+                          "open",
+                          "company",
+                          "collaborators"
+                        ],
+                        "example": "open",
+                        "type": "string"
+                      },
+                      "password": {
+                        "description": "The password required to access the shared link. Set the\npassword to `null` to remove it.\nPasswords must now be at least eight characters\nlong and include a number, upper case letter, or\na non-numeric or non-alphabetic character.\nA password can only be set when `access` is set to `open`.",
+                        "example": "do-n8t-use-this-Password",
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "permissions": {
+                        "properties": {
+                          "can_download": {
+                            "description": "If the shared link allows for downloading of files.\nThis can only be set when `access` is set to\n`open` or `company`.",
+                            "example": true,
+                            "type": "boolean"
+                          },
+                          "can_edit": {
+                            "description": "This value can only be `true` is `type` is `file`.",
+                            "example": false,
+                            "type": "boolean"
+                          },
+                          "can_preview": {
+                            "description": "If the shared link allows for previewing of files.\nThis value is always `true`. For shared links on folders\nthis also applies to any items in the folder.",
+                            "example": true,
+                            "type": "boolean"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "unshared_at": {
+                        "description": "The timestamp at which this shared link will\nexpire. This field can only be set by\nusers with paid accounts. The value must be greater than the\ncurrent date and time.",
+                        "example": "2012-12-12T10:53:43-08:00",
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "vanity_name": {
+                        "description": "Defines a custom vanity name to use in the shared link URL,\nfor example `https://app.box.com/v/my-shared-link`.\n\nCustom URLs should not be used when sharing sensitive content\nas vanity URLs are a lot easier to guess than regular shared\nlinks.",
+                        "example": "my-shared-link",
+                        "minLength": 12,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "value": {
+                      "etag": "1",
+                      "id": "12345",
+                      "shared_link": {
+                        "access": "open",
+                        "download_count": 0,
+                        "download_url": "https://app.box.com/shared/static/kwio6b4ovt1264rnfbyqo1.pdf",
+                        "effective_access": "open",
+                        "effective_permission": "can_download",
+                        "is_password_enabled": false,
+                        "permissions": {
+                          "can_download": true,
+                          "can_edit": false,
+                          "can_preview": true
+                        },
+                        "preview_count": 0,
+                        "unshared_at": "2020-09-21T10:34:41-07:00",
+                        "url": "https://app.box.com/s/kwio6b4ovt1264rnfbyqo1",
+                        "vanity_name": null,
+                        "vanity_url": null
+                      },
+                      "type": "web_link"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            },
+            "description": "Returns the base representation of a web link with a new shared\nlink attached."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned when there is an incorrect permission combination."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned when the access token provided in the `Authorization` header\nis not recognized or not provided."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the user does not have all the permissions to complete the\nupdate."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the file is not found, or the user does not\nhave access to the file."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the `file_id` is not in a recognized format."
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error when the `If-Match` header does not match\nthe current `etag` value of the file. This indicates that the file\nhas changed since it was last requested."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Add shared link to web link",
+        "tags": [
+          "Shared links (Web Links)"
+        ],
+        "x-box-tag": "shared_links_web_links"
+      }
+    },
+    "/web_links/{web_link_id}#get_shared_link": {
+      "get": {
+        "description": "Gets the information for a shared link on a web link.",
+        "operationId": "get_web_links_id#get_shared_link",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicitly request the `shared_link` fields\nto be returned for this item.",
+            "example": "shared_link",
+            "in": "query",
+            "name": "fields",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "value": {
+                      "etag": "1",
+                      "id": "12345",
+                      "shared_link": {
+                        "access": "open",
+                        "download_count": 0,
+                        "download_url": "https://app.box.com/shared/static/kwio6b4ovt1264rnfbyqo1.pdf",
+                        "effective_access": "open",
+                        "effective_permission": "can_download",
+                        "is_password_enabled": false,
+                        "permissions": {
+                          "can_download": true,
+                          "can_edit": false,
+                          "can_preview": true
+                        },
+                        "preview_count": 0,
+                        "unshared_at": "2020-09-21T10:34:41-07:00",
+                        "url": "https://app.box.com/s/kwio6b4ovt1264rnfbyqo1",
+                        "vanity_name": null,
+                        "vanity_url": null
+                      },
+                      "type": "web_link"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            },
+            "description": "Returns the base representation of a web link with the\nadditional shared link information."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned when the access token provided in the `Authorization` header\nis not recognized or not provided."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the file is not found, or the user does not\nhave access to the file."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the `file_id` is not in a recognized format."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Get shared link for web link",
+        "tags": [
+          "Shared links (Web Links)"
+        ],
+        "x-box-tag": "shared_links_web_links"
+      }
+    },
+    "/web_links/{web_link_id}#remove_shared_link": {
+      "put": {
+        "description": "Removes a shared link from a web link.",
+        "operationId": "put_web_links_id#remove_shared_link",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicitly request the `shared_link` fields\nto be returned for this item.",
+            "example": "shared_link",
+            "in": "query",
+            "name": "fields",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "shared_link": {
+                    "description": "By setting this value to `null`, the shared link\nis removed from the web link.",
+                    "example": null,
+                    "nullable": true,
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "value": {
+                      "etag": "1",
+                      "id": "12345",
+                      "shared_link": null,
+                      "type": "web_link"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            },
+            "description": "Returns a basic representation of a web link, with the\nshared link removed."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned when the access token provided in the `Authorization` header\nis not recognized or not provided."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the user does not have all the permissions to complete the\nupdate."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the file is not found, or the user does not\nhave access to the file."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the `file_id` is not in a recognized format."
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error when the `If-Match` header does not match\nthe current `etag` value of the file. This indicates that the file\nhas changed since it was last requested."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Remove shared link from web link",
+        "tags": [
+          "Shared links (Web Links)"
+        ],
+        "x-box-tag": "shared_links_web_links"
+      }
+    },
+    "/web_links/{web_link_id}#update_shared_link": {
+      "put": {
+        "description": "Updates a shared link on a web link.",
+        "operationId": "put_web_links_id#update_shared_link",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicitly request the `shared_link` fields\nto be returned for this item.",
+            "example": "shared_link",
+            "in": "query",
+            "name": "fields",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "shared_link": {
+                    "description": "The settings for the shared link to update.",
+                    "properties": {
+                      "access": {
+                        "description": "The level of access for the shared link. This can be\nrestricted to anyone with the link (`open`), only people\nwithin the company (`company`) and only those who\nhave been invited to the folder (`collaborators`).\n\nIf not set, this field defaults to the access level specified\nby the enterprise admin. To create a shared link with this\ndefault setting pass the `shared_link` object with\nno `access` field, for example `{ \"shared_link\": {} }`.\n\nThe `company` access level is only available to paid\naccounts.",
+                        "enum": [
+                          "open",
+                          "company",
+                          "collaborators"
+                        ],
+                        "example": "open",
+                        "type": "string"
+                      },
+                      "password": {
+                        "description": "The password required to access the shared link. Set the\npassword to `null` to remove it.\nPasswords must now be at least eight characters\nlong and include a number, upper case letter, or\na non-numeric or non-alphabetic character.\nA password can only be set when `access` is set to `open`.",
+                        "example": "do-n8t-use-this-Password",
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "permissions": {
+                        "properties": {
+                          "can_download": {
+                            "description": "If the shared link allows for downloading of files.\nThis can only be set when `access` is set to\n`open` or `company`.",
+                            "example": true,
+                            "type": "boolean"
+                          },
+                          "can_edit": {
+                            "description": "This value can only be `true` is `type` is `file`.",
+                            "example": true,
+                            "type": "boolean"
+                          },
+                          "can_preview": {
+                            "description": "If the shared link allows for previewing of files.\nThis value is always `true`. For shared links on folders\nthis also applies to any items in the folder.",
+                            "example": true,
+                            "type": "boolean"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "unshared_at": {
+                        "description": "The timestamp at which this shared link will\nexpire. This field can only be set by\nusers with paid accounts. The value must be greater than the\ncurrent date and time.",
+                        "example": "2012-12-12T10:53:43-08:00",
+                        "format": "date-time",
+                        "type": "string"
+                      },
+                      "vanity_name": {
+                        "description": "Defines a custom vanity name to use in the shared link URL,\nfor example `https://app.box.com/v/my-shared-link`.\n\nCustom URLs should not be used when sharing sensitive content\nas vanity URLs are a lot easier to guess than regular shared\nlinks.",
+                        "example": "my-shared-link",
+                        "minLength": 12,
+                        "type": "string"
+                      }
+                    },
+                    "type": "object"
+                  }
+                },
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "examples": {
+                  "default": {
+                    "value": {
+                      "etag": "1",
+                      "id": "12345",
+                      "shared_link": {
+                        "access": "open",
+                        "download_count": 0,
+                        "download_url": "https://app.box.com/shared/static/kwio6b4ovt1264rnfbyqo1.pdf",
+                        "effective_access": "open",
+                        "effective_permission": "can_download",
+                        "is_password_enabled": false,
+                        "permissions": {
+                          "can_download": true,
+                          "can_edit": false,
+                          "can_preview": true
+                        },
+                        "preview_count": 0,
+                        "unshared_at": "2020-09-21T10:34:41-07:00",
+                        "url": "https://app.box.com/s/kwio6b4ovt1264rnfbyqo1",
+                        "vanity_name": null,
+                        "vanity_url": null
+                      },
+                      "type": "web_link"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/WebLink"
+                }
+              }
+            },
+            "description": "Returns a basic representation of the web link, with the updated shared\nlink attached."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned when there is an incorrect permission combination."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned when the access token provided in the `Authorization` header\nis not recognized or not provided."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the user does not have all the permissions to complete the\nupdate."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the file is not found, or the user does not\nhave access to the file."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returned if the `file_id` is not in a recognized format."
+          },
+          "412": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error when the `If-Match` header does not match\nthe current `etag` value of the file. This indicates that the file\nhas changed since it was last requested."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Update shared link on web link",
+        "tags": [
+          "Shared links (Web Links)"
+        ],
+        "x-box-tag": "shared_links_web_links"
+      }
+    },
+    "/web_links/{web_link_id}/trash": {
+      "delete": {
+        "description": "Permanently deletes a web link that is in the trash.\nThis action cannot be undone.",
+        "operationId": "delete_web_links_id_trash",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Returns an empty response when the web link was\npermanently deleted."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the web link is not in the trash."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Permanently remove web link",
+        "tags": [
+          "Trashed web links"
+        ],
+        "x-box-tag": "trashed_web_links"
+      },
+      "get": {
+        "description": "Retrieves a web link that has been moved to the trash.",
+        "operationId": "get_web_links_id_trash",
+        "parameters": [
+          {
+            "description": "The ID of the web link.",
+            "example": "12345",
+            "in": "path",
+            "name": "web_link_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "A comma-separated list of attributes to include in the\nresponse. This can be used to request fields that are\nnot normally returned in a standard response.\n\nBe aware that specifying this parameter will have the\neffect that none of the standard fields are returned in\nthe response unless explicitly specified, instead only\nfields for the mini representation are returned, additional\nto the fields requested.",
+            "example": [
+              "id",
+              "type",
+              "name"
+            ],
+            "explode": false,
+            "in": "query",
+            "name": "fields",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrashWebLink"
+                }
+              }
+            },
+            "description": "Returns the web link that was trashed,\nincluding information about when the it\nwas moved to the trash."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "Returns an error if the web link is not in the trash."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientError"
+                }
+              }
+            },
+            "description": "An unexpected client error."
+          }
+        },
+        "summary": "Get trashed web link",
+        "tags": [
+          "Trashed web links"
+        ],
+        "x-box-tag": "trashed_web_links"
+      }
+    }
+  },
+  "security": [
+    {
+      "OAuth2Security": []
+    }
+  ],
+  "servers": [
+    {
+      "description": "Box Platform API server.",
+      "url": "https://api.box.com/2.0"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Web links for files are URLs that are generated\nfor web links in Box,\nwhich provide direct, read-only access to the resource.",
+      "name": "Shared links (Web Links)",
+      "x-box-tag": "shared_links_web_links"
+    },
+    {
+      "description": "Web links that were deleted and\nare in trash.",
+      "name": "Trashed web links",
+      "x-box-tag": "trashed_web_links"
+    },
+    {
+      "description": "Web links are objects that point to URLs.\nThese objects are also known as bookmarks\nwithin the Box web application.",
+      "name": "Web links",
+      "x-box-tag": "web_links"
+    }
+  ]
+}

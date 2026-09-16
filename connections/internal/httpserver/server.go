@@ -166,6 +166,7 @@ func (server *Server) createApp(writer http.ResponseWriter, request *http.Reques
 		GitHubAppID    string   `json:"github_app_id"`
 		GitHubAppSlug  string   `json:"github_app_slug"`
 		PrivateKey     string   `json:"private_key"`
+		Domain         string   `json:"domain"`
 	}
 	if !server.decode(writer, request, &body) {
 		return
@@ -173,7 +174,7 @@ func (server *Server) createApp(writer http.ResponseWriter, request *http.Reques
 	app, err := server.service.CreateApp(request.Context(), credentials, request.PathValue("organizationID"), application.CreateAppInput{
 		Provider: body.Provider, CredentialType: domain.CredentialType(strings.TrimSpace(body.CredentialType)),
 		ClientID: body.ClientID, ClientSecret: body.ClientSecret, Scopes: body.Scopes,
-		GitHubAppID: body.GitHubAppID, GitHubAppSlug: body.GitHubAppSlug, PrivateKey: body.PrivateKey,
+		GitHubAppID: body.GitHubAppID, GitHubAppSlug: body.GitHubAppSlug, PrivateKey: body.PrivateKey, Domain: body.Domain,
 	})
 	if err != nil {
 		server.handleError(writer, request, err)

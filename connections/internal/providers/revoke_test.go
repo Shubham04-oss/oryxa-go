@@ -2,10 +2,14 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
@@ -217,5 +221,296 @@ func TestRevokeWithNoHookOrNoTokens(t *testing.T) {
 	githubProvider.OAuth2 = &githubFlow
 	if revoked, err := client.Revoke(context.Background(), githubProvider, RevokeRequest{ClientID: "c", ClientSecret: "s", Grant: Grant{}}); err != nil || revoked || called {
 		t.Fatalf("empty-grant Revoke() = %v %v, called = %v, want (false, nil) and no request", revoked, err, called)
+	}
+
+	// HubSpot's refresh token and Intercom's installation may be shared by
+	// other connections to the same account, so neither is revoked.
+	for _, provider := range []Provider{HubSpot(), Intercom()} {
+		flow := pointAt(provider, server)
+		provider.OAuth2 = &flow
+		grant := Grant{AccessToken: "tok-1", RefreshToken: "refresh-1"}
+		if revoked, err := client.Revoke(context.Background(), provider, RevokeRequest{ClientID: "c", ClientSecret: "s", Grant: grant}); err != nil || revoked || called {
+			t.Fatalf("%s Revoke() = %v %v, called = %v, want (false, nil) and no request", provider.Name, revoked, err, called)
+		}
+	}
+}
+
+func TestSalesforceRevoke(t *testing.T) {
+	var got url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/revoke" || request.ParseForm() != nil {
+			t.Errorf("revoke request = %s", request.URL.Path)
+		}
+		got = request.PostForm
+		switch got.Get("token") {
+		case "already-gone":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":"invalid_token","error_description":"Token was invalid"}`)
+		case "unsupported":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":"unsupported_token_type","error_description":"Token type not supported"}`)
+		}
+	}))
+	defer server.Close()
+
+	provider := Salesforce().WithDomain("acme.my.salesforce.com")
+	flow := *provider.OAuth2
+	flow.RevokeURL = server.URL + "/revoke"
+	provider.OAuth2 = &flow
+	revoke := func(grant Grant) (bool, error) {
+		return testClient(server).Revoke(context.Background(), provider, RevokeRequest{ClientID: "client", ClientSecret: "secret-value", Grant: grant})
+	}
+	// Revoking the refresh token revokes its access tokens too, and needs no client.
+	if revoked, err := revoke(Grant{AccessToken: "access-1", RefreshToken: "refresh-1"}); err != nil || !revoked ||
+		!maps.EqualFunc(got, url.Values{"token": {"refresh-1"}}, slices.Equal) {
+		t.Fatalf("Revoke() = %v %v, form %v", revoked, err, got)
+	}
+	if revoked, err := revoke(Grant{AccessToken: "access-only"}); err != nil || !revoked || got.Get("token") != "access-only" {
+		t.Fatalf("access token Revoke() = %v %v, form %v", revoked, err, got)
+	}
+	if revoked, err := revoke(Grant{RefreshToken: "already-gone"}); err != nil || !revoked {
+		t.Fatalf("already gone Revoke() = %v %v", revoked, err)
+	}
+	if revoked, err := revoke(Grant{RefreshToken: "unsupported"}); revoked || !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("unsupported_token_type Revoke() = %v %v", revoked, err)
+	}
+}
+
+func TestZendeskRevoke(t *testing.T) {
+	var deleted, refreshed []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.Method + " " + request.URL.Path {
+		case "DELETE /api/oauth/tokens/current":
+			token := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
+			deleted = append(deleted, token)
+			switch token {
+			case "live", "renewed":
+				writer.WriteHeader(http.StatusNoContent)
+			case "failing":
+				writer.WriteHeader(http.StatusBadGateway)
+			default:
+				writer.WriteHeader(http.StatusUnauthorized)
+			}
+		case "POST /token":
+			body := map[string]string{}
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			refreshed = append(refreshed, body["refresh_token"])
+			if body["refresh_token"] != "refresh-1" || body["client_secret"] != "secret-value" {
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(writer, `{"error":"invalid_grant","error_description":"The provided access grant is invalid, expired, or revoked"}`)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"access_token":"renewed","refresh_token":"refresh-2","expires_in":1800,"token_type":"bearer"}`)
+		default:
+			t.Errorf("unexpected request %s %s", request.Method, request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	provider := Zendesk()
+	flow := pointAt(provider, server)
+	provider.OAuth2 = &flow
+	for name, test := range map[string]struct {
+		grant              Grant
+		revoked            bool
+		deleted, refreshed []string
+		unavailable        bool
+	}{
+		"a live access token":                    {Grant{AccessToken: "live", RefreshToken: "refresh-1"}, true, []string{"live"}, nil, false},
+		"an expired access token":                {Grant{AccessToken: "expired", RefreshToken: "refresh-1"}, true, []string{"expired", "renewed"}, []string{"refresh-1"}, false},
+		"a refresh token alone":                  {Grant{RefreshToken: "refresh-1"}, true, []string{"renewed"}, []string{"refresh-1"}, false},
+		"a refresh token Zendesk refuses":        {Grant{AccessToken: "expired", RefreshToken: "refresh-gone"}, true, []string{"expired"}, []string{"refresh-gone"}, false},
+		"a refused token that nothing can renew": {Grant{AccessToken: "revoked"}, true, []string{"revoked"}, nil, false},
+		"a failure deleting the token":           {Grant{AccessToken: "failing", RefreshToken: "refresh-1"}, false, []string{"failing"}, nil, true},
+	} {
+		deleted, refreshed = nil, nil
+		revoked, err := testClient(server).Revoke(context.Background(), provider, RevokeRequest{ClientID: "client", ClientSecret: "secret-value", Grant: test.grant})
+		if revoked != test.revoked || errors.Is(err, domain.ErrProviderUnavailable) != test.unavailable || (err != nil && !test.unavailable) ||
+			!slices.Equal(deleted, test.deleted) || !slices.Equal(refreshed, test.refreshed) {
+			t.Errorf("%s: Revoke() = %v %v, deleted %v, refreshed %v", name, revoked, err, deleted, refreshed)
+		}
+	}
+}
+
+func TestAsanaRevoke(t *testing.T) {
+	var got url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/revoke" || request.ParseForm() != nil {
+			t.Errorf("revoke request = %s", request.URL.Path)
+		}
+		got = request.PostForm
+		switch got.Get("token") {
+		case "already-gone":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":"invalid_grant"}`)
+		case "wrong-client":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":"invalid_client"}`)
+		case "failure":
+			writer.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(writer, "secret-value")
+		default:
+			writer.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	client, flow := testClient(server), pointAt(Asana(), server)
+	flow.RevokeURL = server.URL + "/revoke" // Asana's revoke endpoint is not under APIURL.
+	provider := Asana()
+	provider.OAuth2 = &flow
+	revoke := func(refreshToken string) (bool, error) {
+		return client.Revoke(context.Background(), provider, RevokeRequest{
+			ClientID: "client", ClientSecret: "secret-value", Grant: Grant{AccessToken: "access-1", RefreshToken: refreshToken},
+		})
+	}
+
+	// Asana revokes by refresh token, with the app's client.
+	if revoked, err := revoke("refresh-1"); err != nil || !revoked || got.Get("token") != "refresh-1" ||
+		got.Get("client_id") != "client" || got.Get("client_secret") != "secret-value" {
+		t.Fatalf("Revoke() = %v %v, form = %v", revoked, err, got)
+	}
+	if revoked, err := revoke("already-gone"); err != nil || !revoked {
+		t.Fatalf("already gone Revoke() = %v %v", revoked, err)
+	}
+	if revoked, err := revoke("wrong-client"); revoked || !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("invalid_client Revoke() = %v %v", revoked, err)
+	}
+	if revoked, err := revoke("failure"); revoked || !errors.Is(err, domain.ErrProviderUnavailable) || strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("failure Revoke() = %v %v", revoked, err)
+	}
+	if revoked, err := client.Revoke(context.Background(), provider, RevokeRequest{Grant: Grant{AccessToken: "access-only"}}); revoked || err != nil {
+		t.Fatalf("no refresh token Revoke() = %v %v, want (false, nil)", revoked, err)
+	}
+}
+
+func TestNotionRevoke(t *testing.T) {
+	var got map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		user, password, basic := request.BasicAuth()
+		got = map[string]string{}
+		if request.URL.Path != "/revoke" || !basic || user != "client" || password != "secret-value" ||
+			request.Header.Get("Notion-Version") != notionVersion || json.NewDecoder(request.Body).Decode(&got) != nil {
+			t.Errorf("revoke request = %s %v", request.URL.Path, request.Header)
+		}
+		switch got["token"] {
+		case "already-gone":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"object":"error","status":400,"code":"invalid_grant","message":"Token is invalid."}`)
+		case "failure":
+			writer.WriteHeader(http.StatusBadGateway)
+			_, _ = io.WriteString(writer, "secret-value")
+		default:
+			_, _ = io.WriteString(writer, `{"request_id":"r1"}`)
+		}
+	}))
+	defer server.Close()
+
+	client, flow := testClient(server), pointAt(Notion(), server)
+	flow.RevokeURL = server.URL + "/revoke"
+	provider := Notion()
+	provider.OAuth2 = &flow
+	revoke := func(accessToken string) (bool, error) {
+		return client.Revoke(context.Background(), provider, RevokeRequest{ClientID: "client", ClientSecret: "secret-value", Grant: Grant{AccessToken: accessToken}})
+	}
+	if revoked, err := revoke("access-1"); err != nil || !revoked || got["token"] != "access-1" {
+		t.Fatalf("Revoke() = %v %v, body %v", revoked, err, got)
+	}
+	if revoked, err := revoke("already-gone"); err != nil || !revoked {
+		t.Fatalf("already gone Revoke() = %v %v", revoked, err)
+	}
+	if revoked, err := revoke("failure"); revoked || !errors.Is(err, domain.ErrProviderUnavailable) || strings.Contains(err.Error(), "secret-value") {
+		t.Fatalf("failure Revoke() = %v %v", revoked, err)
+	}
+}
+
+func TestBoxRevoke(t *testing.T) {
+	var got url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/revoke" || request.ParseForm() != nil {
+			t.Errorf("revoke request = %s", request.URL.Path)
+		}
+		got = request.PostForm
+		switch got.Get("token") {
+		case "already-gone":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":"invalid_token","error_description":"The token is invalid"}`)
+		case "wrong-client":
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(writer, `{"error":"invalid_client"}`)
+		}
+	}))
+	defer server.Close()
+
+	client, flow := testClient(server), pointAt(Box(), server)
+	flow.RevokeURL = server.URL + "/revoke"
+	provider := Box()
+	provider.OAuth2 = &flow
+	revoke := func(grant Grant) (bool, error) {
+		return client.Revoke(context.Background(), provider, RevokeRequest{ClientID: "client", ClientSecret: "secret-value", Grant: grant})
+	}
+	// The refresh token outlives the access token, so it is the one revoked.
+	if revoked, err := revoke(Grant{AccessToken: "access-1", RefreshToken: "refresh-1"}); err != nil || !revoked ||
+		got.Get("token") != "refresh-1" || got.Get("client_id") != "client" || got.Get("client_secret") != "secret-value" {
+		t.Fatalf("Revoke() = %v %v, form %v", revoked, err, got)
+	}
+	if revoked, err := revoke(Grant{AccessToken: "access-only"}); err != nil || !revoked || got.Get("token") != "access-only" {
+		t.Fatalf("access token Revoke() = %v %v, form %v", revoked, err, got)
+	}
+	if revoked, err := revoke(Grant{RefreshToken: "already-gone"}); err != nil || !revoked {
+		t.Fatalf("already gone Revoke() = %v %v", revoked, err)
+	}
+	if revoked, err := revoke(Grant{RefreshToken: "wrong-client"}); revoked || !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("invalid_client Revoke() = %v %v", revoked, err)
+	}
+}
+
+func TestDropboxRevoke(t *testing.T) {
+	var revokedWith []string
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/token":
+			_ = request.ParseForm()
+			if request.PostForm.Get("refresh_token") == "revoked" {
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(writer, `{"error":"invalid_grant","error_description":"refresh token is invalid or revoked"}`)
+				return
+			}
+			_, _ = io.WriteString(writer, `{"access_token":"fresh","expires_in":14400,"token_type":"bearer"}`)
+		case "/api/auth/token/revoke":
+			revokedWith = append(revokedWith, request.Header.Get("Authorization"))
+			switch request.Header.Get("Authorization") {
+			case "Bearer fresh":
+			case "Bearer failing":
+				writer.WriteHeader(http.StatusInternalServerError)
+			default:
+				writer.WriteHeader(http.StatusUnauthorized)
+			}
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	client, flow := testClient(server), pointAt(Dropbox(), server)
+	provider := Dropbox()
+	provider.OAuth2 = &flow
+	revoke := func(grant Grant) (bool, error) {
+		revokedWith = nil
+		return client.Revoke(context.Background(), provider, RevokeRequest{ClientID: "client", ClientSecret: "secret-value", Grant: grant})
+	}
+	// A stored access token may have expired, so the grant is refreshed and the
+	// fresh token revokes it.
+	if revoked, err := revoke(Grant{AccessToken: "stale", RefreshToken: "refresh"}); err != nil || !revoked || !slices.Equal(revokedWith, []string{"Bearer fresh"}) {
+		t.Fatalf("Revoke() = %v %v, revoked with %v", revoked, err, revokedWith)
+	}
+	if revoked, err := revoke(Grant{AccessToken: "stale", RefreshToken: "revoked"}); err != nil || !revoked || len(revokedWith) != 0 {
+		t.Fatalf("Revoke() of a refused grant = %v %v, revoked with %v", revoked, err, revokedWith)
+	}
+	if revoked, err := revoke(Grant{AccessToken: "legacy"}); err != nil || !revoked || !slices.Equal(revokedWith, []string{"Bearer legacy"}) {
+		t.Fatalf("Revoke() of a token that no longer works = %v %v, revoked with %v", revoked, err, revokedWith)
+	}
+	if revoked, err := revoke(Grant{AccessToken: "failing"}); revoked || !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("failing Revoke() = %v %v", revoked, err)
 	}
 }

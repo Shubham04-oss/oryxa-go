@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"slices"
@@ -165,7 +167,8 @@ func TestIssueTokenRenewsOnceForConcurrentCallers(t *testing.T) {
 	h := newDBHarness(t)
 	app := h.createApp(t, "google")
 	h.oauth.set(func(oauth *fakeOAuth) {
-		oauth.grant = providers.Grant{AccessToken: "access-old", RefreshToken: "refresh-1", Expiry: h.now.Add(time.Minute), Scopes: app.Scopes}
+		oauth.grant = providers.Grant{AccessToken: "access-old", RefreshToken: "refresh-1", Expiry: h.now.Add(time.Minute), Scopes: app.Scopes,
+			Metadata: map[string]string{"instance_url": "https://acme.example.test"}}
 		oauth.account = domain.ProviderAccount{ID: "sub-1", Name: "asha@example.com"}
 		oauth.refreshGrant = providers.Grant{AccessToken: "access-new", RefreshToken: "refresh-2", Expiry: h.now.Add(time.Hour), Scopes: app.Scopes}
 		oauth.refreshDelay = 300 * time.Millisecond
@@ -218,6 +221,15 @@ func TestIssueTokenRenewsOnceForConcurrentCallers(t *testing.T) {
 	if err != nil || token.AccessToken != "access-new" || token.TokenType != "Bearer" || token.Placement != bearerPlacement ||
 		token.ExpiresAt == nil || !token.ExpiresAt.Equal(h.now.Add(time.Hour)) || token.ProviderAccount.ID != "sub-1" || h.oauth.refreshCount() != 1 {
 		t.Fatalf("IssueToken() after renewal = %+v %v", token, err)
+	}
+	// The provider's metadata goes into the refresh, survives it, and is
+	// issued with the token.
+	metadata := map[string]string{"instance_url": "https://acme.example.test"}
+	if refresh := h.oauth.refreshRequests()[0]; !maps.Equal(refresh.Metadata, metadata) {
+		t.Fatalf("refresh request metadata = %v, want %v", refresh.Metadata, metadata)
+	}
+	if !maps.Equal(sealed.Grant.Metadata, metadata) || !maps.Equal(token.Metadata, metadata) {
+		t.Fatalf("metadata after renewal: stored %v, issued %v, want %v", sealed.Grant.Metadata, token.Metadata, metadata)
 	}
 }
 
@@ -452,6 +464,43 @@ func TestKeyBasedConnections(t *testing.T) {
 		AppID: oauthApp.ID, Credential: domain.CredentialInput{Token: "t"},
 	}); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("CreateConnection() on an oauth2 app error = %v", err)
+	}
+}
+
+func TestKeyConnectionOnAnAppsDomain(t *testing.T) {
+	h := newDBHarness(t)
+	app, err := h.service.CreateApp(ctx, as(adminToken), organization, CreateAppInput{
+		Provider: "atlassian", CredentialType: domain.CredentialBasic, Domain: "acme.atlassian.net",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := h.service.store.App(ctx, organization, app.ID); err != nil || stored.Settings.Domain != "acme.atlassian.net" {
+		t.Fatalf("stored app = %+v %v", stored, err)
+	}
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.keyAccount = domain.ProviderAccount{ID: "557058:f58131cb", Name: "ada@example.test"}
+	})
+
+	created, err := h.service.CreateConnection(ctx, as(memberToken), organization, CreateConnectionInput{
+		AppID: app.ID, Credential: domain.CredentialInput{Username: "ada@example.test", Password: "api-token"},
+	})
+	if err != nil || created.ProviderAccount.ID != "557058:f58131cb" {
+		t.Fatalf("CreateConnection() = %+v %v", created, err)
+	}
+	// The identity check ran on the app's site.
+	h.oauth.mu.Lock()
+	checked := slices.Clone(h.oauth.keyAPIURLs)
+	h.oauth.mu.Unlock()
+	if !slices.Equal(checked, []string{"https://acme.atlassian.net"}) {
+		t.Fatalf("identity checks ran against %v", checked)
+	}
+	// The token names the site it works on.
+	token, err := h.service.IssueToken(ctx, forwarded(memberToken, domain.PurposeAction), created.ID, tokenRequest(domain.PurposeAction, ""))
+	if err != nil || token.Domain != "acme.atlassian.net" || token.TokenType != "basic" ||
+		token.AccessToken != base64.StdEncoding.EncodeToString([]byte("ada@example.test:api-token")) ||
+		token.Placement != (domain.TokenPlacement{In: "header", Name: "Authorization", Prefix: "Basic "}) {
+		t.Fatalf("IssueToken() = %+v %v", token, err)
 	}
 }
 

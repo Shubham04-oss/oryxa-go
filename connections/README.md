@@ -1,7 +1,9 @@
 # Connections service
 
 Status: built. Apps; OAuth 2.0, GitHub App installation, client-credentials and
-key-based connections for GitHub, Google, Linear, Microsoft and Slack;
+key-based connections for Airtable, Asana, Atlassian (Jira and Confluence),
+Box, ClickUp, Dropbox, Figma, GitHub, Google, HubSpot, Intercom, Linear,
+Microsoft, Notion, Salesforce, Slack and Zendesk;
 reconnect, labels, defaults and disconnect; token issuance with refresh and
 minting under a lease; holds, revocation and credential deletion; the
 heartbeat; the auth and teams event consumer; and service identity. Not built
@@ -39,11 +41,11 @@ change, disable or delete apps.
 
 | Field | Holds |
 | --- | --- |
-| `provider` | A built-in provider: `github`, `google`, `linear`, `microsoft` or `slack` |
+| `provider` | A built-in provider: `airtable`, `asana`, `atlassian`, `box`, `clickup`, `dropbox`, `figma`, `github`, `google`, `hubspot`, `intercom`, `linear`, `microsoft`, `notion`, `salesforce`, `slack` or `zendesk` |
 | `credential_type` | How connections to this app authenticate (below). Defaults to the provider's `oauth2` |
 | Client | `oauth2` and `oauth2_client_credentials` apps: `client_id` and an encrypted `client_secret`. `installation` apps: also the GitHub App's `github_app_id`, `github_app_slug` and encrypted `private_key`. Key-based apps take no client |
 | `scopes` | What `oauth2` connections may be granted. Never beyond the provider's ceiling; always includes its required scopes. Client-credentials apps carry the provider's fixed app-only scopes; installation and key-based apps carry none |
-| `settings` | What is not secret about the client, such as the GitHub App's ID and slug |
+| `settings` | What is not secret about the client, such as the GitHub App's ID and slug, and the app's `domain` where the provider needs one. A provider may give an app that names none its default, such as Salesforce's `login.salesforce.com` |
 | `status` | `active` or `disabled` |
 
 - Narrowing `scopes` applies at once: tokens are issued only for scopes the app still allows. Widening needs each connection to reconnect to gain the new scopes.
@@ -59,15 +61,33 @@ change, disable or delete apps.
 | `installation` | A GitHub App installation ID, and the last installation token | The installation, named by its account | An installation token, minted with the app's private key | Minted again before expiry (hourly) |
 | `api_key`, `bearer`, `basic` | The secret | The account the provider's identity check returns | The secret, with where it goes on a request | None; the owner replaces it |
 
-Built-in key-based providers are GitHub personal access tokens (`bearer`) and
-Linear API keys (`api_key`); Microsoft offers client credentials; GitHub offers
-installations. Client-credentials connections are team or organization scope
-only, because no person consents to them.
+Built-in key-based providers are Airtable, Asana and GitHub personal access
+tokens, HubSpot private app tokens, Intercom access tokens and Notion internal
+integration tokens (`bearer`); ClickUp personal tokens, Figma personal access
+tokens (sent in `X-Figma-Token`) and Linear API keys (`api_key`); and Atlassian
+API tokens (`basic`, the account's email and the token). Microsoft offers
+client credentials; GitHub offers installations. Client-credentials connections
+are team or organization scope only, because no person consents to them.
 
 Only `oauth2` connections carry scopes connections can see. An installation
 token has the permissions set on the GitHub App, a client-credentials token the
 application permissions an admin granted, and a key whatever its owner gave it,
 so requested scopes are checked only for `oauth2` connections.
+
+Some providers differ in ways callers notice:
+
+- `atlassian` covers Jira and Confluence Cloud. An `oauth2` grant reaches every site the member lets the app use; callers list those sites, with the cloud IDs their API URLs need, at `https://api.atlassian.com/oauth/token/accessible-resources`. `offline_access` and `read:me` are always requested, and refresh tokens rotate on every refresh. Classic and granular scopes are both offered; Jira Software's boards, sprints and epics have only granular ones. A `basic` app names its site as its `domain`, such as `acme.atlassian.net`, and its API tokens work there alone.
+- `asana` apps either have full permissions, allowing `default` on its own, or allow specific scopes such as `tasks:read`, which the Asana app must also enable, with `users:read` always included for the identity check. `default` covers every specific scope a caller asks for.
+- `clickup` has no OAuth scopes: the member picks the workspaces an app may reach while consenting. Its access tokens do not expire, so there is nothing to refresh.
+- `airtable` requires PKCE, and its refresh tokens rotate. The member picks the bases and workspaces an app may reach while consenting. `user.email:read` is always requested: Airtable refuses an empty scope, and the identity check names the account by its email.
+- `box` refresh tokens work once; each refresh returns a new one. An enterprise's admin may have to authorize the Box app before its members can connect.
+- `dropbox` always asks for offline access, so it issues a refresh token, which does not rotate. `account_info.read` is always requested. Revoking refreshes the grant first, because Dropbox revokes only with a live access token.
+- `figma` refreshes at its own endpoint and keeps the refresh token. It keeps one access token per app and account: refreshing one connection's token ends the previous one, so the same account connected twice to one app interrupts itself. `current_user:read` is always requested.
+- `notion` has no OAuth scopes: an integration's capabilities are set in Notion, and the member picks the pages it may reach while consenting. A connection is the integration's bot in the member's workspace. Its `metadata` carries `workspace_id`, `workspace_name`, `bot_id` and, when the member duplicated a template, `duplicated_template_id`. Connections calls Notion with `Notion-Version: 2025-09-03`.
+- `hubspot` connections are named by their HubSpot account (portal), and their `metadata` carries `hub_id` and `user_id`. `oauth` is always requested. HubSpot reports the scopes it granted, and its refresh tokens do not expire. Disconnecting does not revoke the refresh token, which other connections to the same account may share; uninstalling the app in HubSpot ends it.
+- `intercom` has no OAuth scopes: an app's permissions are set in Intercom's Developer Hub. Its access tokens do not expire, so there is nothing to refresh. A connection is an admin in a workspace. Each region has its own authorization host, which the app names as its `domain`: `app.intercom.com` (the default), `app.eu.intercom.com` or `app.au.intercom.com`. A member sent to the US host can still pick their region, unless they sign in to Intercom with Google. Callers call `api.intercom.io`, which routes to the workspace's region. Disconnecting does not uninstall the app, which would end every connection to the workspace.
+- `salesforce` apps name the host their users log in at as their `domain`: `login.salesforce.com` (the default), `test.salesforce.com`, or an org's My Domain, such as `acme.my.salesforce.com` or `acme--uat.sandbox.my.salesforce.com`. PKCE is always used, and `id` and `refresh_token` are always requested; `full` covers every scope but `refresh_token`. Callers call the org at the `instance_url` in `metadata`, kept current through refreshes. Salesforce does not say when an access token expires, which depends on the org's session timeout, so connections treats each as expiring after 15 minutes, the shortest timeout, and refreshes it then.
+- `zendesk` apps name their account's subdomain as their `domain`, such as `acme` for `acme.zendesk.com`. PKCE is always used, and `users:read` is always requested; `read` and `write` cover every resource's reading and writing. An OAuth client created since 2026-04-30 issues access tokens that expire, with refresh tokens that work once; an older client may still issue tokens that never expire, until Zendesk requires expiry on 2027-04-01. Zendesk API tokens are not offered, since Zendesk deactivates them all on 2027-04-30.
 
 ## Ownership
 
@@ -171,7 +191,7 @@ authorization sessions.
 
 ## Token issuance
 
-Integrations and other services ask for a credential whenever they need one:
+Services ask for a credential whenever they need one:
 
 ```text
 POST /v1/internal/connections/{connectionID}/token
@@ -203,7 +223,11 @@ it the primary token is issued.
 
 `placement` says where the credential goes: a header or query parameter, with
 an optional prefix. A key-based connection's `token_type` is its credential
-type, and it has no `expires_at`.
+type, and it has no `expires_at`. Two fields appear only when they apply:
+`domain`, the app's domain for a provider reached through one, such as
+`acme.atlassian.net`; and `metadata`, what the provider returned with an
+`oauth2` token that callers need and that is not secret, such as Salesforce's
+`instance_url` or HubSpot's `hub_id`, kept through refreshes.
 
 Checks, in order:
 
@@ -264,7 +288,7 @@ Cookie-authenticated mutations on public routes must come from an origin in
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |
 | `GET` | `/v1/organizations/{organizationID}/apps` | Members | Enabled apps: provider, credential type, allowed scopes, settings, status. Never secrets |
-| `POST` | `/v1/organizations/{organizationID}/apps` | Org admins | Enable a provider: `{provider, credential_type, client_id, client_secret, scopes}`, plus `{github_app_id, github_app_slug, private_key}` for an installation app |
+| `POST` | `/v1/organizations/{organizationID}/apps` | Org admins | Enable a provider: `{provider, credential_type, client_id, client_secret, scopes}`, plus `{github_app_id, github_app_slug, private_key}` for an installation app, and `domain` where the provider needs one |
 | `PATCH` | `/v1/organizations/{organizationID}/apps/{appID}` | Org admins | `{scopes}`, `{client_secret}`, `{private_key}`, or `{client_id, client_secret}` |
 | `POST` | `/v1/organizations/{organizationID}/apps/{appID}/disable` | Org admins | Block its connections |
 | `POST` | `/v1/organizations/{organizationID}/apps/{appID}/enable` | Org admins | Unblock them |
@@ -409,6 +433,23 @@ app, team and organization scopes, holds, statuses and health, key-based,
 client-credentials and installation connections, token issuance, and the
 service identity.
 
+## Adding a provider
+
+A provider is one file in `internal/providers` returning a `Provider`,
+registered in `Builtin()`. The application, store and API need no change. What
+a definition can say:
+
+- Credential types, and for each the URLs it uses and an identity check that returns the account a grant or key belongs to.
+- Scope rules: the ceiling, required scopes, implications between scopes, and exclusive scopes allowed only on their own.
+- OAuth 2.0 differences: fixed authorization parameters, PKCE, the scope separator, scopes adjusted before sending or read back from the token response, JSON token requests (`JSONTokenRequests`), client credentials sent as HTTP Basic (`ClientSecretBasic`), fixed headers on token requests (`TokenHeaders`), a separate refresh endpoint (`RefreshURL`), a token response that is not RFC 6749 (`DecodeToken`), permanent refresh errors, and whether a refresh token is required.
+- `Metadata`: token response fields that are not secret and that callers need with the token, strings or whole numbers.
+- `Lifetime`: how long an access token lasts when the token response does not say, for a provider whose tokens expire on a schedule it does not report.
+- A `DomainRule` when URLs name `{domain}`: each app supplies its domain once, validated against the rule, and every flow for the app runs with it filled in. A rule's `Default` is the domain of an app that names none. The provider HTTP client still refuses private addresses.
+- A revoke hook, where the provider can end a grant.
+
+`TestBuiltinProvidersAreConsistent` checks every definition; each provider also
+gets a flow test against a fake server.
+
 ## Run locally
 
 Copy `.env.example` to `connections/.env`, then:
@@ -438,6 +479,12 @@ client against fake auth and a fake GitHub:
 go test ./connections/... ./internal/serviceauth
 CONNECTIONS_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/oryxa?sslmode=disable' go test ./connections/...
 ```
+
+`TestLiveGitHubPersonalToken` runs the same flow against the real GitHub when
+`CONNECTIONS_LIVE_GITHUB_TOKEN` also holds a personal access token: it connects
+the token, has a service request it, and calls GitHub with it through the
+generated clients in `internal/providerapi/github`. It only reads from GitHub
+and never prints the token.
 
 ## Later
 

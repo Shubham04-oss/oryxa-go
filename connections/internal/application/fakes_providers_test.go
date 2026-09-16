@@ -17,17 +17,21 @@ func (oauth *fakeOAuth) Refresh(_ context.Context, _ providers.OAuth2, request p
 	oauth.mu.Unlock()
 	time.Sleep(delay)
 	// Like providers.Client, a provider that does not rotate the refresh
-	// token keeps the old one.
+	// token keeps the old one, and metadata the refresh leaves out is kept.
 	if err == nil && grant.RefreshToken == "" {
 		grant.RefreshToken = request.RefreshToken
+	}
+	if err == nil && grant.Metadata == nil {
+		grant.Metadata = request.Metadata
 	}
 	return grant, err
 }
 
-func (oauth *fakeOAuth) KeyIdentity(_ context.Context, _ providers.Provider, _ domain.CredentialType, credential domain.CredentialInput) (domain.ProviderAccount, error) {
+func (oauth *fakeOAuth) KeyIdentity(_ context.Context, provider providers.Provider, credentialType domain.CredentialType, credential domain.CredentialInput) (domain.ProviderAccount, error) {
 	oauth.mu.Lock()
 	defer oauth.mu.Unlock()
 	oauth.keyChecks = append(oauth.keyChecks, credential)
+	oauth.keyAPIURLs = append(oauth.keyAPIURLs, provider.Keys[credentialType].APIURL)
 	return oauth.keyAccount, oauth.keyErr
 }
 
@@ -76,6 +80,12 @@ func (oauth *fakeOAuth) refreshCount() int {
 	oauth.mu.Lock()
 	defer oauth.mu.Unlock()
 	return len(oauth.refreshes)
+}
+
+func (oauth *fakeOAuth) refreshRequests() []providers.RefreshRequest {
+	oauth.mu.Lock()
+	defer oauth.mu.Unlock()
+	return slices.Clone(oauth.refreshes)
 }
 
 func (oauth *fakeOAuth) revokeRequests() []providers.RevokeRequest {
