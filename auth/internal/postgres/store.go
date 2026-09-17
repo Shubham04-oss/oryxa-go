@@ -5,8 +5,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
-	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -54,35 +52,10 @@ func (store *Store) Close() {
 
 func (store *Store) ExtensionVersions() map[string]string { return store.database.ExtensionVersions() }
 
-// Migrate applies every migration in name order. Each is written to be safe to
-// run again.
+// Migrate applies each migration in name order, once while it stays unchanged,
+// recording what it applied; see postgreskit's Migrate.
 func (store *Store) Migrate(ctx context.Context) error {
-	names, err := fs.Glob(migrations, "migrations/*.sql")
-	if err != nil {
-		return fmt.Errorf("list auth migrations: %w", err)
-	}
-	sort.Strings(names)
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin auth migrations: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, authMigrationsAdvisoryLock); err != nil {
-		return fmt.Errorf("lock auth migrations: %w", err)
-	}
-	for _, name := range names {
-		contents, err := migrations.ReadFile(name)
-		if err != nil {
-			return fmt.Errorf("read auth migration %s: %w", name, err)
-		}
-		if _, err := tx.Exec(ctx, string(contents)); err != nil {
-			return fmt.Errorf("apply auth migration %s: %w", name, err)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit auth migrations: %w", err)
-	}
-	return nil
+	return store.database.Migrate(ctx, "auth", migrations, "migrations/*.sql", authMigrationsAdvisoryLock)
 }
 
 func (store *Store) SaveLoginFlow(ctx context.Context, flow domain.LoginFlow) error {

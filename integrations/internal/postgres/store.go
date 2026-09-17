@@ -4,8 +4,6 @@ import (
 	"context"
 	"embed"
 	"fmt"
-	"io/fs"
-	"slices"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -51,31 +49,8 @@ func (store *Store) Close() {
 
 func (store *Store) ExtensionVersions() map[string]string { return store.database.ExtensionVersions() }
 
+// Migrate applies each migration in name order, once while it stays unchanged,
+// recording what it applied; see postgreskit's Migrate.
 func (store *Store) Migrate(ctx context.Context) error {
-	names, err := fs.Glob(migrations, "migrations/*.sql")
-	if err != nil {
-		return fmt.Errorf("list integrations migrations: %w", err)
-	}
-	slices.Sort(names)
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin integrations migrations: %w", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationsAdvisoryLock); err != nil {
-		return fmt.Errorf("lock integrations migrations: %w", err)
-	}
-	for _, name := range names {
-		contents, err := migrations.ReadFile(name)
-		if err != nil {
-			return fmt.Errorf("read integrations migration %s: %w", name, err)
-		}
-		if _, err := tx.Exec(ctx, string(contents)); err != nil {
-			return fmt.Errorf("apply integrations migration %s: %w", name, err)
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit integrations migrations: %w", err)
-	}
-	return nil
+	return store.database.Migrate(ctx, "integrations", migrations, "migrations/*.sql", migrationsAdvisoryLock)
 }

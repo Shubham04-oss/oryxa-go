@@ -6,8 +6,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
-	"slices"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -20,6 +18,10 @@ import (
 
 //go:embed migrations/*.sql
 var migrations embed.FS
+
+// Replicas that start together must not install the schema at the same time;
+// IF NOT EXISTS alone does not serialize catalog changes.
+const migrationsAdvisoryLock int64 = 7263510403
 
 type Store struct {
 	pool     *pgxpool.Pool
@@ -54,22 +56,10 @@ func (store *Store) Close() {
 
 func (store *Store) ExtensionVersions() map[string]string { return store.database.ExtensionVersions() }
 
+// Migrate applies each migration in name order, once while it stays unchanged,
+// recording what it applied; see postgreskit's Migrate.
 func (store *Store) Migrate(ctx context.Context) error {
-	names, err := fs.Glob(migrations, "migrations/*.sql")
-	if err != nil {
-		return fmt.Errorf("list files migrations: %w", err)
-	}
-	slices.Sort(names)
-	for _, name := range names {
-		contents, err := migrations.ReadFile(name)
-		if err != nil {
-			return fmt.Errorf("read files migration %s: %w", name, err)
-		}
-		if _, err := store.db.ExecContext(ctx, string(contents)); err != nil {
-			return fmt.Errorf("apply files migration %s: %w", name, err)
-		}
-	}
-	return nil
+	return store.database.Migrate(ctx, "files", migrations, "migrations/*.sql", migrationsAdvisoryLock)
 }
 
 type execer interface {
