@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -63,17 +62,8 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		"EMAIL_FROM_ADDRESS":           "no-reply@example.com",
 		"EMAIL_QUEUE_URL":              "http://localhost:4566/000000000000/email-events",
 	}
-	// Mounting never queries the database beyond building each service's
-	// outbox table, which only checks the pool is non-nil; it otherwise only
-	// asks for the extensions snapshot, which Detached can report without a
-	// connection. pgxpool.New leaves the pool non-nil without dialing anything
-	// (it only dials lazily, on first use).
+	// Mounting never queries the database; rag only asks it for pgvector.
 	database := postgreskit.Detached(map[string]string{"vector": "0.8.6", "ltree": "1.3", "pg_trgm": "1.6"})
-	unconnectedPool, err := pgxpool.New(context.Background(), "postgres://unused@127.0.0.1:1/unused")
-	if err != nil {
-		t.Fatal(err)
-	}
-	database.Pool = unconnectedPool
 	platform := host.Platform{
 		Logger:       slog.New(slog.DiscardHandler),
 		Database:     database,
