@@ -125,6 +125,13 @@ func Open(ctx context.Context, config Config) (*Database, error) {
 	return database, nil
 }
 
+// Detached is a Database that holds no connection and reports the given
+// extensions as installed. It is for assembling a service in a test that
+// never queries it.
+func Detached(extensions map[string]string) *Database {
+	return &Database{extensions: maps.Clone(extensions)}
+}
+
 var postgresIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
 func (database *Database) Close() {

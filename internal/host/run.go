@@ -153,6 +153,27 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 	return platform, func() { database.Close() }, nil
 }
 
+// Assemble mounts the definitions on platform and builds the handler Run
+// would serve, without listening or starting any worker. It lets a test prove
+// that the services a binary carries can share one listener. The returned
+// function closes what they opened.
+func Assemble(ctx context.Context, platform Platform, definitions []Definition) (http.Handler, func(), error) {
+	selected, err := Select(definitions, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	services, err := mount(ctx, platform, selected)
+	if err != nil {
+		return nil, nil, err
+	}
+	handler, err := routes(services)
+	if err != nil {
+		closeServices(services)
+		return nil, nil, err
+	}
+	return handler, func() { closeServices(services) }, nil
+}
+
 func mount(ctx context.Context, platform Platform, selected []Definition) ([]mounted, error) {
 	services := make([]mounted, 0, len(selected))
 	for _, definition := range selected {

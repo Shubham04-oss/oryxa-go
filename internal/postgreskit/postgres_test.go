@@ -20,6 +20,19 @@ func TestRequireExtensionsNormalizesNames(t *testing.T) {
 	}
 }
 
+func TestDetachedReportsItsExtensions(t *testing.T) {
+	extensions := map[string]string{"vector": "0.8.6"}
+	database := Detached(extensions)
+	extensions["vector"] = "changed"
+	if got := database.ExtensionVersions()["vector"]; got != "0.8.6" {
+		t.Fatalf("vector = %q, want the version it was given", got)
+	}
+	if err := database.RequireExtensions("pgvector"); err != nil {
+		t.Fatal(err)
+	}
+	database.Close()
+}
+
 func TestOpenDoesNotEchoInvalidDatabaseCredentials(t *testing.T) {
 	const secret = "database-password-must-not-leak"
 	_, err := Open(context.Background(), Config{

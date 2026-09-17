@@ -356,6 +356,37 @@ func TestMountClosesWhatItMountedWhenALaterServiceFails(t *testing.T) {
 	}
 }
 
+func TestAssembleBuildsTheHandlerWithoutStartingWorkers(t *testing.T) {
+	started := false
+	serving := func(name, pattern string) Definition {
+		return Definition{Name: name, Mount: func(context.Context, Platform) (Service, error) {
+			mux := http.NewServeMux()
+			mux.HandleFunc(pattern, func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusAccepted) })
+			return Service{Handler: mux, Routes: []string{pattern}, Workers: []Worker{func(context.Context) { started = true }}}, nil
+		}}
+	}
+	platform := Platform{Logger: slog.New(slog.DiscardHandler)}
+	handler, closeAll, err := Assemble(context.Background(), platform, []Definition{
+		serving("teams", "GET /v1/organizations/{organizationID}/teams"),
+		serving("files", "GET /v1/organizations/{organizationID}/files"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAll()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/organizations/org-1/files", nil))
+	if recorder.Code != http.StatusAccepted || started {
+		t.Fatalf("status = %d, worker started = %v", recorder.Code, started)
+	}
+	if _, _, err := Assemble(context.Background(), platform, []Definition{
+		serving("connections", "GET /v1/providers"),
+		serving("knowledge", "GET /v1/providers"),
+	}); err == nil {
+		t.Fatal("Assemble() accepted two services on one path")
+	}
+}
+
 func TestSelfURL(t *testing.T) {
 	cases := map[string]string{
 		"0.0.0.0:8080":   "http://127.0.0.1:8080",
