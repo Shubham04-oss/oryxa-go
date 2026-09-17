@@ -6,7 +6,7 @@ Cloudflare is the public edge. Route the public auth hostname to this service wi
 
 ## Lifecycle
 
-1. `GET /v1/auth/login` creates a one-time PostgreSQL login flow and redirects to Google through Cognito with OAuth state, nonce, and PKCE.
+1. `GET /v1/auth/login` creates a one-time PostgreSQL login flow and redirects to Google through Cognito with OAuth state, nonce, and PKCE. Its `return_to` must be an `AUTH_RETURN_URLS` entry or a page beneath one on the same origin, such as `/invitations/accept?token=…`, so a member returns to the page that sent them to sign in.
 2. Cognito authenticates with Google and returns an authorization code to `GET /v1/auth/callback`.
 3. Auth consumes the login flow, exchanges the code, validates the Cognito ID token and nonce, upserts the local user, and sets HttpOnly access and refresh cookies.
 4. `POST /v1/auth/refresh` rotates the Cognito session. `POST /v1/auth/logout` revokes the refresh token, clears cookies, and publishes a sign-out event.
@@ -40,6 +40,8 @@ Access JWTs are verified locally against Cognito's signed OIDC keys. The auth st
 | `GET`, `POST` | `/v1/organizations/{organizationID}/invitations` | List or create invitations |
 | `DELETE` | `/v1/organizations/{organizationID}/invitations/{invitationID}` | Revoke an invitation |
 | `POST` | `/v1/invitations/accept` | Accept an invitation token |
+| `GET` | `/v1/invitations` | Pending invitations sent to the caller's email |
+| `POST` | `/v1/invitations/{invitationID}/accept` | Accept one of those invitations |
 | `GET` | `/v1/agent-grant` | Whether the caller has granted agent access |
 | `POST` | `/v1/agent-grant/authorize` | Start granting it: `{return_to}` → `{authorization_url}` |
 | `GET` | `/v1/agent-grant/callback` | Complete the agent grant authorization-code flow |
@@ -49,6 +51,8 @@ Access JWTs are verified locally against Cognito's signed OIDC keys. The auth st
 Owners can update/delete organizations and change any member role. Owners and admins can list invitations and invite/remove members; admins cannot manage owners/admins or create admin invitations. The final owner cannot be demoted or removed, including under concurrent requests.
 
 Inviting and accepting answer `402 Payment Required` when the organization is at the member limit its plan allows; see [Member limits](#member-limits).
+
+An invitation reaches its recipient two ways: the emailed link's token, or `GET /v1/invitations` once they sign in with the address it was sent to. Auth signs in only verified addresses, so that list needs no token: it holds the pending, unexpired invitations from organizations the caller has not joined, each with the organization's name and the role offered. Someone who signs up without following the link still finds the organization that invited them, and the web app shows these before it offers to create an organization. Accepting by ID answers `404` for any invitation not in the caller's list.
 
 ## Provision Cognito
 

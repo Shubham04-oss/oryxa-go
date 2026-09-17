@@ -87,6 +87,18 @@ type Invitation struct {
 	AcceptedAt     *time.Time       `json:"accepted_at,omitempty"`
 }
 
+// ReceivedInvitation is a pending invitation as the person it was sent to
+// sees it: which organization asked them to join, and as what. It says no
+// more than the invitation email does.
+type ReceivedInvitation struct {
+	ID               string    `json:"id"`
+	OrganizationID   string    `json:"organization_id"`
+	OrganizationName string    `json:"organization_name"`
+	Role             Role      `json:"role"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 type LoginFlow struct {
 	StateHash    string
 	CodeVerifier string

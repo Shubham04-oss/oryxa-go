@@ -157,9 +157,45 @@ func TestStoreLifecycle(t *testing.T) {
 	if err := store.CreateInvitation(ctx, invitation, testEvent(eventPrefix+"-invited", "auth.member.invited.v1", now)); err != nil {
 		t.Fatalf("CreateInvitation() error = %v", err)
 	}
+	// The member finds the invitation under their own address, however it is
+	// cased, until it expires; nobody else sees it.
+	received, err := store.ReceivedInvitations(ctx, memberID, strings.ToUpper(member.Email), now)
+	if err != nil || len(received) != 1 || received[0].ID != invitation.ID || received[0].OrganizationID != organizationID ||
+		received[0].OrganizationName != organization.Name || received[0].Role != domain.RoleMember {
+		t.Fatalf("ReceivedInvitations(member) = %+v, %v; want the invitation to %q", received, err, organization.Name)
+	}
+	if received, err := store.ReceivedInvitations(ctx, memberID, member.Email, invitation.ExpiresAt); err != nil || len(received) != 0 {
+		t.Fatalf("ReceivedInvitations(once expired) = %+v, %v; want none", received, err)
+	}
+	if received, err := store.ReceivedInvitations(ctx, ownerID, owner.Email, now); err != nil || len(received) != 0 {
+		t.Fatalf("ReceivedInvitations(owner) = %+v, %v; want none", received, err)
+	}
+
 	membership := domain.Membership{OrganizationID: organizationID, UserID: memberID, Role: domain.RoleMember, JoinedAt: now.Add(time.Second)}
-	if err := store.AcceptInvitation(ctx, invitation.TokenHash, member, membership, testEvent(eventPrefix+"-joined", "auth.member.joined.v1", now)); err != nil {
+	asAdmin := membership
+	asAdmin.Role = domain.RoleAdmin
+	if err := store.AcceptInvitation(ctx, invitation.ID, member, asAdmin, testEvent(eventPrefix+"-joined-as-admin", "auth.member.joined.v1", now)); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("AcceptInvitation(another role) error = %v, want conflict", err)
+	}
+	if err := store.AcceptInvitation(ctx, invitation.ID, owner, membership, testEvent(eventPrefix+"-joined-as-owner", "auth.member.joined.v1", now)); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("AcceptInvitation(someone else) error = %v, want forbidden", err)
+	}
+	if err := store.AcceptInvitation(ctx, invitation.ID, member, membership, testEvent(eventPrefix+"-joined", "auth.member.joined.v1", now)); err != nil {
 		t.Fatalf("AcceptInvitation() error = %v", err)
+	}
+	if received, err := store.ReceivedInvitations(ctx, memberID, member.Email, now); err != nil || len(received) != 0 {
+		t.Fatalf("ReceivedInvitations(after accepting) = %+v, %v; want none", received, err)
+	}
+
+	// Someone already in the organization isn't offered another way in.
+	reinvited := invitation
+	reinvited.ID = "it-reinvite-" + suffix
+	reinvited.TokenHash = "it-reinvite-token-hash-" + suffix
+	if err := store.CreateInvitation(ctx, reinvited, testEvent(eventPrefix+"-reinvited", "auth.member.invited.v1", now)); err != nil {
+		t.Fatalf("CreateInvitation(member again) error = %v", err)
+	}
+	if received, err := store.ReceivedInvitations(ctx, memberID, member.Email, now); err != nil || len(received) != 0 {
+		t.Fatalf("ReceivedInvitations(already a member) = %+v, %v; want none", received, err)
 	}
 	if err := store.ChangeMemberRole(ctx, organizationID, memberID, domain.RoleMember, domain.RoleOwner, testEvent(eventPrefix+"-role-changed", "auth.member.role-changed.v1", now)); err != nil {
 		t.Fatalf("ChangeMemberRole() error = %v", err)
@@ -204,8 +240,8 @@ func TestStoreLifecycle(t *testing.T) {
 	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM auth_outbox WHERE id LIKE $1`, eventPrefix+"%").Scan(&outboxCount); err != nil {
 		t.Fatalf("count outbox events: %v", err)
 	}
-	if outboxCount != 19 {
-		t.Fatalf("outbox count = %d, want 19", outboxCount)
+	if outboxCount != 20 {
+		t.Fatalf("outbox count = %d, want 20", outboxCount)
 	}
 }
 
@@ -235,6 +271,7 @@ func TestIndexes(t *testing.T) {
 		ORDER BY indexname`, []string{
 		"auth_memberships_owners_idx",
 		"auth_invitations_org_created_idx",
+		"auth_invitations_pending_email_idx",
 		"auth_invitations_pending_expiry_idx",
 		"auth_outbox_pending_idx",
 	})
@@ -253,7 +290,7 @@ func TestIndexes(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	want := "auth_invitations_org_created_idx auth_invitations_pending_expiry_idx auth_memberships_owners_idx auth_outbox_pending_idx"
+	want := "auth_invitations_org_created_idx auth_invitations_pending_email_idx auth_invitations_pending_expiry_idx auth_memberships_owners_idx auth_outbox_pending_idx"
 	if got := strings.Join(names, " "); got != want {
 		t.Fatalf("indexes = %q, want %q", got, want)
 	}

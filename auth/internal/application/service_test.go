@@ -23,6 +23,10 @@ type fakeStore struct {
 	members          []domain.Membership
 	events           []domain.Event
 	invitation       domain.Invitation
+	received         []domain.ReceivedInvitation
+	receivedFor      string
+	acceptedID       string
+	joined           domain.Membership
 	deletedOrgID     string
 	revokedInviteID  string
 	action           domain.ActionToken
@@ -119,6 +123,25 @@ func (fake *fakeStore) InvitationByID(_ context.Context, _, _ string) (domain.In
 		return domain.Invitation{}, domain.ErrNotFound
 	}
 	return fake.invitation, nil
+}
+
+func (fake *fakeStore) InvitationByTokenHash(_ context.Context, _ string) (domain.Invitation, error) {
+	if fake.invitation.ID == "" {
+		return domain.Invitation{}, domain.ErrNotFound
+	}
+	return fake.invitation, nil
+}
+
+func (fake *fakeStore) ReceivedInvitations(_ context.Context, userID, email string, at time.Time) ([]domain.ReceivedInvitation, error) {
+	fake.receivedFor = fmt.Sprintf("%s %s %s", userID, email, at.Format(time.RFC3339))
+	return fake.received, nil
+}
+
+func (fake *fakeStore) AcceptInvitation(_ context.Context, invitationID string, _ domain.User, membership domain.Membership, event domain.Event) error {
+	fake.acceptedID = invitationID
+	fake.joined = membership
+	fake.events = append(fake.events, event)
+	return nil
 }
 
 func (fake *fakeStore) RevokeInvitation(_ context.Context, _, invitationID string, event domain.Event) error {
@@ -383,6 +406,130 @@ func TestAdminCannotRevokeAdminInvitation(t *testing.T) {
 	err := service.RevokeInvitation(context.Background(), "admin-1", "org-1", "inv-1")
 	if !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("RevokeInvitation() error = %v, want forbidden", err)
+	}
+}
+
+func TestAcceptInvitationJoinsWithTheInvitedRole(t *testing.T) {
+	store := &fakeStore{
+		user: domain.User{ID: "user-1", Email: "invitee@example.com", DisplayName: "Invitee"},
+		invitation: domain.Invitation{
+			ID: "inv-1", OrganizationID: "org-1", Email: "INVITEE@example.com", Role: domain.RoleAdmin, Status: domain.InvitationPending,
+		},
+	}
+	service := New(store, "https://app.example.com/invitations/accept")
+	service.now = fixedTime
+
+	membership, err := service.AcceptInvitation(context.Background(), "user-1", " raw-token ")
+	if err != nil {
+		t.Fatalf("AcceptInvitation() error = %v", err)
+	}
+	want := domain.Membership{
+		OrganizationID: "org-1", UserID: "user-1", Email: "invitee@example.com", DisplayName: "Invitee",
+		Role: domain.RoleAdmin, JoinedAt: fixedTime(),
+	}
+	if membership != want || store.joined != want || store.acceptedID != "inv-1" {
+		t.Fatalf("membership = %+v, stored %+v for %q; want %+v for inv-1", membership, store.joined, store.acceptedID, want)
+	}
+	var joined autheventsv1.MemberJoined
+	if len(store.events) != 1 || store.events[0].DetailType != autheventsv1.MemberJoinedDetailType || json.Unmarshal(store.events[0].Data, &joined) != nil {
+		t.Fatalf("unexpected events: %+v", store.events)
+	}
+	if joined.OrganizationID != "org-1" || joined.UserID != "user-1" || joined.Role != "admin" {
+		t.Fatalf("joined event = %+v", joined)
+	}
+}
+
+func TestAcceptInvitationRefusesSomeoneElsesInvitation(t *testing.T) {
+	tests := []struct {
+		name       string
+		invitation domain.Invitation
+		want       error
+	}{
+		{
+			name:       "sent to another address",
+			invitation: domain.Invitation{ID: "inv-1", OrganizationID: "org-1", Email: "other@example.com", Role: domain.RoleMember, Status: domain.InvitationPending},
+			want:       domain.ErrForbidden,
+		},
+		{
+			name:       "already accepted",
+			invitation: domain.Invitation{ID: "inv-1", OrganizationID: "org-1", Email: "invitee@example.com", Role: domain.RoleMember, Status: domain.InvitationAccepted},
+			want:       domain.ErrConflict,
+		},
+		{name: "unknown token", want: domain.ErrNotFound},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeStore{user: domain.User{ID: "user-1", Email: "invitee@example.com"}, invitation: test.invitation}
+			service := New(store, "https://app.example.com/invitations/accept")
+
+			if _, err := service.AcceptInvitation(context.Background(), "user-1", "raw-token"); !errors.Is(err, test.want) {
+				t.Fatalf("AcceptInvitation() error = %v, want %v", err, test.want)
+			}
+			if store.acceptedID != "" || len(store.events) != 0 {
+				t.Fatalf("accepted %q with events %+v, want nothing accepted", store.acceptedID, store.events)
+			}
+		})
+	}
+}
+
+func TestReceivedInvitationsAreThoseSentToTheMembersEmail(t *testing.T) {
+	store := &fakeStore{
+		user:     domain.User{ID: "user-1", Email: "invitee@example.com"},
+		received: []domain.ReceivedInvitation{{ID: "inv-1", OrganizationID: "org-1", OrganizationName: "Acme", Role: domain.RoleMember}},
+	}
+	service := New(store, "https://app.example.com/invitations/accept")
+	service.now = fixedTime
+
+	invitations, err := service.ReceivedInvitations(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("ReceivedInvitations() error = %v", err)
+	}
+	if len(invitations) != 1 || invitations[0].OrganizationName != "Acme" {
+		t.Fatalf("invitations = %+v", invitations)
+	}
+	if want := "user-1 invitee@example.com " + fixedTime().Format(time.RFC3339); store.receivedFor != want {
+		t.Fatalf("store asked for %q, want %q", store.receivedFor, want)
+	}
+	if _, err := New(&fakeStore{}, "").ReceivedInvitations(context.Background(), "user-1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ReceivedInvitations(no user) error = %v, want not found", err)
+	}
+}
+
+func TestAcceptReceivedInvitationJoinsItsOrganization(t *testing.T) {
+	store := &fakeStore{
+		user: domain.User{ID: "user-1", Email: "invitee@example.com"},
+		received: []domain.ReceivedInvitation{
+			{ID: "inv-1", OrganizationID: "org-1", OrganizationName: "Acme", Role: domain.RoleMember},
+			{ID: "inv-2", OrganizationID: "org-2", OrganizationName: "Globex", Role: domain.RoleAdmin},
+		},
+	}
+	service := New(store, "https://app.example.com/invitations/accept")
+	service.now = fixedTime
+
+	membership, err := service.AcceptReceivedInvitation(context.Background(), "user-1", "inv-2")
+	if err != nil {
+		t.Fatalf("AcceptReceivedInvitation() error = %v", err)
+	}
+	if membership.OrganizationID != "org-2" || membership.Role != domain.RoleAdmin || membership.UserID != "user-1" || store.acceptedID != "inv-2" {
+		t.Fatalf("membership = %+v accepted %q, want admin of org-2 through inv-2", membership, store.acceptedID)
+	}
+	if len(store.events) != 1 || store.events[0].DetailType != autheventsv1.MemberJoinedDetailType {
+		t.Fatalf("unexpected events: %+v", store.events)
+	}
+}
+
+func TestAcceptReceivedInvitationFindsOnlyTheMembersOwn(t *testing.T) {
+	store := &fakeStore{
+		user:     domain.User{ID: "user-1", Email: "invitee@example.com"},
+		received: []domain.ReceivedInvitation{{ID: "inv-1", OrganizationID: "org-1", Role: domain.RoleMember}},
+	}
+	service := New(store, "https://app.example.com/invitations/accept")
+
+	if _, err := service.AcceptReceivedInvitation(context.Background(), "user-1", "inv-someone-elses"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("AcceptReceivedInvitation() error = %v, want not found", err)
+	}
+	if store.acceptedID != "" || len(store.events) != 0 {
+		t.Fatalf("accepted %q with events %+v, want nothing accepted", store.acceptedID, store.events)
 	}
 }
 
