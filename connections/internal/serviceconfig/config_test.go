@@ -5,96 +5,80 @@ import (
 	"testing"
 )
 
-func setRequired(t *testing.T) {
-	t.Helper()
-	for _, name := range []string{
-		"CONNECTIONS_ADDRESS", "AWS_REGION", "DATABASE_URL", "POSTGRES_REQUIRED_EXTENSIONS",
-		"CONNECTIONS_AUTO_MIGRATE", "AUTH_URL", "TEAMS_URL", "CONNECTIONS_PUBLIC_BASE_URL",
-		"CONNECTIONS_ALLOWED_ORIGINS", "EVENT_BUS_NAME", "CONNECTIONS_EVENTS_QUEUE_URL",
-		"CONNECTIONS_KMS_KEY_ID", "AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_KMS", "EVENTBRIDGE_ENDPOINT",
-		"AWS_ENDPOINT_URL_SQS", "CONNECTIONS_SERVICE_CALLERS",
-	} {
-		t.Setenv(name, "")
+func env(values map[string]string) func(string) string {
+	return func(name string) string { return values[name] }
+}
+
+// requiredValues is the smallest environment FromEnv accepts.
+func requiredValues() map[string]string {
+	return map[string]string{
+		"AUTH_URL":                    "http://localhost:8080/",
+		"CONNECTIONS_PUBLIC_BASE_URL": "https://connect.example.test/",
+		"CONNECTIONS_KMS_KEY_ID":      " alias/oryxa-connections ",
 	}
-	t.Setenv("DATABASE_URL", "postgres://oryxa@localhost:5435/oryxa")
-	t.Setenv("AUTH_URL", "http://localhost:8080/")
-	t.Setenv("CONNECTIONS_PUBLIC_BASE_URL", "https://connect.example.test/")
-	t.Setenv("CONNECTIONS_KMS_KEY_ID", " alias/oryxa-connections ")
 }
 
 func TestFromEnvDefaults(t *testing.T) {
-	setRequired(t)
-	config, err := FromEnv()
+	config, err := FromEnv(env(requiredValues()))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.Address != ":8080" || config.AWSRegion != "ap-south-1" || !config.AutoMigrate ||
-		config.AuthURL != "http://localhost:8080" || config.PublicBaseURL != "https://connect.example.test" ||
-		config.TeamsURL != "" || config.EventBusName != "default" || config.EventsQueueURL != "" ||
+	if config.AuthURL != "http://localhost:8080" || config.PublicBaseURL != "https://connect.example.test" ||
+		config.TeamsURL != "" || config.EventsQueueURL != "" ||
 		config.KMSKeyID != "alias/oryxa-connections" || config.KMSEndpoint != "" || config.EventBridgeEndpoint != "" ||
-		config.SQSEndpoint != "" || len(config.ServiceCallers) != 0 ||
-		len(config.AllowedOrigins) != 0 || len(config.PostgresExtensions) != 0 {
+		config.SQSEndpoint != "" || len(config.ServiceCallers) != 0 || len(config.AllowedOrigins) != 0 {
 		t.Fatalf("config = %+v", config)
 	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
-	setRequired(t)
-	t.Setenv("CONNECTIONS_ADDRESS", " :8086 ")
-	t.Setenv("AWS_REGION", "us-east-1")
-	t.Setenv("CONNECTIONS_AUTO_MIGRATE", "false")
-	t.Setenv("TEAMS_URL", "http://localhost:8083/")
-	t.Setenv("CONNECTIONS_ALLOWED_ORIGINS", "http://localhost:3000, https://app.example.test")
-	t.Setenv("EVENT_BUS_NAME", "oryxa")
-	t.Setenv("CONNECTIONS_EVENTS_QUEUE_URL", " https://sqs.example.test/connections-events ")
-	t.Setenv("POSTGRES_REQUIRED_EXTENSIONS", "vector, ltree")
-	t.Setenv("AWS_ENDPOINT_URL", "http://localhost:4566/")
-	config, err := FromEnv()
+	values := requiredValues()
+	values["TEAMS_URL"] = "http://localhost:8083/"
+	values["CONNECTIONS_ALLOWED_ORIGINS"] = "http://localhost:3000, https://app.example.test"
+	values["CONNECTIONS_EVENTS_QUEUE_URL"] = " https://sqs.example.test/connections-events "
+	values["AWS_ENDPOINT_URL"] = "http://localhost:4566/"
+
+	config, err := FromEnv(env(values))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
 	if config.KMSEndpoint != "" || config.EventBridgeEndpoint != "http://localhost:4566" || config.SQSEndpoint != "http://localhost:4566" {
 		t.Fatalf("AWS endpoints = %q %q %q", config.KMSEndpoint, config.EventBridgeEndpoint, config.SQSEndpoint)
 	}
-	t.Setenv("AWS_ENDPOINT_URL_KMS", "http://localhost:4599")
-	if config, err := FromEnv(); err != nil || config.KMSEndpoint != "http://localhost:4599" {
+
+	values["AWS_ENDPOINT_URL_KMS"] = "http://localhost:4599"
+	if config, err := FromEnv(env(values)); err != nil || config.KMSEndpoint != "http://localhost:4599" {
 		t.Fatalf("KMS endpoint = %q %v", config.KMSEndpoint, err)
 	}
-	config, err = FromEnv()
+
+	config, err = FromEnv(env(values))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.Address != ":8086" || config.AWSRegion != "us-east-1" || config.AutoMigrate ||
-		config.TeamsURL != "http://localhost:8083" || config.EventBusName != "oryxa" ||
-		config.EventsQueueURL != "https://sqs.example.test/connections-events" ||
-		!slices.Equal(config.AllowedOrigins, []string{"http://localhost:3000", "https://app.example.test"}) ||
-		!slices.Equal(config.PostgresExtensions, []string{"vector", "ltree"}) {
+	if config.TeamsURL != "http://localhost:8083" || config.EventsQueueURL != "https://sqs.example.test/connections-events" ||
+		!slices.Equal(config.AllowedOrigins, []string{"http://localhost:3000", "https://app.example.test"}) {
 		t.Fatalf("config = %+v", config)
 	}
 }
 
 func TestFromEnvRejects(t *testing.T) {
-	for name, change := range map[string]func(*testing.T){
-		"missing database URL":    func(t *testing.T) { t.Setenv("DATABASE_URL", "") },
-		"missing auth URL":        func(t *testing.T) { t.Setenv("AUTH_URL", "") },
-		"missing public base URL": func(t *testing.T) { t.Setenv("CONNECTIONS_PUBLIC_BASE_URL", "") },
-		"missing KMS key":         func(t *testing.T) { t.Setenv("CONNECTIONS_KMS_KEY_ID", " ") },
-		"unparseable callers":     func(t *testing.T) { t.Setenv("CONNECTIONS_SERVICE_CALLERS", "integrations") },
-		"unknown caller purpose": func(t *testing.T) {
-			t.Setenv("CONNECTIONS_SERVICE_CALLERS", `[{"service":"integrations","key_id":"alias/k","purposes":["export"]}]`)
+	for name, change := range map[string]func(map[string]string){
+		"missing auth url":        func(v map[string]string) { v["AUTH_URL"] = "" },
+		"missing public base url": func(v map[string]string) { v["CONNECTIONS_PUBLIC_BASE_URL"] = "" },
+		"missing KMS key":         func(v map[string]string) { v["CONNECTIONS_KMS_KEY_ID"] = " " },
+		"unparseable callers":     func(v map[string]string) { v["CONNECTIONS_SERVICE_CALLERS"] = "integrations" },
+		"unknown caller purpose": func(v map[string]string) {
+			v["CONNECTIONS_SERVICE_CALLERS"] = `[{"service":"integrations","key_id":"alias/k","purposes":["export"]}]`
 		},
-		"relative KMS endpoint": func(t *testing.T) { t.Setenv("AWS_ENDPOINT_URL_KMS", "localhost:4566") },
-		"relative auth URL":     func(t *testing.T) { t.Setenv("AUTH_URL", "auth.local") },
-		"relative teams URL":    func(t *testing.T) { t.Setenv("TEAMS_URL", "/teams") },
-		"relative origin":       func(t *testing.T) { t.Setenv("CONNECTIONS_ALLOWED_ORIGINS", "localhost:3000") },
-		"unparseable auto migrate": func(t *testing.T) {
-			t.Setenv("CONNECTIONS_AUTO_MIGRATE", "sometimes")
-		},
+		"relative KMS endpoint": func(v map[string]string) { v["AWS_ENDPOINT_URL_KMS"] = "localhost:4566" },
+		"relative auth URL":     func(v map[string]string) { v["AUTH_URL"] = "auth.local" },
+		"relative teams URL":    func(v map[string]string) { v["TEAMS_URL"] = "/teams" },
+		"relative origin":       func(v map[string]string) { v["CONNECTIONS_ALLOWED_ORIGINS"] = "localhost:3000" },
 	} {
 		t.Run(name, func(t *testing.T) {
-			setRequired(t)
-			change(t)
-			if _, err := FromEnv(); err == nil {
+			values := requiredValues()
+			change(values)
+			if _, err := FromEnv(env(values)); err == nil {
 				t.Fatal("FromEnv() error = nil")
 			}
 		})
@@ -102,9 +86,9 @@ func TestFromEnvRejects(t *testing.T) {
 }
 
 func TestFromEnvServiceCallers(t *testing.T) {
-	setRequired(t)
-	t.Setenv("CONNECTIONS_SERVICE_CALLERS", `[{"service":"integrations","key_id":"arn:aws:kms:ap-south-1:123456789012:key/abc","purposes":["action","trigger","cleanup"]}]`)
-	config, err := FromEnv()
+	values := requiredValues()
+	values["CONNECTIONS_SERVICE_CALLERS"] = `[{"service":"integrations","key_id":"arn:aws:kms:ap-south-1:123456789012:key/abc","purposes":["action","trigger","cleanup"]}]`
+	config, err := FromEnv(env(values))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}

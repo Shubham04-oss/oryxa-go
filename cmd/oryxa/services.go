@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/Shubham04-oss/oryxa-go/connections"
 	"github.com/Shubham04-oss/oryxa-go/email"
 	"github.com/Shubham04-oss/oryxa-go/files"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
@@ -13,5 +14,6 @@ import (
 var definitions = []host.Definition{
 	teams.Definition,
 	files.Definition,
+	connections.Definition,
 	email.Definition,
 }
