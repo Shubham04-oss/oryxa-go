@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -378,6 +379,25 @@ func (store *fakeStore) lastRun() domain.SyncRun {
 }
 
 // published counts the events of one detail type the store was given.
+// publishedReasons are the reasons the events of a type carried, so a test
+// can pin which one a caller announced rather than only how many.
+func (store *fakeStore) publishedReasons(detailType string) []string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var reasons []string
+	for _, event := range store.events {
+		if event.DetailType != detailType {
+			continue
+		}
+		var carried struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(event.Data, &carried)
+		reasons = append(reasons, carried.Reason)
+	}
+	return reasons
+}
+
 func (store *fakeStore) published(detailType string) int {
 	store.mu.Lock()
 	defer store.mu.Unlock()

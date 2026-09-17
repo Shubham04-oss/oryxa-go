@@ -368,6 +368,12 @@ func TestConnectionRemovedRetiresSourcesOnThatConnectionAndRetractsTheirDocument
 	if got := store.published(knowledgev1.DocumentRemovedDetailType); got != 1 {
 		t.Fatalf("published %d retractions, want 1", got)
 	}
+	// A connection someone disconnected is not one whose credential expired,
+	// and a member asking why their documents went deserves the difference.
+	if reasons := store.publishedReasons(knowledgev1.DocumentRemovedDetailType); len(reasons) != 1 ||
+		reasons[0] != knowledgev1.RemovedReasonConnectionRemoved {
+		t.Fatalf("retraction reasons = %v, want %q", reasons, knowledgev1.RemovedReasonConnectionRemoved)
+	}
 }
 
 func TestAlreadyHandledIsTrueOnlyAfterMarkHandled(t *testing.T) {

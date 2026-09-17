@@ -172,9 +172,14 @@ const (
 
 // Removal reasons say why a document is gone.
 const (
-	RemovedReasonDeleted             = "deleted"
-	RemovedReasonSourceRemoved       = "source_removed"
+	RemovedReasonDeleted       = "deleted"
+	RemovedReasonSourceRemoved = "source_removed"
+	// RemovedReasonConnectionLost: the credential behind the source stopped
+	// working and could not be renewed. RemovedReasonConnectionRemoved: the
+	// connection was disconnected on purpose. A consumer telling a member why
+	// their documents went needs the difference.
 	RemovedReasonConnectionLost      = "connection_lost"
+	RemovedReasonConnectionRemoved   = "connection_removed"
 	RemovedReasonOrganizationDeleted = "organization_deleted"
 	RemovedReasonMemberLeft          = "member_left"
 	RemovedReasonNoLongerReadable    = "no_longer_readable"

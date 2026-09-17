@@ -27,11 +27,7 @@ func (s *Service) ConnectionExpired(ctx context.Context, event appsv1.Connection
 // good, and retracts what it held: unlike an expired one, this connection is
 // not coming back.
 func (s *Service) ConnectionRemoved(ctx context.Context, event appsv1.ConnectionRemoved) error {
-	// contracts/events/knowledge/v1 has no reason of its own yet for "the
-	// connection behind this was removed"; RemovedReasonConnectionLost is
-	// the closest existing one in knowledge's own contract, which this
-	// worker may not edit — see the report.
-	return s.retireByConnection(ctx, event.ConnectionID, knowledgev1.RemovedReasonConnectionLost)
+	return s.retireByConnection(ctx, event.ConnectionID, knowledgev1.RemovedReasonConnectionRemoved)
 }
 
 // OrganizationDeleted retires everything an organization had indexed.
