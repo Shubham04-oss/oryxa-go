@@ -67,7 +67,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Sink:        events.NewPublisher(eventClient, platform.EventBusName),
 		Extractors:  Builtin(),
 		Logger:      logger,
-	}, Config{AllowedOrigins: config.AllowedOrigins})
+	}, Config{AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval})
 
 	workers := make([]host.Worker, 0, len(service.Workers())+1)
 	for _, worker := range service.Workers() {

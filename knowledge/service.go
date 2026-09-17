@@ -17,6 +17,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
@@ -56,6 +57,10 @@ type Dependencies struct {
 type Config struct {
 	// AllowedOrigins may send cookie-authenticated mutations.
 	AllowedOrigins []string
+	// FullSweepInterval is how long a full sweep's word about what a source
+	// holds is trusted before a pass reads it from the beginning again. Zero
+	// defaults inside application to domain.DefaultFullSweepInterval.
+	FullSweepInterval time.Duration
 }
 
 // Service is knowledge, ready to mount.
@@ -86,7 +91,7 @@ func New(dependencies Dependencies, config Config) *Service {
 		Grants:      dependencies.Grants,
 		Extractors:  extractors,
 		Logger:      logger,
-	}, application.Config{ServiceName: Name})
+	}, application.Config{ServiceName: Name, FullSweepInterval: config.FullSweepInterval})
 
 	service := &Service{
 		app:      app,

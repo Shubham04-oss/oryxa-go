@@ -39,7 +39,7 @@ type Store interface {
 
 	ClaimDueSources(context.Context, time.Time, int, string, time.Time) ([]domain.Source, error)
 	RenewLease(context.Context, string, string, time.Time) (bool, error)
-	FinishSource(context.Context, string, string, time.Time, time.Time, *domain.Event) (bool, error)
+	FinishSource(context.Context, string, string, time.Time, time.Time, *time.Time, *domain.Event) (bool, error)
 	FailSource(context.Context, string, string, string, time.Time, time.Time, *domain.Event) (bool, error)
 
 	UpsertDocument(context.Context, domain.Document, func(domain.Document) (domain.Event, error)) (bool, error)
@@ -96,6 +96,12 @@ type Dependencies struct {
 
 type Config struct {
 	ServiceName string
+	// FullSweepInterval is how long a full sweep's word about what a source
+	// holds is trusted before a pass starts over from the beginning, so a
+	// document removed at the provider is eventually noticed even long after
+	// a source's first pass. Zero (the caller built Config directly, such as
+	// a test) defaults to domain.DefaultFullSweepInterval.
+	FullSweepInterval time.Duration
 }
 
 type Service struct {
@@ -131,6 +137,9 @@ func New(dependencies Dependencies, config Config) *Service {
 	}
 	if service.config.ServiceName == "" {
 		service.config.ServiceName = "knowledge"
+	}
+	if service.config.FullSweepInterval <= 0 {
+		service.config.FullSweepInterval = domain.DefaultFullSweepInterval
 	}
 	return service
 }

@@ -35,12 +35,16 @@ func testService(t *testing.T, store *fakeStore, extractor *fakeExtractor) (*Ser
 }
 
 // activeSource is a source already registered and claimed under a lease.
+// FullSweepAt is set to now, as it would be right after a source's first
+// pass drains, so a test does not accidentally exercise the periodic sweep
+// without asking for it; a test of that overrides FullSweepAt itself.
 func activeSource(store *fakeStore, provider string) domain.Source {
+	swept := testClock
 	source := domain.Source{
 		ID: "src_1", OrganizationID: "org_1", ConnectionID: "con_1", AppID: "app_1",
 		Provider: provider, Target: map[string]string{"repository": "acme/api"},
 		Scope: domain.ScopeOrganization, CreatedBy: "user-1", Status: domain.StatusActive,
-		Interval: time.Hour, CreatedAt: testClock,
+		Interval: time.Hour, CreatedAt: testClock, FullSweepAt: &swept,
 	}
 	store.sources[source.ID] = source
 	store.lease[source.ID] = "lease-a"
@@ -210,6 +214,52 @@ func TestSyncNeverRetractsOnAnIncrementalPass(t *testing.T) {
 		return
 	}
 	t.Fatal("an incremental pass asked the extractor for everything")
+}
+
+func TestSyncRetractsAfterASweptSourceComesDueAgain(t *testing.T) {
+	// A source that finished its first pass long ago is read incrementally
+	// from then on. Once its full sweep interval elapses, a pass starts over
+	// from the beginning and can once again say what the source no longer
+	// holds, rather than staying incremental — and silent about deletions —
+	// forever.
+	store := newFakeStore()
+	watermark := testClock.Add(-30 * 24 * time.Hour)
+	store.cursors["src_1"] = domain.Cursor{SourceID: "src_1", Watermark: &watermark}
+	gone := domain.Document{
+		ID: "doc_gone", OrganizationID: "org_1", SourceID: "src_1", ExternalID: "2",
+		ContentHash: "unchanged", LastSeenAt: testClock.Add(-2 * time.Hour),
+	}
+	store.documents["src_1\x00"+gone.ExternalID] = gone
+
+	updated := testClock.Add(-time.Hour)
+	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+		{Items: []sources.Item{item("1", "kept", updated)}, Watermark: &updated},
+	}}
+	service, _ := testService(t, store, extractor)
+	source := activeSource(store, "github")
+	stale := testClock.Add(-8 * 24 * time.Hour) // older than the default weekly interval
+	source.FullSweepAt = &stale
+	store.sources[source.ID] = source
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if run := store.lastRun(); run.Kind != knowledgev1.SyncBackfill {
+		t.Fatalf("run kind = %q, want %q: the sweep had come due", run.Kind, knowledgev1.SyncBackfill)
+	}
+	if request := extractor.calls[0]; !request.Full || request.Cursor.Value != "" || request.Cursor.Watermark != nil {
+		t.Fatalf("request = %+v, want a full pass starting from the beginning", request)
+	}
+	if removed := store.documents["src_1\x00"+gone.ExternalID]; removed.RemovedAt == nil {
+		t.Fatal("the document missing from this pass's page was not retracted")
+	}
+	if got := store.published(knowledgev1.DocumentRemovedDetailType); got != 1 {
+		t.Fatalf("published %d removal events, want 1", got)
+	}
+	swept := store.sources[source.ID].FullSweepAt
+	if swept == nil || !swept.Equal(testClock) {
+		t.Fatalf("full_sweep_at = %v, want now (%v): the sweep just completed", swept, testClock)
+	}
 }
 
 func TestSyncPausesASourceWhoseCredentialMustBeReconnected(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 
 const sourceColumns = `id, organization_id, connection_id, app_id, provider, target, scope, team_id, member_id,
 	created_by, status, reason, interval_seconds, sync_at, last_synced_at, attempts,
-	lease_token, lease_until, version, created_at, updated_at`
+	lease_token, lease_until, version, created_at, updated_at, full_sweep_at`
 
 func (store *Store) CreateSource(ctx context.Context, source domain.Source, event *domain.Event) error {
 	target, err := encodeMap(source.Target)
@@ -111,14 +111,20 @@ func (store *Store) RenewLease(ctx context.Context, sourceID, leaseToken string,
 
 // FinishSource schedules the next run and releases the claim. It answers false
 // when the lease has moved on, so a run that lost it changes nothing.
-func (store *Store) FinishSource(ctx context.Context, sourceID, leaseToken string, now time.Time, nextSync time.Time, event *domain.Event) (bool, error) {
+//
+// fullSweptAt is set when this pass read the source from the beginning and
+// drained: it becomes the new full_sweep_at. Nil leaves the column as it was,
+// which is what keeps an ordinary incremental pass from erasing a sweep an
+// earlier pass recorded.
+func (store *Store) FinishSource(ctx context.Context, sourceID, leaseToken string, now time.Time, nextSync time.Time, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
 	claimed := false
 	err := store.inTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE knowledge_sources
 			SET last_synced_at = $3, sync_at = $4, attempts = 0, reason = '',
-			    lease_token = NULL, lease_until = NULL, updated_at = $3, version = version + 1
-			WHERE id = $1 AND lease_token = $2`, sourceID, leaseToken, now, nextSync)
+			    lease_token = NULL, lease_until = NULL, updated_at = $3, version = version + 1,
+			    full_sweep_at = COALESCE($5, full_sweep_at)
+			WHERE id = $1 AND lease_token = $2`, sourceID, leaseToken, now, nextSync, fullSweptAt)
 		if err != nil {
 			return fmt.Errorf("finish source: %w", err)
 		}
@@ -304,7 +310,7 @@ func scanSource(rows pgx.Rows) (domain.Source, error) {
 	if err := rows.Scan(&source.ID, &source.OrganizationID, &source.ConnectionID, &source.AppID, &source.Provider,
 		&target, &scope, &teamID, &memberID, &source.CreatedBy, &status, &source.Reason, &intervalSeconds,
 		&source.SyncAt, &source.LastSyncedAt, &source.Attempts, &leaseToken, &source.LeaseUntil,
-		&source.Version, &source.CreatedAt, &source.UpdatedAt); err != nil {
+		&source.Version, &source.CreatedAt, &source.UpdatedAt, &source.FullSweepAt); err != nil {
 		return domain.Source{}, fmt.Errorf("scan source: %w", err)
 	}
 	decoded, err := decodeMap(target)

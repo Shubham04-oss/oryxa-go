@@ -3,6 +3,7 @@ package serviceconfig
 import (
 	"slices"
 	"testing"
+	"time"
 )
 
 func env(values map[string]string) func(string) string {
@@ -28,6 +29,9 @@ func TestFromEnvDefaults(t *testing.T) {
 		config.EventsQueueURL != "" || len(config.AllowedOrigins) != 0 {
 		t.Fatalf("config = %+v", config)
 	}
+	if config.FullSweepInterval != 7*24*time.Hour {
+		t.Fatalf("FullSweepInterval = %s, want a week", config.FullSweepInterval)
+	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
@@ -35,6 +39,7 @@ func TestFromEnvOverrides(t *testing.T) {
 	values["KNOWLEDGE_ALLOWED_ORIGINS"] = "http://localhost:3000, https://app.example.test"
 	values["KNOWLEDGE_SERVICE_NAME"] = "knowledge-svc"
 	values["KNOWLEDGE_EVENTS_QUEUE_URL"] = " https://sqs.example.test/knowledge-events "
+	values["KNOWLEDGE_FULL_SWEEP_INTERVAL"] = " 72h "
 
 	config, err := FromEnv(env(values))
 	if err != nil {
@@ -45,6 +50,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if !slices.Equal(config.AllowedOrigins, []string{"http://localhost:3000", "https://app.example.test"}) {
 		t.Fatalf("allowed origins = %v", config.AllowedOrigins)
+	}
+	if config.FullSweepInterval != 72*time.Hour {
+		t.Fatalf("FullSweepInterval = %s, want 72h", config.FullSweepInterval)
 	}
 }
 
@@ -81,6 +89,13 @@ func TestFromEnvRejects(t *testing.T) {
 		"relative connections url": func(values map[string]string) { values["CONNECTIONS_URL"] = "/connections" },
 		"relative KMS endpoint":    func(values map[string]string) { values["AWS_ENDPOINT_URL_KMS"] = "localhost:4566" },
 		"relative allowed origin":  func(values map[string]string) { values["KNOWLEDGE_ALLOWED_ORIGINS"] = "localhost:3000" },
+		"zero full sweep interval": func(values map[string]string) { values["KNOWLEDGE_FULL_SWEEP_INTERVAL"] = "0h" },
+		"negative full sweep interval": func(values map[string]string) {
+			values["KNOWLEDGE_FULL_SWEEP_INTERVAL"] = "-24h"
+		},
+		"unparsable full sweep interval": func(values map[string]string) {
+			values["KNOWLEDGE_FULL_SWEEP_INTERVAL"] = "a week"
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			values := required()

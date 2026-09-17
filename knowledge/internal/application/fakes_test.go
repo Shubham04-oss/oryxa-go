@@ -187,13 +187,18 @@ func (store *fakeStore) RenewLease(_ context.Context, sourceID, leaseToken strin
 	return store.lease[sourceID] == leaseToken, nil
 }
 
-func (store *fakeStore) FinishSource(_ context.Context, sourceID, leaseToken string, _ time.Time, nextSync time.Time, event *domain.Event) (bool, error) {
+func (store *fakeStore) FinishSource(_ context.Context, sourceID, leaseToken string, _ time.Time, nextSync time.Time, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.lease[sourceID] != leaseToken {
 		return false, nil
 	}
 	store.finishedNext = nextSync
+	if fullSweptAt != nil {
+		source := store.sources[sourceID]
+		source.FullSweepAt = fullSweptAt
+		store.sources[sourceID] = source
+	}
 	if event != nil {
 		store.events = append(store.events, *event)
 	}

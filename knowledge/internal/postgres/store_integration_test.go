@@ -386,7 +386,7 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 	}
 
 	event := testEvent(t, "knowledge.sync.completed.v1")
-	claimed, err := store.FinishSource(ctx, source.ID, "lease-b", due, due.Add(time.Hour), &event)
+	claimed, err := store.FinishSource(ctx, source.ID, "lease-b", due, due.Add(time.Hour), nil, &event)
 	if err != nil {
 		t.Fatalf("FinishSource() error = %v", err)
 	}
@@ -401,7 +401,7 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 		t.Fatalf("ClaimOutbox() = %d events, want none from a run that lost its lease", len(outbox))
 	}
 
-	claimed, err = store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), &event)
+	claimed, err = store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), nil, &event)
 	if err != nil || !claimed {
 		t.Fatalf("FinishSource(own lease) = %v, %v, want claimed", claimed, err)
 	}
@@ -411,6 +411,49 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 	}
 	if read.LeaseToken != "" || read.Attempts != 0 {
 		t.Fatalf("Source() after finishing = lease %q, attempts %d", read.LeaseToken, read.Attempts)
+	}
+	if read.FullSweepAt != nil {
+		t.Fatalf("Source() full_sweep_at = %v, want nil: this pass did not sweep in full", read.FullSweepAt)
+	}
+}
+
+func TestFinishSourceRecordsAFullSweepAndKeepsItOnALaterIncrementalPass(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+
+	due := testClock.Add(time.Minute)
+	if _, err := store.ClaimDueSources(ctx, due, 10, "lease-a", due.Add(time.Minute)); err != nil {
+		t.Fatalf("ClaimDueSources() error = %v", err)
+	}
+	swept := due
+	if _, err := store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), &swept, nil); err != nil {
+		t.Fatalf("FinishSource() error = %v", err)
+	}
+	read, err := store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if read.FullSweepAt == nil || !read.FullSweepAt.Equal(swept) {
+		t.Fatalf("Source() full_sweep_at = %v, want %v: a full pass just drained", read.FullSweepAt, swept)
+	}
+
+	// A later, ordinary incremental pass must not erase what the full sweep
+	// recorded: nil leaves the column alone rather than clearing it back to
+	// never-swept.
+	later := due.Add(time.Hour)
+	if _, err := store.ClaimDueSources(ctx, later, 10, "lease-b", later.Add(time.Minute)); err != nil {
+		t.Fatalf("ClaimDueSources() error = %v", err)
+	}
+	if _, err := store.FinishSource(ctx, source.ID, "lease-b", later, later.Add(time.Hour), nil, nil); err != nil {
+		t.Fatalf("FinishSource() error = %v", err)
+	}
+	read, err = store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if read.FullSweepAt == nil || !read.FullSweepAt.Equal(swept) {
+		t.Fatalf("Source() full_sweep_at after an incremental pass = %v, want it unchanged at %v", read.FullSweepAt, swept)
 	}
 }
 
