@@ -67,7 +67,10 @@ halves of resuming matter, and they are not the same:
 
 For the same reason, only a full pass retracts what it did not see — an
 incremental one has not looked at everything, so it has no standing to say
-anything is missing.
+anything is missing. A source is swept in full again, not only on its first
+pass, once its last sweep is older than `KNOWLEDGE_FULL_SWEEP_INTERVAL` (a Go
+duration, a week by default), so a document deleted at the provider is
+eventually noticed even long after a source's first pass.
 
 A document is published when it is first seen and whenever its content hash
 changes, and not otherwise, so a pass over an unchanged source publishes
@@ -174,7 +177,7 @@ Knowledge uses `/internal/postgreskit`. Other services never read these tables.
 
 | Table | Holds |
 | --- | --- |
-| `knowledge_sources` | What to index, its placement and owner, its schedule, and the lease one replica claims it under |
+| `knowledge_sources` | What to index, its placement and owner, its schedule, when it was last swept in full, and the lease one replica claims it under |
 | `knowledge_documents` | What came back, with the content hash that is its version and when a pass last saw it |
 | `knowledge_cursors` | Where the last pass stopped, and the newest change a completed pass saw |
 | `knowledge_sync_runs` | What each pass did, so a member can see why nothing new arrived |
@@ -225,7 +228,7 @@ service := knowledge.New(knowledge.Dependencies{
 	Sink:        events.NewPublisher(eventBridge, config.EventBusName),
 	Extractors:  knowledge.Builtin(),
 	Logger:      logger,
-}, knowledge.Config{AllowedOrigins: config.AllowedOrigins})
+}, knowledge.Config{AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval})
 
 if err := service.Migrate(ctx); err != nil { return err }
 mux.Handle("/", service.Handler())

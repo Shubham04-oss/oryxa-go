@@ -34,37 +34,25 @@ fail loudly rather than quietly, but both fail everything.
 
 ---
 
-## 2. Deletions stop being noticed after the first pass
+## 2. Deletions are noticed again after a periodic full sweep (fixed)
 
-**This is the most significant functional gap and it is not obvious from
-reading any single file.**
+`application/sync.go` used to decide a pass was a backfill only when the
+source had no watermark, and only a backfill retracted what it did not see.
+Once a source completed one full pass it had a watermark forever, so every
+later pass was incremental, and `RetractUnseen` was never called again — a
+document deleted at the provider on day two stayed in the index indefinitely.
 
-`application/sync.go` decides a pass is a backfill when the source has no
-watermark, and only a backfill retracts what it did not see. Once a source
-completes one full pass it has a watermark forever, so every later pass is
-incremental, and `RetractUnseen` is never called again. A document deleted at
-the provider on day two stays in the index indefinitely.
-
-That reasoning is correct per pass — an incremental pass genuinely has not
-looked at everything, so it has no standing to say anything is missing — but
-the consequence is that nothing ever looks at everything again.
-
-It bites differently per provider:
-
-- **GitHub** asks with `since`, so it truly cannot see a deleted issue.
-- **Notion** reads the same breadth either way (its search takes no `since`),
-  so it *sees* everything and still will not retract, because the pass is
-  labelled incremental.
-- **Slack** messages are rarely deleted, so the exposure is smallest.
-- **Files** has the same shape, and files also expires objects silently.
-
-**Suggested fix**, roughly in order of effort: add a `full_sweep_at` column to
-`knowledge_sources`, force `full = true` when it is due (say weekly), and
-clear the cursor so the pass starts from the beginning. The retraction
-machinery already works and is tested; only the decision of when to do a full
-pass needs changing. `TestSyncRetractsWhatAFullPassDidNotFind` and
-`TestSyncNeverRetractsOnAnIncrementalPass` pin the current behaviour, so
-whoever changes this will see exactly what they are changing.
+A pass is now also full — starting from the beginning and, once drained,
+retracting what it did not see — when a source's sweep has come due: no
+`knowledge_sources.full_sweep_at` yet, or one older than
+`KNOWLEDGE_FULL_SWEEP_INTERVAL` (a Go duration, weekly by default; see §8.3).
+`full_sweep_at` itself is recorded once such a pass drains. The watermark rule
+did not change: it still moves only when a source is drained, never mid-walk,
+and a walk already under way keeps what it saved rather than restarting from
+the beginning mid-pass. `TestSyncRetractsWhatAFullPassDidNotFind` and
+`TestSyncNeverRetractsOnAnIncrementalPass` still pin a fresh source's first
+pass and an ordinary incremental one; `TestSyncRetractsAfterASweptSourceComesDueAgain`
+pins the periodic sweep itself.
 
 ---
 
@@ -93,14 +81,6 @@ someone else to confirm.
   others would fail identically on their next tick — but it means one bad
   source pauses its siblings. If that is wrong, pause by source id and let
   the others discover it themselves.
-- **Slack's `oldest` is treated as exclusive.** That matches Slack's default
-  (`inclusive=false`), so the message the watermark names is not re-read. If
-  that default ever changes, the boundary message is silently skipped rather
-  than duplicated, which is the worse direction. A cheap hedge is to subtract
-  a second from the watermark and let the idempotent upsert absorb the
-  overlap.
-- **A Notion database with several data sources only has its first indexed.**
-  `notionDataSourceID` takes the first. Rare, but silent.
 - **Document bodies live in Postgres, up to 4 MiB each.** `transform.MaxBytes`
   caps one document; nothing caps a source. For a large corpus this table
   grows fast, and the body is only there to serve
@@ -117,9 +97,6 @@ someone else to confirm.
   files that is quadratic. Fix by carrying the listing across pages within one
   run, which needs the extractor to hold per-run state the seam does not offer
   yet.
-- **`RemoveSource` calls auth twice.** `application/sources.go` calls
-  `s.Source` (which resolves the caller) and then `s.caller` again. One
-  round trip too many on a rare path; trivial to fold together.
 - **No token is shared between sources on the same connection.** The cache in
   `connectionsclient` is keyed by connection, so this already works across
   sources — worth confirming under load rather than assuming.
@@ -134,11 +111,6 @@ sync semantics, the event dedupe, the error mapping.
 
 What is not:
 
-- **`internal/authclient` has no tests.** `knowledge/service_test.go` now
-  covers the seam — `Migrate` and `Mount`, including the routes and workers
-  `Mount` builds — but authclient is still a thin HTTP client that should get
-  the same treatment as `filesclient` and `connectionsclient`, which do have
-  them.
 - **No end-to-end test.** Other services have an `internal/e2e` that runs the
   HTTP API, the application, the store and the adapters together against a
   fake provider. This service should have one; now that the entrypoint
@@ -147,8 +119,6 @@ What is not:
   pattern: skipped unless credentials are in the environment, creating and
   cleaning up real resources. Nothing here has run against a real GitHub,
   Notion or Slack.
-- **`events.Consumer.Poll` is untested.** `Handle` is well covered; the SQS
-  loop around it is not.
 - **The store tests ran against a locally started Postgres 16, not the
   project's `pgvector/pgvector:0.8.6-pg17` image**, because this sandbox has
   no Docker daemon. The schema uses no extensions, so this should not matter —
@@ -172,8 +142,9 @@ to miss and expensive to get wrong:
 - **`BodyOmitted` means fetch it.** Bodies over 128 KiB are not carried;
   `GET /v1/organizations/{org}/documents/{DocumentID}` returns the full text.
 
-`knowledge.document.removed.v1` must actually remove things — see §2 for why
-it fires less often than you would want today.
+`knowledge.document.removed.v1` fires whenever a full pass — a source's
+first, or a periodic sweep at most `KNOWLEDGE_FULL_SWEEP_INTERVAL` apart —
+finds something the provider no longer has; see §2.
 
 ---
 
@@ -188,7 +159,9 @@ it fires less often than you would want today.
    service now follows with `Definition`, `Migrate` and `Mount` in
    `knowledge/service.go` and `knowledge/mount.go` — the shape `internal/host`
    expects from every service it mounts.
-3. **How often should a source do a full sweep?** See §2. Weekly is a guess.
+3. **How often should a source do a full sweep?** Decided: it is a setting,
+   `KNOWLEDGE_FULL_SWEEP_INTERVAL` in `knowledge/internal/serviceconfig`,
+   defaulting to weekly (168h) rather than a cadence fixed in code — see §2.
 4. **Where do document bodies live long-term?** Postgres today; see §4.
 5. **Should background workers drain on shutdown everywhere?** Decided: yes,
    and it turned out not to be each service's call — `internal/host`'s
