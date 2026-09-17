@@ -81,13 +81,22 @@ attacker reached Composio's shared execution layer and took about 5,000 GitHub
 tokens and 5,241 customer API keys, including tokens under customers' own OAuth
 apps. Self-hosting or customer-managed keys are on Composio's enterprise tier.
 
-### Knowledge has nothing to read
+### Knowledge reads three apps, and no files
 
-Its provider sources were archived, and its files source needs a grant to read
-as the member who registered it, so the binary mounts no extractor
+GitHub, Notion and Slack are back, reading through Composio against a
+connection a member made in apps, so knowledge holds no credential of its own
+([knowledge/README.md](../knowledge/README.md)). They mount only when
+`COMPOSIO_API_KEY` is set, which is also why the project key is in two services
+(see above).
+
+The files source is still built and unmounted: it reads as the member who
+registered it and needs a grant to do that
 ([knowledge/TODO.md §1](../knowledge/TODO.md#1-what-still-blocks-every-pass)).
-App sources return on Composio, which never hands out a token: an extractor
-will call through Composio rather than with a credential of its own.
+So an organization's own documents — the obvious first thing anyone would
+index — are the one thing knowledge cannot read. That waits on §3.2.
+
+Nothing has run a pass against a real app, either: it needs a connected
+account, which needs a member at a browser.
 
 ### Knowledge does not feed rag
 
