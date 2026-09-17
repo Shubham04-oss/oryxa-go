@@ -14,16 +14,15 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 )
 
-// registrar builds a service whose caller and connection a test can shape.
-func registrar(t *testing.T, store *fakeStore, caller domain.OrgMembership, connection domain.Connection) *Service {
+// registrar builds a service whose caller a test can shape.
+func registrar(t *testing.T, store *fakeStore, caller domain.OrgMembership) *Service {
 	t.Helper()
-	extractor := &fakeExtractor{provider: "github"}
+	extractor := &fakeExtractor{provider: "files"}
 	return New(Dependencies{
-		Store:       store,
-		Directory:   &fakeDirectory{membership: caller},
-		Connections: &fakeConnections{connection: connection},
-		Extractors:  sources.Registry{"github": extractor},
-		Clock:       func() time.Time { return testClock },
+		Store:      store,
+		Directory:  &fakeDirectory{membership: caller},
+		Extractors: sources.Registry{"files": extractor},
+		Clock:      func() time.Time { return testClock },
 	}, Config{})
 }
 
@@ -31,24 +30,17 @@ func member() domain.OrgMembership {
 	return domain.OrgMembership{OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember}
 }
 
-func usable() domain.Connection {
-	return domain.Connection{
-		ID: "con_1", OrganizationID: "org_1", AppID: "app_1", Provider: "github",
-		Scope: "organization", Status: "active",
-	}
-}
-
 func organizationDeleted(organizationID string) authv1.OrganizationDeleted {
 	return authv1.OrganizationDeleted{OrganizationID: organizationID, DeletedAt: testClock}
 }
 
 func registration() RegisterInput {
-	return RegisterInput{ConnectionID: "con_1", Provider: "github", Target: map[string]string{"repository": "acme/api"}}
+	return RegisterInput{Provider: "files", Target: map[string]string{"team_id": "team_1"}}
 }
 
 func TestRegisterSourceIsDueAtOnce(t *testing.T) {
 	store := newFakeStore()
-	service := registrar(t, store, member(), usable())
+	service := registrar(t, store, member())
 
 	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
 	if err != nil {
@@ -60,30 +52,14 @@ func TestRegisterSourceIsDueAtOnce(t *testing.T) {
 	if source.Interval != domain.DefaultInterval {
 		t.Fatalf("Interval = %s, want the default %s", source.Interval, domain.DefaultInterval)
 	}
-	if source.AppID != "app_1" || source.Scope != domain.ScopeOrganization {
-		t.Fatalf("source = %+v, want the connection's app and placement", source)
-	}
-}
-
-func TestRegisterSourceRefusesAConnectionABackgroundReaderCouldNeverUse(t *testing.T) {
-	// Connections refuses a bare service every purpose but cleanup on an
-	// organization connection its admins reserved, and extraction runs long
-	// after the member has gone. Such a source could only ever fail, so it is
-	// refused while someone is present to be told.
-	store := newFakeStore()
-	reserved := usable()
-	reserved.Usage = domain.UsageAdmins
-	service := registrar(t, store, member(), reserved)
-
-	_, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
-	if !errors.Is(err, domain.ErrForbidden) {
-		t.Fatalf("RegisterSource() error = %v, want ErrForbidden", err)
+	if source.Scope != domain.ScopeOrganization {
+		t.Fatalf("source = %+v, want it placed on the organization", source)
 	}
 }
 
 func TestRegisterSourceRefusesAProviderNothingReads(t *testing.T) {
 	store := newFakeStore()
-	service := registrar(t, store, member(), usable())
+	service := registrar(t, store, member())
 
 	input := registration()
 	input.Provider = "dropbox"
@@ -95,13 +71,12 @@ func TestRegisterSourceRefusesAProviderNothingReads(t *testing.T) {
 
 func TestRegisterSourceRefusesATargetTheExtractorWouldNotUnderstand(t *testing.T) {
 	store := newFakeStore()
-	extractor := &fakeExtractor{provider: "github", targetErr: sources.MissingTarget("a repository")}
+	extractor := &fakeExtractor{provider: "files", targetErr: sources.MissingTarget("a team")}
 	service := New(Dependencies{
-		Store:       store,
-		Directory:   &fakeDirectory{membership: member()},
-		Connections: &fakeConnections{connection: usable()},
-		Extractors:  sources.Registry{"github": extractor},
-		Clock:       func() time.Time { return testClock },
+		Store:      store,
+		Directory:  &fakeDirectory{membership: member()},
+		Extractors: sources.Registry{"files": extractor},
+		Clock:      func() time.Time { return testClock },
 	}, Config{})
 
 	input := registration()
@@ -112,37 +87,13 @@ func TestRegisterSourceRefusesATargetTheExtractorWouldNotUnderstand(t *testing.T
 	}
 }
 
-func TestRegisterSourceRefusesAConnectionForAnotherProvider(t *testing.T) {
-	store := newFakeStore()
-	elsewhere := usable()
-	elsewhere.Provider = "slack"
-	service := registrar(t, store, member(), elsewhere)
-
-	_, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
-	if !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("RegisterSource() error = %v, want ErrInvalid", err)
-	}
-}
-
-func TestRegisterSourceRefusesAConnectionThatIsNotActive(t *testing.T) {
-	store := newFakeStore()
-	stale := usable()
-	stale.Status = "needs_reconnect"
-	service := registrar(t, store, member(), stale)
-
-	_, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
-	if !errors.Is(err, domain.ErrConflict) {
-		t.Fatalf("RegisterSource() error = %v, want ErrConflict", err)
-	}
-}
-
 func TestRegisterSourceRefusesAnAgent(t *testing.T) {
 	// An agent may read what an organization indexed, but choosing what to
 	// index is the member's own decision.
 	store := newFakeStore()
 	agent := member()
 	agent.Agent = true
-	service := registrar(t, store, agent, usable())
+	service := registrar(t, store, agent)
 
 	_, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
 	if !errors.Is(err, domain.ErrForbidden) {
@@ -152,7 +103,7 @@ func TestRegisterSourceRefusesAnAgent(t *testing.T) {
 
 func TestRegisterSourceRefusesAnIntervalThatWouldHammerAProvider(t *testing.T) {
 	store := newFakeStore()
-	service := registrar(t, store, member(), usable())
+	service := registrar(t, store, member())
 
 	input := registration()
 	input.Interval = time.Second
@@ -164,18 +115,18 @@ func TestRegisterSourceRefusesAnIntervalThatWouldHammerAProvider(t *testing.T) {
 
 func TestSourceIsHiddenFromAnotherMember(t *testing.T) {
 	store := newFakeStore()
-	service := registrar(t, store, member(), usable())
+	service := registrar(t, store, member())
 	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
 	if err != nil {
 		t.Fatalf("RegisterSource() error = %v", err)
 	}
 
-	stranger := registrar(t, store, domain.OrgMembership{OrganizationID: "org_1", UserID: "user-2", Role: domain.OrgRoleMember}, usable())
+	stranger := registrar(t, store, domain.OrgMembership{OrganizationID: "org_1", UserID: "user-2", Role: domain.OrgRoleMember})
 	if _, err := stranger.Source(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", source.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("Source() error = %v, want ErrNotFound: a stranger learns nothing, not even that it exists", err)
 	}
 
-	admin := registrar(t, store, domain.OrgMembership{OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin}, usable())
+	admin := registrar(t, store, domain.OrgMembership{OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin})
 	if _, err := admin.Source(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", source.ID); err != nil {
 		t.Fatalf("Source() as an org admin error = %v", err)
 	}
@@ -183,7 +134,7 @@ func TestSourceIsHiddenFromAnotherMember(t *testing.T) {
 
 func TestRemoveSourceRetractsWhatItHeld(t *testing.T) {
 	store := newFakeStore()
-	service := registrar(t, store, member(), usable())
+	service := registrar(t, store, member())
 	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
 	if err != nil {
 		t.Fatalf("RegisterSource() error = %v", err)
@@ -210,11 +161,10 @@ func TestRemoveSourceAsksAuthOnce(t *testing.T) {
 	store := newFakeStore()
 	directory := &fakeDirectory{membership: member()}
 	service := New(Dependencies{
-		Store:       store,
-		Directory:   directory,
-		Connections: &fakeConnections{connection: usable()},
-		Extractors:  sources.Registry{"github": &fakeExtractor{provider: "github"}},
-		Clock:       func() time.Time { return testClock },
+		Store:      store,
+		Directory:  directory,
+		Extractors: sources.Registry{"files": &fakeExtractor{provider: "files"}},
+		Clock:      func() time.Time { return testClock },
 	}, Config{})
 	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
 	if err != nil {
@@ -232,7 +182,7 @@ func TestRemoveSourceAsksAuthOnce(t *testing.T) {
 
 func TestOrganizationDeletedRetiresEverythingItIndexed(t *testing.T) {
 	store := newFakeStore()
-	service := registrar(t, store, member(), usable())
+	service := registrar(t, store, member())
 	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
 	if err != nil {
 		t.Fatalf("RegisterSource() error = %v", err)
@@ -251,18 +201,18 @@ func TestOrganizationDeletedRetiresEverythingItIndexed(t *testing.T) {
 }
 
 func TestAlreadyHandledIsTrueOnlyAfterMarkHandled(t *testing.T) {
-	// Pausing a source and retracting its documents both write events a
+	// Retiring a source retracts its documents, which writes events a
 	// retrieval pipeline acts on, so a redelivery must not do it twice.
 	// AlreadyHandled must say so on its own, without recording anything,
 	// since the caller decides when a handler has actually succeeded.
 	store := newFakeStore()
-	service := registrar(t, store, member(), usable())
+	service := registrar(t, store, member())
 
 	already, err := service.AlreadyHandled(context.Background(), "evt_1")
 	if err != nil || already {
 		t.Fatalf("AlreadyHandled(before) = %v, %v, want false", already, err)
 	}
-	if err := service.MarkHandled(context.Background(), "evt_1", "connections.connection.disconnected.v1"); err != nil {
+	if err := service.MarkHandled(context.Background(), "evt_1", "auth.organization.deleted.v1"); err != nil {
 		t.Fatalf("MarkHandled() error = %v", err)
 	}
 	already, err = service.AlreadyHandled(context.Background(), "evt_1")

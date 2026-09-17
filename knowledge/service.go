@@ -1,5 +1,5 @@
-// Package knowledge assembles the service: the pipes between an
-// organization's connected apps and the retrieval that reads them.
+// Package knowledge assembles the service: the pipes between what an
+// organization holds and the retrieval that reads it.
 //
 // This package exists so that mounting knowledge is three lines rather than a
 // transcription of its wiring. Everything a host has to do — install the
@@ -8,7 +8,7 @@
 // a host that runs all of them use the same shape.
 //
 // What is deliberately not here is where the dependencies come from. Building
-// a Postgres pool, an AWS client, a KMS signer or a token sink is the host's
+// a Postgres pool, an AWS client or a token sink is the host's
 // job, because a host running several services shares those rather than
 // having each service build its own.
 package knowledge
@@ -28,8 +28,8 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 )
 
-// Name is what this service calls itself: to connections when it signs a
-// call, to the bus when it publishes, and to a host mounting it.
+// Name is what this service calls itself: to the bus when it publishes, and
+// to a host mounting it.
 const Name = "knowledge"
 
 // Worker is background work a host runs until its context is cancelled. Each
@@ -40,17 +40,16 @@ type Worker func(context.Context)
 type Dependencies struct {
 	// Store is knowledge's own schema. Required.
 	Store *postgres.Store
-	// Directory is auth, Connections is connections, Grants mints a token
-	// that acts as a member for an internal source.
-	Directory   application.Directory
-	Connections application.Connections
-	Grants      application.Grants
+	// Directory is auth; Grants mints a token that acts as a member for an
+	// internal source.
+	Directory application.Directory
+	Grants    application.Grants
 	// Sink is where published events go. A host on the bus passes an
 	// EventBridge publisher; a host that also runs the retrieval pipeline can
 	// pass that instead, and nothing inside changes.
 	Sink events.Sink
-	// Extractors is what this build can read. Builtin covers the providers
-	// knowledge ships with.
+	// Extractors is what this build can read. None is built in: a host
+	// supplies each one with the client it reads through.
 	Extractors sources.Registry
 	Logger     *slog.Logger
 }
@@ -89,12 +88,11 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	}
 
 	app := application.New(application.Dependencies{
-		Store:       dependencies.Store,
-		Directory:   dependencies.Directory,
-		Connections: dependencies.Connections,
-		Grants:      dependencies.Grants,
-		Extractors:  extractors,
-		Logger:      logger,
+		Store:      dependencies.Store,
+		Directory:  dependencies.Directory,
+		Grants:     dependencies.Grants,
+		Extractors: extractors,
+		Logger:     logger,
 	}, application.Config{ServiceName: Name, FullSweepInterval: config.FullSweepInterval})
 
 	service := &Service{
@@ -151,21 +149,3 @@ func (service *Service) Consumer() *events.Consumer { return service.consumer }
 // Subscriptions are the detail types knowledge consumes, by source, for a
 // host provisioning the rule that feeds its queue.
 func Subscriptions() map[string][]string { return events.Subscriptions() }
-
-// Builtin is the extractors knowledge ships with, sharing one HTTP client so
-// that pacing and rate-limit backoff are per provider across all of them.
-//
-// Files is not here: it reads an internal service rather than a provider, so
-// a host supplies it along with the client it should read through.
-func Builtin() sources.Registry {
-	client := sources.NewClient()
-	registry := sources.Registry{}
-	for _, extractor := range []sources.Extractor{
-		sources.NewGitHub(client),
-		sources.NewNotion(client),
-		sources.NewSlack(client),
-	} {
-		registry[extractor.Provider()] = extractor
-	}
-	return registry
-}

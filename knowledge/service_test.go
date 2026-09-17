@@ -28,9 +28,7 @@ func platform(values map[string]string) host.Platform {
 
 func required() map[string]string {
 	return map[string]string{
-		"AUTH_URL":                 "http://127.0.0.1:8080",
-		"CONNECTIONS_URL":          "http://127.0.0.1:8081",
-		"KNOWLEDGE_SERVICE_KEY_ID": "alias/oryxa-knowledge-identity",
+		"AUTH_URL": "http://127.0.0.1:8080",
 	}
 }
 

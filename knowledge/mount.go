@@ -6,13 +6,10 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
-	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
-	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
-	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/connectionsclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/serviceconfig"
@@ -31,9 +28,10 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	return postgres.New(platform.Database).Migrate(ctx)
 }
 
-// Mount assembles knowledge on what the host shares. Grants has no
-// implementation yet, so an internal files source stays unavailable until one
-// is supplied — see TODO.md.
+// Mount assembles knowledge on what the host shares. It mounts no extractors:
+// the provider sources were archived with connections, and the files source
+// waits on a Grants implementation — see TODO.md. Sources can be listed, but
+// none can be registered until one of those arrives.
 func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if platform.Database == nil {
 		return host.Service{}, host.ErrDatabaseRequired
@@ -47,26 +45,17 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("KNOWLEDGE_ALLOWED_ORIGINS is not set: members can manage sources only with bearer tokens")
 	}
 
-	kmsClient := kms.NewFromConfig(platform.AWS, func(options *kms.Options) {
-		if config.KMSEndpoint != "" {
-			options.BaseEndpoint = aws.String(config.KMSEndpoint)
-		}
-	})
 	eventClient := eventbridge.NewFromConfig(platform.AWS, func(options *eventbridge.Options) {
 		if config.EventBridgeEndpoint != "" {
 			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
 		}
 	})
-	signer := serviceauth.Signer{Client: kmsClient, KeyID: config.ServiceKeyID, Service: config.ServiceName}
-
 	service, err := New(Dependencies{
-		Store:       postgres.New(platform.Database),
-		Directory:   authclient.New(config.AuthURL),
-		Connections: connectionsclient.New(config.ConnectionsURL, signer),
-		Grants:      nil,
-		Sink:        events.NewPublisher(eventClient, platform.EventBusName),
-		Extractors:  Builtin(),
-		Logger:      logger,
+		Store:     postgres.New(platform.Database),
+		Directory: authclient.New(config.AuthURL),
+		Grants:    nil,
+		Sink:      events.NewPublisher(eventClient, platform.EventBusName),
+		Logger:    logger,
 	}, Config{AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval})
 	if err != nil {
 		return host.Service{}, err
@@ -85,7 +74,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		consumer := service.Consumer()
 		workers = append(workers, func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) })
 	} else {
-		logger.Warn("KNOWLEDGE_EVENTS_QUEUE_URL is not set: knowledge will not pause or retire sources when their connection, app, member or organization goes away")
+		logger.Warn("KNOWLEDGE_EVENTS_QUEUE_URL is not set: knowledge will not retire sources when their member or organization goes away")
 	}
 
 	return host.Service{

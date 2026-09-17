@@ -2,7 +2,7 @@
 //
 // Files has no service identity: it never verifies a token itself, forwarding
 // the caller's credentials to auth instead, and nothing in it accepts a
-// signed service token the way connections does. So every call here carries a
+// signed service token. So every call here carries a
 // member's access token, and knowledge reads exactly what that member could
 // read and nothing more. Obtaining that token is the caller's problem, not
 // this package's.

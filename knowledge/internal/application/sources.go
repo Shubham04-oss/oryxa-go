@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -15,19 +14,17 @@ import (
 
 // RegisterInput is what a member says to have something indexed.
 type RegisterInput struct {
-	ConnectionID string
-	Provider     string
-	Target       map[string]string
-	Interval     time.Duration
+	Provider string
+	Target   map[string]string
+	Interval time.Duration
 }
 
 // RegisterSource records something to index and schedules its first run.
 //
 // Everything that could make a later run impossible is checked now, while a
-// member is present to be told: a provider nothing can read, a target the
-// extractor would not understand, a connection that is not usable. The worst
-// outcome is a source that looks registered and quietly never produces
-// anything.
+// member is present to be told: a provider nothing can read, or a target the
+// extractor would not understand. The worst outcome is a source that looks
+// registered and quietly never produces anything.
 func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Credentials, organizationID string, input RegisterInput) (domain.Source, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -63,17 +60,6 @@ func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Cre
 		Status:         domain.StatusActive,
 		Interval:       interval,
 	}
-	if connectionID := strings.TrimSpace(input.ConnectionID); connectionID != "" {
-		connection, err := s.usableConnection(ctx, organizationID, connectionID, credentials.Authorization, provider)
-		if err != nil {
-			return domain.Source{}, err
-		}
-		source.ConnectionID = connection.ID
-		source.AppID = connection.AppID
-		source.Scope = domain.Scope(connection.Scope)
-		source.TeamID = connection.TeamID
-		source.MemberID = connection.MemberID
-	}
 	teamID, memberID, err := domain.Place(source.Scope, source.TeamID, source.MemberID)
 	if err != nil {
 		return domain.Source{}, err
@@ -95,30 +81,6 @@ func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Cre
 	s.logger.InfoContext(ctx, "source registered",
 		"source_id", source.ID, "organization_id", organizationID, "provider", provider)
 	return source, nil
-}
-
-// usableConnection refuses now what a background run could not do later.
-func (s *Service) usableConnection(ctx context.Context, organizationID, connectionID, authorization, provider string) (domain.Connection, error) {
-	connection, err := s.connections.Connection(ctx, organizationID, connectionID, authorization)
-	if err != nil {
-		return domain.Connection{}, err
-	}
-	if connection.Provider != provider {
-		return domain.Connection{}, fmt.Errorf("the connection is for %s, not %s: %w",
-			connection.Provider, provider, domain.ErrInvalid)
-	}
-	if connection.Status != "active" {
-		return domain.Connection{}, fmt.Errorf("the connection is %s: %w", connection.Status, domain.ErrConflict)
-	}
-	// Connections refuses a bare service every purpose but cleanup on an
-	// organization connection its admins reserved. Extraction runs long after
-	// the member has gone, with no token to forward, so such a source could
-	// only ever fail.
-	if connection.Scope == string(domain.ScopeOrganization) && connection.Usage == domain.UsageAdmins {
-		return domain.Connection{}, fmt.Errorf(
-			"this connection is reserved for admins, which a background reader cannot act as: %w", domain.ErrForbidden)
-	}
-	return connection, nil
 }
 
 // Sources lists what an organization has asked to index. An org admin sees
@@ -218,17 +180,5 @@ func (s *Service) retractions(reason string) func(domain.Source, []domain.Docume
 			events = append(events, event)
 		}
 		return events, nil
-	}
-}
-
-// pausedBy is the reason a source stopped, from what went wrong reading it.
-func pausedBy(err error) (string, bool) {
-	switch {
-	case errors.Is(err, domain.ErrNeedsReconnect):
-		return knowledgev1.PausedReasonNeedsReconnect, true
-	case errors.Is(err, domain.ErrScopeRequired):
-		return knowledgev1.PausedReasonScopeRequired, true
-	default:
-		return "", false
 	}
 }

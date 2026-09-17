@@ -19,23 +19,16 @@ const defaultFullSweepInterval = 7 * 24 * time.Hour
 // Config is what knowledge reads for itself. The listener, the database, the
 // AWS region and the event bus are the host's.
 type Config struct {
-	AuthURL        string
-	ConnectionsURL string
+	AuthURL string
 	// AllowedOrigins may send cookie-authenticated mutations.
 	AllowedOrigins []string
-	// KMSEndpoint, EventBridgeEndpoint and SQSEndpoint override where those
-	// AWS clients call, for a local emulator.
-	KMSEndpoint         string
+	// EventBridgeEndpoint and SQSEndpoint override where those AWS clients
+	// call, for a local emulator.
 	EventBridgeEndpoint string
 	SQSEndpoint         string
-	// EventsQueueURL is the queue auth's and connections' events arrive on.
-	// Without it knowledge doesn't learn that a connection, app, member or
-	// organization is gone.
+	// EventsQueueURL is the queue auth's events arrive on. Without it
+	// knowledge doesn't learn that a member or organization is gone.
 	EventsQueueURL string
-	// ServiceName and ServiceKeyID are the identity knowledge signs its calls
-	// to connections with.
-	ServiceName  string
-	ServiceKeyID string
 	// FullSweepInterval is how long a full sweep's word about what a source
 	// holds is trusted before a pass starts over from the beginning.
 	FullSweepInterval time.Duration
@@ -50,25 +43,18 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	config := Config{
-		AuthURL:        endpoint(getenv, "AUTH_URL"),
-		ConnectionsURL: endpoint(getenv, "CONNECTIONS_URL"),
-		AllowedOrigins: splitList(getenv("KNOWLEDGE_ALLOWED_ORIGINS")),
-		// The local stack runs no KMS, so KMS never follows AWS_ENDPOINT_URL.
-		KMSEndpoint:         endpoint(getenv, "AWS_ENDPOINT_URL_KMS"),
+		AuthURL:             endpoint(getenv, "AUTH_URL"),
+		AllowedOrigins:      splitList(getenv("KNOWLEDGE_ALLOWED_ORIGINS")),
 		EventBridgeEndpoint: endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
 		SQSEndpoint:         endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
 		EventsQueueURL:      strings.TrimSpace(getenv("KNOWLEDGE_EVENTS_QUEUE_URL")),
-		ServiceName:         valueOr(getenv, "KNOWLEDGE_SERVICE_NAME", "knowledge"),
-		ServiceKeyID:        strings.TrimSpace(getenv("KNOWLEDGE_SERVICE_KEY_ID")),
 		FullSweepInterval:   fullSweepInterval,
 	}
-	if config.AuthURL == "" || config.ConnectionsURL == "" || config.ServiceKeyID == "" {
-		return Config{}, errors.New("AUTH_URL, CONNECTIONS_URL and KNOWLEDGE_SERVICE_KEY_ID are required")
+	if config.AuthURL == "" {
+		return Config{}, errors.New("AUTH_URL is required")
 	}
 	for _, check := range []struct{ name, value string }{
 		{"AUTH_URL", config.AuthURL},
-		{"CONNECTIONS_URL", config.ConnectionsURL},
-		{"AWS_ENDPOINT_URL_KMS", config.KMSEndpoint},
 		{"EVENTBRIDGE_ENDPOINT", config.EventBridgeEndpoint},
 		{"AWS_ENDPOINT_URL_SQS", config.SQSEndpoint},
 	} {
@@ -82,13 +68,6 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		}
 	}
 	return config, nil
-}
-
-func valueOr(getenv func(string) string, name, fallback string) string {
-	if value := strings.TrimSpace(getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 // duration reads a Go duration, defaulting an unset value. What is set must

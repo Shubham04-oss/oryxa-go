@@ -58,12 +58,12 @@ func (service *fakeService) Document(_ context.Context, credentials authclient.C
 	return domain.Document{ID: "doc_1", Body: "the body"}, service.err
 }
 
-func (service *fakeService) Extractors() []string { return []string{"github", "slack"} }
+func (service *fakeService) Extractors() []string { return []string{"files"} }
 
 func registered() domain.Source {
 	return domain.Source{
-		ID: "src_1", OrganizationID: "org_1", ConnectionID: "con_1", AppID: "app_1",
-		Provider: "github", Target: map[string]string{"repository": "acme/api"},
+		ID: "src_1", OrganizationID: "org_1",
+		Provider: "files", Target: map[string]string{"team_id": "team_1"},
 		Scope: domain.ScopeOrganization, CreatedBy: "user-1", Status: domain.StatusActive,
 		Interval: time.Hour, CreatedAt: testClock, UpdatedAt: testClock,
 		LeaseToken: "lease-a", Version: 3,
@@ -113,8 +113,8 @@ func TestHealthzAnswersWithoutACaller(t *testing.T) {
 }
 
 func TestProvidersAreReadableBeforeACallerHasAnything(t *testing.T) {
-	// A caller needs to know what can be indexed before it has a connection
-	// to index through, so this route holds nothing of any organization.
+	// A caller needs to know what can be indexed before it registers
+	// anything, so this route holds nothing of any organization.
 	recorder := send(testServer(t, &fakeService{}), http.MethodGet, "/v1/sources/providers", "", nil)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("GET /v1/sources/providers = %d, want 200", recorder.Code)
@@ -125,8 +125,8 @@ func TestProvidersAreReadableBeforeACallerHasAnything(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
 		t.Fatal(err)
 	}
-	if len(answer.Providers) != 2 {
-		t.Fatalf("providers = %v, want both", answer.Providers)
+	if len(answer.Providers) != 1 || answer.Providers[0] != "files" {
+		t.Fatalf("providers = %v, want what the service reads", answer.Providers)
 	}
 }
 
@@ -150,7 +150,7 @@ func TestEveryOrganizationRouteNeedsACaller(t *testing.T) {
 func TestACookieAuthenticatedChangeNeedsAKnownOrigin(t *testing.T) {
 	server := testServer(t, &fakeService{source: registered()})
 	request := httptest.NewRequest(http.MethodPost, "/v1/organizations/org_1/sources",
-		strings.NewReader(`{"provider":"github"}`))
+		strings.NewReader(`{"provider":"files"}`))
 	request.AddCookie(&http.Cookie{Name: authclient.AccessCookieName, Value: "session"})
 	request.Header.Set("Origin", "https://evil.example.test")
 	recorder := httptest.NewRecorder()
@@ -164,7 +164,7 @@ func TestACookieAuthenticatedChangeNeedsAKnownOrigin(t *testing.T) {
 func TestRegisterSourceAnswersWhatWasCreated(t *testing.T) {
 	service := &fakeService{source: registered()}
 	recorder := send(testServer(t, service), http.MethodPost, "/v1/organizations/org_1/sources",
-		`{"connection_id":"con_1","provider":"github","target":{"repository":"acme/api"},"interval_seconds":3600}`, bearer())
+		`{"provider":"files","target":{"team_id":"team_1"},"interval_seconds":3600}`, bearer())
 
 	if recorder.Code != http.StatusCreated {
 		t.Fatalf("POST /v1/organizations/org_1/sources = %d, want 201: %s", recorder.Code, recorder.Body)
@@ -184,7 +184,7 @@ func TestRegisterSourceAnswersWhatWasCreated(t *testing.T) {
 func TestRegisterSourceRefusesABodyItDoesNotUnderstand(t *testing.T) {
 	server := testServer(t, &fakeService{source: registered()})
 	recorder := send(server, http.MethodPost, "/v1/organizations/org_1/sources",
-		`{"provider":"github","surprise":true}`, bearer())
+		`{"provider":"files","surprise":true}`, bearer())
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("POST with an unknown field = %d, want 400", recorder.Code)
 	}
@@ -216,8 +216,6 @@ func TestFailuresBecomeTheDocumentedCodes(t *testing.T) {
 		{domain.ErrUnauthorized, http.StatusUnauthorized, "unauthorized"},
 		{domain.ErrForbidden, http.StatusForbidden, "forbidden"},
 		{domain.ErrNotFound, http.StatusNotFound, "not_found"},
-		{domain.ErrNeedsReconnect, http.StatusConflict, "needs_reconnect"},
-		{domain.ErrScopeRequired, http.StatusForbidden, "scope_required"},
 		{domain.ErrConflict, http.StatusConflict, "conflict"},
 		{domain.ErrCredentialRejected, http.StatusUnprocessableEntity, "credential_rejected"},
 		{domain.ErrRateLimited, http.StatusTooManyRequests, "rate_limited"},

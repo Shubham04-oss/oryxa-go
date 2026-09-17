@@ -8,7 +8,6 @@ import (
 
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
-	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/connectionsclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/transform"
@@ -291,20 +290,6 @@ func (s *Service) runFailed(ctx context.Context, source domain.Source, run domai
 		return nil
 	}
 
-	if pause, ok := pausedBy(cause); ok {
-		paused, err := s.sourcePaused(source, pause)
-		if err != nil {
-			return err
-		}
-		if _, err := s.store.PauseSources(ctx, "connection_id", source.ConnectionID, pause, now,
-			func(domain.Source) (domain.Event, error) { return paused, nil }); err != nil {
-			return err
-		}
-		s.connections.Forget(source.ConnectionID)
-		s.logger.WarnContext(ctx, "source paused", "source_id", source.ID, "reason", pause)
-		return nil
-	}
-
 	retryAt := now.Add(domain.RetryAfter(source.Attempts))
 	if _, err := s.store.FailSource(ctx, source.ID, lease, reason, now, retryAt, nil); err != nil {
 		return err
@@ -316,39 +301,26 @@ func (s *Service) runFailed(ctx context.Context, source domain.Source, run domai
 
 // credential is what the source is read with.
 //
-// A source with no connection is internal, and internal storage has no
-// service identity to accept: it is read as the member who registered it,
-// under the grant they gave.
+// Internal storage has no service identity to accept, so a source is read as
+// the member who registered it, under the grant they gave.
 func (s *Service) credential(ctx context.Context, source domain.Source) (domain.Credential, error) {
-	if source.ConnectionID == "" {
-		if s.grants == nil {
-			return domain.Credential{}, fmt.Errorf(
-				"reading %s acts as a member, and no grant is configured: %w", source.Provider, domain.ErrForbidden)
-		}
-		token, err := s.grants.MemberToken(ctx, source.OrganizationID, source.CreatedBy)
-		if err != nil {
-			return domain.Credential{}, err
-		}
-		return domain.Credential{
-			AccessToken: token, In: "header", Name: "Authorization", Prefix: "Bearer ",
-		}, nil
+	if s.grants == nil {
+		return domain.Credential{}, fmt.Errorf(
+			"reading %s acts as a member, and no grant is configured: %w", source.Provider, domain.ErrForbidden)
 	}
-	return s.connections.Token(ctx, connectionsclient.TokenRequest{
-		OrganizationID: source.OrganizationID,
-		ConnectionID:   source.ConnectionID,
-		Purpose:        domain.PurposeAction,
-		ActingMemberID: source.CreatedBy,
-	})
+	token, err := s.grants.MemberToken(ctx, source.OrganizationID, source.CreatedBy)
+	if err != nil {
+		return domain.Credential{}, err
+	}
+	return domain.Credential{
+		AccessToken: token, In: "header", Name: "Authorization", Prefix: "Bearer ",
+	}, nil
 }
 
 // syncError names what stopped a run in the caller's terms, and says whether
 // running it again unchanged could do better.
 func syncError(err error) (string, bool) {
 	switch {
-	case errors.Is(err, domain.ErrNeedsReconnect):
-		return knowledgev1.SyncErrorNeedsReconnect, false
-	case errors.Is(err, domain.ErrScopeRequired):
-		return knowledgev1.SyncErrorScopeRequired, false
 	case errors.Is(err, domain.ErrCredentialRejected):
 		return knowledgev1.SyncErrorCredentialRejected, false
 	case errors.Is(err, domain.ErrForbidden):

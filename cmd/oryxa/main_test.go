@@ -88,7 +88,7 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		{"billing", "/v1/billing/plans", http.StatusOK, `"unpaid"`},
 		{"connections", "/v1/providers", http.StatusOK, `"providers"`},
 		{"integrations", "/v1/catalog", http.StatusOK, `"providers"`},
-		{"knowledge", "/v1/sources/providers", http.StatusOK, `"github"`},
+		{"knowledge", "/v1/sources/providers", http.StatusOK, `"providers"`},
 		{"rag", "/v1/capabilities", http.StatusOK, `"embedding_providers"`},
 		// Every organization route wants a member before it does anything.
 		{"teams", "/v1/organizations/org_1/teams", http.StatusUnauthorized, ""},
