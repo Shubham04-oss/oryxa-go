@@ -431,36 +431,11 @@ func TestAppAndConnectLifecycle(t *testing.T) {
 
 	// Created 1 + connected 3 + client change 1 + needs-reconnect 3 + reconnected 1 +
 	// disconnected 1 + disabled 1 + deleted 1 + disconnected by the deletion 2.
-	claimed, err := store.ClaimOutbox(ctx, 100, "claim-token")
-	if err != nil || len(claimed) != 14 {
-		t.Fatalf("ClaimOutbox() = %d events, error = %v", len(claimed), err)
-	}
-	if again, err := store.ClaimOutbox(ctx, 100, "claim-token"); err != nil || len(again) != 0 {
-		t.Fatalf("second ClaimOutbox() = %d events, error = %v", len(again), err)
-	}
-	if marked, err := store.MarkOutboxPublished(ctx, claimed[0].ID, "claim-token"); err != nil || !marked {
-		t.Fatalf("MarkOutboxPublished() = %v, %v, want true", marked, err)
-	}
-	// The other 13 events are still held by the live claim just taken, so a
-	// different token owns none of them.
-	if marked, err := store.MarkOutboxPublished(ctx, claimed[1].ID, "someone-elses-claim"); err != nil || marked {
-		t.Fatalf("MarkOutboxPublished() under a foreign claim = %v, %v, want false", marked, err)
-	}
-	if marked, err := store.MarkOutboxFailed(ctx, claimed[1].ID, "claim-token", time.Minute, "throttled"); err != nil || !marked {
-		t.Fatalf("MarkOutboxFailed() = %v, %v, want true", marked, err)
-	}
-	// A failed event is held back for its retry delay before it is claimable
-	// again, and then it is claimable by anyone rather than by its old claim.
-	if again, err := store.ClaimOutbox(ctx, 100, "second-claim"); err != nil || len(again) != 0 {
-		t.Fatalf("ClaimOutbox() during the retry delay = %d events, error = %v, want 0", len(again), err)
-	}
-	if _, err := store.pool.Exec(ctx,
-		`UPDATE connections_outbox SET available_at = now() - interval '1 second' WHERE id = $1`, claimed[1].ID); err != nil {
-		t.Fatal(err)
-	}
-	again, err := store.ClaimOutbox(ctx, 100, "second-claim")
-	if err != nil || len(again) != 1 || again[0].ID != claimed[1].ID || again[0].Attempts != 1 {
-		t.Fatalf("ClaimOutbox() after the retry delay = %+v, error = %v, want just %s at 1 attempt", again, err, claimed[1].ID)
+	// internal/outbox's own tests cover claiming, marking and retrying; this
+	// only has to prove every one of those events was actually written.
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM connections_outbox`).Scan(&outboxCount); err != nil || outboxCount != 14 {
+		t.Fatalf("outbox events = %d, error = %v, want 14", outboxCount, err)
 	}
 }
 
@@ -500,8 +475,9 @@ func TestOutboxRejectsAnEventWithNoDetail(t *testing.T) {
 			if _, err := store.App(ctx, app.OrganizationID, app.ID); !errors.Is(err, domain.ErrNotFound) {
 				t.Fatalf("app survived the refused event: %v", err)
 			}
-			if claimed, err := store.ClaimOutbox(ctx, 10, "claim-token"); err != nil || len(claimed) != 0 {
-				t.Fatalf("ClaimOutbox() = %d events, %v, want 0", len(claimed), err)
+			var outboxCount int
+			if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM connections_outbox`).Scan(&outboxCount); err != nil || outboxCount != 0 {
+				t.Fatalf("outbox events = %d, error = %v, want 0", outboxCount, err)
 			}
 		})
 	}
@@ -582,59 +558,8 @@ func TestDeletePublishedOutboxKeepsPendingAndRecentEvents(t *testing.T) {
 	}
 }
 
-// TestOutboxClaimOwnershipSurvivesATakeover covers the claim TTL gap. A
-// dispatcher claims a batch, then stalls past the claim's life; another
-// replica's claim becomes available and it takes the events over. When the
-// first dispatcher finally marks its events, those marks must not touch rows
-// the second claim now owns — otherwise the stale dispatcher clears the live
-// claim and a third replica can claim and publish the same event again.
-func TestOutboxClaimOwnershipSurvivesATakeover(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Microsecond)
-
-	if _, err := store.pool.Exec(ctx, `
-		INSERT INTO connections_outbox (id, detail_type, detail, occurred_at)
-		VALUES ('evt_takeover', 'connections.app.created.v1', '{}', $1)`, now); err != nil {
-		t.Fatal(err)
-	}
-
-	first, err := store.ClaimOutbox(ctx, 10, "claim-one")
-	if err != nil || len(first) != 1 || first[0].ClaimToken != "claim-one" {
-		t.Fatalf("first ClaimOutbox() = %+v, %v", first, err)
-	}
-	// A second claim cannot see it while the first is live.
-	if second, err := store.ClaimOutbox(ctx, 10, "claim-two"); err != nil || len(second) != 0 {
-		t.Fatalf("ClaimOutbox() while claimed = %d events, %v, want 0", len(second), err)
-	}
-
-	// Stall past the claim's life, as a dispatcher that hangs would.
-	if _, err := store.pool.Exec(ctx,
-		`UPDATE connections_outbox SET locked_until = now() - interval '1 second' WHERE id = 'evt_takeover'`); err != nil {
-		t.Fatal(err)
-	}
-	taken, err := store.ClaimOutbox(ctx, 10, "claim-two")
-	if err != nil || len(taken) != 1 {
-		t.Fatalf("ClaimOutbox() after the claim expired = %d events, %v, want 1", len(taken), err)
-	}
-
-	// The stalls' marks are refused: they no longer own the row.
-	if marked, err := store.MarkOutboxPublished(ctx, "evt_takeover", "claim-one"); err != nil || marked {
-		t.Fatalf("stale MarkOutboxPublished() = %v, %v, want false", marked, err)
-	}
-	if marked, err := store.MarkOutboxFailed(ctx, "evt_takeover", "claim-one", time.Minute, "stale"); err != nil || marked {
-		t.Fatalf("stale MarkOutboxFailed() = %v, %v, want false", marked, err)
-	}
-	// The live claim still holds it, so the stall did not hand it to a third
-	// dispatcher.
-	if third, err := store.ClaimOutbox(ctx, 10, "claim-three"); err != nil || len(third) != 0 {
-		t.Fatalf("ClaimOutbox() after a stale mark = %d events, %v, want 0", len(third), err)
-	}
-	// The owner can still finish.
-	if marked, err := store.MarkOutboxPublished(ctx, "evt_takeover", "claim-two"); err != nil || !marked {
-		t.Fatalf("owner MarkOutboxPublished() = %v, %v, want true", marked, err)
-	}
-}
+// Claim ownership across a takeover, and the retry/mark mechanics generally,
+// are internal/outbox's own concern now: see table_integration_test.go.
 
 // TestOpenRequiredExtensions covers Open's requiredExtensions parameter,
 // which POSTGRES_REQUIRED_EXTENSIONS (see internal/host) passes through to
