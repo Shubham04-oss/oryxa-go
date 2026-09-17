@@ -106,3 +106,39 @@ func TestDispatcherMarksEachEvent(t *testing.T) {
 		t.Fatal("retryDelay() does not back off exponentially up to 64s")
 	}
 }
+
+// TestPublisherRefusesAnEventWithNoDetail keeps an envelope with no data off
+// the bus: encoding would turn a nil detail into "data":null and fail outright
+// on an empty one, so a subscriber would either receive nothing useful or the
+// dispatcher would retry an event that can never publish.
+func TestPublisherRefusesAnEventWithNoDetail(t *testing.T) {
+	at := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name string
+		data json.RawMessage
+	}{
+		{"no detail", nil},
+		{"empty detail", json.RawMessage{}},
+		{"malformed detail", json.RawMessage(`{"unterminated":`)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			client := &fakePutEvents{output: &eventbridge.PutEventsOutput{}}
+			event := domain.Event{ID: "evt_1", DetailType: "connections.app.created.v1", OccurredAt: at, Data: testCase.data}
+			if err := NewPublisher(client, "oryxa").PublishEvent(context.Background(), event); err == nil {
+				t.Fatalf("PublishEvent() with %s error = nil, want an error", testCase.name)
+			}
+			if client.input != nil {
+				t.Fatalf("PublishEvent() with %s still put an event on the bus", testCase.name)
+			}
+		})
+	}
+
+	client := &fakePutEvents{output: &eventbridge.PutEventsOutput{}}
+	event := domain.Event{ID: "evt_1", DetailType: "connections.app.created.v1", OccurredAt: at, Data: json.RawMessage(`{"app_id":"app_1"}`)}
+	if err := NewPublisher(client, "oryxa").PublishEvent(context.Background(), event); err != nil {
+		t.Fatalf("PublishEvent() with a valid detail error = %v", err)
+	}
+	if client.input == nil {
+		t.Fatal("PublishEvent() with a valid detail put nothing on the bus")
+	}
+}

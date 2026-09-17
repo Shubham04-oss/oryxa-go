@@ -445,3 +445,57 @@ func TestAppAndConnectLifecycle(t *testing.T) {
 		t.Fatalf("MarkOutboxFailed() error = %v", err)
 	}
 }
+
+// TestOutboxRejectsAnEventWithNoDetail checks that an event carrying no valid
+// JSON detail is refused before it reaches the database. Left to PostgreSQL, a
+// nil detail violates the column's NOT NULL and an empty one is invalid JSON:
+// both abort the whole business transaction, and neither code is one
+// mapWriteError recognises, so the caller would see an internal failure rather
+// than a refused request.
+func TestOutboxRejectsAnEventWithNoDetail(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	for _, testCase := range []struct {
+		name string
+		data json.RawMessage
+	}{
+		{"no detail", nil},
+		{"empty detail", json.RawMessage{}},
+		{"malformed detail", json.RawMessage(`{"unterminated":`)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			app := domain.App{
+				ID: "app_" + randomHex(4), OrganizationID: "org_outbox_detail", Provider: "google",
+				CredentialType: domain.CredentialOAuth2, ClientID: "client-1", EncryptedSecret: sealed("secret"),
+				Scopes: []string{"email"}, Status: domain.AppStatusActive, Revision: 1,
+				CreatedBy: "user-admin", CreatedAt: now, UpdatedAt: now,
+			}
+			event := testEvent("connections.app.created.v1", now)
+			event.Data = testCase.data
+			err := store.CreateApp(ctx, app, event)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("CreateApp() with %s error = %v, want ErrInvalid", testCase.name, err)
+			}
+			// The whole transaction must have rolled back: no app, no event.
+			if _, err := store.App(ctx, app.OrganizationID, app.ID); !errors.Is(err, domain.ErrNotFound) {
+				t.Fatalf("app survived the refused event: %v", err)
+			}
+			if claimed, err := store.ClaimOutbox(ctx, 10); err != nil || len(claimed) != 0 {
+				t.Fatalf("ClaimOutbox() = %d events, %v, want 0", len(claimed), err)
+			}
+		})
+	}
+
+	// A well-formed detail still works, so the guard is not refusing everything.
+	app := domain.App{
+		ID: "app_" + randomHex(4), OrganizationID: "org_outbox_detail", Provider: "google",
+		CredentialType: domain.CredentialOAuth2, ClientID: "client-1", EncryptedSecret: sealed("secret"),
+		Scopes: []string{"email"}, Status: domain.AppStatusActive, Revision: 1,
+		CreatedBy: "user-admin", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.CreateApp(ctx, app, testEvent("connections.app.created.v1", now)); err != nil {
+		t.Fatalf("CreateApp() with a valid detail error = %v", err)
+	}
+}

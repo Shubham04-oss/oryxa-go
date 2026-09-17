@@ -304,3 +304,86 @@ func TestReportConnection(t *testing.T) {
 		t.Fatalf("ReportConnection(missing) error = %v", err)
 	}
 }
+
+// TestStatusChangesClearTheRenewalLease checks that every transition which
+// takes a connection out of use also clears its renewal lease. MarkNeedsReconnect
+// always did; the disconnect paths did not, and ClaimCredentialDeletions waits
+// on that lease, so a lingering one (up to the 30s lease time) delayed the
+// cleanup that revokes a disconnected connection's grant.
+func TestStatusChangesClearTheRenewalLease(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	org := "org_lease"
+	app := createApp(t, store, org, "app_google", domain.CredentialOAuth2, now)
+
+	// leaseOf takes a long renewal lease and returns the connection.
+	leaseOf := func(t *testing.T, connection domain.Connection) domain.Connection {
+		t.Helper()
+		acquired, err := store.AcquireLease(ctx, org, connection.ID, connection.Version, "renew-lease", now, now.Add(time.Hour))
+		if err != nil || !acquired {
+			t.Fatalf("AcquireLease(%s) = %v, %v", connection.ID, acquired, err)
+		}
+		return connection
+	}
+	// assertNoLease fails when a lease is still set on the connection.
+	assertNoLease := func(t *testing.T, connectionID string) {
+		t.Helper()
+		var until *time.Time
+		if err := store.pool.QueryRow(ctx,
+			`SELECT refresh_lease_until FROM connections WHERE organization_id = $1 AND id = $2`,
+			org, connectionID).Scan(&until); err != nil {
+			t.Fatal(err)
+		}
+		if until != nil {
+			t.Fatalf("connection %s still holds a renewal lease until %v", connectionID, until)
+		}
+	}
+
+	t.Run("disconnect", func(t *testing.T) {
+		connection := createConnection(t, store, app, "con_disc", "user-1", "acct-disc", now)
+		leaseOf(t, connection)
+		disconnect(t, store, org, connection.ID, domain.DisconnectRequested, now)
+		assertNoLease(t, connection.ID)
+	})
+
+	t.Run("bulk disconnect", func(t *testing.T) {
+		connection := createConnection(t, store, app, "con_bulk", "user-2", "acct-bulk", now)
+		leaseOf(t, connection)
+		if _, err := store.DisconnectConnections(ctx, org, domain.OwnerFilter{MemberID: "user-2"},
+			domain.DisconnectMemberLeft, now, func(domain.Connection) (domain.Event, error) {
+				return testEvent("connections.connection.disconnected.v1", now), nil
+			}); err != nil {
+			t.Fatal(err)
+		}
+		assertNoLease(t, connection.ID)
+	})
+
+	t.Run("app deleted", func(t *testing.T) {
+		otherApp := createApp(t, store, org, "app_dropbox", domain.CredentialOAuth2, now)
+		connection := createConnection(t, store, otherApp, "con_appdel", "user-3", "acct-appdel", now)
+		leaseOf(t, connection)
+		if err := store.DeleteApp(ctx, org, otherApp.ID, now, testEvent("connections.app.deleted.v1", now),
+			func(domain.Connection) (domain.Event, error) {
+				return testEvent("connections.connection.disconnected.v1", now), nil
+			}); err != nil {
+			t.Fatal(err)
+		}
+		assertNoLease(t, connection.ID)
+	})
+
+	t.Run("client changed", func(t *testing.T) {
+		clientApp := createApp(t, store, org, "app_slack", domain.CredentialOAuth2, now)
+		connection := createConnection(t, store, clientApp, "con_client", "user-4", "acct-client", now)
+		leaseOf(t, connection)
+		updated := clientApp
+		updated.ClientID, updated.Revision, updated.UpdatedAt = "client-2", clientApp.Revision+1, now
+		if err := store.UpdateApp(ctx, updated, clientApp.Revision, domain.ReconnectClientChanged,
+			testEvent("connections.app.updated.v1", now), func(domain.Connection) (domain.Event, error) {
+				return testEvent("connections.connection.needs-reconnect.v1", now), nil
+			}); err != nil {
+			t.Fatal(err)
+		}
+		assertNoLease(t, connection.ID)
+	})
+}
