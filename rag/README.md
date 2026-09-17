@@ -406,15 +406,6 @@ document, wait for `rag.document.indexed.v1`, search, answer — against each
 provider in turn. Expect the model ids and the Bedrock reranker to be where it
 goes wrong first.
 
-## Packages with no tests
-
-| Package | Why it matters |
-| --- | --- |
-| `internal/application` | **The significant gap.** It holds every access rule — who may create, search, write to and delete a corpus at each scope — and those rules are currently only exercised indirectly, through the HTTP layer's fakes. They deserve tests of their own before anyone relies on them |
-| `internal/events` | Consumer, dispatcher and publisher, adapted from the files service where the same code is tested |
-| `internal/filesclient` | The fetch-as-the-caller path, including the size guard |
-| `internal/authclient`, `internal/teamsclient` | Near-verbatim copies of the files service's, which are tested there |
-
 ## Known limits
 
 Things that work as written, but are narrower than they will need to be.
