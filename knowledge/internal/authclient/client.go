@@ -21,6 +21,9 @@ const requestTimeout = 15 * time.Second
 
 const maxResponseBytes = 1 << 20
 
+// AccessCookieName is the cookie the web app signs a member in with.
+const AccessCookieName = "oryxa_access"
+
 // Credentials are how a caller proves who they are: a bearer token, or the
 // access cookie the web app sends.
 type Credentials struct {
@@ -28,8 +31,9 @@ type Credentials struct {
 	AccessCookie  string
 }
 
-func (credentials Credentials) empty() bool {
-	return credentials.Authorization == "" && credentials.AccessCookie == ""
+// Present says the caller offered something to be identified by.
+func (credentials Credentials) Present() bool {
+	return credentials.Authorization != "" || credentials.AccessCookie != ""
 }
 
 type Client struct {
@@ -52,7 +56,7 @@ type organizationResponse struct {
 // Membership answers what the caller is in an organization, and whether they
 // are an agent acting for a member rather than the member themselves.
 func (client *Client) Membership(ctx context.Context, organizationID string, credentials Credentials) (domain.OrgMembership, error) {
-	if credentials.empty() {
+	if !credentials.Present() {
 		return domain.OrgMembership{}, domain.ErrUnauthorized
 	}
 	path := "/v1/organizations/" + url.PathEscape(organizationID)
@@ -65,7 +69,7 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		request.Header.Set("Authorization", credentials.Authorization)
 	}
 	if credentials.AccessCookie != "" {
-		request.AddCookie(&http.Cookie{Name: "oryxa_access", Value: credentials.AccessCookie})
+		request.AddCookie(&http.Cookie{Name: AccessCookieName, Value: credentials.AccessCookie})
 	}
 
 	response, err := client.http.Do(request)
