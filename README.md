@@ -4,7 +4,7 @@ Oryxa is an AWS-backed Go monorepo. It starts with a single Go module and will g
 
 ## Service layout
 
-Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/auth`, `/billing`, `/connections`, `/email`, `/files`, `/integrations`, `/rag` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
+Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/auth`, `/billing`, `/connections`, `/email`, `/files`, `/integrations`, `/knowledge`, `/rag` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
 
 ```text
 /
@@ -15,6 +15,7 @@ Each service owns a lowercase, hyphen-free directory at the repository root. The
 ├── email/                 # Email delivery service
 ├── files/                 # Organization object storage on S3
 ├── integrations/          # Provider triggers and actions, over HTTP and MCP
+├── knowledge/             # Extracts documents from connected apps for retrieval
 ├── rag/                   # Corpora, chunking, embeddings and grounded answers
 ├── teams/                 # Teams service
 ├── contracts/             # Versioned event contracts services publish
@@ -65,8 +66,15 @@ registers, renews or removes something, or runs an action. Its contract lives
 in `integrations/README.md`. `/files` owns organization object storage: a
 private S3
 bucket, PostgreSQL metadata, and credential-free `oryxa.files` events. Other
-services never talk to the bucket; they ask files. `/rag` owns retrieval:
-corpora and the documents in them, the chunks they become, the vectors behind
+services never talk to the bucket; they ask files. `/knowledge` owns what has
+been extracted from an organization's connected apps and when: the sources a
+member asks to have indexed, the scheduled passes that read them a page at a
+time, and the `oryxa.knowledge` events a retrieval pipeline holds. A document
+is published only when its content hash changes, and it carries the scope of
+the connection it was read through, because that is who may read it. Knowledge
+stores no credential; it asks connections for one whenever it reads a
+provider. Its contract lives in `knowledge/README.md`. `/rag` owns
+retrieval: corpora and the documents in them, the chunks they become, the vectors behind
 those, and the grounded answers they support. A corpus pins its embedding
 provider, model, width and metric at creation and never changes them, because
 vectors from two models do not share a space. Vectors live in pgvector or in
@@ -116,8 +124,8 @@ Not yet:
 
 ## Shared PostgreSQL and observability
 
-Auth, billing, connections, files, integrations, rag, teams and the ADK session
-runtime use `/internal/postgreskit`. Each process owns one native `pgxpool`; `sqlx` wraps
+Auth, billing, connections, files, integrations, knowledge, rag, teams and the
+ADK session runtime use `/internal/postgreskit`. Each process owns one native `pgxpool`; `sqlx` wraps
 that same pool through pgx's `database/sql` adapter, so it does not create a
 second connection budget. PostgreSQL statements and transactions remain on
 native pgx where its semantics matter. ADK's GORM session service shares that
