@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,22 @@ func bearer() map[string]string {
 	return map[string]string{"Authorization": "Bearer member-token", "Content-Type": "application/json"}
 }
 
+func TestPatternsNameEveryRoute(t *testing.T) {
+	server := New(&fakeService{}, Config{}, nil)
+	patterns := server.Patterns()
+	if len(patterns) < 8 {
+		t.Fatalf("patterns = %v", patterns)
+	}
+	wildcards := regexp.MustCompile(`\{[^}]+\}`)
+	for _, pattern := range patterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		request := httptest.NewRequest(method, wildcards.ReplaceAllString(path, "x"), nil)
+		if _, matched := server.mux.Handler(request); matched != pattern {
+			t.Errorf("%s routes to %q", pattern, matched)
+		}
+	}
+}
+
 func TestHealthzAnswersWithoutACaller(t *testing.T) {
 	recorder := send(testServer(t, &fakeService{}), http.MethodGet, "/healthz", "", nil)
 	if recorder.Code != http.StatusNoContent {
@@ -98,9 +115,9 @@ func TestHealthzAnswersWithoutACaller(t *testing.T) {
 func TestProvidersAreReadableBeforeACallerHasAnything(t *testing.T) {
 	// A caller needs to know what can be indexed before it has a connection
 	// to index through, so this route holds nothing of any organization.
-	recorder := send(testServer(t, &fakeService{}), http.MethodGet, "/v1/providers", "", nil)
+	recorder := send(testServer(t, &fakeService{}), http.MethodGet, "/v1/sources/providers", "", nil)
 	if recorder.Code != http.StatusOK {
-		t.Fatalf("GET /v1/providers = %d, want 200", recorder.Code)
+		t.Fatalf("GET /v1/sources/providers = %d, want 200", recorder.Code)
 	}
 	var answer struct {
 		Providers []string `json:"providers"`

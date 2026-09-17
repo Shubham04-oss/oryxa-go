@@ -9,19 +9,13 @@ Ordered by what stops you first.
 
 ---
 
-## 1. Nothing runs until these exist
+## 1. What still blocks every pass
 
-None of this is a bug. The service was built as a library on purpose, because
-the services are being consolidated into a single binary and the wiring is
-exactly what that changes. `knowledge/service.go` is the shape that wiring
-mounts.
-
-| Missing | Where it goes | Notes |
-| --- | --- | --- |
-| Entrypoint | `knowledge/cmd/knowledge/` | Or a mount in the shared binary's composition root. `service.go` already exposes `Name`/`Migrate`/`Handler`/`Workers`/`Consumer`. |
-| Queue provisioner | `knowledge/infra/events/` | Queue, dead-letter queue, and an EventBridge rule built from `knowledge.Subscriptions()`. Copy `integrations/infra/events/` and rename. |
-| Environment template | `knowledge/.env.example` | Only needed once there is a process to configure. |
-| Compose overlay | `compose.knowledge.yaml` | Optional — `integrations` has none and runs with `go run`. |
+The wiring is done. `knowledge/service.go` exposes `Definition`, `Migrate`
+and `Mount` — the shape `cmd/oryxa` mounts every service with, proven first
+by `teams` and now adopted here. `knowledge/infra/events` provisions its
+queue, and the root `.env.example` documents its variables. What is left is
+not a wiring gap; it is work nobody has done yet.
 
 **Two prerequisites live outside this repo and outside this service.** Both
 fail loudly rather than quietly, but both fail everything.
@@ -140,13 +134,15 @@ sync semantics, the event dedupe, the error mapping.
 
 What is not:
 
-- **`knowledge` (the seam) and `internal/authclient` have no tests.** The seam
-  is mostly assembly; authclient is a thin HTTP client that should get the
-  same treatment as `filesclient` and `connectionsclient`, which do have them.
+- **`internal/authclient` has no tests.** `knowledge/service_test.go` now
+  covers the seam — `Migrate` and `Mount`, including the routes and workers
+  `Mount` builds — but authclient is still a thin HTTP client that should get
+  the same treatment as `filesclient` and `connectionsclient`, which do have
+  them.
 - **No end-to-end test.** Other services have an `internal/e2e` that runs the
   HTTP API, the application, the store and the adapters together against a
-  fake provider. This service should have one; it is the test most likely to
-  catch a wiring mistake once the entrypoint exists.
+  fake provider. This service should have one; now that the entrypoint
+  exists, it is the test most likely to catch a wiring mistake.
 - **No live provider tests.** `integrations/internal/e2e/live_test.go` is the
   pattern: skipped unless credentials are in the environment, creating and
   cleaning up real resources. Nothing here has run against a real GitHub,
@@ -187,12 +183,15 @@ it fires less often than you would want today.
    Microsoft Graph and richer Notion content. `go.mod` is untouched by this
    whole branch, deliberately.
 2. **Adopt the `Name`/`Migrate`/`Handler`/`Workers` seam across the other
-   seven services?** It was proven here because this one is greenfield. The
-   alternative is designing it during the consolidation itself, with seven
-   services in flight.
+   seven services?** Decided: yes. It was proven here because this one was
+   greenfield; `teams` adopted it first (`teams/service.go`), and this
+   service now follows with `Definition`, `Migrate` and `Mount` in
+   `knowledge/service.go` and `knowledge/mount.go` — the shape `internal/host`
+   expects from every service it mounts.
 3. **How often should a source do a full sweep?** See §2. Weekly is a guess.
 4. **Where do document bodies live long-term?** Postgres today; see §4.
-5. **Should background workers drain on shutdown everywhere?** This service
-   hands workers back so a host can wait for them. Every existing service
-   starts them fire-and-forget and lets the process exit mid-flight. That is a
-   real gap in those services, not a pattern this one should have copied.
+5. **Should background workers drain on shutdown everywhere?** Decided: yes,
+   and it turned out not to be each service's call — `internal/host`'s
+   `serve` stops every mounted service's workers together and waits for them
+   on the way down, so the gap this bullet pointed at is closed process-wide,
+   not only for the service that happened to hand its workers back.
