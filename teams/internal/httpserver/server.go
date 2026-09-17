@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -48,6 +49,7 @@ type Server struct {
 	allowedOrigins map[string]struct{}
 	logger         *slog.Logger
 	mux            *http.ServeMux
+	patterns       []string
 }
 
 func New(service teamsService, config Config, logger *slog.Logger) *Server {
@@ -66,29 +68,39 @@ func New(service teamsService, config Config, logger *slog.Logger) *Server {
 		}
 	}
 
-	server.mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+	server.handle("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/tools", server.tools)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/tools/{name}", server.callTool)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams", server.teams)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/teams", server.createTeam)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/members/search", server.searchMembers)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/search", server.searchTeams)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/teams/nearest", server.nearestTeams)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/{teamID}", server.team)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/{teamID}/descendants", server.descendants)
-	server.mux.HandleFunc("PUT /v1/organizations/{organizationID}/teams/{teamID}/embedding", server.setEmbedding)
-	server.mux.HandleFunc("PATCH /v1/organizations/{organizationID}/teams/{teamID}", server.updateTeam)
-	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/teams/{teamID}", server.deleteTeam)
-	server.mux.HandleFunc("PATCH /v1/organizations/{organizationID}/teams/{teamID}/notification", server.setNotification)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/{teamID}/members/descendants", server.memberDescendants)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/teams/{teamID}/members", server.members)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/teams/{teamID}/members", server.addMember)
-	server.mux.HandleFunc("PATCH /v1/organizations/{organizationID}/teams/{teamID}/members/{userID}", server.changeRole)
-	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/teams/{teamID}/members/{userID}", server.removeMember)
+	server.handle("GET /v1/organizations/{organizationID}/tools", server.tools)
+	server.handle("POST /v1/organizations/{organizationID}/tools/{name}", server.callTool)
+	server.handle("GET /v1/organizations/{organizationID}/teams", server.teams)
+	server.handle("POST /v1/organizations/{organizationID}/teams", server.createTeam)
+	server.handle("GET /v1/organizations/{organizationID}/members/search", server.searchMembers)
+	server.handle("GET /v1/organizations/{organizationID}/teams/search", server.searchTeams)
+	server.handle("POST /v1/organizations/{organizationID}/teams/nearest", server.nearestTeams)
+	server.handle("GET /v1/organizations/{organizationID}/teams/{teamID}", server.team)
+	server.handle("GET /v1/organizations/{organizationID}/teams/{teamID}/descendants", server.descendants)
+	server.handle("PUT /v1/organizations/{organizationID}/teams/{teamID}/embedding", server.setEmbedding)
+	server.handle("PATCH /v1/organizations/{organizationID}/teams/{teamID}", server.updateTeam)
+	server.handle("DELETE /v1/organizations/{organizationID}/teams/{teamID}", server.deleteTeam)
+	server.handle("PATCH /v1/organizations/{organizationID}/teams/{teamID}/notification", server.setNotification)
+	server.handle("GET /v1/organizations/{organizationID}/teams/{teamID}/members/descendants", server.memberDescendants)
+	server.handle("GET /v1/organizations/{organizationID}/teams/{teamID}/members", server.members)
+	server.handle("POST /v1/organizations/{organizationID}/teams/{teamID}/members", server.addMember)
+	server.handle("PATCH /v1/organizations/{organizationID}/teams/{teamID}/members/{userID}", server.changeRole)
+	server.handle("DELETE /v1/organizations/{organizationID}/teams/{teamID}/members/{userID}", server.removeMember)
 	return server
 }
+
+// handle registers a route and remembers its pattern, so a host serving
+// several services knows which paths are this one's.
+func (server *Server) handle(pattern string, handler http.HandlerFunc) {
+	server.mux.HandleFunc(pattern, handler)
+	server.patterns = append(server.patterns, pattern)
+}
+
+// Patterns lists every route the server registered.
+func (server *Server) Patterns() []string { return slices.Clone(server.patterns) }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
