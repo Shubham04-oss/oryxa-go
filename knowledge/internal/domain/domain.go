@@ -89,6 +89,11 @@ type Purpose string
 
 const PurposeAction Purpose = "action"
 
+// RenewBefore is how long before a credential lapses it stops being used.
+// Connections renews inside this window itself, so a caller holding one any
+// longer would be using a token connections has already replaced.
+const RenewBefore = 2 * time.Minute
+
 // Credential is a token connections issued for a connection, with where it
 // goes on a request.
 type Credential struct {
