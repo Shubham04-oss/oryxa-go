@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -17,12 +18,22 @@ import (
 func platform(values map[string]string) host.Platform {
 	return host.Platform{
 		Logger: slog.New(slog.DiscardHandler),
-		// Mounting builds the store but never queries it.
-		Database:     &postgreskit.Database{},
+		// Mounting builds the store but never queries it: the pool just has to
+		// be non-nil, for building the outbox table, which pgxpool.New leaves
+		// true without dialing anything (it only dials lazily, on first use).
+		Database:     &postgreskit.Database{Pool: unconnectedPool()},
 		AWS:          aws.Config{Region: "ap-south-1"},
 		EventBusName: "default",
 		Getenv:       func(name string) string { return values[name] },
 	}
+}
+
+func unconnectedPool() *pgxpool.Pool {
+	pool, err := pgxpool.New(context.Background(), "postgres://unused@127.0.0.1:1/unused")
+	if err != nil {
+		panic(err)
+	}
+	return pool
 }
 
 func TestMountServesFilesRoutesAndRunsItsWorkers(t *testing.T) {

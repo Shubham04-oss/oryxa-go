@@ -12,12 +12,14 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/files/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/blob"
+	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/teamsclient"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
 
 // Name is how ORYXA_SERVICES selects files.
@@ -54,7 +56,14 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}
 	service := application.New(store, blobs, authclient.New(config.AuthURL), teams, logger)
 
-	dispatcher := events.NewDispatcher(store, events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName), logger)
+	publisher := events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName)
+	table, err := outbox.NewTable(store.Pool(), "files_outbox")
+	if err != nil {
+		return host.Service{}, err
+	}
+	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
+		return publisher.PublishEvent(ctx, domain.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+	}), logger)
 	workers := []host.Worker{dispatcher.Run}
 	if config.EventsQueueURL != "" {
 		consumer := events.NewConsumer(service, logger)
