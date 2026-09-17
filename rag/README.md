@@ -362,13 +362,103 @@ For Vertex AI it needs application default credentials for a service account
 with `aiplatform.endpoints.predict` in `GOOGLE_CLOUD_PROJECT`, the same project
 the agents service uses.
 
+## What has and has not been run
+
+Everything here builds, vets and passes its tests. That is not the same as
+having run, and the difference matters more in this service than in most,
+because the expensive paths are the ones that talk to a provider.
+
+**Verified against a real dependency.** The migrations, the store and the
+pgvector backend run against PostgreSQL 16 with pgvector 0.8: corpus and
+document lifecycles, incremental re-embedding, hybrid search, tenant scoping,
+the `halfvec` path at 3072 dimensions, the unindexed fallback width, and the
+cascade from a deleted document to its vectors. The two pgvector index
+ceilings in the schema — 2000 for `vector`, 4000 for `halfvec` — were measured
+there rather than assumed.
+
+**Not run against the real thing.** Each of these is covered by a fake or a
+stub server, which proves the request shape this code builds and the response
+shape it reads, and proves nothing about whether the provider agrees:
+
+| Path | What stands in for it | What is unverified |
+| --- | --- | --- |
+| Bedrock embedding (Titan, Cohere) | A fake `InvokeModel` | Request bodies, response shapes, throttling behaviour, real model ids |
+| Vertex embedding | An `httptest` server | The `:predict` contract, ADC auth, per-model batch limits |
+| Bedrock answering (`Converse`) | A fake `Converse` | Whether the grounding prompt holds, real model ids, guardrail behaviour |
+| Vertex answering (`generateContent`) | An `httptest` server | The same, plus ADC auth |
+| Bedrock reranking | Nothing beyond construction | The whole call. This is the least exercised code in the service |
+| S3 Vectors | A fake client | Index creation, metadata filters, batch limits, the real 3–63 character index name rules |
+| The provisioner | Unit tests on its pattern and policy | It has never created anything, on AWS or on LocalStack |
+
+S3 Vectors has no local emulation available: the LocalStack container in the
+root `docker-compose.yml` runs `events,sqs,dynamodb,s3`, and S3 Vectors is not
+among them. Exercising that backend means a real AWS account.
+
+The first live run should be a small corpus end to end — create, add one
+document, wait for `rag.document.indexed.v1`, search, answer — against each
+provider in turn. Expect the model ids and the Bedrock reranker to be where it
+goes wrong first.
+
+## Packages with no tests
+
+| Package | Why it matters |
+| --- | --- |
+| `internal/application` | **The significant gap.** It holds every access rule — who may create, search, write to and delete a corpus at each scope — and those rules are currently only exercised indirectly, through the HTTP layer's fakes. They deserve tests of their own before anyone relies on them |
+| `internal/events` | Consumer, dispatcher and publisher, adapted from the files service where the same code is tested |
+| `internal/filesclient` | The fetch-as-the-caller path, including the size guard |
+| `internal/authclient`, `internal/teamsclient` | Near-verbatim copies of the files service's, which are tested there |
+
+## Known limits
+
+Things that work as written, but are narrower than they will need to be.
+
+- **No re-index path.** A corpus pins its embedding spec for good reason, but
+  there is nothing that moves a corpus to a new model: no dual-write, no
+  backfill, no alias to switch. Today that means creating a second corpus and
+  re-adding every document, which an upstream pipeline can do but nothing here
+  helps with.
+- **The text search configuration is fixed at `english`.** It is a stored
+  generated column, so changing it is a migration, not a setting. A corpus that
+  is mostly in another language gets worse lexical recall and nothing says so.
+- **Document listing is capped at 200 with no cursor.** Enough to look at a
+  corpus, not enough to walk one.
+- **Answers do not stream.** A long answer holds the request open for as much
+  as the 180-second write timeout allows.
+- **Guardrails are wired on the Bedrock answering path only.** A Vertex answer
+  goes through Vertex's own safety settings and nothing of Oryxa's.
+- **No per-organization quota or rate limit on embedding spend.** One large
+  ingest can consume a shared provider quota; the concurrency and retry limits
+  are per-process, not per-tenant.
+- **`rag_vectors_other` is an exact scan.** A corpus whose width has no table of
+  its own is correct and will be slow in proportion to its size, and only a log
+  line at ingest says so.
+- **Token counts are a heuristic**, not a tokenizer. They are biased to
+  over-count so chunks land under the model's limit, which means chunks are
+  slightly smaller than the budget asks for.
+- **No k6 journey.** `/test` covers teams, files and email; rag is not in it.
+
+## Open decisions
+
+These need a person, not a commit.
+
+- **Where extraction lives.** Rag takes extracted text and refuses anything
+  else, on the reasoning that doing it in two places would mean two answers
+  about what a document says. If extraction should instead live here, that
+  changes the service's shape and the accepted content types, and is worth
+  settling before more is built on the current boundary.
+- **Whether reranking should default on.** It is the largest quality gain per
+  query and the largest latency cost. It is opt-in today because that trade
+  belongs to whoever is watching the latency.
+- **Whether the answering model should have a default.** There is none, so a
+  deployment that forgets it retrieves but cannot answer. The alternative — a
+  guessed model id — fails at the first question instead of at startup, which
+  seemed the worse of the two.
+
 ## Not yet
 
 - The `agents/primary` toolbox: nothing lets Krude search a corpus or cite from
-  one, so an agent cannot yet answer from an organization's own documents.
-- Extraction. PDFs, spreadsheets and rendered pages have to arrive as text.
-- Live runs. The pgvector backend, the store and the chunker are tested against
-  a real PostgreSQL; the Bedrock and Vertex paths are tested against fakes and
-  stub servers, and have not been run against the real providers.
-- A corpus-level text search configuration, for a corpus that is mostly not in
-  English.
+  one, so an agent cannot yet answer from an organization's own documents. This
+  is the obvious next piece.
+- A web screen: corpora, documents and their ingest status have an API and no
+  interface.
+- Extraction, as above.
