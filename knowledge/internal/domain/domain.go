@@ -129,9 +129,11 @@ const UsageAdmins = "admins"
 type Source struct {
 	ID             string `json:"id"`
 	OrganizationID string `json:"organization_id"`
-	// ConnectionID is what the source is read through. An internal source,
-	// such as the organization's own files, has none.
+	// ConnectionID is what the source is read through, and AppID the app that
+	// connection belongs to. An internal source, such as the organization's
+	// own files, has neither.
 	ConnectionID string `json:"connection_id,omitempty"`
+	AppID        string `json:"app_id,omitempty"`
 	Provider     string `json:"provider"`
 	// Target is what to index at the provider, in the provider's terms, such
 	// as {"repository": "acme/api"}.
@@ -192,7 +194,10 @@ type Document struct {
 	Metadata        map[string]string `json:"metadata,omitempty"`
 	SourceUpdatedAt *time.Time        `json:"source_updated_at,omitempty"`
 	ExtractedAt     time.Time         `json:"extracted_at"`
-	RemovedAt       *time.Time        `json:"removed_at,omitempty"`
+	// LastSeenAt is when a run last read this document at its source. A
+	// document a full pass did not see is one the source no longer holds.
+	LastSeenAt time.Time  `json:"last_seen_at"`
+	RemovedAt  *time.Time `json:"removed_at,omitempty"`
 }
 
 // Cursor is where a run stopped, so the next one carries on rather than
