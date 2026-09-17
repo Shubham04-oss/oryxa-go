@@ -45,7 +45,4 @@ type Store interface {
 	ApplyEntitlements(ctx context.Context, organizationID string, revision int64, memberLimit *int, changedAt time.Time) error
 
 	EnqueueEvent(context.Context, domain.Event) error
-	ClaimOutbox(context.Context, int) ([]domain.OutboxEvent, error)
-	MarkOutboxPublished(context.Context, string) error
-	MarkOutboxFailed(context.Context, string, time.Duration, string) error
 }

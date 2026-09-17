@@ -2,9 +2,7 @@ package events
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
@@ -83,55 +81,4 @@ func (outbox *Outbox) RecordEvents(ctx context.Context, events []Event) error {
 		return fmt.Errorf("commit outbox transaction: %w", err)
 	}
 	return nil
-}
-
-type outboxRow struct {
-	ID         string          `db:"id"`
-	DetailType string          `db:"detail_type"`
-	Detail     json.RawMessage `db:"detail"`
-	OccurredAt time.Time       `db:"occurred_at"`
-	Attempts   int             `db:"attempts"`
-}
-
-// ClaimOutbox claims up to limit available events, locking them for 30
-// seconds so replicas do not publish the same row at once. The dispatcher
-// built in cmd/devui/main.go no longer calls this: it claims and marks
-// through internal/outbox instead, with a claim token this does not carry.
-// This stays because adksession's own integration test reads a session's
-// event back through it; deleting it needs that test changed too, outside
-// this change's scope.
-func (outbox *Outbox) ClaimOutbox(ctx context.Context, limit int) ([]OutboxEvent, error) {
-	var rows []outboxRow
-	err := outbox.database.SQLX.SelectContext(ctx, &rows, `
-		WITH picked AS (
-			SELECT id
-			FROM `+schema+`.agents_outbox
-			WHERE published_at IS NULL
-			  AND available_at <= now()
-			  AND (locked_until IS NULL OR locked_until < now())
-			ORDER BY occurred_at, id
-			FOR UPDATE SKIP LOCKED
-			LIMIT $1
-		)
-		UPDATE `+schema+`.agents_outbox AS event
-		SET locked_until = now() + interval '30 seconds'
-		FROM picked
-		WHERE event.id = picked.id
-		RETURNING event.id, event.detail_type, event.detail, event.occurred_at, event.attempts`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("claim outbox: %w", err)
-	}
-	events := make([]OutboxEvent, 0, len(rows))
-	for _, row := range rows {
-		events = append(events, OutboxEvent{
-			Event: Event{
-				ID:         row.ID,
-				DetailType: row.DetailType,
-				OccurredAt: row.OccurredAt,
-				Data:       row.Detail,
-			},
-			Attempts: row.Attempts,
-		})
-	}
-	return events, nil
 }

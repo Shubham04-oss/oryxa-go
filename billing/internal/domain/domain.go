@@ -118,11 +118,6 @@ type Event struct {
 	Data       json.RawMessage
 }
 
-type OutboxEvent struct {
-	Event
-	Attempts int
-}
-
 // Renewal is an active subscription whose next billing date is close.
 type Renewal struct {
 	Subscription     Subscription

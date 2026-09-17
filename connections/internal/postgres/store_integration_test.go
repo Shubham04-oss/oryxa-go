@@ -494,72 +494,8 @@ func TestOutboxRejectsAnEventWithNoDetail(t *testing.T) {
 	}
 }
 
-// TestDeletePublishedOutboxKeepsPendingAndRecentEvents checks the sweep that
-// stops the outbox growing once per connection change for ever. It must remove
-// only events that actually reached the bus and are past the retention window:
-// a pending event has not been delivered, and a recent published one is still
-// useful for explaining a delivery.
-func TestDeletePublishedOutboxKeepsPendingAndRecentEvents(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-	now := time.Now().UTC().Truncate(time.Microsecond)
-
-	// Three events: one published long ago, one published just now, one never
-	// published.
-	if _, err := store.pool.Exec(ctx, `
-		INSERT INTO connections_outbox (id, detail_type, detail, occurred_at, published_at) VALUES
-			('evt_old',    'connections.app.created.v1', '{}', $1, $2),
-			('evt_recent', 'connections.app.created.v1', '{}', $1, $1),
-			('evt_pending','connections.app.created.v1', '{}', $1, NULL)`,
-		now, now.Add(-30*24*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-
-	deleted, err := store.DeletePublishedOutbox(ctx, now.Add(-7*24*time.Hour), 500)
-	if err != nil {
-		t.Fatalf("DeletePublishedOutbox() error = %v", err)
-	}
-	if deleted != 1 {
-		t.Fatalf("DeletePublishedOutbox() deleted %d, want 1", deleted)
-	}
-
-	remaining := map[string]bool{}
-	rows, err := store.pool.Query(ctx, `SELECT id FROM connections_outbox`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			t.Fatal(err)
-		}
-		remaining[id] = true
-	}
-	if remaining["evt_old"] {
-		t.Error("a published event past the retention window was kept")
-	}
-	if !remaining["evt_recent"] {
-		t.Error("a recently published event was removed")
-	}
-	if !remaining["evt_pending"] {
-		t.Error("an undelivered event was removed")
-	}
-
-	// The sweep is bounded, so a large backlog is worked off over runs.
-	if _, err := store.pool.Exec(ctx, `
-		INSERT INTO connections_outbox (id, detail_type, detail, occurred_at, published_at)
-		SELECT 'evt_bulk_'||g, 'connections.app.created.v1', '{}', $1, $2
-		FROM generate_series(0, 9) g`, now, now.Add(-30*24*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
-	if deleted, err := store.DeletePublishedOutbox(ctx, now.Add(-7*24*time.Hour), 4); err != nil || deleted != 4 {
-		t.Fatalf("bounded DeletePublishedOutbox() deleted %d, %v, want 4", deleted, err)
-	}
-}
-
-// Claim ownership across a takeover, and the retry/mark mechanics generally,
-// are internal/outbox's own concern now: see table_integration_test.go.
+// Claiming, marking, retrying and forgetting published events are
+// internal/outbox's concern now: see its table_integration_test.go.
 
 // TestOpenRequiredExtensions covers Open's requiredExtensions parameter,
 // which POSTGRES_REQUIRED_EXTENSIONS (see internal/host) passes through to

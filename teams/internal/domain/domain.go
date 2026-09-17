@@ -120,8 +120,3 @@ type Event struct {
 	OccurredAt time.Time
 	Data       json.RawMessage
 }
-
-type OutboxEvent struct {
-	Event
-	Attempts int
-}

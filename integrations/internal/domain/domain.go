@@ -202,11 +202,6 @@ type Event struct {
 	Data       json.RawMessage
 }
 
-type OutboxEvent struct {
-	Event
-	Attempts int
-}
-
 const (
 	// MaxTargetFields and MaxTargetValue bound what a subscription watches.
 	MaxTargetFields = 8

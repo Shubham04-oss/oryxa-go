@@ -220,7 +220,7 @@ nothing itself — no query, no goroutine, no listener — which is what
 `knowledge.Mount` calls:
 
 ```go
-service := knowledge.New(knowledge.Dependencies{
+service, err := knowledge.New(knowledge.Dependencies{
 	Store:       store,
 	Directory:   authclient.New(config.AuthURL),
 	Connections: connectionsclient.New(config.ConnectionsURL, signer),
@@ -229,6 +229,7 @@ service := knowledge.New(knowledge.Dependencies{
 	Extractors:  knowledge.Builtin(),
 	Logger:      logger,
 }, knowledge.Config{AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval})
+if err != nil { return err }
 
 if err := service.Migrate(ctx); err != nil { return err }
 mux.Handle("/", service.Handler())

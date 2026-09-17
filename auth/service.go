@@ -107,13 +107,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 	})
 	publisher := authevents.NewPublisher(eventBridge, platform.EventBusName, autheventsv1.Source)
-	table, err := outbox.NewTable(store.Pool(), "auth_outbox", outbox.RedactOnPublish(
-		// These carry a single-use delivery link or token, needed only until
-		// the notification is sent.
-		autheventsv1.EmailVerificationDeliveryRequestedDetailType,
-		autheventsv1.PasswordResetDeliveryRequestedDetailType,
-		autheventsv1.MemberInvitedDetailType,
-	))
+	table, err := store.OutboxTable()
 	if err != nil {
 		return host.Service{}, err
 	}

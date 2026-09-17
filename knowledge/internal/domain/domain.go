@@ -270,11 +270,6 @@ type Event struct {
 	Data       json.RawMessage
 }
 
-type OutboxEvent struct {
-	Event
-	Attempts int
-}
-
 const (
 	// MinInterval and MaxInterval bound how often a source may be swept.
 	MinInterval     = 5 * time.Minute

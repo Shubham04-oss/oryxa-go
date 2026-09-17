@@ -260,11 +260,6 @@ type Event struct {
 	Data       json.RawMessage
 }
 
-type OutboxEvent struct {
-	Event
-	Attempts int
-}
-
 func Filename(raw string) (string, error) {
 	name := strings.TrimSpace(raw)
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\:`) {

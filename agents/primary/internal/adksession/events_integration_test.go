@@ -49,26 +49,17 @@ func TestPostgresSessionWritesOutboxEvents(t *testing.T) {
 		_, _ = store.Database().SQLX.ExecContext(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'session_id' = $1`, sessionID)
 	}()
 
-	claimed, err := outbox.ClaimOutbox(ctx, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var createdEvent *events.OutboxEvent
-	for index := range claimed {
-		var payload agentsv1.SessionCreated
-		if err := json.Unmarshal(claimed[index].Data, &payload); err != nil {
-			continue
-		}
-		if claimed[index].DetailType == agentsv1.SessionCreatedDetailType && payload.SessionID == sessionID {
-			createdEvent = &claimed[index]
-			break
-		}
-	}
-	if createdEvent == nil {
-		t.Fatalf("no %s event for session %s in the outbox", agentsv1.SessionCreatedDetailType, sessionID)
+	// Read the event back without claiming anything: this table is shared,
+	// and a claim would hold other rows from a running dispatcher.
+	var detail json.RawMessage
+	if err := store.Database().SQLX.QueryRowContext(ctx, `
+		SELECT detail FROM agents_primary.agents_outbox
+		WHERE detail_type = $1 AND detail->>'session_id' = $2`,
+		agentsv1.SessionCreatedDetailType, sessionID).Scan(&detail); err != nil {
+		t.Fatalf("no %s event for session %s in the outbox: %v", agentsv1.SessionCreatedDetailType, sessionID, err)
 	}
 	var payload agentsv1.SessionCreated
-	if err := json.Unmarshal(createdEvent.Data, &payload); err != nil {
+	if err := json.Unmarshal(detail, &payload); err != nil {
 		t.Fatal(err)
 	}
 	if payload.UserID != t.Name() || payload.OrganizationID != "org_events_test" || payload.AppName != "krude-events-test" {

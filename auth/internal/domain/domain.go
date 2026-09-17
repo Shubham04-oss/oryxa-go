@@ -142,11 +142,6 @@ type Event struct {
 	Data       json.RawMessage
 }
 
-type OutboxEvent struct {
-	Event
-	Attempts int
-}
-
 // SealedData is an envelope-encrypted value. The plaintext data key is never
 // stored; EncryptedDataKey opens only with the same KMS encryption context.
 type SealedData struct {

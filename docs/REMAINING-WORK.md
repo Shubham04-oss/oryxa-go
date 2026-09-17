@@ -97,17 +97,14 @@ established that five of the 13 cannot be built, and it caught that Atlassian's
 current path generation is `2026-09` rather than `v3`. All three would have
 been live bugs.
 
-## Open: a cross-cutting problem, fixed in only one service
+## Closed: a cross-cutting problem, fixed in only one service
 
-**The outbox pattern is duplicated across seven services** — `auth`, `billing`,
-`files`, `integrations`, `teams`, `agents/primary` and `connections` — and the
-anonymous-claim and missing-retention problems found in connections exist in
-all of them. Only connections was fixed, because it was the service in scope.
-
-The string form of that fix belongs in `/internal/postgreskit` so all seven
-share one implementation. Seven near-identical patches is the worse outcome.
-This was flagged and deliberately not started, because it touches services
-outside the task.
+The outbox was duplicated across nine services, and the anonymous-claim and
+missing-retention problems found in connections existed in all of them. They
+now share one implementation, `/internal/outbox`: owned claims, token-guarded
+marks, a week's retention, and a dispatcher that hands back what it never
+started when it stops. Its SQL is tested against PostgreSQL, including four
+dispatchers claiming at once.
 
 ## Open: test coverage known to be missing
 
