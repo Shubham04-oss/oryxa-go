@@ -62,9 +62,6 @@ func (store *Store) Sources(ctx context.Context, organizationID string, query do
 	if !query.Admin {
 		sql += ` AND created_by = ` + bind(query.CreatedBy)
 	}
-	if query.ConnectionID != "" {
-		sql += ` AND connection_id = ` + bind(query.ConnectionID)
-	}
 	if query.Provider != "" {
 		sql += ` AND provider = ` + bind(query.Provider)
 	}
@@ -163,42 +160,6 @@ func (store *Store) FailSource(ctx context.Context, sourceID, leaseToken, reason
 		return nil
 	})
 	return claimed, err
-}
-
-// PauseSources stops every live source reading through what went away, and
-// writes one event for each. Running it again pauses nothing and writes
-// nothing, so a redelivered event is harmless.
-func (store *Store) PauseSources(ctx context.Context, column, value, reason string, now time.Time, event func(domain.Source) (domain.Event, error)) ([]domain.Source, error) {
-	if column != "connection_id" && column != "app_id" {
-		return nil, fmt.Errorf("sources are paused by connection or app, not %q", column)
-	}
-	var paused []domain.Source
-	err := store.inTx(ctx, func(tx pgx.Tx) error {
-		sources, err := querySources(ctx, tx, `
-			UPDATE knowledge_sources
-			SET status = 'paused', reason = $2, sync_at = NULL,
-			    lease_token = NULL, lease_until = NULL, updated_at = $3, version = version + 1
-			WHERE `+column+` = $1 AND status = 'active'
-			RETURNING `+sourceColumns, value, reason, now)
-		if err != nil {
-			return err
-		}
-		for _, source := range sources {
-			if event == nil {
-				continue
-			}
-			recorded, err := event(source)
-			if err != nil {
-				return err
-			}
-			if err := insertEvents(ctx, tx, recorded); err != nil {
-				return err
-			}
-		}
-		paused = sources
-		return nil
-	})
-	return paused, err
 }
 
 // RemoveSources retires every source an organization, or one of its members,

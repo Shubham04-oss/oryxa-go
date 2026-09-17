@@ -2,12 +2,10 @@
 // organization wants indexed, extract documents from them on a schedule, and
 // publish what changed for a retrieval pipeline to hold.
 //
-// Sources are registered rather than discovered. There is no
-// service-authenticated way to list an organization's connections, so a
-// background worker cannot find out what exists on its own; a member says
-// what to index with their own credentials, and every later run works from
-// what was stored. That also matches what indexing is: a choice, not a crawl
-// of everything an organization ever connected.
+// Sources are registered rather than discovered: a member says what to index
+// with their own credentials, and every later run works from what was stored.
+// That matches what indexing is: a choice, not a crawl of everything an
+// organization holds.
 package application
 
 import (
@@ -23,7 +21,6 @@ import (
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
-	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/connectionsclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 )
@@ -35,7 +32,6 @@ type Store interface {
 	Sources(context.Context, string, domain.SourceQuery) ([]domain.Source, error)
 	RemoveSource(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) error
 	RemoveSources(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
-	PauseSources(context.Context, string, string, string, time.Time, func(domain.Source) (domain.Event, error)) ([]domain.Source, error)
 
 	ClaimDueSources(context.Context, time.Time, int, string, time.Time) ([]domain.Source, error)
 	RenewLease(context.Context, string, string, time.Time) (bool, error)
@@ -65,13 +61,6 @@ type Directory interface {
 	Membership(context.Context, string, authclient.Credentials) (domain.OrgMembership, error)
 }
 
-// Connections issues the credential a provider is read with.
-type Connections interface {
-	Token(context.Context, connectionsclient.TokenRequest) (domain.Credential, error)
-	Connection(context.Context, string, string, string) (domain.Connection, error)
-	Forget(string)
-}
-
 // Grants mints a token that acts as a member while they are away.
 //
 // An internal source is read through a service that has no service identity
@@ -85,13 +74,12 @@ type Grants interface {
 }
 
 type Dependencies struct {
-	Store       Store
-	Directory   Directory
-	Connections Connections
-	Grants      Grants
-	Extractors  sources.Registry
-	Logger      *slog.Logger
-	Clock       func() time.Time
+	Store      Store
+	Directory  Directory
+	Grants     Grants
+	Extractors sources.Registry
+	Logger     *slog.Logger
+	Clock      func() time.Time
 }
 
 type Config struct {
@@ -105,26 +93,24 @@ type Config struct {
 }
 
 type Service struct {
-	store       Store
-	directory   Directory
-	connections Connections
-	grants      Grants
-	extractors  sources.Registry
-	logger      *slog.Logger
-	now         func() time.Time
-	config      Config
+	store      Store
+	directory  Directory
+	grants     Grants
+	extractors sources.Registry
+	logger     *slog.Logger
+	now        func() time.Time
+	config     Config
 }
 
 func New(dependencies Dependencies, config Config) *Service {
 	service := &Service{
-		store:       dependencies.Store,
-		directory:   dependencies.Directory,
-		connections: dependencies.Connections,
-		grants:      dependencies.Grants,
-		extractors:  dependencies.Extractors,
-		logger:      dependencies.Logger,
-		now:         dependencies.Clock,
-		config:      config,
+		store:      dependencies.Store,
+		directory:  dependencies.Directory,
+		grants:     dependencies.Grants,
+		extractors: dependencies.Extractors,
+		logger:     dependencies.Logger,
+		now:        dependencies.Clock,
+		config:     config,
 	}
 	if service.logger == nil {
 		service.logger = slog.New(slog.DiscardHandler)
@@ -208,13 +194,5 @@ func (s *Service) documentRemoved(source domain.Source, document domain.Document
 		DocumentID: document.ID, OrganizationID: source.OrganizationID, SourceID: source.ID,
 		Provider: source.Provider, ExternalID: document.ExternalID,
 		Reason: reason, RemovedAt: s.now(),
-	})
-}
-
-func (s *Service) sourcePaused(source domain.Source, reason string) (domain.Event, error) {
-	return s.event(knowledgev1.SourcePausedDetailType, knowledgev1.SourcePaused{
-		SourceID: source.ID, OrganizationID: source.OrganizationID,
-		ConnectionID: source.ConnectionID, Provider: source.Provider,
-		Reason: reason, PausedAt: s.now(),
 	})
 }

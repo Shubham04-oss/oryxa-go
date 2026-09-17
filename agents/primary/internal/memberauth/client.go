@@ -15,8 +15,8 @@ import (
 )
 
 // tokenRefreshWindow is how long before its expiry a cached agent token is
-// treated as already expired, so a caller is never handed a token integrations
-// is about to refuse mid-call.
+// treated as already expired, so a caller is never handed a token the service
+// it calls is about to refuse mid-call.
 const tokenRefreshWindow = 2 * time.Minute
 
 // AuthClientConfig configures an AuthClient.

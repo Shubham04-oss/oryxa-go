@@ -17,20 +17,19 @@ by `teams` and now adopted here. `knowledge/infra/events` provisions its
 queue, and the root `.env.example` documents its variables. What is left is
 not a wiring gap; it is work nobody has done yet.
 
-**Two prerequisites live outside this repo and outside this service.** Both
-fail loudly rather than quietly, but both fail everything.
+**Nothing can be indexed today, for two reasons.**
 
-- **Connections must allow knowledge to call it.** An operator adds
-  `{"service": "knowledge", "key_id": "alias/oryxa-knowledge-identity", "purposes": ["action"]}`
-  to `CONNECTIONS_SERVICE_CALLERS` on the **connections** deployment, and the
-  KMS signing key must exist first. It is read once at startup, so connections
-  needs a restart. Without it every pass fails at the first token request.
+- **The provider sources were archived.** GitHub, Notion and Slack read
+  through the connections service, and went with it on 2026-09-17 while app
+  connections are rebuilt on Composio. The code is at tag
+  `archive/connections-and-integrations-2026-09-17`. Composio never hands out
+  a token, so their return means extractors that call through it rather than
+  with a credential of their own.
 - **`application.Grants` has no implementation.** It mints a member-scoped
-  token for an internal source, because `files` has no service identity —
+  token for the files source, because `files` has no service identity —
   every route there wants a member's own credentials. Until one is supplied,
-  a files source fails with a clear message and every provider source works
-  fine. `agents/primary/internal/memberauth` is the working precedent for
-  minting one under auth's agent grant.
+  the files source is not mounted. `agents/primary/internal/memberauth` is
+  the working precedent for minting one under auth's agent grant.
 
 ---
 
@@ -60,12 +59,8 @@ pins the periodic sweep itself.
 
 | Gap | Where | What it costs |
 | --- | --- | --- |
-| **HTML is not extractable** | `internal/transform` | Only plain text, Markdown, CSV and JSON are read. HTML means promoting `golang.org/x/net` from an indirect dependency to a direct one — a deliberate choice left open rather than made unilaterally. Microsoft Graph mail and Notion's richer blocks wait on it. |
-| **Notion gives properties, not page content** | `internal/sources/notion.go` | A page's body is its title and properties. Block children are a recursive call per page; for a workspace of any size that is a different cost profile, and worth designing rather than bolting on. |
-| **Notion incremental reads full breadth** | `internal/sources/notion.go` | Notion's search takes no `since`. Unchanged hashes mean it publishes nothing, but it costs a full read to find that out every interval. |
-| **Only four of seventeen providers** | `internal/sources/` | Box, Zendesk, Intercom and Figma already have generated clients in `internal/providerapi`, so each is a file in the shape of `github.go`. The others need hand-rolling like `slack.go`. |
+| **HTML is not extractable** | `internal/transform` | Only plain text, Markdown, CSV and JSON are read. HTML means promoting `golang.org/x/net` from an indirect dependency to a direct one — a deliberate choice left open rather than made unilaterally. |
 | **Team files need team ids you have to already know** | `internal/filesclient` | Files never returns team-scoped objects unless a team is named, and offers no way to enumerate teams. Indexing everything an organization holds means asking `teams` first. A source naming one team works fine today. |
-| **Slack reads channel history, not threads** | `internal/sources/slack.go` | Replies inside a thread are not walked. `thread_ts` is carried in metadata, so a consumer can at least group them. |
 | **One run's ceiling is ~20k documents** | `internal/application/sync.go` | `pagesPerRun` (200) × `pageSize` (100). A source with more gives the worker back and resumes next tick, which is the intent — but a first backfill of a very large repository takes several intervals to complete. A full pass spanning several runs retracts against when the whole walk began, not against whichever run happens to finish it (`knowledge_cursors.walk_started_at`), so an earlier run's own reads are never mistaken for what the provider no longer has. |
 
 ---
@@ -75,12 +70,6 @@ pins the periodic sweep itself.
 Nothing here is known-wrong. They are the judgement calls I would want
 someone else to confirm.
 
-- **A failing credential pauses every source on that connection, not just the
-  one that failed.** `application/sync.go` calls `PauseSources` by
-  `connection_id`. That is intentional — the credential is shared, so the
-  others would fail identically on their next tick — but it means one bad
-  source pauses its siblings. If that is wrong, pause by source id and let
-  the others discover it themselves.
 - **Document bodies live in Postgres, up to 4 MiB each.** `transform.MaxBytes`
   caps one document; nothing caps a source. For a large corpus this table
   grows fast, and the body is only there to serve
@@ -97,17 +86,14 @@ someone else to confirm.
   files that is quadratic. Fix by carrying the listing across pages within one
   run, which needs the extractor to hold per-run state the seam does not offer
   yet.
-- **No token is shared between sources on the same connection.** The cache in
-  `connectionsclient` is keyed by connection, so this already works across
-  sources — worth confirming under load rather than assuming.
 
 ---
 
 ## 6. Test coverage gaps
 
 The layers that carry the real logic are covered: the store against a real
-Postgres, transform, the HTTP client's retry and rate-limit behaviour, the
-sync semantics, the event dedupe, the error mapping.
+Postgres, transform, the sync semantics, the event dedupe, the error
+mapping.
 
 What is not:
 
@@ -115,10 +101,6 @@ What is not:
   HTTP API, the application, the store and the adapters together against a
   fake provider. This service should have one; now that the entrypoint
   exists, it is the test most likely to catch a wiring mistake.
-- **No live provider tests.** `integrations/internal/e2e/live_test.go` is the
-  pattern: skipped unless credentials are in the environment, creating and
-  cleaning up real resources. Nothing here has run against a real GitHub,
-  Notion or Slack.
 
 ---
 
@@ -130,7 +112,7 @@ to miss and expensive to get wrong:
 - **Scope travels on every document and is not decoration.** `Scope`, `TeamID`
   and `MemberID` say who may read that document. A retrieval pipeline
   answering across an organization has to honour them, or a member-scoped
-  connection's documents leak to the whole org.
+  source's documents leak to the whole org.
 - **`ContentHash` is the version.** A document is published on first sight and
   whenever its hash changes, so upsert on `(SourceID, ExternalID)`. Delivery
   is at least once — dedupe on the envelope's `event_id`, or treat an equal
@@ -147,8 +129,7 @@ finds something the provider no longer has; see §2.
 ## 8. Decisions that are not mine to make
 
 1. **Promote `golang.org/x/net` to a direct dependency for HTML?** Unblocks
-   Microsoft Graph and richer Notion content. `go.mod` is untouched by this
-   whole branch, deliberately.
+   HTML documents, such as mail and rich pages, once app sources return.
 2. **Adopt the `Name`/`Migrate`/`Handler`/`Workers` seam across the other
    seven services?** Decided: yes. It was proven here because this one was
    greenfield; `teams` adopted it first (`teams/service.go`), and this

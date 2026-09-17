@@ -21,9 +21,7 @@ var (
 	ErrForbidden           = errors.New("forbidden")
 	ErrUnauthorized        = errors.New("unauthorized")
 	ErrConflict            = errors.New("conflict")
-	ErrNeedsReconnect      = errors.New("connection needs reconnect")
 	ErrCredentialRejected  = errors.New("provider rejected the credential")
-	ErrScopeRequired       = errors.New("scope required")
 	ErrRateLimited         = errors.New("too many requests")
 	ErrProviderUnavailable = errors.New("provider unavailable")
 	// ErrLeaseLost means another replica claimed the source while this run was
@@ -83,19 +81,8 @@ const (
 	StatusRemoved Status = "removed"
 )
 
-// Purpose is what knowledge asks connections for a credential for. Extraction
-// only ever reads, so it asks as an action.
-type Purpose string
-
-const PurposeAction Purpose = "action"
-
-// RenewBefore is how long before a credential lapses it stops being used.
-// Connections renews inside this window itself, so a caller holding one any
-// longer would be using a token connections has already replaced.
-const RenewBefore = 2 * time.Minute
-
-// Credential is a token connections issued for a connection, with where it
-// goes on a request.
+// Credential is the token a source is read with, and where it goes on a
+// request.
 type Credential struct {
 	AccessToken string
 	// In is "header" or "query"; Name and Prefix say how the token is sent.
@@ -106,37 +93,14 @@ type Credential struct {
 	Metadata map[string]string
 }
 
-// Connection is what connections tells knowledge about a connection.
-type Connection struct {
-	ID              string `json:"id"`
-	OrganizationID  string `json:"organization_id"`
-	AppID           string `json:"app_id"`
-	Provider        string `json:"provider"`
-	Scope           string `json:"scope"`
-	TeamID          string `json:"team_id,omitempty"`
-	MemberID        string `json:"member_id,omitempty"`
-	ProviderAccount struct {
-		ID   string `json:"id"`
-		Name string `json:"name,omitempty"`
-	} `json:"provider_account"`
-	Status string `json:"status"`
-	Usage  string `json:"usage"`
-}
-
-// UsageAdmins is the connection usage a bare service may not act with: an
-// organization connection its admins reserved. A source on one would fail
-// every run, so registering it is refused instead.
-const UsageAdmins = "admins"
-
-// Source is one thing an organization asked to be indexed: a repository, a
-// workspace, a channel, its own files. The member who registers it owns it,
-// and extraction reads as them, so it stops when they lose the connection.
+// Source is one thing an organization asked to be indexed, such as its own
+// files. The member who registers it owns it, and extraction reads as them.
 type Source struct {
 	ID             string `json:"id"`
 	OrganizationID string `json:"organization_id"`
-	// ConnectionID is what the source is read through, and AppID the app that
-	// connection belongs to. An internal source, such as the organization's
-	// own files, has neither.
+	// ConnectionID and AppID name what a provider source reads through. An
+	// internal source, such as the organization's own files, has neither, and
+	// no provider sources are built today; the schema and events keep both.
 	ConnectionID string `json:"connection_id,omitempty"`
 	AppID        string `json:"app_id,omitempty"`
 	Provider     string `json:"provider"`
@@ -187,10 +151,9 @@ func (source Source) Extractable() error {
 // SourceQuery narrows a listing. An org admin sees the organization's
 // sources; anyone else sees the ones they registered.
 type SourceQuery struct {
-	CreatedBy    string
-	ConnectionID string
-	Provider     string
-	Admin        bool
+	CreatedBy string
+	Provider  string
+	Admin     bool
 }
 
 // Document is one thing a source holds, normalized. Body is the text a

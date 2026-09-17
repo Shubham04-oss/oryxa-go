@@ -15,8 +15,8 @@ import (
 
 // WrapToolset returns inner with the acting member attached to the context
 // every call it makes uses: its Tools listing and each tool's Run. Both are
-// live, authenticated calls to integrations' MCP endpoint — Tools lists a
-// provider's tools, Run calls one — and CredentialProvider only ever sees an
+// live, authenticated calls to a remote MCP endpoint — Tools lists its
+// tools, Run calls one — and CredentialProvider only ever sees an
 // HTTP request's plain context, never ADK's session state, so this is how
 // the member reaches it.
 //
@@ -40,8 +40,7 @@ type memberToolset struct {
 func (w *memberToolset) Name() string { return w.inner.Name() }
 
 // Tools lists inner's tools with the session's member attached to the
-// context inner uses to do it — for an MCP toolset, a live "list tools" call
-// to integrations.
+// context inner uses to do it — for an MCP toolset, a live "list tools" call.
 func (w *memberToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 	member, err := MemberFromSession(ctx)
 	if err != nil {

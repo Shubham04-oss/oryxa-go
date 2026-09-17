@@ -14,7 +14,6 @@ import (
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
-	connectionsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/connections/v1"
 )
 
 var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
@@ -50,18 +49,6 @@ func (app *fakeApplication) OrganizationDeleted(context.Context, authv1.Organiza
 
 func (app *fakeApplication) MemberRemoved(context.Context, authv1.MemberRemoved) error {
 	return app.act(authv1.MemberRemovedDetailType)
-}
-
-func (app *fakeApplication) ConnectionDisconnected(context.Context, connectionsv1.ConnectionDisconnected) error {
-	return app.act(connectionsv1.ConnectionDisconnectedDetailType)
-}
-
-func (app *fakeApplication) ConnectionNeedsReconnect(context.Context, connectionsv1.ConnectionNeedsReconnect) error {
-	return app.act(connectionsv1.ConnectionNeedsReconnectDetailType)
-}
-
-func (app *fakeApplication) AppDeleted(context.Context, connectionsv1.AppDeleted) error {
-	return app.act(connectionsv1.AppDeletedDetailType)
 }
 
 func (app *fakeApplication) AlreadyHandled(_ context.Context, eventID string) (bool, error) {
@@ -137,8 +124,8 @@ func TestHandleActsOnAnEventOnlyOnce(t *testing.T) {
 	// tell a retrieval pipeline to forget the same documents twice.
 	app := newFakeApplication()
 	consumer := NewConsumer(app, nil)
-	body := delivery(t, connectionsv1.Source, connectionsv1.ConnectionDisconnectedDetailType, "evt_1",
-		connectionsv1.ConnectionDisconnected{ConnectionID: "con_1", OrganizationID: "org_1"})
+	body := delivery(t, authv1.Source, authv1.OrganizationDeletedDetailType, "evt_1",
+		authv1.OrganizationDeleted{OrganizationID: "org_1"})
 
 	for range 3 {
 		if err := consumer.Handle(context.Background(), body); err != nil {
@@ -160,9 +147,6 @@ func TestHandleDispatchesEachEventToItsOwnHandler(t *testing.T) {
 	}{
 		{authv1.Source, authv1.OrganizationDeletedDetailType, authv1.OrganizationDeleted{OrganizationID: "org_1"}},
 		{authv1.Source, authv1.MemberRemovedDetailType, authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-1"}},
-		{connectionsv1.Source, connectionsv1.ConnectionDisconnectedDetailType, connectionsv1.ConnectionDisconnected{ConnectionID: "con_1"}},
-		{connectionsv1.Source, connectionsv1.ConnectionNeedsReconnectDetailType, connectionsv1.ConnectionNeedsReconnect{ConnectionID: "con_1"}},
-		{connectionsv1.Source, connectionsv1.AppDeletedDetailType, connectionsv1.AppDeleted{AppID: "app_1"}},
 	} {
 		body := delivery(t, event.source, event.detailType, fmt.Sprintf("evt_%d", index), event.data)
 		if err := consumer.Handle(context.Background(), body); err != nil {
@@ -178,8 +162,8 @@ func TestHandleRefusesADetailTypeFromTheWrongSource(t *testing.T) {
 	// A detail type nobody else may claim: an event's name alone is not
 	// enough to say who sent it.
 	consumer := NewConsumer(newFakeApplication(), nil)
-	body := delivery(t, "oryxa.someone-else", connectionsv1.ConnectionDisconnectedDetailType, "evt_1",
-		connectionsv1.ConnectionDisconnected{ConnectionID: "con_1"})
+	body := delivery(t, "oryxa.someone-else", authv1.OrganizationDeletedDetailType, "evt_1",
+		authv1.OrganizationDeleted{OrganizationID: "org_1"})
 
 	if err := consumer.Handle(context.Background(), body); err == nil {
 		t.Fatal("Handle() error = nil, want a refusal")
@@ -188,8 +172,8 @@ func TestHandleRefusesADetailTypeFromTheWrongSource(t *testing.T) {
 
 func TestHandleRefusesAnEnvelopeFromAnotherVersion(t *testing.T) {
 	consumer := NewConsumer(newFakeApplication(), nil)
-	body := `{"id":"aws-1","source":"` + connectionsv1.Source + `","detail-type":"` +
-		connectionsv1.ConnectionDisconnectedDetailType + `","detail":{"event_id":"evt_1","version":2,"data":{}}}`
+	body := `{"id":"aws-1","source":"` + authv1.Source + `","detail-type":"` +
+		authv1.OrganizationDeletedDetailType + `","detail":{"event_id":"evt_1","version":2,"data":{}}}`
 
 	if err := consumer.Handle(context.Background(), body); err == nil {
 		t.Fatal("Handle() error = nil, want a refusal")
@@ -202,8 +186,8 @@ func TestHandleLeavesAnEventUndeletedWhenActingOnItFailed(t *testing.T) {
 	app := newFakeApplication()
 	app.err = errors.New("the store was unreachable")
 	consumer := NewConsumer(app, nil)
-	body := delivery(t, connectionsv1.Source, connectionsv1.AppDeletedDetailType, "evt_1",
-		connectionsv1.AppDeleted{AppID: "app_1"})
+	body := delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_1",
+		authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-1"})
 
 	if err := consumer.Handle(context.Background(), body); err == nil {
 		t.Fatal("Handle() error = nil, want the failure to reach Poll")
@@ -224,8 +208,8 @@ func TestHandleRecordsAnEventOnlyAfterItsHandlerSucceeds(t *testing.T) {
 	app := newFakeApplication()
 	app.failTimes = 1
 	consumer := NewConsumer(app, nil)
-	body := delivery(t, connectionsv1.Source, connectionsv1.AppDeletedDetailType, "evt_1",
-		connectionsv1.AppDeleted{AppID: "app_1"})
+	body := delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_1",
+		authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-1"})
 
 	if err := consumer.Handle(context.Background(), body); err == nil {
 		t.Fatal("Handle() error = nil on the first delivery, want the handler's failure")
@@ -331,8 +315,8 @@ func waitPollReturns(t *testing.T, done <-chan struct{}) {
 func TestPollHandsEachMessageToHandleAndDeletesOnlyWhatSucceeded(t *testing.T) {
 	app := newFakeApplication()
 	consumer := NewConsumer(app, nil)
-	good := delivery(t, connectionsv1.Source, connectionsv1.AppDeletedDetailType, "evt_1",
-		connectionsv1.AppDeleted{AppID: "app_1"})
+	good := delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_1",
+		authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-1"})
 
 	queue := newFakeQueue(receiveResult{messages: []sqstypes.Message{
 		{MessageId: aws.String("m1"), ReceiptHandle: aws.String("rh1"), Body: aws.String(good)},
@@ -346,7 +330,7 @@ func TestPollHandsEachMessageToHandleAndDeletesOnlyWhatSucceeded(t *testing.T) {
 	cancel()
 	waitPollReturns(t, done)
 
-	if len(app.acted) != 1 || app.acted[0] != connectionsv1.AppDeletedDetailType {
+	if len(app.acted) != 1 || app.acted[0] != authv1.MemberRemovedDetailType {
 		t.Fatalf("acted = %v, want one call for the message Handle could decode", app.acted)
 	}
 	if len(deleted) != 1 || deleted[0] != "rh1" {

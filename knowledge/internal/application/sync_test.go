@@ -14,7 +14,7 @@ import (
 )
 
 // testService wires the service to fakes and a frozen clock.
-func testService(t *testing.T, store *fakeStore, extractor *fakeExtractor) (*Service, *fakeConnections) {
+func testService(t *testing.T, store *fakeStore, extractor *fakeExtractor) (*Service, *fakeGrants) {
 	t.Helper()
 	return testServiceWithClock(t, store, extractor, func() time.Time { return testClock })
 }
@@ -22,24 +22,21 @@ func testService(t *testing.T, store *fakeStore, extractor *fakeExtractor) (*Ser
 // testServiceWithClock is testService with a clock the caller controls, for a
 // test that must tell two runs apart in time rather than see the same frozen
 // instant from both.
-func testServiceWithClock(t *testing.T, store *fakeStore, extractor *fakeExtractor, clock func() time.Time) (*Service, *fakeConnections) {
+func testServiceWithClock(t *testing.T, store *fakeStore, extractor *fakeExtractor, clock func() time.Time) (*Service, *fakeGrants) {
 	t.Helper()
-	connections := &fakeConnections{
-		connection: domain.Connection{ID: "con_1", OrganizationID: "org_1", AppID: "app_1", Provider: "github", Scope: "organization", Status: "active"},
-		credential: domain.Credential{AccessToken: "provider-token"},
-	}
+	grants := &fakeGrants{token: "member-token"}
 	registry := sources.Registry{}
 	if extractor != nil {
 		registry[extractor.provider] = extractor
 	}
 	service := New(Dependencies{
-		Store:       store,
-		Directory:   &fakeDirectory{membership: domain.OrgMembership{OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember}},
-		Connections: connections,
-		Extractors:  registry,
-		Clock:       clock,
+		Store:      store,
+		Directory:  &fakeDirectory{membership: domain.OrgMembership{OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember}},
+		Grants:     grants,
+		Extractors: registry,
+		Clock:      clock,
 	}, Config{})
-	return service, connections
+	return service, grants
 }
 
 // advancingClock moves forward by a second on every call, for a test where
@@ -61,8 +58,8 @@ func advancingClock(start time.Time) func() time.Time {
 func activeSource(store *fakeStore, provider string) domain.Source {
 	swept := testClock
 	source := domain.Source{
-		ID: "src_1", OrganizationID: "org_1", ConnectionID: "con_1", AppID: "app_1",
-		Provider: provider, Target: map[string]string{"repository": "acme/api"},
+		ID: "src_1", OrganizationID: "org_1",
+		Provider: provider, Target: map[string]string{"team_id": "team_1"},
 		Scope: domain.ScopeOrganization, CreatedBy: "user-1", Status: domain.StatusActive,
 		Interval: time.Hour, CreatedAt: testClock, FullSweepAt: &swept,
 	}
@@ -81,11 +78,11 @@ func item(externalID, body string, updated time.Time) sources.Item {
 func TestSyncPublishesOnlyWhatChanged(t *testing.T) {
 	store := newFakeStore()
 	updated := testClock.Add(-time.Hour)
-	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
 		{Items: []sources.Item{item("1", "first", updated), item("2", "second", updated)}, Watermark: &updated},
 	}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -113,14 +110,14 @@ func TestSyncKeepsThePlaceButNotTheWatermarkWhenAWalkStopsEarly(t *testing.T) {
 	store := newFakeStore()
 	newest := testClock.Add(-time.Minute)
 	extractor := &fakeExtractor{
-		provider: "github",
+		provider: "files",
 		pages: []sources.Page{
 			{Items: []sources.Item{item("1", "newest", newest)}, Cursor: "page-2", Watermark: &newest},
 		},
 		errs: []error{nil, domain.ErrProviderUnavailable},
 	}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -139,12 +136,12 @@ func TestSyncAdvancesTheWatermarkOnceTheWalkFinishes(t *testing.T) {
 	store := newFakeStore()
 	newest := testClock.Add(-time.Minute)
 	older := testClock.Add(-time.Hour)
-	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
 		{Items: []sources.Item{item("1", "newest", newest)}, Cursor: "page-2", Watermark: &newest},
 		{Items: []sources.Item{item("2", "older", older)}, Cursor: "", Watermark: &older},
 	}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -161,12 +158,12 @@ func TestSyncAdvancesTheWatermarkOnceTheWalkFinishes(t *testing.T) {
 func TestSyncStopsWhenAnotherWorkerTookTheSource(t *testing.T) {
 	store := newFakeStore()
 	updated := testClock.Add(-time.Hour)
-	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
 		{Items: []sources.Item{item("1", "first", updated)}, Cursor: "page-2", Watermark: &updated},
 		{Items: []sources.Item{item("2", "second", updated)}, Cursor: "", Watermark: &updated},
 	}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 	store.lease[source.ID] = "someone-else"
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
@@ -191,11 +188,11 @@ func TestSyncStopsWhenAnotherWorkerTookTheSource(t *testing.T) {
 func TestSyncRetractsWhatAFullPassDidNotFind(t *testing.T) {
 	store := newFakeStore()
 	updated := testClock.Add(-time.Hour)
-	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
 		{Items: []sources.Item{item("1", "kept", updated), item("2", "goes away", updated)}, Watermark: &updated},
 	}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -215,11 +212,11 @@ func TestSyncNeverRetractsOnAnIncrementalPass(t *testing.T) {
 	updated := testClock.Add(-time.Hour)
 	watermark := testClock.Add(-2 * time.Hour)
 	store.cursors["src_1"] = domain.Cursor{SourceID: "src_1", Watermark: &watermark}
-	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
 		{Items: []sources.Item{item("1", "changed", updated)}, Watermark: &updated},
 	}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -252,11 +249,11 @@ func TestSyncRetractsAfterASweptSourceComesDueAgain(t *testing.T) {
 	store.documents["src_1\x00"+gone.ExternalID] = gone
 
 	updated := testClock.Add(-time.Hour)
-	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
 		{Items: []sources.Item{item("1", "kept", updated)}, Watermark: &updated},
 	}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 	stale := testClock.Add(-8 * 24 * time.Hour) // older than the default weekly interval
 	source.FullSweepAt = &stale
 	store.sources[source.ID] = source
@@ -282,34 +279,56 @@ func TestSyncRetractsAfterASweptSourceComesDueAgain(t *testing.T) {
 	}
 }
 
-func TestSyncPausesASourceWhoseCredentialMustBeReconnected(t *testing.T) {
+func TestSyncReadsAsTheMemberWhoRegisteredTheSource(t *testing.T) {
+	// Internal storage has no service identity to accept, so every page is
+	// read with the token the registering member's grant mints, never as the
+	// service itself.
 	store := newFakeStore()
-	extractor := &fakeExtractor{provider: "github", errs: []error{domain.ErrNeedsReconnect}}
-	service, connections := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{{}}}
+	service, grants := testService(t, store, extractor)
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
-	if store.sources[source.ID].Status != domain.StatusPaused {
-		t.Fatalf("source status = %s, want paused", store.sources[source.ID].Status)
+	if len(grants.members) != 1 || grants.members[0] != "org_1/user-1" {
+		t.Fatalf("grants minted for %v, want only the registering member org_1/user-1", grants.members)
 	}
-	if got := store.published(knowledgev1.SourcePausedDetailType); got != 1 {
-		t.Fatalf("published %d pause events, want 1", got)
+	if len(extractor.calls) != 1 || extractor.calls[0].Credential.AccessToken != "member-token" {
+		t.Fatalf("extractor calls = %+v, want one read with the member's token", extractor.calls)
 	}
-	if len(connections.forgotten) != 1 {
-		t.Fatal("a paused source must not keep using the credential it held")
+}
+
+func TestSyncFailsWithoutAGrantToReadAs(t *testing.T) {
+	store := newFakeStore()
+	extractor := &fakeExtractor{provider: "files"}
+	service := New(Dependencies{
+		Store:      store,
+		Directory:  &fakeDirectory{membership: domain.OrgMembership{OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember}},
+		Extractors: sources.Registry{"files": extractor},
+		Clock:      func() time.Time { return testClock },
+	}, Config{})
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if len(extractor.calls) != 0 {
+		t.Fatal("nothing may be read without a member's grant to read as")
+	}
+	if store.failedReason != knowledgev1.SyncErrorForbidden {
+		t.Fatalf("failed with %q, want %q", store.failedReason, knowledgev1.SyncErrorForbidden)
 	}
 	if run := store.lastRun(); run.Retryable {
-		t.Fatal("a reconnect is not something running again unchanged would fix")
+		t.Fatal("a missing grant is not something running again unchanged would fix")
 	}
 }
 
 func TestSyncBacksOffAProviderThatIsDown(t *testing.T) {
 	store := newFakeStore()
-	extractor := &fakeExtractor{provider: "github", errs: []error{domain.ErrProviderUnavailable}}
+	extractor := &fakeExtractor{provider: "files", errs: []error{domain.ErrProviderUnavailable}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -330,11 +349,11 @@ func TestSyncSkipsAnItemThatHoldsNoText(t *testing.T) {
 	updated := testClock.Add(-time.Hour)
 	unreadable := item("1", "binary", updated)
 	unreadable.MIME = "application/pdf"
-	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
 		{Items: []sources.Item{unreadable, item("2", "readable", updated)}, Watermark: &updated},
 	}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -356,9 +375,9 @@ func TestSyncComesStraightBackWhenAPassStoppedEarly(t *testing.T) {
 			Items: []sources.Item{item("1", "same", updated)}, Cursor: "more", Watermark: &updated,
 		})
 	}
-	extractor := &fakeExtractor{provider: "github", pages: pages}
+	extractor := &fakeExtractor{provider: "files", pages: pages}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -388,11 +407,11 @@ func TestSyncRetractsOnlyWhatNeitherRunOfAWalkSaw(t *testing.T) {
 		})
 	}
 	secondRunPage := sources.Page{Items: []sources.Item{item("2", "seen by the second run", updated)}, Watermark: &updated}
-	extractor := &fakeExtractor{provider: "github", pages: append(firstRunPages, secondRunPage)}
+	extractor := &fakeExtractor{provider: "files", pages: append(firstRunPages, secondRunPage)}
 	// The clock must move between the two runs, or nothing distinguishes
 	// "the walk's start" from "this run's start" and the bug cannot show up.
 	service, _ := testServiceWithClock(t, store, extractor, advancingClock(testClock))
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	// A document from an earlier walk that this one genuinely never finds:
 	// gone at the provider, unlike "1" and "2" which the walk still holds.
@@ -433,11 +452,11 @@ func TestSyncRetractsOnlyWhatNeitherRunOfAWalkSaw(t *testing.T) {
 func TestSyncWaitsAnIntervalOnceASourceIsDrained(t *testing.T) {
 	store := newFakeStore()
 	updated := testClock.Add(-time.Hour)
-	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
 		{Items: []sources.Item{item("1", "only", updated)}, Watermark: &updated},
 	}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
 		t.Fatalf("Sync() error = %v", err)
@@ -449,9 +468,9 @@ func TestSyncWaitsAnIntervalOnceASourceIsDrained(t *testing.T) {
 
 func TestSyncLeavesTheSourceAloneWhenTheProcessIsGoingAway(t *testing.T) {
 	store := newFakeStore()
-	extractor := &fakeExtractor{provider: "github", errs: []error{context.Canceled}}
+	extractor := &fakeExtractor{provider: "files", errs: []error{context.Canceled}}
 	service, _ := testService(t, store, extractor)
-	source := activeSource(store, "github")
+	source := activeSource(store, "files")
 
 	err := service.Sync(context.Background(), source, "lease-a")
 	if !errors.Is(err, context.Canceled) {
@@ -464,8 +483,8 @@ func TestSyncLeavesTheSourceAloneWhenTheProcessIsGoingAway(t *testing.T) {
 
 func TestSyncRefusesASourceThatIsNotActive(t *testing.T) {
 	store := newFakeStore()
-	service, _ := testService(t, store, &fakeExtractor{provider: "github"})
-	source := activeSource(store, "github")
+	service, _ := testService(t, store, &fakeExtractor{provider: "files"})
+	source := activeSource(store, "files")
 	source.Status = domain.StatusPaused
 
 	if err := service.Sync(context.Background(), source, "lease-a"); !errors.Is(err, domain.ErrConflict) {

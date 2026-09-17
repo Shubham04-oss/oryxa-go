@@ -475,36 +475,6 @@ func TestFailSourceBacksOffAndKeepsTheReason(t *testing.T) {
 	}
 }
 
-func TestPauseSourcesStopsWhatReadsThroughALostConnection(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-	source := testSource(t, store, "org_1")
-
-	paused, err := store.PauseSources(ctx, "connection_id", source.ConnectionID, "disconnected", testClock,
-		func(domain.Source) (domain.Event, error) { return testEvent(t, "knowledge.source.paused.v1"), nil })
-	if err != nil {
-		t.Fatalf("PauseSources() error = %v", err)
-	}
-	if len(paused) != 1 {
-		t.Fatalf("PauseSources() = %d sources, want 1", len(paused))
-	}
-
-	read, err := store.Source(ctx, "org_1", source.ID)
-	if err != nil {
-		t.Fatalf("Source() error = %v", err)
-	}
-	if read.Status != domain.StatusPaused || read.SyncAt != nil {
-		t.Fatalf("Source() = status %s, sync_at %v", read.Status, read.SyncAt)
-	}
-
-	// A redelivered disconnect pauses nothing and writes nothing.
-	again, err := store.PauseSources(ctx, "connection_id", source.ConnectionID, "disconnected", testClock,
-		func(domain.Source) (domain.Event, error) { return testEvent(t, "knowledge.source.paused.v1"), nil })
-	if err != nil || len(again) != 0 {
-		t.Fatalf("PauseSources(again) = %d sources, %v, want none", len(again), err)
-	}
-}
-
 func TestRemoveSourceRetractsWhatItHeld(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

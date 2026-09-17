@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
-	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/connectionsclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 )
@@ -31,7 +30,6 @@ type fakeStore struct {
 	lease map[string]string
 
 	retractUnseen int
-	paused        []string
 	finishedNext  time.Time
 	failedReason  string
 }
@@ -133,34 +131,6 @@ func (store *fakeStore) retractAll(source domain.Source, events func(domain.Sour
 	}
 	store.events = append(store.events, recorded...)
 	return nil
-}
-
-func (store *fakeStore) PauseSources(_ context.Context, _, value, reason string, _ time.Time, event func(domain.Source) (domain.Event, error)) ([]domain.Source, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	paused := []domain.Source{}
-	for id, source := range store.sources {
-		if source.Status != domain.StatusActive {
-			continue
-		}
-		if source.ConnectionID != value && source.AppID != value {
-			continue
-		}
-		source.Status = domain.StatusPaused
-		source.Reason = reason
-		source.SyncAt = nil
-		store.sources[id] = source
-		paused = append(paused, source)
-		if event != nil {
-			recorded, err := event(source)
-			if err != nil {
-				return nil, err
-			}
-			store.events = append(store.events, recorded)
-		}
-	}
-	store.paused = append(store.paused, reason)
-	return paused, nil
 }
 
 func (store *fakeStore) ClaimDueSources(_ context.Context, now time.Time, limit int, leaseToken string, _ time.Time) ([]domain.Source, error) {
@@ -392,33 +362,19 @@ func (directory *fakeDirectory) Membership(context.Context, string, authclient.C
 	return directory.membership, nil
 }
 
-// fakeConnections answers what connections would about a connection.
-type fakeConnections struct {
-	connection domain.Connection
-	credential domain.Credential
-	tokenErr   error
-	forgotten  []string
+// fakeGrants mints a member token, recording whom it was minted for.
+type fakeGrants struct {
+	token   string
+	err     error
+	members []string
 }
 
-func (connections *fakeConnections) Token(context.Context, connectionsclient.TokenRequest) (domain.Credential, error) {
-	if connections.tokenErr != nil {
-		return domain.Credential{}, connections.tokenErr
+func (grants *fakeGrants) MemberToken(_ context.Context, organizationID, memberID string) (string, error) {
+	grants.members = append(grants.members, organizationID+"/"+memberID)
+	if grants.err != nil {
+		return "", grants.err
 	}
-	return connections.credential, nil
-}
-
-func (connections *fakeConnections) Connection(_ context.Context, _, connectionID, _ string) (domain.Connection, error) {
-	if connections.connection.ID == "" {
-		return domain.Connection{}, domain.ErrNotFound
-	}
-	if connections.connection.ID != connectionID {
-		return domain.Connection{}, domain.ErrNotFound
-	}
-	return connections.connection, nil
-}
-
-func (connections *fakeConnections) Forget(connectionID string) {
-	connections.forgotten = append(connections.forgotten, connectionID)
+	return grants.token, nil
 }
 
 // fakeExtractor serves scripted pages, so a test can shape a walk exactly.

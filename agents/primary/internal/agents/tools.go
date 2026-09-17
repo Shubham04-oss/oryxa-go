@@ -78,8 +78,8 @@ func (c *toolCatalog) toolboxFor(name string) (Toolbox, bool) {
 // session. Its Tools method handles toolboxes loaded before an invocation;
 // ProcessRequest also makes a toolbox loaded during an invocation available
 // on the next model step. A loaded toolbox whose tools cannot be listed right
-// now, such as integrations' when the member has withdrawn their grant, is
-// left out rather than failing the turn; load_tools says why.
+// now, such as a member-authenticated one after the member withdrew their
+// grant, is left out rather than failing the turn; load_tools says why.
 func (c *toolCatalog) loaded() tool.Toolset {
 	return loadedToolset{catalog: c}
 }

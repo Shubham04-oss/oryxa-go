@@ -134,8 +134,8 @@ switched off, add it to `Root`, and name it in `instructions/krude.md`.
 
 An agent acts **as the member it works for, with that member's own
 identity** — never as a service impersonating them. `internal/memberauth`
-carries that identity from a session to every call an integrations tool
-makes.
+carries that identity from a session to every call a member-authenticated
+tool makes.
 
 **Member present.** A chat turn forwards the member's own access token —
 the same bearer token auth issues today — onto the run's context with
@@ -165,36 +165,18 @@ sets `Authorization: Bearer <token>` and `X-Oryxa-Organization:
 <organization>` on the request: the member's own token when the run carries
 one, otherwise an agent token for the session's user.
 
-**Integrations toolboxes.** `agents.IntegrationsToolboxes` fetches
-integrations' `GET /v1/catalog` once and turns every provider with at least
-one action into a `Toolbox`: its tools are that provider's MCP endpoint at
-`POST /v1/mcp/{provider}`, wrapped as above, and its skill is the provider's
-own — carried into Krude's instruction like any other toolbox's, while it is
-loaded. Every tool requires confirmation before it runs, the same
-Human-in-the-Loop flow toolbox tools already use, except the reads the
-catalogue names and each provider's `_connections` tool; so a write
-integrations gains after primary read the catalogue still asks first. A
-provider with no actions gets no toolbox.
-
-Integrations serves every member the same tools, so a toolbox lists them once,
-as whichever member first loads it; after that a loaded toolbox costs no call
-per model step, and only tool calls go out, each as its own member. One MCP
-client serves every member: each request carries the credential of the run
-that made it, never another member's. When acting for the member fails — no
-grant, no member, auth not answering — the model gets the reason in plain
-words, without the request that carried it, and a loaded toolbox whose tools
-cannot be listed is left out of the turn rather than failing it, with
-`load_tools` saying why. A sub-agent may not take a name starting with a
-toolbox's name and an underscore, so checking a name never lists a toolbox.
-
-`cmd/devui` builds these toolboxes when `INTEGRATIONS_URL` is set, logging a
-warning and running without them if the catalogue cannot be reached —
-integrations being unreachable never keeps the agents from starting.
+**No member-authenticated toolboxes today.** The integrations toolboxes that
+used all of this were archived on 2026-09-17, with the connections and
+integrations services, while app tools are rebuilt on Composio; the code is at
+tag `archive/connections-and-integrations-2026-09-17`. `memberauth` stays for
+that rebuild. Nothing in `cmd/devui` builds an `AuthClient` now, so it no
+longer reads `INTEGRATIONS_URL`, `AUTH_URL` or
+`AGENTS_PRIMARY_SERVICE_KEY_ID`, and Krude loads only its sandbox and browser
+toolboxes.
 
 **Not yet.** There is no run API yet, so outside tests nothing calls
-`memberauth.WithAccessToken`: every development UI run acts through the
-member's grant, and a member who has not granted one cannot use integrations
-tools. No run starts from an integrations trigger either.
+`memberauth.WithAccessToken` or an `AuthClient`, and no run starts from a
+trigger.
 
 ## Models and routing
 
@@ -397,9 +379,6 @@ the one `oryxa` image; there is no Dockerfile of its own any more.
 | `GOOGLE_CLOUD_PROJECT` | unset | Project whose Vertex AI serves Gemini; the agents require it |
 | `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI location: `global`, or the `us` or `eu` multi-region |
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | ADC credential file for deployments; locally `gcloud auth application-default login` supplies ADC |
-| `INTEGRATIONS_URL` | unset | Integrations' own URL; when set, `cmd/devui` builds one toolbox per provider its catalogue offers (see Acting for a member) |
-| `AUTH_URL` | unset | Auth's own URL; where a member-absent run exchanges the member's standing grant for an agent token |
-| `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |
 
 The HTTP server sets no write timeout: agent streams outlive any fixed write
 deadline, so each streaming handler sets its own.

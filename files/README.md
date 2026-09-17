@@ -3,14 +3,12 @@
 Files owns object storage for an organization. Auth remains the identity and
 organization/membership boundary. Teams remains the team graph: files forwards
 the caller's credentials to teams when a file hangs on a team, and never copies
-the tree. Integrations remains third-party connections; its piece runner still
-has no AWS permissions and does not call S3. Billing and pipelines do not
-write to the bucket. They will attach later by file id and purpose.
+the tree. Billing and pipelines do not write to the bucket. They will attach later by file id and purpose.
 
 S3 is the blob store. PostgreSQL is the source of truth for whether an object
 exists, where it hangs, who created it, its purpose, checksum, and when it
 expires. The files process is the only AWS principal that talks to the bucket.
-Callers never receive credentials, and the piece runner never will.
+Callers never receive credentials.
 
 ```text
 app ── files HTTP ──▶ files ── PutObject/GetObject ──▶ S3

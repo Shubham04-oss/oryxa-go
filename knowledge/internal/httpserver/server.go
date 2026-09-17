@@ -103,7 +103,6 @@ func (server *Server) providers(writer http.ResponseWriter, _ *http.Request) {
 type sourceView struct {
 	ID           string            `json:"id"`
 	Provider     string            `json:"provider"`
-	ConnectionID string            `json:"connection_id,omitempty"`
 	Target       map[string]string `json:"target"`
 	Scope        string            `json:"scope"`
 	TeamID       string            `json:"team_id,omitempty"`
@@ -123,7 +122,7 @@ type sourceView struct {
 // business.
 func view(source domain.Source) sourceView {
 	return sourceView{
-		ID: source.ID, Provider: source.Provider, ConnectionID: source.ConnectionID,
+		ID: source.ID, Provider: source.Provider,
 		Target: source.Target, Scope: string(source.Scope), TeamID: source.TeamID,
 		MemberID: source.MemberID, CreatedBy: source.CreatedBy, Status: string(source.Status),
 		Reason: source.Reason, IntervalSecs: int(source.Interval / time.Second),
@@ -138,7 +137,6 @@ func (server *Server) registerSource(writer http.ResponseWriter, request *http.R
 		return
 	}
 	var body struct {
-		ConnectionID    string            `json:"connection_id"`
 		Provider        string            `json:"provider"`
 		Target          map[string]string `json:"target"`
 		IntervalSeconds int               `json:"interval_seconds"`
@@ -148,10 +146,9 @@ func (server *Server) registerSource(writer http.ResponseWriter, request *http.R
 	}
 	source, err := server.service.RegisterSource(request.Context(), credentials,
 		request.PathValue("organizationID"), application.RegisterInput{
-			ConnectionID: body.ConnectionID,
-			Provider:     body.Provider,
-			Target:       body.Target,
-			Interval:     time.Duration(body.IntervalSeconds) * time.Second,
+			Provider: body.Provider,
+			Target:   body.Target,
+			Interval: time.Duration(body.IntervalSeconds) * time.Second,
 		})
 	if err != nil {
 		server.handleError(writer, request, err)
@@ -166,9 +163,8 @@ func (server *Server) listSources(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	query := domain.SourceQuery{
-		ConnectionID: request.URL.Query().Get("connection_id"),
-		Provider:     request.URL.Query().Get("provider"),
-		Admin:        request.URL.Query().Get("scope") == "organization",
+		Provider: request.URL.Query().Get("provider"),
+		Admin:    request.URL.Query().Get("scope") == "organization",
 	}
 	listed, err := server.service.Sources(request.Context(), credentials, request.PathValue("organizationID"), query)
 	if err != nil {
@@ -290,15 +286,11 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusForbidden, "forbidden", strings.TrimSuffix(err.Error(), ": "+domain.ErrForbidden.Error()))
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(writer, http.StatusNotFound, "not_found", "resource not found")
-	case errors.Is(err, domain.ErrNeedsReconnect):
-		writeError(writer, http.StatusConflict, "needs_reconnect", "the connection must be reconnected first")
-	case errors.Is(err, domain.ErrScopeRequired):
-		writeError(writer, http.StatusForbidden, "scope_required", "the connection is missing a scope")
 	case errors.Is(err, domain.ErrConflict):
 		writeError(writer, http.StatusConflict, "conflict", strings.TrimSuffix(err.Error(), ": "+domain.ErrConflict.Error()))
 	case errors.Is(err, domain.ErrCredentialRejected):
 		server.logger.WarnContext(request.Context(), "provider rejected a credential", "path", request.URL.Path, "error", err)
-		writeError(writer, http.StatusUnprocessableEntity, "credential_rejected", "the provider rejected the connection's credential")
+		writeError(writer, http.StatusUnprocessableEntity, "credential_rejected", "the provider rejected the credential")
 	case errors.Is(err, domain.ErrRateLimited):
 		writeError(writer, http.StatusTooManyRequests, "rate_limited", "too many requests; retry")
 	case errors.Is(err, domain.ErrProviderUnavailable):

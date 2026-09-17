@@ -16,10 +16,6 @@ func TestEventPatternMatchesTheEventsThatEndSubscriptions(t *testing.T) {
 			{
 				"source": ["oryxa.auth"],
 				"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
-			},
-			{
-				"source": ["oryxa.connections"],
-				"detail-type": ["connections.app.deleted.v1", "connections.connection.disconnected.v1", "connections.connection.needs-reconnect.v1"]
 			}
 		]
 	}`)

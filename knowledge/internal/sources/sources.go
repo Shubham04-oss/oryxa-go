@@ -62,8 +62,8 @@ type Request struct {
 
 // Extractor reads documents out of one provider.
 type Extractor interface {
-	// Provider is the connections provider this reads, or "files" for the
-	// organization's own storage.
+	// Provider is what this reads, such as "files" for the organization's own
+	// storage.
 	Provider() string
 	// Target says whether this extractor can read what a source names, before
 	// a source is registered on it.
@@ -114,4 +114,14 @@ func Limit(requested, maximum int) int {
 // MissingTarget says a source did not name something the extractor needs.
 func MissingTarget(field string) error {
 	return fmt.Errorf("a target needs %s: %w", field, domain.ErrInvalid)
+}
+
+// watermarkAfter is whichever of current and candidate is newer, so a page's
+// watermark only ever moves forward.
+func watermarkAfter(current *time.Time, candidate time.Time) *time.Time {
+	if current == nil || candidate.After(*current) {
+		value := candidate.UTC()
+		return &value
+	}
+	return current
 }
