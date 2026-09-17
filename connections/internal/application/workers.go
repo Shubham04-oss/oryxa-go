@@ -24,6 +24,12 @@ const (
 	// callback still finds its session and answers session_expired.
 	sessionRetention = time.Hour
 	sessionSweep     = 500
+	// outboxRetention is how long a published event is kept. Nothing reads a
+	// published row again — delivery has already happened — so it is kept only
+	// long enough to explain recent deliveries, and the sweep is what stops
+	// the table growing once per connection change for ever.
+	outboxRetention = 7 * 24 * time.Hour
+	outboxSweep     = 500
 	// revokeGiveUp is how long past domain.MaxHold a provider that cannot
 	// answer is asked to revoke before the credentials are deleted anyway.
 	revokeGiveUp = 24 * time.Hour
@@ -209,14 +215,17 @@ func checkRejection(credentialType domain.CredentialType, err error) domain.Reco
 	}
 }
 
-// CleanUp removes expired sessions, then claims disconnected connections whose
-// holds are released or expired, revokes their grants where the provider
-// allows, and deletes their credentials. It returns how many connections it
-// claimed.
+// CleanUp removes expired sessions and long-published outbox events, then
+// claims disconnected connections whose holds are released or expired, revokes
+// their grants where the provider allows, and deletes their credentials. It
+// returns how many connections it claimed.
 func (s *Service) CleanUp(ctx context.Context) (int, error) {
 	now := s.clock()
 	if _, err := s.store.DeleteExpiredSessions(ctx, now.Add(-sessionRetention), sessionSweep); err != nil {
 		s.logger.WarnContext(ctx, "delete expired sessions", "error", err)
+	}
+	if _, err := s.store.DeletePublishedOutbox(ctx, now.Add(-outboxRetention), outboxSweep); err != nil {
+		s.logger.WarnContext(ctx, "delete published outbox events", "error", err)
 	}
 	lease, err := s.randomToken(18)
 	if err != nil {

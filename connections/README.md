@@ -438,6 +438,16 @@ provider account for connections whose credentials are still present, because
 it is asked inside the provider-grant lock and must not scan the
 organization's whole connection history.
 
+A claim on an outbox event is owned: `ClaimOutbox` stamps the rows it hands out
+with a token, and a dispatcher marks an event published or failed only under
+the token it claimed with. Without that, a dispatcher whose claim expired while
+it was still publishing could clear the claim a later replica had taken, and a
+third could then claim and publish the same event again. A batch publishes in
+parallel, which keeps a claim short. Events that reached the bus are kept for
+7 days and then swept by the cleanup worker, so the table does not grow once
+per connection change for ever. Delivery is at-least-once: a duplicate carries
+the same `event_id`, which is the handle a consumer deduplicates on.
+
 ## Security
 
 - Every secret is envelope-encrypted with connections' own KMS key. The encryption context binds the service, organization, resource type and ID, so ciphertext cannot be moved between organizations or records. Plaintext buffers are wiped after use.

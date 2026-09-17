@@ -143,7 +143,7 @@ func TestDeleteCredentialsRequiresTheClaimedLease(t *testing.T) {
 	}
 
 	found := false
-	events, err := store.ClaimOutbox(ctx, 100)
+	events, err := store.ClaimOutbox(ctx, 100, "claim-token")
 	if err != nil {
 		t.Fatal(err)
 	}

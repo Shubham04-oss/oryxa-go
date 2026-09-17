@@ -69,7 +69,7 @@ func TestAnyAppAndDeleteOrganizationApps(t *testing.T) {
 		t.Fatalf("second DeleteOrganizationApps() = %d, %v (events=%d)", count, err, len(mu))
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 100)
+	claimed, err := store.ClaimOutbox(ctx, 100, "claim-token")
 	if err != nil {
 		t.Fatal(err)
 	}
