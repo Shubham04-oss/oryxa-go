@@ -635,3 +635,40 @@ func TestOutboxClaimOwnershipSurvivesATakeover(t *testing.T) {
 		t.Fatalf("owner MarkOutboxPublished() = %v, %v, want true", marked, err)
 	}
 }
+
+// TestOpenRequiredExtensions covers Open's requiredExtensions parameter,
+// which POSTGRES_REQUIRED_EXTENSIONS (see internal/host) passes through to
+// postgreskit.Open: it succeeds when every named extension is installed, and
+// refuses, naming it, when one is not. openTestStore always opens with none,
+// so nothing else in this package exercises it.
+func TestOpenRequiredExtensions(t *testing.T) {
+	databaseURL := os.Getenv("CONNECTIONS_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("CONNECTIONS_TEST_DATABASE_URL is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	admin, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close(ctx)
+	// pg_trgm ships with every standard PostgreSQL install and, since
+	// PostgreSQL 13, is trusted: a role that can CREATE SCHEMA (which
+	// openTestStore already relies on) can install it without being
+	// superuser. If this environment still refuses it, skip rather than fail,
+	// since that is a property of the database, not of Open.
+	if _, err := admin.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS pg_trgm"); err != nil {
+		t.Skipf("pg_trgm could not be installed on this database: %v", err)
+	}
+
+	store, err := Open(ctx, databaseURL, "pg_trgm")
+	if err != nil {
+		t.Fatalf("Open() with an installed extension error = %v", err)
+	}
+	store.Close()
+
+	if _, err := Open(ctx, databaseURL, "pg_trgm", "not_a_real_extension"); err == nil || !strings.Contains(err.Error(), "not_a_real_extension") {
+		t.Fatalf("Open() with a missing extension error = %v, want it to name not_a_real_extension", err)
+	}
+}
