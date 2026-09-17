@@ -294,10 +294,13 @@ func failed(err error) *mcp.CallToolResult {
 }
 
 func failedWith(code, message string, extra map[string]any) *mcp.CallToolResult {
-	value := map[string]any{"error": code, "message": message}
+	value := map[string]any{}
 	for key, item := range extra {
 		value[key] = item
 	}
+	// The code is set last: a run view carries a failure's own wording under
+	// error, and the code is what a model branches on.
+	value["error"], value["message"] = code, message
 	encoded, _ := json.Marshal(value)
 	return &mcp.CallToolResult{
 		IsError:           true,
