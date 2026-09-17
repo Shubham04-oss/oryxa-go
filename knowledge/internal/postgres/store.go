@@ -25,8 +25,11 @@ const migrationsAdvisoryLock int64 = 7263510500
 type Store struct {
 	pool     *pgxpool.Pool
 	database *postgreskit.Database
+	// borrowed is a pool someone else opened and will close.
+	borrowed bool
 }
 
+// Open opens a pool of knowledge's own, which Close closes.
 func Open(ctx context.Context, databaseURL string, requiredExtensions ...string) (*Store, error) {
 	database, err := postgreskit.Open(ctx, postgreskit.Config{
 		URL: databaseURL, ApplicationName: "oryxa-knowledge", RequiredExtensions: requiredExtensions,
@@ -37,7 +40,17 @@ func Open(ctx context.Context, databaseURL string, requiredExtensions ...string)
 	return &Store{pool: database.Pool, database: database}, nil
 }
 
-func (store *Store) Close() { store.database.Close() }
+// New uses a pool the caller owns, such as the one a host shares between
+// services. Close leaves it open.
+func New(database *postgreskit.Database) *Store {
+	return &Store{pool: database.Pool, database: database, borrowed: true}
+}
+
+func (store *Store) Close() {
+	if !store.borrowed {
+		store.database.Close()
+	}
+}
 
 func (store *Store) ExtensionVersions() map[string]string { return store.database.ExtensionVersions() }
 

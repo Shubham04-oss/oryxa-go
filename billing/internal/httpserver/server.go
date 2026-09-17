@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -45,6 +46,7 @@ type Server struct {
 	allowedOrigins map[string]struct{}
 	logger         *slog.Logger
 	mux            *http.ServeMux
+	patterns       []string
 }
 
 func New(service billingService, webhooks webhookParser, config Config, logger *slog.Logger) *Server {
@@ -61,16 +63,26 @@ func New(service billingService, webhooks webhookParser, config Config, logger *
 		}
 	}
 
-	server.mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+	server.handle("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	server.mux.HandleFunc("GET /v1/billing/plans", server.plans)
-	server.mux.HandleFunc("GET /v1/billing/organizations/{organizationID}", server.summary)
-	server.mux.HandleFunc("POST /v1/billing/organizations/{organizationID}/checkout", server.checkout)
-	server.mux.HandleFunc("POST /v1/billing/organizations/{organizationID}/portal", server.portal)
-	server.mux.HandleFunc("POST /v1/billing/webhooks/dodo", server.dodoWebhook)
+	server.handle("GET /v1/billing/plans", server.plans)
+	server.handle("GET /v1/billing/organizations/{organizationID}", server.summary)
+	server.handle("POST /v1/billing/organizations/{organizationID}/checkout", server.checkout)
+	server.handle("POST /v1/billing/organizations/{organizationID}/portal", server.portal)
+	server.handle("POST /v1/billing/webhooks/dodo", server.dodoWebhook)
 	return server
 }
+
+// handle registers a route and remembers its pattern, so a host serving
+// several services knows which paths are this one's.
+func (server *Server) handle(pattern string, handler http.HandlerFunc) {
+	server.mux.HandleFunc(pattern, handler)
+	server.patterns = append(server.patterns, pattern)
+}
+
+// Patterns lists every route the server registered.
+func (server *Server) Patterns() []string { return slices.Clone(server.patterns) }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")

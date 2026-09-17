@@ -20,6 +20,19 @@ func TestRequireExtensionsNormalizesNames(t *testing.T) {
 	}
 }
 
+func TestDetachedReportsItsExtensions(t *testing.T) {
+	extensions := map[string]string{"vector": "0.8.6"}
+	database := Detached(extensions)
+	extensions["vector"] = "changed"
+	if got := database.ExtensionVersions()["vector"]; got != "0.8.6" {
+		t.Fatalf("vector = %q, want the version it was given", got)
+	}
+	if err := database.RequireExtensions("pgvector"); err != nil {
+		t.Fatal(err)
+	}
+	database.Close()
+}
+
 func TestOpenDoesNotEchoInvalidDatabaseCredentials(t *testing.T) {
 	const secret = "database-password-must-not-leak"
 	_, err := Open(context.Background(), Config{
@@ -64,5 +77,35 @@ func TestOpenSharesPGXPoolWithSQLXAndRegistersVector(t *testing.T) {
 	}
 	if got := value.Slice(); len(got) != 3 || got[0] != 1 || got[2] != 3 {
 		t.Fatalf("vector = %v", got)
+	}
+}
+
+func TestOpenSizesThePoolUnlessTheURLDoes(t *testing.T) {
+	databaseURL := os.Getenv("POSTGRESKIT_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("POSTGRESKIT_TEST_DATABASE_URL is not set")
+	}
+	sized, err := Open(context.Background(), Config{URL: databaseURL, ApplicationName: "oryxa-postgreskit-test", MaxConns: 17})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sized.Close()
+	if got := sized.Pool.Config().MaxConns; got != 17 {
+		t.Fatalf("MaxConns = %d, want 17", got)
+	}
+
+	separator := "?"
+	if strings.Contains(databaseURL, "?") {
+		separator = "&"
+	}
+	named, err := Open(context.Background(), Config{
+		URL: databaseURL + separator + "pool_max_conns=3", ApplicationName: "oryxa-postgreskit-test", MaxConns: 17,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer named.Close()
+	if got := named.Pool.Config().MaxConns; got != 3 {
+		t.Fatalf("MaxConns = %d, want the URL's 3", got)
 	}
 }

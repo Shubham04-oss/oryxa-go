@@ -21,44 +21,54 @@ var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
 type fakeApplication struct {
 	acted   []string
 	handled map[string]bool
-	err     error
+	// err fails every handler call it is set for.
+	err error
+	// failTimes fails that many handler calls before letting the rest
+	// through, for a test that redelivers after a failure.
+	failTimes int
 }
 
 func newFakeApplication() *fakeApplication {
 	return &fakeApplication{handled: map[string]bool{}}
 }
 
-func (app *fakeApplication) OrganizationDeleted(context.Context, authv1.OrganizationDeleted) error {
-	app.acted = append(app.acted, authv1.OrganizationDeletedDetailType)
+// act records the call and fails it if the fake was told to.
+func (app *fakeApplication) act(detailType string) error {
+	app.acted = append(app.acted, detailType)
+	if app.failTimes > 0 {
+		app.failTimes--
+		return errors.New("the handler failed")
+	}
 	return app.err
+}
+
+func (app *fakeApplication) OrganizationDeleted(context.Context, authv1.OrganizationDeleted) error {
+	return app.act(authv1.OrganizationDeletedDetailType)
 }
 
 func (app *fakeApplication) MemberRemoved(context.Context, authv1.MemberRemoved) error {
-	app.acted = append(app.acted, authv1.MemberRemovedDetailType)
-	return app.err
+	return app.act(authv1.MemberRemovedDetailType)
 }
 
 func (app *fakeApplication) ConnectionDisconnected(context.Context, connectionsv1.ConnectionDisconnected) error {
-	app.acted = append(app.acted, connectionsv1.ConnectionDisconnectedDetailType)
-	return app.err
+	return app.act(connectionsv1.ConnectionDisconnectedDetailType)
 }
 
 func (app *fakeApplication) ConnectionNeedsReconnect(context.Context, connectionsv1.ConnectionNeedsReconnect) error {
-	app.acted = append(app.acted, connectionsv1.ConnectionNeedsReconnectDetailType)
-	return app.err
+	return app.act(connectionsv1.ConnectionNeedsReconnectDetailType)
 }
 
 func (app *fakeApplication) AppDeleted(context.Context, connectionsv1.AppDeleted) error {
-	app.acted = append(app.acted, connectionsv1.AppDeletedDetailType)
-	return app.err
+	return app.act(connectionsv1.AppDeletedDetailType)
 }
 
-func (app *fakeApplication) Handled(_ context.Context, eventID, _ string) (bool, error) {
-	if app.handled[eventID] {
-		return false, nil
-	}
+func (app *fakeApplication) AlreadyHandled(_ context.Context, eventID string) (bool, error) {
+	return app.handled[eventID], nil
+}
+
+func (app *fakeApplication) MarkHandled(_ context.Context, eventID, _ string) error {
 	app.handled[eventID] = true
-	return true, nil
+	return nil
 }
 
 // delivery is one message as EventBridge would put it on the queue.
@@ -195,6 +205,41 @@ func TestHandleLeavesAnEventUndeletedWhenActingOnItFailed(t *testing.T) {
 
 	if err := consumer.Handle(context.Background(), body); err == nil {
 		t.Fatal("Handle() error = nil, want the failure to reach Poll")
+	}
+	// A failed handler must not be recorded: the redelivery Poll causes has
+	// to run it again, not find it already marked handled.
+	if already, err := app.AlreadyHandled(context.Background(), "evt_1"); err != nil || already {
+		t.Fatalf("AlreadyHandled() after a failed handler = %v, %v, want false", already, err)
+	}
+}
+
+func TestHandleRecordsAnEventOnlyAfterItsHandlerSucceeds(t *testing.T) {
+	// Recording an event as handled before running its handler would mean a
+	// handler that then fails is never retried: the redelivery would find
+	// the event already marked handled, skip the handler, and Poll would
+	// still delete the message. The fix is to record the event only once its
+	// handler has actually succeeded.
+	app := newFakeApplication()
+	app.failTimes = 1
+	consumer := NewConsumer(app, nil)
+	body := delivery(t, connectionsv1.Source, connectionsv1.AppDeletedDetailType, "evt_1",
+		connectionsv1.AppDeleted{AppID: "app_1"})
+
+	if err := consumer.Handle(context.Background(), body); err == nil {
+		t.Fatal("Handle() error = nil on the first delivery, want the handler's failure")
+	}
+	if already, err := app.AlreadyHandled(context.Background(), "evt_1"); err != nil || already {
+		t.Fatalf("AlreadyHandled() after the first delivery failed = %v, %v, want false", already, err)
+	}
+
+	if err := consumer.Handle(context.Background(), body); err != nil {
+		t.Fatalf("Handle() error on the redelivery = %v", err)
+	}
+	if len(app.acted) != 2 {
+		t.Fatalf("handler ran %d times, want 2: the failure and the retry", len(app.acted))
+	}
+	if already, err := app.AlreadyHandled(context.Background(), "evt_1"); err != nil || !already {
+		t.Fatalf("AlreadyHandled() after the redelivery succeeded = %v, %v, want true", already, err)
 	}
 }
 

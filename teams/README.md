@@ -135,33 +135,27 @@ To consume another event: add it to `AuthSubscriptions` and `NewConsumer` in `in
 
 ## Provision
 
-Copy `.env.example` to the ignored `teams/.env`. Its last block points everything at the emulators in the root `docker-compose.yml`; delete that block to provision AWS through the default credential chain. Then run:
+Copy the root `.env.example` to the ignored `.env`. Its emulator block points the AWS services teams uses at the emulators in the root `docker-compose.yml`; remove it to provision AWS through the default credential chain. Then run:
 
 ```sh
-(set -a && . teams/.env && go run ./teams/infra/events/cmd/provision)
+(set -a && . ./.env && go run ./teams/infra/events/cmd/provision)
 ```
 
 The command is repeatable. It creates or updates the `teams-events` queue with its dead-letter queue, and a `teams-auth-organizations` rule on `EVENT_BUS_NAME` whose target is the queue and which the queue policy admits alone. Put the printed `queue_url` in `TEAMS_EVENTS_QUEUE_URL`.
 
-The embedded migrations are in `internal/postgres/migrations/` and are applied in name order automatically with `TEAMS_AUTO_MIGRATE=true`. The emulators forget EventBridge state when they restart, so re-run the provisioner after one.
+The embedded migrations are in `internal/postgres/migrations/` and are applied in name order when `oryxa` starts, unless `ORYXA_AUTO_MIGRATE=false`, or ahead of time with `go run ./cmd/oryxa migrate`. The emulators forget EventBridge state when they restart, so re-run the provisioner after one.
 
 ## Run locally
 
 ```sh
 docker compose up -d
-(set -a && . teams/.env && go run ./teams/infra/events/cmd/provision)
-(set -a && . teams/.env && go run ./teams/cmd/teams)
-```
-
-Or in Docker on the shared network, like auth and billing:
-
-```sh
-docker compose -f compose.teams.yaml up -d --build teams
+(set -a && . ./.env && go run ./teams/infra/events/cmd/provision)
+(set -a && . ./.env && ORYXA_SERVICES=teams go run ./cmd/oryxa)
 ```
 
 Logs are structured JSON from `/internal/observability`. HTTP access logs skip `/healthz`. AWS SDK and pgx spans export over OTLP/gRPC when `OTEL_EXPORTER_OTLP_ENDPOINT` (or the signal-specific endpoints) is set.
 
-The simulated client journey for teams together with files and email is `/test` (`./test/run.sh`). It is k6 against a local harness, not this binary.
+The simulated client journey for teams together with files and email is `/test` (`./test/run.sh`). It is k6 against one `oryxa` process running teams, files and email.
 
 Without `TEAMS_EVENTS_QUEUE_URL` teams still starts, but it will not hear about organizations. The store has its own tests against PostgreSQL, which the unit test run skips:
 
@@ -171,4 +165,4 @@ TEAMS_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/oryx
 
 ## Deploy
 
-Teams is a long-running container, like auth, behind the same public edge. Its runtime identity needs `events:PutEvents` on the event bus and `sqs:ReceiveMessage` and `sqs:DeleteMessage` on `teams-events`.
+Teams deploys as part of the single `oryxa` image, behind the same public edge as every service it runs alongside. Its runtime identity needs `events:PutEvents` on the event bus and `sqs:ReceiveMessage` and `sqs:DeleteMessage` on `teams-events`.

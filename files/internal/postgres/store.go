@@ -25,8 +25,11 @@ type Store struct {
 	pool     *pgxpool.Pool
 	db       *sqlx.DB
 	database *postgreskit.Database
+	// borrowed is a pool someone else opened and will close.
+	borrowed bool
 }
 
+// Open opens a pool of files' own, which Close closes.
 func Open(ctx context.Context, databaseURL string, requiredExtensions ...string) (*Store, error) {
 	database, err := postgreskit.Open(ctx, postgreskit.Config{
 		URL: databaseURL, ApplicationName: "oryxa-files", RequiredExtensions: requiredExtensions,
@@ -37,8 +40,16 @@ func Open(ctx context.Context, databaseURL string, requiredExtensions ...string)
 	return &Store{pool: database.Pool, db: database.SQLX, database: database}, nil
 }
 
+// New uses a pool the caller owns, such as the one a host shares between
+// services. Close leaves it open.
+func New(database *postgreskit.Database) *Store {
+	return &Store{pool: database.Pool, db: database.SQLX, database: database, borrowed: true}
+}
+
 func (store *Store) Close() {
-	store.database.Close()
+	if !store.borrowed {
+		store.database.Close()
+	}
 }
 
 func (store *Store) ExtensionVersions() map[string]string { return store.database.ExtensionVersions() }

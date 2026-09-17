@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/integrations/internal/application"
@@ -56,6 +57,7 @@ type Server struct {
 	allowedOrigins map[string]struct{}
 	logger         *slog.Logger
 	mux            *http.ServeMux
+	patterns       []string
 }
 
 func New(service integrationsService, config Config, logger *slog.Logger) *Server {
@@ -68,32 +70,49 @@ func New(service integrationsService, config Config, logger *slog.Logger) *Serve
 			server.allowedOrigins[parsed.Scheme+"://"+parsed.Host] = struct{}{}
 		}
 	}
-	server.mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+	server.handle("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	server.mux.HandleFunc("POST /v1/webhooks/{provider}/{route}", server.receive)
+	server.handle("POST /v1/webhooks/{provider}/{route}", server.receive)
 
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/subscriptions", server.listSubscriptions)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/subscriptions", server.createSubscription)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/subscriptions/{subscriptionID}", server.getSubscription)
-	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/subscriptions/{subscriptionID}", server.stopSubscription)
+	server.handle("GET /v1/organizations/{organizationID}/subscriptions", server.listSubscriptions)
+	server.handle("POST /v1/organizations/{organizationID}/subscriptions", server.createSubscription)
+	server.handle("GET /v1/organizations/{organizationID}/subscriptions/{subscriptionID}", server.getSubscription)
+	server.handle("DELETE /v1/organizations/{organizationID}/subscriptions/{subscriptionID}", server.stopSubscription)
 
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/actions", server.runAction)
-	server.mux.HandleFunc("GET /v1/catalog", server.catalog)
+	server.handle("POST /v1/organizations/{organizationID}/actions", server.runAction)
+	server.handle("GET /v1/catalog", server.catalog)
 	if config.MCP != nil {
 		// An MCP endpoint keeps no session and answers only POST; the mux
 		// refuses the other methods for it.
-		server.mux.Handle("POST /v1/organizations/{organizationID}/mcp/{provider}", config.MCP)
+		server.handleHandler("POST /v1/organizations/{organizationID}/mcp/{provider}", config.MCP)
 		// The same endpoint at one fixed URL per provider, naming the
 		// organization in a header, as an agent's toolset is configured.
-		server.mux.Handle("POST /v1/mcp/{provider}", config.MCP)
+		server.handleHandler("POST /v1/mcp/{provider}", config.MCP)
 	}
 
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/apps/{appID}/webhook", server.getAppWebhook)
-	server.mux.HandleFunc("PUT /v1/organizations/{organizationID}/apps/{appID}/webhook", server.putAppWebhook)
-	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/apps/{appID}/webhook", server.deleteAppWebhook)
+	server.handle("GET /v1/organizations/{organizationID}/apps/{appID}/webhook", server.getAppWebhook)
+	server.handle("PUT /v1/organizations/{organizationID}/apps/{appID}/webhook", server.putAppWebhook)
+	server.handle("DELETE /v1/organizations/{organizationID}/apps/{appID}/webhook", server.deleteAppWebhook)
 	return server
 }
+
+// handle registers a route and remembers its pattern, so a host serving
+// several services knows which paths are this one's.
+func (server *Server) handle(pattern string, handler http.HandlerFunc) {
+	server.mux.HandleFunc(pattern, handler)
+	server.patterns = append(server.patterns, pattern)
+}
+
+// handleHandler is handle for a route served by an http.Handler rather than a
+// HandlerFunc, such as the MCP endpoint.
+func (server *Server) handleHandler(pattern string, handler http.Handler) {
+	server.mux.Handle(pattern, handler)
+	server.patterns = append(server.patterns, pattern)
+}
+
+// Patterns lists every route the server registered.
+func (server *Server) Patterns() []string { return slices.Clone(server.patterns) }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")

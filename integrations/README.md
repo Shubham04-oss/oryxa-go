@@ -331,21 +331,19 @@ pings, signs and delivers the way the real one does.
 
 ## Configuration
 
+The listener, `DATABASE_URL`, migrations, `EVENT_BUS_NAME` and `AWS_REGION`
+belong to the `oryxa` process; see the root README. Integrations reads:
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `INTEGRATIONS_ADDRESS` | `:8080` | Listen address |
-| `DATABASE_URL` | — | PostgreSQL, required |
-| `AUTH_URL` | — | Auth, required |
-| `CONNECTIONS_URL` | — | Connections, required |
+| `AUTH_URL` | this process, when it runs auth | Auth |
+| `CONNECTIONS_URL` | this process, when it runs connections | Connections |
 | `INTEGRATIONS_PUBLIC_BASE_URL` | — | Where providers reach integrations; webhook URLs are built on it, required |
 | `INTEGRATIONS_ALLOWED_ORIGINS` | — | Origins that may send cookie-authenticated changes |
 | `INTEGRATIONS_KMS_KEY_ID` | — | Envelope-encrypts webhook secrets, required |
 | `INTEGRATIONS_SERVICE_KEY_ID` | — | The KMS key integrations signs service tokens with, required |
 | `INTEGRATIONS_SERVICE_NAME` | `integrations` | What it calls itself to connections |
 | `INTEGRATIONS_EVENTS_QUEUE_URL` | — | Without it, subscriptions do not stop when connections, members or organizations go away |
-| `INTEGRATIONS_AUTO_MIGRATE` | `true` | Run migrations at startup |
-| `EVENT_BUS_NAME` | `default` | EventBridge bus |
-| `AWS_REGION` | `ap-south-1` | AWS region |
 
 Connections must allow integrations to call it, with the purposes it uses:
 
@@ -355,19 +353,23 @@ CONNECTIONS_SERVICE_CALLERS=[{"service": "integrations", "key_id": "alias/oryxa-
 
 ## Run locally
 
-Copy `.env.example` to `integrations/.env`, then:
+Copy the root `.env.example` to the ignored `.env`, then from the repository root:
 
 ```sh
 docker compose up -d
-(set -a && . integrations/.env && go run ./integrations/cmd/integrations)
+(set -a && . ./.env && ORYXA_SERVICES=integrations go run ./cmd/oryxa)
 ```
+
+Install the schema on its own with `go run ./cmd/oryxa migrate`; it also runs
+at startup unless `ORYXA_AUTO_MIGRATE=false`. Integrations deploys as part of
+the single `oryxa` image.
 
 `INTEGRATIONS_PUBLIC_BASE_URL` must be a public HTTPS URL that reaches the
 service, since providers deliver to it: a Cloudflare tunnel is the shortest
 way.
 
 ```sh
-cloudflared tunnel --url http://localhost:8087
+cloudflared tunnel --url http://localhost:8080
 ```
 
 ## Tests

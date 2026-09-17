@@ -7,20 +7,22 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 )
 
+func env(values map[string]string) func(string) string {
+	return func(name string) string { return values[name] }
+}
+
 // minimal sets only what rag cannot start without, so each test can add the
 // one variable it is about.
-func minimal(t *testing.T, extra map[string]string) {
-	t.Helper()
-	t.Setenv("DATABASE_URL", "postgres://oryxa@localhost/oryxa")
-	t.Setenv("AUTH_URL", "http://localhost:8080")
+func minimal(extra map[string]string) map[string]string {
+	values := map[string]string{"AUTH_URL": "http://localhost:8080"}
 	for name, value := range extra {
-		t.Setenv(name, value)
+		values[name] = value
 	}
+	return values
 }
 
 func TestDefaults(t *testing.T) {
-	minimal(t, nil)
-	config, err := FromEnv()
+	config, err := FromEnv(env(minimal(nil)))
 	if err != nil {
 		t.Fatalf("FromEnv: %v", err)
 	}
@@ -40,11 +42,9 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
-func TestDatabaseAndAuthAreRequired(t *testing.T) {
-	t.Setenv("DATABASE_URL", "")
-	t.Setenv("AUTH_URL", "")
-	if _, err := FromEnv(); err == nil {
-		t.Fatal("rag started with no database and no auth")
+func TestAuthURLIsRequired(t *testing.T) {
+	if _, err := FromEnv(env(nil)); err == nil {
+		t.Fatal("rag started with no auth")
 	}
 }
 
@@ -117,15 +117,10 @@ func TestBadDefaultsFailTheDeploy(t *testing.T) {
 		name:    "a concurrency outside the allowed range",
 		env:     map[string]string{"RAG_EMBED_CONCURRENCY": "0"},
 		wantErr: "RAG_EMBED_CONCURRENCY",
-	}, {
-		name:    "auto-migrate that is not a boolean",
-		env:     map[string]string{"RAG_AUTO_MIGRATE": "sometimes"},
-		wantErr: "RAG_AUTO_MIGRATE",
 	}}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			minimal(t, testCase.env)
-			_, err := FromEnv()
+			_, err := FromEnv(env(minimal(testCase.env)))
 			if err == nil {
 				t.Fatalf("FromEnv accepted %v", testCase.env)
 			}
@@ -137,15 +132,14 @@ func TestBadDefaultsFailTheDeploy(t *testing.T) {
 }
 
 func TestAWorkableVertexConfiguration(t *testing.T) {
-	minimal(t, map[string]string{
+	config, err := FromEnv(env(minimal(map[string]string{
 		"RAG_DEFAULT_EMBEDDING_PROVIDER": "vertex",
 		"RAG_DEFAULT_EMBEDDING_MODEL":    "gemini-embedding-001",
 		"GOOGLE_CLOUD_PROJECT":           "oryxa-dev",
 		"GOOGLE_CLOUD_LOCATION":          "asia-south1",
 		"RAG_ANSWER_PROVIDER":            "vertex",
 		"RAG_ANSWER_MODEL":               "gemini-3.8-flash",
-	})
-	config, err := FromEnv()
+	})))
 	if err != nil {
 		t.Fatalf("FromEnv: %v", err)
 	}
@@ -158,11 +152,10 @@ func TestAWorkableVertexConfiguration(t *testing.T) {
 }
 
 func TestAWorkableS3VectorsConfiguration(t *testing.T) {
-	minimal(t, map[string]string{
+	config, err := FromEnv(env(minimal(map[string]string{
 		"RAG_DEFAULT_BACKEND":    "s3vectors",
 		"RAG_VECTOR_BUCKET_NAME": "oryxa-vectors",
-	})
-	config, err := FromEnv()
+	})))
 	if err != nil {
 		t.Fatalf("FromEnv: %v", err)
 	}
@@ -172,12 +165,11 @@ func TestAWorkableS3VectorsConfiguration(t *testing.T) {
 }
 
 func TestTrailingSlashesAreTrimmedFromURLs(t *testing.T) {
-	minimal(t, map[string]string{
+	config, err := FromEnv(env(minimal(map[string]string{
 		"AUTH_URL":  "http://localhost:8080/",
 		"TEAMS_URL": "http://localhost:8083/",
 		"FILES_URL": "http://localhost:8085/",
-	})
-	config, err := FromEnv()
+	})))
 	if err != nil {
 		t.Fatalf("FromEnv: %v", err)
 	}

@@ -3,7 +3,6 @@ package serviceconfig
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -13,8 +12,12 @@ import (
 
 const defaultAWSRegion = "ap-south-1"
 
+// Config is what primary reads for itself. The listener is the host's.
+// DatabaseURL and AutoMigrate stay here, unlike a service the host migrates
+// and mounts on the shared pool: cmd/devui is the only thing that opens
+// PostgreSQL today, through adksession, and it needs a pool of its own for
+// ADK's tables rather than the host's shared one.
 type Config struct {
-	Address string
 	// Model is the main chat model the agents run on, and ModelLite the
 	// cheaper model planning and bulk work are routed to.
 	Model     string
@@ -71,37 +74,39 @@ type Config struct {
 	ServiceKeyID string
 }
 
-func FromEnv() (Config, error) {
-	autoMigrate, err := boolValue("AGENTS_PRIMARY_AUTO_MIGRATE", true)
+// FromEnv reads primary's configuration through getenv, which a host layers
+// its own defaults under.
+func FromEnv(getenv func(string) string) (Config, error) {
+	autoMigrate, err := boolValue(getenv, "AGENTS_PRIMARY_AUTO_MIGRATE", true)
 	if err != nil {
 		return Config{}, err
 	}
-	cache, err := boolValue("AGENTS_PRIMARY_PROMPT_CACHE", true)
+	cache, err := boolValue(getenv, "AGENTS_PRIMARY_PROMPT_CACHE", true)
 	if err != nil {
 		return Config{}, err
 	}
-	cacheTTL, err := secondsValue("AGENTS_PRIMARY_CACHE_TTL_SECONDS", time.Hour, time.Minute, 24*time.Hour)
+	cacheTTL, err := secondsValue(getenv, "AGENTS_PRIMARY_CACHE_TTL_SECONDS", time.Hour, time.Minute, 24*time.Hour)
 	if err != nil {
 		return Config{}, err
 	}
-	cacheMinTokens, err := intValue("AGENTS_PRIMARY_CACHE_MIN_TOKENS", 4096, 0, 1_000_000)
+	cacheMinTokens, err := intValue(getenv, "AGENTS_PRIMARY_CACHE_MIN_TOKENS", 4096, 0, 1_000_000)
 	if err != nil {
 		return Config{}, err
 	}
-	sandboxTimeout, err := secondsValue("AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", 15*time.Minute, time.Minute, 8*time.Hour)
+	sandboxTimeout, err := secondsValue(getenv, "AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", 15*time.Minute, time.Minute, 8*time.Hour)
 	if err != nil {
 		return Config{}, err
 	}
-	browserTimeout, err := secondsValue("AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS", 15*time.Minute, time.Minute, 8*time.Hour)
+	browserTimeout, err := secondsValue(getenv, "AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS", 15*time.Minute, time.Minute, 8*time.Hour)
 	if err != nil {
 		return Config{}, err
 	}
-	guardrailFailClosed, err := boolValue("AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED", false)
+	guardrailFailClosed, err := boolValue(getenv, "AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED", false)
 	if err != nil {
 		return Config{}, err
 	}
-	guardrailIdentifier := strings.TrimSpace(os.Getenv("AGENTS_PRIMARY_GUARDRAIL_ID"))
-	guardrailVersion := strings.TrimSpace(os.Getenv("AGENTS_PRIMARY_GUARDRAIL_VERSION"))
+	guardrailIdentifier := strings.TrimSpace(getenv("AGENTS_PRIMARY_GUARDRAIL_ID"))
+	guardrailVersion := strings.TrimSpace(getenv("AGENTS_PRIMARY_GUARDRAIL_VERSION"))
 	if guardrailIdentifier != "" {
 		if guardrailVersion == "" {
 			return Config{}, errors.New("AGENTS_PRIMARY_GUARDRAIL_VERSION is required when AGENTS_PRIMARY_GUARDRAIL_ID is set")
@@ -110,53 +115,52 @@ func FromEnv() (Config, error) {
 			return Config{}, errors.New("AGENTS_PRIMARY_GUARDRAIL_VERSION must be a numbered snapshot, not DRAFT")
 		}
 	}
-	modelPrices := strings.TrimSpace(os.Getenv("AGENTS_PRIMARY_MODEL_PRICES"))
+	modelPrices := strings.TrimSpace(getenv("AGENTS_PRIMARY_MODEL_PRICES"))
 	if _, err := pricing.ParseOverrides(modelPrices); err != nil {
 		return Config{}, err
 	}
 	return Config{
-		Address:             valueOrDefault("AGENTS_PRIMARY_ADDRESS", ":8080"),
-		Model:               valueOrDefault("AGENTS_PRIMARY_MODEL", "gemini-3.8-flash"),
-		ModelLite:           valueOrDefault("AGENTS_PRIMARY_MODEL_LITE", "gemini-3.8-flash-lite"),
-		GoogleCloudProject:  strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")),
-		GoogleCloudLocation: valueOrDefault("GOOGLE_CLOUD_LOCATION", "global"),
-		DatabaseURL:         strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		Model:               valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL", "gemini-3.8-flash"),
+		ModelLite:           valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL_LITE", "gemini-3.8-flash-lite"),
+		GoogleCloudProject:  strings.TrimSpace(getenv("GOOGLE_CLOUD_PROJECT")),
+		GoogleCloudLocation: valueOrDefault(getenv, "GOOGLE_CLOUD_LOCATION", "global"),
+		DatabaseURL:         strings.TrimSpace(getenv("DATABASE_URL")),
 		AutoMigrate:         autoMigrate,
 		Cache:               cache,
 		CacheTTL:            cacheTTL,
 		CacheMinTokens:      cacheMinTokens,
-		AWSRegion:           valueOrDefault("AWS_REGION", defaultAWSRegion),
+		AWSRegion:           valueOrDefault(getenv, "AWS_REGION", defaultAWSRegion),
 		SandboxCodeInterpreter: valueOrDefault(
-			"AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID",
+			getenv, "AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID",
 			"aws.codeinterpreter.v1",
 		),
 		SandboxSessionTimeout: sandboxTimeout,
 		BrowserIdentifier: valueOrDefault(
-			"AGENTS_PRIMARY_BROWSER_ID",
+			getenv, "AGENTS_PRIMARY_BROWSER_ID",
 			"aws.browser.v1",
 		),
 		BrowserSessionTimeout: browserTimeout,
-		EventBusName:          valueOrDefault("EVENT_BUS_NAME", "default"),
-		EventBridgeEndpoint:   strings.TrimSpace(os.Getenv("EVENTBRIDGE_ENDPOINT")),
+		EventBusName:          valueOrDefault(getenv, "EVENT_BUS_NAME", "default"),
+		EventBridgeEndpoint:   strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")),
 		GuardrailIdentifier:   guardrailIdentifier,
 		GuardrailVersion:      guardrailVersion,
 		GuardrailFailClosed:   guardrailFailClosed,
 		ModelPrices:           modelPrices,
-		IntegrationsURL:       strings.TrimSpace(os.Getenv("INTEGRATIONS_URL")),
-		AuthURL:               strings.TrimSpace(os.Getenv("AUTH_URL")),
-		ServiceKeyID:          strings.TrimSpace(os.Getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
+		IntegrationsURL:       strings.TrimSpace(getenv("INTEGRATIONS_URL")),
+		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),
+		ServiceKeyID:          strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
 	}, nil
 }
 
-func valueOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+func valueOrDefault(getenv func(string) string, name, fallback string) string {
+	if value := strings.TrimSpace(getenv(name)); value != "" {
 		return value
 	}
 	return fallback
 }
 
-func boolValue(name string, fallback bool) (bool, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func boolValue(getenv func(string) string, name string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}
@@ -167,8 +171,8 @@ func boolValue(name string, fallback bool) (bool, error) {
 	return parsed, nil
 }
 
-func secondsValue(name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func secondsValue(getenv func(string) string, name string, fallback, minimum, maximum time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}
@@ -183,8 +187,8 @@ func secondsValue(name string, fallback, minimum, maximum time.Duration) (time.D
 	return duration, nil
 }
 
-func intValue(name string, fallback, minimum, maximum int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func intValue(getenv func(string) string, name string, fallback, minimum, maximum int) (int, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}

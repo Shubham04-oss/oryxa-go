@@ -4,66 +4,51 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
-const defaultRegion = "ap-south-1"
-
+// Config is what connections reads for itself. The listener, the database,
+// the AWS region and the event bus are the host's.
 type Config struct {
-	Address            string
-	AWSRegion          string
-	DatabaseURL        string
-	PostgresExtensions []string
-	AutoMigrate        bool
-	AuthURL            string
-	TeamsURL           string
-	PublicBaseURL      string
-	AllowedOrigins     []string
+	AuthURL        string
+	TeamsURL       string
+	PublicBaseURL  string
+	AllowedOrigins []string
 	// KMSKeyID is the key that envelope-encrypts client secrets, sessions and
 	// grants.
 	KMSKeyID            string
 	KMSEndpoint         string
 	EventBridgeEndpoint string
 	SQSEndpoint         string
-	EventBusName        string
 	EventsQueueURL      string
 	// ServiceCallers are the services that may call the internal API with
 	// their own identity, their KMS keys, and their purposes.
 	ServiceCallers []serviceauth.Caller
 }
 
-func FromEnv() (Config, error) {
-	autoMigrate, err := boolValue("CONNECTIONS_AUTO_MIGRATE", true)
-	if err != nil {
-		return Config{}, err
-	}
-	genericEndpoint := endpoint("AWS_ENDPOINT_URL")
+// FromEnv reads connections' configuration through getenv, which a host
+// layers its own defaults under.
+func FromEnv(getenv func(string) string) (Config, error) {
+	genericEndpoint := endpoint(getenv, "AWS_ENDPOINT_URL")
 	config := Config{
-		Address:            valueOrDefault("CONNECTIONS_ADDRESS", ":8080"),
-		AWSRegion:          valueOrDefault("AWS_REGION", defaultRegion),
-		DatabaseURL:        strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		PostgresExtensions: splitList(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
-		AutoMigrate:        autoMigrate,
-		AuthURL:            endpoint("AUTH_URL"),
-		TeamsURL:           endpoint("TEAMS_URL"),
-		PublicBaseURL:      endpoint("CONNECTIONS_PUBLIC_BASE_URL"),
-		AllowedOrigins:     splitList(os.Getenv("CONNECTIONS_ALLOWED_ORIGINS")),
-		KMSKeyID:           strings.TrimSpace(os.Getenv("CONNECTIONS_KMS_KEY_ID")),
+		AuthURL:        endpoint(getenv, "AUTH_URL"),
+		TeamsURL:       endpoint(getenv, "TEAMS_URL"),
+		PublicBaseURL:  endpoint(getenv, "CONNECTIONS_PUBLIC_BASE_URL"),
+		AllowedOrigins: splitList(getenv("CONNECTIONS_ALLOWED_ORIGINS")),
+		KMSKeyID:       strings.TrimSpace(getenv("CONNECTIONS_KMS_KEY_ID")),
 		// The local stack runs no KMS, so KMS never follows AWS_ENDPOINT_URL.
-		KMSEndpoint:         endpoint("AWS_ENDPOINT_URL_KMS"),
-		EventBridgeEndpoint: endpointOr("EVENTBRIDGE_ENDPOINT", genericEndpoint),
-		SQSEndpoint:         endpointOr("AWS_ENDPOINT_URL_SQS", genericEndpoint),
-		EventBusName:        valueOrDefault("EVENT_BUS_NAME", "default"),
-		EventsQueueURL:      strings.TrimSpace(os.Getenv("CONNECTIONS_EVENTS_QUEUE_URL")),
+		KMSEndpoint:         endpoint(getenv, "AWS_ENDPOINT_URL_KMS"),
+		EventBridgeEndpoint: endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
+		SQSEndpoint:         endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
+		EventsQueueURL:      strings.TrimSpace(getenv("CONNECTIONS_EVENTS_QUEUE_URL")),
 	}
-	if config.DatabaseURL == "" || config.AuthURL == "" || config.PublicBaseURL == "" || config.KMSKeyID == "" {
-		return Config{}, errors.New("DATABASE_URL, AUTH_URL, CONNECTIONS_PUBLIC_BASE_URL and CONNECTIONS_KMS_KEY_ID are required")
+	if config.AuthURL == "" || config.PublicBaseURL == "" || config.KMSKeyID == "" {
+		return Config{}, errors.New("AUTH_URL, CONNECTIONS_PUBLIC_BASE_URL and CONNECTIONS_KMS_KEY_ID are required")
 	}
-	if config.ServiceCallers, err = serviceauth.ParseCallers(os.Getenv("CONNECTIONS_SERVICE_CALLERS")); err != nil {
+	var err error
+	if config.ServiceCallers, err = serviceauth.ParseCallers(getenv("CONNECTIONS_SERVICE_CALLERS")); err != nil {
 		return Config{}, fmt.Errorf("CONNECTIONS_SERVICE_CALLERS: %w", err)
 	}
 	for _, caller := range config.ServiceCallers {
@@ -93,19 +78,12 @@ func FromEnv() (Config, error) {
 	return config, nil
 }
 
-func valueOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
+func endpoint(getenv func(string) string, name string) string {
+	return strings.TrimRight(strings.TrimSpace(getenv(name)), "/")
 }
 
-func endpoint(name string) string {
-	return strings.TrimRight(strings.TrimSpace(os.Getenv(name)), "/")
-}
-
-func endpointOr(name, fallback string) string {
-	if value := endpoint(name); value != "" {
+func endpointOr(getenv func(string) string, name, fallback string) string {
+	if value := endpoint(getenv, name); value != "" {
 		return value
 	}
 	return fallback
@@ -119,18 +97,6 @@ func splitList(value string) []string {
 		}
 	}
 	return result
-}
-
-func boolValue(name string, fallback bool) (bool, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, errors.New(name + " must be true or false")
-	}
-	return parsed, nil
 }
 
 func absoluteURL(value string) bool {

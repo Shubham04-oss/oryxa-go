@@ -12,7 +12,7 @@ SES ─── aws.ses events ─────▶ email-ses-feedback rule ──�
                                                              email-deliveries, email-suppressions
 ```
 
-The service consumes the queue through one handler, run by Lambda in AWS and by a poller everywhere else. A message that keeps failing moves to `email-events-dlq` after five receives.
+The service consumes the queue through one handler, polled by the `oryxa` binary. A message that keeps failing moves to `email-events-dlq` after five receives.
 
 ## Subscribed events
 
@@ -75,7 +75,7 @@ SES events can arrive out of order, so a delivery only moves forward through tha
 To see everything sent to an address, query the `recipient` index:
 
 ```sh
-(set -a && . email/.env && aws dynamodb query --table-name email-deliveries --index-name recipient \
+(set -a && . ./.env && aws dynamodb query --table-name email-deliveries --index-name recipient \
   --key-condition-expression 'recipient_key = :address' \
   --expression-attribute-values '{":address":{"S":"asha@example.com"}}')
 ```
@@ -93,10 +93,10 @@ aws sesv2 delete-suppressed-destination --email-address asha@example.com
 
 ## Provision
 
-Copy `.env.example` to an ignored `.env`. Its last block points everything at the emulators in the root `docker-compose.yml`; delete that block to provision AWS through the default credential chain. Then run:
+Copy the root `.env.example` to the ignored `.env`. Its emulator block points the AWS services email uses at the emulators in the root `docker-compose.yml`; delete that block to provision AWS through the default credential chain. Then run:
 
 ```sh
-(set -a && . email/.env && go run ./email/infra/delivery/cmd/provision)
+(set -a && . ./.env && go run ./email/infra/delivery/cmd/provision)
 ```
 
 The command is repeatable. It creates or updates:
@@ -113,8 +113,8 @@ For a new domain in AWS, publish the printed `dkim_records` in DNS; `ses_verifie
 
 ```sh
 docker compose up -d
-(set -a && . email/.env && go run ./email/infra/delivery/cmd/provision)
-(set -a && . email/.env && go run ./email/cmd/email)
+(set -a && . ./.env && go run ./email/infra/delivery/cmd/provision)
+(set -a && . ./.env && ORYXA_SERVICES=email go run ./cmd/oryxa)
 ```
 
 Locally, `EMAIL_SMTP_ADDR=localhost:1025` sends through Mailpit instead of SES. The UI is [http://localhost:8025](http://localhost:8025).
@@ -122,7 +122,7 @@ Locally, `EMAIL_SMTP_ADDR=localhost:1025` sends through Mailpit instead of SES. 
 The emulators forget everything when they restart, so re-run the provisioner after one. Auth running against the same emulators delivers its requests on its own; to publish one by hand, as auth's outbox would:
 
 ```sh
-(set -a && . email/.env && aws events put-events --entries "$(jq -n '[{
+(set -a && . ./.env && aws events put-events --entries "$(jq -n '[{
   Source: "oryxa.auth", DetailType: "auth.user.email-verification.delivery-requested.v1", EventBusName: "default",
   Detail: ({
     event_id: "evt_local_1", version: 1, occurred_at: (now | todate),
@@ -138,7 +138,7 @@ Moto never delivers anything, so nothing bounces locally. To simulate a bounce, 
 
 ```sh
 DELIVERY_ID=paste-the-delivery-id
-(set -a && . email/.env && aws events put-events --entries "$(jq -n --arg id "$DELIVERY_ID" '[{
+(set -a && . ./.env && aws events put-events --entries "$(jq -n --arg id "$DELIVERY_ID" '[{
   Source: "aws.ses", DetailType: "Email Bounced", EventBusName: "default",
   Detail: ({
     eventType: "Bounce",
@@ -162,15 +162,7 @@ Logs are structured JSON from `/internal/observability` and carry `service`, `se
 
 ## Deploy
 
-Build for Lambda's `provided.al2023` runtime on arm64:
-
-```sh
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags lambda.norpc -trimpath -ldflags="-s -w" -o bootstrap ./email/cmd/email
-```
-
-The function itself is not provisioned yet. It needs:
+Email deploys as part of the single `oryxa` image, polling `email-events` rather than running as a Lambda. Whatever runs it needs:
 
 - `EMAIL_FROM_ADDRESS` (and optionally `EMAIL_FROM_NAME`); the table, configuration set and region settings default to what the provisioner creates;
-- a timeout of 10 seconds or less, because the queue's visibility timeout is 60;
-- an SQS event source mapping on `email-events` with `ReportBatchItemFailures`;
 - permission to receive and delete messages from `email-events`, to `GetItem`, `PutItem` and `UpdateItem` on both tables, and to `ses:SendEmail` for the identity and the `oryxa-email` configuration set.

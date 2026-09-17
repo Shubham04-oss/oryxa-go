@@ -1,6 +1,6 @@
 // Command stack supervises the k6 journey: seeds the simulated
-// organization, serves the auth stub, and runs teams, files and email. It is
-// not a product service.
+// organization, serves the auth stub, and runs teams, files and email in one
+// oryxa process. It is not a product service.
 package main
 
 import (
@@ -43,8 +43,7 @@ func run(ctx context.Context) error {
 	sesEndpoint := value("AWS_ENDPOINT_URL_SESV2", "http://localhost:4567")
 	smtpAddr := value("EMAIL_SMTP_ADDR", "127.0.0.1:1025")
 	authAddr := value("AUTHSTUB_ADDRESS", "127.0.0.1:18080")
-	teamsAddr := value("TEAMS_ADDRESS", "127.0.0.1:18083")
-	filesAddr := value("FILES_ADDRESS", "127.0.0.1:18085")
+	oryxaAddr := value("ORYXA_ADDRESS", "127.0.0.1:18083")
 	if err := seedAuth(ctx, databaseURL, organizationID); err != nil {
 		return err
 	}
@@ -62,19 +61,17 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	teamsBin, err := build(ctx, root, "teams", "./teams/cmd/teams")
+	oryxaBin, err := build(ctx, root, "oryxa", "./cmd/oryxa")
 	if err != nil {
 		return err
 	}
-	filesBin, err := build(ctx, root, "files", "./files/cmd/files")
-	if err != nil {
-		return err
-	}
-	emailBin, err := build(ctx, root, "email", "./email/cmd/email")
-	if err != nil {
-		return err
-	}
-	awsLocal := map[string]string{
+	// One process serves teams and files from one address; files reaches
+	// teams there without being told, and email polls its queue beside them.
+	oryxa := command(ctx, oryxaBin, map[string]string{
+		"ORYXA_ADDRESS":                oryxaAddr,
+		"ORYXA_SERVICES":               "teams,files,email",
+		"DATABASE_URL":                 databaseURL,
+		"AUTH_URL":                     "http://" + authAddr,
 		"AWS_REGION":                   "ap-south-1",
 		"AWS_ACCESS_KEY_ID":            "test",
 		"AWS_SECRET_ACCESS_KEY":        "test",
@@ -82,46 +79,23 @@ func run(ctx context.Context) error {
 		"AWS_ENDPOINT_URL_EVENTBRIDGE": awsEndpoint,
 		"AWS_ENDPOINT_URL_SQS":         awsEndpoint,
 		"AWS_ENDPOINT_URL_DYNAMODB":    awsEndpoint,
+		"AWS_ENDPOINT_URL_SESV2":       sesEndpoint,
 		"EVENT_BUS_NAME":               "default",
+		"FILES_BUCKET_NAME":            filesProvision.BucketName,
+		"FILES_EVENTS_QUEUE_URL":       filesProvision.QueueURL,
+		"EMAIL_FROM_ADDRESS":           "no-reply@example.com",
+		"EMAIL_FROM_NAME":              "Oryxa",
+		"EMAIL_QUEUE_URL":              queueURL,
+		"EMAIL_SMTP_ADDR":              smtpAddr,
+		"EMAIL_DELIVERIES_TABLE":       "email-deliveries",
+		"EMAIL_SUPPRESSIONS_TABLE":     "email-suppressions",
+	})
+	if err := oryxa.Start(); err != nil {
+		return fmt.Errorf("start oryxa: %w", err)
 	}
-	teams := command(ctx, teamsBin, mergeEnv(awsLocal, map[string]string{
-		"DATABASE_URL":       databaseURL,
-		"AUTH_URL":           "http://" + authAddr,
-		"TEAMS_ADDRESS":      teamsAddr,
-		"TEAMS_AUTO_MIGRATE": "true",
-	}))
-	files := command(ctx, filesBin, mergeEnv(awsLocal, map[string]string{
-		"DATABASE_URL":           databaseURL,
-		"AUTH_URL":               "http://" + authAddr,
-		"TEAMS_URL":              "http://" + teamsAddr,
-		"FILES_ADDRESS":          filesAddr,
-		"FILES_AUTO_MIGRATE":     "true",
-		"FILES_BUCKET_NAME":      filesProvision.BucketName,
-		"FILES_EVENTS_QUEUE_URL": filesProvision.QueueURL,
-	}))
-	email := command(ctx, emailBin, mergeEnv(awsLocal, map[string]string{
-		"EMAIL_FROM_ADDRESS":       "no-reply@example.com",
-		"EMAIL_FROM_NAME":          "Oryxa",
-		"EMAIL_QUEUE_URL":          queueURL,
-		"EMAIL_SMTP_ADDR":          smtpAddr,
-		"EMAIL_DELIVERIES_TABLE":   "email-deliveries",
-		"EMAIL_SUPPRESSIONS_TABLE": "email-suppressions",
-		"AWS_ENDPOINT_URL_SESV2":   sesEndpoint,
-	}))
-	if err := teams.Start(); err != nil {
-		return fmt.Errorf("start teams: %w", err)
-	}
-	if err := files.Start(); err != nil {
-		return fmt.Errorf("start files: %w", err)
-	}
-	if err := email.Start(); err != nil {
-		return fmt.Errorf("start email: %w", err)
-	}
-	go waitLogged("teams", teams)
-	go waitLogged("files", files)
-	go waitLogged("email", email)
+	go waitLogged("oryxa", oryxa)
 
-	log.Printf("stack ready org_id=%s auth=http://%s teams=http://%s files=http://%s mailpit=http://127.0.0.1:8025", organizationID, authAddr, teamsAddr, filesAddr)
+	log.Printf("stack ready org_id=%s auth=http://%s oryxa=http://%s mailpit=http://127.0.0.1:8025", organizationID, authAddr, oryxaAddr)
 	<-ctx.Done()
 	return nil
 }
@@ -278,16 +252,6 @@ func provisionEmail(ctx context.Context, root, awsEndpoint, sesEndpoint string) 
 	}
 	log.Printf("email queue %s", result.QueueURL)
 	return result.QueueURL, nil
-}
-
-func mergeEnv(parts ...map[string]string) map[string]string {
-	merged := map[string]string{}
-	for _, part := range parts {
-		for key, value := range part {
-			merged[key] = value
-		}
-	}
-	return merged
 }
 
 func command(ctx context.Context, bin string, env map[string]string) *exec.Cmd {

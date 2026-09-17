@@ -12,13 +12,14 @@ fi
 RUN_ID="${RUN_ID:-$(date +%Y%m%d%H%M%S)}"
 ORG_ID="${ORG_ID:-org_sim_${RUN_ID}}"
 AUTHSTUB_ADDRESS="${AUTHSTUB_ADDRESS:-127.0.0.1:18080}"
-TEAMS_ADDRESS="${TEAMS_ADDRESS:-127.0.0.1:18083}"
-FILES_ADDRESS="${FILES_ADDRESS:-127.0.0.1:18085}"
+# Teams, files and email run in one oryxa process, so teams and files share
+# its address.
+ORYXA_ADDRESS="${ORYXA_ADDRESS:-127.0.0.1:18083}"
 DATABASE_URL="${DATABASE_URL:-postgres://oryxa:oryxa-dev-password@localhost:5435/oryxa?sslmode=disable}"
 AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
 AUTH_URL="http://${AUTHSTUB_ADDRESS}"
-TEAMS_URL="http://${TEAMS_ADDRESS}"
-FILES_URL="http://${FILES_ADDRESS}"
+TEAMS_URL="http://${ORYXA_ADDRESS}"
+FILES_URL="http://${ORYXA_ADDRESS}"
 
 MAILPIT_URL="${MAILPIT_URL:-http://127.0.0.1:8025}"
 SES_ENDPOINT="${AWS_ENDPOINT_URL_SESV2:-http://localhost:4567}"
@@ -57,8 +58,7 @@ env \
   DATABASE_URL="${DATABASE_URL}" \
   AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL}" \
   AUTHSTUB_ADDRESS="${AUTHSTUB_ADDRESS}" \
-  TEAMS_ADDRESS="${TEAMS_ADDRESS}" \
-  FILES_ADDRESS="${FILES_ADDRESS}" \
+  ORYXA_ADDRESS="${ORYXA_ADDRESS}" \
   AWS_ENDPOINT_URL_SESV2="${SES_ENDPOINT}" \
   EMAIL_SMTP_ADDR="${EMAIL_SMTP_ADDR}" \
   AWS_REGION=ap-south-1 \
@@ -67,7 +67,7 @@ env \
   "${STACK_BIN}" >"${STACK_LOG}" 2>&1 &
 STACK_PID=$!
 
-echo "waiting for auth, teams, and files"
+echo "waiting for the auth stub and oryxa"
 ready=0
 for _ in $(seq 1 60); do
   if ! kill -0 "${STACK_PID}" >/dev/null 2>&1; then
@@ -76,8 +76,7 @@ for _ in $(seq 1 60); do
     exit 1
   fi
   if curl -sf -o /dev/null "${AUTH_URL}/healthz" \
-    && curl -sf -o /dev/null "${TEAMS_URL}/healthz" \
-    && curl -sf -o /dev/null "${FILES_URL}/healthz"; then
+    && curl -sf -o /dev/null "http://${ORYXA_ADDRESS}/healthz"; then
     ready=1
     break
   fi

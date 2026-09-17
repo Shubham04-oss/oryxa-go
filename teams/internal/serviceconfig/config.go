@@ -4,58 +4,32 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
 )
 
-const defaultRegion = "ap-south-1"
-
+// Config is what teams reads for itself. The listener, the database, the AWS
+// region and the event bus are the host's.
 type Config struct {
-	Address            string
-	AWSRegion          string
-	DatabaseURL        string
-	PostgresExtensions []string
-	AutoMigrate        bool
-	AuthURL            string
-	AllowedOrigins     []string
-	EventBusName       string
-	// EventsQueueURL is the queue auth's organization and membership events
-	// arrive on. Without it teams doesn't learn about new, renamed or
-	// deleted organizations, or members leaving them.
+	AuthURL        string
+	AllowedOrigins []string
 	EventsQueueURL string
 }
 
-func FromEnv() (Config, error) {
-	autoMigrate, err := boolValue("TEAMS_AUTO_MIGRATE", true)
-	if err != nil {
-		return Config{}, err
-	}
+// FromEnv reads teams' configuration through getenv, which a host layers its
+// own defaults under.
+func FromEnv(getenv func(string) string) (Config, error) {
 	config := Config{
-		Address:            valueOrDefault("TEAMS_ADDRESS", ":8080"),
-		AWSRegion:          valueOrDefault("AWS_REGION", defaultRegion),
-		DatabaseURL:        strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		PostgresExtensions: splitList(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
-		AutoMigrate:        autoMigrate,
-		AuthURL:            strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_URL")), "/"),
-		AllowedOrigins:     splitList(os.Getenv("TEAMS_ALLOWED_ORIGINS")),
-		EventBusName:       valueOrDefault("EVENT_BUS_NAME", "default"),
-		EventsQueueURL:     strings.TrimSpace(os.Getenv("TEAMS_EVENTS_QUEUE_URL")),
+		AuthURL:        strings.TrimRight(strings.TrimSpace(getenv("AUTH_URL")), "/"),
+		AllowedOrigins: splitList(getenv("TEAMS_ALLOWED_ORIGINS")),
+		EventsQueueURL: strings.TrimSpace(getenv("TEAMS_EVENTS_QUEUE_URL")),
 	}
-	if config.DatabaseURL == "" || config.AuthURL == "" {
-		return Config{}, errors.New("DATABASE_URL and AUTH_URL are required")
+	if config.AuthURL == "" {
+		return Config{}, errors.New("AUTH_URL is required")
 	}
 	if parsed, err := url.Parse(config.AuthURL); err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return Config{}, fmt.Errorf("AUTH_URL must be an absolute URL")
 	}
 	return config, nil
-}
-
-func valueOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func splitList(value string) []string {
@@ -66,16 +40,4 @@ func splitList(value string) []string {
 		}
 	}
 	return result
-}
-
-func boolValue(name string, fallback bool) (bool, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, errors.New(name + " must be true or false")
-	}
-	return parsed, nil
 }

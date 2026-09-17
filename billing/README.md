@@ -14,7 +14,7 @@ Billing never verifies a token itself. It forwards the caller's bearer token or 
 
 ## Plans
 
-What Oryxa sells lives in a plan catalog, not in code: a JSON file named by `BILLING_PLANS_FILE`. Each plan maps a Dodo product to what it entitles an organization to. Changing pricing means creating the products in Dodo and editing the catalog; billing reconciles every organization with the catalog when it starts.
+What Oryxa sells lives in a plan catalog, not in code: a JSON file named by `BILLING_PLANS_FILE`. Each plan maps a Dodo product to what it entitles an organization to. Changing pricing means creating the products in Dodo and editing the catalog; billing reconciles every organization with the catalog when it starts. A relative `BILLING_PLANS_FILE` resolves against the process's working directory: the repository root when running billing with `go run ./cmd/oryxa`.
 
 ```json
 {
@@ -90,10 +90,10 @@ Billing verifies each delivery's Standard Webhooks signature and rejects anythin
 
 ## Provision
 
-Billing uses `/internal/postgreskit`, the same PostgreSQL boundary as auth, connections, files and teams: one instrumented `pgxpool`, with sqlx on that pool. Tables are created by the embedded migration when `BILLING_AUTO_MIGRATE` is true, the default. Logs, HTTP access, AWS SDK and pgx spans come from `/internal/observability`; OTLP export is opt-in through `OTEL_EXPORTER_OTLP_ENDPOINT`. The queue auth's organization events arrive on is provisioned like the other services' AWS resources:
+Billing uses `/internal/postgreskit`, the same PostgreSQL boundary as auth, connections, files and teams: one instrumented `pgxpool`, with sqlx on that pool. Tables are created by the embedded migration when `ORYXA_AUTO_MIGRATE` is true, the default. Logs, HTTP access, AWS SDK and pgx spans come from `/internal/observability`; OTLP export is opt-in through `OTEL_EXPORTER_OTLP_ENDPOINT`. The queue auth's organization events arrive on is provisioned like the other services' AWS resources:
 
 ```sh
-(set -a && . billing/.env && go run ./billing/infra/events/cmd/provision)
+(set -a && . ./.env && go run ./billing/infra/events/cmd/provision)
 ```
 
 The command is repeatable. It creates or updates the `billing-events` queue with its dead-letter queue, and a `billing-auth-organizations` rule on `EVENT_BUS_NAME` whose target is the queue and which the queue policy admits alone. Put the printed `queue_url` in `BILLING_EVENTS_QUEUE_URL`.
@@ -102,19 +102,15 @@ Auth has its own queue for billing's entitlements; see `auth/README.md`.
 
 ## Run locally
 
-Copy `.env.example` to an ignored `.env`. Dodo has a test mode but no emulator, so checkout and the portal need a test-mode API key; without `DODO_PAYMENTS_API_KEY` billing still starts, answering those endpoints with 503. Webhooks need Dodo to reach billing, through a tunnel such as `cloudflared tunnel --url http://localhost:8081`.
+Copy the root `.env.example` to the ignored `.env`. Dodo has a test mode but no emulator, so checkout and the portal need a test-mode API key; without `DODO_PAYMENTS_API_KEY` billing still starts, answering those endpoints with 503. Webhooks need Dodo to reach billing, through a tunnel such as `cloudflared tunnel --url http://localhost:8080`.
 
 ```sh
 docker compose up -d
-(set -a && . billing/.env && go run ./billing/infra/events/cmd/provision)
-(set -a && . billing/.env && go run ./billing/cmd/billing)
+(set -a && . ./.env && go run ./billing/infra/events/cmd/provision)
+(set -a && . ./.env && ORYXA_SERVICES=billing go run ./cmd/oryxa)
 ```
 
-Or in Docker on the shared network, like auth:
-
-```sh
-docker compose -f compose.billing.yaml up -d --build billing
-```
+Install billing's schema on its own with `go run ./cmd/oryxa migrate`; it is also installed at start unless `ORYXA_AUTO_MIGRATE=false`. Billing deploys as part of the single `oryxa` image, not a container of its own.
 
 The store has its own tests against PostgreSQL, which the unit test run skips:
 

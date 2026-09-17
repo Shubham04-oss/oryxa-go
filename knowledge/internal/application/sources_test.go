@@ -223,18 +223,23 @@ func TestOrganizationDeletedRetiresEverythingItIndexed(t *testing.T) {
 	}
 }
 
-func TestHandledIsTrueOnlyTheFirstTimeAnEventArrives(t *testing.T) {
+func TestAlreadyHandledIsTrueOnlyAfterMarkHandled(t *testing.T) {
 	// Pausing a source and retracting its documents both write events a
 	// retrieval pipeline acts on, so a redelivery must not do it twice.
+	// AlreadyHandled must say so on its own, without recording anything,
+	// since the caller decides when a handler has actually succeeded.
 	store := newFakeStore()
 	service := registrar(t, store, member(), usable())
 
-	first, err := service.Handled(context.Background(), "evt_1", "connections.connection.disconnected.v1")
-	if err != nil || !first {
-		t.Fatalf("Handled(first) = %v, %v, want true", first, err)
+	already, err := service.AlreadyHandled(context.Background(), "evt_1")
+	if err != nil || already {
+		t.Fatalf("AlreadyHandled(before) = %v, %v, want false", already, err)
 	}
-	again, err := service.Handled(context.Background(), "evt_1", "connections.connection.disconnected.v1")
-	if err != nil || again {
-		t.Fatalf("Handled(redelivered) = %v, %v, want false", again, err)
+	if err := service.MarkHandled(context.Background(), "evt_1", "connections.connection.disconnected.v1"); err != nil {
+		t.Fatalf("MarkHandled() error = %v", err)
+	}
+	already, err = service.AlreadyHandled(context.Background(), "evt_1")
+	if err != nil || !already {
+		t.Fatalf("AlreadyHandled(after) = %v, %v, want true", already, err)
 	}
 }

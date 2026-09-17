@@ -1,0 +1,44 @@
+# The oryxa binary on the network docker-compose.yml creates. Start the
+# dependencies first with `docker compose up -d`, then:
+#
+#   docker compose -f compose.oryxa.yaml up -d --build
+#
+# It reads .env like `go run ./cmd/oryxa` does. Inside the network the
+# emulators are reached by container name rather than through the host, so
+# the variables below replace the ones .env points at localhost.
+services:
+  oryxa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oryxa:dev
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ORYXA_ADDRESS: ":8080"
+      DATABASE_URL: postgres://oryxa:oryxa-dev-password@oryxa-go-postgres-1:5432/oryxa?sslmode=disable
+      # Only the emulated AWS services; KMS, Cognito and Bedrock stay on AWS.
+      AWS_ENDPOINT_URL_EVENTBRIDGE: http://oryxa-go-eventbridge-1:4566
+      AWS_ENDPOINT_URL_SQS: http://oryxa-go-eventbridge-1:4566
+      AWS_ENDPOINT_URL_S3: http://oryxa-go-eventbridge-1:4566
+      AWS_ENDPOINT_URL_DYNAMODB: http://oryxa-go-eventbridge-1:4566
+      AWS_ENDPOINT_URL_SESV2: http://oryxa-go-ses-1:5000
+      # The overrides auth, connections, integrations and knowledge read for
+      # themselves, which would otherwise keep .env's localhost.
+      EVENTBRIDGE_ENDPOINT: http://oryxa-go-eventbridge-1:4566
+      SQS_ENDPOINT: http://oryxa-go-eventbridge-1:4566
+      EMAIL_SMTP_ADDR: oryxa-go-mailpit-1:1025
+      # The plan catalog is configuration: mount the file the environment names.
+      BILLING_PLANS_FILE: /etc/oryxa/plans.json
+    volumes:
+      - ./billing/plans.example.json:/etc/oryxa/plans.json:ro
+    ports:
+      - "${ORYXA_PORT:-8080}:8080"
+    networks:
+      - oryxa-go
+
+networks:
+  oryxa-go:
+    external: true
+    name: oryxa-go_default

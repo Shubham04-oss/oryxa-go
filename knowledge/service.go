@@ -62,7 +62,7 @@ type Config struct {
 type Service struct {
 	app        *application.Service
 	store      *postgres.Store
-	handler    http.Handler
+	handler    *httpserver.Server
 	dispatcher *events.Dispatcher
 	consumer   *events.Consumer
 }
@@ -109,6 +109,12 @@ func (service *Service) Migrate(ctx context.Context) error { return service.stor
 
 // Handler is knowledge's HTTP API, ready to mount wherever a host serves.
 func (service *Service) Handler() http.Handler { return service.handler }
+
+// Routes lists every path Handler serves, such as
+// "GET /v1/organizations/{organizationID}/sources", for a host that mounts
+// several services on one listener and has to know which paths are this
+// one's.
+func (service *Service) Routes() []string { return service.handler.Patterns() }
 
 // Workers is the background work knowledge needs running to do anything at
 // all. A host starts each one and waits for it on the way down: a half-read

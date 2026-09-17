@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,6 +93,7 @@ type Server struct {
 	config         Config
 	allowedOrigins map[string]struct{}
 	mux            *http.ServeMux
+	patterns       []string
 }
 
 type authContextKey struct{}
@@ -101,7 +103,7 @@ type authenticatedRequest struct {
 	FromCookie bool
 }
 
-func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, service authService, config Config) http.Handler {
+func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, service authService, config Config) *Server {
 	server := &Server{
 		verifier:       verifier,
 		oauth:          oauth,
@@ -117,41 +119,57 @@ func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, s
 		}
 	}
 
-	server.mux.HandleFunc("GET /healthz", server.health)
-	server.mux.HandleFunc("GET /v1/auth/config", server.authConfig)
-	server.mux.HandleFunc("GET /v1/auth/login", server.login)
-	server.mux.HandleFunc("GET /v1/auth/callback", server.callback)
-	server.mux.HandleFunc("POST /v1/auth/refresh", server.refresh)
-	server.mux.HandleFunc("POST /v1/auth/logout", server.logout)
-	server.mux.HandleFunc("POST /v1/auth/password/signup", server.passwordSignUp)
-	server.mux.HandleFunc("POST /v1/auth/password/verify", server.passwordVerifyEmail)
-	server.mux.HandleFunc("POST /v1/auth/password/resend-verification", server.passwordResendVerification)
-	server.mux.HandleFunc("POST /v1/auth/password/login", server.passwordLogin)
-	server.mux.HandleFunc("POST /v1/auth/password/forgot", server.passwordForgot)
-	server.mux.HandleFunc("POST /v1/auth/password/reset", server.passwordReset)
-	server.mux.Handle("GET /v1/auth/me", server.authenticated(http.HandlerFunc(server.me)))
-	server.mux.Handle("GET /v1/organizations", server.authenticated(http.HandlerFunc(server.organizations)))
-	server.mux.Handle("POST /v1/organizations", server.authenticated(http.HandlerFunc(server.createOrganization)))
-	server.mux.Handle("GET /v1/organizations/{organizationID}", server.authenticated(http.HandlerFunc(server.organization)))
-	server.mux.Handle("PATCH /v1/organizations/{organizationID}", server.authenticated(http.HandlerFunc(server.updateOrganization)))
-	server.mux.Handle("DELETE /v1/organizations/{organizationID}", server.authenticated(http.HandlerFunc(server.deleteOrganization)))
-	server.mux.Handle("GET /v1/organizations/{organizationID}/members", server.authenticated(http.HandlerFunc(server.members)))
-	server.mux.Handle("POST /v1/organizations/{organizationID}/invitations", server.authenticated(http.HandlerFunc(server.inviteMember)))
-	server.mux.Handle("GET /v1/organizations/{organizationID}/invitations", server.authenticated(http.HandlerFunc(server.invitations)))
-	server.mux.Handle("DELETE /v1/organizations/{organizationID}/invitations/{invitationID}", server.authenticated(http.HandlerFunc(server.revokeInvitation)))
-	server.mux.Handle("POST /v1/invitations/accept", server.authenticated(http.HandlerFunc(server.acceptInvitation)))
-	server.mux.Handle("GET /v1/invitations", server.authenticated(http.HandlerFunc(server.receivedInvitations)))
-	server.mux.Handle("POST /v1/invitations/{invitationID}/accept", server.authenticated(http.HandlerFunc(server.acceptReceivedInvitation)))
-	server.mux.Handle("PATCH /v1/organizations/{organizationID}/members/{userID}", server.authenticated(http.HandlerFunc(server.changeMemberRole)))
-	server.mux.Handle("DELETE /v1/organizations/{organizationID}/members/{userID}", server.authenticated(http.HandlerFunc(server.removeMember)))
-	server.mux.Handle("GET /v1/agent-grant", server.authenticated(http.HandlerFunc(server.agentGrantStatus)))
-	server.mux.Handle("POST /v1/agent-grant/authorize", server.authenticated(http.HandlerFunc(server.agentGrantAuthorize)))
-	server.mux.HandleFunc("GET /v1/agent-grant/callback", server.agentGrantCallback)
-	server.mux.Handle("DELETE /v1/agent-grant", server.authenticated(http.HandlerFunc(server.agentGrantRevoke)))
-	server.mux.HandleFunc("POST /v1/internal/agent-tokens", server.mintAgentToken)
+	server.handleFunc("GET /healthz", server.health)
+	server.handleFunc("GET /v1/auth/config", server.authConfig)
+	server.handleFunc("GET /v1/auth/login", server.login)
+	server.handleFunc("GET /v1/auth/callback", server.callback)
+	server.handleFunc("POST /v1/auth/refresh", server.refresh)
+	server.handleFunc("POST /v1/auth/logout", server.logout)
+	server.handleFunc("POST /v1/auth/password/signup", server.passwordSignUp)
+	server.handleFunc("POST /v1/auth/password/verify", server.passwordVerifyEmail)
+	server.handleFunc("POST /v1/auth/password/resend-verification", server.passwordResendVerification)
+	server.handleFunc("POST /v1/auth/password/login", server.passwordLogin)
+	server.handleFunc("POST /v1/auth/password/forgot", server.passwordForgot)
+	server.handleFunc("POST /v1/auth/password/reset", server.passwordReset)
+	server.handle("GET /v1/auth/me", server.authenticated(http.HandlerFunc(server.me)))
+	server.handle("GET /v1/organizations", server.authenticated(http.HandlerFunc(server.organizations)))
+	server.handle("POST /v1/organizations", server.authenticated(http.HandlerFunc(server.createOrganization)))
+	server.handle("GET /v1/organizations/{organizationID}", server.authenticated(http.HandlerFunc(server.organization)))
+	server.handle("PATCH /v1/organizations/{organizationID}", server.authenticated(http.HandlerFunc(server.updateOrganization)))
+	server.handle("DELETE /v1/organizations/{organizationID}", server.authenticated(http.HandlerFunc(server.deleteOrganization)))
+	server.handle("GET /v1/organizations/{organizationID}/members", server.authenticated(http.HandlerFunc(server.members)))
+	server.handle("POST /v1/organizations/{organizationID}/invitations", server.authenticated(http.HandlerFunc(server.inviteMember)))
+	server.handle("GET /v1/organizations/{organizationID}/invitations", server.authenticated(http.HandlerFunc(server.invitations)))
+	server.handle("DELETE /v1/organizations/{organizationID}/invitations/{invitationID}", server.authenticated(http.HandlerFunc(server.revokeInvitation)))
+	server.handle("POST /v1/invitations/accept", server.authenticated(http.HandlerFunc(server.acceptInvitation)))
+	server.handle("GET /v1/invitations", server.authenticated(http.HandlerFunc(server.receivedInvitations)))
+	server.handle("POST /v1/invitations/{invitationID}/accept", server.authenticated(http.HandlerFunc(server.acceptReceivedInvitation)))
+	server.handle("PATCH /v1/organizations/{organizationID}/members/{userID}", server.authenticated(http.HandlerFunc(server.changeMemberRole)))
+	server.handle("DELETE /v1/organizations/{organizationID}/members/{userID}", server.authenticated(http.HandlerFunc(server.removeMember)))
+	server.handle("GET /v1/agent-grant", server.authenticated(http.HandlerFunc(server.agentGrantStatus)))
+	server.handle("POST /v1/agent-grant/authorize", server.authenticated(http.HandlerFunc(server.agentGrantAuthorize)))
+	server.handleFunc("GET /v1/agent-grant/callback", server.agentGrantCallback)
+	server.handle("DELETE /v1/agent-grant", server.authenticated(http.HandlerFunc(server.agentGrantRevoke)))
+	server.handleFunc("POST /v1/internal/agent-tokens", server.mintAgentToken)
 
 	return server
 }
+
+// handle registers a route backed by an http.Handler and remembers its
+// pattern, so a host serving several services knows which paths are this
+// one's.
+func (server *Server) handle(pattern string, handler http.Handler) {
+	server.mux.Handle(pattern, handler)
+	server.patterns = append(server.patterns, pattern)
+}
+
+// handleFunc is handle for a plain handler function.
+func (server *Server) handleFunc(pattern string, handler http.HandlerFunc) {
+	server.handle(pattern, handler)
+}
+
+// Patterns lists every route the server registered.
+func (server *Server) Patterns() []string { return slices.Clone(server.patterns) }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")

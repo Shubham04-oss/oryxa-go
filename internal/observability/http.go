@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/felixge/httpsnoop"
@@ -26,6 +27,7 @@ func HTTPHandler(serviceName string, next http.Handler) http.Handler {
 			route = "unmatched"
 		}
 		attributes := []slog.Attr{
+			slog.String("component", strings.TrimPrefix(serviceName, "oryxa-")),
 			slog.String("request_id", requestID),
 			slog.String("http.method", request.Method),
 			slog.String("http.route", route),

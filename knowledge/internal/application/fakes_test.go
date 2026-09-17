@@ -329,14 +329,17 @@ func (store *fakeStore) Runs(_ context.Context, _, sourceID string, _ int) ([]do
 	return listed, nil
 }
 
-func (store *fakeStore) MarkEventHandled(_ context.Context, eventID, _ string, _ time.Time) (bool, error) {
+func (store *fakeStore) EventHandled(_ context.Context, eventID string) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if store.handled[eventID] {
-		return false, nil
-	}
+	return store.handled[eventID], nil
+}
+
+func (store *fakeStore) MarkEventHandled(_ context.Context, eventID, _ string, _ time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	store.handled[eventID] = true
-	return true, nil
+	return nil
 }
 
 func (store *fakeStore) DeleteHandledEventsBefore(context.Context, time.Time) (int64, error) {

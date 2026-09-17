@@ -1,25 +1,18 @@
-// Package serviceconfig reads integrations' configuration from the
+// Package serviceconfig reads integrations' own configuration from the
 // environment.
 package serviceconfig
 
 import (
 	"errors"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
 )
 
-const defaultRegion = "ap-south-1"
-
+// Config is what integrations reads for itself. The listener, the database,
+// auto-migration, the AWS region and the event bus are the host's.
 type Config struct {
-	Address            string
-	AWSRegion          string
-	DatabaseURL        string
-	PostgresExtensions []string
-	AutoMigrate        bool
-	AuthURL            string
-	ConnectionsURL     string
+	AuthURL        string
+	ConnectionsURL string
 	// PublicBaseURL is the address providers reach integrations at, in front
 	// of which Cloudflare sits in production. Webhook URLs are built on it.
 	PublicBaseURL  string
@@ -29,7 +22,6 @@ type Config struct {
 	KMSEndpoint         string
 	EventBridgeEndpoint string
 	SQSEndpoint         string
-	EventBusName        string
 	EventsQueueURL      string
 	// ServiceName and ServiceKeyID are the identity integrations signs its
 	// calls to connections with.
@@ -37,35 +29,27 @@ type Config struct {
 	ServiceKeyID string
 }
 
-func FromEnv() (Config, error) {
-	autoMigrate, err := boolValue("INTEGRATIONS_AUTO_MIGRATE", true)
-	if err != nil {
-		return Config{}, err
-	}
-	genericEndpoint := endpoint("AWS_ENDPOINT_URL")
+// FromEnv reads integrations' configuration through getenv, which a host
+// layers its own defaults under.
+func FromEnv(getenv func(string) string) (Config, error) {
+	genericEndpoint := endpoint(getenv, "AWS_ENDPOINT_URL")
 	config := Config{
-		Address:            valueOrDefault("INTEGRATIONS_ADDRESS", ":8080"),
-		AWSRegion:          valueOrDefault("AWS_REGION", defaultRegion),
-		DatabaseURL:        strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		PostgresExtensions: splitList(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
-		AutoMigrate:        autoMigrate,
-		AuthURL:            endpoint("AUTH_URL"),
-		ConnectionsURL:     endpoint("CONNECTIONS_URL"),
-		PublicBaseURL:      endpoint("INTEGRATIONS_PUBLIC_BASE_URL"),
-		AllowedOrigins:     splitList(os.Getenv("INTEGRATIONS_ALLOWED_ORIGINS")),
-		KMSKeyID:           strings.TrimSpace(os.Getenv("INTEGRATIONS_KMS_KEY_ID")),
+		AuthURL:        endpoint(getenv, "AUTH_URL"),
+		ConnectionsURL: endpoint(getenv, "CONNECTIONS_URL"),
+		PublicBaseURL:  endpoint(getenv, "INTEGRATIONS_PUBLIC_BASE_URL"),
+		AllowedOrigins: splitList(getenv("INTEGRATIONS_ALLOWED_ORIGINS")),
+		KMSKeyID:       strings.TrimSpace(getenv("INTEGRATIONS_KMS_KEY_ID")),
 		// The local stack runs no KMS, so KMS never follows AWS_ENDPOINT_URL.
-		KMSEndpoint:         endpoint("AWS_ENDPOINT_URL_KMS"),
-		EventBridgeEndpoint: endpointOr("EVENTBRIDGE_ENDPOINT", genericEndpoint),
-		SQSEndpoint:         endpointOr("AWS_ENDPOINT_URL_SQS", genericEndpoint),
-		EventBusName:        valueOrDefault("EVENT_BUS_NAME", "default"),
-		EventsQueueURL:      strings.TrimSpace(os.Getenv("INTEGRATIONS_EVENTS_QUEUE_URL")),
-		ServiceName:         valueOrDefault("INTEGRATIONS_SERVICE_NAME", "integrations"),
-		ServiceKeyID:        strings.TrimSpace(os.Getenv("INTEGRATIONS_SERVICE_KEY_ID")),
+		KMSEndpoint:         endpoint(getenv, "AWS_ENDPOINT_URL_KMS"),
+		EventBridgeEndpoint: endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
+		SQSEndpoint:         endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
+		EventsQueueURL:      strings.TrimSpace(getenv("INTEGRATIONS_EVENTS_QUEUE_URL")),
+		ServiceName:         valueOrDefault(getenv, "INTEGRATIONS_SERVICE_NAME", "integrations"),
+		ServiceKeyID:        strings.TrimSpace(getenv("INTEGRATIONS_SERVICE_KEY_ID")),
 	}
-	if config.DatabaseURL == "" || config.AuthURL == "" || config.ConnectionsURL == "" || config.PublicBaseURL == "" ||
+	if config.AuthURL == "" || config.ConnectionsURL == "" || config.PublicBaseURL == "" ||
 		config.KMSKeyID == "" || config.ServiceKeyID == "" {
-		return Config{}, errors.New("DATABASE_URL, AUTH_URL, CONNECTIONS_URL, INTEGRATIONS_PUBLIC_BASE_URL, INTEGRATIONS_KMS_KEY_ID and INTEGRATIONS_SERVICE_KEY_ID are required")
+		return Config{}, errors.New("AUTH_URL, CONNECTIONS_URL, INTEGRATIONS_PUBLIC_BASE_URL, INTEGRATIONS_KMS_KEY_ID and INTEGRATIONS_SERVICE_KEY_ID are required")
 	}
 	for _, check := range []struct{ name, value string }{
 		{"AUTH_URL", config.AuthURL},
@@ -87,19 +71,19 @@ func FromEnv() (Config, error) {
 	return config, nil
 }
 
-func valueOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+func valueOrDefault(getenv func(string) string, name, fallback string) string {
+	if value := strings.TrimSpace(getenv(name)); value != "" {
 		return value
 	}
 	return fallback
 }
 
-func endpoint(name string) string {
-	return strings.TrimRight(strings.TrimSpace(os.Getenv(name)), "/")
+func endpoint(getenv func(string) string, name string) string {
+	return strings.TrimRight(strings.TrimSpace(getenv(name)), "/")
 }
 
-func endpointOr(name, fallback string) string {
-	if value := endpoint(name); value != "" {
+func endpointOr(getenv func(string) string, name, fallback string) string {
+	if value := endpoint(getenv, name); value != "" {
 		return value
 	}
 	return fallback
@@ -113,18 +97,6 @@ func splitList(value string) []string {
 		}
 	}
 	return result
-}
-
-func boolValue(name string, fallback bool) (bool, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, errors.New(name + " must be true or false")
-	}
-	return parsed, nil
 }
 
 func absoluteURL(value string) bool {

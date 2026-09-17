@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -103,6 +104,22 @@ func do(t *testing.T, server *Server, method, path, body string, decorate ...fun
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	return recorder
+}
+
+func TestPatternsNameEveryRoute(t *testing.T) {
+	server := New(&fakeService{}, Config{}, nil)
+	patterns := server.Patterns()
+	if len(patterns) < 12 {
+		t.Fatalf("patterns = %v", patterns)
+	}
+	wildcards := regexp.MustCompile(`\{[^}]+\}`)
+	for _, pattern := range patterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		request := httptest.NewRequest(method, wildcards.ReplaceAllString(path, "x"), nil)
+		if _, matched := server.mux.Handler(request); matched != pattern {
+			t.Errorf("%s routes to %q", pattern, matched)
+		}
+	}
 }
 
 func TestCreateCorpusPassesTheChoicesDown(t *testing.T) {

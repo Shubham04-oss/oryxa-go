@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -21,20 +20,14 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 )
 
-const defaultRegion = "ap-south-1"
-
+// Config is what rag reads for itself. The listener, the database, the AWS
+// region and the event bus are the host's.
 type Config struct {
-	Address            string
-	AWSRegion          string
-	DatabaseURL        string
-	PostgresExtensions []string
-	AutoMigrate        bool
-	AuthURL            string
-	TeamsURL           string
-	FilesURL           string
-	AllowedOrigins     []string
-	EventBusName       string
-	EventsQueueURL     string
+	AuthURL        string
+	TeamsURL       string
+	FilesURL       string
+	AllowedOrigins []string
+	EventsQueueURL string
 
 	// VectorBucket is the S3 Vectors bucket. Without it, corpora on that
 	// backend are refused by name rather than failing at their first write.
@@ -79,64 +72,56 @@ type Config struct {
 	IngestInterval time.Duration
 }
 
-func FromEnv() (Config, error) {
-	autoMigrate, err := boolValue("RAG_AUTO_MIGRATE", true)
+// FromEnv reads rag's configuration through getenv, which a host layers its
+// own defaults under.
+func FromEnv(getenv func(string) string) (Config, error) {
+	embedConcurrency, err := intValue(getenv, "RAG_EMBED_CONCURRENCY", 4, 1, 64)
 	if err != nil {
 		return Config{}, err
 	}
-	embedConcurrency, err := intValue("RAG_EMBED_CONCURRENCY", 4, 1, 64)
+	embedAttempts, err := intValue(getenv, "RAG_EMBED_MAX_ATTEMPTS", 5, 1, 10)
 	if err != nil {
 		return Config{}, err
 	}
-	embedAttempts, err := intValue("RAG_EMBED_MAX_ATTEMPTS", 5, 1, 10)
+	ingestBatch, err := intValue(getenv, "RAG_INGEST_BATCH", 4, 1, 64)
 	if err != nil {
 		return Config{}, err
 	}
-	ingestBatch, err := intValue("RAG_INGEST_BATCH", 4, 1, 64)
+	ingestLease, err := secondsValue(getenv, "RAG_INGEST_LEASE_SECONDS", 5*time.Minute, time.Minute, time.Hour)
 	if err != nil {
 		return Config{}, err
 	}
-	ingestLease, err := secondsValue("RAG_INGEST_LEASE_SECONDS", 5*time.Minute, time.Minute, time.Hour)
-	if err != nil {
-		return Config{}, err
-	}
-	ingestInterval, err := secondsValue("RAG_INGEST_INTERVAL_SECONDS", 2*time.Second, time.Second, 5*time.Minute)
+	ingestInterval, err := secondsValue(getenv, "RAG_INGEST_INTERVAL_SECONDS", 2*time.Second, time.Second, 5*time.Minute)
 	if err != nil {
 		return Config{}, err
 	}
 
-	genericEndpoint := endpoint("AWS_ENDPOINT_URL")
+	genericEndpoint := endpoint(getenv, "AWS_ENDPOINT_URL")
 	config := Config{
-		Address:            valueOrDefault("RAG_ADDRESS", ":8080"),
-		AWSRegion:          valueOrDefault("AWS_REGION", defaultRegion),
-		DatabaseURL:        strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		PostgresExtensions: splitList(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
-		AutoMigrate:        autoMigrate,
-		AuthURL:            trimURL(os.Getenv("AUTH_URL")),
-		TeamsURL:           trimURL(os.Getenv("TEAMS_URL")),
-		FilesURL:           trimURL(os.Getenv("FILES_URL")),
-		AllowedOrigins:     splitList(os.Getenv("RAG_ALLOWED_ORIGINS")),
-		EventBusName:       valueOrDefault("EVENT_BUS_NAME", "default"),
-		EventsQueueURL:     strings.TrimSpace(os.Getenv("RAG_EVENTS_QUEUE_URL")),
+		AuthURL:        trimURL(getenv("AUTH_URL")),
+		TeamsURL:       trimURL(getenv("TEAMS_URL")),
+		FilesURL:       trimURL(getenv("FILES_URL")),
+		AllowedOrigins: splitList(getenv("RAG_ALLOWED_ORIGINS")),
+		EventsQueueURL: strings.TrimSpace(getenv("RAG_EVENTS_QUEUE_URL")),
 
-		VectorBucket:      strings.TrimSpace(os.Getenv("RAG_VECTOR_BUCKET_NAME")),
-		S3VectorsEndpoint: endpointOr("AWS_ENDPOINT_URL_S3VECTORS", genericEndpoint),
+		VectorBucket:      strings.TrimSpace(getenv("RAG_VECTOR_BUCKET_NAME")),
+		S3VectorsEndpoint: endpointOr(getenv, "AWS_ENDPOINT_URL_S3VECTORS", genericEndpoint),
 
-		GoogleCloudProject:  strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")),
-		GoogleCloudLocation: valueOrDefault("GOOGLE_CLOUD_LOCATION", "global"),
+		GoogleCloudProject:  strings.TrimSpace(getenv("GOOGLE_CLOUD_PROJECT")),
+		GoogleCloudLocation: valueOrDefault(getenv, "GOOGLE_CLOUD_LOCATION", "global"),
 
-		DefaultProvider: domain.Provider(valueOrDefault("RAG_DEFAULT_EMBEDDING_PROVIDER", string(domain.ProviderBedrock))),
-		DefaultModel:    valueOrDefault("RAG_DEFAULT_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0"),
-		DefaultMetric:   domain.Metric(valueOrDefault("RAG_DEFAULT_METRIC", string(domain.MetricCosine))),
-		DefaultBackend:  domain.Backend(valueOrDefault("RAG_DEFAULT_BACKEND", string(domain.BackendPgvector))),
+		DefaultProvider: domain.Provider(valueOrDefault(getenv, "RAG_DEFAULT_EMBEDDING_PROVIDER", string(domain.ProviderBedrock))),
+		DefaultModel:    valueOrDefault(getenv, "RAG_DEFAULT_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0"),
+		DefaultMetric:   domain.Metric(valueOrDefault(getenv, "RAG_DEFAULT_METRIC", string(domain.MetricCosine))),
+		DefaultBackend:  domain.Backend(valueOrDefault(getenv, "RAG_DEFAULT_BACKEND", string(domain.BackendPgvector))),
 
-		AnswerProvider:     domain.Provider(valueOrDefault("RAG_ANSWER_PROVIDER", string(domain.ProviderBedrock))),
-		AnswerModel:        strings.TrimSpace(os.Getenv("RAG_ANSWER_MODEL")),
-		AnswerInstructions: strings.TrimSpace(os.Getenv("RAG_ANSWER_INSTRUCTIONS")),
+		AnswerProvider:     domain.Provider(valueOrDefault(getenv, "RAG_ANSWER_PROVIDER", string(domain.ProviderBedrock))),
+		AnswerModel:        strings.TrimSpace(getenv("RAG_ANSWER_MODEL")),
+		AnswerInstructions: strings.TrimSpace(getenv("RAG_ANSWER_INSTRUCTIONS")),
 
-		RerankModelARN:      strings.TrimSpace(os.Getenv("RAG_RERANK_MODEL_ARN")),
-		GuardrailIdentifier: strings.TrimSpace(os.Getenv("RAG_GUARDRAIL_ID")),
-		GuardrailVersion:    strings.TrimSpace(os.Getenv("RAG_GUARDRAIL_VERSION")),
+		RerankModelARN:      strings.TrimSpace(getenv("RAG_RERANK_MODEL_ARN")),
+		GuardrailIdentifier: strings.TrimSpace(getenv("RAG_GUARDRAIL_ID")),
+		GuardrailVersion:    strings.TrimSpace(getenv("RAG_GUARDRAIL_VERSION")),
 
 		EmbedConcurrency: embedConcurrency,
 		EmbedMaxAttempts: embedAttempts,
@@ -145,8 +130,8 @@ func FromEnv() (Config, error) {
 		IngestInterval:   ingestInterval,
 	}
 
-	if config.DatabaseURL == "" || config.AuthURL == "" {
-		return Config{}, errors.New("DATABASE_URL and AUTH_URL are required")
+	if config.AuthURL == "" {
+		return Config{}, errors.New("AUTH_URL is required")
 	}
 	for name, value := range map[string]string{"AUTH_URL": config.AuthURL, "TEAMS_URL": config.TeamsURL, "FILES_URL": config.FilesURL} {
 		if value == "" {
@@ -198,8 +183,8 @@ func FromEnv() (Config, error) {
 	return config, nil
 }
 
-func valueOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+func valueOrDefault(getenv func(string) string, name, fallback string) string {
+	if value := strings.TrimSpace(getenv(name)); value != "" {
 		return value
 	}
 	return fallback
@@ -209,12 +194,12 @@ func trimURL(value string) string {
 	return strings.TrimRight(strings.TrimSpace(value), "/")
 }
 
-func endpoint(name string) string {
-	return strings.TrimRight(strings.TrimSpace(os.Getenv(name)), "/")
+func endpoint(getenv func(string) string, name string) string {
+	return strings.TrimRight(strings.TrimSpace(getenv(name)), "/")
 }
 
-func endpointOr(name, fallback string) string {
-	if value := endpoint(name); value != "" {
+func endpointOr(getenv func(string) string, name, fallback string) string {
+	if value := endpoint(getenv, name); value != "" {
 		return value
 	}
 	return fallback
@@ -230,20 +215,8 @@ func splitList(value string) []string {
 	return result
 }
 
-func boolValue(name string, fallback bool) (bool, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, errors.New(name + " must be true or false")
-	}
-	return parsed, nil
-}
-
-func intValue(name string, fallback, lowest, highest int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func intValue(getenv func(string) string, name string, fallback, lowest, highest int) (int, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}
@@ -254,8 +227,8 @@ func intValue(name string, fallback, lowest, highest int) (int, error) {
 	return parsed, nil
 }
 
-func secondsValue(name string, fallback, lowest, highest time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func secondsValue(getenv func(string) string, name string, fallback, lowest, highest time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}

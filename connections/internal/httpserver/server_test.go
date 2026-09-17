@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -264,6 +265,22 @@ func errorCode(t *testing.T, recorder *httptest.ResponseRecorder) string {
 		t.Fatalf("error body = %s", recorder.Body)
 	}
 	return fmt.Sprint(failure["code"])
+}
+
+func TestPatternsNameEveryRoute(t *testing.T) {
+	server := New(&fakeService{}, Config{}, nil)
+	patterns := server.Patterns()
+	if len(patterns) < 23 {
+		t.Fatalf("patterns = %v", patterns)
+	}
+	wildcards := regexp.MustCompile(`\{[^}]+\}`)
+	for _, pattern := range patterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		request := httptest.NewRequest(method, wildcards.ReplaceAllString(path, "x"), nil)
+		if _, matched := server.mux.Handler(request); matched != pattern {
+			t.Errorf("%s routes to %q", pattern, matched)
+		}
+	}
 }
 
 func TestHealthzAndHeaders(t *testing.T) {

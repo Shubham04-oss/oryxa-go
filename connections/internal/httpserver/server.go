@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/connections/internal/application"
@@ -62,6 +63,7 @@ type Server struct {
 	services       ServiceVerifier
 	logger         *slog.Logger
 	mux            *http.ServeMux
+	patterns       []string
 }
 
 func New(service connectionsService, config Config, logger *slog.Logger) *Server {
@@ -80,38 +82,48 @@ func New(service connectionsService, config Config, logger *slog.Logger) *Server
 			server.allowedOrigins[parsed.Scheme+"://"+parsed.Host] = struct{}{}
 		}
 	}
-	server.mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+	server.handle("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
 
-	server.mux.HandleFunc("GET /v1/providers", server.listProviders)
+	server.handle("GET /v1/providers", server.listProviders)
 
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/apps", server.listApps)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/apps", server.createApp)
-	server.mux.HandleFunc("PATCH /v1/organizations/{organizationID}/apps/{appID}", server.updateApp)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/apps/{appID}/disable", server.setAppStatus(domain.AppStatusDisabled))
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/apps/{appID}/enable", server.setAppStatus(domain.AppStatusActive))
-	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/apps/{appID}", server.deleteApp)
+	server.handle("GET /v1/organizations/{organizationID}/apps", server.listApps)
+	server.handle("POST /v1/organizations/{organizationID}/apps", server.createApp)
+	server.handle("PATCH /v1/organizations/{organizationID}/apps/{appID}", server.updateApp)
+	server.handle("POST /v1/organizations/{organizationID}/apps/{appID}/disable", server.setAppStatus(domain.AppStatusDisabled))
+	server.handle("POST /v1/organizations/{organizationID}/apps/{appID}/enable", server.setAppStatus(domain.AppStatusActive))
+	server.handle("DELETE /v1/organizations/{organizationID}/apps/{appID}", server.deleteApp)
 
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/connections", server.listConnections)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/connections/authorize", server.authorize)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/connections/complete", server.complete)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/connections", server.createConnection)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/connections/{connectionID}", server.getConnection)
-	server.mux.HandleFunc("PATCH /v1/organizations/{organizationID}/connections/{connectionID}", server.updateConnection)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/connections/{connectionID}/reconnect", server.reconnect)
-	server.mux.HandleFunc("PUT /v1/organizations/{organizationID}/connections/{connectionID}/credential", server.replaceCredential)
-	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/connections/{connectionID}", server.disconnect)
+	server.handle("GET /v1/organizations/{organizationID}/connections", server.listConnections)
+	server.handle("POST /v1/organizations/{organizationID}/connections/authorize", server.authorize)
+	server.handle("POST /v1/organizations/{organizationID}/connections/complete", server.complete)
+	server.handle("POST /v1/organizations/{organizationID}/connections", server.createConnection)
+	server.handle("GET /v1/organizations/{organizationID}/connections/{connectionID}", server.getConnection)
+	server.handle("PATCH /v1/organizations/{organizationID}/connections/{connectionID}", server.updateConnection)
+	server.handle("POST /v1/organizations/{organizationID}/connections/{connectionID}/reconnect", server.reconnect)
+	server.handle("PUT /v1/organizations/{organizationID}/connections/{connectionID}/credential", server.replaceCredential)
+	server.handle("DELETE /v1/organizations/{organizationID}/connections/{connectionID}", server.disconnect)
 
-	server.mux.HandleFunc("GET "+application.CallbackPath+"{provider}", server.callback)
+	server.handle("GET "+application.CallbackPath+"{provider}", server.callback)
 
-	server.mux.HandleFunc("POST /v1/internal/connections/{connectionID}/token", server.issueToken)
-	server.mux.HandleFunc("GET /v1/internal/connections/{connectionID}", server.internalConnection)
-	server.mux.HandleFunc("POST /v1/internal/connections/{connectionID}/holds", server.addHold)
-	server.mux.HandleFunc("DELETE /v1/internal/connections/{connectionID}/holds/{holder}", server.releaseHold)
-	server.mux.HandleFunc("POST /v1/internal/connections/{connectionID}/report", server.report)
+	server.handle("POST /v1/internal/connections/{connectionID}/token", server.issueToken)
+	server.handle("GET /v1/internal/connections/{connectionID}", server.internalConnection)
+	server.handle("POST /v1/internal/connections/{connectionID}/holds", server.addHold)
+	server.handle("DELETE /v1/internal/connections/{connectionID}/holds/{holder}", server.releaseHold)
+	server.handle("POST /v1/internal/connections/{connectionID}/report", server.report)
 	return server
 }
+
+// handle registers a route and remembers its pattern, so a host serving
+// several services knows which paths are this one's.
+func (server *Server) handle(pattern string, handler http.HandlerFunc) {
+	server.mux.HandleFunc(pattern, handler)
+	server.patterns = append(server.patterns, pattern)
+}
+
+// Patterns lists every route the server registered.
+func (server *Server) Patterns() []string { return slices.Clone(server.patterns) }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")

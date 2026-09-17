@@ -5,29 +5,16 @@ import (
 	"time"
 )
 
-func clearEnv(t *testing.T) {
-	t.Helper()
-	for _, name := range []string{
-		"AGENTS_PRIMARY_ADDRESS", "AGENTS_PRIMARY_MODEL", "AGENTS_PRIMARY_MODEL_LITE", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "DATABASE_URL", "AGENTS_PRIMARY_AUTO_MIGRATE",
-		"AGENTS_PRIMARY_PROMPT_CACHE", "AGENTS_PRIMARY_CACHE_TTL_SECONDS", "AGENTS_PRIMARY_CACHE_MIN_TOKENS",
-		"AWS_REGION", "AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID", "AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS",
-		"AGENTS_PRIMARY_BROWSER_ID", "AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS",
-		"EVENT_BUS_NAME", "EVENTBRIDGE_ENDPOINT",
-		"AGENTS_PRIMARY_GUARDRAIL_ID", "AGENTS_PRIMARY_GUARDRAIL_VERSION", "AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED", "AGENTS_PRIMARY_MODEL_PRICES",
-		"INTEGRATIONS_URL", "AUTH_URL", "AGENTS_PRIMARY_SERVICE_KEY_ID",
-	} {
-		t.Setenv(name, "")
-	}
+func env(values map[string]string) func(string) string {
+	return func(name string) string { return values[name] }
 }
 
 func TestFromEnvDefaults(t *testing.T) {
-	clearEnv(t)
-
-	config, err := FromEnv()
+	config, err := FromEnv(env(map[string]string{}))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.Address != ":8080" || config.Model != "gemini-3.8-flash" || config.ModelLite != "gemini-3.8-flash-lite" || config.GoogleCloudProject != "" || config.GoogleCloudLocation != "global" || config.DatabaseURL != "" || !config.AutoMigrate {
+	if config.Model != "gemini-3.8-flash" || config.ModelLite != "gemini-3.8-flash-lite" || config.GoogleCloudProject != "" || config.GoogleCloudLocation != "global" || config.DatabaseURL != "" || !config.AutoMigrate {
 		t.Fatalf("config = %+v", config)
 	}
 	if !config.Cache || config.CacheTTL != time.Hour || config.CacheMinTokens != 4096 {
@@ -51,37 +38,35 @@ func TestFromEnvDefaults(t *testing.T) {
 }
 
 func TestFromEnvOverrides(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("AGENTS_PRIMARY_ADDRESS", " :8086 ")
-	t.Setenv("AGENTS_PRIMARY_MODEL", " gemini-3.5-flash ")
-	t.Setenv("AGENTS_PRIMARY_MODEL_LITE", " gemini-3.5-flash-lite ")
-	t.Setenv("GOOGLE_CLOUD_PROJECT", " oryxa-dev ")
-	t.Setenv("GOOGLE_CLOUD_LOCATION", " eu ")
-	t.Setenv("DATABASE_URL", " postgres://oryxa@localhost:5435/oryxa ")
-	t.Setenv("AGENTS_PRIMARY_AUTO_MIGRATE", " false ")
-	t.Setenv("AGENTS_PRIMARY_PROMPT_CACHE", " false ")
-	t.Setenv("AGENTS_PRIMARY_CACHE_TTL_SECONDS", "7200")
-	t.Setenv("AGENTS_PRIMARY_CACHE_MIN_TOKENS", "2048")
-	t.Setenv("AWS_REGION", " us-east-1 ")
-	t.Setenv("AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID", " interpreter-1 ")
-	t.Setenv("AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", "3600")
-	t.Setenv("AGENTS_PRIMARY_BROWSER_ID", " browser-1 ")
-	t.Setenv("AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS", "120")
-	t.Setenv("EVENT_BUS_NAME", " oryxa-local ")
-	t.Setenv("EVENTBRIDGE_ENDPOINT", " http://localhost:4566 ")
-	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_ID", " gr-123 ")
-	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_VERSION", " 7 ")
-	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED", " true ")
-	t.Setenv("AGENTS_PRIMARY_MODEL_PRICES", ` {"gemini-3.8-flash":{"input":0.30,"output":2.50,"cached":0.075}} `)
-	t.Setenv("INTEGRATIONS_URL", " http://localhost:8090 ")
-	t.Setenv("AUTH_URL", " http://localhost:8081 ")
-	t.Setenv("AGENTS_PRIMARY_SERVICE_KEY_ID", " arn:aws:kms:ap-south-1:1:key/agents ")
-
-	config, err := FromEnv()
+	config, err := FromEnv(env(map[string]string{
+		"AGENTS_PRIMARY_MODEL":                           " gemini-3.5-flash ",
+		"AGENTS_PRIMARY_MODEL_LITE":                      " gemini-3.5-flash-lite ",
+		"GOOGLE_CLOUD_PROJECT":                           " oryxa-dev ",
+		"GOOGLE_CLOUD_LOCATION":                          " eu ",
+		"DATABASE_URL":                                   " postgres://oryxa@localhost:5435/oryxa ",
+		"AGENTS_PRIMARY_AUTO_MIGRATE":                    " false ",
+		"AGENTS_PRIMARY_PROMPT_CACHE":                    " false ",
+		"AGENTS_PRIMARY_CACHE_TTL_SECONDS":               "7200",
+		"AGENTS_PRIMARY_CACHE_MIN_TOKENS":                "2048",
+		"AWS_REGION":                                     " us-east-1 ",
+		"AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID":     " interpreter-1 ",
+		"AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS": "3600",
+		"AGENTS_PRIMARY_BROWSER_ID":                      " browser-1 ",
+		"AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS": "120",
+		"EVENT_BUS_NAME":                                 " oryxa-local ",
+		"EVENTBRIDGE_ENDPOINT":                           " http://localhost:4566 ",
+		"AGENTS_PRIMARY_GUARDRAIL_ID":                    " gr-123 ",
+		"AGENTS_PRIMARY_GUARDRAIL_VERSION":               " 7 ",
+		"AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED":           " true ",
+		"AGENTS_PRIMARY_MODEL_PRICES":                    ` {"gemini-3.8-flash":{"input":0.30,"output":2.50,"cached":0.075}} `,
+		"INTEGRATIONS_URL":                               " http://localhost:8090 ",
+		"AUTH_URL":                                       " http://localhost:8081 ",
+		"AGENTS_PRIMARY_SERVICE_KEY_ID":                  " arn:aws:kms:ap-south-1:1:key/agents ",
+	}))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.Address != ":8086" || config.Model != "gemini-3.5-flash" || config.ModelLite != "gemini-3.5-flash-lite" || config.GoogleCloudProject != "oryxa-dev" || config.GoogleCloudLocation != "eu" || config.DatabaseURL != "postgres://oryxa@localhost:5435/oryxa" || config.AutoMigrate {
+	if config.Model != "gemini-3.5-flash" || config.ModelLite != "gemini-3.5-flash-lite" || config.GoogleCloudProject != "oryxa-dev" || config.GoogleCloudLocation != "eu" || config.DatabaseURL != "postgres://oryxa@localhost:5435/oryxa" || config.AutoMigrate {
 		t.Fatalf("config = %+v", config)
 	}
 	if config.Cache || config.CacheTTL != 2*time.Hour || config.CacheMinTokens != 2048 {
@@ -108,52 +93,39 @@ func TestFromEnvOverrides(t *testing.T) {
 }
 
 func TestFromEnvRejectsInvalidAutoMigrate(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("AGENTS_PRIMARY_AUTO_MIGRATE", "sometimes")
-	if _, err := FromEnv(); err == nil {
+	if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_AUTO_MIGRATE": "sometimes"})); err == nil {
 		t.Fatal("FromEnv() error = nil")
 	}
 }
 
 func TestFromEnvRejectsInvalidCacheMinTokens(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("AGENTS_PRIMARY_CACHE_MIN_TOKENS", "many")
-	if _, err := FromEnv(); err == nil {
+	if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_CACHE_MIN_TOKENS": "many"})); err == nil {
 		t.Fatal("FromEnv() error = nil for a min-token count that is not a number")
 	}
-	t.Setenv("AGENTS_PRIMARY_CACHE_MIN_TOKENS", "-1")
-	if _, err := FromEnv(); err == nil {
+	if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_CACHE_MIN_TOKENS": "-1"})); err == nil {
 		t.Fatal("FromEnv() error = nil for a negative min-token count")
 	}
 }
 
 func TestFromEnvRejectsInvalidGuardrail(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_ID", "gr-123")
-	if _, err := FromEnv(); err == nil {
+	if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_GUARDRAIL_ID": "gr-123"})); err == nil {
 		t.Fatal("FromEnv() error = nil when the guardrail version is missing")
 	}
-	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_VERSION", "DRAFT")
-	if _, err := FromEnv(); err == nil {
+	if _, err := FromEnv(env(map[string]string{
+		"AGENTS_PRIMARY_GUARDRAIL_ID": "gr-123", "AGENTS_PRIMARY_GUARDRAIL_VERSION": "DRAFT",
+	})); err == nil {
 		t.Fatal("FromEnv() error = nil for the mutable DRAFT guardrail version")
 	}
-	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_VERSION", "")
-	t.Setenv("AGENTS_PRIMARY_GUARDRAIL_ID", "")
-	t.Setenv("AGENTS_PRIMARY_MODEL_PRICES", "not json")
-	if _, err := FromEnv(); err == nil {
+	if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_MODEL_PRICES": "not json"})); err == nil {
 		t.Fatal("FromEnv() error = nil for model prices that are not JSON")
 	}
 }
 
 func TestFromEnvRejectsInvalidSessionTimeout(t *testing.T) {
-	clearEnv(t)
-	t.Setenv("AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", "30")
-	if _, err := FromEnv(); err == nil {
+	if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS": "30"})); err == nil {
 		t.Fatal("FromEnv() error = nil for a sandbox timeout below one minute")
 	}
-	t.Setenv("AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS", "")
-	t.Setenv("AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS", "later")
-	if _, err := FromEnv(); err == nil {
+	if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS": "later"})); err == nil {
 		t.Fatal("FromEnv() error = nil for a browser timeout that is not a number")
 	}
 }

@@ -1,0 +1,72 @@
+package billing
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"slices"
+	"testing"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+)
+
+func platform(values map[string]string) host.Platform {
+	return host.Platform{
+		Logger: slog.New(slog.DiscardHandler),
+		// Mounting builds the store but never queries it.
+		Database:     &postgreskit.Database{},
+		AWS:          aws.Config{Region: "ap-south-1"},
+		EventBusName: "default",
+		Getenv:       func(name string) string { return values[name] },
+	}
+}
+
+func required() map[string]string {
+	return map[string]string{
+		"AUTH_URL":    "http://127.0.0.1:8080",
+		"BILLING_URL": "https://app.example.com/settings/billing",
+	}
+}
+
+func TestMountServesBillingRoutesAndRunsItsWorkers(t *testing.T) {
+	values := required()
+	values["BILLING_EVENTS_QUEUE_URL"] = "http://localhost:4566/000000000000/billing-events"
+	service, err := Mount(context.Background(), platform(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if service.Handler == nil || !slices.Contains(service.Routes, "GET /v1/billing/plans") {
+		t.Fatalf("routes = %v", service.Routes)
+	}
+	if len(service.Workers) != 3 {
+		t.Fatalf("workers = %d, want the dispatcher, the consumer and housekeeping", len(service.Workers))
+	}
+	if service.Timeouts.Read == 0 || service.Timeouts.Write == 0 {
+		t.Fatalf("timeouts = %+v", service.Timeouts)
+	}
+
+	withoutQueue, err := Mount(context.Background(), platform(required()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutQueue.Workers) != 2 {
+		t.Fatalf("workers without a queue = %d, want the dispatcher and housekeeping", len(withoutQueue.Workers))
+	}
+}
+
+func TestMountRefusesWhatItCannotRunWith(t *testing.T) {
+	if _, err := Mount(context.Background(), platform(map[string]string{"AUTH_URL": "http://127.0.0.1:8080"})); err == nil {
+		t.Fatal("Mount() accepted a missing BILLING_URL")
+	}
+	noDatabase := platform(required())
+	noDatabase.Database = nil
+	if _, err := Mount(context.Background(), noDatabase); !errors.Is(err, host.ErrDatabaseRequired) {
+		t.Fatalf("Mount() without a database = %v", err)
+	}
+	if err := Migrate(context.Background(), noDatabase); !errors.Is(err, host.ErrDatabaseRequired) {
+		t.Fatalf("Migrate() without a database = %v", err)
+	}
+}

@@ -4,38 +4,31 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
-const defaultRegion = "ap-south-1"
-
+// Config is what auth reads for itself. The listener, the database, the AWS
+// region and the event bus are the host's.
 type Config struct {
-	Address             string
-	AWSRegion           string
 	CognitoIssuer       string
 	CognitoUserPoolID   string
 	CognitoClientID     string
 	CognitoDomain       string
 	CognitoCallbackURL  string
-	EventBusName        string
 	EventBridgeEndpoint string
 	// EventsQueueURL is the queue billing's entitlements arrive on. Without
 	// it no member limits are applied.
 	EventsQueueURL       string
 	SQSEndpoint          string
-	DatabaseURL          string
-	PostgresExtensions   []string
 	InvitationAcceptURL  string
 	EmailVerificationURL string
 	PasswordResetURL     string
 	AllowedReturnURLs    []string
 	CookieDomain         string
 	CookieSecure         bool
-	AutoMigrate          bool
 
 	// Agent grants let an agent act for a member while the member is absent.
 	// All four of the following are optional; AgentGrantsEnabled reports
@@ -56,47 +49,39 @@ func (c Config) AgentGrantsEnabled() bool {
 	return c.CognitoAgentClientID != "" && c.CognitoAgentClientSecret != "" && c.CognitoAgentCallbackURL != "" && c.AuthKMSKeyID != ""
 }
 
-func FromEnv() (Config, error) {
-	cookieSecure, err := boolValue("AUTH_COOKIE_SECURE", true)
-	if err != nil {
-		return Config{}, err
-	}
-	autoMigrate, err := boolValue("AUTH_AUTO_MIGRATE", true)
+// FromEnv reads auth's configuration through getenv, which a host layers its
+// own defaults under.
+func FromEnv(getenv func(string) string) (Config, error) {
+	cookieSecure, err := boolValue(getenv, "AUTH_COOKIE_SECURE", true)
 	if err != nil {
 		return Config{}, err
 	}
 	config := Config{
-		Address:              valueOrDefault("AUTH_ADDRESS", ":8080"),
-		AWSRegion:            valueOrDefault("AWS_REGION", defaultRegion),
-		CognitoIssuer:        strings.TrimSpace(os.Getenv("COGNITO_ISSUER")),
-		CognitoUserPoolID:    strings.TrimSpace(os.Getenv("COGNITO_USER_POOL_ID")),
-		CognitoClientID:      strings.TrimSpace(os.Getenv("COGNITO_CLIENT_ID")),
-		CognitoDomain:        strings.TrimRight(strings.TrimSpace(os.Getenv("COGNITO_DOMAIN")), "/"),
-		CognitoCallbackURL:   strings.TrimSpace(os.Getenv("COGNITO_CALLBACK_URL")),
-		EventBusName:         valueOrDefault("EVENT_BUS_NAME", "default"),
-		EventBridgeEndpoint:  strings.TrimRight(strings.TrimSpace(os.Getenv("EVENTBRIDGE_ENDPOINT")), "/"),
-		EventsQueueURL:       strings.TrimSpace(os.Getenv("AUTH_EVENTS_QUEUE_URL")),
-		SQSEndpoint:          strings.TrimRight(strings.TrimSpace(os.Getenv("SQS_ENDPOINT")), "/"),
-		DatabaseURL:          strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		PostgresExtensions:   splitList(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
-		InvitationAcceptURL:  strings.TrimSpace(os.Getenv("INVITATION_ACCEPT_URL")),
-		EmailVerificationURL: strings.TrimSpace(os.Getenv("EMAIL_VERIFICATION_URL")),
-		PasswordResetURL:     strings.TrimSpace(os.Getenv("PASSWORD_RESET_URL")),
-		AllowedReturnURLs:    splitList(os.Getenv("AUTH_RETURN_URLS")),
-		CookieDomain:         strings.TrimSpace(os.Getenv("AUTH_COOKIE_DOMAIN")),
+		CognitoIssuer:        strings.TrimSpace(getenv("COGNITO_ISSUER")),
+		CognitoUserPoolID:    strings.TrimSpace(getenv("COGNITO_USER_POOL_ID")),
+		CognitoClientID:      strings.TrimSpace(getenv("COGNITO_CLIENT_ID")),
+		CognitoDomain:        strings.TrimRight(strings.TrimSpace(getenv("COGNITO_DOMAIN")), "/"),
+		CognitoCallbackURL:   strings.TrimSpace(getenv("COGNITO_CALLBACK_URL")),
+		EventBridgeEndpoint:  strings.TrimRight(strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")), "/"),
+		EventsQueueURL:       strings.TrimSpace(getenv("AUTH_EVENTS_QUEUE_URL")),
+		SQSEndpoint:          strings.TrimRight(strings.TrimSpace(getenv("SQS_ENDPOINT")), "/"),
+		InvitationAcceptURL:  strings.TrimSpace(getenv("INVITATION_ACCEPT_URL")),
+		EmailVerificationURL: strings.TrimSpace(getenv("EMAIL_VERIFICATION_URL")),
+		PasswordResetURL:     strings.TrimSpace(getenv("PASSWORD_RESET_URL")),
+		AllowedReturnURLs:    splitList(getenv("AUTH_RETURN_URLS")),
+		CookieDomain:         strings.TrimSpace(getenv("AUTH_COOKIE_DOMAIN")),
 		CookieSecure:         cookieSecure,
-		AutoMigrate:          autoMigrate,
 
-		CognitoAgentClientID:     strings.TrimSpace(os.Getenv("COGNITO_AGENT_CLIENT_ID")),
-		CognitoAgentClientSecret: strings.TrimSpace(os.Getenv("COGNITO_AGENT_CLIENT_SECRET")),
-		CognitoAgentCallbackURL:  strings.TrimSpace(os.Getenv("COGNITO_AGENT_CALLBACK_URL")),
-		AuthKMSKeyID:             strings.TrimSpace(os.Getenv("AUTH_KMS_KEY_ID")),
+		CognitoAgentClientID:     strings.TrimSpace(getenv("COGNITO_AGENT_CLIENT_ID")),
+		CognitoAgentClientSecret: strings.TrimSpace(getenv("COGNITO_AGENT_CLIENT_SECRET")),
+		CognitoAgentCallbackURL:  strings.TrimSpace(getenv("COGNITO_AGENT_CALLBACK_URL")),
+		AuthKMSKeyID:             strings.TrimSpace(getenv("AUTH_KMS_KEY_ID")),
 	}
 	if config.CognitoIssuer == "" || config.CognitoUserPoolID == "" || config.CognitoClientID == "" || config.CognitoDomain == "" || config.CognitoCallbackURL == "" {
 		return Config{}, errors.New("COGNITO_ISSUER, COGNITO_USER_POOL_ID, COGNITO_CLIENT_ID, COGNITO_DOMAIN, and COGNITO_CALLBACK_URL are required")
 	}
-	if config.DatabaseURL == "" || config.InvitationAcceptURL == "" || config.EmailVerificationURL == "" || config.PasswordResetURL == "" || len(config.AllowedReturnURLs) == 0 {
-		return Config{}, errors.New("DATABASE_URL, INVITATION_ACCEPT_URL, EMAIL_VERIFICATION_URL, PASSWORD_RESET_URL, and AUTH_RETURN_URLS are required")
+	if config.InvitationAcceptURL == "" || config.EmailVerificationURL == "" || config.PasswordResetURL == "" || len(config.AllowedReturnURLs) == 0 {
+		return Config{}, errors.New("INVITATION_ACCEPT_URL, EMAIL_VERIFICATION_URL, PASSWORD_RESET_URL, and AUTH_RETURN_URLS are required")
 	}
 	urls := append([]string{}, config.AllowedReturnURLs...)
 	urls = append(urls, config.CognitoCallbackURL, config.InvitationAcceptURL, config.EmailVerificationURL, config.PasswordResetURL)
@@ -112,17 +97,10 @@ func FromEnv() (Config, error) {
 			return Config{}, errors.New("COGNITO_AGENT_CALLBACK_URL must be an absolute URL")
 		}
 	}
-	if config.ServiceCallers, err = serviceauth.ParseCallers(os.Getenv("AUTH_SERVICE_CALLERS")); err != nil {
+	if config.ServiceCallers, err = serviceauth.ParseCallers(getenv("AUTH_SERVICE_CALLERS")); err != nil {
 		return Config{}, fmt.Errorf("AUTH_SERVICE_CALLERS: %w", err)
 	}
 	return config, nil
-}
-
-func valueOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
 }
 
 func splitList(value string) []string {
@@ -135,8 +113,8 @@ func splitList(value string) []string {
 	return result
 }
 
-func boolValue(name string, fallback bool) (bool, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func boolValue(getenv func(string) string, name string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}

@@ -1,11 +1,12 @@
 # Knowledge service
 
-Status: built as a library, not yet wired. The pipes between an organization's
-connected apps and the retrieval that reads them: the sources a member asks to
-have indexed, the scheduled passes that extract documents from them, the
-normalization that makes a document's hash mean something, and the
-`oryxa.knowledge` events a retrieval pipeline holds. Not built yet: the
-entrypoint, the queue provisioner, and the environment and compose files — see
+The pipes between an organization's connected apps and the retrieval that
+reads them: the sources a member asks to have indexed, the scheduled passes
+that extract documents from them, the normalization that makes a document's
+hash mean something, and the `oryxa.knowledge` events a retrieval pipeline
+holds. It mounts into the single `oryxa` binary like every other service —
+see [Mounting it](#mounting-it) and [Run locally](#run-locally). Not built
+yet: minting the grant an internal files source needs — see
 [Later](#later).
 
 Knowledge owns what has been extracted and when. Connections owns the apps and
@@ -112,7 +113,7 @@ source never shows its lease, version or attempt count.
 | Method | Path | Who | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |
-| `GET` | `/v1/providers` | Anyone | What this build can read |
+| `GET` | `/v1/sources/providers` | Anyone | What this build can read |
 | `GET` | `/v1/organizations/{organizationID}/sources` | Members | The caller's sources; `scope=organization` gives an org admin all of them |
 | `POST` | `/v1/organizations/{organizationID}/sources` | Members | Register one: `{connection_id, provider, target, interval_seconds}` → `201` |
 | `GET` | `/v1/organizations/{organizationID}/sources/{sourceID}` | Its creator or an org admin | One source |
@@ -197,7 +198,23 @@ Knowledge uses `/internal/postgreskit`. Other services never read these tables.
 
 ## Mounting it
 
-Knowledge is a library. `knowledge.New` assembles it and touches nothing:
+Knowledge mounts into `internal/host` like every other service.
+`knowledge.Definition` names it; `knowledge.Migrate` installs its schema;
+`knowledge.Mount` reads knowledge's own variables through the host's
+environment, borrows the shared Postgres pool and AWS configuration, builds
+the KMS signer and the connections client, and hands back its handler, the
+routes its server registered, its timeouts and its workers:
+
+```go
+var definitions = []host.Definition{
+	knowledge.Definition,
+	// the other services this binary carries
+}
+```
+
+Underneath, `knowledge.New` is what actually assembles it, and still touches
+nothing itself — no query, no goroutine, no listener — which is what
+`knowledge.Mount` calls:
 
 ```go
 service := knowledge.New(knowledge.Dependencies{
@@ -230,6 +247,44 @@ CONNECTIONS_SERVICE_CALLERS=[{"service": "knowledge", "key_id": "alias/oryxa-kno
 This is read once at startup, so connections needs a restart, and the KMS
 signing key must exist first. Without it every pass fails at the first token.
 
+## Provision
+
+Copy the root `.env.example` to the ignored `.env` and fill in knowledge's
+variables. Then run:
+
+```sh
+(set -a && . ./.env && go run ./knowledge/infra/events/cmd/provision)
+```
+
+The command is repeatable. It creates or updates the `knowledge-events` queue
+with its dead-letter queue, and a `knowledge-events` rule on `EVENT_BUS_NAME`
+whose target is the queue and which the queue policy admits alone. Put the
+printed `queue_url` in `KNOWLEDGE_EVENTS_QUEUE_URL`.
+
+The embedded migrations are in `internal/postgres/migrations/` and are
+applied in name order when `oryxa` starts, unless `ORYXA_AUTO_MIGRATE=false`,
+or ahead of time with `go run ./cmd/oryxa migrate`. The emulators forget
+EventBridge state when they restart, so re-run the provisioner after one.
+
+## Run locally
+
+```sh
+docker compose up -d
+(set -a && . ./.env && go run ./knowledge/infra/events/cmd/provision)
+(set -a && . ./.env && ORYXA_SERVICES=knowledge go run ./cmd/oryxa)
+```
+
+Without `KNOWLEDGE_EVENTS_QUEUE_URL` knowledge still starts, but it will not
+pause or retire a source when its connection, app, member or organization
+goes away.
+
+## Deploy
+
+Knowledge deploys as part of the single `oryxa` image, behind the same public
+edge as every service it runs alongside. Its runtime identity needs
+`kms:Sign` on its signing key, `events:PutEvents` on the event bus, and
+`sqs:ReceiveMessage` and `sqs:DeleteMessage` on `knowledge-events`.
+
 ## Tests
 
 Unit tests need nothing. The store tests need PostgreSQL; each migrates a
@@ -243,13 +298,6 @@ KNOWLEDGE_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/
 
 ## Later
 
-- **The entrypoint.** There is no `cmd/knowledge`, no `.env.example` and no
-  compose file, because the services are being consolidated into a single
-  binary and that wiring is what changes. `knowledge/service.go` is the shape
-  that wiring mounts.
-- **The queue provisioner.** `infra/events` — the queue, its dead-letter
-  queue, and the EventBridge rule built from `Subscriptions()` — following the
-  pattern every other service here uses.
 - **The grant.** `Grants` is an interface with no implementation yet; minting
   a member-scoped token is auth's job, and `agents/primary`'s `memberauth` is
   the working precedent. Until one is supplied, a files source says so rather

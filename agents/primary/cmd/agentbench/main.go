@@ -56,7 +56,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	settings, err := serviceconfig.FromEnv()
+	settings, err := serviceconfig.FromEnv(os.Getenv)
 	if err != nil {
 		log.Fatal(err)
 	}

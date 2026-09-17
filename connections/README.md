@@ -485,12 +485,17 @@ gets a flow test against a fake server.
 
 ## Run locally
 
-Copy `.env.example` to `connections/.env`, then:
+Copy the root `.env.example` to the ignored `.env` and fill in connections'
+section, then, from the repository root:
 
 ```sh
 docker compose up -d
-(set -a && . connections/.env && go run ./connections/cmd/connections)
+(set -a && . ./.env && ORYXA_SERVICES=connections go run ./cmd/oryxa)
 ```
+
+Install the schema on its own with `go run ./cmd/oryxa migrate` (it also runs
+at start unless `ORYXA_AUTO_MIGRATE=false`). Connections deploys as part of
+the single `oryxa` image.
 
 `CONNECTIONS_KMS_KEY_ID` must name a KMS key the service can use: the local
 stack runs no KMS, so use a key in AWS, or add `kms` to LocalStack's

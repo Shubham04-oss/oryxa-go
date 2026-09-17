@@ -13,23 +13,14 @@ pnpm dev
 ```
 
 The app calls every service under `/v1` on its own origin, so session cookies
-stay first-party and no service needs CORS. `pnpm dev` proxies those paths to
-the local services:
-
-| Path | Service |
-| --- | --- |
-| `/v1/organizations/{id}/teams`, `…/tools`, `…/members/search` | teams |
-| `/v1/organizations/{id}/files` | files |
-| `/v1/organizations/{id}/apps`, `…/connections`, `/v1/oauth`, `/v1/providers` | connections |
-| `/v1/billing` | billing |
-| Everything else under `/v1` | auth |
-
-The `*_SERVICE_URL` variables in `.env` say where each service runs. A
-deployment's edge must route `/v1` the same way; set `VITE_API_URL` only to
-send API calls to another origin. Auth accepts browser requests only from its
-`AUTH_RETURN_URLS` origins, and the other services check cookie-authenticated
-changes against their `*_ALLOWED_ORIGINS`, so keep the app on
-`http://localhost:3000`.
+stay first-party and no service needs CORS. Every service runs in one `oryxa`
+process, so `pnpm dev` proxies all of `/v1` to the address `ORYXA_URL` names
+(`http://localhost:8080` by default); start it from the repository root with
+`go run ./cmd/oryxa`. A deployment's edge must send `/v1` to it the same way;
+set `VITE_API_URL` only to send API calls to another origin. Auth accepts
+browser requests only from its `AUTH_RETURN_URLS` origins, and the other
+services check cookie-authenticated changes against their `*_ALLOWED_ORIGINS`,
+so keep the app on `http://localhost:3000`.
 
 ## Routes
 
