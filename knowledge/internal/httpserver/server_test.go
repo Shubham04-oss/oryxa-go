@@ -17,21 +17,25 @@ import (
 
 var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
 
-// fakeService answers whatever a test needs, recording the credentials it was
-// called with.
+// fakeService answers whatever a test needs, recording the credentials and
+// input it was called with.
 type fakeService struct {
-	source domain.Source
-	err    error
-	seen   authclient.Credentials
+	source     domain.Source
+	err        error
+	seen       authclient.Credentials
+	registered application.RegisterInput
+	query      domain.SourceQuery
 }
 
-func (service *fakeService) RegisterSource(_ context.Context, credentials authclient.Credentials, _ string, _ application.RegisterInput) (domain.Source, error) {
+func (service *fakeService) RegisterSource(_ context.Context, credentials authclient.Credentials, _ string, input application.RegisterInput) (domain.Source, error) {
 	service.seen = credentials
+	service.registered = input
 	return service.source, service.err
 }
 
-func (service *fakeService) Sources(_ context.Context, credentials authclient.Credentials, _ string, _ domain.SourceQuery) ([]domain.Source, error) {
+func (service *fakeService) Sources(_ context.Context, credentials authclient.Credentials, _ string, query domain.SourceQuery) ([]domain.Source, error) {
 	service.seen = credentials
+	service.query = query
 	if service.err != nil {
 		return nil, service.err
 	}
@@ -181,6 +185,46 @@ func TestRegisterSourceAnswersWhatWasCreated(t *testing.T) {
 	}
 }
 
+func TestRegisterSourceForwardsTheConnectionID(t *testing.T) {
+	service := &fakeService{source: registered()}
+	recorder := send(testServer(t, service), http.MethodPost, "/v1/organizations/org_1/sources",
+		`{"provider":"github","connection_id":"apc_1","target":{"repository":"acme/api"}}`, bearer())
+
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("POST /v1/organizations/org_1/sources = %d, want 201: %s", recorder.Code, recorder.Body)
+	}
+	if service.registered.ConnectionID != "apc_1" {
+		t.Fatalf("RegisterInput.ConnectionID = %q, want apc_1", service.registered.ConnectionID)
+	}
+}
+
+func TestListSourcesForwardsTheConnectionIDFilter(t *testing.T) {
+	service := &fakeService{source: registered()}
+	recorder := send(testServer(t, service), http.MethodGet, "/v1/organizations/org_1/sources?connection_id=apc_1", "", bearer())
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET sources = %d, want 200: %s", recorder.Code, recorder.Body)
+	}
+	if service.query.ConnectionID != "apc_1" {
+		t.Fatalf("SourceQuery.ConnectionID = %q, want apc_1", service.query.ConnectionID)
+	}
+}
+
+func TestASourceShowsItsConnection(t *testing.T) {
+	withConnection := registered()
+	withConnection.ConnectionID = "apc_1"
+	service := &fakeService{source: withConnection}
+	recorder := send(testServer(t, service), http.MethodGet, "/v1/organizations/org_1/sources/src_1", "", bearer())
+
+	var answer sourceView
+	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	if answer.ConnectionID != "apc_1" {
+		t.Fatalf("ConnectionID = %q, want apc_1", answer.ConnectionID)
+	}
+}
+
 func TestRegisterSourceRefusesABodyItDoesNotUnderstand(t *testing.T) {
 	server := testServer(t, &fakeService{source: registered()})
 	recorder := send(server, http.MethodPost, "/v1/organizations/org_1/sources",
@@ -216,6 +260,8 @@ func TestFailuresBecomeTheDocumentedCodes(t *testing.T) {
 		{domain.ErrUnauthorized, http.StatusUnauthorized, "unauthorized"},
 		{domain.ErrForbidden, http.StatusForbidden, "forbidden"},
 		{domain.ErrNotFound, http.StatusNotFound, "not_found"},
+		{domain.ErrNeedsReconnect, http.StatusConflict, "needs_reconnect"},
+		{domain.ErrScopeRequired, http.StatusForbidden, "scope_required"},
 		{domain.ErrConflict, http.StatusConflict, "conflict"},
 		{domain.ErrCredentialRejected, http.StatusUnprocessableEntity, "credential_rejected"},
 		{domain.ErrRateLimited, http.StatusTooManyRequests, "rate_limited"},

@@ -28,6 +28,27 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 )
 
+// Builtin is the extractors knowledge ships with, sharing one HTTP client so
+// that pacing and rate-limit backoff are per toolkit across all of them, and
+// reading every one of them through Composio's proxy: proxy is nil only when
+// COMPOSIO_API_KEY is not configured, in which case Mount does not call this
+// at all.
+//
+// Files is not here: it reads an internal service rather than a toolkit, so a
+// host supplies it along with the client it should read through.
+func Builtin(proxy sources.Proxier) sources.Registry {
+	client := sources.NewClient(proxy)
+	registry := sources.Registry{}
+	for _, extractor := range []sources.Extractor{
+		sources.NewGitHub(client),
+		sources.NewNotion(client),
+		sources.NewSlack(client),
+	} {
+		registry[extractor.Provider()] = extractor
+	}
+	return registry
+}
+
 // Name is what this service calls itself: to the bus when it publishes, and
 // to a host mounting it.
 const Name = "knowledge"
@@ -40,9 +61,11 @@ type Worker func(context.Context)
 type Dependencies struct {
 	// Store is knowledge's own schema. Required.
 	Store *postgres.Store
-	// Directory is auth; Grants mints a token that acts as a member for an
-	// internal source.
+	// Directory is auth; Apps is nil unless COMPOSIO_API_KEY is configured,
+	// in which case no provider source can be registered; Grants mints a
+	// token that acts as a member for an internal source.
 	Directory application.Directory
+	Apps      application.Apps
 	Grants    application.Grants
 	// Sink is where published events go. A host on the bus passes an
 	// EventBridge publisher; a host that also runs the retrieval pipeline can
@@ -90,6 +113,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	app := application.New(application.Dependencies{
 		Store:      dependencies.Store,
 		Directory:  dependencies.Directory,
+		Apps:       dependencies.Apps,
 		Grants:     dependencies.Grants,
 		Extractors: extractors,
 		Logger:     logger,

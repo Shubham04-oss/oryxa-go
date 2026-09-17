@@ -20,14 +20,24 @@ const defaultFullSweepInterval = 7 * 24 * time.Hour
 // AWS region and the event bus are the host's.
 type Config struct {
 	AuthURL string
+	// AppsURL is where a provider source's connection is read, required only
+	// once COMPOSIO_API_KEY says provider sources are on. It is a host URL
+	// variable: when apps runs in this process, the host defaults it there.
+	AppsURL string
+	// ComposioAPIKey turns on GitHub, Notion and Slack: without it knowledge
+	// mounts no extractor for them, only files. ComposioBaseURL overrides
+	// Composio's own API, for a test double.
+	ComposioAPIKey  string
+	ComposioBaseURL string
 	// AllowedOrigins may send cookie-authenticated mutations.
 	AllowedOrigins []string
 	// EventBridgeEndpoint and SQSEndpoint override where those AWS clients
 	// call, for a local emulator.
 	EventBridgeEndpoint string
 	SQSEndpoint         string
-	// EventsQueueURL is the queue auth's events arrive on. Without it
-	// knowledge doesn't learn that a member or organization is gone.
+	// EventsQueueURL is the queue auth's and apps' events arrive on. Without
+	// it knowledge doesn't learn that a connection, member or organization is
+	// gone.
 	EventsQueueURL string
 	// FullSweepInterval is how long a full sweep's word about what a source
 	// holds is trusted before a pass starts over from the beginning.
@@ -44,6 +54,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	config := Config{
 		AuthURL:             endpoint(getenv, "AUTH_URL"),
+		AppsURL:             endpoint(getenv, "APPS_URL"),
+		ComposioAPIKey:      strings.TrimSpace(getenv("COMPOSIO_API_KEY")),
+		ComposioBaseURL:     endpoint(getenv, "COMPOSIO_BASE_URL"),
 		AllowedOrigins:      splitList(getenv("KNOWLEDGE_ALLOWED_ORIGINS")),
 		EventBridgeEndpoint: endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
 		SQSEndpoint:         endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
@@ -53,8 +66,13 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if config.AuthURL == "" {
 		return Config{}, errors.New("AUTH_URL is required")
 	}
+	if config.ComposioAPIKey != "" && config.AppsURL == "" {
+		return Config{}, errors.New("APPS_URL is required when COMPOSIO_API_KEY is set")
+	}
 	for _, check := range []struct{ name, value string }{
 		{"AUTH_URL", config.AuthURL},
+		{"APPS_URL", config.AppsURL},
+		{"COMPOSIO_BASE_URL", config.ComposioBaseURL},
 		{"EVENTBRIDGE_ENDPOINT", config.EventBridgeEndpoint},
 		{"AWS_ENDPOINT_URL_SQS", config.SQSEndpoint},
 	} {

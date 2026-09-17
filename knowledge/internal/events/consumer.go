@@ -13,19 +13,25 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
+	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 )
 
 // Subscriptions are the detail types knowledge consumes, by source.
 //
-// What knowledge holds outlives the people it was read as, so it has to hear
-// when one of them goes away — otherwise a retrieval pipeline keeps answering
-// out of documents nobody is entitled to any more.
+// What knowledge holds outlives the connections and people it was read
+// through, so it has to hear when one of those goes away — otherwise a
+// retrieval pipeline keeps answering out of a repository nobody can reach
+// any more.
 func Subscriptions() map[string][]string {
 	return map[string][]string{
 		authv1.Source: {
 			authv1.OrganizationDeletedDetailType,
 			authv1.MemberRemovedDetailType,
+		},
+		appsv1.Source: {
+			appsv1.ConnectionExpiredDetailType,
+			appsv1.ConnectionRemovedDetailType,
 		},
 	}
 }
@@ -35,6 +41,8 @@ func Subscriptions() map[string][]string {
 type application interface {
 	OrganizationDeleted(context.Context, authv1.OrganizationDeleted) error
 	MemberRemoved(context.Context, authv1.MemberRemoved) error
+	ConnectionExpired(context.Context, appsv1.ConnectionExpired) error
+	ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error
 	// AlreadyHandled checks without recording anything; MarkHandled records,
 	// and must only be called once the handler it followed has succeeded.
 	AlreadyHandled(ctx context.Context, eventID string) (bool, error)
@@ -48,7 +56,7 @@ type subscription struct {
 	handle handler
 }
 
-// Consumer retires what an organization can no longer reach.
+// Consumer pauses or retires what an organization can no longer reach.
 type Consumer struct {
 	handlers map[string]subscription
 	app      application
@@ -63,6 +71,8 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 		handlers: map[string]subscription{
 			authv1.OrganizationDeletedDetailType: {source: authv1.Source, handle: decode(app.OrganizationDeleted)},
 			authv1.MemberRemovedDetailType:       {source: authv1.Source, handle: decode(app.MemberRemoved)},
+			appsv1.ConnectionExpiredDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionExpired)},
+			appsv1.ConnectionRemovedDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionRemoved)},
 		},
 		app:    app,
 		logger: logger,
@@ -90,8 +100,8 @@ type receivedEnvelope struct {
 // would turn a handler that then fails into an event nobody acts on, because
 // the redelivery would find it recorded and Poll would delete the message.
 // A handler that does run twice — it succeeded but the record failed, or two
-// deliveries raced — writes nothing the second time, because retiring
-// changes only sources that are not yet removed.
+// deliveries raced — writes nothing the second time, because pausing and
+// retiring change only sources that are still active or not yet removed.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	var event eventBridgeEvent
 	if err := json.Unmarshal([]byte(body), &event); err != nil {

@@ -14,6 +14,10 @@ func TestEventPatternMatchesTheEventsThatEndSubscriptions(t *testing.T) {
 	assertJSONEqual(t, pattern, `{
 		"$or": [
 			{
+				"source": ["oryxa.apps"],
+				"detail-type": ["apps.connection.expired.v1", "apps.connection.removed.v1"]
+			},
+			{
 				"source": ["oryxa.auth"],
 				"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
 			}
