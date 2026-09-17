@@ -4,50 +4,34 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
-	"strconv"
 	"strings"
 )
 
-const defaultRegion = "ap-south-1"
-
+// Config is what files reads for itself. The listener, the database, the AWS
+// region and the event bus are the host's.
 type Config struct {
-	Address            string
-	AWSRegion          string
-	S3Endpoint         string
-	BucketName         string
-	DatabaseURL        string
-	PostgresExtensions []string
-	AutoMigrate        bool
-	AuthURL            string
-	TeamsURL           string
-	AllowedOrigins     []string
-	EventBusName       string
-	EventsQueueURL     string
+	S3Endpoint     string
+	BucketName     string
+	AuthURL        string
+	TeamsURL       string
+	AllowedOrigins []string
+	EventsQueueURL string
 }
 
-func FromEnv() (Config, error) {
-	autoMigrate, err := boolValue("FILES_AUTO_MIGRATE", true)
-	if err != nil {
-		return Config{}, err
-	}
-	genericEndpoint := endpoint("AWS_ENDPOINT_URL")
+// FromEnv reads files' configuration through getenv, which a host layers its
+// own defaults under.
+func FromEnv(getenv func(string) string) (Config, error) {
+	genericEndpoint := endpoint(getenv, "AWS_ENDPOINT_URL")
 	config := Config{
-		Address:            valueOrDefault("FILES_ADDRESS", ":8080"),
-		AWSRegion:          valueOrDefault("AWS_REGION", defaultRegion),
-		S3Endpoint:         endpointOr("AWS_ENDPOINT_URL_S3", genericEndpoint),
-		BucketName:         strings.TrimSpace(os.Getenv("FILES_BUCKET_NAME")),
-		DatabaseURL:        strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		PostgresExtensions: splitList(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
-		AutoMigrate:        autoMigrate,
-		AuthURL:            strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_URL")), "/"),
-		TeamsURL:           strings.TrimRight(strings.TrimSpace(os.Getenv("TEAMS_URL")), "/"),
-		AllowedOrigins:     splitList(os.Getenv("FILES_ALLOWED_ORIGINS")),
-		EventBusName:       valueOrDefault("EVENT_BUS_NAME", "default"),
-		EventsQueueURL:     strings.TrimSpace(os.Getenv("FILES_EVENTS_QUEUE_URL")),
+		S3Endpoint:     endpointOr(getenv, "AWS_ENDPOINT_URL_S3", genericEndpoint),
+		BucketName:     strings.TrimSpace(getenv("FILES_BUCKET_NAME")),
+		AuthURL:        strings.TrimRight(strings.TrimSpace(getenv("AUTH_URL")), "/"),
+		TeamsURL:       strings.TrimRight(strings.TrimSpace(getenv("TEAMS_URL")), "/"),
+		AllowedOrigins: splitList(getenv("FILES_ALLOWED_ORIGINS")),
+		EventsQueueURL: strings.TrimSpace(getenv("FILES_EVENTS_QUEUE_URL")),
 	}
-	if config.DatabaseURL == "" || config.AuthURL == "" || config.BucketName == "" {
-		return Config{}, errors.New("DATABASE_URL, AUTH_URL and FILES_BUCKET_NAME are required")
+	if config.AuthURL == "" || config.BucketName == "" {
+		return Config{}, errors.New("AUTH_URL and FILES_BUCKET_NAME are required")
 	}
 	if parsed, err := url.Parse(config.AuthURL); err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return Config{}, fmt.Errorf("AUTH_URL must be an absolute URL")
@@ -60,19 +44,12 @@ func FromEnv() (Config, error) {
 	return config, nil
 }
 
-func valueOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
+func endpoint(getenv func(string) string, name string) string {
+	return strings.TrimRight(strings.TrimSpace(getenv(name)), "/")
 }
 
-func endpoint(name string) string {
-	return strings.TrimRight(strings.TrimSpace(os.Getenv(name)), "/")
-}
-
-func endpointOr(name, fallback string) string {
-	if value := endpoint(name); value != "" {
+func endpointOr(getenv func(string) string, name, fallback string) string {
+	if value := endpoint(getenv, name); value != "" {
 		return value
 	}
 	return fallback
@@ -86,16 +63,4 @@ func splitList(value string) []string {
 		}
 	}
 	return result
-}
-
-func boolValue(name string, fallback bool) (bool, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, errors.New(name + " must be true or false")
-	}
-	return parsed, nil
 }

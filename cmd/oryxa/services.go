@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/Shubham04-oss/oryxa-go/files"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/teams"
 )
@@ -10,4 +11,5 @@ import (
 // its migrations install the vector extension rag's tables are declared with.
 var definitions = []host.Definition{
 	teams.Definition,
+	files.Definition,
 }

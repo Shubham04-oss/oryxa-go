@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -60,6 +61,22 @@ func (fake *fakeService) DownloadURL(context.Context, authclient.Credentials, st
 
 func (fake *fakeService) Delete(context.Context, authclient.Credentials, string, string) error {
 	return fake.err
+}
+
+func TestPatternsNameEveryRoute(t *testing.T) {
+	server := New(&fakeService{}, Config{}, nil)
+	patterns := server.Patterns()
+	if len(patterns) < 6 {
+		t.Fatalf("patterns = %v", patterns)
+	}
+	wildcards := regexp.MustCompile(`\{[^}]+\}`)
+	for _, pattern := range patterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		request := httptest.NewRequest(method, wildcards.ReplaceAllString(path, "x"), nil)
+		if _, matched := server.mux.Handler(request); matched != pattern {
+			t.Errorf("%s routes to %q", pattern, matched)
+		}
+	}
 }
 
 func TestHealthz(t *testing.T) {

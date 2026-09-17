@@ -5,42 +5,36 @@ import (
 	"testing"
 )
 
-func setRequired(t *testing.T) {
-	t.Helper()
-	for _, name := range []string{"FILES_ADDRESS", "AWS_REGION", "DATABASE_URL", "AUTH_URL", "TEAMS_URL", "FILES_BUCKET_NAME", "FILES_AUTO_MIGRATE", "FILES_ALLOWED_ORIGINS", "EVENT_BUS_NAME", "FILES_EVENTS_QUEUE_URL"} {
-		t.Setenv(name, "")
-	}
-	t.Setenv("DATABASE_URL", "postgres://oryxa@localhost:5435/oryxa")
-	t.Setenv("AUTH_URL", "http://localhost:8080/")
-	t.Setenv("FILES_BUCKET_NAME", "oryxa-files")
+func env(values map[string]string) func(string) string {
+	return func(name string) string { return values[name] }
 }
 
 func TestFromEnvDefaults(t *testing.T) {
-	setRequired(t)
-
-	config, err := FromEnv()
+	config, err := FromEnv(env(map[string]string{
+		"AUTH_URL":          "http://localhost:8080/",
+		"FILES_BUCKET_NAME": "oryxa-files",
+	}))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.Address != ":8080" || config.AWSRegion != "ap-south-1" || !config.AutoMigrate || config.AuthURL != "http://localhost:8080" ||
-		config.TeamsURL != "" || config.EventBusName != "default" || config.EventsQueueURL != "" || config.BucketName != "oryxa-files" {
+	if config.AuthURL != "http://localhost:8080" || config.TeamsURL != "" || config.EventsQueueURL != "" || config.BucketName != "oryxa-files" || len(config.AllowedOrigins) != 0 {
 		t.Fatalf("config = %+v", config)
 	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
-	setRequired(t)
-	t.Setenv("FILES_ADDRESS", " :8085 ")
-	t.Setenv("FILES_ALLOWED_ORIGINS", "http://localhost:3000, https://app.example.com")
-	t.Setenv("FILES_EVENTS_QUEUE_URL", " http://localhost:4566/000000000000/files-events ")
-	t.Setenv("TEAMS_URL", "http://localhost:8083/")
-	t.Setenv("AWS_ENDPOINT_URL", "http://localhost:4566/")
-
-	config, err := FromEnv()
+	config, err := FromEnv(env(map[string]string{
+		"AUTH_URL":               "http://localhost:8080",
+		"FILES_BUCKET_NAME":      "oryxa-files",
+		"FILES_ALLOWED_ORIGINS":  "http://localhost:3000, https://app.example.com",
+		"FILES_EVENTS_QUEUE_URL": " http://localhost:4566/000000000000/files-events ",
+		"TEAMS_URL":              "http://localhost:8083/",
+		"AWS_ENDPOINT_URL":       "http://localhost:4566/",
+	}))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.Address != ":8085" || config.EventsQueueURL != "http://localhost:4566/000000000000/files-events" || config.S3Endpoint != "http://localhost:4566" || config.TeamsURL != "http://localhost:8083" {
+	if config.EventsQueueURL != "http://localhost:4566/000000000000/files-events" || config.S3Endpoint != "http://localhost:4566" || config.TeamsURL != "http://localhost:8083" {
 		t.Fatalf("config = %+v", config)
 	}
 	if !slices.Equal(config.AllowedOrigins, []string{"http://localhost:3000", "https://app.example.com"}) {
@@ -48,21 +42,32 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestFromEnvOverridesS3EndpointAloneOverGeneric(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{
+		"AUTH_URL":            "http://localhost:8080",
+		"FILES_BUCKET_NAME":   "oryxa-files",
+		"AWS_ENDPOINT_URL":    "http://localhost:4566/",
+		"AWS_ENDPOINT_URL_S3": "http://localhost:9000/",
+	}))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.S3Endpoint != "http://localhost:9000" {
+		t.Fatalf("S3Endpoint = %q", config.S3Endpoint)
+	}
+}
+
 func TestFromEnvRejectsInvalidValues(t *testing.T) {
+	valid := map[string]string{"AUTH_URL": "http://localhost:8080", "FILES_BUCKET_NAME": "oryxa-files"}
 	tests := map[string]map[string]string{
-		"missing database":         {"DATABASE_URL": ""},
-		"missing bucket":           {"FILES_BUCKET_NAME": ""},
-		"relative auth url":        {"AUTH_URL": "/auth"},
-		"relative teams url":       {"TEAMS_URL": "/teams"},
-		"auto migrate not boolean": {"FILES_AUTO_MIGRATE": "sometimes"},
+		"missing bucket":     {"AUTH_URL": valid["AUTH_URL"]},
+		"missing auth url":   {"FILES_BUCKET_NAME": valid["FILES_BUCKET_NAME"]},
+		"relative auth url":  {"AUTH_URL": "/auth", "FILES_BUCKET_NAME": valid["FILES_BUCKET_NAME"]},
+		"relative teams url": {"AUTH_URL": valid["AUTH_URL"], "FILES_BUCKET_NAME": valid["FILES_BUCKET_NAME"], "TEAMS_URL": "/teams"},
 	}
 	for name, values := range tests {
 		t.Run(name, func(t *testing.T) {
-			setRequired(t)
-			for key, value := range values {
-				t.Setenv(key, value)
-			}
-			if _, err := FromEnv(); err == nil {
+			if _, err := FromEnv(env(values)); err == nil {
 				t.Fatalf("FromEnv() error = nil with %v", values)
 			}
 		})

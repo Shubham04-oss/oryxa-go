@@ -11,6 +11,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -39,6 +40,7 @@ type Server struct {
 	allowedOrigins map[string]struct{}
 	logger         *slog.Logger
 	mux            *http.ServeMux
+	patterns       []string
 }
 
 func New(service filesService, config Config, logger *slog.Logger) *Server {
@@ -56,17 +58,27 @@ func New(service filesService, config Config, logger *slog.Logger) *Server {
 			server.allowedOrigins[parsed.Scheme+"://"+parsed.Host] = struct{}{}
 		}
 	}
-	server.mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+	server.handle("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/files", server.list)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/files", server.create)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/files/{fileID}/content", server.content)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/files/{fileID}/download-url", server.downloadURL)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/files/{fileID}", server.get)
-	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/files/{fileID}", server.delete)
+	server.handle("GET /v1/organizations/{organizationID}/files", server.list)
+	server.handle("POST /v1/organizations/{organizationID}/files", server.create)
+	server.handle("GET /v1/organizations/{organizationID}/files/{fileID}/content", server.content)
+	server.handle("POST /v1/organizations/{organizationID}/files/{fileID}/download-url", server.downloadURL)
+	server.handle("GET /v1/organizations/{organizationID}/files/{fileID}", server.get)
+	server.handle("DELETE /v1/organizations/{organizationID}/files/{fileID}", server.delete)
 	return server
 }
+
+// handle registers a route and remembers its pattern, so a host serving
+// several services knows which paths are this one's.
+func (server *Server) handle(pattern string, handler http.HandlerFunc) {
+	server.mux.HandleFunc(pattern, handler)
+	server.patterns = append(server.patterns, pattern)
+}
+
+// Patterns lists every route the server registered.
+func (server *Server) Patterns() []string { return slices.Clone(server.patterns) }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")

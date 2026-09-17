@@ -115,12 +115,12 @@ Deleting a team removes that team's prefix and rows.
 
 ## Provision
 
-Copy `.env.example` to the ignored `files/.env`. Its last block points
-everything at the emulators in the root `docker-compose.yml`; delete that block
-to provision AWS through the default credential chain. Then run:
+Copy the root `.env.example` to the ignored `.env`. Its emulator block points
+the AWS services files uses at the emulators in the root `docker-compose.yml`;
+delete that block to provision AWS through the default credential chain. Then run:
 
 ```sh
-(set -a && . files/.env && go run ./files/infra/storage/cmd/provision)
+(set -a && . ./.env && go run ./files/infra/storage/cmd/provision)
 ```
 
 The command is repeatable. It creates or updates:
@@ -143,15 +143,11 @@ once (`docker compose up -d --force-recreate eventbridge`).
 
 ```sh
 docker compose up -d
-(set -a && . files/.env && go run ./files/infra/storage/cmd/provision)
-(set -a && . files/.env && go run ./files/cmd/files)
+(set -a && . ./.env && go run ./files/infra/storage/cmd/provision)
+(set -a && . ./.env && ORYXA_SERVICES=files go run ./cmd/oryxa)
 ```
 
-Or in Docker on the shared network:
-
-```sh
-docker compose -f compose.files.yaml up -d --build files
-```
+Schemas install automatically at start unless `ORYXA_AUTO_MIGRATE=false`; install them ahead of time with `go run ./cmd/oryxa migrate`. Files deploys as part of the single `oryxa` image, alongside whichever other services `ORYXA_SERVICES` names.
 
 Logs are structured JSON from `/internal/observability`. HTTP access logs skip
 `/healthz`. The simulated client journey includes files at `/test`
@@ -167,7 +163,7 @@ FILES_TEST_AWS_ENDPOINT=http://localhost:4566 go test ./files/internal/blob
 
 ## Deploy
 
-Files is a long-running container, like teams, behind the same public edge.
+Files deploys as part of the single `oryxa` image, behind the same public edge as every other service it runs alongside.
 Its runtime identity needs `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`,
 `s3:ListBucket`, `s3:AbortMultipartUpload` on the files bucket,
 `events:PutEvents` on the event bus, and `sqs:ReceiveMessage` /
