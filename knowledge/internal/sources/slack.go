@@ -46,9 +46,13 @@ func (source *Slack) Target(target map[string]string) error {
 
 // Fetch walks one channel's history, resuming from the next_cursor Slack
 // answers. An incremental pass asks only for what came after the watermark,
-// passed as oldest, which Slack treats as exclusive so the message the
-// watermark names is not read twice; a full pass asks for everything, because
-// only a full pass may retract what it did not see.
+// passed as oldest a second early: Slack's default treats oldest as
+// exclusive, so asking for the watermark itself would rely on that default
+// never changing, and the failure mode if it ever did is the message the
+// watermark names being skipped silently. Asking a second early instead
+// means the idempotent upsert absorbs the one-message overlap, whichever way
+// Slack treats the boundary. A full pass asks for everything, because only a
+// full pass may retract what it did not see.
 //
 // Slack answers newest message first, unlike GitHub's oldest-change-first
 // walk. So a watermark taken from the first page is already the newest of the
@@ -70,7 +74,7 @@ func (source *Slack) Fetch(ctx context.Context, request Request) (Page, error) {
 		query.Set("cursor", cursor)
 	}
 	if !request.Full && request.Cursor.Watermark != nil {
-		query.Set("oldest", slackOldest(*request.Cursor.Watermark))
+		query.Set("oldest", slackOldest(request.Cursor.Watermark.Add(-time.Second)))
 	}
 
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, source.api+"/conversations.history?"+query.Encode(), nil)
