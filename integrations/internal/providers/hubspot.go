@@ -108,9 +108,10 @@ type hubspotDelivery struct {
 	ChangeSource   string      `json:"changeSource"`
 }
 
-// hubspotReceive verifies a delivery's v3 signature and reads it. The account
-// keys are the portals it names, so an event reaches the subscriptions of the
-// connections that belong to them.
+// hubspotReceive verifies a delivery's v3 signature and reads it. One batch
+// can carry events from several portals, so the account keys are every portal
+// it names and each event keeps its own: an event reaches only the
+// subscriptions of connections to the portal it happened in.
 func hubspotReceive(delivery Delivered, secret []byte, now time.Time) (Reception, error) {
 	if err := hubspotVerify(delivery, secret, now); err != nil {
 		return Reception{}, err
@@ -120,6 +121,7 @@ func hubspotReceive(delivery Delivered, secret []byte, now time.Time) (Reception
 		return Reception{}, fmt.Errorf("%w: HubSpot payload is not a JSON array", domain.ErrInvalid)
 	}
 	var portals []string
+	seen := map[string]bool{}
 	events := make([]Event, 0, len(delivered))
 	for _, item := range delivered {
 		eventType := strings.TrimSpace(item.EventType)
@@ -130,7 +132,10 @@ func hubspotReceive(delivery Delivered, secret []byte, now time.Time) (Reception
 		if portal == "" {
 			return Reception{}, fmt.Errorf("%w: HubSpot event names no portal", domain.ErrInvalid)
 		}
-		portals = append(portals, portal)
+		if !seen[portal] {
+			seen[portal] = true
+			portals = append(portals, portal)
+		}
 
 		// HubSpot says eventId is not guaranteed unique, and a retry repeats
 		// it, so the attempt number is what tells a redelivery from a new
@@ -148,6 +153,7 @@ func hubspotReceive(delivery Delivered, secret []byte, now time.Time) (Reception
 			Type:       eventType,
 			DeliveryID: item.EventID.String(),
 			Key:        key,
+			AccountKey: portal,
 			Resource:   hubspotResource(eventType, item),
 			OccurredAt: occurredAt,
 			Payload:    hubspotEventPayload(item, delivery.Body),
@@ -209,6 +215,9 @@ func hubspotVerify(delivery Delivered, secret []byte, now time.Time) error {
 	if age := now.Sub(signedAt); age > hubspotTolerance || age < -hubspotTolerance {
 		return fmt.Errorf("%w: HubSpot request is too old", ErrUnverified)
 	}
+	if delivery.URL == "" {
+		return fmt.Errorf("%w: HubSpot delivery has no URL to verify against", ErrUnverified)
+	}
 	message := delivery.Method + hubspotSignedURI(delivery) + string(delivery.Body) + timestamp
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(message))
@@ -219,20 +228,13 @@ func hubspotVerify(delivery Delivered, secret []byte, now time.Time) error {
 	return nil
 }
 
-// hubspotSignedURI is the URI HubSpot signed: the protocol, the host it
-// called, and the path with its query. The query is decoded as HubSpot's own
+// hubspotSignedURI is the URI HubSpot signed: the whole URL it called, the
+// webhook URL integrations registered. The query is decoded as HubSpot's own
 // samples decode it — only the query, and only these sequences — so an encoded
 // slash in the path stays encoded, which is the part implementations get
 // wrong.
 func hubspotSignedURI(delivery Delivered) string {
-	uri := delivery.URI
-	if uri == "" || delivery.Header.Get("Host") == "" {
-		return uri
-	}
-	if !strings.HasPrefix(uri, "/") {
-		return uri
-	}
-	return "https://" + delivery.Header.Get("Host") + hubspotDecodedQuery(uri)
+	return hubspotDecodedQuery(delivery.URL)
 }
 
 // hubspotDecodedQuery decodes the sequences HubSpot's own examples decode, in

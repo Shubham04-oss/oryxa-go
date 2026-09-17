@@ -40,7 +40,7 @@ type Store interface {
 
 	UpsertDocument(ctx context.Context, document domain.Document, body string, event domain.Event) (domain.Document, postgres.Upsert, error)
 	Document(ctx context.Context, organizationID, documentID string) (domain.Document, error)
-	Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, limit int) ([]domain.Document, error)
+	Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) ([]domain.Document, string, error)
 	DocumentsBySource(ctx context.Context, organizationID string, kind domain.SourceKind, ref string) ([]domain.Document, error)
 	ChunkIDs(ctx context.Context, organizationID, documentID string) ([]string, error)
 	DeleteDocument(ctx context.Context, organizationID, documentID string, event domain.Event) ([]string, error)
@@ -403,18 +403,33 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 	return stored, nil
 }
 
-func (service *Service) Documents(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, status domain.IngestStatus, limit int) ([]domain.Document, error) {
+// DocumentPage is one page of a corpus's documents, newest first.
+type DocumentPage struct {
+	Documents []domain.Document `json:"documents"`
+	// NextCursor continues the listing from exactly where this page ended.
+	// It is empty on the last page, which is what tells a caller to stop.
+	NextCursor string `json:"next_cursor,omitempty"`
+}
+
+// Documents lists a corpus's documents. With no cursor a caller gets the
+// first page, exactly as it does today; passing back the cursor a page
+// returned continues from where that page left off.
+func (service *Service) Documents(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) (DocumentPage, error) {
 	corpus, _, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
-		return nil, err
+		return DocumentPage{}, err
 	}
 	if status != "" && !status.Valid() {
-		return nil, fmt.Errorf("status is not allowed: %w", domain.ErrInvalid)
+		return DocumentPage{}, fmt.Errorf("status is not allowed: %w", domain.ErrInvalid)
 	}
 	if limit <= 0 || limit > MaxDocumentsPerPage {
 		limit = MaxDocumentsPerPage
 	}
-	return service.store.Documents(ctx, organizationID, corpus.ID, status, limit)
+	documents, nextCursor, err := service.store.Documents(ctx, organizationID, corpus.ID, status, cursor, limit)
+	if err != nil {
+		return DocumentPage{}, err
+	}
+	return DocumentPage{Documents: documents, NextCursor: nextCursor}, nil
 }
 
 func (service *Service) Document(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID, documentID string) (domain.Document, error) {

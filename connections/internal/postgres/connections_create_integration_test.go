@@ -71,13 +71,22 @@ func TestCreateConnectionAndReplaceCredentials(t *testing.T) {
 		t.Fatalf("ReplaceCredentials() on a disconnected connection error = %v", err)
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 100, "claim-token")
+	rows, err := store.pool.Query(ctx, `SELECT detail_type, count(*) FROM connections_outbox GROUP BY detail_type`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	kinds := map[string]int{}
-	for _, event := range claimed {
-		kinds[event.DetailType]++
+	for rows.Next() {
+		var detailType string
+		var count int
+		if err := rows.Scan(&detailType, &count); err != nil {
+			t.Fatal(err)
+		}
+		kinds[detailType] = count
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
 	}
 	if kinds["connections.connection.connected.v1"] != 2 || kinds["connections.connection.reconnected.v1"] != 1 || kinds["connections.connection.disconnected.v1"] != 1 {
 		t.Fatalf("outbox events = %+v", kinds)

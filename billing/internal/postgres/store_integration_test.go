@@ -210,25 +210,8 @@ func TestStoreLifecycle(t *testing.T) {
 	if outbox != 3 {
 		t.Fatalf("outbox events = %d, want 3 (organization, first webhook, renewal)", outbox)
 	}
-	claimedEvents, err := store.ClaimOutbox(ctx, 500)
-	if err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-	for _, event := range claimedEvents {
-		if event.ID == eventPrefix+"-1" {
-			if err := store.MarkOutboxFailed(ctx, event.ID, time.Hour, "unavailable"); err != nil {
-				t.Fatalf("MarkOutboxFailed() error = %v", err)
-			}
-		} else if len(event.ID) > len(eventPrefix) && event.ID[:len(eventPrefix)] == eventPrefix {
-			if err := store.MarkOutboxPublished(ctx, event.ID); err != nil {
-				t.Fatalf("MarkOutboxPublished() error = %v", err)
-			}
-		}
-	}
-	var pending int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM billing_outbox WHERE id LIKE $1 AND published_at IS NULL AND attempts = 1`, eventPrefix+"%").Scan(&pending); err != nil || pending != 1 {
-		t.Fatalf("failed events awaiting retry = %d, %v; want 1", pending, err)
-	}
+	// Claiming, marking and retrying are internal/outbox's own concern now:
+	// see its table_integration_test.go.
 
 	if err := store.PruneWebhookDeliveries(ctx, now.Add(-time.Hour)); err != nil {
 		t.Fatalf("PruneWebhookDeliveries() error = %v", err)

@@ -233,7 +233,7 @@ that path needs no origin check.
 | `POST` | `/v1/organizations/{org}/corpora` | Per placement | Create. `{name, slug, scope, team_id, embedding_provider, embedding_model, embedding_dimensions, embedding_metric, backend, chunking, metadata}` |
 | `GET` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | One corpus, with its document and chunk counts. `{corpus}` may be an id or the slug |
 | `DELETE` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | Delete the corpus, its documents and its vectors |
-| `GET` | `.../corpora/{corpus}/documents` | Per placement | List. Query `status`, `limit` |
+| `GET` | `.../corpora/{corpus}/documents` | Per placement | List. Query `status`, `limit`, `cursor`. Answers `{documents, next_cursor}`; `next_cursor` is absent on the last page |
 | `POST` | `.../corpora/{corpus}/documents` | Per placement | Add. `{source:{kind,ref}, title, content_type, text, metadata}`. Answers `202`: it is queued, not yet searchable |
 | `GET` | `.../corpora/{corpus}/documents/{document}` | Per placement | One document and its ingest status |
 | `DELETE` | `.../corpora/{corpus}/documents/{document}` | Per placement | Remove it and its vectors |
@@ -244,6 +244,14 @@ A document source is `inline` (text in the request — what an upstream
 extract-and-transform step delivers), `file` (a files object id, fetched as the
 caller) or `external` (text with the URI it came from, kept so a citation can
 point back).
+
+Listing a corpus's documents pages by cursor. The first request sends none;
+each answer's `next_cursor` — present whenever more documents follow, absent
+on the last page — is passed back as the `cursor` query parameter to continue.
+A request with no cursor gets the same first page it always has: newest first,
+by `(created_at, id)`, which is also what the cursor addresses, so a document
+added mid-walk cannot make a later page repeat or skip one already seen.
+`limit` defaults to, and is capped at, 200.
 
 Filters narrow on document ids and on metadata, with `eq`, `ne`, `in` and
 `nin`. That set is deliberately small: every operator maps onto both a
@@ -398,15 +406,6 @@ document, wait for `rag.document.indexed.v1`, search, answer — against each
 provider in turn. Expect the model ids and the Bedrock reranker to be where it
 goes wrong first.
 
-## Packages with no tests
-
-| Package | Why it matters |
-| --- | --- |
-| `internal/application` | **The significant gap.** It holds every access rule — who may create, search, write to and delete a corpus at each scope — and those rules are currently only exercised indirectly, through the HTTP layer's fakes. They deserve tests of their own before anyone relies on them |
-| `internal/events` | Consumer, dispatcher and publisher, adapted from the files service where the same code is tested |
-| `internal/filesclient` | The fetch-as-the-caller path, including the size guard |
-| `internal/authclient`, `internal/teamsclient` | Near-verbatim copies of the files service's, which are tested there |
-
 ## Known limits
 
 Things that work as written, but are narrower than they will need to be.
@@ -419,8 +418,6 @@ Things that work as written, but are narrower than they will need to be.
 - **The text search configuration is fixed at `english`.** It is a stored
   generated column, so changing it is a migration, not a setting. A corpus that
   is mostly in another language gets worse lexical recall and nothing says so.
-- **Document listing is capped at 200 with no cursor.** Enough to look at a
-  corpus, not enough to walk one.
 - **Answers do not stream.** A long answer holds the request open for as much
   as the 180-second write timeout allows.
 - **Guardrails are wired on the Bedrock answering path only.** A Vertex answer

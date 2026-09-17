@@ -125,11 +125,16 @@ func Open(ctx context.Context, config Config) (*Database, error) {
 	return database, nil
 }
 
-// Detached is a Database that holds no connection and reports the given
-// extensions as installed. It is for assembling a service in a test that
-// never queries it.
+// Detached is a Database whose pool never connects and which reports the
+// given extensions as installed. It is for assembling a service in a test
+// that never queries it: building a store or an outbox table needs a pool,
+// and a pool dials only when it is first used.
 func Detached(extensions map[string]string) *Database {
-	return &Database{extensions: maps.Clone(extensions)}
+	pool, err := pgxpool.New(context.Background(), "postgres://detached@127.0.0.1:1/detached")
+	if err != nil {
+		panic(fmt.Sprintf("postgreskit: build a detached pool: %v", err))
+	}
+	return &Database{Pool: pool, extensions: maps.Clone(extensions)}
 }
 
 var postgresIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)

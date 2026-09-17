@@ -3,9 +3,10 @@ package postgres
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
+	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
 
 func (store *Store) EnqueueEvent(ctx context.Context, event domain.Event) error {
@@ -18,71 +19,13 @@ func (store *Store) EnqueueEvent(ctx context.Context, event domain.Event) error 
 	return nil
 }
 
-func (store *Store) ClaimOutbox(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
-	rows, err := store.pool.Query(ctx, `
-		WITH picked AS (
-			SELECT id
-			FROM auth_outbox
-			WHERE published_at IS NULL
-			  AND available_at <= now()
-			  AND (locked_until IS NULL OR locked_until < now())
-			ORDER BY occurred_at, id
-			FOR UPDATE SKIP LOCKED
-			LIMIT $1
-		)
-		UPDATE auth_outbox AS event
-		SET locked_until = now() + interval '30 seconds'
-		FROM picked
-		WHERE event.id = picked.id
-		RETURNING event.id, event.detail_type, event.detail, event.occurred_at, event.attempts`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("claim outbox: %w", err)
-	}
-	defer rows.Close()
-
-	events := make([]domain.OutboxEvent, 0)
-	for rows.Next() {
-		var event domain.OutboxEvent
-		if err := rows.Scan(&event.ID, &event.DetailType, &event.Data, &event.OccurredAt, &event.Attempts); err != nil {
-			return nil, fmt.Errorf("scan outbox event: %w", err)
-		}
-		events = append(events, event)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate outbox events: %w", err)
-	}
-	return events, nil
-}
-
-func (store *Store) MarkOutboxPublished(ctx context.Context, eventID string) error {
-	_, err := store.pool.Exec(ctx, `
-		UPDATE auth_outbox
-		SET published_at = now(), locked_until = NULL, last_error = NULL,
-		    detail = CASE
-		        WHEN detail_type IN (
-		            'auth.user.email-verification.delivery-requested.v1',
-		            'auth.user.password-reset.delivery-requested.v1',
-		            'auth.member.invited.v1'
-		        ) THEN '{}'::jsonb
-		        ELSE detail
-		    END
-		WHERE id = $1`, eventID)
-	if err != nil {
-		return fmt.Errorf("mark outbox published: %w", err)
-	}
-	return nil
-}
-
-func (store *Store) MarkOutboxFailed(ctx context.Context, eventID string, retryAfter time.Duration, message string) error {
-	_, err := store.pool.Exec(ctx, `
-		UPDATE auth_outbox
-		SET attempts = attempts + 1,
-		    available_at = now() + ($2 * interval '1 millisecond'),
-		    locked_until = NULL,
-		    last_error = left($3, 1000)
-		WHERE id = $1`, eventID, retryAfter.Milliseconds(), message)
-	if err != nil {
-		return fmt.Errorf("mark outbox failed: %w", err)
-	}
-	return nil
+// OutboxTable is auth_outbox, for internal/outbox to publish from. The events
+// that carry a single-use link or token are blanked once delivered: they are
+// needed only until the notification goes out.
+func (store *Store) OutboxTable() (*outbox.Table, error) {
+	return outbox.NewTable(store.pool, "auth_outbox", outbox.RedactOnPublish(
+		autheventsv1.EmailVerificationDeliveryRequestedDetailType,
+		autheventsv1.PasswordResetDeliveryRequestedDetailType,
+		autheventsv1.MemberInvitedDetailType,
+	))
 }

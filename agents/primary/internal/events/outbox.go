@@ -2,9 +2,7 @@ package events
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
@@ -42,6 +40,12 @@ func (outbox *Outbox) Ensure(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS agents_outbox_pending_idx
 			ON ` + schema + `.agents_outbox (available_at, occurred_at, id)
 			WHERE published_at IS NULL`,
+		// A claim is now owned, by internal/outbox: it stamps the rows it hands
+		// out with a token, and marks published or failed only touch a row that
+		// still carries the same token. Without it a dispatcher whose claim
+		// expired mid-batch could mark a row another replica had since
+		// re-claimed, clearing that claim's lock while it was still publishing.
+		`ALTER TABLE ` + schema + `.agents_outbox ADD COLUMN IF NOT EXISTS claim_token text`,
 	}
 	for _, statement := range statements {
 		if _, err := outbox.database.SQLX.ExecContext(ctx, statement); err != nil {
@@ -75,75 +79,6 @@ func (outbox *Outbox) RecordEvents(ctx context.Context, events []Event) error {
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit outbox transaction: %w", err)
-	}
-	return nil
-}
-
-type outboxRow struct {
-	ID         string          `db:"id"`
-	DetailType string          `db:"detail_type"`
-	Detail     json.RawMessage `db:"detail"`
-	OccurredAt time.Time       `db:"occurred_at"`
-	Attempts   int             `db:"attempts"`
-}
-
-// ClaimOutbox claims up to limit available events for the dispatcher, locking
-// them for 30 seconds so replicas do not publish the same row at once.
-func (outbox *Outbox) ClaimOutbox(ctx context.Context, limit int) ([]OutboxEvent, error) {
-	var rows []outboxRow
-	err := outbox.database.SQLX.SelectContext(ctx, &rows, `
-		WITH picked AS (
-			SELECT id
-			FROM `+schema+`.agents_outbox
-			WHERE published_at IS NULL
-			  AND available_at <= now()
-			  AND (locked_until IS NULL OR locked_until < now())
-			ORDER BY occurred_at, id
-			FOR UPDATE SKIP LOCKED
-			LIMIT $1
-		)
-		UPDATE `+schema+`.agents_outbox AS event
-		SET locked_until = now() + interval '30 seconds'
-		FROM picked
-		WHERE event.id = picked.id
-		RETURNING event.id, event.detail_type, event.detail, event.occurred_at, event.attempts`, limit)
-	if err != nil {
-		return nil, fmt.Errorf("claim outbox: %w", err)
-	}
-	events := make([]OutboxEvent, 0, len(rows))
-	for _, row := range rows {
-		events = append(events, OutboxEvent{
-			Event: Event{
-				ID:         row.ID,
-				DetailType: row.DetailType,
-				OccurredAt: row.OccurredAt,
-				Data:       row.Detail,
-			},
-			Attempts: row.Attempts,
-		})
-	}
-	return events, nil
-}
-
-func (outbox *Outbox) MarkOutboxPublished(ctx context.Context, eventID string) error {
-	if _, err := outbox.database.SQLX.ExecContext(ctx, `
-		UPDATE `+schema+`.agents_outbox
-		SET published_at = now(), locked_until = NULL, last_error = NULL
-		WHERE id = $1`, eventID); err != nil {
-		return fmt.Errorf("mark outbox published: %w", err)
-	}
-	return nil
-}
-
-func (outbox *Outbox) MarkOutboxFailed(ctx context.Context, eventID string, retryAfter time.Duration, message string) error {
-	if _, err := outbox.database.SQLX.ExecContext(ctx, `
-		UPDATE `+schema+`.agents_outbox
-		SET attempts = attempts + 1,
-		    available_at = now() + ($2 * interval '1 millisecond'),
-		    locked_until = NULL,
-		    last_error = left($3, 1000)
-		WHERE id = $1`, eventID, retryAfter.Milliseconds(), message); err != nil {
-		return fmt.Errorf("mark outbox failed: %w", err)
 	}
 	return nil
 }

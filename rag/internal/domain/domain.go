@@ -281,10 +281,3 @@ type Event struct {
 	OccurredAt time.Time
 	Data       []byte
 }
-
-// OutboxEvent is an Event the dispatcher has claimed, with how many times
-// publishing it has already failed.
-type OutboxEvent struct {
-	Event
-	Attempts int
-}

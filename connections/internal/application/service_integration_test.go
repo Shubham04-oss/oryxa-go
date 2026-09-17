@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -11,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/url"
 	"os"
@@ -40,10 +42,11 @@ type dbHarness struct {
 	database *pgx.Conn
 }
 
-func newDBHarness(t *testing.T) *dbHarness {
+func newDBHarness(t *testing.T, change ...func(*Dependencies)) *dbHarness {
 	t.Helper()
 	store, database := openTestDatabase(t)
-	return &dbHarness{harness: newHarness(t, func(dependencies *Dependencies) { dependencies.Store = store }), db: store, database: database}
+	setStore := func(dependencies *Dependencies) { dependencies.Store = store }
+	return &dbHarness{harness: newHarness(t, append([]func(*Dependencies){setStore}, change...)...), db: store, database: database}
 }
 
 // openTestDatabase migrates a throwaway schema and drops it afterwards, so the
@@ -1044,5 +1047,332 @@ func TestReconnectDuringRenewalWins(t *testing.T) {
 	}
 	if events := h.outbox(t)[connectionseventsv1.ConnectionNeedsReconnectDetailType]; events != 0 {
 		t.Fatalf("needs-reconnect events = %d, want none", events)
+	}
+}
+
+// TestHeartbeatNonOAuth2Credentials exercises probe's other three branches:
+// TestHeartbeat only ever claims an OAuth2 connection. Each section here
+// forces a passing check, then a permanent failure, and checks the
+// connection is marked needs_reconnect with the right reason. The
+// client-credentials failure runs through freshGrant exactly like an OAuth2
+// refresh would, which also proves CheckHealth's ErrNeedsReconnect skip
+// branch: the renewal inside probe already recorded the failure, so the
+// check itself is recorded as skipped rather than failed.
+func TestHeartbeatNonOAuth2Credentials(t *testing.T) {
+	h := newDBHarness(t)
+	forceDue := func(connectionID string) {
+		t.Helper()
+		h.exec(t, `UPDATE connections_health SET next_check_at = $1 WHERE connection_id = $2`, h.now, connectionID)
+	}
+	health := func(connectionID string) (domain.Health, int) {
+		t.Helper()
+		var state domain.Health
+		var failures int
+		if err := h.database.QueryRow(ctx, `SELECT state, consecutive_failures FROM connections_health WHERE connection_id = $1`,
+			connectionID).Scan(&state, &failures); err != nil {
+			t.Fatal(err)
+		}
+		return state, failures
+	}
+	checked := func(want int) {
+		t.Helper()
+		if claimed, err := h.service.CheckHealth(ctx); err != nil || claimed != want {
+			t.Fatalf("CheckHealth() = %d %v, want %d", claimed, err, want)
+		}
+	}
+
+	// Client credentials: minting in the tenant is the check.
+	ccApp, err := h.service.CreateApp(ctx, as(adminToken), organization, CreateAppInput{
+		Provider: "microsoft", CredentialType: domain.CredentialOAuth2ClientCredentials, ClientID: "client-cc", ClientSecret: "secret-cc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.mintGrant = providers.Grant{AccessToken: "app-token-1", Expiry: h.now.Add(time.Hour), Scopes: ccApp.Scopes}
+	})
+	ccConnection, err := h.service.CreateConnection(ctx, as(adminToken), organization, CreateConnectionInput{
+		AppID: ccApp.ID, Scope: domain.ScopeOrganization, Credential: domain.CredentialInput{Tenant: "contoso.onmicrosoft.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forceDue(ccConnection.ID)
+	checked(1)
+	if state, failures := health(ccConnection.ID); state != domain.HealthHealthy || failures != 0 {
+		t.Fatalf("client-credentials health after a passing check = %s %d", state, failures)
+	}
+
+	h.now = h.now.Add(59 * time.Minute)
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.mintErr = fmt.Errorf("%w: unauthorized_client", domain.ErrCredentialRejected)
+	})
+	forceDue(ccConnection.ID)
+	checked(1)
+	if connection := h.stored(t, ccConnection.ID); connection.Status != domain.StatusNeedsReconnect || connection.Reason != string(domain.ReconnectCredentialRejected) {
+		t.Fatalf("client-credentials connection after a rejected mint = %s/%s", connection.Status, connection.Reason)
+	}
+	if state, failures := health(ccConnection.ID); state != domain.HealthHealthy || failures != 0 {
+		t.Fatalf("client-credentials health after a skipped check = %s %d, want it unchanged by the freshGrant failure", state, failures)
+	}
+
+	// Installation: identity comes from the installation itself, not a grant.
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	installApp, err := h.service.CreateApp(ctx, as(adminToken), organization, CreateAppInput{
+		Provider: "github", CredentialType: domain.CredentialInstallation, ClientID: "Iv1.client", ClientSecret: "secret-app",
+		GitHubAppID: "123", GitHubAppSlug: "oryxa-test", PrivateKey: privateKeyPEM,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.grant = providers.Grant{AccessToken: "ghu_user"}
+		oauth.userInstallations = []string{"999"}
+		oauth.installationAccount = domain.ProviderAccount{ID: "999", Name: "acme"}
+		oauth.installationToken = providers.Grant{AccessToken: "ghs_installation", Expiry: h.now.Add(time.Hour)}
+	})
+	authorization, err := h.service.Authorize(ctx, as(memberToken), organization, AuthorizeInput{AppID: installApp.ID, ReturnURI: returnTo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := h.service.Callback(ctx, "github", CallbackParams{
+		State: stateOf(t, authorization), Code: "code-install", InstallationID: "999", SetupAction: "install",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ := url.Parse(target)
+	installCompletion, err := h.service.Complete(ctx, as(memberToken), organization, parsed.Query().Get("session_id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	installConnection := installCompletion.Connection.ID
+	forceDue(installConnection)
+	checked(1)
+	if state, failures := health(installConnection); state != domain.HealthHealthy || failures != 0 {
+		t.Fatalf("installation health after a passing check = %s %d", state, failures)
+	}
+
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.installationErr = fmt.Errorf("%w: %w", domain.ErrCredentialRejected, providers.ErrInstallationNotFound)
+	})
+	forceDue(installConnection)
+	checked(1)
+	if connection := h.stored(t, installConnection); connection.Status != domain.StatusNeedsReconnect || connection.Reason != string(domain.ReconnectInstallationRemoved) {
+		t.Fatalf("installation connection after a missing installation = %s/%s", connection.Status, connection.Reason)
+	}
+
+	// Key-based: identity is checked directly against the key, with no grant
+	// to renew.
+	bearerApp, err := h.service.CreateApp(ctx, as(adminToken), organization, CreateAppInput{Provider: "github", CredentialType: domain.CredentialBearer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.oauth.set(func(oauth *fakeOAuth) { oauth.keyAccount = domain.ProviderAccount{ID: "42", Name: "octocat"} })
+	keyConnection, err := h.service.CreateConnection(ctx, as(memberToken), organization, CreateConnectionInput{
+		AppID: bearerApp.ID, Credential: domain.CredentialInput{Token: "ghp_first"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	forceDue(keyConnection.ID)
+	checked(1)
+	if state, failures := health(keyConnection.ID); state != domain.HealthHealthy || failures != 0 {
+		t.Fatalf("key-based health after a passing check = %s %d", state, failures)
+	}
+
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.keyErr = fmt.Errorf("%w: provider refused the credential", domain.ErrCredentialRejected)
+	})
+	forceDue(keyConnection.ID)
+	checked(1)
+	if connection := h.stored(t, keyConnection.ID); connection.Status != domain.StatusNeedsReconnect || connection.Reason != string(domain.ReconnectCredentialRejected) {
+		t.Fatalf("key-based connection after a refused key = %s/%s", connection.Status, connection.Reason)
+	}
+}
+
+// TestInstallationTokenRenewalFailure covers token.go's installation renewal
+// branch, the other path that reads fakeOAuth.installationTokErr (the
+// heartbeat instead reads installationErr, covered above): IssueToken renews
+// an installation token through InstallationToken, not Installation, so a
+// removed installation surfaces there when the cached token nears expiry.
+func TestInstallationTokenRenewalFailure(t *testing.T) {
+	h := newDBHarness(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	app, err := h.service.CreateApp(ctx, as(adminToken), organization, CreateAppInput{
+		Provider: "github", CredentialType: domain.CredentialInstallation, ClientID: "Iv1.client", ClientSecret: "secret-app",
+		GitHubAppID: "123", GitHubAppSlug: "oryxa-test", PrivateKey: privateKeyPEM,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.grant = providers.Grant{AccessToken: "ghu_user"}
+		oauth.userInstallations = []string{"999"}
+		oauth.installationAccount = domain.ProviderAccount{ID: "999", Name: "acme"}
+		oauth.installationToken = providers.Grant{AccessToken: "ghs_installation", Expiry: h.now.Add(time.Hour)}
+	})
+	authorization, err := h.service.Authorize(ctx, as(memberToken), organization, AuthorizeInput{AppID: app.ID, ReturnURI: returnTo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := h.service.Callback(ctx, "github", CallbackParams{
+		State: stateOf(t, authorization), Code: "code-install", InstallationID: "999", SetupAction: "install",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, _ := url.Parse(target)
+	completion, err := h.service.Complete(ctx, as(memberToken), organization, parsed.Query().Get("session_id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionID := completion.Connection.ID
+	if token, err := h.service.IssueToken(ctx, forwarded(memberToken, domain.PurposeAction), connectionID, tokenRequest(domain.PurposeAction, "")); err != nil ||
+		token.AccessToken != "ghs_installation" {
+		t.Fatalf("initial IssueToken(installation) = %+v %v", token, err)
+	}
+
+	// The installation token nears its expiry; the provider says the
+	// installation is gone.
+	h.now = h.now.Add(59 * time.Minute)
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.installationTokErr = fmt.Errorf("%w: %w", domain.ErrCredentialRejected, providers.ErrInstallationNotFound)
+	})
+	if _, err := h.service.IssueToken(ctx, forwarded(memberToken, domain.PurposeAction), connectionID, tokenRequest(domain.PurposeAction, "")); !errors.Is(err, domain.ErrNeedsReconnect) {
+		t.Fatalf("IssueToken() with a removed installation error = %v", err)
+	}
+	if connection := h.stored(t, connectionID); connection.Status != domain.StatusNeedsReconnect || connection.Reason != string(domain.ReconnectInstallationRemoved) {
+		t.Fatalf("connection after a removed installation = %s/%s", connection.Status, connection.Reason)
+	}
+}
+
+// TestClientCredentialsMintFailures covers Mint's two callers: a rejected
+// mint during CreateConnection leaves nothing behind, and one during a later
+// renewal, driven through IssueToken exactly as TestIssueTokenRenewalFailures
+// drives an OAuth2 refresh, marks the connection needs_reconnect. A
+// provider-unavailable mint in between shows the same still-usable-token
+// fallback renew gives an OAuth2 grant.
+func TestClientCredentialsMintFailures(t *testing.T) {
+	h := newDBHarness(t)
+	app, err := h.service.CreateApp(ctx, as(adminToken), organization, CreateAppInput{
+		Provider: "microsoft", CredentialType: domain.CredentialOAuth2ClientCredentials, ClientID: "client-cc", ClientSecret: "secret-cc",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.mintErr = fmt.Errorf("%w: unauthorized_client", domain.ErrCredentialRejected)
+	})
+	if _, err := h.service.CreateConnection(ctx, as(adminToken), organization, CreateConnectionInput{
+		AppID: app.ID, Scope: domain.ScopeOrganization, Credential: domain.CredentialInput{Tenant: "contoso.onmicrosoft.com"},
+	}); !errors.Is(err, domain.ErrCredentialRejected) {
+		t.Fatalf("CreateConnection() with a rejected mint error = %v", err)
+	}
+	if connections, err := h.service.ListConnections(ctx, as(adminToken), organization, ConnectionFilter{}); err != nil || len(connections) != 0 {
+		t.Fatalf("connections after a refused connect = %+v %v", connections, err)
+	}
+
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.mintErr = nil
+		oauth.mintGrant = providers.Grant{AccessToken: "app-token-1", Expiry: h.now.Add(time.Hour), Scopes: app.Scopes}
+	})
+	created, err := h.service.CreateConnection(ctx, as(adminToken), organization, CreateConnectionInput{
+		AppID: app.ID, Scope: domain.ScopeOrganization, Credential: domain.CredentialInput{Tenant: "contoso.onmicrosoft.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The token has not actually expired yet, so a failing renewal still hands
+	// out the old one.
+	h.now = h.now.Add(59 * time.Minute)
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.mintErr = fmt.Errorf("%w: token endpoint returned 503", domain.ErrProviderUnavailable)
+	})
+	token, err := h.service.IssueToken(ctx, service(domain.PurposeTrigger), created.ID, tokenRequest(domain.PurposeTrigger, "user-1"))
+	if err != nil || token.AccessToken != "app-token-1" {
+		t.Fatalf("IssueToken() with an unexpired token and a failing mint = %+v %v", token, err)
+	}
+
+	// Now it really has expired, so the failure surfaces.
+	h.now = h.now.Add(2 * time.Minute)
+	if _, err := h.service.IssueToken(ctx, service(domain.PurposeTrigger), created.ID, tokenRequest(domain.PurposeTrigger, "user-1")); !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("IssueToken() with an expired token and a failing mint error = %v", err)
+	}
+	if connection := h.stored(t, created.ID); connection.Status != domain.StatusActive {
+		t.Fatalf("connection after a transient mint failure = %s, want it to stay active", connection.Status)
+	}
+
+	// A permanent refusal marks the connection needs_reconnect instead.
+	h.oauth.set(func(oauth *fakeOAuth) {
+		oauth.mintErr = fmt.Errorf("%w: unauthorized_client", domain.ErrCredentialRejected)
+	})
+	if _, err := h.service.IssueToken(ctx, service(domain.PurposeTrigger), created.ID, tokenRequest(domain.PurposeTrigger, "user-1")); !errors.Is(err, domain.ErrNeedsReconnect) {
+		t.Fatalf("IssueToken() with a permanently rejected mint error = %v", err)
+	}
+	if connection := h.stored(t, created.ID); connection.Status != domain.StatusNeedsReconnect || connection.Reason != string(domain.ReconnectCredentialRejected) {
+		t.Fatalf("connection after a rejected mint = %s/%s", connection.Status, connection.Reason)
+	}
+}
+
+// TestRevocationFailureKeepsCredentialsUntilRevokeGiveUp covers
+// deleteCredentials's error path. A provider that refuses to revoke keeps a
+// disconnected connection's credentials rather than deleting them outright,
+// so cleanup can retry the revoke on a later run; only once revokeGiveUp has
+// passed beyond MaxHold does it give up, deleting the credentials unrevoked
+// and saying so, in the log and in the credentials-deleted event.
+func TestRevocationFailureKeepsCredentialsUntilRevokeGiveUp(t *testing.T) {
+	var logs bytes.Buffer
+	h := newDBHarness(t, func(dependencies *Dependencies) { dependencies.Logger = slog.New(slog.NewTextHandler(&logs, nil)) })
+	app := h.createApp(t, "github", "read:user", "repo")
+	completion, err := h.connect(t, memberToken, "github", AuthorizeInput{AppID: app.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionID := completion.Connection.ID
+	if err := h.service.Disconnect(ctx, as(memberToken), organization, connectionID); err != nil {
+		t.Fatal(err)
+	}
+	h.oauth.set(func(oauth *fakeOAuth) { oauth.revokeErr = errors.New("revoke endpoint unavailable") })
+
+	if claimed, err := h.service.CleanUp(ctx); err != nil || claimed != 1 {
+		t.Fatalf("CleanUp() while the provider refuses to revoke = %d %v", claimed, err)
+	}
+	if stored := h.stored(t, connectionID); stored.EncryptedCredentials == nil || stored.CredentialsDeletedAt != nil {
+		t.Fatalf("connection deleted despite the unresolved revoke: %+v", stored)
+	}
+	if revocations := h.oauth.revokeRequests(); len(revocations) != 1 {
+		t.Fatalf("revoke attempts = %d, want 1", len(revocations))
+	}
+	if deleted := h.outboxEvents(t, connectionseventsv1.ConnectionCredentialsDeletedDetailType); len(deleted) != 0 {
+		t.Fatalf("credentials-deleted was recorded before the deletion finished: %v", deleted)
+	}
+
+	// Past MaxHold + revokeGiveUp, cleanup deletes the credentials anyway and
+	// says so.
+	h.now = h.now.Add(domain.MaxHold + revokeGiveUp + time.Minute)
+	if claimed, err := h.service.CleanUp(ctx); err != nil || claimed != 1 {
+		t.Fatalf("CleanUp() past revokeGiveUp = %d %v", claimed, err)
+	}
+	if stored := h.stored(t, connectionID); stored.EncryptedCredentials != nil || stored.CredentialsDeletedAt == nil {
+		t.Fatalf("connection was not deleted past revokeGiveUp: %+v", stored)
+	}
+	if !strings.Contains(logs.String(), "deleting credentials the provider did not revoke") {
+		t.Fatalf("log = %s, want the give-up warning", logs.String())
+	}
+	deleted := h.outboxEvents(t, connectionseventsv1.ConnectionCredentialsDeletedDetailType)
+	var payload connectionseventsv1.ConnectionCredentialsDeleted
+	if len(deleted) != 1 || json.Unmarshal([]byte(deleted[0]), &payload) != nil || payload.Revoked {
+		t.Fatalf("credentials deleted event = %v (unmarshalled %+v), want exactly one with revoked=false", deleted, payload)
 	}
 }

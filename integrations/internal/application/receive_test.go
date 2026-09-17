@@ -94,6 +94,25 @@ func TestReceiveWebhookPublishesATriggerOnce(t *testing.T) {
 	}
 }
 
+// A provider that signs the whole URL it called, as HubSpot does, must be
+// handed the public webhook URL: the request arrives with only its path, and
+// a proxy in front may have rewritten the host it came to.
+func TestReceiveHandsTheProviderThePublicURLItCalled(t *testing.T) {
+	h := newHarness(t)
+	subscription := h.subscribe(t)
+	uri := "/v1/webhooks/hooks/" + subscription.Route + "?attempt=2"
+
+	if _, err := h.service.Receive(context.Background(), "hooks", subscription.Route, providers.Delivered{Method: http.MethodPost, URI: uri}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.hooks.received) != 1 {
+		t.Fatalf("provider Receive calls = %d, want 1", len(h.hooks.received))
+	}
+	if got, want := h.hooks.received[0].delivery.URL, testPublicURL+uri; got != want {
+		t.Fatalf("Delivered.URL = %q, want %q", got, want)
+	}
+}
+
 func TestReceiveRefusesWhatARouteDoesNotName(t *testing.T) {
 	h := newHarness(t)
 	subscription := h.subscribe(t)
@@ -350,6 +369,34 @@ func TestReceiveAppDeliversToTheWorkspacesSubscriptions(t *testing.T) {
 	want := map[string]int{messages.ID + " chat.message": 1, everything.ID + " chat.message": 1, everything.ID + " chat.reaction_added": 1}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("triggers = %v, want %v", got, want)
+	}
+}
+
+// One delivery can carry events for several accounts, as a HubSpot batch
+// does. An event that names its account must reach only that account's
+// subscriptions: another organization's must never see it.
+func TestReceiveAppDeliversAnAccountsEventOnlyToThatAccount(t *testing.T) {
+	h := newHarness(t)
+	view := h.setAppWebhook(t)
+	first := h.store.put(domain.Subscription{ID: "sub_t1", OrganizationID: testOrganization, ConnectionID: "conn_chat", AppID: "app_chat", Provider: "chat", AccountKey: "T1", Status: domain.SubscriptionActive, Route: "route-t1", CreatedBy: "user_member"})
+	second := h.store.put(domain.Subscription{ID: "sub_t2", OrganizationID: "org_other", ConnectionID: "conn_chat_2", AppID: "app_chat", Provider: "chat", AccountKey: "T2", Status: domain.SubscriptionActive, Route: "route-t2", CreatedBy: "user_other"})
+	h.chat.reception = providers.Reception{AccountKeys: []string{"T1", "T2"}, Events: []providers.Event{
+		{Name: "message", Type: "message", DeliveryID: "Ev1", Key: "Ev1", AccountKey: "T1"},
+		{Name: "message", Type: "message", DeliveryID: "Ev2", Key: "Ev2", AccountKey: "T2"},
+		{Name: "message", Type: "message", DeliveryID: "Ev3", Key: "Ev3"},
+	}}
+	route := strings.TrimPrefix(view.URL, testPublicURL+"/v1/webhooks/chat/")
+
+	if _, err := h.service.Receive(context.Background(), "chat", route, providers.Delivered{Body: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, trigger := range triggers(t, h) {
+		got[trigger.SubscriptionID+" "+trigger.DeliveryID]++
+	}
+	want := map[string]int{first.ID + " Ev1": 1, first.ID + " Ev3": 1, second.ID + " Ev2": 1, second.ID + " Ev3": 1}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("triggers = %v, want %v: each account's own event and the one they share", got, want)
 	}
 }
 

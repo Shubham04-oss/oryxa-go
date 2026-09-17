@@ -67,12 +67,10 @@ func TestCreateSubscription(t *testing.T) {
 		if err := store.CreateSubscription(ctx, sub, nil); err != nil {
 			t.Fatalf("CreateSubscription() error = %v", err)
 		}
-		claimed, err := store.ClaimOutbox(ctx, 10)
-		if err != nil {
-			t.Fatalf("ClaimOutbox() error = %v", err)
-		}
-		if len(claimed) != 0 {
-			t.Fatalf("ClaimOutbox() after a pending create = %d events, want 0", len(claimed))
+		// Nothing else has written to this schema's outbox yet.
+		var outboxCount int
+		if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM integrations_outbox`).Scan(&outboxCount); err != nil || outboxCount != 0 {
+			t.Fatalf("outbox events after a pending create = %d, error = %v, want 0", outboxCount, err)
 		}
 	})
 
@@ -82,13 +80,7 @@ func TestCreateSubscription(t *testing.T) {
 		if err := store.CreateSubscription(ctx, sub, &event); err != nil {
 			t.Fatalf("CreateSubscription() error = %v", err)
 		}
-		claimed, err := store.ClaimOutbox(ctx, 10)
-		if err != nil {
-			t.Fatalf("ClaimOutbox() error = %v", err)
-		}
-		if len(claimed) != 1 || claimed[0].ID != event.ID {
-			t.Fatalf("ClaimOutbox() = %+v, want exactly [%s]", claimed, event.ID)
-		}
+		assertOutboxHas(t, ctx, store, event.ID, true)
 	})
 
 	t.Run("placement check refuses member scope without member id", func(t *testing.T) {
@@ -159,9 +151,11 @@ func TestActivateSubscription(t *testing.T) {
 		renewAt := now.Add(24 * time.Hour)
 		activatedAt := now.Add(time.Minute)
 		var seen domain.Subscription
+		var activatedEvent domain.Event
 		callback := func(subscription domain.Subscription) (domain.Event, error) {
 			seen = subscription
-			return testEvent("integrations.subscription.activated.v1", activatedAt), nil
+			activatedEvent = testEvent("integrations.subscription.activated.v1", activatedAt)
+			return activatedEvent, nil
 		}
 		activated, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_abc", nil, &expiresAt, &renewAt, activatedAt, callback)
 		if err != nil {
@@ -174,13 +168,7 @@ func TestActivateSubscription(t *testing.T) {
 		if seen.ID != sub.ID || seen.Status != domain.SubscriptionActive || seen.RegistrationID != "reg_abc" {
 			t.Fatalf("eventFor received = %+v, want the activated subscription", seen)
 		}
-		claimed, err := store.ClaimOutbox(ctx, 10)
-		if err != nil {
-			t.Fatalf("ClaimOutbox() error = %v", err)
-		}
-		if len(claimed) != 1 {
-			t.Fatalf("ClaimOutbox() = %d events, want 1", len(claimed))
-		}
+		assertOutboxHas(t, ctx, store, activatedEvent.ID, true)
 	})
 
 	t.Run("unknown id is not found", func(t *testing.T) {
@@ -250,9 +238,6 @@ func TestActivateSubscription(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ActivateSubscription() first error = %v", err)
 		}
-		if _, err := store.ClaimOutbox(ctx, 10); err != nil {
-			t.Fatalf("ClaimOutbox() error = %v", err)
-		}
 		if _, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_2", nil, nil, nil, now.Add(time.Minute), neverCalled(t)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("ActivateSubscription() on an active subscription error = %v, want ErrConflict", err)
 		}
@@ -276,8 +261,9 @@ func TestActivateSubscription(t *testing.T) {
 		if err != nil || len(stopped) != 1 {
 			t.Fatalf("StopSubscriptions() = %+v, %v", stopped, err)
 		}
-		if _, err := store.ClaimOutbox(ctx, 10); err != nil {
-			t.Fatalf("ClaimOutbox() error = %v", err)
+		var before int
+		if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM integrations_outbox`).Scan(&before); err != nil {
+			t.Fatal(err)
 		}
 
 		activateAt := now.Add(time.Minute)
@@ -299,12 +285,12 @@ func TestActivateSubscription(t *testing.T) {
 		if len(due) != 1 || due[0].ID != sub.ID {
 			t.Fatalf("ClaimCleanups() = %+v, want [%s]", due, sub.ID)
 		}
-		claimed, err := store.ClaimOutbox(ctx, 10)
-		if err != nil {
-			t.Fatalf("ClaimOutbox() error = %v", err)
+		var after int
+		if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM integrations_outbox`).Scan(&after); err != nil {
+			t.Fatal(err)
 		}
-		if len(claimed) != 0 {
-			t.Fatalf("ClaimOutbox() after activating a stopped subscription = %d events, want 0", len(claimed))
+		if after != before {
+			t.Fatalf("activating a stopped subscription wrote %d outbox events, want 0", after-before)
 		}
 	})
 }

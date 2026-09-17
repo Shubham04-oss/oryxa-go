@@ -21,12 +21,6 @@ type Event struct {
 	Data       json.RawMessage
 }
 
-// OutboxEvent is a stored event the dispatcher has claimed.
-type OutboxEvent struct {
-	Event
-	Attempts int
-}
-
 // NewEvent builds an event with a fresh id and the detail encoded, ready for
 // the outbox.
 func NewEvent(detailType string, data any, occurredAt time.Time) (Event, error) {

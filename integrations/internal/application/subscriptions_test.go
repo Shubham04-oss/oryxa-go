@@ -84,6 +84,45 @@ func TestCreateWebhookSubscriptionRegistersThenActivates(t *testing.T) {
 	}
 }
 
+// TestCreateWebhookSubscriptionStoresTheProvidersOwnSecret covers a provider
+// that issues its own signing secret during registration rather than signing
+// with the one CreateSubscription generated and sent it, as ClickUp answers a
+// create with the webhook's own secret and Asana hands one over during its
+// handshake. The stored secret must be the provider's, and later deliveries
+// must be verified with it, not the generated one.
+func TestCreateWebhookSubscriptionStoresTheProvidersOwnSecret(t *testing.T) {
+	h := newHarness(t)
+	const issued = "provider-issued-signing-secret-42"
+	h.hooks.registration = providers.Registration{ID: "reg_1", Secret: issued}
+
+	subscription := h.subscribe(t)
+
+	if len(h.hooks.registered) != 1 {
+		t.Fatalf("Register calls = %d, want 1", len(h.hooks.registered))
+	}
+	if generated := h.hooks.registered[0].Secret; generated == issued {
+		t.Fatalf("test setup: the generated secret %q must differ from the provider's", generated)
+	}
+	opened, err := fakeSealer{}.Open(context.Background(),
+		secrets.Binding{OrganizationID: testOrganization, ResourceType: secrets.ResourceSubscription, ResourceID: subscription.ID},
+		*h.store.subscription(t, subscription.ID).EncryptedSecret)
+	if err != nil || string(opened) != issued {
+		t.Fatalf("stored secret opens to %q, %v, want the provider's %q, not the generated one", opened, err, issued)
+	}
+
+	// A delivery is verified with the stored secret, which must now be the
+	// provider's own.
+	if _, err := h.service.Receive(context.Background(), "hooks", subscription.Route, providers.Delivered{Body: []byte(`{}`)}); err != nil {
+		t.Fatalf("Receive() error = %v", err)
+	}
+	if len(h.hooks.received) != 1 {
+		t.Fatalf("provider Receive calls = %d, want 1", len(h.hooks.received))
+	}
+	if got := h.hooks.received[0].secret; got != issued {
+		t.Fatalf("provider verified with %q, want the provider's own secret %q", got, issued)
+	}
+}
+
 type connectionsclientTokenCall struct {
 	purpose        domain.Purpose
 	accessToken    string

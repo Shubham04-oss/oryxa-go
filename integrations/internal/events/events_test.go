@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
-	"slices"
 	"testing"
 	"time"
 
@@ -64,45 +62,5 @@ func TestPublisherReportsFailures(t *testing.T) {
 	}
 }
 
-type fakeOutbox struct {
-	events    []domain.OutboxEvent
-	published []string
-	failed    []string
-}
-
-func (fake *fakeOutbox) ClaimOutbox(context.Context, int) ([]domain.OutboxEvent, error) {
-	return fake.events, nil
-}
-
-func (fake *fakeOutbox) MarkOutboxPublished(_ context.Context, eventID string) error {
-	fake.published = append(fake.published, eventID)
-	return nil
-}
-
-func (fake *fakeOutbox) MarkOutboxFailed(_ context.Context, eventID string, _ time.Duration, _ string) error {
-	fake.failed = append(fake.failed, eventID)
-	return nil
-}
-
-type failingPublisher struct{ failID string }
-
-func (publisher failingPublisher) PublishEvent(_ context.Context, event domain.Event) error {
-	if event.ID == publisher.failID {
-		return errors.New("rejected")
-	}
-	return nil
-}
-
-func TestDispatcherMarksEachEvent(t *testing.T) {
-	outbox := &fakeOutbox{events: []domain.OutboxEvent{
-		{Event: domain.Event{ID: "evt_ok"}},
-		{Event: domain.Event{ID: "evt_bad"}, Attempts: 2},
-	}}
-	NewDispatcher(outbox, failingPublisher{failID: "evt_bad"}, slog.New(slog.DiscardHandler)).flush(context.Background())
-	if !slices.Equal(outbox.published, []string{"evt_ok"}) || !slices.Equal(outbox.failed, []string{"evt_bad"}) {
-		t.Fatalf("published = %v, failed = %v", outbox.published, outbox.failed)
-	}
-	if retryDelay(0) != time.Second || retryDelay(2) != 4*time.Second || retryDelay(99) != 64*time.Second {
-		t.Fatal("retryDelay() does not back off exponentially up to 64s")
-	}
-}
+// Claiming, marking and retrying are internal/outbox's own concern now: see
+// its dispatcher_test.go.

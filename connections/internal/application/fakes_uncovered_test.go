@@ -30,10 +30,6 @@ func (store *fakeStore) DeleteExpiredSessions(context.Context, time.Time, int) (
 	return 0, errUncovered
 }
 
-func (store *fakeStore) DeletePublishedOutbox(context.Context, time.Time, int) (int, error) {
-	return 0, errUncovered
-}
-
 func (store *fakeStore) CreateConnection(context.Context, domain.Connection, domain.Event, time.Time) (domain.Connection, error) {
 	return domain.Connection{}, errUncovered
 }

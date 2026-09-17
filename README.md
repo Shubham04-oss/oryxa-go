@@ -162,8 +162,8 @@ Not yet:
 
 - Triggers into agent runs, and subscription tools, so an agent can watch as
   well as act. Each provider's skill already describes its events.
-- Actions and triggers for the 13 other providers members can connect, such
-  as Google, Notion, Atlassian, HubSpot and Salesforce.
+- Actions and triggers for the 12 other providers members can connect, such
+  as Google, Notion, Atlassian and Salesforce.
 - A run API in the `agents` service that forwards the member's own token, and a web
   screen for agent grants.
 - Live runs: only GitHub's webhook has run against the real provider. The live
@@ -183,7 +183,10 @@ agents development UI, keeps a pool of its own, isolated in the
 
 Every service's migrations run before that pool opens, on a short-lived pool
 and under one advisory lock, so replicas starting together take turns and every
-shared connection sees the extensions the migrations installed.
+shared connection sees the extensions the migrations installed. Each file runs
+once: `oryxa_migrations` records what was applied, by service, name and
+checksum, so a restart skips unchanged files rather than repeating their locks
+and backfills, and a file edited in place is applied again.
 
 The boundary discovers these database capabilities:
 

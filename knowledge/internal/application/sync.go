@@ -55,16 +55,32 @@ func (s *Service) Sync(ctx context.Context, source domain.Source, lease string) 
 	if err != nil {
 		return err
 	}
+	startedAt := s.now()
 
 	// A source with no watermark has never been read through, so this pass is
-	// the first full one. Only a full pass may retract what it did not see.
+	// the first full one. A source that has been read through is swept in
+	// full again once its last sweep is missing or has aged past the
+	// interval — starting over from the beginning, the same as a first pass
+	// — but only when nothing is already mid-walk: a pass already under way
+	// keeps what it saved rather than discarding progress. Only a full pass
+	// may retract what it did not see.
 	full := cursor.Watermark == nil
+	if cursor.Value == "" && dueForFullSweep(source.FullSweepAt, s.config.FullSweepInterval, startedAt) {
+		full = true
+		cursor = domain.Cursor{SourceID: source.ID}
+	}
+	if cursor.Value == "" {
+		// A walk is beginning now rather than resuming one already under
+		// way. Recorded so that if this walk outlives the run that started
+		// it, a later run can still retract against when the walk itself
+		// began, not against whichever run happens to finish it.
+		cursor.WalkStartedAt = &startedAt
+	}
 	kind := knowledgev1.SyncIncremental
 	if full {
 		kind = knowledgev1.SyncBackfill
 	}
 
-	startedAt := s.now()
 	run := domain.SyncRun{
 		OrganizationID: source.OrganizationID, SourceID: source.ID,
 		Kind: kind, Status: domain.RunRunning, StartedAt: startedAt,
@@ -82,6 +98,12 @@ func (s *Service) Sync(ctx context.Context, source domain.Source, lease string) 
 		return s.runFailed(ctx, source, run, result, lease, err)
 	}
 	return s.runCompleted(ctx, source, run, result, cursor, lease)
+}
+
+// dueForFullSweep says whether a source needs to be read from the beginning
+// again: it never has been, or its last full sweep has aged past interval.
+func dueForFullSweep(sweptAt *time.Time, interval time.Duration, now time.Time) bool {
+	return sweptAt == nil || !sweptAt.Add(interval).After(now)
 }
 
 // walk reads page after page until the source is drained, this pass has done
@@ -171,11 +193,22 @@ func (s *Service) keep(ctx context.Context, source domain.Source, item sources.I
 // runCompleted closes off a pass that did not fail.
 func (s *Service) runCompleted(ctx context.Context, source domain.Source, run domain.SyncRun, result outcome, cursor domain.Cursor, lease string) error {
 	now := s.now()
+	var fullSweptAt *time.Time
 	if result.drained {
 		// Only a pass that read the whole source may say what is missing from
 		// it, and only then does the watermark describe a closed window.
 		if run.Kind == knowledgev1.SyncBackfill {
-			removed, err := s.store.RetractUnseen(ctx, source.ID, run.StartedAt, now,
+			// The threshold is when the walk began, not when this run of it
+			// did: a walk spanning several runs stamped what earlier runs
+			// saw before this run started, and using this run's own start
+			// would retract that along with what is actually gone. A cursor
+			// saved before walk_started_at existed has none, so this run's
+			// start is the best available answer for it.
+			before := run.StartedAt
+			if cursor.WalkStartedAt != nil {
+				before = *cursor.WalkStartedAt
+			}
+			removed, err := s.store.RetractUnseen(ctx, source.ID, before, now,
 				func(document domain.Document) (domain.Event, error) {
 					return s.documentRemoved(source, document, knowledgev1.RemovedReasonDeleted)
 				})
@@ -184,6 +217,7 @@ func (s *Service) runCompleted(ctx context.Context, source domain.Source, run do
 			}
 			result.removed = removed
 			run.DocumentsRemoved = removed
+			fullSweptAt = &now
 		}
 		if err := s.store.SaveCursor(ctx, domain.Cursor{
 			SourceID: source.ID, Value: "", Watermark: result.watermark, UpdatedAt: now,
@@ -213,7 +247,7 @@ func (s *Service) runCompleted(ctx context.Context, source domain.Source, run do
 	if !result.drained {
 		next = now
 	}
-	if _, err := s.store.FinishSource(ctx, source.ID, lease, now, next, nil); err != nil {
+	if _, err := s.store.FinishSource(ctx, source.ID, lease, now, next, fullSweptAt, nil); err != nil {
 		return err
 	}
 	s.logger.InfoContext(ctx, "source read",

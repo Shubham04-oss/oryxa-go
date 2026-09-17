@@ -530,6 +530,9 @@ func mustClaim(t *testing.T, store *Store, ctx context.Context) []domain.Documen
 	return claimed
 }
 
+// TestOutboxRoundTrip proves RecordEvents wrote the event; claiming, marking
+// and retrying are internal/outbox's own concern now, covered by its
+// table_integration_test.go.
 func TestOutboxRoundTrip(t *testing.T) {
 	store, ctx := openTestStore(t)
 	organizationID := uniqueOrganization()
@@ -539,30 +542,10 @@ func TestOutboxRoundTrip(t *testing.T) {
 	if err := store.RecordEvents(ctx, []domain.Event{event}); err != nil {
 		t.Fatalf("RecordEvents: %v", err)
 	}
-	claimed, err := store.ClaimOutbox(ctx, 50)
-	if err != nil {
-		t.Fatalf("ClaimOutbox: %v", err)
-	}
-	var found bool
-	for _, pending := range claimed {
-		if pending.ID == event.ID {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("the recorded event was not claimed")
-	}
-	if err := store.MarkOutboxPublished(ctx, event.ID); err != nil {
-		t.Fatalf("MarkOutboxPublished: %v", err)
-	}
-	again, err := store.ClaimOutbox(ctx, 50)
-	if err != nil {
-		t.Fatalf("ClaimOutbox: %v", err)
-	}
-	for _, pending := range again {
-		if pending.ID == event.ID {
-			t.Fatal("a published event was claimed again")
-		}
+	var pending bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM rag_outbox WHERE id = $1 AND published_at IS NULL)`,
+		event.ID).Scan(&pending); err != nil || !pending {
+		t.Fatalf("the recorded event was not in the outbox: found = %v, err = %v", pending, err)
 	}
 }
 
@@ -658,6 +641,96 @@ func TestSyncChunksWillNotReuseAChunkThatWasNeverEmbedded(t *testing.T) {
 	if len(third.Fresh) != 0 || len(third.Reused) != 2 {
 		t.Fatalf("after the vectors were recorded = %d fresh, %d reused, want 0 and 2",
 			len(third.Fresh), len(third.Reused))
+	}
+}
+
+// TestDocumentsPaginatesWithACursor backs the listing's cursor: every
+// document is reachable across pages, in the same newest-first order an
+// unpaged read gives, with no repeat and no skip at a page boundary — and a
+// caller who names no cursor gets exactly the first page it always got.
+func TestDocumentsPaginatesWithACursor(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	// Explicit, strictly increasing timestamps: pagination is ordered by
+	// created_at, and the wall clock's resolution is not reliably finer than
+	// what five inserts in a row would need to stay distinct.
+	base := time.Now().UTC().Truncate(time.Microsecond)
+	created := make([]domain.Document, 0, 5)
+	for index := range 5 {
+		body := fmt.Sprintf("document %d", index)
+		document := newDocument(corpus, domain.Source{Kind: domain.SourceInline}, fmt.Sprintf("Doc %d", index), body)
+		document.CreatedAt = base.Add(time.Duration(index) * time.Second)
+		document.UpdatedAt = document.CreatedAt
+		stored, _, err := store.UpsertDocument(ctx, document, body, testEvent(t, "rag.document.received.v1"))
+		if err != nil {
+			t.Fatalf("UpsertDocument: %v", err)
+		}
+		created = append(created, stored)
+	}
+	newestFirst := func(index int) string { return created[len(created)-1-index].ID }
+
+	// No cursor must return exactly the first page an unpaged caller gets
+	// today: the newest three, with a cursor to continue.
+	firstPage, next, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 3)
+	if err != nil {
+		t.Fatalf("Documents: %v", err)
+	}
+	if len(firstPage) != 3 || next == "" {
+		t.Fatalf("first page = %d documents, next_cursor = %q, want 3 and a cursor", len(firstPage), next)
+	}
+	for index, document := range firstPage {
+		if document.ID != newestFirst(index) {
+			t.Fatalf("first page order = %+v", firstPage)
+		}
+	}
+
+	// Walking the cursor reaches every document exactly once, newest first
+	// throughout, with a page size never larger than asked for.
+	var walked []domain.Document
+	cursor := ""
+	for pages := 0; ; pages++ {
+		if pages > len(created) {
+			t.Fatal("Documents did not terminate: the cursor is not making progress")
+		}
+		page, next, err := store.Documents(ctx, organizationID, corpus.ID, "", cursor, 2)
+		if err != nil {
+			t.Fatalf("Documents: %v", err)
+		}
+		if len(page) > 2 {
+			t.Fatalf("page held %d documents, want at most 2", len(page))
+		}
+		walked = append(walked, page...)
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	if len(walked) != len(created) {
+		t.Fatalf("walked %d documents across pages, want %d", len(walked), len(created))
+	}
+	for index, document := range walked {
+		if document.ID != newestFirst(index) {
+			t.Fatalf("page %d: got %s, want %s (newest-first order was not preserved across the boundary)",
+				index, document.ID, newestFirst(index))
+		}
+	}
+
+	// A page that holds everything carries no cursor, so a caller knows to
+	// stop asking.
+	_, lastNext, err := store.Documents(ctx, organizationID, corpus.ID, "", "", len(created))
+	if err != nil {
+		t.Fatalf("Documents: %v", err)
+	}
+	if lastNext != "" {
+		t.Fatalf("next_cursor = %q on a page holding everything, want none", lastNext)
+	}
+
+	// A cursor that was not handed back unmodified is refused rather than
+	// silently treated as the start.
+	if _, _, err := store.Documents(ctx, organizationID, corpus.ID, "", "not-a-real-cursor", 2); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("a malformed cursor returned %v, want ErrInvalid", err)
 	}
 }
 

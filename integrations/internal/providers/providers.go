@@ -155,6 +155,12 @@ type Delivered struct {
 	// rather than re-serialized from Query.
 	Method string
 	URI    string
+	// URL is the absolute address the provider delivered to: the webhook URL
+	// integrations registered, with the query the request carried, which
+	// HubSpot signs whole. It is built from INTEGRATIONS_PUBLIC_BASE_URL, not
+	// from the request's Host, which net/http never leaves in Header and a
+	// proxy in front may have rewritten.
+	URL string
 }
 
 // Reception is what a verified delivery holds.
@@ -193,8 +199,14 @@ type Event struct {
 	// RegistrationID names the registration a delivery says it came through,
 	// when it says, so one meant for another registration is ignored.
 	RegistrationID string
-	Resource       integrationsv1.Resource
-	Actor          *integrationsv1.Actor
+	// AccountKey is the one account an event of an app delivery belongs to,
+	// when a delivery carries events for several accounts at once, as a
+	// HubSpot batch does. Empty means the event concerns every account the
+	// delivery is for, as a Slack event in a channel shared by several
+	// workspaces does.
+	AccountKey string
+	Resource   integrationsv1.Resource
+	Actor      *integrationsv1.Actor
 	// OccurredAt is when it happened, when the provider says; zero means when
 	// it was received.
 	OccurredAt time.Time

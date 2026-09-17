@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/returnurl"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/secrets"
 )
 
@@ -76,7 +77,7 @@ type Config struct {
 
 type Manager struct {
 	config     Config
-	allowed    map[string]struct{}
+	allowed    []*url.URL
 	store      Store
 	verifier   identityVerifier
 	sealer     Sealer
@@ -88,9 +89,9 @@ func New(config Config, store Store, verifier identityVerifier, sealer Sealer) (
 	if config.CognitoDomain == "" || config.ClientID == "" || config.ClientSecret == "" || config.CallbackURL == "" || len(config.AllowedReturnTo) == 0 {
 		return nil, errors.New("Cognito domain, agent client ID and secret, callback URL, and return URLs are required")
 	}
-	allowed := make(map[string]struct{}, len(config.AllowedReturnTo))
-	for _, target := range config.AllowedReturnTo {
-		allowed[target] = struct{}{}
+	allowed, err := returnurl.ParseOrigins(config.AllowedReturnTo)
+	if err != nil {
+		return nil, err
 	}
 	return &Manager{
 		config:     config,
@@ -114,7 +115,7 @@ func (m *Manager) Status(ctx context.Context, userID string) (domain.AgentGrant,
 // client along with the opaque state the caller must round-trip back as a
 // cookie for Complete to check.
 func (m *Manager) Authorize(ctx context.Context, memberID, returnTo string) (string, string, error) {
-	if _, ok := m.allowed[returnTo]; !ok {
+	if !returnurl.Allowed(returnTo, m.allowed) {
 		return "", "", fmt.Errorf("return URL is not allowed: %w", domain.ErrInvalid)
 	}
 	random, err := secureToken(32)
@@ -181,7 +182,7 @@ func (m *Manager) Complete(ctx context.Context, state, stateCookie, code string)
 	}
 	// Re-validated even though Authorize already checked it: Complete must
 	// never redirect anywhere it did not itself confirm is allowed.
-	if _, ok := m.allowed[flow.ReturnTo]; !ok {
+	if !returnurl.Allowed(flow.ReturnTo, m.allowed) {
 		return "", fmt.Errorf("return URL is not allowed: %w", domain.ErrInvalid)
 	}
 

@@ -484,7 +484,7 @@ func (service *Service) InviteMember(ctx context.Context, actorID, organizationI
 		ExpiresAt:      now.Add(7 * 24 * time.Hour),
 		CreatedAt:      now,
 	}
-	acceptURL := service.invitationAcceptBase + "?token=" + url.QueryEscape(token)
+	acceptURL := tokenURL(service.invitationAcceptBase, token)
 	event, err := newEvent(autheventsv1.MemberInvitedDetailType, autheventsv1.MemberInvited{
 		InvitationID:     invitation.ID,
 		OrganizationID:   organizationID,

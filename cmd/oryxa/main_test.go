@@ -62,10 +62,11 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		"EMAIL_FROM_ADDRESS":           "no-reply@example.com",
 		"EMAIL_QUEUE_URL":              "http://localhost:4566/000000000000/email-events",
 	}
+	// Mounting never queries the database; rag only asks it for pgvector.
+	database := postgreskit.Detached(map[string]string{"vector": "0.8.6", "ltree": "1.3", "pg_trgm": "1.6"})
 	platform := host.Platform{
-		Logger: slog.New(slog.DiscardHandler),
-		// Mounting never queries the database; rag only asks it for pgvector.
-		Database:     postgreskit.Detached(map[string]string{"vector": "0.8.6", "ltree": "1.3", "pg_trgm": "1.6"}),
+		Logger:       slog.New(slog.DiscardHandler),
+		Database:     database,
 		AWS:          aws.Config{Region: "ap-south-1", Credentials: aws.AnonymousCredentials{}},
 		EventBusName: "default",
 		Getenv:       host.Environment(func(name string) string { return environment[name] }, definitions, "http://127.0.0.1:1"),

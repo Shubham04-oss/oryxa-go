@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -32,6 +33,11 @@ func (s *Service) Receive(ctx context.Context, providerName, route string, deliv
 	provider, ok := s.providers[providerName]
 	if !ok || route == "" {
 		return providers.Reply{}, domain.ErrNotFound
+	}
+	// The provider called the public webhook URL, not the address the request
+	// arrived at, and a signature can cover that URL whole.
+	if strings.HasPrefix(delivery.URI, "/") {
+		delivery.URL = s.publicBaseURL + delivery.URI
 	}
 	if provider.Delivery == providers.DeliveryApp {
 		return s.receiveApp(ctx, provider, route, delivery)
@@ -64,6 +70,11 @@ func (s *Service) receiveApp(ctx context.Context, provider providers.Provider, r
 		}
 		for _, subscription := range subscriptions {
 			for _, event := range reception.Events {
+				// An event that belongs to one account is that account's
+				// alone, however many accounts share the delivery.
+				if event.AccountKey != "" && event.AccountKey != accountKey {
+					continue
+				}
 				if !subscription.Accepts(firstNonEmpty(event.Type, event.Name)) {
 					continue
 				}

@@ -257,12 +257,9 @@ func TestFinishAction(t *testing.T) {
 		t.Fatalf("FinishAction() error = %v", err)
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-	if len(claimed) != 1 || claimed[0].ID != event.ID {
-		t.Fatalf("ClaimOutbox() = %+v, want exactly [%s]", claimed, event.ID)
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM integrations_outbox WHERE id = $1`, event.ID).Scan(&outboxCount); err != nil || outboxCount != 1 {
+		t.Fatalf("outbox events for %s = %d, error = %v, want 1", event.ID, outboxCount, err)
 	}
 
 	reloaded, err := store.actionByIdempotencyKey(ctx, action.ConnectionID, action.Name, action.IdempotencyKey)
@@ -290,12 +287,9 @@ func TestFinishAction(t *testing.T) {
 		if err := store.FinishAction(ctx, again, secondEvent); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("FinishAction() second call error = %v, want ErrConflict", err)
 		}
-		claimedAgain, err := store.ClaimOutbox(ctx, 10)
-		if err != nil {
-			t.Fatalf("ClaimOutbox() error = %v", err)
-		}
-		if len(claimedAgain) != 0 {
-			t.Fatalf("ClaimOutbox() after a conflicting finish = %d events, want 0", len(claimedAgain))
+		var againCount int
+		if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM integrations_outbox WHERE id = $1`, secondEvent.ID).Scan(&againCount); err != nil || againCount != 0 {
+			t.Fatalf("outbox events for the conflicting finish = %d, error = %v, want 0", againCount, err)
 		}
 		reloadedAgain, err := store.actionByIdempotencyKey(ctx, action.ConnectionID, action.Name, action.IdempotencyKey)
 		if err != nil {
@@ -336,10 +330,6 @@ func TestDeleteActionsBefore(t *testing.T) {
 	if _, ok, err := store.StartAction(ctx, running); err != nil || !ok {
 		t.Fatalf("StartAction(running) error = %v, ok = %v", err, ok)
 	}
-	if _, err := store.ClaimOutbox(ctx, 10); err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-
 	deleted, err := store.DeleteActionsBefore(ctx, cutoff)
 	if err != nil {
 		t.Fatalf("DeleteActionsBefore() error = %v", err)

@@ -212,18 +212,17 @@ func TestFailSubscription(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ActivateSubscription(%s) error = %v", id, err)
 		}
-		if _, err := store.ClaimOutbox(ctx, 10); err != nil {
-			t.Fatalf("ClaimOutbox() error = %v", err)
-		}
 		return activated
 	}
 
 	t.Run("marks failed with reason and event, cleanup true queues cleanup", func(t *testing.T) {
 		sub := activateWithRegistration("sub_fail_cleanup", "con_1")
 		var seen domain.Subscription
+		var failedEvent domain.Event
 		callback := func(subscription domain.Subscription) (domain.Event, error) {
 			seen = subscription
-			return testEvent("integrations.subscription.failed.v1", now.Add(time.Minute)), nil
+			failedEvent = testEvent("integrations.subscription.failed.v1", now.Add(time.Minute))
+			return failedEvent, nil
 		}
 		failed, err := store.FailSubscription(ctx, org, sub.ID, "", "provider_removed", true, now.Add(time.Minute), callback)
 		if err != nil {
@@ -235,10 +234,7 @@ func TestFailSubscription(t *testing.T) {
 		if seen.ID != sub.ID || seen.Reason != "provider_removed" {
 			t.Fatalf("eventFor received = %+v", seen)
 		}
-		claimed, err := store.ClaimOutbox(ctx, 10)
-		if err != nil || len(claimed) != 1 {
-			t.Fatalf("ClaimOutbox() = %+v, %v, want exactly one event", claimed, err)
-		}
+		assertOutboxHas(t, ctx, store, failedEvent.ID, true)
 		due, err := store.ClaimCleanups(ctx, now.Add(2*time.Minute), 10, "lease_fail_1", now.Add(3*time.Minute))
 		if err != nil {
 			t.Fatalf("ClaimCleanups() error = %v", err)

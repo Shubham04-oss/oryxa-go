@@ -69,15 +69,10 @@ func TestAnyAppAndDeleteOrganizationApps(t *testing.T) {
 		t.Fatalf("second DeleteOrganizationApps() = %d, %v (events=%d)", count, err, len(mu))
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 100, "claim-token")
-	if err != nil {
+	var deletedEvents int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM connections_outbox WHERE detail_type = $1`,
+		"connections.app.deleted.v1").Scan(&deletedEvents); err != nil {
 		t.Fatal(err)
-	}
-	deletedEvents := 0
-	for _, event := range claimed {
-		if event.DetailType == "connections.app.deleted.v1" {
-			deletedEvents++
-		}
 	}
 	if deletedEvents != 2 {
 		t.Fatalf("outbox has %d connections.app.deleted.v1 events, want 2", deletedEvents)

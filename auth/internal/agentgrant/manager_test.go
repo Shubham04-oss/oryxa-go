@@ -155,6 +155,58 @@ func TestAuthorizeRejectsUnlistedReturnURL(t *testing.T) {
 	}
 }
 
+// TestAuthorizeAllowsOnlyPagesBeneathAnAllowedOrigin mirrors oauthflow's
+// TestBeginReturnsOnlyToPagesOnAllowedOrigins: agent grants share
+// returnurl.Allowed with Google sign-in, so a member granting from a real
+// page such as an invitation link with a query must be accepted, while the
+// tricks an exact match was meant to catch stay refused.
+func TestAuthorizeAllowsOnlyPagesBeneathAnAllowedOrigin(t *testing.T) {
+	manager, err := New(Config{
+		CognitoDomain:   "https://identity.example.com",
+		ClientID:        "agent-client-id",
+		ClientSecret:    "agent-client-secret",
+		CallbackURL:     "https://auth.example.com/v1/agent-grant/callback",
+		AllowedReturnTo: []string{"https://app.example.com", "https://admin.example.com/console/"},
+	}, &fakeStore{}, &fakeIdentityVerifier{}, &fakeSealer{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	allowed := []string{
+		"https://app.example.com",
+		"https://app.example.com/",
+		"https://app.example.com/invitations/accept?token=abc",
+		"HTTPS://App.Example.com/invitations/accept",
+		"https://admin.example.com/console",
+		"https://admin.example.com/console/members",
+	}
+	for _, target := range allowed {
+		if _, _, err := manager.Authorize(context.Background(), "member-1", target); err != nil {
+			t.Errorf("Authorize(%q) error = %v, want allowed", target, err)
+		}
+	}
+
+	refused := []string{
+		"https://attacker.example.com/app",
+		"http://app.example.com/app",
+		"https://app.example.com:8443/app",
+		"https://app.example.com.attacker.example/app",
+		"https://app.example.com@attacker.example/app",
+		"//app.example.com/app",
+		"/app",
+		"javascript:alert(1)",
+		"https://admin.example.com/consoles",
+		"https://admin.example.com/",
+		"https://admin.example.com/console/../billing",
+		"https://admin.example.com/console/%2e%2e/billing",
+	}
+	for _, target := range refused {
+		if _, _, err := manager.Authorize(context.Background(), "member-1", target); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("Authorize(%q) error = %v, want invalid input", target, err)
+		}
+	}
+}
+
 func TestCompleteExchangesCodeStoresSealedGrantAndReturnsReturnTo(t *testing.T) {
 	tokenServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		username, password, ok := request.BasicAuth()
@@ -259,6 +311,38 @@ func TestCompleteRejectsReturnURLNoLongerAllowedAndStoresNothing(t *testing.T) {
 	}
 	if store.upserted != nil {
 		t.Fatal("grant stored despite a disallowed return URL")
+	}
+}
+
+// TestCompleteAllowsReturnToBeneathAnAllowedOriginWithAQuery is the
+// agent-grant analogue of the bug PR #16 fixed for Google sign-in: a real
+// page like the invitation link carries a query string, so Complete's
+// re-validation of flow.ReturnTo must accept a page beneath an allowed
+// origin rather than only the origin itself.
+func TestCompleteAllowsReturnToBeneathAnAllowedOriginWithAQuery(t *testing.T) {
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_ = json.NewEncoder(writer).Encode(tokenResponse{
+			AccessToken: "access-token", IDToken: "identity-token", RefreshToken: "refresh-token", ExpiresIn: 3600,
+		})
+	}))
+	defer tokenServer.Close()
+
+	store := &fakeStore{flow: domain.LoginFlow{
+		CodeVerifier: "verifier", Nonce: "nonce", ReturnTo: "https://app.example.com/invitations/accept?token=abc",
+	}, flowSaved: true}
+	verifier := &fakeIdentityVerifier{subject: "member-1"}
+	manager, err := New(testConfig(tokenServer.URL), store, verifier, &fakeSealer{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	state := "member-1.random-suffix"
+	returnTo, err := manager.Complete(context.Background(), state, state, "code-1")
+	if err != nil {
+		t.Fatalf("Complete() error = %v, want a page beneath the allowed origin to be accepted", err)
+	}
+	if returnTo != "https://app.example.com/invitations/accept?token=abc" {
+		t.Fatalf("returnTo = %q", returnTo)
 	}
 }
 

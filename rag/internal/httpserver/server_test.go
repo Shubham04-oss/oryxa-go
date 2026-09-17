@@ -19,18 +19,24 @@ import (
 // fakeService records what the handler passed down and answers with whatever
 // a test set up.
 type fakeService struct {
-	corpus      domain.Corpus
-	corpora     []domain.Corpus
-	document    domain.Document
-	documents   []domain.Document
-	results     retrieval.Results
-	answered    application.Answered
-	err         error
-	createInput application.CreateCorpusInput
-	addInput    application.AddDocumentInput
-	listFilter  application.ListFilter
-	query       domain.Query
-	credentials authclient.Credentials
+	corpus        domain.Corpus
+	corpora       []domain.Corpus
+	document      domain.Document
+	documents     []domain.Document
+	nextCursor    string
+	results       retrieval.Results
+	answered      application.Answered
+	err           error
+	createInput   application.CreateCorpusInput
+	addInput      application.AddDocumentInput
+	listFilter    application.ListFilter
+	query         domain.Query
+	credentials   authclient.Credentials
+	documentsArgs struct {
+		status domain.IngestStatus
+		cursor string
+		limit  int
+	}
 }
 
 func (fake *fakeService) CreateCorpus(_ context.Context, credentials authclient.Credentials, _ string, input application.CreateCorpusInput) (domain.Corpus, error) {
@@ -56,8 +62,12 @@ func (fake *fakeService) AddDocument(_ context.Context, _ authclient.Credentials
 	return fake.document, fake.err
 }
 
-func (fake *fakeService) Documents(context.Context, authclient.Credentials, string, string, domain.IngestStatus, int) ([]domain.Document, error) {
-	return fake.documents, fake.err
+func (fake *fakeService) Documents(_ context.Context, _ authclient.Credentials, _, _ string, status domain.IngestStatus, cursor string, limit int) (application.DocumentPage, error) {
+	fake.documentsArgs.status, fake.documentsArgs.cursor, fake.documentsArgs.limit = status, cursor, limit
+	if fake.err != nil {
+		return application.DocumentPage{}, fake.err
+	}
+	return application.DocumentPage{Documents: fake.documents, NextCursor: fake.nextCursor}, nil
 }
 
 func (fake *fakeService) Document(context.Context, authclient.Credentials, string, string, string) (domain.Document, error) {
@@ -439,6 +449,53 @@ func TestListCorporaDefaultsToTheCallersOwnPlusTheOrganizations(t *testing.T) {
 	}
 	if fake.listFilter.Scope != domain.ScopeTeam || fake.listFilter.TeamID != "tm_1" {
 		t.Fatalf("filter = %+v", fake.listFilter)
+	}
+}
+
+func TestListDocumentsPassesTheCursorDownAndReportsTheNextOne(t *testing.T) {
+	t.Parallel()
+	fake := &fakeService{documents: []domain.Document{{ID: "doc_1"}}, nextCursor: "opaque-cursor"}
+	recorder := do(t, newServer(fake), http.MethodGet,
+		"/v1/organizations/org_1/corpora/cor_1/documents?cursor=prior-cursor&limit=5&status=ready", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
+	}
+	if fake.documentsArgs.cursor != "prior-cursor" || fake.documentsArgs.limit != 5 || fake.documentsArgs.status != domain.StatusReady {
+		t.Fatalf("arguments passed down = %+v", fake.documentsArgs)
+	}
+	var body struct {
+		Documents  []domain.Document `json:"documents"`
+		NextCursor string            `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Documents) != 1 || body.NextCursor != "opaque-cursor" {
+		t.Fatalf("body = %+v", body)
+	}
+}
+
+func TestListDocumentsOmitsNextCursorOnTheLastPage(t *testing.T) {
+	t.Parallel()
+	// A caller pages by looping while next_cursor is present; a page holding
+	// everything must not carry one, or that loop never ends.
+	recorder := do(t, newServer(&fakeService{documents: []domain.Document{{ID: "doc_1"}}}), http.MethodGet,
+		"/v1/organizations/org_1/corpora/cor_1/documents", "")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
+	}
+	if strings.Contains(recorder.Body.String(), "next_cursor") {
+		t.Fatalf("the last page carried a next_cursor: %s", recorder.Body)
+	}
+}
+
+func TestListDocumentsWithAMalformedCursorIsRefused(t *testing.T) {
+	t.Parallel()
+	fake := &fakeService{err: fmt.Errorf("cursor is not valid: %w", domain.ErrInvalid)}
+	recorder := do(t, newServer(fake), http.MethodGet,
+		"/v1/organizations/org_1/corpora/cor_1/documents?cursor=not-a-cursor", "")
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
 	}
 }
 

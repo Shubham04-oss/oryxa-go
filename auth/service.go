@@ -20,6 +20,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/authn"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/billingevents"
+	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	authevents "github.com/Shubham04-oss/oryxa-go/auth/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/oauthflow"
@@ -29,6 +30,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/serviceconfig"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -105,7 +107,13 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 	})
 	publisher := authevents.NewPublisher(eventBridge, platform.EventBusName, autheventsv1.Source)
-	dispatcher := authevents.NewDispatcher(store, publisher)
+	table, err := store.OutboxTable()
+	if err != nil {
+		return host.Service{}, err
+	}
+	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
+		return publisher.PublishEvent(ctx, domain.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+	}), logger)
 	workers := []host.Worker{dispatcher.Run}
 
 	if config.EventsQueueURL != "" {

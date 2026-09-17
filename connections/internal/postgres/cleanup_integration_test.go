@@ -142,15 +142,9 @@ func TestDeleteCredentialsRequiresTheClaimedLease(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	found := false
-	events, err := store.ClaimOutbox(ctx, 100, "claim-token")
-	if err != nil {
+	var found bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM connections_outbox WHERE id = $1)`, event.ID).Scan(&found); err != nil {
 		t.Fatal(err)
-	}
-	for _, claimedEvent := range events {
-		if claimedEvent.ID == event.ID {
-			found = true
-		}
 	}
 	if !found {
 		t.Fatalf("DeleteCredentials() did not record its event in the outbox")

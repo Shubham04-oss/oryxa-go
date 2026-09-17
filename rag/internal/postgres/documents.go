@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -219,30 +220,92 @@ func (store *Store) DocumentBody(ctx context.Context, documentID string) (string
 	return body, nil
 }
 
-// Documents lists a corpus's documents, newest first.
-func (store *Store) Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, limit int) ([]domain.Document, error) {
+// documentCursor is where a page of documents left off. It is opaque to
+// everything outside this file: a caller only ever passes back a NextCursor
+// this store handed it. The pair inside is what lets a keyset scan resume
+// after exactly the last row a page returned, in the same order the listing
+// promises — newest first, ties (there are none: id is unique) broken by id —
+// rather than by offset, which would skip or repeat rows when a document is
+// added between two pages.
+type documentCursor struct {
+	CreatedAt time.Time
+	ID        string
+}
+
+// encodeDocumentCursor renders where a page ended, opaque and URL-safe.
+func encodeDocumentCursor(createdAt time.Time, id string) string {
+	raw := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeDocumentCursor reverses encodeDocumentCursor. A cursor that was not
+// just handed back unmodified — edited, truncated, or carried over from a
+// different listing — is refused rather than guessed at.
+func decodeDocumentCursor(cursor string) (documentCursor, error) {
+	invalid := fmt.Errorf("cursor is not valid: %w", domain.ErrInvalid)
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return documentCursor{}, invalid
+	}
+	createdAtField, id, ok := strings.Cut(string(raw), "|")
+	if !ok || id == "" {
+		return documentCursor{}, invalid
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, createdAtField)
+	if err != nil {
+		return documentCursor{}, invalid
+	}
+	return documentCursor{CreatedAt: createdAt, ID: id}, nil
+}
+
+// Documents lists a corpus's documents, newest first. With no cursor it
+// returns the first page. Passing back the cursor a page returned continues
+// the listing from exactly where that page ended; the returned cursor is
+// empty once there is nothing more to read, which is what tells a caller to
+// stop asking.
+func (store *Store) Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) ([]domain.Document, string, error) {
 	statement := `SELECT ` + documentColumns + ` FROM rag_documents WHERE organization_id = $1 AND corpus_id = $2`
 	arguments := []any{organizationID, corpusID}
 	if status != "" {
 		arguments = append(arguments, string(status))
 		statement += fmt.Sprintf(` AND status = $%d`, len(arguments))
 	}
-	arguments = append(arguments, limit)
+	if cursor != "" {
+		after, err := decodeDocumentCursor(cursor)
+		if err != nil {
+			return nil, "", err
+		}
+		arguments = append(arguments, after.CreatedAt, after.ID)
+		createdAtIndex, idIndex := len(arguments)-1, len(arguments)
+		// Matches ORDER BY created_at DESC, id below: strictly older, or the
+		// same instant and a greater id, is exactly what comes after the
+		// cursor's row in that order.
+		statement += fmt.Sprintf(` AND (created_at < $%d OR (created_at = $%d AND id > $%d))`, createdAtIndex, createdAtIndex, idIndex)
+	}
+	// One row more than the page asks for is the cheap way to know whether
+	// another page follows, without a second round trip to count it.
+	arguments = append(arguments, limit+1)
 	statement += fmt.Sprintf(` ORDER BY created_at DESC, id LIMIT $%d`, len(arguments))
 
 	var rows []documentRow
 	if err := store.db.SelectContext(ctx, &rows, statement, arguments...); err != nil {
-		return nil, fmt.Errorf("list documents: %w", err)
+		return nil, "", fmt.Errorf("list documents: %w", err)
+	}
+	var nextCursor string
+	if len(rows) > limit {
+		rows = rows[:limit]
+		last := rows[len(rows)-1]
+		nextCursor = encodeDocumentCursor(last.CreatedAt, last.ID)
 	}
 	documents := make([]domain.Document, 0, len(rows))
 	for _, row := range rows {
 		document, err := row.document()
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		documents = append(documents, document)
 	}
-	return documents, nil
+	return documents, nextCursor, nil
 }
 
 // DeleteDocument removes a document and, by cascade, its chunks and any

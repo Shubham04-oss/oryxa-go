@@ -7,7 +7,14 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 )
+
+// defaultFullSweepInterval is how often a source already indexed is read
+// from the beginning again when KNOWLEDGE_FULL_SWEEP_INTERVAL is unset, so a
+// document removed at the provider is eventually noticed even long after a
+// source's first pass.
+const defaultFullSweepInterval = 7 * 24 * time.Hour
 
 // Config is what knowledge reads for itself. The listener, the database, the
 // AWS region and the event bus are the host's.
@@ -29,12 +36,19 @@ type Config struct {
 	// to connections with.
 	ServiceName  string
 	ServiceKeyID string
+	// FullSweepInterval is how long a full sweep's word about what a source
+	// holds is trusted before a pass starts over from the beginning.
+	FullSweepInterval time.Duration
 }
 
 // FromEnv reads knowledge's configuration through getenv, which a host layers
 // its own defaults under.
 func FromEnv(getenv func(string) string) (Config, error) {
 	genericEndpoint := endpoint(getenv, "AWS_ENDPOINT_URL")
+	fullSweepInterval, err := duration(getenv, "KNOWLEDGE_FULL_SWEEP_INTERVAL", defaultFullSweepInterval)
+	if err != nil {
+		return Config{}, err
+	}
 	config := Config{
 		AuthURL:        endpoint(getenv, "AUTH_URL"),
 		ConnectionsURL: endpoint(getenv, "CONNECTIONS_URL"),
@@ -46,6 +60,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		EventsQueueURL:      strings.TrimSpace(getenv("KNOWLEDGE_EVENTS_QUEUE_URL")),
 		ServiceName:         valueOr(getenv, "KNOWLEDGE_SERVICE_NAME", "knowledge"),
 		ServiceKeyID:        strings.TrimSpace(getenv("KNOWLEDGE_SERVICE_KEY_ID")),
+		FullSweepInterval:   fullSweepInterval,
 	}
 	if config.AuthURL == "" || config.ConnectionsURL == "" || config.ServiceKeyID == "" {
 		return Config{}, errors.New("AUTH_URL, CONNECTIONS_URL and KNOWLEDGE_SERVICE_KEY_ID are required")
@@ -74,6 +89,25 @@ func valueOr(getenv func(string) string, name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// duration reads a Go duration, defaulting an unset value. What is set must
+// be positive: zero or negative says nothing about how often, and a sweep
+// interval that is never due, or always due, is a config mistake worth
+// refusing rather than running with.
+func duration(getenv func(string) string, name string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a valid duration: %w", name, err)
+	}
+	if parsed <= 0 {
+		return 0, fmt.Errorf("%s must be positive", name)
+	}
+	return parsed, nil
 }
 
 func endpoint(getenv func(string) string, name string) string {

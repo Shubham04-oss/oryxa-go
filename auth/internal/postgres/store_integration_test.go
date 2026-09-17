@@ -103,8 +103,17 @@ func TestStoreLifecycle(t *testing.T) {
 	if err := store.CompleteActionToken(ctx, domain.ActionEmailVerification, verification.TokenHash, now.Add(time.Second), testEvent(eventPrefix+"-email-verified", "auth.user.email-verified.v1", now)); err != nil {
 		t.Fatalf("CompleteActionToken(verification) error = %v", err)
 	}
-	if err := store.MarkOutboxPublished(ctx, eventPrefix+"-verification-requested"); err != nil {
-		t.Fatalf("MarkOutboxPublished(verification) error = %v", err)
+	// Publishing through the table auth dispatches from must blank a
+	// delivery event's link.
+	table, err := store.OutboxTable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := table.Claim(ctx, 1000, time.Minute, "it-claim-"+suffix); err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if marked, err := table.MarkPublished(ctx, eventPrefix+"-verification-requested", "it-claim-"+suffix); err != nil || !marked {
+		t.Fatalf("MarkPublished(verification) = %v, %v", marked, err)
 	}
 	var scrubbedDetail string
 	if err := store.pool.QueryRow(ctx, `SELECT detail::text FROM auth_outbox WHERE id = $1`, eventPrefix+"-verification-requested").Scan(&scrubbedDetail); err != nil || scrubbedDetail != "{}" {

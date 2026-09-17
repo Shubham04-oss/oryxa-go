@@ -159,6 +159,10 @@ type Source struct {
 	// finished.
 	SyncAt       *time.Time `json:"sync_at,omitempty"`
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
+	// FullSweepAt is when a pass last read this source from the beginning and
+	// retracted what it did not see. Nil means never: the source is due for
+	// one now, the same as if it had just been registered.
+	FullSweepAt *time.Time `json:"full_sweep_at,omitempty"`
 	// Attempts counts consecutive failures, and backs the next try off.
 	Attempts int `json:"-"`
 	// LeaseToken and LeaseUntil are how one replica claims a run. A run that
@@ -223,7 +227,14 @@ type Cursor struct {
 	// Watermark is the newest change knowledge has seen, for a provider that
 	// filters by time rather than paging.
 	Watermark *time.Time
-	UpdatedAt time.Time
+	// WalkStartedAt is when the walk this cursor is mid-way through began:
+	// the first of what can be several runs, when a source outgrows one
+	// run's page budget. Set when a walk starts from the beginning, carried
+	// unchanged while it resumes, and cleared once it drains. A full pass
+	// retracts what it did not see against this, not against whichever run
+	// happens to finish it.
+	WalkStartedAt *time.Time
+	UpdatedAt     time.Time
 }
 
 // RunStatus is where an extraction run ended up.
@@ -259,16 +270,19 @@ type Event struct {
 	Data       json.RawMessage
 }
 
-type OutboxEvent struct {
-	Event
-	Attempts int
-}
-
 const (
 	// MinInterval and MaxInterval bound how often a source may be swept.
 	MinInterval     = 5 * time.Minute
 	MaxInterval     = 7 * 24 * time.Hour
 	DefaultInterval = time.Hour
+
+	// DefaultFullSweepInterval is how often a source already indexed is read
+	// from the beginning again when nothing configures otherwise, so a
+	// document removed at the provider is eventually noticed even long after
+	// a source's first pass. serviceconfig applies the same default to
+	// KNOWLEDGE_FULL_SWEEP_INTERVAL; this is the fallback for a caller that
+	// builds the application directly, such as a test.
+	DefaultFullSweepInterval = 7 * 24 * time.Hour
 
 	// MaxTargetFields and maxTargetValue bound what a target may say.
 	MaxTargetFields = 8

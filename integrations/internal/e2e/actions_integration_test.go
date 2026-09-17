@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -205,6 +206,93 @@ func TestSlackActionEndToEnd(t *testing.T) {
 	}
 	failed := eventsOf[integrationsv1.ActionFailed](s, integrationsv1.ActionFailedDetailType)
 	if len(failed) != 1 || failed[0].Error != integrationsv1.ActionErrorNotFound {
+		t.Fatalf("action.failed = %+v", failed)
+	}
+}
+
+// fakeHubSpotAPI answers the CRM object calls HubSpot actions make.
+type fakeHubSpotAPI struct {
+	t       *testing.T
+	server  *httptest.Server
+	mu      sync.Mutex
+	nextID  int
+	created []map[string]string
+}
+
+func newFakeHubSpotAPI(t *testing.T) *fakeHubSpotAPI {
+	t.Helper()
+	hubspot := &fakeHubSpotAPI{t: t, nextID: 9000}
+	hubspot.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer "+providerToken {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if !strings.HasSuffix(request.URL.Path, "/contacts") || request.Method != http.MethodPost {
+			writer.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(writer).Encode(map[string]any{"status": "error", "message": "not found"})
+			return
+		}
+		var body struct {
+			Properties map[string]string `json:"properties"`
+		}
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		hubspot.mu.Lock()
+		hubspot.nextID++
+		id := hubspot.nextID
+		hubspot.created = append(hubspot.created, body.Properties)
+		hubspot.mu.Unlock()
+		_ = json.NewEncoder(writer).Encode(map[string]any{"id": strconv.Itoa(id), "properties": body.Properties})
+	}))
+	t.Cleanup(hubspot.server.Close)
+	return hubspot
+}
+
+func (hubspot *fakeHubSpotAPI) contactsCreated() []map[string]string {
+	hubspot.mu.Lock()
+	defer hubspot.mu.Unlock()
+	return append([]map[string]string(nil), hubspot.created...)
+}
+
+func TestHubSpotActionEndToEnd(t *testing.T) {
+	hubspot := newFakeHubSpotAPI(t)
+	s := newStack(t, hubspot.server)
+	s.connections.add(domain.Connection{
+		ID: "conn_hubspot", AppID: "app_hubspot", Provider: "hubspot", CredentialType: "oauth2", Scope: "member", MemberID: "user-1",
+		ProviderAccount: domain.ProviderAccount{ID: "12345678", Name: "Acme"}, Status: "active",
+	})
+
+	// The member creates a contact with their connection.
+	status, action, body := s.runAction("create_contact", "conn_hubspot", "chat-turn-hubspot-1", map[string]any{
+		"email": "person@example.com", "firstname": "Ada",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("POST actions = %d %s", status, body)
+	}
+	if action.Status != domain.ActionCompleted || action.Provider != "hubspot" || action.Name != "create_contact" || action.RequestedBy != "user-1" {
+		t.Fatalf("action = %+v", action)
+	}
+	if action.Resource == nil || action.Resource.Type != "record" || action.Resource.ID == "" {
+		t.Fatalf("action resource = %+v", action.Resource)
+	}
+	if created := hubspot.contactsCreated(); len(created) != 1 || created[0]["email"] != "person@example.com" || created[0]["firstname"] != "Ada" {
+		t.Fatalf("HubSpot was asked to create %+v", created)
+	}
+	if calls := s.connections.issued(); len(calls) != 1 || calls[0].purpose != "action" || calls[0].member != "user-1" {
+		t.Fatalf("credentials issued = %+v, want one action credential for the member", calls)
+	}
+	if published := completed(s); len(published) != 1 || published[0].Action != "hubspot.create_contact" {
+		t.Fatalf("action.completed = %+v", published)
+	}
+	s.noSecrets(providerToken)
+
+	// A contact HubSpot does not have is recorded and published as failed.
+	status, _, body = s.runAction("get_contact", "conn_hubspot", "chat-turn-hubspot-2", map[string]any{"contact_id": "999999"})
+	if status != http.StatusNotFound {
+		t.Fatalf("reading a contact HubSpot does not have = %d %s, want 404", status, body)
+	}
+	failed := eventsOf[integrationsv1.ActionFailed](s, integrationsv1.ActionFailedDetailType)
+	if len(failed) != 1 || failed[0].Error != integrationsv1.ActionErrorNotFound || failed[0].Retryable {
 		t.Fatalf("action.failed = %+v", failed)
 	}
 }

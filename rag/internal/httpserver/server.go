@@ -35,7 +35,7 @@ type ragService interface {
 	DeleteCorpus(context.Context, authclient.Credentials, string, string) error
 
 	AddDocument(context.Context, authclient.Credentials, string, string, application.AddDocumentInput) (domain.Document, error)
-	Documents(context.Context, authclient.Credentials, string, string, domain.IngestStatus, int) ([]domain.Document, error)
+	Documents(context.Context, authclient.Credentials, string, string, domain.IngestStatus, string, int) (application.DocumentPage, error)
 	Document(context.Context, authclient.Credentials, string, string, string) (domain.Document, error)
 	DeleteDocument(context.Context, authclient.Credentials, string, string, string) error
 
@@ -298,17 +298,17 @@ func (server *Server) listDocuments(writer http.ResponseWriter, request *http.Re
 		}
 		limit = parsed
 	}
-	documents, err := server.service.Documents(request.Context(), credentials,
+	page, err := server.service.Documents(request.Context(), credentials,
 		request.PathValue("organizationID"), request.PathValue("corpusID"),
-		domain.IngestStatus(strings.TrimSpace(query.Get("status"))), limit)
+		domain.IngestStatus(strings.TrimSpace(query.Get("status"))), strings.TrimSpace(query.Get("cursor")), limit)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
 	}
-	if documents == nil {
-		documents = []domain.Document{}
+	if page.Documents == nil {
+		page.Documents = []domain.Document{}
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"documents": documents})
+	writeJSON(writer, http.StatusOK, page)
 }
 
 func (server *Server) getDocument(writer http.ResponseWriter, request *http.Request) {

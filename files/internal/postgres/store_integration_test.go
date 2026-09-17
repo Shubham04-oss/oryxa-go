@@ -89,12 +89,9 @@ func TestStoreLifecycle(t *testing.T) {
 	if _, err := store.Object(ctx, organizationID, fileID, now.Add(48*time.Hour)); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expired Object() error = %v, want not found", err)
 	}
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(claimed) < 1 {
-		t.Fatalf("ClaimOutbox() = %d, err = %v", len(claimed), err)
-	}
-	if err := store.MarkOutboxPublished(ctx, eventPrefix+"-created"); err != nil {
-		t.Fatalf("MarkOutboxPublished() error = %v", err)
+	var recorded bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM files_outbox WHERE id = $1)`, eventPrefix+"-created").Scan(&recorded); err != nil || !recorded {
+		t.Fatalf("outbox event %s not recorded, found = %v, err = %v", eventPrefix+"-created", recorded, err)
 	}
 	if err := store.DeleteObject(ctx, organizationID, fileID, testEvent(eventPrefix+"-deleted", "files.object.deleted.v1", now)); err != nil {
 		t.Fatalf("DeleteObject() error = %v", err)

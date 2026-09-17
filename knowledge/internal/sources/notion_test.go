@@ -118,6 +118,66 @@ func TestFetchResolvesADatabaseToItsDataSourceBeforeQuerying(t *testing.T) {
 	}
 }
 
+func TestFetchReadsEveryDataSourceOfADatabase(t *testing.T) {
+	// A database split since the 2025-09-03 API version can hold several data
+	// sources, and rows live under all of them. Reading only the first left
+	// the rest silently unindexed.
+	provider := &fakeProvider{answers: []*http.Response{
+		notionJSON(http.StatusOK, `{"object": "database", "id": "db-1", "data_sources": [{"id": "ds-1", "name": "Tasks"}, {"id": "ds-2", "name": "Archive"}]}`),
+		notionJSON(http.StatusOK, `{
+			"results": [
+				{"object": "page", "id": "task-1", "url": "https://notion.so/task-1",
+				 "last_edited_time": "2026-01-01T00:00:00.000Z",
+				 "properties": {"Name": {"type": "title", "title": [{"plain_text": "Task one"}]}}}
+			],
+			"has_more": false,
+			"next_cursor": null
+		}`),
+		notionJSON(http.StatusOK, `{"object": "database", "id": "db-1", "data_sources": [{"id": "ds-1", "name": "Tasks"}, {"id": "ds-2", "name": "Archive"}]}`),
+		notionJSON(http.StatusOK, `{
+			"results": [
+				{"object": "page", "id": "task-2", "url": "https://notion.so/task-2",
+				 "last_edited_time": "2026-01-02T00:00:00.000Z",
+				 "properties": {"Name": {"type": "title", "title": [{"plain_text": "Task two"}]}}}
+			],
+			"has_more": false,
+			"next_cursor": null
+		}`),
+	}}
+	client, _ := testClient(t, provider)
+	source := NewNotion(client)
+	request := Request{Source: domain.Source{Target: map[string]string{"database": "db-1"}}}
+
+	first, err := source.Fetch(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(first.Items) != 1 || first.Items[0].ExternalID != "task-1" {
+		t.Fatalf("Fetch() items = %+v, want one item from the first data source", first.Items)
+	}
+	if first.Cursor == "" {
+		t.Fatal("Fetch() cursor = \"\", want more to read: the second data source has not been queried yet")
+	}
+	if got := provider.calls[1].URL.String(); !strings.Contains(got, "/v1/data_sources/ds-1/query") {
+		t.Fatalf("second call URL = %s, want the first data source's query endpoint", got)
+	}
+
+	request.Cursor = domain.Cursor{Value: first.Cursor}
+	second, err := source.Fetch(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ExternalID != "task-2" {
+		t.Fatalf("Fetch() items = %+v, want one item from the second data source", second.Items)
+	}
+	if second.Cursor != "" {
+		t.Fatalf("Fetch() cursor = %q, want empty: both data sources are drained", second.Cursor)
+	}
+	if got := provider.calls[3].URL.String(); !strings.Contains(got, "/v1/data_sources/ds-2/query") {
+		t.Fatalf("fourth call URL = %s, want the second data source's query endpoint", got)
+	}
+}
+
 func TestFetchReturnsNotFoundWhenTheDatabaseIsGone(t *testing.T) {
 	provider := &fakeProvider{answers: []*http.Response{
 		answer(http.StatusNotFound, `{"object":"error","status":404,"code":"object_not_found","message":"nope"}`, nil),

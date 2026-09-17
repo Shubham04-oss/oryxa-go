@@ -140,12 +140,9 @@ func TestCreateSourceStoresTheSourceAndItsEvent(t *testing.T) {
 		t.Fatalf("Source() interval = %s, want %s", read.Interval, 90*time.Minute)
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-	if len(claimed) != 1 || claimed[0].ID != event.ID {
-		t.Fatalf("ClaimOutbox() = %+v, want the source's event", claimed)
+	var recorded bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM knowledge_outbox WHERE id = $1)`, event.ID).Scan(&recorded); err != nil || !recorded {
+		t.Fatalf("the source's event was not in the outbox: found = %v, err = %v", recorded, err)
 	}
 }
 
@@ -219,12 +216,9 @@ func TestUpsertDocumentPublishesOnlyWhatChanged(t *testing.T) {
 		t.Fatalf("UpsertDocument(changed) = %v, %v, want published", published, err)
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-	if len(claimed) != 2 {
-		t.Fatalf("ClaimOutbox() = %d events, want 2", len(claimed))
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM knowledge_outbox`).Scan(&outboxCount); err != nil || outboxCount != 2 {
+		t.Fatalf("outbox events = %d, error = %v, want 2", outboxCount, err)
 	}
 }
 
@@ -386,22 +380,19 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 	}
 
 	event := testEvent(t, "knowledge.sync.completed.v1")
-	claimed, err := store.FinishSource(ctx, source.ID, "lease-b", due, due.Add(time.Hour), &event)
+	claimed, err := store.FinishSource(ctx, source.ID, "lease-b", due, due.Add(time.Hour), nil, &event)
 	if err != nil {
 		t.Fatalf("FinishSource() error = %v", err)
 	}
 	if claimed {
 		t.Fatal("FinishSource(lost lease) = true, want false")
 	}
-	outbox, err := store.ClaimOutbox(ctx, 10)
-	if err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-	if len(outbox) != 0 {
-		t.Fatalf("ClaimOutbox() = %d events, want none from a run that lost its lease", len(outbox))
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM knowledge_outbox`).Scan(&outboxCount); err != nil || outboxCount != 0 {
+		t.Fatalf("outbox events = %d, error = %v, want none from a run that lost its lease", outboxCount, err)
 	}
 
-	claimed, err = store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), &event)
+	claimed, err = store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), nil, &event)
 	if err != nil || !claimed {
 		t.Fatalf("FinishSource(own lease) = %v, %v, want claimed", claimed, err)
 	}
@@ -411,6 +402,49 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 	}
 	if read.LeaseToken != "" || read.Attempts != 0 {
 		t.Fatalf("Source() after finishing = lease %q, attempts %d", read.LeaseToken, read.Attempts)
+	}
+	if read.FullSweepAt != nil {
+		t.Fatalf("Source() full_sweep_at = %v, want nil: this pass did not sweep in full", read.FullSweepAt)
+	}
+}
+
+func TestFinishSourceRecordsAFullSweepAndKeepsItOnALaterIncrementalPass(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+
+	due := testClock.Add(time.Minute)
+	if _, err := store.ClaimDueSources(ctx, due, 10, "lease-a", due.Add(time.Minute)); err != nil {
+		t.Fatalf("ClaimDueSources() error = %v", err)
+	}
+	swept := due
+	if _, err := store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), &swept, nil); err != nil {
+		t.Fatalf("FinishSource() error = %v", err)
+	}
+	read, err := store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if read.FullSweepAt == nil || !read.FullSweepAt.Equal(swept) {
+		t.Fatalf("Source() full_sweep_at = %v, want %v: a full pass just drained", read.FullSweepAt, swept)
+	}
+
+	// A later, ordinary incremental pass must not erase what the full sweep
+	// recorded: nil leaves the column alone rather than clearing it back to
+	// never-swept.
+	later := due.Add(time.Hour)
+	if _, err := store.ClaimDueSources(ctx, later, 10, "lease-b", later.Add(time.Minute)); err != nil {
+		t.Fatalf("ClaimDueSources() error = %v", err)
+	}
+	if _, err := store.FinishSource(ctx, source.ID, "lease-b", later, later.Add(time.Hour), nil, nil); err != nil {
+		t.Fatalf("FinishSource() error = %v", err)
+	}
+	read, err = store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if read.FullSweepAt == nil || !read.FullSweepAt.Equal(swept) {
+		t.Fatalf("Source() full_sweep_at after an incremental pass = %v, want it unchanged at %v", read.FullSweepAt, swept)
 	}
 }
 
@@ -536,43 +570,6 @@ func TestEventHandledIsTrueOnlyAfterMarkEventHandled(t *testing.T) {
 	}
 }
 
-func TestOutboxRetriesWhatCouldNotBePublished(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-	source := testSource(t, store, "org_1")
-	event := testEvent(t, "knowledge.document.published.v1")
-	document := testDocument(source, "issue-1", strings.Repeat("a", 64))
-	if _, err := store.UpsertDocument(ctx, document, func(domain.Document) (domain.Event, error) { return event, nil }); err != nil {
-		t.Fatalf("UpsertDocument() error = %v", err)
-	}
-
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(claimed) != 1 {
-		t.Fatalf("ClaimOutbox() = %d events, %v, want 1", len(claimed), err)
-	}
-	// A claimed event is not handed to a second dispatcher.
-	locked, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(locked) != 0 {
-		t.Fatalf("ClaimOutbox(while locked) = %d events, %v, want none", len(locked), err)
-	}
-
-	if err := store.MarkOutboxFailed(ctx, event.ID, 0, "the bus said no"); err != nil {
-		t.Fatalf("MarkOutboxFailed() error = %v", err)
-	}
-	retried, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(retried) != 1 || retried[0].Attempts != 1 {
-		t.Fatalf("ClaimOutbox(after failing) = %+v, %v", retried, err)
-	}
-
-	if err := store.MarkOutboxPublished(ctx, event.ID); err != nil {
-		t.Fatalf("MarkOutboxPublished() error = %v", err)
-	}
-	done, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(done) != 0 {
-		t.Fatalf("ClaimOutbox(after publishing) = %d events, %v, want none", len(done), err)
-	}
-}
-
 func TestCursorRemembersWhereARunStopped(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -582,13 +579,14 @@ func TestCursorRemembersWhereARunStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cursor() error = %v", err)
 	}
-	if empty.Value != "" || empty.Watermark != nil {
+	if empty.Value != "" || empty.Watermark != nil || empty.WalkStartedAt != nil {
 		t.Fatalf("Cursor(never run) = %+v, want an empty cursor", empty)
 	}
 
 	watermark := testClock.Add(-time.Hour)
+	walkStarted := testClock.Add(-30 * time.Minute)
 	if err := store.SaveCursor(ctx, domain.Cursor{
-		SourceID: source.ID, Value: "page-2", Watermark: &watermark, UpdatedAt: testClock,
+		SourceID: source.ID, Value: "page-2", Watermark: &watermark, WalkStartedAt: &walkStarted, UpdatedAt: testClock,
 	}); err != nil {
 		t.Fatalf("SaveCursor() error = %v", err)
 	}
@@ -598,6 +596,25 @@ func TestCursorRemembersWhereARunStopped(t *testing.T) {
 	}
 	if read.Value != "page-2" || read.Watermark == nil || !read.Watermark.Equal(watermark) {
 		t.Fatalf("Cursor() = %+v", read)
+	}
+	if read.WalkStartedAt == nil || !read.WalkStartedAt.Equal(walkStarted) {
+		t.Fatalf("Cursor() walk_started_at = %v, want %v: a walk spanning several runs must resume knowing when it began", read.WalkStartedAt, walkStarted)
+	}
+
+	// A save with no walk in progress writes exactly what it is given, the
+	// same as any other cursor field: once a walk drains, the application
+	// layer stops carrying its start forward and this must actually clear.
+	if err := store.SaveCursor(ctx, domain.Cursor{
+		SourceID: source.ID, Value: "", Watermark: &watermark, UpdatedAt: testClock,
+	}); err != nil {
+		t.Fatalf("SaveCursor() error = %v", err)
+	}
+	drained, err := store.Cursor(ctx, source.ID)
+	if err != nil {
+		t.Fatalf("Cursor() error = %v", err)
+	}
+	if drained.WalkStartedAt != nil {
+		t.Fatalf("Cursor() walk_started_at = %v, want nil once the walk that started it is over", drained.WalkStartedAt)
 	}
 
 	if err := store.ClearCursor(ctx, source.ID); err != nil {

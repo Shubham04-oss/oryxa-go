@@ -176,6 +176,10 @@ func TestFetchParsesTsIntoUpdatedAt(t *testing.T) {
 }
 
 func TestFetchPassesOldestWhenResumingIncrementally(t *testing.T) {
+	// A second before the watermark, not the watermark itself: Slack's
+	// default treats oldest as exclusive, so asking for the watermark would
+	// rely on that never changing. Asking a second early instead means the
+	// idempotent upsert absorbs the overlap whichever way Slack treats it.
 	provider := &fakeProvider{answers: []*http.Response{
 		answer(http.StatusOK, `{"ok":true,"messages":[],"response_metadata":{"next_cursor":""}}`, nil),
 	}}
@@ -190,8 +194,8 @@ func TestFetchPassesOldestWhenResumingIncrementally(t *testing.T) {
 	if _, err := source.Fetch(context.Background(), request); err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
-	if got, want := provider.calls[0].URL.Query().Get("oldest"), "1788220800.000000"; got != want {
-		t.Fatalf("oldest param = %q, want %q", got, want)
+	if got, want := provider.calls[0].URL.Query().Get("oldest"), "1788220799.000000"; got != want {
+		t.Fatalf("oldest param = %q, want %q (one second before the watermark)", got, want)
 	}
 }
 

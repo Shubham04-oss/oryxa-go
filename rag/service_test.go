@@ -15,12 +15,14 @@ import (
 )
 
 func platform(values map[string]string) host.Platform {
+	// Mount never queries the pool itself beyond building the outbox table,
+	// which only checks it is non-nil: it otherwise reads the extensions
+	// snapshot the host already took, which Detached can report without a
+	// connection.
+	database := postgreskit.Detached(map[string]string{"vector": "0.8.6"})
 	return host.Platform{
-		Logger: slog.New(slog.DiscardHandler),
-		// Mount never queries the pool itself: it only reads the extensions
-		// snapshot the host already took, which Detached can report without a
-		// connection.
-		Database:     postgreskit.Detached(map[string]string{"vector": "0.8.6"}),
+		Logger:       slog.New(slog.DiscardHandler),
+		Database:     database,
 		AWS:          aws.Config{Region: "ap-south-1"},
 		EventBusName: "default",
 		Getenv:       func(name string) string { return values[name] },

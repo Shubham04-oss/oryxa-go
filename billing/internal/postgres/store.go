@@ -6,8 +6,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
-	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -20,6 +18,10 @@ import (
 
 //go:embed migrations/*.sql
 var migrations embed.FS
+
+// Replicas that start together must not install the schema at the same time;
+// IF NOT EXISTS alone does not serialize catalog changes.
+const migrationsAdvisoryLock int64 = 7263510402
 
 // Store is billing's PostgreSQL access through the shared postgreskit
 // boundary: one instrumented pgx pool, with sqlx on that same pool.
@@ -56,24 +58,15 @@ func (store *Store) Close() {
 
 func (store *Store) ExtensionVersions() map[string]string { return store.database.ExtensionVersions() }
 
-// Migrate applies every migration in name order. Each is written to be safe to
-// run again.
+// Pool is billing's pool, for internal/outbox's table to claim, mark and
+// sweep billing_outbox directly rather than through a copy of that logic
+// here.
+func (store *Store) Pool() *pgxpool.Pool { return store.pool }
+
+// Migrate applies each migration in name order, once while it stays unchanged,
+// recording what it applied; see postgreskit's Migrate.
 func (store *Store) Migrate(ctx context.Context) error {
-	names, err := fs.Glob(migrations, "migrations/*.sql")
-	if err != nil {
-		return fmt.Errorf("list billing migrations: %w", err)
-	}
-	slices.Sort(names)
-	for _, name := range names {
-		contents, err := migrations.ReadFile(name)
-		if err != nil {
-			return fmt.Errorf("read billing migration %s: %w", name, err)
-		}
-		if _, err := store.db.ExecContext(ctx, string(contents)); err != nil {
-			return fmt.Errorf("apply billing migration %s: %w", name, err)
-		}
-	}
-	return nil
+	return store.database.Migrate(ctx, "billing", migrations, "migrations/*.sql", migrationsAdvisoryLock)
 }
 
 type execer interface {

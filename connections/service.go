@@ -15,6 +15,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/connections/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/connections/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/connections/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/connections/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/connections/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/connections/internal/postgres"
@@ -23,6 +24,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/connections/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/connections/internal/teamsclient"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -91,7 +93,14 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Logger:         logger,
 	}, application.Config{PublicBaseURL: config.PublicBaseURL, AllowedOrigins: config.AllowedOrigins})
 
-	dispatcher := events.NewDispatcher(store, events.NewPublisher(eventClient, platform.EventBusName), logger)
+	publisher := events.NewPublisher(eventClient, platform.EventBusName)
+	table, err := outbox.NewTable(store.Pool(), "connections_outbox")
+	if err != nil {
+		return host.Service{}, err
+	}
+	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
+		return publisher.PublishEvent(ctx, domain.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+	}), logger)
 	// Both workers claim with SKIP LOCKED, so every replica may run them.
 	workers := []host.Worker{dispatcher.Run, service.RunHeartbeat, service.RunCleanup}
 	if config.EventsQueueURL != "" {

@@ -187,13 +187,18 @@ func (store *fakeStore) RenewLease(_ context.Context, sourceID, leaseToken strin
 	return store.lease[sourceID] == leaseToken, nil
 }
 
-func (store *fakeStore) FinishSource(_ context.Context, sourceID, leaseToken string, _ time.Time, nextSync time.Time, event *domain.Event) (bool, error) {
+func (store *fakeStore) FinishSource(_ context.Context, sourceID, leaseToken string, _ time.Time, nextSync time.Time, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.lease[sourceID] != leaseToken {
 		return false, nil
 	}
 	store.finishedNext = nextSync
+	if fullSweptAt != nil {
+		source := store.sources[sourceID]
+		source.FullSweepAt = fullSweptAt
+		store.sources[sourceID] = source
+	}
 	if event != nil {
 		store.events = append(store.events, *event)
 	}
@@ -371,13 +376,16 @@ func (store *fakeStore) published(detailType string) int {
 	return count
 }
 
-// fakeDirectory answers what auth would about the caller.
+// fakeDirectory answers what auth would about the caller, and counts how
+// often it was asked.
 type fakeDirectory struct {
 	membership domain.OrgMembership
 	err        error
+	calls      int
 }
 
 func (directory *fakeDirectory) Membership(context.Context, string, authclient.Credentials) (domain.OrgMembership, error) {
+	directory.calls++
 	if directory.err != nil {
 		return domain.OrgMembership{}, directory.err
 	}
