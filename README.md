@@ -108,9 +108,10 @@ been extracted for retrieval and when: the sources a member asks to have
 indexed, the scheduled passes that read them a page at a time, and the
 `oryxa.knowledge` events a retrieval pipeline holds. A document is published
 only when its content hash changes, and it carries the scope of who may read
-it. No source can run yet: its provider sources were archived with
-connections, and its files source waits on an agent grant to read as the
-member. Its contract lives in `knowledge/README.md`. `/rag` owns
+it. GitHub, Notion and Slack read through a member's Composio connection, so
+knowledge holds no credential of its own; its files source waits on an agent
+grant to read as the member, so an organization's own documents are the one
+thing it cannot index yet. Its contract lives in `knowledge/README.md`. `/rag` owns
 retrieval: corpora and the documents in them, the chunks they become, the vectors behind
 those, and the grounded answers they support. A corpus pins its embedding
 provider, model, width and metric at creation and never changes them, because

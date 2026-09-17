@@ -91,18 +91,18 @@ func ParseScope(raw string) (Scope, error) {
 
 type Purpose string
 
+// The allowlist is closed, so a lifecycle or a later pipeline cannot invent a
+// storage class. The integrations.* purposes were retired with that service on
+// 2026-09-17; see migration 004.
 const (
-	PurposeUpload                 Purpose = "upload"
-	PurposeIntegrationsPiece      Purpose = "integrations.piece"
-	PurposeIntegrationsWebhook    Purpose = "integrations.webhook-payload"
-	PurposeIntegrationsAttachment Purpose = "integrations.attachment"
-	PurposePipelineArtifact       Purpose = "pipeline.artifact"
-	PurposeBillingAttachment      Purpose = "billing.attachment"
+	PurposeUpload            Purpose = "upload"
+	PurposePipelineArtifact  Purpose = "pipeline.artifact"
+	PurposeBillingAttachment Purpose = "billing.attachment"
 )
 
 func (purpose Purpose) Valid() bool {
 	switch purpose {
-	case PurposeUpload, PurposeIntegrationsPiece, PurposeIntegrationsWebhook, PurposeIntegrationsAttachment, PurposePipelineArtifact, PurposeBillingAttachment:
+	case PurposeUpload, PurposePipelineArtifact, PurposeBillingAttachment:
 		return true
 	default:
 		return false
@@ -113,7 +113,7 @@ func (purpose Purpose) DefaultRetentionDays() int {
 	switch purpose {
 	case PurposeBillingAttachment:
 		return MaxRetentionDays
-	case PurposeIntegrationsPiece, PurposeIntegrationsWebhook, PurposeIntegrationsAttachment, PurposePipelineArtifact:
+	case PurposePipelineArtifact:
 		return 7
 	default:
 		return DefaultRetentionDays

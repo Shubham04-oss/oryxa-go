@@ -157,14 +157,14 @@ function filesJourney(teams) {
   must(f('GET', `/files?team_id=${teams.design.id}`, 'member', null), { 'member cannot list Design files': (r) => r.status === 404 });
 
   const attachment = json(must(f('POST', '/files', 'member', {
-    filename: `slack-${runID}.txt`,
+    filename: `artifact-${runID}.txt`,
     content_type: 'text/plain',
     scope: 'team',
     team_id: teams.engineering.id,
-    purpose: 'integrations.attachment',
-    content: encoding.b64encode('slack note'),
-  }), { 'member stores an integrations attachment on Engineering': (r) => r.status === 201 }));
-  mustOk(attachment.purpose === 'integrations.attachment' && attachment.team_id === teams.engineering.id, 'integrations attachment hangs on Engineering');
+    purpose: 'pipeline.artifact',
+    content: encoding.b64encode('pipeline note'),
+  }), { 'member stores a pipeline artifact on Engineering': (r) => r.status === 201 }));
+  mustOk(attachment.purpose === 'pipeline.artifact' && attachment.team_id === teams.engineering.id, 'pipeline artifact hangs on Engineering');
 
   must(f('DELETE', `/files/${orgFile.id}`, 'member', null), { 'member cannot delete an organization file': (r) => r.status === 404 });
   must(f('DELETE', `/files/${orgFile.id}`, 'owner', null), { 'owner deletes the organization file': (r) => r.status === 204 });

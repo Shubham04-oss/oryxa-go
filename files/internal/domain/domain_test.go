@@ -98,7 +98,7 @@ func TestPurposeAndRetention(t *testing.T) {
 	if !PurposeUpload.Valid() || Purpose("other").Valid() {
 		t.Fatal("purpose allowlist")
 	}
-	days, err := RetentionDays(PurposeIntegrationsWebhook, 0)
+	days, err := RetentionDays(PurposePipelineArtifact, 0)
 	if err != nil || days != 7 {
 		t.Fatalf("default retention = %d, %v", days, err)
 	}

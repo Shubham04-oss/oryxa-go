@@ -81,13 +81,22 @@ attacker reached Composio's shared execution layer and took about 5,000 GitHub
 tokens and 5,241 customer API keys, including tokens under customers' own OAuth
 apps. Self-hosting or customer-managed keys are on Composio's enterprise tier.
 
-### Knowledge has nothing to read
+### Knowledge reads three apps, and no files
 
-Its provider sources were archived, and its files source needs a grant to read
-as the member who registered it, so the binary mounts no extractor
+GitHub, Notion and Slack are back, reading through Composio against a
+connection a member made in apps, so knowledge holds no credential of its own
+([knowledge/README.md](../knowledge/README.md)). They mount only when
+`COMPOSIO_API_KEY` is set, which is also why the project key is in two services
+(see above).
+
+The files source is still built and unmounted: it reads as the member who
+registered it and needs a grant to do that
 ([knowledge/TODO.md §1](../knowledge/TODO.md#1-what-still-blocks-every-pass)).
-App sources return on Composio, which never hands out a token: an extractor
-will call through Composio rather than with a credential of its own.
+So an organization's own documents — the obvious first thing anyone would
+index — are the one thing knowledge cannot read. That waits on §3.2.
+
+Nothing has run a pass against a real app, either: it needs a connected
+account, which needs a member at a browser.
 
 ### Knowledge does not feed rag
 
@@ -335,17 +344,6 @@ service that fails without them.
 
 ## 8. Housekeeping
 
-- **Integrations left purposes behind in files.** `integrations.piece`,
-  `integrations.webhook-payload` and `integrations.attachment` are still
-  accepted purposes, in the check constraint of files' migrations;
-  `integrations.piece` was for the Activepieces runner removed before either
-  archive, and the k6 journey still uses `integrations.attachment`. Removing
-  them needs a migration that narrows the check.
-- **Merged branches remain on the remote**: `claude/happy-hypatia-ypwooc`,
-  `feat/agent-identity-and-tools`, `feat/agents-primary`,
-  `feat/connections-providers`, `feat/connections-work-tracking`, `feat/rag`,
-  `feat/single-binary`, `fix/invited-member-onboarding`, `fix/recorded-issues`
-  and `spike/openapi-structs`.
 - **Building under a sandbox** that cannot write `$HOME` needs `GOPATH` and
   `GOCACHE` pointed inside the workspace; both are gitignored.
 
@@ -361,6 +359,18 @@ Kept short; the pull requests hold the detail.
   sweep; paged rag's document lists and tested its access rules, events and
   clients; and fixed auth's invitation links and agent-grant `return_to`,
   along with three bugs found while proving those.
+- **PR #20** built `/apps`: a member's third-party apps on Composio, with the
+  safety layer Oryxa keeps — the connection a call uses derived from auth, a
+  write needing an idempotency key and the member's confirmation, verified
+  webhooks, four MCP tools for agents, and knowledge's GitHub, Notion and Slack
+  sources back on top of it. A first live pass against a real Composio project
+  found and fixed two defects
+  ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)).
+- **Housekeeping, 2026-09-18**: the eleven merged branches are off the remote
+  (the suspended Linear work is a stash, untouched), and files' check
+  constraint no longer accepts the retired `integrations.*` purposes —
+  migration 004 re-points any straggler at `upload`, which cannot extend its
+  life because every object carries its own `expires_at`.
 - **The connections archive** removed connections, integrations, their event
   contracts, the generated provider clients, knowledge's provider sources and
   Krude's integrations toolboxes, in favour of Composio. With them went the
