@@ -117,6 +117,39 @@ func TestProxyAllowsTheReadEndpointsThatArePosts(t *testing.T) {
 	}
 }
 
+func TestProxySaysAWriteIsAWriteEvenWithNothingConnected(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+
+	// The request is wrong whichever way the connection went, and a caller
+	// debugging a refusal is better told that than sent looking for a
+	// connection it would not have been allowed to use anyway.
+	_, err := h.service.Proxy(context.Background(), memberToken, "org_1", ProxyInput{
+		Toolkit: "github", Method: http.MethodPost, Endpoint: "/repos/oryxa/oryxa-go/issues",
+	})
+	if !errors.Is(err, domain.ErrNotReadOnly) {
+		t.Fatalf("error = %v, want not read-only", err)
+	}
+	// Named by connection alone, the app is not known until it is read, so a
+	// missing connection is still what a caller hears first.
+	if _, err := h.service.Proxy(context.Background(), memberToken, "org_1", ProxyInput{
+		ConnectionID: "apc_nope", Method: http.MethodPost, Endpoint: "/repos/oryxa/oryxa-go/issues",
+	}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("error = %v, want not found", err)
+	}
+	// A caller naming another app than its connection's does not get around
+	// the check: the connection's own app decides.
+	h.activeConnection("apc_1", "user-1", "notion", "ca_1")
+	if _, err := h.service.Proxy(context.Background(), memberToken, "org_1", ProxyInput{
+		ConnectionID: "apc_1", Toolkit: "notion", Method: http.MethodPost, Endpoint: "/v1/pages",
+	}); !errors.Is(err, domain.ErrNotReadOnly) {
+		t.Fatalf("error = %v, want not read-only", err)
+	}
+	if len(h.composio.proxied) != 0 {
+		t.Fatal("a refused call reached Composio")
+	}
+}
+
 func TestProxyRefusesAnEndpointThatIsNotTheAppsOwn(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

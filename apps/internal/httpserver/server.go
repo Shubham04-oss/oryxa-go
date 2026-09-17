@@ -519,14 +519,38 @@ func Message(err error) string {
 	case code == "unavailable":
 		return "Composio or a service apps depends on did not answer; retry"
 	}
-	message := err.Error()
-	for _, sentinel := range []error{
+	sentinels := []error{
 		domain.ErrInvalid, domain.ErrForbidden, domain.ErrConflict, domain.ErrNotConnected, domain.ErrChooseConnection,
 		domain.ErrNeedsReconnect, domain.ErrNotReadOnly, domain.ErrNotConnectable,
-	} {
-		message = strings.TrimSuffix(message, ": "+sentinel.Error())
 	}
-	return message
+	// A sentinel says the same thing the code already does, so it is dropped
+	// from the wording however it was attached: wrapped onto the end with %w,
+	// or joined on its own line by errors.Join, which a validator uses to
+	// carry both the kind and the advice.
+	message := err.Error()
+	lines := make([]string, 0, 2)
+	for _, line := range strings.Split(message, "\n") {
+		if line = strip(strings.TrimSpace(line), sentinels); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		// Nothing but the sentinel: its own words are better than silence.
+		return strings.TrimSpace(message)
+	}
+	return strings.Join(lines, ": ")
+}
+
+// strip takes a sentinel off one line of an error's wording, wherever it sits:
+// on its own, or after the words that wrap it.
+func strip(line string, sentinels []error) string {
+	for _, sentinel := range sentinels {
+		if line == sentinel.Error() {
+			return ""
+		}
+		line = strings.TrimSpace(strings.TrimSuffix(line, ": "+sentinel.Error()))
+	}
+	return line
 }
 
 // handleError answers a failed call with the README's error codes. Errors

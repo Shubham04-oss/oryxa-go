@@ -651,13 +651,38 @@ func TestErrorsBecomeTheDocumentedCodes(t *testing.T) {
 
 func TestMessageKeepsTheSentinelOutOfTheWording(t *testing.T) {
 	t.Parallel()
-	message := Message(fmt.Errorf("%s changes things, so it runs only once the member confirms: %w",
-		"GITHUB_CREATE_AN_ISSUE", domain.ErrNotReadOnly))
-	if strings.Contains(message, domain.ErrNotReadOnly.Error()) {
-		t.Fatalf("message = %q", message)
-	}
-	if !strings.Contains(message, "GITHUB_CREATE_AN_ISSUE") {
-		t.Fatalf("message = %q", message)
+	for name, testCase := range map[string]struct {
+		err  error
+		want string
+	}{
+		"wrapped onto the end": {
+			err: fmt.Errorf("%s changes things, so it runs only once the member confirms: %w",
+				"GITHUB_CREATE_AN_ISSUE", domain.ErrNotReadOnly),
+			want: "GITHUB_CREATE_AN_ISSUE changes things, so it runs only once the member confirms",
+		},
+		// A validator joins the kind and the advice, so the wording arrives on
+		// two lines with the sentinel on one of them.
+		"joined on its own line": {
+			err:  errors.Join(domain.ErrInvalid, errors.New("an idempotency key is 8 to 128 characters")),
+			want: "an idempotency key is 8 to 128 characters",
+		},
+		"joined and then wrapped": {
+			err: fmt.Errorf("run GITHUB_CREATE_AN_ISSUE: %w",
+				errors.Join(domain.ErrInvalid, errors.New("a tool is an uppercase slug such as GITHUB_CREATE_AN_ISSUE"))),
+			want: "run GITHUB_CREATE_AN_ISSUE: a tool is an uppercase slug such as GITHUB_CREATE_AN_ISSUE",
+		},
+		"nothing but the sentinel": {err: domain.ErrInvalid, want: domain.ErrInvalid.Error()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			message := Message(testCase.err)
+			if message != testCase.want {
+				t.Fatalf("message = %q, want %q", message, testCase.want)
+			}
+			// Whatever the shape, a model never reads a newline mid-sentence.
+			if strings.Contains(message, "\n") {
+				t.Fatalf("message carries a newline: %q", message)
+			}
+		})
 	}
 }
 

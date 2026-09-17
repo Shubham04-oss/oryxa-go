@@ -107,11 +107,19 @@ func (s *Service) Proxy(ctx context.Context, credentials authclient.Credentials,
 		if toolkit, err = domain.CheckToolkit(input.Toolkit); err != nil {
 			return ProxyResult{}, err
 		}
+		// What the request asks for is wrong whether or not the app is
+		// connected, and saying so first spares a caller debugging a missing
+		// connection when the real answer is that it asked to write. With only
+		// a connection named, the app is not known until it is read.
+		if err := checkRead(toolkit, method, parsed.Path); err != nil {
+			return ProxyResult{}, err
+		}
 	}
 	connection, err := s.connectionFor(ctx, organizationID, caller.UserID, toolkit, strings.TrimSpace(input.ConnectionID))
 	if err != nil {
 		return ProxyResult{}, err
 	}
+	// The connection's own app decides, in case the caller named another.
 	if err := checkRead(connection.Toolkit, method, parsed.Path); err != nil {
 		return ProxyResult{}, err
 	}

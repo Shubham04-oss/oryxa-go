@@ -48,11 +48,20 @@ four MCP tools for agents, and Krude's `apps` toolbox over them
 ([apps/README.md](../apps/README.md)). Every test runs against fakes, so
 nothing has touched Composio, and no member has connected anything.
 
-What it needs: a Composio project and API key, a tunnel so Composio can reach
-the process, and one pass through connect → run a read → run a write →
-subscribe a trigger → receive its delivery. Until then, treat the whole service
-as unverified against the real API — the payload shapes came from Composio's
-OpenAPI spec, not from a live call.
+A first live pass ran on 2026-09-18 against a throwaway Composio project
+through a cloudflared tunnel: the catalog, tool search and its read-only marks,
+auth-config and connect-link creation, the webhook subscription provisioner,
+webhook verification in all four of its cases, the MCP endpoint over plain
+HTTP, and every refusal
+([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)). It found
+two defects, both fixed: a sentinel's own words leaking into the wording a
+model reads, and the read route answering `not_connected` where the honest
+answer was `not_read_only`.
+
+What is still unrun: **connecting an account end to end**. The hosted flow
+needs a member at a browser, so nothing past activation — a tool against a real
+app, a subscribed trigger, a real delivery — has happened. Treat those as
+proven against a stand-in only.
 
 Then, in order:
 
@@ -300,7 +309,7 @@ reads. They prove nothing about whether the provider agrees.
 | Area | What has never run | What it needs |
 | --- | --- | --- |
 | Rag | Bedrock and Vertex embedding and answering; Bedrock reranking, the least exercised code in the service; S3 Vectors; the provisioner, which has never created anything | An AWS account — S3 Vectors has no local emulation — and a Vertex project ([rag/README.md](../rag/README.md#what-has-and-has-not-been-run)) |
-| Apps | Every Composio call: connecting an app, running a tool, subscribing a trigger, receiving a delivery. The payload shapes came from Composio's OpenAPI spec, not a live call, and the webhook subscription provisioner has never created anything | A Composio project and API key, and a tunnel so Composio can reach the process ([apps/README.md, Run locally](../apps/README.md#run-locally)) |
+| Apps | Connecting an account end to end, and therefore every path past it: a tool against a real app, a subscribed trigger, a real delivery, and the outbox reaching the bus. The catalog, tool marks, link creation, the webhook provisioner, webhook verification, MCP and the refusals all ran for real on 2026-09-18 ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)) | A member at a browser to finish Composio's hosted page, and LocalStack up for the bus |
 | Auth | The agent grant against a provisioned Cognito agent client | The agent client provisioned |
 | Journey | `test/run.sh` has not run since PR #17 rewrote it for the one binary, and it covers teams, files and email only | Docker |
 

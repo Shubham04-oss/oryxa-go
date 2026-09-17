@@ -109,6 +109,14 @@ request, and every request carries its own member.
 | `apps_run_read_tool` | Runs a tool Composio marks read-only; refuses anything else |
 | `apps_run_write_tool` | Runs a change, with an idempotency key |
 
+A client the SDK builds needs nothing more than the URL and the headers above.
+One written by hand does: the stateless protocol carries what a session used to,
+so every request needs `Mcp-Protocol-Version: 2026-07-28`, `Mcp-Method` naming
+the JSON-RPC method, `Mcp-Name` naming the tool for a `tools/call`, and
+`params._meta` carrying `io.modelcontextprotocol/protocolVersion` and
+`io.modelcontextprotocol/clientCapabilities`. Without them the endpoint answers
+a JSON-RPC error saying which is missing.
+
 Failures come back as codes a model can act on rather than prose:
 `not_connected`, `needs_reconnect`, `choose_connection`, `not_read_only`,
 `app_error`, `rate_limited`. Krude's side of this is
@@ -363,6 +371,28 @@ APPS_TEST_DATABASE_URL=postgres://... go test ./apps/internal/postgres/
 
 They create a schema of their own and drop it afterwards, so they never touch
 anything else in that database.
+
+## What has and has not been run
+
+Against a real Composio project, through a cloudflared tunnel, on 2026-09-18:
+
+| Run for real | What it proved |
+| --- | --- |
+| The catalog, one app, its tools and its triggers | The types read Composio's own answers: GitHub's 874 tools and 46 triggers, `connectable` true for its managed OAuth and false for a `NO_AUTH` toolkit |
+| Tool search and its read-only marks | Composio tags reads with `readOnlyHint`, which is what the whole write/confirm rule rests on |
+| Creating an auth config and a connect link | Apps made a Composio-managed config for GitHub and recorded the pending connection under `oryxa.{org}.{member}` with only a SHA-256 of the callback state |
+| The webhook subscription provisioner | Created the subscription on V3 with the three event types, printed the secret once, and on a second run left it alone rather than minting another |
+| Webhook verification | Unsigned, wrongly signed and 12-minute-stale deliveries each refused 401; a correctly signed one accepted, recorded once, and its retry deduplicated |
+| The MCP endpoint | `tools/list` and every tool over plain HTTP JSON-RPC, with real Composio behind the search |
+| The refusals | `not_connected`, `not_read_only`, `invalid_request` for a short key, `not_found` for an unknown tool and an unknown app, `forbidden` for another organization and for an agent trying to connect |
+| Migrations | Installed through the binary into a schema of their own |
+
+Not yet run, and not to be described as working:
+
+- **Connecting an account end to end.** The hosted flow was opened but not completed, so no account has been activated, no tool has run against a real app, and no trigger has been subscribed. Every path past activation is proven only against a stand-in.
+- **A real delivery from a real trigger.** The verified deliveries above were signed with the real subscription secret but sent by hand. GitHub's triggers are all `poll`, so a real one arrives on Composio's polling interval rather than instantly.
+- **The outbox reaching the bus.** EventBridge pointed at a dead local endpoint for this run, and no event was written, so the dispatcher never published.
+- **Auth.** A stand-in answered membership; Cognito was not wired in.
 
 ## Later
 
