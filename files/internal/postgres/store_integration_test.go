@@ -64,7 +64,7 @@ func TestStoreLifecycle(t *testing.T) {
 	teamFile := domain.Object{
 		ID: fileID + "-team", OrganizationID: organizationID, Scope: domain.ScopeTeam, TeamID: teamID,
 		Filename: "spec.md", ContentType: "text/markdown",
-		Purpose: domain.PurposeIntegrationsAttachment, SizeBytes: 4, SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		Purpose: domain.PurposePipelineArtifact, SizeBytes: 4, SHA256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		CreatedBy: "user-1", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour),
 	}
 	if err := store.CreateObject(ctx, "Acme", teamFile, testEvent(eventPrefix+"-team", "files.object.created.v1", now)); err != nil {

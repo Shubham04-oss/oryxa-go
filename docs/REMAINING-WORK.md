@@ -335,17 +335,6 @@ service that fails without them.
 
 ## 8. Housekeeping
 
-- **Integrations left purposes behind in files.** `integrations.piece`,
-  `integrations.webhook-payload` and `integrations.attachment` are still
-  accepted purposes, in the check constraint of files' migrations;
-  `integrations.piece` was for the Activepieces runner removed before either
-  archive, and the k6 journey still uses `integrations.attachment`. Removing
-  them needs a migration that narrows the check.
-- **Merged branches remain on the remote**: `claude/happy-hypatia-ypwooc`,
-  `feat/agent-identity-and-tools`, `feat/agents-primary`,
-  `feat/connections-providers`, `feat/connections-work-tracking`, `feat/rag`,
-  `feat/single-binary`, `fix/invited-member-onboarding`, `fix/recorded-issues`
-  and `spike/openapi-structs`.
 - **Building under a sandbox** that cannot write `$HOME` needs `GOPATH` and
   `GOCACHE` pointed inside the workspace; both are gitignored.
 
@@ -361,6 +350,18 @@ Kept short; the pull requests hold the detail.
   sweep; paged rag's document lists and tested its access rules, events and
   clients; and fixed auth's invitation links and agent-grant `return_to`,
   along with three bugs found while proving those.
+- **PR #20** built `/apps`: a member's third-party apps on Composio, with the
+  safety layer Oryxa keeps — the connection a call uses derived from auth, a
+  write needing an idempotency key and the member's confirmation, verified
+  webhooks, four MCP tools for agents, and knowledge's GitHub, Notion and Slack
+  sources back on top of it. A first live pass against a real Composio project
+  found and fixed two defects
+  ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)).
+- **Housekeeping, 2026-09-18**: the eleven merged branches are off the remote
+  (the suspended Linear work is a stash, untouched), and files' check
+  constraint no longer accepts the retired `integrations.*` purposes —
+  migration 004 re-points any straggler at `upload`, which cannot extend its
+  life because every object carries its own `expires_at`.
 - **The connections archive** removed connections, integrations, their event
   contracts, the generated provider clients, knowledge's provider sources and
   Krude's integrations toolboxes, in favour of Composio. With them went the

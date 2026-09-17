@@ -55,9 +55,6 @@ a storage class:
 | Purpose | Default retention | Notes |
 | --- | --- | --- |
 | `upload` | 30 days | Default |
-| `integrations.piece` | 7 days | |
-| `integrations.webhook-payload` | 7 days | |
-| `integrations.attachment` | 7 days | |
 | `pipeline.artifact` | 7 days | |
 | `billing.attachment` | 90 days | Organization scope only |
 
