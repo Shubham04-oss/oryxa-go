@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -91,6 +92,22 @@ func testHandler(verifier fakeVerifier, flow *fakeAuthFlow, service *fakeAuthSer
 		CognitoDomain:   "https://example.auth.ap-south-1.amazoncognito.com",
 		CognitoClientID: "client-id",
 	})
+}
+
+func TestPatternsNameEveryRoute(t *testing.T) {
+	server := New(fakeVerifier{}, &fakeAuthFlow{}, &fakePasswordAuth{}, &fakeAuthService{}, Config{})
+	patterns := server.Patterns()
+	if len(patterns) < 32 {
+		t.Fatalf("patterns = %v", patterns)
+	}
+	wildcards := regexp.MustCompile(`\{[^}]+\}`)
+	for _, pattern := range patterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		request := httptest.NewRequest(method, wildcards.ReplaceAllString(path, "x"), nil)
+		if _, matched := server.mux.Handler(request); matched != pattern {
+			t.Errorf("%s routes to %q", pattern, matched)
+		}
+	}
 }
 
 func TestMeRejectsMissingAccessToken(t *testing.T) {

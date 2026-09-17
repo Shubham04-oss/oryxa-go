@@ -56,41 +56,41 @@ An invitation reaches its recipient two ways: the emailed link's token, or `GET 
 
 ## Provision Cognito
 
-Copy `.env.example` to the ignored `auth/.env`, provide a globally unique Cognito domain prefix, Google OAuth credentials, and the exact public callback/logout URLs. Authenticate the AWS SDK default credential chain and run:
+Copy the root `.env.example` to the ignored `.env`, fill in auth's section with a globally unique Cognito domain prefix, Google OAuth credentials, and the exact public callback/logout URLs. Authenticate the AWS SDK default credential chain and run:
 
 ```sh
-go run ./auth/infra/cognito/cmd/provision
+(set -a && . ./.env && go run ./auth/infra/cognito/cmd/provision)
 ```
 
 The repeatable provisioner creates or updates an Essentials-tier user pool in `ap-south-1`, enables deletion protection, registers Google, and creates a public client with authorization-code, password-auth, 15-minute access tokens, and refresh-token rotation support. Direct Cognito self-signup remains disabled: auth creates password users administratively with Cognito delivery suppressed. Add the provisioner's `google_redirect_uri` output to the Google OAuth client's authorized redirect URIs. Google credentials are provisioning inputs and must not be passed to the auth container.
 
 ## PostgreSQL and local runtime
 
-The embedded migrations are in `internal/postgres/migrations/` and are applied in name order automatically with `AUTH_AUTO_MIGRATE=true`; each is safe to run again. To apply them explicitly to the existing mini container:
+The embedded migrations are in `internal/postgres/migrations/` and are applied in name order automatically at start unless `ORYXA_AUTO_MIGRATE=false`, in which case install them explicitly with `go run ./cmd/oryxa migrate`; each is safe to run again. To apply them directly to the existing mini container instead:
 
 ```sh
 cat auth/internal/postgres/migrations/*.sql | docker --context mac-mini exec -i oryxa-go-postgres-1 \
   sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 ```
 
-After filling `auth/.env`, build or start auth on the shared `oryxa-go_default` network:
+After filling the repository root's `.env`, run auth from the repository root as part of the single `oryxa` binary:
 
 ```sh
-docker --context mac-mini compose -f compose.auth.yaml build auth
-docker --context mac-mini compose -f compose.auth.yaml up -d auth
+(set -a && . ./.env && ORYXA_SERVICES=auth go run ./cmd/oryxa)
 ```
 
-`DATABASE_URL` should address `oryxa-go-postgres-1:5432`; `EVENTBRIDGE_ENDPOINT` should address `oryxa-go-eventbridge-1:4566` for the local EventBridge emulator.
+It deploys as part of the one `oryxa` image, alongside whichever other services `ORYXA_SERVICES` names. `DATABASE_URL` should address `oryxa-go-postgres-1:5432`; `EVENTBRIDGE_ENDPOINT` should address `oryxa-go-eventbridge-1:4566` for the local EventBridge emulator.
 
 The store tests run when `AUTH_TEST_DATABASE_URL` is set. Unlike connections' and integrations', they migrate straight into that database rather than a throwaway schema and leave outbox rows behind, so point them at a disposable database, never the shared one auth itself runs on.
 
 ### PostgreSQL client and extensions
 
 Auth uses the module-private PostgreSQL boundary in `/internal/postgreskit`.
-The process owns one native `pgxpool`, and its `sqlx` handle shares that pool
-through pgx's `database/sql` adapter rather than opening a second set of
-connections. Migrations use a transaction-scoped PostgreSQL advisory lock, so
-multiple replicas can start with `AUTH_AUTO_MIGRATE=true` safely.
+It borrows the one native `pgxpool` the `oryxa` process shares between its
+services, and its `sqlx` handle shares that pool through pgx's `database/sql`
+adapter rather than opening a second set of connections. Migrations use a
+transaction-scoped PostgreSQL advisory lock, inside the process's own lock over
+every service's migrations, so multiple replicas can start together safely.
 
 Startup discovers the installed versions of `ltree`, `pg_trgm`, pgvector and
 Apache AGE. Their PostgreSQL extension names are `ltree`, `pg_trgm`, `vector`,

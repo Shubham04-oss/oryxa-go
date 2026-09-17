@@ -1,24 +1,20 @@
-package main
+// Package auth assembles the auth service for a host: Google and password
+// sign-in, browser sessions, users, organizations, memberships, invitations,
+// agent grants, and the events it publishes and hears.
+package auth
 
 import (
 	"context"
-	"errors"
-	"log"
-	"log/slog"
-	"net/http"
-	"os/signal"
-	"syscall"
+	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/cognitoidentityprovider"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/coreos/go-oidc/v3/oidc"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/agentgrant"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/application"
@@ -32,49 +28,44 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/secrets"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/serviceconfig"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
-	"github.com/Shubham04-oss/oryxa-go/internal/observability"
+	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
+
+// Name is how ORYXA_SERVICES selects auth.
+const Name = "auth"
 
 // serviceAudience is the audience other services name in tokens for auth.
 const serviceAudience = "auth"
 
-func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	telemetryShutdown, err := observability.Setup(ctx, observability.Config{ServiceName: "oryxa-auth"})
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := telemetryShutdown(shutdownContext); err != nil {
-			slog.Error("shutdown telemetry", "error", err)
-		}
-	}()
+// Definition is how a host builds auth.
+var Definition = host.Definition{Name: Name, URLVariable: "AUTH_URL", Migrate: Migrate, Mount: Mount}
 
-	config, err := serviceconfig.FromEnv()
-	if err != nil {
-		log.Fatal(err)
+// Migrate installs the auth schema.
+func Migrate(ctx context.Context, platform host.Platform) error {
+	if platform.Database == nil {
+		return host.ErrDatabaseRequired
 	}
+	return postgres.New(platform.Database).Migrate(ctx)
+}
+
+// Mount assembles auth on what the host shares.
+func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
+	if platform.Database == nil {
+		return host.Service{}, host.ErrDatabaseRequired
+	}
+	config, err := serviceconfig.FromEnv(platform.Getenv)
+	if err != nil {
+		return host.Service{}, err
+	}
+	logger := platform.Logger
 
 	provider, err := oidc.NewProvider(ctx, config.CognitoIssuer)
 	if err != nil {
-		log.Fatalf("discover Cognito issuer: %v", err)
+		return host.Service{}, fmt.Errorf("discover Cognito issuer: %w", err)
 	}
 	verifier := authn.New(provider, config.CognitoClientID, config.CognitoAgentClientID)
-	store, err := postgres.Open(ctx, config.DatabaseURL, config.PostgresExtensions...)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer store.Close()
-	slog.Info("postgres connected", "extensions", store.ExtensionVersions())
-	if config.AutoMigrate {
-		if err := store.Migrate(ctx); err != nil {
-			log.Fatal(err)
-		}
-	}
+	store := postgres.New(platform.Database)
 	service := application.NewWithConfig(store, application.Config{
 		InvitationAcceptURL:  config.InvitationAcceptURL,
 		EmailVerificationURL: config.EmailVerificationURL,
@@ -87,24 +78,24 @@ func main() {
 		AllowedReturnTo: config.AllowedReturnURLs,
 	}, service, verifier)
 	if err != nil {
-		log.Fatal(err)
+		return host.Service{}, err
 	}
 
-	awsConfig, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(config.AWSRegion))
-	if err != nil {
-		log.Fatalf("load AWS configuration: %v", err)
-	}
-	otelaws.AppendMiddlewares(&awsConfig.APIOptions)
 	passwords, err := passwordflow.New(
-		cognitoidentityprovider.NewFromConfig(awsConfig),
+		cognitoidentityprovider.NewFromConfig(platform.AWS),
 		service,
 		verifier,
 		passwordflow.Config{UserPoolID: config.CognitoUserPoolID, ClientID: config.CognitoClientID},
 	)
 	if err != nil {
-		log.Fatal(err)
+		return host.Service{}, err
 	}
-	eventBridgeConfig := awsConfig
+
+	// The EventBridge and SQS clients sign with static "test" credentials
+	// only when their endpoint is overridden for a local emulator: the
+	// process otherwise carries real credentials for KMS and Cognito too, so
+	// those must never be swapped out.
+	eventBridgeConfig := platform.AWS
 	if config.EventBridgeEndpoint != "" {
 		eventBridgeConfig.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
 	}
@@ -113,12 +104,12 @@ func main() {
 			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
 		}
 	})
-	publisher := authevents.NewPublisher(eventBridge, config.EventBusName, autheventsv1.Source)
+	publisher := authevents.NewPublisher(eventBridge, platform.EventBusName, autheventsv1.Source)
 	dispatcher := authevents.NewDispatcher(store, publisher)
-	go dispatcher.Run(ctx)
+	workers := []host.Worker{dispatcher.Run}
 
 	if config.EventsQueueURL != "" {
-		sqsConfig := awsConfig
+		sqsConfig := platform.AWS
 		if config.SQSEndpoint != "" {
 			sqsConfig.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
 		}
@@ -127,12 +118,13 @@ func main() {
 				options.BaseEndpoint = aws.String(config.SQSEndpoint)
 			}
 		})
-		go billingevents.NewConsumer(service).Poll(ctx, queue, config.EventsQueueURL)
+		consumer := billingevents.NewConsumer(service)
+		workers = append(workers, func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) })
 	} else {
-		slog.Warn("billing entitlement events are disabled", "reason", "AUTH_EVENTS_QUEUE_URL is not set")
+		logger.Warn("billing entitlement events are disabled", "reason", "AUTH_EVENTS_QUEUE_URL is not set")
 	}
 
-	kmsClient := kms.NewFromConfig(awsConfig)
+	kmsClient := kms.NewFromConfig(platform.AWS)
 
 	var agentGrants httpserver.AgentGrantsFlow
 	if config.AgentGrantsEnabled() {
@@ -144,54 +136,39 @@ func main() {
 			AllowedReturnTo: config.AllowedReturnURLs,
 		}, store, verifier, secrets.Envelope{Keys: secrets.KMSDataKeys{Client: kmsClient, KeyID: config.AuthKMSKeyID}, KeyID: config.AuthKMSKeyID})
 		if err != nil {
-			log.Fatal(err)
+			return host.Service{}, err
 		}
 		agentGrants = manager
 	} else {
-		slog.Warn("agent grants are disabled", "reason", "COGNITO_AGENT_CLIENT_ID, COGNITO_AGENT_CLIENT_SECRET, COGNITO_AGENT_CALLBACK_URL, and AUTH_KMS_KEY_ID are not all set")
+		logger.Warn("agent grants are disabled", "reason", "COGNITO_AGENT_CLIENT_ID, COGNITO_AGENT_CLIENT_SECRET, COGNITO_AGENT_CALLBACK_URL, and AUTH_KMS_KEY_ID are not all set")
 	}
 
 	var services httpserver.ServiceVerifier
 	if len(config.ServiceCallers) > 0 {
 		serviceVerifier, err := serviceauth.NewVerifier(serviceauth.VerifierConfig{Keys: kmsClient, Audience: serviceAudience, Callers: config.ServiceCallers})
 		if err != nil {
-			log.Fatal(err)
+			return host.Service{}, err
 		}
 		services = serviceVerifier
 	} else {
-		slog.Warn("AUTH_SERVICE_CALLERS is not set: the internal API refuses every call, so no service can mint agent tokens")
+		logger.Warn("AUTH_SERVICE_CALLERS is not set: the internal API refuses every call, so no service can mint agent tokens")
 	}
 
-	server := &http.Server{
-		Addr: config.Address,
-		Handler: observability.HTTPHandler("oryxa-auth", httpserver.New(verifier, oauth, passwords, service, httpserver.Config{
-			CognitoDomain:      config.CognitoDomain,
-			CognitoClientID:    config.CognitoClientID,
-			CognitoCallbackURL: config.CognitoCallbackURL,
-			AllowedOrigins:     config.AllowedReturnURLs,
-			CookieDomain:       config.CookieDomain,
-			CookieSecure:       config.CookieSecure,
-			AgentClientID:      config.CognitoAgentClientID,
-			AgentGrants:        agentGrants,
-			Services:           services,
-		})),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-
-	go func() {
-		<-ctx.Done()
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownContext); err != nil {
-			slog.Error("shutdown auth", "error", err)
-		}
-	}()
-
-	slog.Info("auth listening", "address", config.Address)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
-	}
+	server := httpserver.New(verifier, oauth, passwords, service, httpserver.Config{
+		CognitoDomain:      config.CognitoDomain,
+		CognitoClientID:    config.CognitoClientID,
+		CognitoCallbackURL: config.CognitoCallbackURL,
+		AllowedOrigins:     config.AllowedReturnURLs,
+		CookieDomain:       config.CookieDomain,
+		CookieSecure:       config.CookieSecure,
+		AgentClientID:      config.CognitoAgentClientID,
+		AgentGrants:        agentGrants,
+		Services:           services,
+	})
+	return host.Service{
+		Handler:  server,
+		Routes:   server.Patterns(),
+		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 15 * time.Second},
+		Workers:  workers,
+	}, nil
 }
