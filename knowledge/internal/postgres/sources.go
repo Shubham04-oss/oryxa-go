@@ -14,15 +14,6 @@ const sourceColumns = `id, organization_id, connection_id, app_id, provider, tar
 	created_by, status, reason, interval_seconds, sync_at, last_synced_at, attempts,
 	lease_token, lease_until, version, created_at, updated_at`
 
-// SourceQuery narrows a listing. An org admin sees the organization's sources;
-// anyone else sees the ones they registered.
-type SourceQuery struct {
-	CreatedBy    string
-	ConnectionID string
-	Provider     string
-	Admin        bool
-}
-
 func (store *Store) CreateSource(ctx context.Context, source domain.Source, event *domain.Event) error {
 	target, err := encodeMap(source.Target)
 	if err != nil {
@@ -61,7 +52,7 @@ func (store *Store) Source(ctx context.Context, organizationID, sourceID string)
 	return sources[0], nil
 }
 
-func (store *Store) Sources(ctx context.Context, organizationID string, query SourceQuery) ([]domain.Source, error) {
+func (store *Store) Sources(ctx context.Context, organizationID string, query domain.SourceQuery) ([]domain.Source, error) {
 	sql := `SELECT ` + sourceColumns + ` FROM knowledge_sources WHERE organization_id = $1 AND status <> 'removed'`
 	args := []any{organizationID}
 	bind := func(value any) string {

@@ -180,6 +180,15 @@ func (source Source) Extractable() error {
 	}
 }
 
+// SourceQuery narrows a listing. An org admin sees the organization's
+// sources; anyone else sees the ones they registered.
+type SourceQuery struct {
+	CreatedBy    string
+	ConnectionID string
+	Provider     string
+	Admin        bool
+}
+
 // Document is one thing a source holds, normalized. Body is the text a
 // retrieval pipeline indexes; ContentHash over it is the version.
 type Document struct {

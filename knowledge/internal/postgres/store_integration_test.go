@@ -174,7 +174,7 @@ func TestSourcesShowAMemberOnlyTheirOwn(t *testing.T) {
 		t.Fatalf("CreateSource() error = %v", err)
 	}
 
-	own, err := store.Sources(ctx, "org_1", SourceQuery{CreatedBy: "user-1"})
+	own, err := store.Sources(ctx, "org_1", domain.SourceQuery{CreatedBy: "user-1"})
 	if err != nil {
 		t.Fatalf("Sources() error = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestSourcesShowAMemberOnlyTheirOwn(t *testing.T) {
 		t.Fatalf("Sources(member) = %d sources, want only their own", len(own))
 	}
 
-	all, err := store.Sources(ctx, "org_1", SourceQuery{Admin: true})
+	all, err := store.Sources(ctx, "org_1", domain.SourceQuery{Admin: true})
 	if err != nil {
 		t.Fatalf("Sources() error = %v", err)
 	}
