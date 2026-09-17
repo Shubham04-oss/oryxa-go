@@ -85,6 +85,13 @@ func (store *fakeStore) ActivateSubscription(_ context.Context, organizationID, 
 	}
 	subscription.Status, subscription.RegistrationID = domain.SubscriptionActive, registrationID
 	subscription.ExpiresAt, subscription.RenewAt, subscription.UpdatedAt = expiresAt, renewAt, at
+	// A provider that issues its own signing secret during registration
+	// replaces the one generated when the subscription was created, as the
+	// real store's ActivateSubscription does with
+	// COALESCE($secret, encrypted_secret).
+	if secret != nil {
+		subscription.EncryptedSecret = secret
+	}
 	event, err := eventFor(subscription)
 	if err != nil {
 		return domain.Subscription{}, err
