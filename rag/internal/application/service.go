@@ -59,16 +59,7 @@ type Teams interface {
 
 // Files fetches a document's bytes as the caller.
 type Files interface {
-	Fetch(ctx context.Context, organizationID, fileID string, credentials authclient.Credentials) (filesObject, error)
-}
-
-// filesObject mirrors what filesclient returns, declared here so this package
-// depends on the shape rather than on the client.
-type filesObject = struct {
-	ID          string
-	Filename    string
-	ContentType string
-	Body        string
+	Fetch(ctx context.Context, organizationID, fileID string, credentials authclient.Credentials) (domain.SourceContent, error)
 }
 
 // Vectors routes a corpus to the store holding its vectors.

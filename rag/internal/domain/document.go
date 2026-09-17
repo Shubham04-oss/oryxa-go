@@ -284,3 +284,13 @@ type ChunkSync struct {
 	// by cascade; an S3 Vectors corpus needs them deleted by key.
 	Removed []string
 }
+
+// SourceContent is a document's bytes as fetched from the files service, with
+// the little that files knows about them. It lives here rather than in the
+// client so the application depends on the shape rather than on the transport.
+type SourceContent struct {
+	ID          string
+	Filename    string
+	ContentType string
+	Body        string
+}

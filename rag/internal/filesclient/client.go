@@ -36,14 +36,6 @@ func New(baseURL string) *Client {
 	}
 }
 
-// Object is the little about a file that a document keeps.
-type Object struct {
-	ID          string
-	Filename    string
-	ContentType string
-	Body        string
-}
-
 type metadataResponse struct {
 	ID          string `json:"id"`
 	Filename    string `json:"filename"`
@@ -51,24 +43,23 @@ type metadataResponse struct {
 }
 
 // Fetch reads a file's metadata and its bytes as the caller.
-func (client *Client) Fetch(ctx context.Context, organizationID, fileID string, credentials authclient.Credentials) (Object, error) {
+func (client *Client) Fetch(ctx context.Context, organizationID, fileID string, credentials authclient.Credentials) (domain.SourceContent, error) {
 	if !credentials.Present() {
-		return Object{}, domain.ErrUnauthorized
+		return domain.SourceContent{}, domain.ErrUnauthorized
 	}
 	base := "/v1/organizations/" + url.PathEscape(organizationID) + "/files/" + url.PathEscape(fileID)
 
+	// Metadata first: it is what says the content type and the filename, and
+	// it is the cheaper of the two calls to be refused on.
 	var metadata metadataResponse
-	body, err := client.get(ctx, base, credentials, &metadata)
-	if err != nil {
-		return Object{}, err
+	if _, err := client.get(ctx, base, credentials, &metadata); err != nil {
+		return domain.SourceContent{}, err
 	}
-	_ = body
-
 	content, err := client.get(ctx, base+"/content", credentials, nil)
 	if err != nil {
-		return Object{}, err
+		return domain.SourceContent{}, err
 	}
-	return Object{
+	return domain.SourceContent{
 		ID:          metadata.ID,
 		Filename:    metadata.Filename,
 		ContentType: metadata.ContentType,
