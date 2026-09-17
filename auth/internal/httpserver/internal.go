@@ -24,7 +24,7 @@ type ServiceVerifier interface {
 // mintAgentToken exchanges a member's stored agent grant for a short-lived
 // access token, for a service that acts as an agent while the member is
 // absent. The caller proves its identity with a signed token in
-// serviceauth.Header, exactly as connections verifies its own callers.
+// serviceauth.Header.
 func (server *Server) mintAgentToken(writer http.ResponseWriter, request *http.Request) {
 	noStore(writer)
 	if server.config.AgentGrants == nil {

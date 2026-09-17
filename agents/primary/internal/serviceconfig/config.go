@@ -61,17 +61,6 @@ type Config struct {
 	// ModelPrices overrides the price table used for run costs, as JSON of
 	// per-million USD rates by model.
 	ModelPrices string
-	// IntegrationsURL is integrations' own URL. When set, devui builds one
-	// toolbox per provider it catalogues (agents.IntegrationsToolboxes);
-	// when empty, the agents run with no integrations toolboxes.
-	IntegrationsURL string
-	// AuthURL is auth's own URL: agent tokens for a member-absent run are
-	// requested at {AuthURL}/v1/internal/agent-tokens.
-	AuthURL string
-	// ServiceKeyID is the KMS key agents signs its service tokens with
-	// (serviceauth.Signer), naming itself to auth when it asks for an agent
-	// token on a member's behalf.
-	ServiceKeyID string
 }
 
 // FromEnv reads primary's configuration through getenv, which a host layers
@@ -146,9 +135,6 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		GuardrailVersion:      guardrailVersion,
 		GuardrailFailClosed:   guardrailFailClosed,
 		ModelPrices:           modelPrices,
-		IntegrationsURL:       strings.TrimSpace(getenv("INTEGRATIONS_URL")),
-		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),
-		ServiceKeyID:          strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
 	}, nil
 }
 

@@ -66,8 +66,7 @@ func newRealToolContext(base context.Context, sess session.Session) agent.Contex
 // recordingToolset and recordingTool are the toolset WrapToolset wraps in
 // this test: they record the context they were called with so the test can
 // inspect exactly what WrapToolset attached to it, without needing any real
-// MCP or HTTP machinery — that end-to-end path is proven separately by
-// agents.IntegrationsToolboxes's own tests.
+// MCP or HTTP machinery.
 type recordingToolset struct {
 	gotToolsCtx context.Context
 	tool        *recordingTool

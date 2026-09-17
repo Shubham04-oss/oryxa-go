@@ -18,7 +18,7 @@ type TokenSource interface {
 	AgentToken(ctx context.Context, userID string) (token string, expiresAt time.Time, err error)
 }
 
-// CredentialProvider is the ADK auth.CredentialProvider every integrations
+// CredentialProvider is the ADK auth.CredentialProvider a member-authenticated
 // MCP call authenticates with: the member's own access token when the run
 // carries one (WithAccessToken), otherwise a short-lived agent token for the
 // session's user, minted from Tokens.
@@ -57,7 +57,7 @@ func (p *CredentialProvider) Credential(ctx context.Context) (auth.Credential, e
 }
 
 // memberCredential applies the member's bearer token and organization to a
-// request headed for integrations.
+// request made as that member.
 type memberCredential struct {
 	token          string
 	organizationID string
