@@ -24,8 +24,8 @@ services:
       AWS_ENDPOINT_URL_S3: http://oryxa-go-eventbridge-1:4566
       AWS_ENDPOINT_URL_DYNAMODB: http://oryxa-go-eventbridge-1:4566
       AWS_ENDPOINT_URL_SESV2: http://oryxa-go-ses-1:5000
-      # The overrides auth, connections, integrations and knowledge read for
-      # themselves, which would otherwise keep .env's localhost.
+      # The overrides auth and knowledge read for themselves, which would
+      # otherwise keep .env's localhost.
       EVENTBRIDGE_ENDPOINT: http://oryxa-go-eventbridge-1:4566
       SQS_ENDPOINT: http://oryxa-go-eventbridge-1:4566
       EMAIL_SMTP_ADDR: oryxa-go-mailpit-1:1025
