@@ -401,6 +401,24 @@ func TestApps(t *testing.T) {
 	}
 }
 
+// TestDecodeRejectsAnOversizedBody checks the other half of decode's guard:
+// TestApps already covers unknown fields and a trailing object, but nothing
+// exercised the size limit itself. A body over maxJSONBytes is truncated
+// mid-value by the io.LimitReader before json ever sees a complete object, so
+// it fails to decode like any other malformed body; a normal small body still
+// works, so the limit is not rejecting everything.
+func TestDecodeRejectsAnOversizedBody(t *testing.T) {
+	service := &fakeService{}
+	oversized := `{"provider":"github","client_id":"` + strings.Repeat("a", maxJSONBytes) + `"}`
+	if recorder := serve(service, http.MethodPost, "/v1/organizations/org_1/apps", oversized); recorder.Code != http.StatusBadRequest ||
+		errorCode(t, recorder) != "invalid_request" {
+		t.Fatalf("POST apps with a body over maxJSONBytes = %d %s", recorder.Code, recorder.Body)
+	}
+	if recorder := serve(service, http.MethodPost, "/v1/organizations/org_1/apps", `{"provider":"github"}`); recorder.Code != http.StatusCreated {
+		t.Fatalf("POST apps with a normal body = %d %s", recorder.Code, recorder.Body)
+	}
+}
+
 func TestConnectionRoutes(t *testing.T) {
 	service := &fakeService{}
 	recorder := serve(service, http.MethodGet, "/v1/organizations/org_1/connections?app_id=app_1&scope=team&team_id=team_1", "")
