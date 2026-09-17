@@ -431,17 +431,207 @@ func TestAppAndConnectLifecycle(t *testing.T) {
 
 	// Created 1 + connected 3 + client change 1 + needs-reconnect 3 + reconnected 1 +
 	// disconnected 1 + disabled 1 + deleted 1 + disconnected by the deletion 2.
-	claimed, err := store.ClaimOutbox(ctx, 100)
+	claimed, err := store.ClaimOutbox(ctx, 100, "claim-token")
 	if err != nil || len(claimed) != 14 {
 		t.Fatalf("ClaimOutbox() = %d events, error = %v", len(claimed), err)
 	}
-	if again, err := store.ClaimOutbox(ctx, 100); err != nil || len(again) != 0 {
+	if again, err := store.ClaimOutbox(ctx, 100, "claim-token"); err != nil || len(again) != 0 {
 		t.Fatalf("second ClaimOutbox() = %d events, error = %v", len(again), err)
 	}
-	if err := store.MarkOutboxPublished(ctx, claimed[0].ID); err != nil {
-		t.Fatalf("MarkOutboxPublished() error = %v", err)
+	if marked, err := store.MarkOutboxPublished(ctx, claimed[0].ID, "claim-token"); err != nil || !marked {
+		t.Fatalf("MarkOutboxPublished() = %v, %v, want true", marked, err)
 	}
-	if err := store.MarkOutboxFailed(ctx, claimed[1].ID, time.Minute, "throttled"); err != nil {
-		t.Fatalf("MarkOutboxFailed() error = %v", err)
+	// The other 13 events are still held by the live claim just taken, so a
+	// different token owns none of them.
+	if marked, err := store.MarkOutboxPublished(ctx, claimed[1].ID, "someone-elses-claim"); err != nil || marked {
+		t.Fatalf("MarkOutboxPublished() under a foreign claim = %v, %v, want false", marked, err)
+	}
+	if marked, err := store.MarkOutboxFailed(ctx, claimed[1].ID, "claim-token", time.Minute, "throttled"); err != nil || !marked {
+		t.Fatalf("MarkOutboxFailed() = %v, %v, want true", marked, err)
+	}
+	// A failed event is held back for its retry delay before it is claimable
+	// again, and then it is claimable by anyone rather than by its old claim.
+	if again, err := store.ClaimOutbox(ctx, 100, "second-claim"); err != nil || len(again) != 0 {
+		t.Fatalf("ClaimOutbox() during the retry delay = %d events, error = %v, want 0", len(again), err)
+	}
+	if _, err := store.pool.Exec(ctx,
+		`UPDATE connections_outbox SET available_at = now() - interval '1 second' WHERE id = $1`, claimed[1].ID); err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.ClaimOutbox(ctx, 100, "second-claim")
+	if err != nil || len(again) != 1 || again[0].ID != claimed[1].ID || again[0].Attempts != 1 {
+		t.Fatalf("ClaimOutbox() after the retry delay = %+v, error = %v, want just %s at 1 attempt", again, err, claimed[1].ID)
+	}
+}
+
+// TestOutboxRejectsAnEventWithNoDetail checks that an event carrying no valid
+// JSON detail is refused before it reaches the database. Left to PostgreSQL, a
+// nil detail violates the column's NOT NULL and an empty one is invalid JSON:
+// both abort the whole business transaction, and neither code is one
+// mapWriteError recognises, so the caller would see an internal failure rather
+// than a refused request.
+func TestOutboxRejectsAnEventWithNoDetail(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	for _, testCase := range []struct {
+		name string
+		data json.RawMessage
+	}{
+		{"no detail", nil},
+		{"empty detail", json.RawMessage{}},
+		{"malformed detail", json.RawMessage(`{"unterminated":`)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			app := domain.App{
+				ID: "app_" + randomHex(4), OrganizationID: "org_outbox_detail", Provider: "google",
+				CredentialType: domain.CredentialOAuth2, ClientID: "client-1", EncryptedSecret: sealed("secret"),
+				Scopes: []string{"email"}, Status: domain.AppStatusActive, Revision: 1,
+				CreatedBy: "user-admin", CreatedAt: now, UpdatedAt: now,
+			}
+			event := testEvent("connections.app.created.v1", now)
+			event.Data = testCase.data
+			err := store.CreateApp(ctx, app, event)
+			if !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("CreateApp() with %s error = %v, want ErrInvalid", testCase.name, err)
+			}
+			// The whole transaction must have rolled back: no app, no event.
+			if _, err := store.App(ctx, app.OrganizationID, app.ID); !errors.Is(err, domain.ErrNotFound) {
+				t.Fatalf("app survived the refused event: %v", err)
+			}
+			if claimed, err := store.ClaimOutbox(ctx, 10, "claim-token"); err != nil || len(claimed) != 0 {
+				t.Fatalf("ClaimOutbox() = %d events, %v, want 0", len(claimed), err)
+			}
+		})
+	}
+
+	// A well-formed detail still works, so the guard is not refusing everything.
+	app := domain.App{
+		ID: "app_" + randomHex(4), OrganizationID: "org_outbox_detail", Provider: "google",
+		CredentialType: domain.CredentialOAuth2, ClientID: "client-1", EncryptedSecret: sealed("secret"),
+		Scopes: []string{"email"}, Status: domain.AppStatusActive, Revision: 1,
+		CreatedBy: "user-admin", CreatedAt: now, UpdatedAt: now,
+	}
+	if err := store.CreateApp(ctx, app, testEvent("connections.app.created.v1", now)); err != nil {
+		t.Fatalf("CreateApp() with a valid detail error = %v", err)
+	}
+}
+
+// TestDeletePublishedOutboxKeepsPendingAndRecentEvents checks the sweep that
+// stops the outbox growing once per connection change for ever. It must remove
+// only events that actually reached the bus and are past the retention window:
+// a pending event has not been delivered, and a recent published one is still
+// useful for explaining a delivery.
+func TestDeletePublishedOutboxKeepsPendingAndRecentEvents(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	// Three events: one published long ago, one published just now, one never
+	// published.
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO connections_outbox (id, detail_type, detail, occurred_at, published_at) VALUES
+			('evt_old',    'connections.app.created.v1', '{}', $1, $2),
+			('evt_recent', 'connections.app.created.v1', '{}', $1, $1),
+			('evt_pending','connections.app.created.v1', '{}', $1, NULL)`,
+		now, now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := store.DeletePublishedOutbox(ctx, now.Add(-7*24*time.Hour), 500)
+	if err != nil {
+		t.Fatalf("DeletePublishedOutbox() error = %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("DeletePublishedOutbox() deleted %d, want 1", deleted)
+	}
+
+	remaining := map[string]bool{}
+	rows, err := store.pool.Query(ctx, `SELECT id FROM connections_outbox`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		remaining[id] = true
+	}
+	if remaining["evt_old"] {
+		t.Error("a published event past the retention window was kept")
+	}
+	if !remaining["evt_recent"] {
+		t.Error("a recently published event was removed")
+	}
+	if !remaining["evt_pending"] {
+		t.Error("an undelivered event was removed")
+	}
+
+	// The sweep is bounded, so a large backlog is worked off over runs.
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO connections_outbox (id, detail_type, detail, occurred_at, published_at)
+		SELECT 'evt_bulk_'||g, 'connections.app.created.v1', '{}', $1, $2
+		FROM generate_series(0, 9) g`, now, now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, err := store.DeletePublishedOutbox(ctx, now.Add(-7*24*time.Hour), 4); err != nil || deleted != 4 {
+		t.Fatalf("bounded DeletePublishedOutbox() deleted %d, %v, want 4", deleted, err)
+	}
+}
+
+// TestOutboxClaimOwnershipSurvivesATakeover covers the claim TTL gap. A
+// dispatcher claims a batch, then stalls past the claim's life; another
+// replica's claim becomes available and it takes the events over. When the
+// first dispatcher finally marks its events, those marks must not touch rows
+// the second claim now owns — otherwise the stale dispatcher clears the live
+// claim and a third replica can claim and publish the same event again.
+func TestOutboxClaimOwnershipSurvivesATakeover(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO connections_outbox (id, detail_type, detail, occurred_at)
+		VALUES ('evt_takeover', 'connections.app.created.v1', '{}', $1)`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := store.ClaimOutbox(ctx, 10, "claim-one")
+	if err != nil || len(first) != 1 || first[0].ClaimToken != "claim-one" {
+		t.Fatalf("first ClaimOutbox() = %+v, %v", first, err)
+	}
+	// A second claim cannot see it while the first is live.
+	if second, err := store.ClaimOutbox(ctx, 10, "claim-two"); err != nil || len(second) != 0 {
+		t.Fatalf("ClaimOutbox() while claimed = %d events, %v, want 0", len(second), err)
+	}
+
+	// Stall past the claim's life, as a dispatcher that hangs would.
+	if _, err := store.pool.Exec(ctx,
+		`UPDATE connections_outbox SET locked_until = now() - interval '1 second' WHERE id = 'evt_takeover'`); err != nil {
+		t.Fatal(err)
+	}
+	taken, err := store.ClaimOutbox(ctx, 10, "claim-two")
+	if err != nil || len(taken) != 1 {
+		t.Fatalf("ClaimOutbox() after the claim expired = %d events, %v, want 1", len(taken), err)
+	}
+
+	// The stalls' marks are refused: they no longer own the row.
+	if marked, err := store.MarkOutboxPublished(ctx, "evt_takeover", "claim-one"); err != nil || marked {
+		t.Fatalf("stale MarkOutboxPublished() = %v, %v, want false", marked, err)
+	}
+	if marked, err := store.MarkOutboxFailed(ctx, "evt_takeover", "claim-one", time.Minute, "stale"); err != nil || marked {
+		t.Fatalf("stale MarkOutboxFailed() = %v, %v, want false", marked, err)
+	}
+	// The live claim still holds it, so the stall did not hand it to a third
+	// dispatcher.
+	if third, err := store.ClaimOutbox(ctx, 10, "claim-three"); err != nil || len(third) != 0 {
+		t.Fatalf("ClaimOutbox() after a stale mark = %d events, %v, want 0", len(third), err)
+	}
+	// The owner can still finish.
+	if marked, err := store.MarkOutboxPublished(ctx, "evt_takeover", "claim-two"); err != nil || !marked {
+		t.Fatalf("owner MarkOutboxPublished() = %v, %v, want true", marked, err)
 	}
 }

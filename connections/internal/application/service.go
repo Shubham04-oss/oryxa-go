@@ -59,6 +59,9 @@ type Store interface {
 	DeleteOrganizationApps(ctx context.Context, organizationID string, at time.Time, appEvent func(domain.App) (domain.Event, error)) (int, error)
 	CountOpenSessions(ctx context.Context, organizationID, memberID string, now time.Time) (int, error)
 	DeleteExpiredSessions(ctx context.Context, before time.Time, limit int) (int, error)
+	// DeletePublishedOutbox removes events that already reached the bus, so
+	// the table does not grow once per change for ever.
+	DeletePublishedOutbox(ctx context.Context, before time.Time, limit int) (int, error)
 
 	CreateConnection(ctx context.Context, connection domain.Connection, event domain.Event, nextCheck time.Time) (domain.Connection, error)
 	ReplaceCredentials(ctx context.Context, connection domain.Connection, expectedVersion int64, event domain.Event) (domain.Connection, error)

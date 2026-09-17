@@ -40,6 +40,12 @@ func (publisher *Publisher) PublishEvent(ctx context.Context, event domain.Event
 	if event.ID == "" || event.DetailType == "" || event.OccurredAt.IsZero() {
 		return errors.New("event id, detail type, and occurrence time are required")
 	}
+	// Encode would turn a nil detail into "data":null and fail outright on an
+	// empty one, which is not an event either way. Refuse it here rather than
+	// let a subscriber receive an envelope with no data.
+	if len(event.Data) == 0 || !json.Valid(event.Data) {
+		return fmt.Errorf("event %s (%s) has no valid JSON detail", event.ID, event.DetailType)
+	}
 	occurredAt := event.OccurredAt.UTC()
 	detail, err := json.Marshal(envelope{
 		EventID:    event.ID,

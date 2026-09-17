@@ -32,6 +32,14 @@ func insertEvents(ctx context.Context, tx pgx.Tx, events ...domain.Event) error 
 		if event.ID == "" || event.DetailType == "" || event.OccurredAt.IsZero() {
 			return errors.New("event id, detail type and occurrence time are required")
 		}
+		// An event with no detail is not an event. Left to the database, a nil
+		// Data encodes as SQL NULL and an empty one as invalid JSON: either way
+		// the whole business transaction rolls back, and the constraint error
+		// is not one mapWriteError recognises, so the caller sees an internal
+		// failure instead of a refused request.
+		if len(event.Data) == 0 || !json.Valid(event.Data) {
+			return fmt.Errorf("event %s (%s) has no valid JSON detail: %w", event.ID, event.DetailType, domain.ErrInvalid)
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO connections_outbox (id, detail_type, detail, occurred_at)
 			VALUES ($1, $2, $3, $4)`, event.ID, event.DetailType, []byte(event.Data), event.OccurredAt); err != nil {

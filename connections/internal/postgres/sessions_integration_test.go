@@ -108,3 +108,57 @@ func TestDeleteExpiredSessions(t *testing.T) {
 		t.Fatalf("unexpired session was deleted: %v", err)
 	}
 }
+
+// TestClaimedSessionIsSingleUseUntilItExpires pins a deliberate trade-off. A
+// completion claims its session before exchanging the code, so a repeated
+// request can never exchange a code twice. The claim is not a lease: if the
+// process dies between claiming and consuming, that session cannot be claimed
+// again, and the member starts over. Preferring a failed connection attempt
+// over a double exchange is the point, so this test exists to make a change to
+// it deliberate rather than accidental.
+func TestClaimedSessionIsSingleUseUntilItExpires(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	org := "org_session_claim"
+	createApp(t, store, org, "app_google", domain.CredentialOAuth2, now)
+
+	expires := now.Add(10 * time.Minute)
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO connections_sessions (
+			state_hash, handle_hash, organization_id, member_id, app_id, intent, scope, usage,
+			return_uri, redirect_uri, requested_scopes, created_at, expires_at, callback_at)
+		VALUES ($1,$2,$3,'user-1','app_google','connect','member','members',
+			'https://app.example.com/cb','https://conn.example.com/v1/oauth/callback/google','{}',$4,$5,$4)`,
+		sha("state-claim"), sha("handle-claim"), org, now, expires); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.ClaimSession(ctx, sha("state-claim"), now); err != nil {
+		t.Fatalf("first ClaimSession() error = %v", err)
+	}
+	// Long after, but before the session expires, the claim still stands.
+	if err := store.ClaimSession(ctx, sha("state-claim"), now.Add(9*time.Minute)); !errors.Is(err, domain.ErrSessionExpired) {
+		t.Fatalf("second ClaimSession() error = %v, want ErrSessionExpired", err)
+	}
+	// Consuming it in the connect transaction is what completes the session,
+	// and the completion is single-use too.
+	if _, err := store.CompleteConnect(ctx, sha("state-claim"), domain.Connection{
+		ID: "con_claim", OrganizationID: org, AppID: "app_google", Provider: "google",
+		CredentialType: domain.CredentialOAuth2, Scope: domain.ScopeMember, MemberID: "user-1",
+		ProviderAccount: domain.ProviderAccount{ID: "acct-1"}, Scopes: []string{"email"},
+		Status: domain.StatusActive, StatusChangedAt: now, EncryptedCredentials: sealed("con_claim"),
+		CreatedBy: "user-1", CreatedAt: now, UpdatedAt: now,
+	}, testEvent("connections.connection.connected.v1", now), now.Add(24*time.Hour)); err != nil {
+		t.Fatalf("CompleteConnect() error = %v", err)
+	}
+	// Once completed, the session is spent even though it has not expired.
+	if err := store.ClaimSession(ctx, sha("state-claim"), now.Add(time.Minute)); !errors.Is(err, domain.ErrSessionExpired) {
+		t.Fatalf("ClaimSession() after completion error = %v, want ErrSessionExpired", err)
+	}
+	// Expiry is what finally reclaims the row.
+	deleted, err := store.DeleteExpiredSessions(ctx, expires.Add(time.Minute), 100)
+	if err != nil || deleted != 1 {
+		t.Fatalf("DeleteExpiredSessions() = %d, %v, want 1", deleted, err)
+	}
+}

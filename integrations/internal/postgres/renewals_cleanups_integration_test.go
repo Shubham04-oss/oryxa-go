@@ -22,7 +22,7 @@ func TestScheduleRenewal(t *testing.T) {
 		if err := store.CreateSubscription(ctx, sub, nil); err != nil {
 			t.Fatalf("CreateSubscription(%s) error = %v", id, err)
 		}
-		activated, err := store.ActivateSubscription(ctx, org, id, "reg_"+id, nil, renewAt, now, eventFor("integrations.subscription.activated.v1", now))
+		activated, err := store.ActivateSubscription(ctx, org, id, "reg_"+id, nil, nil, renewAt, now, eventFor("integrations.subscription.activated.v1", now))
 		if err != nil {
 			t.Fatalf("ActivateSubscription(%s) error = %v", id, err)
 		}
@@ -112,7 +112,7 @@ func TestClaimRenewals(t *testing.T) {
 		if err := store.CreateSubscription(ctx, sub, nil); err != nil {
 			t.Fatalf("CreateSubscription(%s) error = %v", id, err)
 		}
-		activated, err := store.ActivateSubscription(ctx, org, id, "reg_"+id, nil, renewAt, now, eventFor("integrations.subscription.activated.v1", now))
+		activated, err := store.ActivateSubscription(ctx, org, id, "reg_"+id, nil, nil, renewAt, now, eventFor("integrations.subscription.activated.v1", now))
 		if err != nil {
 			t.Fatalf("ActivateSubscription(%s) error = %v", id, err)
 		}
@@ -222,7 +222,7 @@ func TestClaimCleanupsLeaseLifecycle(t *testing.T) {
 		if err := store.CreateSubscription(ctx, sub, nil); err != nil {
 			t.Fatalf("CreateSubscription(%s) error = %v", id, err)
 		}
-		if _, err := store.ActivateSubscription(ctx, org, id, "reg_"+id, nil, nil, now, eventFor("integrations.subscription.activated.v1", now)); err != nil {
+		if _, err := store.ActivateSubscription(ctx, org, id, "reg_"+id, nil, nil, nil, now, eventFor("integrations.subscription.activated.v1", now)); err != nil {
 			t.Fatalf("ActivateSubscription(%s) error = %v", id, err)
 		}
 		stopped, err := store.StopSubscriptions(ctx, domain.SubscriptionSelector{OrganizationID: org, SubscriptionID: id},

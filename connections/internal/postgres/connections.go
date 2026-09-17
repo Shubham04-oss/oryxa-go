@@ -283,7 +283,8 @@ func (store *Store) DisconnectConnection(ctx context.Context, organizationID, co
 		changed, err = changeConnections(ctx, tx, `
 			UPDATE connections
 			SET status = 'disconnected', status_reason = $3, is_default = false,
-			    status_changed_at = $4, updated_at = $4, version = version + 1
+			    status_changed_at = $4, updated_at = $4, version = version + 1,
+			    refresh_lease_token = NULL, refresh_lease_until = NULL
 			WHERE organization_id = $1 AND id = $2 AND status <> 'disconnected'
 			RETURNING `+connectionColumns(""),
 			[]any{organizationID, connectionID, string(reason), at}, connectionEvent)
@@ -309,7 +310,8 @@ func (store *Store) DisconnectConnections(ctx context.Context, organizationID st
 	sql := `
 		UPDATE connections
 		SET status = 'disconnected', status_reason = $2, is_default = false,
-		    status_changed_at = $3, updated_at = $3, version = version + 1
+		    status_changed_at = $3, updated_at = $3, version = version + 1,
+		    refresh_lease_token = NULL, refresh_lease_until = NULL
 		WHERE organization_id = $1 AND status <> 'disconnected'`
 	args := []any{organizationID, string(reason), at}
 	switch {
