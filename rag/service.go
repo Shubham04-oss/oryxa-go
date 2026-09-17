@@ -1,33 +1,28 @@
-// Command rag serves retrieval-augmented generation for an organization: its
-// corpora, the documents in them, and the grounded answers they support.
+// Package rag assembles the rag service for a host: retrieval-augmented
+// generation for an organization — its corpora, the documents in them, and
+// the grounded answers they support.
 //
-// One process runs both the HTTP API and the ingest worker. They are separable
-// — the worker claims its work from PostgreSQL with a lease, so several
-// processes can run safely — but a single deployment is what most
-// organizations need and splitting it later costs nothing.
-package main
+// Two workers run beside its HTTP API: the outbox dispatcher that publishes
+// rag's own events, and the ingest pipeline that turns an accepted document
+// into searchable chunks. The pipeline claims its work from PostgreSQL with a
+// lease rather than working what a request just submitted, so a submission
+// returns as soon as its text is safely stored and more than one process may
+// run the pipeline safely.
+package rag
 
 import (
 	"context"
 	"errors"
-	"log"
-	"log/slog"
-	"net/http"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/s3vectors"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 
-	"github.com/Shubham04-oss/oryxa-go/internal/observability"
+	"github.com/Shubham04-oss/oryxa-go/internal/host"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
@@ -45,65 +40,65 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/vectorstore"
 )
 
-func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-	telemetryShutdown, err := observability.Setup(ctx, observability.Config{ServiceName: "oryxa-rag"})
-	if err != nil {
-		log.Fatal(err)
+// Name is how ORYXA_SERVICES selects rag.
+const Name = "rag"
+
+// Definition is how a host builds rag. Nothing calls rag over HTTP yet, so it
+// publishes no URL variable of its own.
+var Definition = host.Definition{Name: Name, Migrate: Migrate, Mount: Mount}
+
+// Migrate installs the rag schema.
+//
+// It must not check that pgvector is installed: on a fresh database the pool
+// it is handed can predate the migration that installs the extension, and
+// Store's Migrate applies rag's SQL without looking for it — only Open does.
+func Migrate(ctx context.Context, platform host.Platform) error {
+	if platform.Database == nil {
+		return host.ErrDatabaseRequired
 	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := telemetryShutdown(shutdownContext); err != nil {
-			slog.Error("shutdown telemetry", "error", err)
-		}
-	}()
-	if err := run(ctx); err != nil {
-		slog.Error("rag stopped", "error", err)
-		os.Exit(1)
-	}
+	return postgres.New(platform.Database).Migrate(ctx)
 }
 
-func run(ctx context.Context) error {
-	logger := slog.Default()
-	config, err := serviceconfig.FromEnv()
-	if err != nil {
-		return err
+// Mount assembles rag on what the host shares.
+//
+// It refuses to mount when the shared pool has no pgvector. Every corpus
+// keeps its chunk text in PostgreSQL and its vectors in pgvector or S3
+// Vectors depending on what it named, but the chunk and vector tables are
+// created together, so pgvector is required whatever a deployment configures
+// S3 Vectors for. This is the first point after every migration has run where
+// that can be checked against a live snapshot, rather than the one Migrate
+// saw, which can predate it.
+func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
+	if platform.Database == nil {
+		return host.Service{}, host.ErrDatabaseRequired
 	}
+	extensions := platform.Database.ExtensionVersions()
+	pgvectorVersion, ok := extensions["vector"]
+	if !ok {
+		return host.Service{}, errors.New("rag requires the pgvector extension, which is not installed on this database")
+	}
+	config, err := serviceconfig.FromEnv(platform.Getenv)
+	if err != nil {
+		return host.Service{}, err
+	}
+	logger := platform.Logger
+	store := postgres.New(platform.Database)
 
-	store, err := postgres.Open(ctx, config.DatabaseURL, config.PostgresExtensions...)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-	logger.Info("postgres connected", "extensions", store.ExtensionVersions())
-	if config.AutoMigrate {
-		if err := store.Migrate(ctx); err != nil {
-			return err
-		}
-	}
-
-	awsConfig, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(config.AWSRegion))
-	if err != nil {
-		return err
-	}
-	otelaws.AppendMiddlewares(&awsConfig.APIOptions)
-	bedrockClient := bedrockruntime.NewFromConfig(awsConfig)
+	bedrockClient := bedrockruntime.NewFromConfig(platform.AWS)
 
 	// Both vector backends are built where they can be, and a corpus naming
 	// one that is not configured is refused by name rather than failing at
 	// its first write.
-	stores := []vectorstore.Store{vectorstore.NewPgvector(store.Pool(), store.PgvectorVersion())}
+	stores := []vectorstore.Store{vectorstore.NewPgvector(store.Pool(), pgvectorVersion)}
 	if config.VectorBucket != "" {
-		s3VectorsClient := s3vectors.NewFromConfig(awsConfig, func(options *s3vectors.Options) {
+		s3VectorsClient := s3vectors.NewFromConfig(platform.AWS, func(options *s3vectors.Options) {
 			if config.S3VectorsEndpoint != "" {
 				options.BaseEndpoint = aws.String(config.S3VectorsEndpoint)
 			}
 		})
 		s3Store, err := vectorstore.NewS3Vectors(s3VectorsClient, config.VectorBucket)
 		if err != nil {
-			return err
+			return host.Service{}, err
 		}
 		stores = append(stores, s3Store)
 	} else {
@@ -129,9 +124,9 @@ func run(ctx context.Context) error {
 
 	var reranker retrieval.Reranker
 	if config.RerankModelARN != "" {
-		reranker, err = retrieval.NewBedrockReranker(bedrockagentruntime.NewFromConfig(awsConfig), config.RerankModelARN)
+		reranker, err = retrieval.NewBedrockReranker(bedrockagentruntime.NewFromConfig(platform.AWS), config.RerankModelARN)
 		if err != nil {
-			return err
+			return host.Service{}, err
 		}
 	} else {
 		logger.Info("RAG_RERANK_MODEL_ARN is not set: queries asking to rerank get the fused order")
@@ -153,7 +148,7 @@ func run(ctx context.Context) error {
 		})
 	}
 	if err != nil {
-		return err
+		return host.Service{}, err
 	}
 
 	retriever := retrieval.New(store, vectors, embedders, reranker, logger)
@@ -180,56 +175,45 @@ func run(ctx context.Context) error {
 			AnswerInstructions: config.AnswerInstructions,
 		}, logger)
 
-	dispatcher := events.NewDispatcher(store, events.NewPublisher(eventbridge.NewFromConfig(awsConfig), config.EventBusName), logger)
-	go dispatcher.Run(ctx)
-
+	dispatcher := events.NewDispatcher(store, events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName), logger)
 	pipeline := ingest.New(store, vectors, embedders, ingest.Options{
 		Batch: config.IngestBatch, Lease: config.IngestLease, Interval: config.IngestInterval,
 	}, logger)
-	go pipeline.Run(ctx)
-
+	workers := []host.Worker{dispatcher.Run, pipeline.Run}
 	if config.EventsQueueURL != "" {
-		go events.NewConsumer(service, logger).Poll(ctx, sqs.NewFromConfig(awsConfig), config.EventsQueueURL)
+		consumer := events.NewConsumer(service, logger)
+		queue := sqs.NewFromConfig(platform.AWS)
+		workers = append(workers, func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) })
 	} else {
 		logger.Warn("RAG_EVENTS_QUEUE_URL is not set: rag will not hear about deleted organizations, members leaving them, deleted teams or deleted files")
 	}
 
-	server := &http.Server{
-		Addr: config.Address,
-		Handler: observability.HTTPHandler("oryxa-rag", httpserver.New(service, httpserver.Config{
-			AllowedOrigins: config.AllowedOrigins,
-			Capabilities: httpserver.Capabilities{
-				Providers:    embedders.Providers(),
-				Backends:     vectors.Backends(),
-				Models:       domain.Catalog(),
-				ContentTypes: domain.TextContentTypes(),
-				Answering:    generator != nil,
-				Reranking:    reranker != nil,
-			},
-		}, logger)),
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       60 * time.Second,
-		// Answering runs a retrieval and then a model, so it is the slowest
-		// thing this service does.
-		WriteTimeout: 180 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-	go func() {
-		<-ctx.Done()
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownContext); err != nil {
-			logger.Error("shutdown", "error", err)
-		}
-	}()
+	server := httpserver.New(service, httpserver.Config{
+		AllowedOrigins: config.AllowedOrigins,
+		Capabilities: httpserver.Capabilities{
+			Providers:    embedders.Providers(),
+			Backends:     vectors.Backends(),
+			Models:       domain.Catalog(),
+			ContentTypes: domain.TextContentTypes(),
+			Answering:    generator != nil,
+			Reranking:    reranker != nil,
+		},
+	}, logger)
 
-	logger.Info("rag listening",
-		"address", config.Address,
+	logger.Info("rag mounted",
 		"backends", vectors.Backends(),
 		"embedding_providers", embedders.Providers(),
 		"answering", generator != nil)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
+
+	return host.Service{
+		Handler: server,
+		Routes:  server.Patterns(),
+		Timeouts: host.Timeouts{
+			Read: 60 * time.Second,
+			// Answering runs a retrieval and then a model, so it is the
+			// slowest thing this service does.
+			Write: 180 * time.Second,
+		},
+		Workers: workers,
+	}, nil
 }

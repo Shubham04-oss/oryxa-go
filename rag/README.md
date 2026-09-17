@@ -286,12 +286,12 @@ half-finished wipe never leaves an orphan nobody can find.
 
 ## Provision
 
-Copy `.env.example` to the ignored `rag/.env`. Its last block points everything
-at the emulators in the root `docker-compose.yml`; delete that block to
-provision AWS through the default credential chain. Then run:
+Copy the root `.env.example` to the ignored `.env`. Its emulator block points
+the AWS services rag uses at the emulators in the root `docker-compose.yml`;
+delete that block to provision AWS through the default credential chain. Then run:
 
 ```sh
-(set -a && . rag/.env && go run ./rag/infra/vectors/cmd/provision)
+(set -a && . ./.env && go run ./rag/infra/vectors/cmd/provision)
 ```
 
 The command is repeatable. It creates or updates:
@@ -314,15 +314,13 @@ the provisioner after one.
 
 ```sh
 docker compose up -d
-(set -a && . rag/.env && go run ./rag/infra/vectors/cmd/provision)
-(set -a && . rag/.env && go run ./rag/cmd/rag)
+(set -a && . ./.env && go run ./rag/infra/vectors/cmd/provision)
+(set -a && . ./.env && ORYXA_SERVICES=rag go run ./cmd/oryxa)
 ```
 
-Or in Docker on the shared network:
-
-```sh
-docker compose -f compose.rag.yaml up -d --build rag
-```
+Schemas install automatically at start unless `ORYXA_AUTO_MIGRATE=false`; to
+install them ahead of time instead, run `go run ./cmd/oryxa migrate`. Rag
+deploys as part of the one `oryxa` image, not a container of its own.
 
 Logs are structured JSON from `/internal/observability`. HTTP access logs skip
 `/healthz`.
@@ -342,9 +340,10 @@ scan, which is what keeps a filtered search from coming back short. The root
 
 ## Deploy
 
-Rag is a long-running container behind the same public edge as files and teams.
-One process serves the HTTP API and runs the ingest worker; the worker leases
-its work from PostgreSQL, so several replicas are safe.
+Rag deploys as part of the one `oryxa` image, behind the same public edge as
+the other services running alongside it. Its HTTP API and its ingest worker
+share that one process; the worker leases its work from PostgreSQL, so several
+replicas are safe.
 
 Its runtime identity needs:
 

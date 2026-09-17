@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -66,6 +67,7 @@ type Server struct {
 	capabilities   Capabilities
 	logger         *slog.Logger
 	mux            *http.ServeMux
+	patterns       []string
 }
 
 func New(service ragService, config Config, logger *slog.Logger) *Server {
@@ -84,25 +86,35 @@ func New(service ragService, config Config, logger *slog.Logger) *Server {
 			server.allowedOrigins[parsed.Scheme+"://"+parsed.Host] = struct{}{}
 		}
 	}
-	server.mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+	server.handle("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	server.mux.HandleFunc("GET /v1/capabilities", server.readCapabilities)
+	server.handle("GET /v1/capabilities", server.readCapabilities)
 
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/corpora", server.listCorpora)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/corpora", server.createCorpus)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/corpora/{corpusID}", server.getCorpus)
-	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/corpora/{corpusID}", server.deleteCorpus)
+	server.handle("GET /v1/organizations/{organizationID}/corpora", server.listCorpora)
+	server.handle("POST /v1/organizations/{organizationID}/corpora", server.createCorpus)
+	server.handle("GET /v1/organizations/{organizationID}/corpora/{corpusID}", server.getCorpus)
+	server.handle("DELETE /v1/organizations/{organizationID}/corpora/{corpusID}", server.deleteCorpus)
 
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/corpora/{corpusID}/documents", server.listDocuments)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/corpora/{corpusID}/documents", server.addDocument)
-	server.mux.HandleFunc("GET /v1/organizations/{organizationID}/corpora/{corpusID}/documents/{documentID}", server.getDocument)
-	server.mux.HandleFunc("DELETE /v1/organizations/{organizationID}/corpora/{corpusID}/documents/{documentID}", server.deleteDocument)
+	server.handle("GET /v1/organizations/{organizationID}/corpora/{corpusID}/documents", server.listDocuments)
+	server.handle("POST /v1/organizations/{organizationID}/corpora/{corpusID}/documents", server.addDocument)
+	server.handle("GET /v1/organizations/{organizationID}/corpora/{corpusID}/documents/{documentID}", server.getDocument)
+	server.handle("DELETE /v1/organizations/{organizationID}/corpora/{corpusID}/documents/{documentID}", server.deleteDocument)
 
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/corpora/{corpusID}/search", server.search)
-	server.mux.HandleFunc("POST /v1/organizations/{organizationID}/corpora/{corpusID}/answer", server.answer)
+	server.handle("POST /v1/organizations/{organizationID}/corpora/{corpusID}/search", server.search)
+	server.handle("POST /v1/organizations/{organizationID}/corpora/{corpusID}/answer", server.answer)
 	return server
 }
+
+// handle registers a route and remembers its pattern, so a host serving
+// several services knows which paths are this one's.
+func (server *Server) handle(pattern string, handler http.HandlerFunc) {
+	server.mux.HandleFunc(pattern, handler)
+	server.patterns = append(server.patterns, pattern)
+}
+
+// Patterns lists every route the server registered.
+func (server *Server) Patterns() []string { return slices.Clone(server.patterns) }
 
 func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
