@@ -26,6 +26,16 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 )
 
+// Sink is where a dispatched event goes.
+//
+// It is an interface rather than the EventBridge publisher itself because
+// that choice is not the outbox's business. Today it is the bus; in a build
+// where the retrieval pipeline shares this process, it is that pipeline, and
+// the durability, ordering and retry above it are identical either way.
+type Sink interface {
+	PublishEvent(context.Context, domain.Event) error
+}
+
 type putEventsAPI interface {
 	PutEvents(context.Context, *eventbridge.PutEventsInput, ...func(*eventbridge.Options)) (*eventbridge.PutEventsOutput, error)
 }

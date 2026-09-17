@@ -59,7 +59,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	})
 	signer := serviceauth.Signer{Client: kmsClient, KeyID: config.ServiceKeyID, Service: config.ServiceName}
 
-	service := New(Dependencies{
+	service, err := New(Dependencies{
 		Store:       postgres.New(platform.Database),
 		Directory:   authclient.New(config.AuthURL),
 		Connections: connectionsclient.New(config.ConnectionsURL, signer),
@@ -68,6 +68,9 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Extractors:  Builtin(),
 		Logger:      logger,
 	}, Config{AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval})
+	if err != nil {
+		return host.Service{}, err
+	}
 
 	workers := make([]host.Worker, 0, len(service.Workers())+1)
 	for _, worker := range service.Workers() {

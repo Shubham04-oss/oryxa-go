@@ -140,12 +140,9 @@ func TestCreateSourceStoresTheSourceAndItsEvent(t *testing.T) {
 		t.Fatalf("Source() interval = %s, want %s", read.Interval, 90*time.Minute)
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-	if len(claimed) != 1 || claimed[0].ID != event.ID {
-		t.Fatalf("ClaimOutbox() = %+v, want the source's event", claimed)
+	var recorded bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM knowledge_outbox WHERE id = $1)`, event.ID).Scan(&recorded); err != nil || !recorded {
+		t.Fatalf("the source's event was not in the outbox: found = %v, err = %v", recorded, err)
 	}
 }
 
@@ -219,12 +216,9 @@ func TestUpsertDocumentPublishesOnlyWhatChanged(t *testing.T) {
 		t.Fatalf("UpsertDocument(changed) = %v, %v, want published", published, err)
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-	if len(claimed) != 2 {
-		t.Fatalf("ClaimOutbox() = %d events, want 2", len(claimed))
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM knowledge_outbox`).Scan(&outboxCount); err != nil || outboxCount != 2 {
+		t.Fatalf("outbox events = %d, error = %v, want 2", outboxCount, err)
 	}
 }
 
@@ -393,12 +387,9 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 	if claimed {
 		t.Fatal("FinishSource(lost lease) = true, want false")
 	}
-	outbox, err := store.ClaimOutbox(ctx, 10)
-	if err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-	if len(outbox) != 0 {
-		t.Fatalf("ClaimOutbox() = %d events, want none from a run that lost its lease", len(outbox))
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM knowledge_outbox`).Scan(&outboxCount); err != nil || outboxCount != 0 {
+		t.Fatalf("outbox events = %d, error = %v, want none from a run that lost its lease", outboxCount, err)
 	}
 
 	claimed, err = store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), nil, &event)
@@ -576,43 +567,6 @@ func TestEventHandledIsTrueOnlyAfterMarkEventHandled(t *testing.T) {
 	forgotten, err := store.DeleteHandledEventsBefore(ctx, testClock.Add(time.Hour))
 	if err != nil || forgotten != 1 {
 		t.Fatalf("DeleteHandledEventsBefore() = %d, %v, want 1", forgotten, err)
-	}
-}
-
-func TestOutboxRetriesWhatCouldNotBePublished(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-	source := testSource(t, store, "org_1")
-	event := testEvent(t, "knowledge.document.published.v1")
-	document := testDocument(source, "issue-1", strings.Repeat("a", 64))
-	if _, err := store.UpsertDocument(ctx, document, func(domain.Document) (domain.Event, error) { return event, nil }); err != nil {
-		t.Fatalf("UpsertDocument() error = %v", err)
-	}
-
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(claimed) != 1 {
-		t.Fatalf("ClaimOutbox() = %d events, %v, want 1", len(claimed), err)
-	}
-	// A claimed event is not handed to a second dispatcher.
-	locked, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(locked) != 0 {
-		t.Fatalf("ClaimOutbox(while locked) = %d events, %v, want none", len(locked), err)
-	}
-
-	if err := store.MarkOutboxFailed(ctx, event.ID, 0, "the bus said no"); err != nil {
-		t.Fatalf("MarkOutboxFailed() error = %v", err)
-	}
-	retried, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(retried) != 1 || retried[0].Attempts != 1 {
-		t.Fatalf("ClaimOutbox(after failing) = %+v, %v", retried, err)
-	}
-
-	if err := store.MarkOutboxPublished(ctx, event.ID); err != nil {
-		t.Fatalf("MarkOutboxPublished() error = %v", err)
-	}
-	done, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(done) != 0 {
-		t.Fatalf("ClaimOutbox(after publishing) = %d events, %v, want none", len(done), err)
 	}
 }
 

@@ -15,8 +15,6 @@ import (
 
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	connectionsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/connections/v1"
-
-	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 )
 
 var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
@@ -247,89 +245,8 @@ func TestHandleRecordsAnEventOnlyAfterItsHandlerSucceeds(t *testing.T) {
 	}
 }
 
-// fakeOutbox is what the dispatcher claims from.
-type fakeOutbox struct {
-	pending   []domain.OutboxEvent
-	published []string
-	failed    []string
-	delays    []time.Duration
-}
-
-func (outbox *fakeOutbox) ClaimOutbox(_ context.Context, limit int) ([]domain.OutboxEvent, error) {
-	if len(outbox.pending) == 0 {
-		return nil, nil
-	}
-	if limit > len(outbox.pending) {
-		limit = len(outbox.pending)
-	}
-	claimed := outbox.pending[:limit]
-	outbox.pending = outbox.pending[limit:]
-	return claimed, nil
-}
-
-func (outbox *fakeOutbox) MarkOutboxPublished(_ context.Context, eventID string) error {
-	outbox.published = append(outbox.published, eventID)
-	return nil
-}
-
-func (outbox *fakeOutbox) MarkOutboxFailed(_ context.Context, eventID string, retryAfter time.Duration, _ string) error {
-	outbox.failed = append(outbox.failed, eventID)
-	outbox.delays = append(outbox.delays, retryAfter)
-	return nil
-}
-
-// fakeSink stands where EventBridge, or a retrieval pipeline sharing this
-// process, would.
-type fakeSink struct {
-	got []domain.Event
-	err error
-}
-
-func (sink *fakeSink) PublishEvent(_ context.Context, event domain.Event) error {
-	if sink.err != nil {
-		return sink.err
-	}
-	sink.got = append(sink.got, event)
-	return nil
-}
-
-func outboxEvent(id string, attempts int) domain.OutboxEvent {
-	return domain.OutboxEvent{
-		Event: domain.Event{
-			ID: id, DetailType: "knowledge.document.published.v1",
-			OccurredAt: testClock, Data: json.RawMessage(`{}`),
-		},
-		Attempts: attempts,
-	}
-}
-
-func TestDispatcherHandsEveryClaimedEventToTheSink(t *testing.T) {
-	// The sink is an interface precisely so this is the same whether it is the
-	// bus or a pipeline in this process.
-	outbox := &fakeOutbox{pending: []domain.OutboxEvent{outboxEvent("evt_1", 0), outboxEvent("evt_2", 0)}}
-	sink := &fakeSink{}
-
-	NewDispatcher(outbox, sink, nil).flush(context.Background())
-	if len(sink.got) != 2 {
-		t.Fatalf("sink received %d events, want 2", len(sink.got))
-	}
-	if len(outbox.published) != 2 {
-		t.Fatalf("marked %d published, want 2", len(outbox.published))
-	}
-}
-
-func TestDispatcherKeepsAnEventTheSinkRefused(t *testing.T) {
-	outbox := &fakeOutbox{pending: []domain.OutboxEvent{outboxEvent("evt_1", 0)}}
-	sink := &fakeSink{err: errors.New("the bus said no")}
-
-	NewDispatcher(outbox, sink, nil).flush(context.Background())
-	if len(outbox.published) != 0 {
-		t.Fatal("marked an event published that was never published")
-	}
-	if len(outbox.failed) != 1 {
-		t.Fatalf("marked %d failed, want 1", len(outbox.failed))
-	}
-}
+// Claiming, marking, retrying and the backoff behind it are internal/outbox's
+// own concern now: see its dispatcher_test.go.
 
 // fakeQueue answers a scripted sequence of receives and records every
 // receive and delete Poll makes, each on its own channel, so a test can wait
@@ -467,19 +384,4 @@ func TestPollReturnsOnceItsContextIsCancelled(t *testing.T) {
 	done := make(chan struct{})
 	go func() { consumer.Poll(ctx, queue, "queue-url"); close(done) }()
 	waitPollReturns(t, done)
-}
-
-func TestRetryDelayDoublesUntilItIsCapped(t *testing.T) {
-	if got := retryDelay(0); got != time.Second {
-		t.Fatalf("retryDelay(0) = %s, want 1s", got)
-	}
-	if got := retryDelay(3); got != 8*time.Second {
-		t.Fatalf("retryDelay(3) = %s, want 8s", got)
-	}
-	if got := retryDelay(50); got != 64*time.Second {
-		t.Fatalf("retryDelay(past the ceiling) = %s, want 64s", got)
-	}
-	if got := retryDelay(-1); got != time.Second {
-		t.Fatalf("retryDelay(-1) = %s, want 1s", got)
-	}
 }

@@ -19,7 +19,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/application"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/postgres"
@@ -68,13 +70,15 @@ type Service struct {
 	app        *application.Service
 	store      *postgres.Store
 	handler    *httpserver.Server
-	dispatcher *events.Dispatcher
+	dispatcher *outbox.Dispatcher
 	consumer   *events.Consumer
 }
 
 // New assembles the service. It does not touch the database, start anything,
-// or listen: a host decides when each of those happens.
-func New(dependencies Dependencies, config Config) *Service {
+// or listen: a host decides when each of those happens. It errors only if
+// Store's pool is nil or knowledge_outbox is not a name internal/outbox
+// accepts, neither of which a real host can trigger.
+func New(dependencies Dependencies, config Config) (*Service, error) {
 	logger := dependencies.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -100,9 +104,16 @@ func New(dependencies Dependencies, config Config) *Service {
 		consumer: events.NewConsumer(app, logger),
 	}
 	if dependencies.Sink != nil {
-		service.dispatcher = events.NewDispatcher(dependencies.Store, dependencies.Sink, logger)
+		table, err := outbox.NewTable(dependencies.Store.Pool(), "knowledge_outbox")
+		if err != nil {
+			return nil, err
+		}
+		sink := dependencies.Sink
+		service.dispatcher = outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
+			return sink.PublishEvent(ctx, domain.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+		}), logger)
 	}
-	return service
+	return service, nil
 }
 
 // Name is what this service calls itself.
