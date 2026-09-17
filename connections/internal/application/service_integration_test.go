@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -11,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/url"
 	"os"
@@ -40,10 +42,11 @@ type dbHarness struct {
 	database *pgx.Conn
 }
 
-func newDBHarness(t *testing.T) *dbHarness {
+func newDBHarness(t *testing.T, change ...func(*Dependencies)) *dbHarness {
 	t.Helper()
 	store, database := openTestDatabase(t)
-	return &dbHarness{harness: newHarness(t, func(dependencies *Dependencies) { dependencies.Store = store }), db: store, database: database}
+	setStore := func(dependencies *Dependencies) { dependencies.Store = store }
+	return &dbHarness{harness: newHarness(t, append([]func(*Dependencies){setStore}, change...)...), db: store, database: database}
 }
 
 // openTestDatabase migrates a throwaway schema and drops it afterwards, so the
@@ -1319,5 +1322,57 @@ func TestClientCredentialsMintFailures(t *testing.T) {
 	}
 	if connection := h.stored(t, created.ID); connection.Status != domain.StatusNeedsReconnect || connection.Reason != string(domain.ReconnectCredentialRejected) {
 		t.Fatalf("connection after a rejected mint = %s/%s", connection.Status, connection.Reason)
+	}
+}
+
+// TestRevocationFailureKeepsCredentialsUntilRevokeGiveUp covers
+// deleteCredentials's error path. A provider that refuses to revoke keeps a
+// disconnected connection's credentials rather than deleting them outright,
+// so cleanup can retry the revoke on a later run; only once revokeGiveUp has
+// passed beyond MaxHold does it give up, deleting the credentials unrevoked
+// and saying so, in the log and in the credentials-deleted event.
+func TestRevocationFailureKeepsCredentialsUntilRevokeGiveUp(t *testing.T) {
+	var logs bytes.Buffer
+	h := newDBHarness(t, func(dependencies *Dependencies) { dependencies.Logger = slog.New(slog.NewTextHandler(&logs, nil)) })
+	app := h.createApp(t, "github", "read:user", "repo")
+	completion, err := h.connect(t, memberToken, "github", AuthorizeInput{AppID: app.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionID := completion.Connection.ID
+	if err := h.service.Disconnect(ctx, as(memberToken), organization, connectionID); err != nil {
+		t.Fatal(err)
+	}
+	h.oauth.set(func(oauth *fakeOAuth) { oauth.revokeErr = errors.New("revoke endpoint unavailable") })
+
+	if claimed, err := h.service.CleanUp(ctx); err != nil || claimed != 1 {
+		t.Fatalf("CleanUp() while the provider refuses to revoke = %d %v", claimed, err)
+	}
+	if stored := h.stored(t, connectionID); stored.EncryptedCredentials == nil || stored.CredentialsDeletedAt != nil {
+		t.Fatalf("connection deleted despite the unresolved revoke: %+v", stored)
+	}
+	if revocations := h.oauth.revokeRequests(); len(revocations) != 1 {
+		t.Fatalf("revoke attempts = %d, want 1", len(revocations))
+	}
+	if deleted := h.outboxEvents(t, connectionseventsv1.ConnectionCredentialsDeletedDetailType); len(deleted) != 0 {
+		t.Fatalf("credentials-deleted was recorded before the deletion finished: %v", deleted)
+	}
+
+	// Past MaxHold + revokeGiveUp, cleanup deletes the credentials anyway and
+	// says so.
+	h.now = h.now.Add(domain.MaxHold + revokeGiveUp + time.Minute)
+	if claimed, err := h.service.CleanUp(ctx); err != nil || claimed != 1 {
+		t.Fatalf("CleanUp() past revokeGiveUp = %d %v", claimed, err)
+	}
+	if stored := h.stored(t, connectionID); stored.EncryptedCredentials != nil || stored.CredentialsDeletedAt == nil {
+		t.Fatalf("connection was not deleted past revokeGiveUp: %+v", stored)
+	}
+	if !strings.Contains(logs.String(), "deleting credentials the provider did not revoke") {
+		t.Fatalf("log = %s, want the give-up warning", logs.String())
+	}
+	deleted := h.outboxEvents(t, connectionseventsv1.ConnectionCredentialsDeletedDetailType)
+	var payload connectionseventsv1.ConnectionCredentialsDeleted
+	if len(deleted) != 1 || json.Unmarshal([]byte(deleted[0]), &payload) != nil || payload.Revoked {
+		t.Fatalf("credentials deleted event = %v (unmarshalled %+v), want exactly one with revoked=false", deleted, payload)
 	}
 }
