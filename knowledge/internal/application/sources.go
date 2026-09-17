@@ -167,10 +167,6 @@ const maxRuns = 50
 // RemoveSource stops indexing something and retracts what it held, so a
 // retrieval pipeline forgets it too.
 func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) error {
-	source, err := s.Source(ctx, credentials, organizationID, sourceID)
-	if err != nil {
-		return err
-	}
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
 		return err
@@ -178,8 +174,13 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 	if caller.Agent {
 		return fmt.Errorf("an agent cannot remove a source: %w", domain.ErrForbidden)
 	}
+	source, err := s.store.Source(ctx, organizationID, sourceID)
+	if err != nil {
+		return err
+	}
 	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
-		return domain.ErrForbidden
+		// Answering not-found tells the caller nothing they did not know.
+		return domain.ErrNotFound
 	}
 	return s.store.RemoveSource(ctx, organizationID, sourceID, s.now(), s.retractions(knowledgev1.RemovedReasonSourceRemoved))
 }

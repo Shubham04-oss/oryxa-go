@@ -203,6 +203,33 @@ func TestRemoveSourceRetractsWhatItHeld(t *testing.T) {
 	}
 }
 
+func TestRemoveSourceAsksAuthOnce(t *testing.T) {
+	// s.Source resolves the caller and s.caller resolved it again was one
+	// round trip too many on a path that runs once per removal, not once per
+	// page; the caller is now resolved a single time.
+	store := newFakeStore()
+	directory := &fakeDirectory{membership: member()}
+	service := New(Dependencies{
+		Store:       store,
+		Directory:   directory,
+		Connections: &fakeConnections{connection: usable()},
+		Extractors:  sources.Registry{"github": &fakeExtractor{provider: "github"}},
+		Clock:       func() time.Time { return testClock },
+	}, Config{})
+	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", registration())
+	if err != nil {
+		t.Fatalf("RegisterSource() error = %v", err)
+	}
+
+	directory.calls = 0
+	if err := service.RemoveSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", source.ID); err != nil {
+		t.Fatalf("RemoveSource() error = %v", err)
+	}
+	if directory.calls != 1 {
+		t.Fatalf("RemoveSource() asked auth %d times, want 1", directory.calls)
+	}
+}
+
 func TestOrganizationDeletedRetiresEverythingItIndexed(t *testing.T) {
 	store := newFakeStore()
 	service := registrar(t, store, member(), usable())

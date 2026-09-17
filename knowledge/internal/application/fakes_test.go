@@ -376,13 +376,16 @@ func (store *fakeStore) published(detailType string) int {
 	return count
 }
 
-// fakeDirectory answers what auth would about the caller.
+// fakeDirectory answers what auth would about the caller, and counts how
+// often it was asked.
 type fakeDirectory struct {
 	membership domain.OrgMembership
 	err        error
+	calls      int
 }
 
 func (directory *fakeDirectory) Membership(context.Context, string, authclient.Credentials) (domain.OrgMembership, error) {
+	directory.calls++
 	if directory.err != nil {
 		return domain.OrgMembership{}, directory.err
 	}
