@@ -162,8 +162,8 @@ Not yet:
 
 - Triggers into agent runs, and subscription tools, so an agent can watch as
   well as act. Each provider's skill already describes its events.
-- Actions and triggers for the 13 other providers members can connect, such
-  as Google, Notion, Atlassian, HubSpot and Salesforce.
+- Actions and triggers for the 12 other providers members can connect, such
+  as Google, Notion, Atlassian and Salesforce.
 - A run API in the `agents` service that forwards the member's own token, and a web
   screen for agent grants.
 - Live runs: only GitHub's webhook has run against the real provider. The live

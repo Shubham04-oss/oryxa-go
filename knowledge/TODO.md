@@ -119,10 +119,6 @@ What is not:
   pattern: skipped unless credentials are in the environment, creating and
   cleaning up real resources. Nothing here has run against a real GitHub,
   Notion or Slack.
-- **The store tests ran against a locally started Postgres 16, not the
-  project's `pgvector/pgvector:0.8.6-pg17` image**, because this sandbox has
-  no Docker daemon. The schema uses no extensions, so this should not matter —
-  but it has not been proven on the real image.
 
 ---
 

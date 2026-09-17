@@ -120,6 +120,6 @@ BILLING_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/or
 
 ## Deploy
 
-Billing is a long-running container, like auth, behind the same public edge: the webhook endpoint must be reachable by Dodo, and the other routes by the app. Its runtime identity needs `events:PutEvents` on the event bus and `sqs:ReceiveMessage` and `sqs:DeleteMessage` on `billing-events`.
+Billing deploys as part of the single `oryxa` image, behind the same public edge as every service it runs alongside: the webhook endpoint must be reachable by Dodo, and the other routes by the app. Its runtime identity needs `events:PutEvents` on the event bus and `sqs:ReceiveMessage` and `sqs:DeleteMessage` on `billing-events`.
 
 Before taking payments: create the products in Dodo live mode, point the catalog's `product_id`s at them, set `DODO_PAYMENTS_ENVIRONMENT=live_mode` with a live API key and webhook secret, and turn on Dodo's subscription grace period if organizations should keep their plan while a renewal is retried.
