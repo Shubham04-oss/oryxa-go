@@ -56,15 +56,23 @@ func (store *Store) CreateSubscription(ctx context.Context, subscription domain.
 // provider, makes it active and writes its created event. A subscription that
 // was stopped while it registered stays stopped, and its registration is
 // queued for removal: the result is then domain.ErrConflict.
-func (store *Store) ActivateSubscription(ctx context.Context, organizationID, subscriptionID, registrationID string, expiresAt, renewAt *time.Time, at time.Time, eventFor func(domain.Subscription) (domain.Event, error)) (domain.Subscription, error) {
+//
+// secret replaces the subscription's stored signing secret when the provider
+// issued one of its own, as ClickUp does by answering a create with the
+// webhook's secret. Nil keeps the secret the subscription was saved with.
+func (store *Store) ActivateSubscription(ctx context.Context, organizationID, subscriptionID, registrationID string, secret *domain.SealedData, expiresAt, renewAt *time.Time, at time.Time, eventFor func(domain.Subscription) (domain.Event, error)) (domain.Subscription, error) {
+	encoded, err := sealedValue(secret)
+	if err != nil {
+		return domain.Subscription{}, err
+	}
 	var activated domain.Subscription
 	ended := false
-	err := store.inTx(ctx, func(tx pgx.Tx) error {
-		current, err := scanSubscription(tx.QueryRow(ctx, `
+	err = store.inTx(ctx, func(tx pgx.Tx) error {
+		current, scanErr := scanSubscription(tx.QueryRow(ctx, `
 			SELECT `+subscriptionColumns+` FROM integrations_subscriptions
 			WHERE organization_id = $1 AND id = $2 FOR UPDATE`, organizationID, subscriptionID))
-		if err != nil {
-			return err
+		if scanErr != nil {
+			return scanErr
 		}
 		switch current.Status {
 		case domain.SubscriptionPending:
@@ -82,9 +90,10 @@ func (store *Store) ActivateSubscription(ctx context.Context, organizationID, su
 		}
 		activated, err = scanSubscription(tx.QueryRow(ctx, `
 			UPDATE integrations_subscriptions
-			SET status = 'active', registration_id = $3, expires_at = $4, renew_at = $5, updated_at = $6, version = version + 1
+			SET status = 'active', registration_id = $3, expires_at = $4, renew_at = $5, updated_at = $6,
+			    encrypted_secret = COALESCE($7, encrypted_secret), version = version + 1
 			WHERE organization_id = $1 AND id = $2
-			RETURNING `+subscriptionColumns, organizationID, subscriptionID, registrationID, expiresAt, renewAt, at))
+			RETURNING `+subscriptionColumns, organizationID, subscriptionID, registrationID, expiresAt, renewAt, at, encoded))
 		if err != nil {
 			return err
 		}

@@ -25,7 +25,7 @@ import (
 
 type Store interface {
 	CreateSubscription(context.Context, domain.Subscription, *domain.Event) error
-	ActivateSubscription(ctx context.Context, organizationID, subscriptionID, registrationID string, expiresAt, renewAt *time.Time, at time.Time, eventFor func(domain.Subscription) (domain.Event, error)) (domain.Subscription, error)
+	ActivateSubscription(ctx context.Context, organizationID, subscriptionID, registrationID string, secret *domain.SealedData, expiresAt, renewAt *time.Time, at time.Time, eventFor func(domain.Subscription) (domain.Event, error)) (domain.Subscription, error)
 	DeletePendingSubscription(ctx context.Context, organizationID, subscriptionID string) error
 	Subscription(ctx context.Context, organizationID, subscriptionID string) (domain.Subscription, error)
 	SubscriptionByRoute(ctx context.Context, route string) (domain.Subscription, error)

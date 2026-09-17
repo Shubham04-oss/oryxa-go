@@ -61,7 +61,7 @@ func (store *fakeStore) CreateSubscription(_ context.Context, subscription domai
 	return nil
 }
 
-func (store *fakeStore) ActivateSubscription(_ context.Context, organizationID, subscriptionID, registrationID string, expiresAt, renewAt *time.Time, at time.Time, eventFor func(domain.Subscription) (domain.Event, error)) (domain.Subscription, error) {
+func (store *fakeStore) ActivateSubscription(_ context.Context, organizationID, subscriptionID, registrationID string, secret *domain.SealedData, expiresAt, renewAt *time.Time, at time.Time, eventFor func(domain.Subscription) (domain.Event, error)) (domain.Subscription, error) {
 	if store.onActivate != nil {
 		store.onActivate()
 	}

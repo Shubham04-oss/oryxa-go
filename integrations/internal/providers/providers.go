@@ -118,6 +118,14 @@ type Registration struct {
 	// ExpiresAt is when the provider stops delivering unless it is renewed;
 	// zero when it does not expire.
 	ExpiresAt time.Time
+	// Secret is the signing secret the provider issued for this registration,
+	// where the provider chooses it rather than taking the one the request
+	// carried: ClickUp answers a create with the webhook's own secret, and
+	// Asana hands one over during the handshake and signs every later delivery
+	// with it. The caller stores this in place of the secret it generated, so
+	// Receive is given the value the provider actually signs with. Empty means
+	// the request's Secret is what the provider signs with, as GitHub does.
+	Secret string
 }
 
 type RenewRequest struct {
