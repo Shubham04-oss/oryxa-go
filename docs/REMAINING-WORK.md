@@ -113,12 +113,6 @@ outside the task.
 
 ### Integrations
 
-- **No end-to-end test for HubSpot.** The provider and its actions have unit
-  tests against fake servers; the e2e stack (`internal/e2e`) covers GitHub,
-  Slack, Linear and Microsoft only.
-- **No test for the `Registration.Secret` path at the application layer.** The
-  store behaviour is tested (replace, keep, read-back), but nothing drives a
-  provider that returns a secret through `createWebhookSubscription`.
 - **No live HubSpot test.** Nothing has run against the real HubSpot API.
 
 ### Connections
