@@ -117,31 +117,68 @@ outside the task.
 
 ### Connections
 
-These were identified by comparing the implementation against the tests, and
-none has been closed:
+The eight gaps this section used to list (worker loops, non-OAuth2 probing,
+the two `ErrInstallationNotFound` paths, the revoke-failure fallback,
+`mintErr`, the `ErrNeedsReconnect` skip branch, `maxJSONBytes`, and
+`postgres.Open`'s required extensions) were closed in this round with new
+tests; none needed a behaviour change. The worker-loop and `httpserver`
+tests need no database and were run directly. The `maxJSONBytes` one was
+also confirmed to fail with the limit loosened. The five DB-backed tests —
+four new ones in `service_integration_test.go` plus
+`TestOpenRequiredExtensions` in `postgres` — were only read against the
+code, not run: like the rest of those two suites, they need
+`CONNECTIONS_TEST_DATABASE_URL` and were left for the lead to run. What is
+left is unchanged from before: real KMS,
+EventBridge and SQS are still never contacted.
 
 - The **worker loops** — `RunHeartbeat`, `RunCleanup`, `runEvery`, `jitter` —
-  are never exercised; only the inner `CheckHealth` and `CleanUp` are. Batching,
-  jitter, cancellation and error logging are unverified.
-- `probe` branches for **non-OAuth2** credentials (client-credentials mint,
-  installation, key-based identity): the heartbeat test uses an OAuth2
-  connection only.
-- `ErrInstallationNotFound` → `installation_removed` is unexercised;
-  `fakeOAuth.installationErr` and `installationTokErr` are declared but never
-  set, so `workers.go` and `token.go` paths that read them never run.
-- The **revocation-failure** path and the `revokeGiveUp` fallback are untested:
-  `fakeOAuth.revokeErr` is never set, so an OAuth2
-  `credentials-deleted` event with `revoked: false` is never produced.
-- `mintErr` is never set, so a mint failure during connect or during a
-  client-credentials renewal is untested.
-- `CheckHealth`'s `ErrNeedsReconnect` skip branch is not reached by any test.
-- `httpserver.decode`'s `maxJSONBytes` limit is untested — unknown fields and
-  trailing objects are covered, an oversized body is not.
-- `postgres.Open` with `POSTGRES_REQUIRED_EXTENSIONS` is untested; the test
-  helpers pass none.
-- Real KMS, EventBridge and SQS are never contacted; the e2e stack substitutes
-  AES-GCM for KMS, so the production envelope wiring in `connections/service.go`
-  is unverified end to end. Its test mounts the service but contacts nothing.
+  are covered in `internal/application/workers_test.go`: draining full
+  batches before sleeping, jitter's bounds (including the zero-spread edge
+  case), prompt return on cancellation, waiting about the interval between
+  short batches, and logging then continuing after an error. `RunHeartbeat`
+  and `RunCleanup` are each checked to actually delegate to `runEvery` with
+  `CheckHealth`/`CleanUp` as their work, by driving them against the fake
+  store (which leaves `ClaimHealthChecks`/`ClaimCredentialDeletions`
+  unimplemented on purpose) and reading the logged failure back out.
+- `probe`'s **non-OAuth2** branches (client-credentials mint, installation
+  identity, key-based identity) are covered by
+  `TestHeartbeatNonOAuth2Credentials` in `service_integration_test.go`, each
+  with a passing check and a permanent-failure check.
+- `ErrInstallationNotFound` → `installation_removed` is exercised on both
+  paths that read it: `TestHeartbeatNonOAuth2Credentials` sets
+  `fakeOAuth.installationErr` for `workers.go`'s probe, and
+  `TestInstallationTokenRenewalFailure` sets `installationTokErr` for
+  `token.go`'s renewal.
+- The **revocation-failure** path and the `revokeGiveUp` fallback are covered
+  by `TestRevocationFailureKeepsCredentialsUntilRevokeGiveUp`: with
+  `fakeOAuth.revokeErr` set, a disconnected connection keeps its credentials
+  while cleanup retries the revoke, and only past `revokeGiveUp` are they
+  deleted unrevoked, with `revoked: false` on the `credentials-deleted` event
+  and a logged warning.
+- `mintErr` is covered by `TestClientCredentialsMintFailures`: a rejected
+  mint during `CreateConnection` leaves nothing behind, and one during a
+  client-credentials renewal (driven through `IssueToken`, mirroring
+  `TestIssueTokenRenewalFailures`'s OAuth2 case) marks the connection
+  `needs_reconnect`.
+- `CheckHealth`'s `ErrNeedsReconnect` skip branch is reached by
+  `TestHeartbeatNonOAuth2Credentials`'s client-credentials failure case: the
+  renewal inside `probe` already records the failure, so the check itself
+  must be recorded as skipped rather than failed.
+- `httpserver.decode`'s `maxJSONBytes` limit is covered by
+  `TestDecodeRejectsAnOversizedBody`, alongside a normal-sized body to show
+  the limit is not rejecting everything.
+- `postgres.Open` with required extensions is covered by
+  `TestOpenRequiredExtensions`, an integration test that skips without
+  `CONNECTIONS_TEST_DATABASE_URL` like the rest of this package's `postgres`
+  suite: a required extension that is installed is accepted, and a name the
+  database does not recognise as installed is refused, naming it.
+
+Still open:
+
+- Real KMS, EventBridge and SQS are never contacted; the e2e stack
+  substitutes AES-GCM for KMS, so the production envelope wiring in
+  `connections/service.go` is unverified end to end. Its test mounts the
+  service but contacts nothing.
 
 ## Local branch hygiene
 
