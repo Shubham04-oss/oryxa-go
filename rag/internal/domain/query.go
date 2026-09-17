@@ -214,6 +214,14 @@ func (query Query) Candidates() int {
 	return min(query.TopK*query.OverFetch, MaxCandidates)
 }
 
+// ScoredChunk is one retriever's opinion: a chunk and how well it did. It is
+// deliberately thin, because the retrievers disagree about what a score means
+// and fusion ranks them rather than adding them up.
+type ScoredChunk struct {
+	ChunkID string
+	Score   float64
+}
+
 // Match is one retrieved chunk and why it is here. The ranks are kept so a
 // result can be explained: a chunk that only the lexical side found looks
 // very different from one both retrievers agreed on, and that difference is

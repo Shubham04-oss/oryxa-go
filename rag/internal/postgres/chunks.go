@@ -229,12 +229,6 @@ func (store *Store) DocumentRefs(ctx context.Context, organizationID string, ids
 	return refs, nil
 }
 
-// LexicalHit is one match from the text index.
-type LexicalHit struct {
-	ChunkID string
-	Score   float64
-}
-
 // LexicalSearch is the other half of hybrid retrieval.
 //
 // It exists because vectors are bad at exactly what full-text search is good
@@ -245,7 +239,7 @@ type LexicalHit struct {
 // websearch_to_tsquery is used rather than plainto_tsquery because it accepts
 // what people actually type — quoted phrases, and a leading minus to exclude —
 // and because it never errors on punctuation the way to_tsquery does.
-func (store *Store) LexicalSearch(ctx context.Context, corpus domain.Corpus, text string, limit int, filter domain.Filter) ([]LexicalHit, error) {
+func (store *Store) LexicalSearch(ctx context.Context, corpus domain.Corpus, text string, limit int, filter domain.Filter) ([]domain.ScoredChunk, error) {
 	if err := filter.Validate(); err != nil {
 		return nil, err
 	}
@@ -288,9 +282,9 @@ func (store *Store) LexicalSearch(ctx context.Context, corpus domain.Corpus, tex
 	if err := store.db.SelectContext(ctx, &rows, statement, arguments...); err != nil {
 		return nil, fmt.Errorf("lexical search: %w", err)
 	}
-	hits := make([]LexicalHit, 0, len(rows))
+	hits := make([]domain.ScoredChunk, 0, len(rows))
 	for _, row := range rows {
-		hits = append(hits, LexicalHit{ChunkID: row.ID, Score: row.Score})
+		hits = append(hits, domain.ScoredChunk{ChunkID: row.ID, Score: row.Score})
 	}
 	return hits, nil
 }
