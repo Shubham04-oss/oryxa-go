@@ -58,6 +58,11 @@ func (store *Store) Close() {
 
 func (store *Store) ExtensionVersions() map[string]string { return store.database.ExtensionVersions() }
 
+// Pool is billing's pool, for internal/outbox's table to claim, mark and
+// sweep billing_outbox directly rather than through a copy of that logic
+// here.
+func (store *Store) Pool() *pgxpool.Pool { return store.pool }
+
 // Migrate applies each migration in name order, once while it stays unchanged,
 // recording what it applied; see postgreskit's Migrate.
 func (store *Store) Migrate(ctx context.Context) error {

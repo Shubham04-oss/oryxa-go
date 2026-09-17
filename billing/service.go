@@ -16,11 +16,13 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/catalog"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/dodo"
+	"github.com/Shubham04-oss/oryxa-go/billing/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
 
 // Name is how ORYXA_SERVICES selects billing.
@@ -70,7 +72,14 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		RenewalReminderWindow: time.Duration(config.RenewalReminderDays) * 24 * time.Hour,
 	}, logger)
 
-	dispatcher := events.NewDispatcher(store, events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName), logger)
+	publisher := events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName)
+	table, err := outbox.NewTable(store.Pool(), "billing_outbox")
+	if err != nil {
+		return host.Service{}, err
+	}
+	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
+		return publisher.PublishEvent(ctx, domain.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+	}), logger)
 	workers := []host.Worker{dispatcher.Run}
 	if config.EventsQueueURL != "" {
 		consumer := events.NewConsumer(service, logger)
