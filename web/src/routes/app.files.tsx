@@ -44,7 +44,7 @@ import {
 	getFile,
 	type StoredFile,
 } from "@/lib/files/client";
-import { daysUntil, formatDate } from "@/lib/format";
+import { daysUntil, expiryText, formatDate } from "@/lib/format";
 import { teamsQueryOptions, teamTrails } from "@/lib/teams/client";
 
 type FilesView = "all" | "member" | "team" | "organization";
@@ -336,11 +336,4 @@ function placementName(file: StoredFile, teamName: string | undefined): string {
 		default:
 			return "Personal";
 	}
-}
-
-function expiryText(days: number): string {
-	if (days <= 0) {
-		return "Expires today";
-	}
-	return days === 1 ? "Expires tomorrow" : `Expires in ${days} days`;
 }

@@ -47,6 +47,16 @@ export interface Invitation {
 	status: "pending" | "accepted" | "revoked" | "expired";
 }
 
+/** A pending invitation, as the person it was sent to sees it. */
+export interface ReceivedInvitation {
+	created_at: string;
+	expires_at: string;
+	id: string;
+	organization_id: string;
+	organization_name: string;
+	role: Role;
+}
+
 export interface Session {
 	organizations: Organization[];
 	user: User;
@@ -229,4 +239,24 @@ export function acceptInvitation(token: string): Promise<Membership> {
 	return apiRequest<Membership>("/v1/invitations/accept", {
 		body: { token },
 	});
+}
+
+/**
+ * Invitations sent to the signed-in member's own email, from organizations
+ * they have not joined, whether or not they ever opened the emailed link.
+ */
+export async function listReceivedInvitations(): Promise<ReceivedInvitation[]> {
+	const { invitations } = await apiRequest<{
+		invitations: ReceivedInvitation[];
+	}>("/v1/invitations");
+	return invitations;
+}
+
+export function acceptReceivedInvitation(
+	invitationId: string,
+): Promise<Membership> {
+	return apiRequest<Membership>(
+		apiPath`/v1/invitations/${invitationId}/accept`,
+		{ method: "POST" },
+	);
 }

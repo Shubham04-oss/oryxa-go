@@ -341,6 +341,8 @@ func TestAgentTokenRestrictedToAllowlist(t *testing.T) {
 		{http.MethodGet, "/v1/organizations/org-1/invitations", false},
 		{http.MethodDelete, "/v1/organizations/org-1/invitations/inv-1", false},
 		{http.MethodPost, "/v1/invitations/accept", false},
+		{http.MethodGet, "/v1/invitations", false},
+		{http.MethodPost, "/v1/invitations/inv-1/accept", false},
 		{http.MethodPatch, "/v1/organizations/org-1/members/user-1", false},
 		{http.MethodDelete, "/v1/organizations/org-1/members/user-1", false},
 		{http.MethodGet, "/v1/agent-grant", false},

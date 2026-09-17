@@ -152,3 +152,63 @@ func TestCompleteRejectsMismatchedStateBeforeExchange(t *testing.T) {
 		t.Fatalf("Complete() error = %v, want unauthorized", err)
 	}
 }
+
+func TestBeginReturnsOnlyToPagesOnAllowedOrigins(t *testing.T) {
+	manager, err := New(Config{
+		CognitoDomain:   "https://identity.example.com",
+		ClientID:        "client-id",
+		CallbackURL:     "https://auth.example.com/v1/auth/callback",
+		AllowedReturnTo: []string{"https://app.example.com", "https://admin.example.com/console/"},
+	}, &fakeLoginService{}, &fakeIdentityVerifier{})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	allowed := []string{
+		"https://app.example.com",
+		"https://app.example.com/",
+		"https://app.example.com/app",
+		"https://app.example.com/invitations/accept?token=abc",
+		"HTTPS://App.Example.com/app",
+		"https://admin.example.com/console",
+		"https://admin.example.com/console/members",
+	}
+	for _, target := range allowed {
+		if _, _, err := manager.Begin(context.Background(), target); err != nil {
+			t.Errorf("Begin(%q) error = %v, want allowed", target, err)
+		}
+	}
+
+	refused := []string{
+		"https://attacker.example.com/app",
+		"http://app.example.com/app",
+		"https://app.example.com:8443/app",
+		"https://app.example.com.attacker.example/app",
+		"https://app.example.com@attacker.example/app",
+		"//app.example.com/app",
+		"/app",
+		"javascript:alert(1)",
+		"https://admin.example.com/consoles",
+		"https://admin.example.com/",
+		"https://admin.example.com/console/../billing",
+		"https://admin.example.com/console/%2e%2e/billing",
+		"https://admin.example.com/console%2F..%2Fbilling",
+	}
+	for _, target := range refused {
+		if _, _, err := manager.Begin(context.Background(), target); !errors.Is(err, domain.ErrInvalid) {
+			t.Errorf("Begin(%q) error = %v, want invalid input", target, err)
+		}
+	}
+}
+
+func TestNewRejectsRelativeReturnURL(t *testing.T) {
+	_, err := New(Config{
+		CognitoDomain:   "https://identity.example.com",
+		ClientID:        "client-id",
+		CallbackURL:     "https://auth.example.com/v1/auth/callback",
+		AllowedReturnTo: []string{"/app"},
+	}, &fakeLoginService{}, &fakeIdentityVerifier{})
+	if err == nil {
+		t.Fatal("New() accepted a relative return URL")
+	}
+}

@@ -812,6 +812,46 @@ a:focus-visible {
   line-height: 1.5;
 }
 
+.invitation-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.invitation-list li {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 0.875rem;
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-control);
+}
+
+.invitation-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.1875rem;
+}
+
+.invitation-copy span {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invitation-copy small {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+
 .app-shell {
   min-height: 100svh;
   background: var(--canvas);

@@ -362,7 +362,44 @@ func (store *Store) RevokeInvitation(ctx context.Context, organizationID, invita
 	return nil
 }
 
-func (store *Store) AcceptInvitation(ctx context.Context, tokenHash string, user domain.User, membership domain.Membership, event domain.Event) error {
+func (store *Store) ReceivedInvitations(ctx context.Context, userID, email string, at time.Time) ([]domain.ReceivedInvitation, error) {
+	rows, err := store.pool.Query(ctx, `
+		SELECT i.id, i.organization_id, o.name, i.role, i.expires_at, i.created_at
+		FROM auth_invitations i
+		JOIN auth_organizations o ON o.id = i.organization_id
+		WHERE lower(i.email) = lower($1)
+		  AND i.status = 'pending' AND i.expires_at > $2
+		  AND NOT EXISTS (
+		      SELECT 1 FROM auth_memberships m
+		      WHERE m.organization_id = i.organization_id AND m.user_id = $3)
+		ORDER BY i.created_at DESC, i.id`, email, at, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list received invitations: %w", err)
+	}
+	defer rows.Close()
+
+	invitations := make([]domain.ReceivedInvitation, 0)
+	for rows.Next() {
+		var invitation domain.ReceivedInvitation
+		if err := rows.Scan(
+			&invitation.ID,
+			&invitation.OrganizationID,
+			&invitation.OrganizationName,
+			&invitation.Role,
+			&invitation.ExpiresAt,
+			&invitation.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan received invitation: %w", err)
+		}
+		invitations = append(invitations, invitation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate received invitations: %w", err)
+	}
+	return invitations, nil
+}
+
+func (store *Store) AcceptInvitation(ctx context.Context, invitationID string, user domain.User, membership domain.Membership, event domain.Event) error {
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin acceptance transaction: %w", err)
@@ -373,7 +410,7 @@ func (store *Store) AcceptInvitation(ctx context.Context, tokenHash string, user
 	// organization takes them, and so concurrent acceptances can't together
 	// pass the member limit.
 	var organizationID string
-	err = tx.QueryRow(ctx, `SELECT organization_id FROM auth_invitations WHERE token_hash = $1`, tokenHash).Scan(&organizationID)
+	err = tx.QueryRow(ctx, `SELECT organization_id FROM auth_invitations WHERE id = $1`, invitationID).Scan(&organizationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrNotFound
 	}
@@ -385,13 +422,14 @@ func (store *Store) AcceptInvitation(ctx context.Context, tokenHash string, user
 	}
 
 	var email string
+	var role domain.Role
 	var status domain.InvitationStatus
 	var expiresAt time.Time
 	err = tx.QueryRow(ctx, `
-		SELECT email, status, expires_at
+		SELECT email, role, status, expires_at
 		FROM auth_invitations
-		WHERE token_hash = $1
-		FOR UPDATE`, tokenHash).Scan(&email, &status, &expiresAt)
+		WHERE id = $1
+		FOR UPDATE`, invitationID).Scan(&email, &role, &status, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrNotFound
 	}
@@ -402,7 +440,7 @@ func (store *Store) AcceptInvitation(ctx context.Context, tokenHash string, user
 		return domain.ErrConflict
 	}
 	if !expiresAt.After(membership.JoinedAt) {
-		if _, err := tx.Exec(ctx, `UPDATE auth_invitations SET status = 'expired' WHERE token_hash = $1`, tokenHash); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE auth_invitations SET status = 'expired' WHERE id = $1`, invitationID); err != nil {
 			return fmt.Errorf("expire invitation: %w", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -412,6 +450,9 @@ func (store *Store) AcceptInvitation(ctx context.Context, tokenHash string, user
 	}
 	if normalizeEmail(email) != normalizeEmail(user.Email) {
 		return domain.ErrForbidden
+	}
+	if organizationID != membership.OrganizationID || role != membership.Role {
+		return fmt.Errorf("membership does not match invitation %s: %w", invitationID, domain.ErrConflict)
 	}
 	if err := checkMemberLimit(ctx, tx, organizationID, nil); err != nil {
 		return err
@@ -427,7 +468,7 @@ func (store *Store) AcceptInvitation(ctx context.Context, tokenHash string, user
 	_, err = tx.Exec(ctx, `
 		UPDATE auth_invitations
 		SET status = 'accepted', accepted_at = $2, accepted_by = $3
-		WHERE token_hash = $1`, tokenHash, membership.JoinedAt, user.ID)
+		WHERE id = $1`, invitationID, membership.JoinedAt, user.ID)
 	if err != nil {
 		return fmt.Errorf("accept invitation: %w", err)
 	}

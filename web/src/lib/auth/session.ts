@@ -10,14 +10,24 @@ import { ApiError } from "../api/client";
 import {
 	getOrganization,
 	getSession,
+	listReceivedInvitations,
 	type Membership,
 	type Organization,
+	type ReceivedInvitation,
 	type Session,
 } from "./client";
 
 export const sessionQueryOptions = queryOptions({
 	queryFn: getSession,
 	queryKey: ["auth", "session"],
+	retry: false,
+	staleTime: 60_000,
+});
+
+/** Invitations waiting for the signed-in member; see `/invitations`. */
+export const receivedInvitationsQueryOptions = queryOptions({
+	queryFn: listReceivedInvitations,
+	queryKey: ["auth", "invitations"],
 	retry: false,
 	staleTime: 60_000,
 });
@@ -50,14 +60,37 @@ export async function ensureSession(
 }
 
 /**
+ * The invitations waiting for the member, for a route that lists them. A
+ * member with none, and no organization yet, is sent to set one up instead.
+ */
+export async function ensureReceivedInvitations(
+	queryClient: QueryClient,
+	session: Session,
+): Promise<ReceivedInvitation[]> {
+	const invitations = await queryClient.fetchQuery(
+		receivedInvitationsQueryOptions,
+	);
+	if (invitations.length === 0 && session.organizations.length === 0) {
+		throw redirect({ to: "/onboarding" });
+	}
+	return invitations;
+}
+
+/**
  * Refetches the session once the member has joined or created an
  * organization. `ensureSession` would otherwise keep answering from the cache.
  */
-export function reloadSession(queryClient: QueryClient): Promise<void> {
-	return queryClient.invalidateQueries({
-		queryKey: sessionQueryOptions.queryKey,
-		refetchType: "all",
-	});
+export async function reloadSession(queryClient: QueryClient): Promise<void> {
+	await Promise.all([
+		queryClient.invalidateQueries({
+			queryKey: sessionQueryOptions.queryKey,
+			refetchType: "all",
+		}),
+		// Joining an organization settles the invitation from it, too.
+		queryClient.invalidateQueries({
+			queryKey: receivedInvitationsQueryOptions.queryKey,
+		}),
+	]);
 }
 
 /** A path on this app to return to after signing in; anything else is dropped. */
@@ -74,6 +107,11 @@ export function safeRedirect(value: unknown): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/** Whether `redirect` returns to an invitation, so sign-in is for joining. */
+export function isInvitationRedirect(redirect: string | undefined): boolean {
+	return redirect !== undefined && /^\/invitations(?:[/?#]|$)/.test(redirect);
 }
 
 /** The single-use token an emailed auth link carries. */
