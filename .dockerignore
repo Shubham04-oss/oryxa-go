@@ -3,3 +3,11 @@
 **/.env
 **/*_test.go
 **/node_modules
+# The binary embeds Markdown (agent instructions, provider skills) and SQL,
+# so only what it never reads is left out.
+.claude
+.gocache
+.gopath
+docs
+test
+web

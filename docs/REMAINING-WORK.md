@@ -146,9 +146,8 @@ none has been closed:
 - `postgres.Open` with `POSTGRES_REQUIRED_EXTENSIONS` is untested; the test
   helpers pass none.
 - Real KMS, EventBridge and SQS are never contacted; the e2e stack substitutes
-  AES-GCM for KMS, so the production envelope wiring at
-  `connections/cmd/connections/main.go` is unverified end to end. `cmd/connections`
-  has no test at all.
+  AES-GCM for KMS, so the production envelope wiring in `connections/service.go`
+  is unverified end to end. Its test mounts the service but contacts nothing.
 
 ## Local branch hygiene
 

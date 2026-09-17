@@ -2,50 +2,24 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
-import { defineConfig, loadEnv, type ProxyOptions } from "vite";
+import { defineConfig, loadEnv } from "vite";
 
 // The app calls every service under /v1 on its own origin, so session cookies
-// stay first-party and no service needs CORS. The dev server routes those
-// paths to the local services. The first matching pattern wins, so the
-// organization routes other services own come before auth's catch-all.
-function serviceProxy(
-	env: Record<string, string>,
-): Record<string, ProxyOptions> {
-	const service = (name: string, fallback: string): ProxyOptions => ({
-		changeOrigin: true,
-		target: env[name] || fallback,
-	});
-	const connections = service(
-		"CONNECTIONS_SERVICE_URL",
-		"http://localhost:8086",
-	);
-
+// stay first-party and no service needs CORS. One oryxa process serves every
+// service's routes, so the dev server sends all of /v1 to it.
+const config = defineConfig(({ mode }) => {
+	const target =
+		loadEnv(mode, process.cwd(), "").ORYXA_URL || "http://localhost:8080";
 	return {
-		"^/v1/organizations/[^/]+/(teams|tools|members/search)([/?]|$)": service(
-			"TEAMS_SERVICE_URL",
-			"http://localhost:8083",
-		),
-		"^/v1/organizations/[^/]+/files([/?]|$)": service(
-			"FILES_SERVICE_URL",
-			"http://localhost:8085",
-		),
-		"^/v1/organizations/[^/]+/(apps|connections)([/?]|$)": connections,
-		"^/v1/oauth/": connections,
-		"^/v1/providers([/?]|$)": connections,
-		"^/v1/billing/": service("BILLING_SERVICE_URL", "http://localhost:8081"),
-		"^/v1/": service("AUTH_SERVICE_URL", "http://localhost:8080"),
+		resolve: { tsconfigPaths: true },
+		server: { proxy: { "^/v1/": { changeOrigin: true, target } } },
+		plugins: [
+			cloudflare({ viteEnvironment: { name: "ssr" } }),
+			tailwindcss(),
+			tanstackStart(),
+			viteReact(),
+		],
 	};
-}
-
-const config = defineConfig(({ mode }) => ({
-	resolve: { tsconfigPaths: true },
-	server: { proxy: serviceProxy(loadEnv(mode, process.cwd(), "")) },
-	plugins: [
-		cloudflare({ viteEnvironment: { name: "ssr" } }),
-		tailwindcss(),
-		tanstackStart(),
-		viteReact(),
-	],
-}));
+});
 
 export default config;
