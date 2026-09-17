@@ -1,5 +1,6 @@
 // Command devui runs primary's agents in ADK's development web UI, or in its
-// console. It is for local development only; cmd/primary is the service.
+// console. It is for local development only; primary mounts in the oryxa
+// binary as the service.
 package main
 
 import (
@@ -51,7 +52,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	settings, err := serviceconfig.FromEnv()
+	settings, err := serviceconfig.FromEnv(os.Getenv)
 	if err != nil {
 		log.Fatal(err)
 	}

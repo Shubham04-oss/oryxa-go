@@ -12,9 +12,9 @@ wired today. A model router sends planning and bulk work to the lite model, a
 prompt cache layer holds large stable prefixes on Vertex, and the events
 outbox, publisher and dispatcher are in with contracts in
 `contracts/events/agents/v1`. `cmd/devui` opens it in ADK's development web UI.
-The service itself, `cmd/primary`, still serves only `GET /healthz`; the run
-and stream API, and the wiring of the events and cache components into it,
-land next.
+The service itself, mounted in the single `oryxa` binary as `agents`, still
+serves only `GET /healthz`; the run and stream API, and the wiring of the
+events and cache components into it, land next.
 
 ## Agents
 
@@ -191,7 +191,7 @@ toolbox's name and an underscore, so checking a name never lists a toolbox.
 warning and running without them if the catalogue cannot be reached —
 integrations being unreachable never keeps the agents from starting.
 
-**Not yet.** `cmd/primary` serves no runs, so outside tests nothing calls
+**Not yet.** There is no run API yet, so outside tests nothing calls
 `memberauth.WithAccessToken`: every development UI run acts through the
 member's grant, and a member who has not granted one cannot use integrations
 tools. No run starts from an integrations trigger either.
@@ -248,7 +248,7 @@ latency, time to first text, tokens, cached tokens and the priced cost. It
 needs the same ADC and `GOOGLE_CLOUD_PROJECT` as `cmd/devui`.
 
 ```sh
-(set -a && . agents/primary/.env && go run -C agents/primary ./cmd/agentbench -repeat 2)
+(set -a && . ./.env && go run ./agents/primary/cmd/agentbench -repeat 2)
 ```
 
 Each task runs in a fresh session with the same member state, so the first
@@ -313,8 +313,8 @@ agent AWS credentials as tool input.
 docker compose up -d postgres
 gcloud auth application-default login
 aws login
-cp agents/primary/.env.example agents/primary/.env
-(set -a && . agents/primary/.env && go run -C agents/primary ./cmd/devui)
+cp .env.example .env
+(set -a && . ./.env && go run ./agents/primary/cmd/devui)
 ```
 
 Open http://localhost:8087/ui/. The REST API the UI calls is under
@@ -338,48 +338,48 @@ Arguments to `devui` replace its web UI defaults and go straight to ADK's
 launcher, so `console` chats in the terminal instead:
 
 ```sh
-(set -a && . agents/primary/.env && go run -C agents/primary ./cmd/devui console)
+(set -a && . ./.env && go run ./agents/primary/cmd/devui console)
 ```
 
 ## Module
 
-Primary is its own Go module, `github.com/Shubham04-oss/oryxa-go/agents/primary`.
-adk-go releases every few weeks and brings its own dependency tree; a separate
-module keeps those upgrades away from the module every other service shares.
-`go.mod` replaces the root module with `../..`, which is how primary imports
-`/internal/observability` and, for `memberauth`'s service tokens,
-`/internal/serviceauth`.
+Primary is part of the root module, `github.com/Shubham04-oss/oryxa-go`; it
+imports `/internal/postgreskit` and, for `memberauth`'s service tokens,
+`/internal/serviceauth` the way every other package in the module does.
+Primary used to be its own Go module, replacing the root module with `../..`,
+so that adk-go's frequent releases and the dependency tree they bring stayed
+out of the module every other service shares. That reason no longer holds now
+that primary deploys inside the single `oryxa` binary: one binary needs one
+build list regardless of how many go.mod files declare it, so keeping adk-go
+in a module of its own only meant a second list to keep resolvable.
 
-The root module's `go test ./...` and `go mod tidy` do not reach primary, so
-run its checks with `-C` from the repository root:
+Run its checks from the repository root, like any other package in the
+module:
 
 ```sh
-go test -C agents/primary -race ./...
-go vet -C agents/primary ./...
-go mod tidy -C agents/primary
+go test ./agents/...
+go vet ./agents/...
 ```
 
 ## Run the service
 
-```sh
-cp agents/primary/.env.example agents/primary/.env
-(set -a && . agents/primary/.env && go run -C agents/primary ./cmd/primary)
-curl -i http://localhost:8086/healthz
-```
-
-The image builds from the repository root, because the build needs the root
-`go.mod` and `/internal`:
+Primary mounts in the single `oryxa` binary as the `agents` service, from the
+repository root's `.env`:
 
 ```sh
-docker build -f agents/primary/Dockerfile -t oryxa-agents-primary:dev .
-docker run --rm -p 8086:8080 oryxa-agents-primary:dev
+(set -a && . ./.env && ORYXA_SERVICES=agents go run ./cmd/oryxa)
+curl -i http://localhost:8080/healthz
 ```
+
+Primary installs no schema of its own this way — `Migrate` is nil, since ADK's
+tables live in the separate pool Development UI above opens for them, not the
+one this command shares with the rest of `oryxa` — and it deploys as part of
+the one `oryxa` image; there is no Dockerfile of its own any more.
 
 ## Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AGENTS_PRIMARY_ADDRESS` | `:8080` | Listen address |
 | `AGENTS_PRIMARY_MODEL` | `gemini-3.8-flash` | Main model: conversation and grounded research |
 | `AGENTS_PRIMARY_MODEL_LITE` | `gemini-3.8-flash-lite` | Lite model: planning and bulk single-turn work |
 | `AGENTS_PRIMARY_PROMPT_CACHE` | `true` | Use explicit Vertex cached contents for large stable prefixes |
@@ -397,9 +397,6 @@ docker run --rm -p 8086:8080 oryxa-agents-primary:dev
 | `GOOGLE_CLOUD_PROJECT` | unset | Project whose Vertex AI serves Gemini; the agents require it |
 | `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI location: `global`, or the `us` or `eu` multi-region |
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | ADC credential file for deployments; locally `gcloud auth application-default login` supplies ADC |
-| `DEPLOYMENT_ENVIRONMENT` | `development` | Environment on logs and telemetry |
-| `LOG_LEVEL` | `info` | Structured log level |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | OTLP/gRPC export; without it, logs stay on and telemetry export is a no-op |
 | `INTEGRATIONS_URL` | unset | Integrations' own URL; when set, `cmd/devui` builds one toolbox per provider its catalogue offers (see Acting for a member) |
 | `AUTH_URL` | unset | Auth's own URL; where a member-absent run exchanges the member's standing grant for an agent token |
 | `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |

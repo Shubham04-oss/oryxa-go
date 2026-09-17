@@ -1,6 +1,7 @@
 package main
 
 import (
+	primary "github.com/Shubham04-oss/oryxa-go/agents/primary"
 	"github.com/Shubham04-oss/oryxa-go/auth"
 	"github.com/Shubham04-oss/oryxa-go/billing"
 	"github.com/Shubham04-oss/oryxa-go/connections"
@@ -24,4 +25,5 @@ var definitions = []host.Definition{
 	integrations.Definition,
 	rag.Definition,
 	email.Definition,
+	primary.Definition,
 }
