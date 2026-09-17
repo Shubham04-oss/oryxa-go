@@ -7,6 +7,7 @@ import (
 	"context"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
@@ -31,12 +33,14 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcoresandbox"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	// Aliased: this file's own outbox variable is agents primary's, an
 	// *events.Outbox, and would otherwise shadow the package.
 	sharedoutbox "github.com/Shubham04-oss/oryxa-go/internal/outbox"
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
 // defaultArgs serves the web UI and the REST API behind it on one port, clear
@@ -170,6 +174,28 @@ func main() {
 	toolboxes := []agents.Toolbox{
 		agents.SandboxToolbox(sandboxTools),
 		agents.BrowserToolbox(browserTools),
+	}
+	if settings.AppsURL != "" {
+		if settings.AuthURL == "" || settings.ServiceKeyID == "" {
+			log.Printf("apps toolbox: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
+		}
+		tokens := memberauth.NewAuthClient(memberauth.AuthClientConfig{
+			BaseURL: settings.AuthURL,
+			Signer:  serviceauth.Signer{Client: kms.NewFromConfig(awsConfig), KeyID: settings.ServiceKeyID, Service: "agents"},
+		})
+		appsToolbox, err := agents.AppsToolbox(agents.AppsConfig{
+			URL:    settings.AppsURL,
+			HTTP:   &http.Client{},
+			Tokens: tokens,
+		})
+		if err != nil {
+			// Krude still runs without it: a member simply cannot reach the
+			// apps service's tools until APPS_URL is fixed and devui restarts.
+			log.Printf("apps toolbox unavailable, running without it: %v", err)
+		} else {
+			toolboxes = append(toolboxes, appsToolbox)
+			log.Printf("apps toolbox: %s", settings.AppsURL)
+		}
 	}
 
 	root, err := agents.Root(router, toolboxes)

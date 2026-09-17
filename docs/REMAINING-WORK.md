@@ -10,11 +10,12 @@ Nothing here is a promise about behaviour. Where something was confirmed — by
 a command, by reading the code, or against a provider's documentation — it
 says so; where it was only noticed in passing, it says that instead.
 
-Brought up to date on 2026-09-17, after connections and integrations were
-archived.
+Brought up to date on 2026-09-17, after the `apps` service replaced
+connections.
 
 **Direction.** Third-party apps reach first users through Composio rather than
-Oryxa's own connection layer. The `connections` and `integrations` services,
+Oryxa's own connection layer. The `apps` service is that: built and tested, and
+not yet run against a real Composio project. The `connections` and `integrations` services,
 their event contracts, the generated provider clients in
 `internal/providerapi`, knowledge's GitHub, Notion and Slack sources, and
 Krude's integrations toolboxes were archived on 2026-09-17; everything is at
@@ -39,25 +40,41 @@ Each service works on its own. The paths between them — the ones that let an
 agent act in an organization's apps, answer from its own documents, or react
 to something that happened — do not exist yet. This is the largest gap.
 
-### App connections, tools and triggers are gone until Composio lands
+### Apps has never run against Composio
 
-Nothing connects a member's apps today: the connections and integrations
-services are archived, and Krude has only its sandbox and browser toolboxes.
-The rebuild puts Composio behind Oryxa's own layer, so that:
+The `apps` service is built: connecting an app through Composio's hosted flow,
+tools behind Oryxa's member identity and write approvals, verified webhooks,
+four MCP tools for agents, and Krude's `apps` toolbox over them
+([apps/README.md](../apps/README.md)). Every test runs against fakes, so
+nothing has touched Composio, and no member has connected anything.
 
-- **Only Oryxa's backend calls Composio**, always with the member's stable id,
-  so an agent or a browser can never choose whose connected account a call
-  uses. A project API key reaches every user in the project.
-- **Oryxa keeps the safety layer**: an agent acts as its member with less than
-  the member's own rights, writes ask the member first, and each action is
-  recorded. `agents/primary/internal/memberauth` carries the member's identity
-  and survived the archive for this.
-- **Triggers arrive as Composio's signed webhooks** (HMAC-SHA256 over
-  `webhook-id.webhook-timestamp.body`), deduplicated on `webhook-id`.
-- **Composio's own Google app is used at first**, since an unverified Google
-  app of Oryxa's is capped at 100 new users and, in testing, loses refresh
-  tokens after seven days. Moving to Oryxa's own app later means members
-  reconnect once.
+A first live pass ran on 2026-09-18 against a throwaway Composio project
+through a cloudflared tunnel: the catalog, tool search and its read-only marks,
+auth-config and connect-link creation, the webhook subscription provisioner,
+webhook verification in all four of its cases, the MCP endpoint over plain
+HTTP, and every refusal
+([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)). It found
+two defects, both fixed: a sentinel's own words leaking into the wording a
+model reads, and the read route answering `not_connected` where the honest
+answer was `not_read_only`.
+
+What is still unrun: **connecting an account end to end**. The hosted flow
+needs a member at a browser, so nothing past activation — a tool against a real
+app, a subscribed trigger, a real delivery — has happened. Treat those as
+proven against a stand-in only.
+
+Then, in order:
+
+- **An OAuth app of Oryxa's own**, for the apps Composio holds no app for.
+  Those are refused today as not connectable, so the catalog is smaller than
+  Composio's. Composio's own Google app is used first anyway, since an
+  unverified Google app of Oryxa's is capped at 100 new users and, in testing,
+  loses refresh tokens after seven days; moving later means members reconnect
+  once.
+- **Triggers do not start agent runs** (see below) — a trigger delivers and
+  publishes, and nothing acts on it.
+- **A tool allow-list per organization**, for an admin who wants writes limited
+  to certain apps.
 
 Known risk to revisit before security-conscious customers: in May 2026 an
 attacker reached Composio's shared execution layer and took about 5,000 GitHub
@@ -115,7 +132,8 @@ a run handler has to set its own through `http.ResponseController`.
 ### Triggers do not start runs
 
 Nothing turns an event from an app into an agent run as the member it belongs
-to. The intended shape batches: events collect for a while, across apps,
+to. Apps publishes `apps.trigger.received.v1` with the app's payload, and no
+consumer reads it. The intended shape batches: events collect for a while, across apps,
 before one run wakes the agent, rather than one run per event. A trigger that
 arrives before the batch would close gains nothing, so a polled trigger is as
 good as a pushed one; and batching does not relax verification, because a
@@ -137,7 +155,9 @@ The web app is to be refactored, and until then it runs ahead of the backend:
 
 - **Its connection screens call archived APIs.** `/app/connections`, the
   tools settings page and onboarding's tool step call connections' routes,
-  which the binary no longer serves.
+  which the binary no longer serves. Apps serves a different shape —
+  `/v1/organizations/{org}/apps/connections` and a hosted link the browser is
+  sent to ([apps/README.md, API](../apps/README.md#api)).
 - **Agent conversations.** `/app/threads` renders a `ServicePlaceholder`.
 - **Agent grants.** No screen grants or withdraws an agent's access, although
   auth's API does both
@@ -188,12 +208,19 @@ From [rag/README.md, Open decisions](../rag/README.md#open-decisions):
 
 No decision stands in the way of these.
 
-### Composio behind Oryxa
+### The Composio project key is in two services
 
-The shape in §1: connecting an app through Composio as the member, tools behind
-Oryxa's member identity and write approvals, and triggers from Composio's
-signed webhooks. It needs a Composio project and API key, which only the owner
-can create.
+Knowledge's GitHub, Notion and Slack sources read through Composio's proxy with
+`COMPOSIO_API_KEY` of their own, because a scheduled pass has no member to act
+as. Apps offers `POST /v1/organizations/{org}/apps/read`, which derives the
+account from who is asking and refuses anything but a read — but nobody is
+asking during a pass.
+
+That key reaches every user in the Composio project, so having it in two
+services doubles where it can leak from. Moving knowledge behind apps' read
+route needs a token that acts as the member who registered the source, which is
+the same thing knowledge's files source waits on (§3.2). Until then both
+services read it from the same `.env`, and rotating it means rotating both.
 
 ### Knowledge
 
@@ -282,6 +309,7 @@ reads. They prove nothing about whether the provider agrees.
 | Area | What has never run | What it needs |
 | --- | --- | --- |
 | Rag | Bedrock and Vertex embedding and answering; Bedrock reranking, the least exercised code in the service; S3 Vectors; the provisioner, which has never created anything | An AWS account — S3 Vectors has no local emulation — and a Vertex project ([rag/README.md](../rag/README.md#what-has-and-has-not-been-run)) |
+| Apps | Connecting an account end to end, and therefore every path past it: a tool against a real app, a subscribed trigger, a real delivery, and the outbox reaching the bus. The catalog, tool marks, link creation, the webhook provisioner, webhook verification, MCP and the refusals all ran for real on 2026-09-18 ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)) | A member at a browser to finish Composio's hosted page, and LocalStack up for the bus |
 | Auth | The agent grant against a provisioned Cognito agent client | The agent client provisioned |
 | Journey | `test/run.sh` has not run since PR #17 rewrote it for the one binary, and it covers teams, files and email only | Docker |
 
@@ -300,9 +328,10 @@ service that fails without them.
   and `btree_gin` in the managed database, or let the migrating role create
   them, and set `POSTGRES_REQUIRED_EXTENSIONS` so a missing one fails startup
   rather than a query (§5).
-- **Composio.** A project, a scoped API key and IP allowlisting, and — for
-  security-conscious customers — a decision on the self-hosted or
-  customer-managed-key tier (§1).
+- **Composio.** A project, a scoped API key and IP allowlisting, the webhook
+  subscription (`go run ./apps/infra/composio/cmd/provision`, whose secret is
+  shown once), and — for security-conscious customers — a decision on the
+  self-hosted or customer-managed-key tier (§1).
 
 ## 8. Housekeeping
 

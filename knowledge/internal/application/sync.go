@@ -290,6 +290,18 @@ func (s *Service) runFailed(ctx context.Context, source domain.Source, run domai
 		return nil
 	}
 
+	// A connection that needs attention will not read differently next
+	// interval, so every source on it is paused now rather than discovering
+	// the same thing one at a time. An internal source has no connection to
+	// pause by, though nothing reads as one and gets this far in practice.
+	if reason, ok := pausedBy(cause); ok && source.ConnectionID != "" {
+		if err := s.pause(ctx, source.ConnectionID, reason); err != nil {
+			return err
+		}
+		s.logger.WarnContext(ctx, "source paused", "source_id", source.ID, "reason", reason)
+		return nil
+	}
+
 	retryAt := now.Add(domain.RetryAfter(source.Attempts))
 	if _, err := s.store.FailSource(ctx, source.ID, lease, reason, now, retryAt, nil); err != nil {
 		return err
@@ -301,9 +313,15 @@ func (s *Service) runFailed(ctx context.Context, source domain.Source, run domai
 
 // credential is what the source is read with.
 //
-// Internal storage has no service identity to accept, so a source is read as
-// the member who registered it, under the grant they gave.
+// A provider source reads through Composio, which holds the credential
+// itself: nothing here ever sees a token for it, only the connected account
+// to proxy calls through. Internal storage has no service identity to
+// accept, so a source with no Composio account is read as the member who
+// registered it, under the grant they gave.
 func (s *Service) credential(ctx context.Context, source domain.Source) (domain.Credential, error) {
+	if source.ComposioAccountID != "" {
+		return domain.Credential{Metadata: map[string]string{"composio_account_id": source.ComposioAccountID}}, nil
+	}
 	if s.grants == nil {
 		return domain.Credential{}, fmt.Errorf(
 			"reading %s acts as a member, and no grant is configured: %w", source.Provider, domain.ErrForbidden)
@@ -321,6 +339,10 @@ func (s *Service) credential(ctx context.Context, source domain.Source) (domain.
 // running it again unchanged could do better.
 func syncError(err error) (string, bool) {
 	switch {
+	case errors.Is(err, domain.ErrNeedsReconnect):
+		return knowledgev1.SyncErrorNeedsReconnect, false
+	case errors.Is(err, domain.ErrScopeRequired):
+		return knowledgev1.SyncErrorScopeRequired, false
 	case errors.Is(err, domain.ErrCredentialRejected):
 		return knowledgev1.SyncErrorCredentialRejected, false
 	case errors.Is(err, domain.ErrForbidden):

@@ -32,6 +32,13 @@ type Store interface {
 	Sources(context.Context, string, domain.SourceQuery) ([]domain.Source, error)
 	RemoveSource(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) error
 	RemoveSources(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	// RemoveSourcesByConnection retires every source reading through one
+	// connection: apps.connection.removed.v1, which is gone for good.
+	RemoveSourcesByConnection(context.Context, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	// PauseSources stops every live source reading through one connection:
+	// apps.connection.expired.v1, or a run that just discovered the same
+	// thing the hard way.
+	PauseSources(context.Context, string, string, time.Time, func(domain.Source) (domain.Event, error)) ([]domain.Source, error)
 
 	ClaimDueSources(context.Context, time.Time, int, string, time.Time) ([]domain.Source, error)
 	RenewLease(context.Context, string, string, time.Time) (bool, error)
@@ -61,6 +68,14 @@ type Directory interface {
 	Membership(context.Context, string, authclient.Credentials) (domain.OrgMembership, error)
 }
 
+// Apps is apps, which owns a member's connections to third-party apps and
+// the Composio accounts behind them. Nil when COMPOSIO_API_KEY is not
+// configured, in which case nothing reads through a connection: see
+// usableConnection.
+type Apps interface {
+	Connection(ctx context.Context, organizationID, connectionID string, credentials authclient.Credentials) (domain.AppConnection, error)
+}
+
 // Grants mints a token that acts as a member while they are away.
 //
 // An internal source is read through a service that has no service identity
@@ -76,6 +91,7 @@ type Grants interface {
 type Dependencies struct {
 	Store      Store
 	Directory  Directory
+	Apps       Apps
 	Grants     Grants
 	Extractors sources.Registry
 	Logger     *slog.Logger
@@ -95,6 +111,7 @@ type Config struct {
 type Service struct {
 	store      Store
 	directory  Directory
+	apps       Apps
 	grants     Grants
 	extractors sources.Registry
 	logger     *slog.Logger
@@ -106,6 +123,7 @@ func New(dependencies Dependencies, config Config) *Service {
 	service := &Service{
 		store:      dependencies.Store,
 		directory:  dependencies.Directory,
+		apps:       dependencies.Apps,
 		grants:     dependencies.Grants,
 		extractors: dependencies.Extractors,
 		logger:     dependencies.Logger,
@@ -194,5 +212,15 @@ func (s *Service) documentRemoved(source domain.Source, document domain.Document
 		DocumentID: document.ID, OrganizationID: source.OrganizationID, SourceID: source.ID,
 		Provider: source.Provider, ExternalID: document.ExternalID,
 		Reason: reason, RemovedAt: s.now(),
+	})
+}
+
+// sourcePaused is the event a source travels as when it stops reading
+// because what it reads through needs attention.
+func (s *Service) sourcePaused(source domain.Source, reason string) (domain.Event, error) {
+	return s.event(knowledgev1.SourcePausedDetailType, knowledgev1.SourcePaused{
+		SourceID: source.ID, OrganizationID: source.OrganizationID,
+		ConnectionID: source.ConnectionID, Provider: source.Provider,
+		Reason: reason, PausedAt: s.now(),
 	})
 }

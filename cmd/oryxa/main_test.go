@@ -55,6 +55,8 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		"FILES_BUCKET_NAME":      "oryxa-files",
 		"EMAIL_FROM_ADDRESS":     "no-reply@example.com",
 		"EMAIL_QUEUE_URL":        "http://localhost:4566/000000000000/email-events",
+		"COMPOSIO_API_KEY":       "ak_test",
+		"APPS_PUBLIC_BASE_URL":   "http://localhost:8080",
 	}
 	// Mounting never queries the database; rag only asks it for pgvector.
 	database := postgreskit.Detached(map[string]string{"vector": "0.8.6", "ltree": "1.3", "pg_trgm": "1.6"})
@@ -87,6 +89,7 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		{"files", "/v1/organizations/org_1/files", http.StatusUnauthorized, ""},
 		{"knowledge", "/v1/organizations/org_1/sources", http.StatusUnauthorized, ""},
 		{"rag", "/v1/organizations/org_1/corpora", http.StatusUnauthorized, ""},
+		{"apps", "/v1/organizations/org_1/apps/connections", http.StatusUnauthorized, ""},
 		{"nobody", "/v1/unknown", http.StatusNotFound, ""},
 	}
 	for _, probe := range probes {

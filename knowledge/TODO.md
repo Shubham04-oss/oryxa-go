@@ -14,17 +14,25 @@ Ordered by what stops you first.
 The wiring is done. `knowledge/service.go` exposes `Definition`, `Migrate`
 and `Mount` — the shape `cmd/oryxa` mounts every service with, proven first
 by `teams` and now adopted here. `knowledge/infra/events` provisions its
-queue, and the root `.env.example` documents its variables. What is left is
-not a wiring gap; it is work nobody has done yet.
+queue. What is left is not a wiring gap; it is work nobody has done yet.
 
-**Nothing can be indexed today, for two reasons.**
+The root `.env.example` documents knowledge's older variables but not yet
+`APPS_URL`, `COMPOSIO_API_KEY` or `COMPOSIO_BASE_URL` — outside `knowledge/`,
+so worth a follow-up rather than something this pass could reach.
 
-- **The provider sources were archived.** GitHub, Notion and Slack read
-  through the connections service, and went with it on 2026-09-17 while app
-  connections are rebuilt on Composio. The code is at tag
-  `archive/connections-and-integrations-2026-09-17`. Composio never hands out
-  a token, so their return means extractors that call through it rather than
-  with a credential of their own.
+**GitHub, Notion and Slack read again, through Composio.** The connections
+service they used to read through is gone for good; these three now proxy
+every call through Composio's API on the connected account named by an
+`apps` connection, and `application.Apps` (`internal/appsclient`) reads that
+connection at registration. They mount only once `COMPOSIO_API_KEY` (and
+`APPS_URL`) are configured; unset, the binary mounts no extractor for them,
+same as `files` today. `internal/providerapi`'s generated GitHub and Notion
+clients are not restored — both are hand-rolled on the shared paced client
+the way Slack already was, since Composio holds the credential and a
+generated client has nowhere to place one.
+
+**`files` still cannot be indexed, for one reason.**
+
 - **`application.Grants` has no implementation.** It mints a member-scoped
   token for the files source, because `files` has no service identity —
   every route there wants a member's own credentials. Until one is supplied,
@@ -129,7 +137,7 @@ finds something the provider no longer has; see §2.
 ## 8. Decisions that are not mine to make
 
 1. **Promote `golang.org/x/net` to a direct dependency for HTML?** Unblocks
-   HTML documents, such as mail and rich pages, once app sources return.
+   HTML documents, such as mail and rich pages.
 2. **Adopt the `Name`/`Migrate`/`Handler`/`Workers` seam across the other
    seven services?** Decided: yes. It was proven here because this one was
    greenfield; `teams` adopted it first (`teams/service.go`), and this

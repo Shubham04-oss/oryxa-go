@@ -1,6 +1,6 @@
-// Package provision creates what delivers the auth events that make
-// knowledge retire what it has indexed: a queue with a dead-letter queue, and
-// an EventBridge rule allowed to send to it.
+// Package provision creates what delivers the auth and apps events that make
+// knowledge pause or retire what it has indexed: a queue with a dead-letter
+// queue, and an EventBridge rule allowed to send to it.
 package provision
 
 import (
@@ -90,7 +90,7 @@ func Run(ctx context.Context, eventBridgeClient *eventbridge.Client, sqsClient *
 
 	rule, err := eventBridgeClient.PutRule(ctx, &eventbridge.PutRuleInput{
 		Name:         aws.String(ruleName),
-		Description:  aws.String("Auth events that make knowledge retire what it has indexed"),
+		Description:  aws.String("Auth and apps events that make knowledge pause or retire what it has indexed"),
 		EventBusName: aws.String(config.EventBusName),
 		EventPattern: aws.String(pattern),
 		State:        eventbridgetypes.RuleStateEnabled,

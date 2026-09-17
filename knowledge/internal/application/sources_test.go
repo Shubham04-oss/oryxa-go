@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
@@ -36,6 +37,129 @@ func organizationDeleted(organizationID string) authv1.OrganizationDeleted {
 
 func registration() RegisterInput {
 	return RegisterInput{Provider: "files", Target: map[string]string{"team_id": "team_1"}}
+}
+
+// githubRegistrar builds a service whose caller and apps connection a test
+// can shape, for the provider-source registration path files never takes.
+func githubRegistrar(t *testing.T, store *fakeStore, caller domain.OrgMembership, apps *fakeApps) *Service {
+	t.Helper()
+	extractor := &fakeExtractor{provider: "github"}
+	return New(Dependencies{
+		Store:      store,
+		Directory:  &fakeDirectory{membership: caller},
+		Apps:       apps,
+		Extractors: sources.Registry{"github": extractor},
+		Clock:      func() time.Time { return testClock },
+	}, Config{})
+}
+
+// usableConnection is a connection registration accepts: active, for
+// github, and the caller's own.
+func usableConnection() domain.AppConnection {
+	return domain.AppConnection{
+		ID: "apc_1", Toolkit: "github", Status: "active", MemberID: "user-1", ComposioAccountID: "ca_1",
+	}
+}
+
+func githubRegistration() RegisterInput {
+	return RegisterInput{ConnectionID: "apc_1", Provider: "github", Target: map[string]string{"repository": "acme/api"}}
+}
+
+func TestRegisterSourceStoresTheConnectionAndComposioAccount(t *testing.T) {
+	store := newFakeStore()
+	apps := &fakeApps{connection: usableConnection()}
+	service := githubRegistrar(t, store, member(), apps)
+
+	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration())
+	if err != nil {
+		t.Fatalf("RegisterSource() error = %v", err)
+	}
+	if source.ConnectionID != "apc_1" || source.ComposioAccountID != "ca_1" {
+		t.Fatalf("source = %+v, want the connection and its Composio account", source)
+	}
+	if source.Scope != domain.ScopeMember || source.MemberID != "user-1" {
+		t.Fatalf("source placement = %s %q, want it indexed as the caller's own", source.Scope, source.MemberID)
+	}
+	if len(apps.calls) != 1 || apps.calls[0] != "apc_1" {
+		t.Fatalf("apps was asked for %v, want one call for apc_1", apps.calls)
+	}
+}
+
+func TestRegisterSourceRefusesAProviderSourceWithNoConnectionID(t *testing.T) {
+	store := newFakeStore()
+	service := githubRegistrar(t, store, member(), &fakeApps{connection: usableConnection()})
+
+	input := githubRegistration()
+	input.ConnectionID = ""
+	if _, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", input); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RegisterSource() error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRegisterSourceRefusesFilesWithAConnectionID(t *testing.T) {
+	// files is the organization's own storage; a connection_id on it can only
+	// be a mistake worth catching now rather than silently ignoring.
+	store := newFakeStore()
+	service := registrar(t, store, member())
+
+	input := registration()
+	input.ConnectionID = "apc_1"
+	if _, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", input); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RegisterSource() error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRegisterSourceRefusesAConnectionForAnotherToolkit(t *testing.T) {
+	store := newFakeStore()
+	elsewhere := usableConnection()
+	elsewhere.Toolkit = "slack"
+	service := githubRegistrar(t, store, member(), &fakeApps{connection: elsewhere})
+
+	if _, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration()); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RegisterSource() error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestRegisterSourceRefusesAConnectionThatIsNotActive(t *testing.T) {
+	store := newFakeStore()
+	pending := usableConnection()
+	pending.Status = "pending"
+	service := githubRegistrar(t, store, member(), &fakeApps{connection: pending})
+
+	if _, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration()); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("RegisterSource() error = %v, want ErrConflict", err)
+	}
+}
+
+func TestRegisterSourceRefusesAConnectionThatIsNotTheCallers(t *testing.T) {
+	// A member indexes only through their own connection: apps answering
+	// about someone else's is a caller trying to read as them, not a
+	// mistake in what was asked for.
+	store := newFakeStore()
+	someoneElses := usableConnection()
+	someoneElses.MemberID = "user-2"
+	service := githubRegistrar(t, store, member(), &fakeApps{connection: someoneElses})
+
+	if _, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration()); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("RegisterSource() error = %v, want ErrForbidden", err)
+	}
+}
+
+func TestRegisterSourceRefusesAProviderSourceWhenAppsIsNotConfigured(t *testing.T) {
+	// Without COMPOSIO_API_KEY, mount builds no extractor for github, notion
+	// or slack, so this path is defensive: it must still refuse cleanly
+	// rather than reach for a nil Apps.
+	store := newFakeStore()
+	service := New(Dependencies{
+		Store:      store,
+		Directory:  &fakeDirectory{membership: member()},
+		Extractors: sources.Registry{"github": &fakeExtractor{provider: "github"}},
+		Clock:      func() time.Time { return testClock },
+	}, Config{})
+
+	if _, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration()); !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("RegisterSource() error = %v, want ErrProviderUnavailable", err)
+	}
 }
 
 func TestRegisterSourceIsDueAtOnce(t *testing.T) {
@@ -197,6 +321,58 @@ func TestOrganizationDeletedRetiresEverythingItIndexed(t *testing.T) {
 	}
 	if got := store.published(knowledgev1.DocumentRemovedDetailType); got != 1 {
 		t.Fatalf("published %d retractions, want 1", got)
+	}
+}
+
+func TestConnectionExpiredPausesEveryLiveSourceOnThatConnection(t *testing.T) {
+	store := newFakeStore()
+	apps := &fakeApps{connection: usableConnection()}
+	service := githubRegistrar(t, store, member(), apps)
+	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration())
+	if err != nil {
+		t.Fatalf("RegisterSource() error = %v", err)
+	}
+
+	if err := service.ConnectionExpired(context.Background(), appsv1.ConnectionExpired{
+		ConnectionID: source.ConnectionID, OrganizationID: "org_1", MemberID: "user-1", Toolkit: "github",
+	}); err != nil {
+		t.Fatalf("ConnectionExpired() error = %v", err)
+	}
+	read := store.sources[source.ID]
+	if read.Status != domain.StatusPaused || read.Reason != knowledgev1.PausedReasonNeedsReconnect {
+		t.Fatalf("source after ConnectionExpired = %+v", read)
+	}
+	if got := store.published(knowledgev1.SourcePausedDetailType); got != 1 {
+		t.Fatalf("published %d pause events, want 1", got)
+	}
+}
+
+func TestConnectionRemovedRetiresSourcesOnThatConnectionAndRetractsTheirDocuments(t *testing.T) {
+	store := newFakeStore()
+	apps := &fakeApps{connection: usableConnection()}
+	service := githubRegistrar(t, store, member(), apps)
+	source, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", githubRegistration())
+	if err != nil {
+		t.Fatalf("RegisterSource() error = %v", err)
+	}
+	store.documents["k"] = domain.Document{ID: "doc_1", OrganizationID: "org_1", SourceID: source.ID, ExternalID: "1"}
+
+	if err := service.ConnectionRemoved(context.Background(), appsv1.ConnectionRemoved{
+		ConnectionID: source.ConnectionID, OrganizationID: "org_1", MemberID: "user-1", Toolkit: "github", Reason: "removed_by_member",
+	}); err != nil {
+		t.Fatalf("ConnectionRemoved() error = %v", err)
+	}
+	if store.sources[source.ID].Status != domain.StatusRemoved {
+		t.Fatalf("source status = %s, want removed", store.sources[source.ID].Status)
+	}
+	if got := store.published(knowledgev1.DocumentRemovedDetailType); got != 1 {
+		t.Fatalf("published %d retractions, want 1", got)
+	}
+	// A connection someone disconnected is not one whose credential expired,
+	// and a member asking why their documents went deserves the difference.
+	if reasons := store.publishedReasons(knowledgev1.DocumentRemovedDetailType); len(reasons) != 1 ||
+		reasons[0] != knowledgev1.RemovedReasonConnectionRemoved {
+		t.Fatalf("retraction reasons = %v, want %q", reasons, knowledgev1.RemovedReasonConnectionRemoved)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
+	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 )
 
@@ -49,6 +50,14 @@ func (app *fakeApplication) OrganizationDeleted(context.Context, authv1.Organiza
 
 func (app *fakeApplication) MemberRemoved(context.Context, authv1.MemberRemoved) error {
 	return app.act(authv1.MemberRemovedDetailType)
+}
+
+func (app *fakeApplication) ConnectionExpired(context.Context, appsv1.ConnectionExpired) error {
+	return app.act(appsv1.ConnectionExpiredDetailType)
+}
+
+func (app *fakeApplication) ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error {
+	return app.act(appsv1.ConnectionRemovedDetailType)
 }
 
 func (app *fakeApplication) AlreadyHandled(_ context.Context, eventID string) (bool, error) {
@@ -147,6 +156,8 @@ func TestHandleDispatchesEachEventToItsOwnHandler(t *testing.T) {
 	}{
 		{authv1.Source, authv1.OrganizationDeletedDetailType, authv1.OrganizationDeleted{OrganizationID: "org_1"}},
 		{authv1.Source, authv1.MemberRemovedDetailType, authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-1"}},
+		{appsv1.Source, appsv1.ConnectionExpiredDetailType, appsv1.ConnectionExpired{ConnectionID: "apc_1"}},
+		{appsv1.Source, appsv1.ConnectionRemovedDetailType, appsv1.ConnectionRemoved{ConnectionID: "apc_1"}},
 	} {
 		body := delivery(t, event.source, event.detailType, fmt.Sprintf("evt_%d", index), event.data)
 		if err := consumer.Handle(context.Background(), body); err != nil {

@@ -29,6 +29,48 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.FullSweepInterval != 7*24*time.Hour {
 		t.Fatalf("FullSweepInterval = %s, want a week", config.FullSweepInterval)
 	}
+	// Without a Composio key, app sources stay off and nothing names apps.
+	if config.ComposioAPIKey != "" || config.AppsURL != "" || config.ComposioBaseURL != "" {
+		t.Fatalf("config = %+v, want no Composio configuration", config)
+	}
+}
+
+func TestFromEnvRequiresAppsURLOnlyWithAComposioKey(t *testing.T) {
+	values := required()
+	values["COMPOSIO_API_KEY"] = "sk_live_1"
+	if _, err := FromEnv(env(values)); err == nil {
+		t.Fatal("FromEnv() error = nil, want APPS_URL required alongside a Composio key")
+	}
+
+	values["APPS_URL"] = "http://localhost:8083"
+	config, err := FromEnv(env(values))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.ComposioAPIKey != "sk_live_1" || config.AppsURL != "http://localhost:8083" {
+		t.Fatalf("config = %+v", config)
+	}
+
+	// Without a key, apps stays optional: app sources are simply off.
+	delete(values, "COMPOSIO_API_KEY")
+	if _, err := FromEnv(env(values)); err != nil {
+		t.Fatalf("FromEnv() error = %v, want APPS_URL alone to need no Composio key", err)
+	}
+}
+
+func TestFromEnvReadsTheComposioBaseURLOverride(t *testing.T) {
+	values := required()
+	values["COMPOSIO_API_KEY"] = "sk_live_1"
+	values["APPS_URL"] = "http://localhost:8083"
+	values["COMPOSIO_BASE_URL"] = "http://localhost:4010/composio/"
+
+	config, err := FromEnv(env(values))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.ComposioBaseURL != "http://localhost:4010/composio" {
+		t.Fatalf("ComposioBaseURL = %q, want the trailing slash trimmed", config.ComposioBaseURL)
+	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
@@ -76,6 +118,16 @@ func TestFromEnvRejects(t *testing.T) {
 		"missing auth url":              func(values map[string]string) { values["AUTH_URL"] = "" },
 		"relative auth url":             func(values map[string]string) { values["AUTH_URL"] = "auth.local" },
 		"relative EventBridge endpoint": func(values map[string]string) { values["EVENTBRIDGE_ENDPOINT"] = "localhost:4566" },
+		"relative apps url": func(values map[string]string) {
+			values["COMPOSIO_API_KEY"] = "sk_live_1"
+			values["APPS_URL"] = "apps.local"
+		},
+		"relative composio base url": func(values map[string]string) {
+			values["COMPOSIO_API_KEY"] = "sk_live_1"
+			values["APPS_URL"] = "http://localhost:8083"
+			values["COMPOSIO_BASE_URL"] = "composio.local"
+		},
+		"composio key without apps url": func(values map[string]string) { values["COMPOSIO_API_KEY"] = "sk_live_1" },
 		"relative allowed origin":       func(values map[string]string) { values["KNOWLEDGE_ALLOWED_ORIGINS"] = "localhost:3000" },
 		"zero full sweep interval":      func(values map[string]string) { values["KNOWLEDGE_FULL_SWEEP_INTERVAL"] = "0h" },
 		"negative full sweep interval": func(values map[string]string) {

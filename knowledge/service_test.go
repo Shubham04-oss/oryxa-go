@@ -2,8 +2,11 @@ package knowledge
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"testing"
 
@@ -56,6 +59,53 @@ func TestMountServesKnowledgeRoutesAndRunsItsWorkers(t *testing.T) {
 	}
 	if len(withoutQueue.Workers) != 2 {
 		t.Fatalf("workers without a queue = %d, want the sync loop and the dispatcher", len(withoutQueue.Workers))
+	}
+}
+
+func providers(t *testing.T, handler http.Handler) []string {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/sources/providers", nil))
+	var answer struct {
+		Providers []string `json:"providers"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+		t.Fatalf("decode /v1/sources/providers: %v", err)
+	}
+	slices.Sort(answer.Providers)
+	return answer.Providers
+}
+
+func TestMountWithoutAComposioKeyReadsNothing(t *testing.T) {
+	// files still waits on a Grants implementation, so with no Composio key
+	// this build can extract from nothing at all — see TODO.md.
+	service, err := Mount(context.Background(), platform(required()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := providers(t, service.Handler); len(got) != 0 {
+		t.Fatalf("providers = %v, want none without COMPOSIO_API_KEY", got)
+	}
+}
+
+func TestMountWithAComposioKeyReadsGitHubNotionAndSlack(t *testing.T) {
+	values := required()
+	values["COMPOSIO_API_KEY"] = "sk_live_1"
+	values["APPS_URL"] = "http://localhost:8083"
+	service, err := Mount(context.Background(), platform(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := providers(t, service.Handler); !slices.Equal(got, []string{"github", "notion", "slack"}) {
+		t.Fatalf("providers = %v, want github, notion and slack", got)
+	}
+}
+
+func TestMountRequiresAppsURLAlongsideAComposioKey(t *testing.T) {
+	values := required()
+	values["COMPOSIO_API_KEY"] = "sk_live_1"
+	if _, err := Mount(context.Background(), platform(values)); err == nil {
+		t.Fatal("Mount() accepted a Composio key with no APPS_URL")
 	}
 }
 

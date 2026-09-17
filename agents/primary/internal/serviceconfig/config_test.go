@@ -32,6 +32,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.GuardrailIdentifier != "" || config.GuardrailVersion != "" || config.GuardrailFailClosed || config.ModelPrices != "" {
 		t.Fatalf("guardrail/pricing config = %+v", config)
 	}
+	if config.AppsURL != "" || config.AuthURL != "" || config.ServiceKeyID != "" {
+		t.Fatalf("apps config = %+v", config)
+	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
@@ -56,6 +59,9 @@ func TestFromEnvOverrides(t *testing.T) {
 		"AGENTS_PRIMARY_GUARDRAIL_VERSION":               " 7 ",
 		"AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED":           " true ",
 		"AGENTS_PRIMARY_MODEL_PRICES":                    ` {"gemini-3.8-flash":{"input":0.30,"output":2.50,"cached":0.075}} `,
+		"APPS_URL":                                       " http://localhost:8091 ",
+		"AUTH_URL":                                       " http://localhost:8081 ",
+		"AGENTS_PRIMARY_SERVICE_KEY_ID":                  " arn:aws:kms:ap-south-1:1:key/agents ",
 	}))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
@@ -80,6 +86,9 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if config.ModelPrices == "" {
 		t.Fatalf("model prices were dropped: %+v", config)
+	}
+	if config.AppsURL != "http://localhost:8091" || config.AuthURL != "http://localhost:8081" || config.ServiceKeyID != "arn:aws:kms:ap-south-1:1:key/agents" {
+		t.Fatalf("apps config = %+v", config)
 	}
 }
 

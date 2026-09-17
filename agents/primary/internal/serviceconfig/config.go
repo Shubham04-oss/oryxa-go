@@ -61,6 +61,17 @@ type Config struct {
 	// ModelPrices overrides the price table used for run costs, as JSON of
 	// per-million USD rates by model.
 	ModelPrices string
+	// AppsURL is the apps service's own URL. When set, devui builds the apps
+	// toolbox (agents.AppsToolbox), which reaches every app a member has
+	// connected through Composio; when empty, Krude loads no apps toolbox.
+	AppsURL string
+	// AuthURL is auth's own URL: agent tokens for a member-absent run are
+	// requested at {AuthURL}/v1/internal/agent-tokens.
+	AuthURL string
+	// ServiceKeyID is the KMS key agents signs its service tokens with
+	// (serviceauth.Signer), naming itself to auth when it asks for an agent
+	// token on a member's behalf.
+	ServiceKeyID string
 }
 
 // FromEnv reads primary's configuration through getenv, which a host layers
@@ -135,6 +146,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		GuardrailVersion:      guardrailVersion,
 		GuardrailFailClosed:   guardrailFailClosed,
 		ModelPrices:           modelPrices,
+		AppsURL:               strings.TrimSpace(getenv("APPS_URL")),
+		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),
+		ServiceKeyID:          strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
 	}, nil
 }
 

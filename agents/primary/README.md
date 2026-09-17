@@ -165,18 +165,49 @@ sets `Authorization: Bearer <token>` and `X-Oryxa-Organization:
 <organization>` on the request: the member's own token when the run carries
 one, otherwise an agent token for the session's user.
 
-**No member-authenticated toolboxes today.** The integrations toolboxes that
-used all of this were archived on 2026-09-17, with the connections and
-integrations services, while app tools are rebuilt on Composio; the code is at
-tag `archive/connections-and-integrations-2026-09-17`. `memberauth` stays for
-that rebuild. Nothing in `cmd/devui` builds an `AuthClient` now, so it no
-longer reads `INTEGRATIONS_URL`, `AUTH_URL` or
-`AGENTS_PRIMARY_SERVICE_KEY_ID`, and Krude loads only its sandbox and browser
-toolboxes.
+**Apps toolbox.** `agents.AppsToolbox` builds the one toolbox, named `apps`,
+that reaches every app a member has connected through Composio: email,
+calendars, CRMs and the rest. Its tools are the apps service's stateless MCP
+endpoint at `POST {APPS_URL}/v1/mcp/apps`, wrapped as above, and its skill is
+`internal/agents/toolboxes/apps.md`, embedded the way sandbox's and browser's
+are. `apps_connections` lists what the member has connected, `apps_search_tools`
+finds a toolkit's tools, and `apps_run_read_tool`/`apps_run_write_tool` call
+one. Unlike the archived integrations toolboxes, there is no provider
+catalogue: a member's connected apps and their tools are discovered live,
+through these tools, rather than fetched once at startup, and building the
+toolbox makes no network call of its own — the MCP session, and the first
+`tools/list`, happen lazily on first use.
+
+Every tool but its three reads — `apps_connections`, `apps_search_tools` and
+`apps_run_read_tool` — requires confirmation before it runs, the same
+Human-in-the-Loop flow toolbox tools already use, so a write, or a tool the
+apps service adds later that this toolbox does not yet know about, always
+asks first. The apps service serves every member the same tools, so the
+toolbox lists them once, as whichever member first loads it; after that a
+loaded toolbox costs no call per model step, and only tool calls go out, each
+as its own member. One MCP client serves every member: each request carries
+the credential of the run that made it, never another member's. When acting
+for the member fails — no grant, no member, auth not answering — the model
+gets the reason in plain words, without the request that carried it, and a
+loaded toolbox whose tools cannot be listed is left out of the turn rather
+than failing it, with `load_tools` saying why.
+
+`cmd/devui` builds the apps toolbox when `APPS_URL` is set, signing its agent
+token requests with a KMS `serviceauth.Signer` naming agents as the caller
+(`AUTH_URL` and `AGENTS_PRIMARY_SERVICE_KEY_ID`); when either is missing it
+logs a warning, since a run without the member's own token could then not act
+for them. An error building the toolbox is logged, and Krude runs without it
+rather than failing to start.
+
+The integrations toolboxes that predated this, one per provider from the now
+archived integrations service, were archived on 2026-09-17 with the
+connections and integrations services; the code is at tag
+`archive/connections-and-integrations-2026-09-17`.
 
 **Not yet.** There is no run API yet, so outside tests nothing calls
-`memberauth.WithAccessToken` or an `AuthClient`, and no run starts from a
-trigger.
+`memberauth.WithAccessToken`; every development UI run acts through the
+member's standing grant instead, and a member who has not granted one cannot
+use the apps toolbox. No run starts from a trigger either.
 
 ## Models and routing
 
@@ -379,6 +410,9 @@ the one `oryxa` image; there is no Dockerfile of its own any more.
 | `GOOGLE_CLOUD_PROJECT` | unset | Project whose Vertex AI serves Gemini; the agents require it |
 | `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI location: `global`, or the `us` or `eu` multi-region |
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | ADC credential file for deployments; locally `gcloud auth application-default login` supplies ADC |
+| `APPS_URL` | unset | The apps service's own URL; when set, `cmd/devui` builds the apps toolbox (see Acting for a member) |
+| `AUTH_URL` | unset | Auth's own URL; where a member-absent run exchanges the member's standing grant for an agent token |
+| `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |
 
 The HTTP server sets no write timeout: agent streams outlive any fixed write
 deadline, so each streaming handler sets its own.

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ type fakeStore struct {
 	lease map[string]string
 
 	retractUnseen int
+	paused        []string
 	finishedNext  time.Time
 	failedReason  string
 }
@@ -131,6 +133,49 @@ func (store *fakeStore) retractAll(source domain.Source, events func(domain.Sour
 	}
 	store.events = append(store.events, recorded...)
 	return nil
+}
+
+func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionID string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	removed := []domain.Source{}
+	for id, source := range store.sources {
+		if source.ConnectionID != connectionID || source.Status == domain.StatusRemoved {
+			continue
+		}
+		source.Status = domain.StatusRemoved
+		store.sources[id] = source
+		removed = append(removed, source)
+		if err := store.retractAll(source, events); err != nil {
+			return nil, err
+		}
+	}
+	return removed, nil
+}
+
+func (store *fakeStore) PauseSources(_ context.Context, connectionID, reason string, _ time.Time, event func(domain.Source) (domain.Event, error)) ([]domain.Source, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	paused := []domain.Source{}
+	for id, source := range store.sources {
+		if source.Status != domain.StatusActive || source.ConnectionID != connectionID {
+			continue
+		}
+		source.Status = domain.StatusPaused
+		source.Reason = reason
+		source.SyncAt = nil
+		store.sources[id] = source
+		paused = append(paused, source)
+		if event != nil {
+			recorded, err := event(source)
+			if err != nil {
+				return nil, err
+			}
+			store.events = append(store.events, recorded)
+		}
+	}
+	store.paused = append(store.paused, reason)
+	return paused, nil
 }
 
 func (store *fakeStore) ClaimDueSources(_ context.Context, now time.Time, limit int, leaseToken string, _ time.Time) ([]domain.Source, error) {
@@ -334,6 +379,25 @@ func (store *fakeStore) lastRun() domain.SyncRun {
 }
 
 // published counts the events of one detail type the store was given.
+// publishedReasons are the reasons the events of a type carried, so a test
+// can pin which one a caller announced rather than only how many.
+func (store *fakeStore) publishedReasons(detailType string) []string {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var reasons []string
+	for _, event := range store.events {
+		if event.DetailType != detailType {
+			continue
+		}
+		var carried struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal(event.Data, &carried)
+		reasons = append(reasons, carried.Reason)
+	}
+	return reasons
+}
+
 func (store *fakeStore) published(detailType string) int {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -360,6 +424,24 @@ func (directory *fakeDirectory) Membership(context.Context, string, authclient.C
 		return domain.OrgMembership{}, directory.err
 	}
 	return directory.membership, nil
+}
+
+// fakeApps answers what apps would about one of a member's connections.
+type fakeApps struct {
+	connection domain.AppConnection
+	err        error
+	calls      []string
+}
+
+func (apps *fakeApps) Connection(_ context.Context, _, connectionID string, _ authclient.Credentials) (domain.AppConnection, error) {
+	apps.calls = append(apps.calls, connectionID)
+	if apps.err != nil {
+		return domain.AppConnection{}, apps.err
+	}
+	if apps.connection.ID == "" || apps.connection.ID != connectionID {
+		return domain.AppConnection{}, domain.ErrNotFound
+	}
+	return apps.connection, nil
 }
 
 // fakeGrants mints a member token, recording whom it was minted for.

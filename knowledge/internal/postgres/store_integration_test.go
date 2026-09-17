@@ -512,6 +512,163 @@ func TestRemoveSourceRetractsWhatItHeld(t *testing.T) {
 	}
 }
 
+func TestCreateSourceStoresTheComposioAccount(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := domain.Source{
+		ID: "src_" + randomHex(8), OrganizationID: "org_1", ConnectionID: "con_1", ComposioAccountID: "ca_1",
+		Provider: "github", Target: map[string]string{"repository": "acme/api"},
+		Scope: domain.ScopeMember, MemberID: "user-1", CreatedBy: "user-1",
+		Status: domain.StatusActive, Interval: time.Hour, SyncAt: &testClock, CreatedAt: testClock,
+	}
+	if err := store.CreateSource(ctx, source, nil); err != nil {
+		t.Fatalf("CreateSource() error = %v", err)
+	}
+
+	read, err := store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if read.ComposioAccountID != "ca_1" {
+		t.Fatalf("Source() composio_account_id = %q, want ca_1", read.ComposioAccountID)
+	}
+}
+
+func TestSourcesFiltersByConnection(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	mine := testSource(t, store, "org_1")
+
+	elsewhere := mine
+	elsewhere.ID = "src_" + randomHex(8)
+	elsewhere.ConnectionID = "con_" + randomHex(4)
+	elsewhere.Target = map[string]string{"repository": "acme/elsewhere"}
+	if err := store.CreateSource(ctx, elsewhere, nil); err != nil {
+		t.Fatalf("CreateSource() error = %v", err)
+	}
+
+	listed, err := store.Sources(ctx, "org_1", domain.SourceQuery{Admin: true, ConnectionID: mine.ConnectionID})
+	if err != nil {
+		t.Fatalf("Sources() error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != mine.ID {
+		t.Fatalf("Sources(connection_id) = %d sources, want only %s", len(listed), mine.ID)
+	}
+}
+
+func TestPauseSourcesStopsWhatReadsThroughAConnection(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+
+	// A source on another connection must be left alone.
+	elsewhere := source
+	elsewhere.ID = "src_" + randomHex(8)
+	elsewhere.ConnectionID = "con_" + randomHex(4)
+	elsewhere.Target = map[string]string{"repository": "acme/elsewhere"}
+	if err := store.CreateSource(ctx, elsewhere, nil); err != nil {
+		t.Fatalf("CreateSource() error = %v", err)
+	}
+
+	var recordedReason string
+	paused, err := store.PauseSources(ctx, source.ConnectionID, "needs_reconnect", testClock,
+		func(paused domain.Source) (domain.Event, error) {
+			recordedReason = paused.Reason
+			return testEvent(t, "knowledge.source.paused.v1"), nil
+		})
+	if err != nil {
+		t.Fatalf("PauseSources() error = %v", err)
+	}
+	if len(paused) != 1 || paused[0].ID != source.ID {
+		t.Fatalf("PauseSources() = %d sources, want only %s", len(paused), source.ID)
+	}
+	if recordedReason != "needs_reconnect" {
+		t.Fatalf("the event's source reason = %q, want needs_reconnect", recordedReason)
+	}
+
+	read, err := store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if read.Status != domain.StatusPaused || read.Reason != "needs_reconnect" || read.SyncAt != nil {
+		t.Fatalf("Source() after pausing = %+v", read)
+	}
+	other, err := store.Source(ctx, "org_1", elsewhere.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if other.Status != domain.StatusActive {
+		t.Fatalf("a source on another connection was paused: status = %s", other.Status)
+	}
+
+	// Running it again pauses nothing further: a redelivered event is
+	// harmless.
+	again, err := store.PauseSources(ctx, source.ConnectionID, "needs_reconnect", testClock, nil)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("PauseSources(again) = %d, %v, want none", len(again), err)
+	}
+}
+
+func TestRemoveSourcesByConnectionRetractsWhatItHeld(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "issue-1", strings.Repeat("a", 64))
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+
+	elsewhere := source
+	elsewhere.ID = "src_" + randomHex(8)
+	elsewhere.ConnectionID = "con_" + randomHex(4)
+	elsewhere.Target = map[string]string{"repository": "acme/elsewhere"}
+	if err := store.CreateSource(ctx, elsewhere, nil); err != nil {
+		t.Fatalf("CreateSource() error = %v", err)
+	}
+
+	var retracted int
+	removed, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, testClock,
+		func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
+			retracted = len(documents)
+			events := make([]domain.Event, 0, len(documents))
+			for range documents {
+				events = append(events, testEvent(t, "knowledge.document.removed.v1"))
+			}
+			return events, nil
+		})
+	if err != nil {
+		t.Fatalf("RemoveSourcesByConnection() error = %v", err)
+	}
+	if len(removed) != 1 || removed[0].ID != source.ID {
+		t.Fatalf("RemoveSourcesByConnection() = %d sources, want only %s", len(removed), source.ID)
+	}
+	if retracted != 1 {
+		t.Fatalf("RemoveSourcesByConnection() retracted %d documents, want 1", retracted)
+	}
+
+	read, err := store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if read.Status != domain.StatusRemoved {
+		t.Fatalf("Source() status = %s, want removed", read.Status)
+	}
+	other, err := store.Source(ctx, "org_1", elsewhere.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if other.Status != domain.StatusActive {
+		t.Fatalf("a source on another connection was removed: status = %s", other.Status)
+	}
+
+	// Running it again finds nothing further: a redelivered event is
+	// harmless.
+	again, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, testClock, nil)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("RemoveSourcesByConnection(again) = %d, %v, want none", len(again), err)
+	}
+}
+
 func TestEventHandledIsTrueOnlyAfterMarkEventHandled(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
