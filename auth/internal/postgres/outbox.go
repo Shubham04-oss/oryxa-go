@@ -18,6 +18,12 @@ func (store *Store) EnqueueEvent(ctx context.Context, event domain.Event) error 
 	return nil
 }
 
+// ClaimOutbox, MarkOutboxPublished and MarkOutboxFailed below are no longer
+// what publishes auth's outbox: auth/service.go now dispatches through
+// internal/outbox, which claims and marks with a claim token these do not
+// carry. They remain only because auth/internal/application.Store (outside
+// this change's scope) still declares them; deleting them here needs that
+// interface trimmed too.
 func (store *Store) ClaimOutbox(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
 	rows, err := store.pool.Query(ctx, `
 		WITH picked AS (
