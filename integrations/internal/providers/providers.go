@@ -94,7 +94,7 @@ type Registry map[string]Provider
 // returns fresh values, so a caller may point one at a test server.
 func Builtin() Registry {
 	registry := Registry{}
-	for _, provider := range []Provider{GitHub(), Linear(), Microsoft(), Slack()} {
+	for _, provider := range []Provider{GitHub(), HubSpot(), Linear(), Microsoft(), Slack()} {
 		registry[provider.Name] = provider
 	}
 	return registry
@@ -148,6 +148,13 @@ type Delivered struct {
 	Header http.Header
 	Query  url.Values
 	Body   []byte
+	// Method and URI are the request line as the provider sent it, which a
+	// signature that covers the request rather than only its body needs:
+	// HubSpot signs method + URI + body + timestamp. URI is the path with its
+	// query, still percent-encoded, so a provider's own encoding is preserved
+	// rather than re-serialized from Query.
+	Method string
+	URI    string
 }
 
 // Reception is what a verified delivery holds.

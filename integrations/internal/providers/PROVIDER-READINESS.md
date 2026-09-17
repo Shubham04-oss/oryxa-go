@@ -11,9 +11,12 @@ a matter of effort — five of the 13 cannot have a verified delivery at all, fo
 four different reasons. Everything below is checked against each provider's own
 documentation or OpenAPI specification; sources are in `docs/research/`.
 
-The headline: **of the 13, exactly one — HubSpot — is ready to build today
-without either a framework decision or an unresolved reverse-engineering
-question.**
+**HubSpot is built.** It is the one provider of the 13 that needed neither a
+framework decision nor a reverse-engineering task. Its shape differs from the
+first four in a way worth knowing: HubSpot sets **one target URL per app**, not
+one per subscription, so it is an app delivery rather than a webhook one, and
+the app's client secret — not a per-subscription secret — is what signs every
+delivery. Connections already stores that secret, so nothing had to change.
 
 ## The contract, and what it assumes
 
@@ -93,7 +96,7 @@ response carries `webhook.secret` — so the same change unblocks it too.
 
 | Provider | Delivery | Verification | Ready? |
 | --- | --- | --- | --- |
-| **HubSpot** | webhook, created via API | v3 HMAC-SHA256, base64, 5-min window — fully specified | **Yes** |
+| **HubSpot** | app delivery, one target URL | v3 HMAC-SHA256, base64, 5-min window — fully specified | **Built** |
 | **ClickUp** | webhook, created via API | HMAC-SHA256 hex in `X-Signature`, secret from the create response | Yes, with the new extension |
 | **Asana** | webhook, created via API | HMAC-SHA256 hex in `X-Hook-Signature`, secret from the handshake | Yes, with the new extension |
 | **Atlassian** | webhook, created via API | bearer JWT, **undocumented** | Blocked |

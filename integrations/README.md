@@ -416,7 +416,7 @@ throwaway repository, workspace, team or mailbox.
 - Triggers into agent runs: something has to turn `integrations.trigger.received.v1` into a run, as the member the subscription belongs to. Subscriptions are not tools yet either, so an agent can act but not watch, although each provider's skill already describes its events.
 - User-provided integrations from OpenAPI specs, offered through the same endpoint behind a filter.
 - A sweeper for subscriptions left `pending` by a process that died mid-registration; today they are only cleaned up when something stops them.
-- More providers, and more of each provider's surface: connections connects 17 providers and only these four have triggers and actions, and Graph subscriptions are limited to mail, a mail folder, calendar events and the drive root.
+- More providers, and more of each provider's surface: connections connects 17 providers and only five have triggers and actions, and Graph subscriptions are limited to mail, a mail folder, calendar events and the drive root. `PROVIDER-READINESS.md` surveys the rest and records why five of them cannot have a verified delivery at all.
 - Per-request headers on provider calls: Graph's `Prefer` cannot be sent yet, so `microsoft_get_message` strips a message's HTML itself.
 - Live runs of everything but GitHub's webhook. Linear's `issue(id:)` resolving an identifier such as `ENG-42`, which its actions rely on, has only been checked against the fake.
 - Shared envelope encryption: `internal/secrets` is the same code as connections', which belongs in one place.

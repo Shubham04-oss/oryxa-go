@@ -171,8 +171,8 @@ func checkSchema(t *testing.T, action Action) {
 // providers reads.
 func TestDescribeReadsTheRegistryAloud(t *testing.T) {
 	described := Builtin().Describe()
-	if len(described) != 4 {
-		t.Fatalf("Describe() = %d providers, want the registry's", len(described))
+	if len(described) != len(Builtin()) {
+		t.Fatalf("Describe() = %d providers, want the registry's %d", len(described), len(Builtin()))
 	}
 	names := make([]string, 0, len(described))
 	for _, provider := range described {

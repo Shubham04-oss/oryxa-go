@@ -89,7 +89,7 @@ integrations each let an agent's token do less than the member's own.
 | | Where it stands |
 | --- | --- |
 | Connecting a provider | Members connect any of connections' 17 providers from the web app. An agent can list the member's connections but never change one |
-| Acting in a provider | GitHub, Slack, Linear and Microsoft have actions, over integrations' HTTP API and one MCP endpoint each. Krude loads each as a toolbox, and every write asks the member first |
+| Acting in a provider | GitHub, Slack, Linear, Microsoft and HubSpot have actions, over integrations' HTTP API and one MCP endpoint each. Krude loads each as a toolbox, and every write asks the member first |
 | Reacting to a provider | Integrations turns deliveries into `integrations.trigger.received.v1` events, but nothing starts an agent run from one, and no tool lets an agent subscribe |
 | Running an agent as a member | Only `agents/primary`'s development UI runs Krude, acting through the member's grant. `cmd/primary` has no run API, and the web app has no screen to grant or withdraw agent access |
 
