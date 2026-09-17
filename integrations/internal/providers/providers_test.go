@@ -186,7 +186,7 @@ func TestSendJSON(t *testing.T) {
 
 func TestBuiltin(t *testing.T) {
 	registry := Builtin()
-	names := []string{"github", "linear", "microsoft", "slack"}
+	names := []string{"github", "hubspot", "linear", "microsoft", "slack"}
 	if len(registry) != len(names) {
 		t.Fatalf("Builtin() has %d providers, want %d (%v)", len(registry), len(names), registry)
 	}

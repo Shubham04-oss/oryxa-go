@@ -553,29 +553,67 @@ func (service *Service) RevokeInvitation(ctx context.Context, actorID, organizat
 	return service.store.RevokeInvitation(ctx, organizationID, invitationID, event)
 }
 
+// AcceptInvitation joins the member to the organization whose emailed
+// invitation link carries token.
 func (service *Service) AcceptInvitation(ctx context.Context, actorID, token string) (domain.Membership, error) {
 	user, err := service.store.UserByID(ctx, actorID)
 	if err != nil {
 		return domain.Membership{}, err
 	}
-	tokenHash := hashToken(strings.TrimSpace(token))
-	invitation, err := service.store.InvitationByTokenHash(ctx, tokenHash)
+	invitation, err := service.store.InvitationByTokenHash(ctx, hashToken(strings.TrimSpace(token)))
 	if err != nil {
 		return domain.Membership{}, err
 	}
-	now := service.now().UTC()
 	if invitation.Status != domain.InvitationPending {
 		return domain.Membership{}, domain.ErrConflict
 	}
 	if normalizeEmail(invitation.Email) != normalizeEmail(user.Email) {
 		return domain.Membership{}, domain.ErrForbidden
 	}
+	return service.join(ctx, user, invitation.ID, invitation.OrganizationID, invitation.Role)
+}
+
+// ReceivedInvitations lists the pending invitations sent to the member's own
+// email, in organizations they have not joined. Auth only signs in verified
+// email addresses, so the member owns that address and needs no emailed link
+// to see them: whoever signs up without following the link still finds the
+// organization that invited them.
+func (service *Service) ReceivedInvitations(ctx context.Context, actorID string) ([]domain.ReceivedInvitation, error) {
+	user, err := service.store.UserByID(ctx, actorID)
+	if err != nil {
+		return nil, err
+	}
+	return service.store.ReceivedInvitations(ctx, user.ID, user.Email, service.now().UTC())
+}
+
+// AcceptReceivedInvitation joins the member to the organization of one of
+// their ReceivedInvitations. Any other invitation is not found, so an ID
+// alone tells nobody whether it exists.
+func (service *Service) AcceptReceivedInvitation(ctx context.Context, actorID, invitationID string) (domain.Membership, error) {
+	user, err := service.store.UserByID(ctx, actorID)
+	if err != nil {
+		return domain.Membership{}, err
+	}
+	invitations, err := service.store.ReceivedInvitations(ctx, user.ID, user.Email, service.now().UTC())
+	if err != nil {
+		return domain.Membership{}, err
+	}
+	for _, invitation := range invitations {
+		if invitation.ID == invitationID {
+			return service.join(ctx, user, invitation.ID, invitation.OrganizationID, invitation.Role)
+		}
+	}
+	return domain.Membership{}, domain.ErrNotFound
+}
+
+func (service *Service) join(ctx context.Context, user domain.User, invitationID, organizationID string, role domain.Role) (domain.Membership, error) {
+	now := service.now().UTC()
 	membership := domain.Membership{
-		OrganizationID: invitation.OrganizationID,
+		OrganizationID: organizationID,
 		UserID:         user.ID,
 		Email:          user.Email,
 		DisplayName:    user.DisplayName,
-		Role:           invitation.Role,
+		Role:           role,
 		JoinedAt:       now,
 	}
 	event, err := newEvent(autheventsv1.MemberJoinedDetailType, autheventsv1.MemberJoined{
@@ -588,7 +626,7 @@ func (service *Service) AcceptInvitation(ctx context.Context, actorID, token str
 	if err != nil {
 		return domain.Membership{}, err
 	}
-	if err := service.store.AcceptInvitation(ctx, tokenHash, user, membership, event); err != nil {
+	if err := service.store.AcceptInvitation(ctx, invitationID, user, membership, event); err != nil {
 		return domain.Membership{}, err
 	}
 	return membership, nil

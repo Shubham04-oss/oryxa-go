@@ -86,3 +86,69 @@ func TestHolds(t *testing.T) {
 		t.Fatalf("CountHolds() after DeleteCredentials = %d, %v, want 0 (holds were removed)", count, err)
 	}
 }
+
+// TestAddHoldAndCredentialDeletionAreSerialized races a hold against the
+// cleanup that deletes the credentials it means to keep. Before AddHold took
+// its row lock, its unlocked EXISTS read did not conflict with the deletion's
+// write, so the insert could land after the deletion had already removed the
+// holds: the hold survived on a connection left with no credentials, callers
+// believed the credentials were retained, and nothing ever removed the row.
+// The invariant is that the two can never both win.
+func TestAddHoldAndCredentialDeletionAreSerialized(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	// Enough attempts that the pre-fix interleaving shows up; it was observed
+	// on 39 of 40 before the lock was added.
+	const attempts = 40
+	for attempt := range attempts {
+		org := "org_hold_race_" + randomHex(4)
+		suffix := randomHex(4)
+		app := createApp(t, store, org, "app_hold_race_"+suffix, domain.CredentialOAuth2, now)
+		connection := createConnection(t, store, app, "con_hold_race_"+suffix, "user-1", "account-1", now)
+		disconnect(t, store, org, connection.ID, domain.DisconnectRequested, now)
+		// Take the cleanup lease the way the worker would, so the deletion is
+		// not refused for want of one.
+		if _, err := store.pool.Exec(ctx, `
+			UPDATE connections SET refresh_lease_token = $3, refresh_lease_until = $4
+			WHERE organization_id = $1 AND id = $2`,
+			org, connection.ID, "cleanup-lease", now.Add(2*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+
+		start := make(chan struct{})
+		holdDone := make(chan error, 1)
+		deleteDone := make(chan error, 1)
+		go func() {
+			<-start
+			holdDone <- store.AddHold(ctx, org, connection.ID, "integrations.webhooks", now)
+		}()
+		go func() {
+			<-start
+			deleteDone <- store.DeleteCredentials(ctx, org, connection.ID, "cleanup-lease", now,
+				testEvent("connections.connection.credentials-deleted.v1", now))
+		}()
+		close(start)
+		holdErr, deleteErr := <-holdDone, <-deleteDone
+
+		// Whichever ran first, the loser must have seen the winner: either the
+		// hold was refused or removed, or the deletion lost the race.
+		var holds int
+		if err := store.pool.QueryRow(ctx,
+			`SELECT count(*) FROM connections_holds WHERE organization_id = $1 AND connection_id = $2`,
+			org, connection.ID).Scan(&holds); err != nil {
+			t.Fatal(err)
+		}
+		var credentialsDeleted bool
+		if err := store.pool.QueryRow(ctx,
+			`SELECT credentials_deleted_at IS NOT NULL FROM connections WHERE organization_id = $1 AND id = $2`,
+			org, connection.ID).Scan(&credentialsDeleted); err != nil {
+			t.Fatal(err)
+		}
+		if holds > 0 && credentialsDeleted {
+			t.Fatalf("attempt %d: %d hold(s) survived on a connection whose credentials are deleted (hold err %v, delete err %v)",
+				attempt, holds, holdErr, deleteErr)
+		}
+	}
+}

@@ -138,7 +138,8 @@ func (store *Store) UpdateApp(ctx context.Context, app domain.App, expectedRevis
 		if reconnect != "" {
 			if _, err := changeConnections(ctx, tx, `
 				UPDATE connections
-				SET status = 'needs_reconnect', status_reason = $3, status_changed_at = $4, updated_at = $4, version = version + 1
+				SET status = 'needs_reconnect', status_reason = $3, status_changed_at = $4, updated_at = $4,
+				    version = version + 1, refresh_lease_token = NULL, refresh_lease_until = NULL
 				WHERE organization_id = $1 AND app_id = $2 AND status = 'active'
 				RETURNING `+connectionColumns(""),
 				[]any{app.OrganizationID, app.ID, string(reconnect), app.UpdatedAt}, connectionEvent); err != nil {
@@ -166,7 +167,8 @@ func (store *Store) DeleteApp(ctx context.Context, organizationID, appID string,
 		if _, err := changeConnections(ctx, tx, `
 			UPDATE connections
 			SET status = 'disconnected', status_reason = 'app_deleted', is_default = false,
-			    status_changed_at = $3, updated_at = $3, version = version + 1
+			    status_changed_at = $3, updated_at = $3, version = version + 1,
+			    refresh_lease_token = NULL, refresh_lease_until = NULL
 			WHERE organization_id = $1 AND app_id = $2 AND status <> 'disconnected'
 			RETURNING `+connectionColumns(""),
 			[]any{organizationID, appID, at}, connectionEvent); err != nil {

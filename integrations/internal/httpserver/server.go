@@ -118,6 +118,7 @@ func (server *Server) receive(writer http.ResponseWriter, request *http.Request)
 	}
 	reply, err := server.service.Receive(request.Context(), request.PathValue("provider"), request.PathValue("route"), providers.Delivered{
 		Header: request.Header, Query: request.URL.Query(), Body: body,
+		Method: request.Method, URI: request.URL.RequestURI(),
 	})
 	switch {
 	case err == nil:

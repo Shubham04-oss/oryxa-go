@@ -9,7 +9,17 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/connections/internal/domain"
 )
 
-func (store *Store) ClaimOutbox(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
+// outboxClaimTTL is how long one claim on an outbox event lasts. It is far
+// longer than a batch should take, because a claim that expires while its
+// dispatcher is still publishing lets another replica publish the same event
+// again; the claim token is what keeps the stale dispatcher from then marking
+// a row it no longer owns.
+const outboxClaimTTL = 2 * time.Minute
+
+// ClaimOutbox hands out up to limit published-pending events to one dispatcher,
+// oldest first, stamped with token. Events another dispatcher is working
+// under a live claim are skipped.
+func (store *Store) ClaimOutbox(ctx context.Context, limit int, token string) ([]domain.OutboxEvent, error) {
 	rows, err := store.pool.Query(ctx, `
 		WITH picked AS (
 			SELECT id
@@ -22,10 +32,11 @@ func (store *Store) ClaimOutbox(ctx context.Context, limit int) ([]domain.Outbox
 			LIMIT $1
 		)
 		UPDATE connections_outbox AS event
-		SET locked_until = now() + interval '30 seconds'
+		SET locked_until = now() + ($2 * interval '1 millisecond'), claim_token = $3
 		FROM picked
 		WHERE event.id = picked.id
-		RETURNING event.id, event.detail_type, event.detail, event.occurred_at, event.attempts`, limit)
+		RETURNING event.id, event.detail_type, event.detail, event.occurred_at, event.attempts, event.claim_token`,
+		limit, outboxClaimTTL.Milliseconds(), token)
 	if err != nil {
 		return nil, fmt.Errorf("claim outbox: %w", err)
 	}
@@ -34,7 +45,7 @@ func (store *Store) ClaimOutbox(ctx context.Context, limit int) ([]domain.Outbox
 	for rows.Next() {
 		var event domain.OutboxEvent
 		var detail []byte
-		if err := rows.Scan(&event.ID, &event.DetailType, &detail, &event.OccurredAt, &event.Attempts); err != nil {
+		if err := rows.Scan(&event.ID, &event.DetailType, &detail, &event.OccurredAt, &event.Attempts, &event.ClaimToken); err != nil {
 			return nil, fmt.Errorf("scan outbox event: %w", err)
 		}
 		event.Data = json.RawMessage(detail)
@@ -46,25 +57,49 @@ func (store *Store) ClaimOutbox(ctx context.Context, limit int) ([]domain.Outbox
 	return events, nil
 }
 
-func (store *Store) MarkOutboxPublished(ctx context.Context, eventID string) error {
-	if _, err := store.pool.Exec(ctx, `
+// MarkOutboxPublished records that an event reached the bus. A token that no
+// longer owns the row, because the claim expired and another dispatcher took
+// it, changes nothing and reports false.
+func (store *Store) MarkOutboxPublished(ctx context.Context, eventID, token string) (bool, error) {
+	tag, err := store.pool.Exec(ctx, `
 		UPDATE connections_outbox
-		SET published_at = now(), locked_until = NULL, last_error = NULL
-		WHERE id = $1`, eventID); err != nil {
-		return fmt.Errorf("mark outbox published: %w", err)
+		SET published_at = now(), locked_until = NULL, claim_token = NULL, last_error = NULL
+		WHERE id = $1 AND claim_token = $2`, eventID, token)
+	if err != nil {
+		return false, fmt.Errorf("mark outbox published: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() > 0, nil
 }
 
-func (store *Store) MarkOutboxFailed(ctx context.Context, eventID string, retryAfter time.Duration, message string) error {
-	if _, err := store.pool.Exec(ctx, `
+// MarkOutboxFailed sends an event back for retry. A token that no longer owns
+// the row changes nothing and reports false.
+func (store *Store) MarkOutboxFailed(ctx context.Context, eventID, token string, retryAfter time.Duration, message string) (bool, error) {
+	tag, err := store.pool.Exec(ctx, `
 		UPDATE connections_outbox
 		SET attempts = attempts + 1,
-		    available_at = now() + ($2 * interval '1 millisecond'),
+		    available_at = now() + ($3 * interval '1 millisecond'),
 		    locked_until = NULL,
-		    last_error = left($3, 1000)
-		WHERE id = $1`, eventID, retryAfter.Milliseconds(), message); err != nil {
-		return fmt.Errorf("mark outbox failed: %w", err)
+		    claim_token = NULL,
+		    last_error = left($4, 1000)
+		WHERE id = $1 AND claim_token = $2`, eventID, token, retryAfter.Milliseconds(), message)
+	if err != nil {
+		return false, fmt.Errorf("mark outbox failed: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() > 0, nil
+}
+
+// DeletePublishedOutbox removes up to limit events that reached the bus before
+// the given time. Nothing reads a published row again, so they are kept only
+// briefly to explain recent deliveries; without this the table grows once per
+// connection change, for ever.
+func (store *Store) DeletePublishedOutbox(ctx context.Context, before time.Time, limit int) (int, error) {
+	tag, err := store.pool.Exec(ctx, `
+		DELETE FROM connections_outbox
+		WHERE id IN (
+			SELECT id FROM connections_outbox WHERE published_at IS NOT NULL AND published_at < $1 LIMIT $2
+		)`, before, limit)
+	if err != nil {
+		return 0, fmt.Errorf("delete published outbox events: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }

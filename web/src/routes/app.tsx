@@ -19,8 +19,10 @@ export const Route = createFileRoute("/app")({
 	ssr: false,
 	beforeLoad: async ({ context, location }) => {
 		const session = await ensureSession(context.queryClient, location.href);
+		// An invited member joins that organization rather than setting up
+		// their own; /invitations sends anyone with none on to onboarding.
 		if (session.organizations.length === 0) {
-			throw redirect({ to: "/onboarding" });
+			throw redirect({ to: "/invitations" });
 		}
 	},
 	component: AppLayout,
@@ -33,7 +35,7 @@ function AppLayout() {
 
 	// The member can leave their last organization while the app is open.
 	if (!organization) {
-		return <Navigate to="/onboarding" />;
+		return <Navigate to="/invitations" />;
 	}
 
 	return (

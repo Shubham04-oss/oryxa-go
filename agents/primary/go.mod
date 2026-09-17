@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.33.4
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.4
 	github.com/aws/aws-sdk-go-v2/service/bedrockagentcore v1.48.0
-	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.62.0
+	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.63.0
 	github.com/aws/aws-sdk-go-v2/service/eventbridge v1.54.0
 	github.com/aws/aws-sdk-go-v2/service/kms v1.60.0
 	github.com/gorilla/websocket v1.5.3
@@ -96,7 +96,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/oauth2 v0.36.0 // indirect
+	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect

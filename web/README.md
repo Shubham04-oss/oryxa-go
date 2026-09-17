@@ -37,11 +37,13 @@ changes against their `*_ALLOWED_ORIGINS`, so keep the app on
 - `/auth/verify-email`, `/auth/forgot-password` and `/auth/reset-password`:
   auth's `EMAIL_VERIFICATION_URL` and `PASSWORD_RESET_URL` links open these.
 - `/invitations/accept`: auth's `INVITATION_ACCEPT_URL`. A signed-out visitor
-  signs in first and comes back to it.
+  signs in, or creates an account, and comes back to it.
+- `/invitations`: the invitations sent to the signed-in member's email, to
+  join without the emailed link.
 - `/onboarding`: create an organization and invite its first members.
-- `/app`: the workspace. It sends a signed-out visitor to sign in and a member
-  without an organization to onboarding, and remembers the organization last
-  chosen in that browser.
+- `/app`: the workspace. It sends a signed-out visitor to sign in, and a member
+  without an organization to their invitations, or to onboarding when there
+  are none. It remembers the organization last chosen in that browser.
 - `/app/teams`: the team tree, each team's people, and your email switch for it.
 - `/app/files`: organization and personal files, with uploads and downloads.
 - `/app/connections`: connect a tool, reconnect it, or replace its key.

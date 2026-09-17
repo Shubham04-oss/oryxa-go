@@ -71,7 +71,7 @@ func TestCreateConnectionAndReplaceCredentials(t *testing.T) {
 		t.Fatalf("ReplaceCredentials() on a disconnected connection error = %v", err)
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 100)
+	claimed, err := store.ClaimOutbox(ctx, 100, "claim-token")
 	if err != nil {
 		t.Fatal(err)
 	}

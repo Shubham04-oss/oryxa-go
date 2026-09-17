@@ -70,7 +70,7 @@ func TestMemberLimits(t *testing.T) {
 	}
 	accept := func(name string) error {
 		membership := domain.Membership{OrganizationID: organizationID, UserID: ids[name], Role: domain.RoleMember, JoinedAt: now.Add(time.Second)}
-		return store.AcceptInvitation(ctx, "it-limit-token-"+name+"-"+suffix, users[name], membership, nextEvent("auth.member.joined.v1"))
+		return store.AcceptInvitation(ctx, "it-limit-invite-"+name+"-"+suffix, users[name], membership, nextEvent("auth.member.joined.v1"))
 	}
 	limit := func(revision int64, value *int) {
 		t.Helper()

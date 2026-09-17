@@ -195,7 +195,24 @@ func (s *Service) createWebhookSubscription(ctx context.Context, provider provid
 	}
 	now := s.now()
 	expiresAt, renewAt := renewalTimes(registration.ExpiresAt, now)
-	activated, err := s.store.ActivateSubscription(ctx, organizationID, subscription.ID, registration.ID, expiresAt, renewAt, now, s.createdEvent)
+	// A provider that issues its own signing secret, as ClickUp and Asana do,
+	// replaces the one generated above: every later delivery is signed with
+	// the provider's, so Receive must be given that one.
+	var issued *domain.SealedData
+	if registration.Secret != "" {
+		checked, err := domain.CheckWebhookSecret(registration.Secret)
+		if err != nil {
+			s.abandon(context.WithoutCancel(ctx), subscription)
+			return domain.Subscription{}, fmt.Errorf("provider %s issued a signing secret this service cannot store: %w", provider.Name, err)
+		}
+		sealed, err := s.sealer.Seal(ctx, subscriptionBinding(subscription), []byte(checked))
+		if err != nil {
+			s.abandon(context.WithoutCancel(ctx), subscription)
+			return domain.Subscription{}, err
+		}
+		issued = &sealed
+	}
+	activated, err := s.store.ActivateSubscription(ctx, organizationID, subscription.ID, registration.ID, issued, expiresAt, renewAt, now, s.createdEvent)
 	if err != nil && !errors.Is(err, domain.ErrConflict) {
 		// The registration exists but was not saved: remove it while its
 		// credential is at hand.

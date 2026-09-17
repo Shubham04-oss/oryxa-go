@@ -163,7 +163,7 @@ func TestActivateSubscription(t *testing.T) {
 			seen = subscription
 			return testEvent("integrations.subscription.activated.v1", activatedAt), nil
 		}
-		activated, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_abc", &expiresAt, &renewAt, activatedAt, callback)
+		activated, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_abc", nil, &expiresAt, &renewAt, activatedAt, callback)
 		if err != nil {
 			t.Fatalf("ActivateSubscription() error = %v", err)
 		}
@@ -184,9 +184,60 @@ func TestActivateSubscription(t *testing.T) {
 	})
 
 	t.Run("unknown id is not found", func(t *testing.T) {
-		_, err := store.ActivateSubscription(ctx, org, "sub_missing", "reg", nil, nil, now, neverCalled(t))
+		_, err := store.ActivateSubscription(ctx, org, "sub_missing", "reg", nil, nil, nil, now, neverCalled(t))
 		if !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("ActivateSubscription() for an unknown id error = %v, want ErrNotFound", err)
+		}
+	})
+
+	// A provider that issues its own signing secret — ClickUp answers a create
+	// with the webhook's secret, Asana hands one over during the handshake —
+	// replaces the one the service generated. Every later delivery is signed
+	// with the provider's, so the stored value has to become that one, or
+	// Receive would refuse genuine deliveries.
+	t.Run("a provider-issued secret replaces the one stored", func(t *testing.T) {
+		sub := newSubscription(org, "sub_secret", "con_secret", "app_1", "user_1", domain.SubscriptionPending, now)
+		sub.EncryptedSecret = sealedData("generated")
+		if err := store.CreateSubscription(ctx, sub, nil); err != nil {
+			t.Fatalf("CreateSubscription() error = %v", err)
+		}
+
+		issued := sealedData("issued")
+		activated, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_issued", issued, nil, nil, now,
+			eventFor("integrations.subscription.activated.v1", now))
+		if err != nil {
+			t.Fatalf("ActivateSubscription() error = %v", err)
+		}
+		if !sealedEqual(activated.EncryptedSecret, issued) {
+			t.Fatalf("ActivateSubscription() stored secret = %+v, want the provider's", activated.EncryptedSecret)
+		}
+		// Reading it back shows the replacement was persisted, not just
+		// returned.
+		stored, err := store.Subscription(ctx, org, sub.ID)
+		if err != nil {
+			t.Fatalf("Subscription() error = %v", err)
+		}
+		if !sealedEqual(stored.EncryptedSecret, issued) {
+			t.Fatalf("Subscription() secret = %+v, want the provider's", stored.EncryptedSecret)
+		}
+	})
+
+	// A provider that takes the generated secret — GitHub stores what it is
+	// given — leaves it alone.
+	t.Run("no issued secret keeps the one stored", func(t *testing.T) {
+		generated := sealedData("kept")
+		sub := newSubscription(org, "sub_keeps", "con_keeps", "app_1", "user_1", domain.SubscriptionPending, now)
+		sub.EncryptedSecret = generated
+		if err := store.CreateSubscription(ctx, sub, nil); err != nil {
+			t.Fatalf("CreateSubscription() error = %v", err)
+		}
+		activated, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_keeps", nil, nil, nil, now,
+			eventFor("integrations.subscription.activated.v1", now))
+		if err != nil {
+			t.Fatalf("ActivateSubscription() error = %v", err)
+		}
+		if !sealedEqual(activated.EncryptedSecret, generated) {
+			t.Fatalf("ActivateSubscription() stored secret = %+v, want the generated one kept", activated.EncryptedSecret)
 		}
 	})
 
@@ -195,14 +246,14 @@ func TestActivateSubscription(t *testing.T) {
 		if err := store.CreateSubscription(ctx, sub, nil); err != nil {
 			t.Fatalf("CreateSubscription() error = %v", err)
 		}
-		first, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_1", nil, nil, now, eventFor("integrations.subscription.activated.v1", now))
+		first, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_1", nil, nil, nil, now, eventFor("integrations.subscription.activated.v1", now))
 		if err != nil {
 			t.Fatalf("ActivateSubscription() first error = %v", err)
 		}
 		if _, err := store.ClaimOutbox(ctx, 10); err != nil {
 			t.Fatalf("ClaimOutbox() error = %v", err)
 		}
-		if _, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_2", nil, nil, now.Add(time.Minute), neverCalled(t)); !errors.Is(err, domain.ErrConflict) {
+		if _, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_2", nil, nil, nil, now.Add(time.Minute), neverCalled(t)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("ActivateSubscription() on an active subscription error = %v, want ErrConflict", err)
 		}
 		reloaded, err := store.Subscription(ctx, org, sub.ID)
@@ -230,7 +281,7 @@ func TestActivateSubscription(t *testing.T) {
 		}
 
 		activateAt := now.Add(time.Minute)
-		if _, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_late", nil, nil, activateAt, neverCalled(t)); !errors.Is(err, domain.ErrConflict) {
+		if _, err := store.ActivateSubscription(ctx, org, sub.ID, "reg_late", nil, nil, nil, activateAt, neverCalled(t)); !errors.Is(err, domain.ErrConflict) {
 			t.Fatalf("ActivateSubscription() of a subscription stopped while pending error = %v, want ErrConflict", err)
 		}
 
@@ -425,7 +476,7 @@ func TestHoldsConnection(t *testing.T) {
 	if err := store.CreateSubscription(ctx, registered, nil); err != nil {
 		t.Fatalf("CreateSubscription() error = %v", err)
 	}
-	activated, err := store.ActivateSubscription(ctx, org, registered.ID, "reg_hold", nil, nil, now.Add(2*time.Minute),
+	activated, err := store.ActivateSubscription(ctx, org, registered.ID, "reg_hold", nil, nil, nil, now.Add(2*time.Minute),
 		eventFor("integrations.subscription.activated.v1", now))
 	if err != nil {
 		t.Fatalf("ActivateSubscription() error = %v", err)

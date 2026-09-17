@@ -40,7 +40,7 @@ type Config struct {
 
 type Manager struct {
 	config     Config
-	allowed    map[string]struct{}
+	allowed    []*url.URL
 	service    loginService
 	verifier   identityVerifier
 	httpClient *http.Client
@@ -74,9 +74,13 @@ func New(config Config, service loginService, verifier identityVerifier) (*Manag
 	if config.CognitoDomain == "" || config.ClientID == "" || config.CallbackURL == "" || len(config.AllowedReturnTo) == 0 {
 		return nil, errors.New("Cognito domain, client ID, callback URL, and return URLs are required")
 	}
-	allowed := make(map[string]struct{}, len(config.AllowedReturnTo))
+	allowed := make([]*url.URL, 0, len(config.AllowedReturnTo))
 	for _, target := range config.AllowedReturnTo {
-		allowed[target] = struct{}{}
+		parsed, err := url.Parse(target)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return nil, fmt.Errorf("return URL %q must be absolute", target)
+		}
+		allowed = append(allowed, parsed)
 	}
 	return &Manager{
 		config:     config,
@@ -92,7 +96,7 @@ func (manager *Manager) Begin(ctx context.Context, returnTo string) (string, str
 	if returnTo == "" {
 		returnTo = manager.config.AllowedReturnTo[0]
 	}
-	if _, ok := manager.allowed[returnTo]; !ok {
+	if !manager.returnAllowed(returnTo) {
 		return "", "", fmt.Errorf("return URL is not allowed: %w", domain.ErrInvalid)
 	}
 	state, err := secureToken(32)
@@ -130,6 +134,31 @@ func (manager *Manager) Begin(ctx context.Context, returnTo string) (string, str
 		"state":                 {state},
 	}
 	return state, strings.TrimRight(manager.config.CognitoDomain, "/") + "/oauth2/authorize?" + query.Encode(), nil
+}
+
+// returnAllowed reports whether sign-in may end at target: an allowed return
+// URL, or a page beneath one on the same origin, so a member comes back to
+// the page that sent them to sign in, such as the invitation they opened.
+func (manager *Manager) returnAllowed(target string) bool {
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.User != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+		return false
+	}
+	// A browser resolves dot segments, which could climb out of an allowed
+	// path; the path is decoded, so encoded dots are caught too.
+	for _, segment := range strings.Split(parsed.Path, "/") {
+		if segment == "." || segment == ".." {
+			return false
+		}
+	}
+	for _, allowed := range manager.allowed {
+		base := strings.TrimSuffix(allowed.Path, "/")
+		if parsed.Scheme == allowed.Scheme && strings.EqualFold(parsed.Host, allowed.Host) &&
+			(parsed.Path == base || strings.HasPrefix(parsed.Path, base+"/")) {
+			return true
+		}
+	}
+	return false
 }
 
 func (manager *Manager) Complete(ctx context.Context, state, stateCookie, code string) (Session, error) {

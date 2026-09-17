@@ -33,7 +33,13 @@ type Store interface {
 	InvitationByTokenHash(context.Context, string) (domain.Invitation, error)
 	InvitationByID(context.Context, string, string) (domain.Invitation, error)
 	RevokeInvitation(context.Context, string, string, domain.Event) error
-	AcceptInvitation(context.Context, string, domain.User, domain.Membership, domain.Event) error
+	// ReceivedInvitations lists the invitations to email still pending at
+	// the given time, in organizations userID has not joined.
+	ReceivedInvitations(ctx context.Context, userID, email string, at time.Time) ([]domain.ReceivedInvitation, error)
+	// AcceptInvitation adds membership for user on the invitation
+	// invitationID, which must still be pending, unexpired, addressed to
+	// user, and for the organization and role membership names.
+	AcceptInvitation(ctx context.Context, invitationID string, user domain.User, membership domain.Membership, joined domain.Event) error
 	ChangeMemberRole(context.Context, string, string, domain.Role, domain.Role, domain.Event) error
 	RemoveMember(context.Context, string, string, domain.Role, domain.Event) error
 	ApplyEntitlements(ctx context.Context, organizationID string, revision int64, memberLimit *int, changedAt time.Time) error

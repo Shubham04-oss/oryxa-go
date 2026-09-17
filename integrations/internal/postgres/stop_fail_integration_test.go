@@ -92,7 +92,7 @@ func TestStopSubscriptionsFieldsRecorded(t *testing.T) {
 		t.Fatalf("CreateSubscription() error = %v", err)
 	}
 	expiresAt, renewAt := now.Add(48*time.Hour), now.Add(24*time.Hour)
-	activated, err := store.ActivateSubscription(ctx, org, registered.ID, "reg_stop", &expiresAt, &renewAt, now,
+	activated, err := store.ActivateSubscription(ctx, org, registered.ID, "reg_stop", nil, &expiresAt, &renewAt, now,
 		eventFor("integrations.subscription.activated.v1", now))
 	if err != nil {
 		t.Fatalf("ActivateSubscription() error = %v", err)
@@ -208,7 +208,7 @@ func TestFailSubscription(t *testing.T) {
 		if err := store.CreateSubscription(ctx, sub, nil); err != nil {
 			t.Fatalf("CreateSubscription(%s) error = %v", id, err)
 		}
-		activated, err := store.ActivateSubscription(ctx, org, id, "reg_"+id, nil, nil, now, eventFor("integrations.subscription.activated.v1", now))
+		activated, err := store.ActivateSubscription(ctx, org, id, "reg_"+id, nil, nil, nil, now, eventFor("integrations.subscription.activated.v1", now))
 		if err != nil {
 			t.Fatalf("ActivateSubscription(%s) error = %v", id, err)
 		}

@@ -57,6 +57,8 @@ type authService interface {
 	Invitations(context.Context, string, string) ([]domain.Invitation, error)
 	RevokeInvitation(context.Context, string, string, string) error
 	AcceptInvitation(context.Context, string, string) (domain.Membership, error)
+	ReceivedInvitations(context.Context, string) ([]domain.ReceivedInvitation, error)
+	AcceptReceivedInvitation(context.Context, string, string) (domain.Membership, error)
 	ChangeMemberRole(context.Context, string, string, string, domain.Role) (domain.Membership, error)
 	RemoveMember(context.Context, string, string, string) error
 }
@@ -138,6 +140,8 @@ func New(verifier accessTokenVerifier, oauth authFlow, passwords passwordAuth, s
 	server.mux.Handle("GET /v1/organizations/{organizationID}/invitations", server.authenticated(http.HandlerFunc(server.invitations)))
 	server.mux.Handle("DELETE /v1/organizations/{organizationID}/invitations/{invitationID}", server.authenticated(http.HandlerFunc(server.revokeInvitation)))
 	server.mux.Handle("POST /v1/invitations/accept", server.authenticated(http.HandlerFunc(server.acceptInvitation)))
+	server.mux.Handle("GET /v1/invitations", server.authenticated(http.HandlerFunc(server.receivedInvitations)))
+	server.mux.Handle("POST /v1/invitations/{invitationID}/accept", server.authenticated(http.HandlerFunc(server.acceptReceivedInvitation)))
 	server.mux.Handle("PATCH /v1/organizations/{organizationID}/members/{userID}", server.authenticated(http.HandlerFunc(server.changeMemberRole)))
 	server.mux.Handle("DELETE /v1/organizations/{organizationID}/members/{userID}", server.authenticated(http.HandlerFunc(server.removeMember)))
 	server.mux.Handle("GET /v1/agent-grant", server.authenticated(http.HandlerFunc(server.agentGrantStatus)))
@@ -565,6 +569,30 @@ func (server *Server) acceptInvitation(writer http.ResponseWriter, request *http
 	}
 	authenticated := requestAuth(request)
 	membership, err := server.service.AcceptInvitation(request.Context(), authenticated.Claims.Subject, input.Token)
+	if err != nil {
+		server.handleError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, membership)
+}
+
+func (server *Server) receivedInvitations(writer http.ResponseWriter, request *http.Request) {
+	authenticated := requestAuth(request)
+	invitations, err := server.service.ReceivedInvitations(request.Context(), authenticated.Claims.Subject)
+	if err != nil {
+		server.handleError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"invitations": invitations})
+}
+
+func (server *Server) acceptReceivedInvitation(writer http.ResponseWriter, request *http.Request) {
+	authenticated := requestAuth(request)
+	membership, err := server.service.AcceptReceivedInvitation(
+		request.Context(),
+		authenticated.Claims.Subject,
+		request.PathValue("invitationID"),
+	)
 	if err != nil {
 		server.handleError(writer, err)
 		return

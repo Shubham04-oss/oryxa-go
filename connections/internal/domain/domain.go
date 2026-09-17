@@ -407,4 +407,9 @@ type Event struct {
 type OutboxEvent struct {
 	Event
 	Attempts int
+	// ClaimToken is the claim this event was handed out under. Marking it
+	// published or failed needs the same token, so a dispatcher whose claim
+	// expired while it was publishing cannot overwrite the row a later claim
+	// now owns.
+	ClaimToken string
 }

@@ -56,8 +56,10 @@ type fakeAuthService struct {
 	organization  domain.Organization
 	membership    domain.Membership
 	members       []domain.Membership
+	received      []domain.ReceivedInvitation
 	err           error
 	signedOutUser string
+	accepted      string
 }
 
 func (fake *fakeAuthService) CurrentUser(_ context.Context, _ string) (domain.User, []domain.Organization, error) {
@@ -71,6 +73,15 @@ func (fake *fakeAuthService) SignOut(_ context.Context, userID string) error {
 
 func (fake *fakeAuthService) InviteMember(_ context.Context, _, _ string, _ application.InviteMemberInput) (domain.Invitation, string, error) {
 	return domain.Invitation{}, "", fake.err
+}
+
+func (fake *fakeAuthService) ReceivedInvitations(_ context.Context, _ string) ([]domain.ReceivedInvitation, error) {
+	return fake.received, fake.err
+}
+
+func (fake *fakeAuthService) AcceptReceivedInvitation(_ context.Context, actorID, invitationID string) (domain.Membership, error) {
+	fake.accepted = actorID + " accepted " + invitationID
+	return fake.membership, fake.err
 }
 
 func testHandler(verifier fakeVerifier, flow *fakeAuthFlow, service *fakeAuthService) http.Handler {
@@ -234,5 +245,56 @@ func TestPasswordLoginSetsSessionCookies(t *testing.T) {
 	}
 	if strings.Contains(response.Body.String(), "Correct-Horse") {
 		t.Fatal("password leaked into response")
+	}
+}
+
+func TestReceivedInvitationsNameTheirOrganizations(t *testing.T) {
+	service := &fakeAuthService{received: []domain.ReceivedInvitation{
+		{ID: "inv-1", OrganizationID: "org-1", OrganizationName: "Acme", Role: domain.RoleMember},
+	}}
+	handler := testHandler(fakeVerifier{claims: authn.Claims{Subject: "user-1"}}, &fakeAuthFlow{}, service)
+	request := httptest.NewRequest(http.MethodGet, "/v1/invitations", nil)
+	request.AddCookie(&http.Cookie{Name: accessCookieName, Value: "token"})
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	body := response.Body.String()
+	if response.Code != http.StatusOK || !strings.Contains(body, `"invitations":[{"id":"inv-1"`) || !strings.Contains(body, `"organization_name":"Acme"`) {
+		t.Fatalf("status = %d, body = %s; want the invitation to Acme", response.Code, body)
+	}
+}
+
+func TestAcceptReceivedInvitation(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{name: "joins the organization", status: http.StatusOK},
+		{name: "someone else's invitation is not found", err: domain.ErrNotFound, status: http.StatusNotFound},
+		{name: "a full organization needs payment", err: fmt.Errorf("accept: %w", domain.ErrLimitReached), status: http.StatusPaymentRequired},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &fakeAuthService{
+				membership: domain.Membership{OrganizationID: "org-1", UserID: "user-1", Role: domain.RoleMember},
+				err:        test.err,
+			}
+			handler := testHandler(fakeVerifier{claims: authn.Claims{Subject: "user-1"}}, &fakeAuthFlow{}, service)
+			request := httptest.NewRequest(http.MethodPost, "/v1/invitations/inv-1/accept", nil)
+			request.AddCookie(&http.Cookie{Name: accessCookieName, Value: "token"})
+			request.Header.Set("Origin", "https://app.example.com")
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != test.status || service.accepted != "user-1 accepted inv-1" {
+				t.Fatalf("status = %d, accepted %q, body = %s; want %d for user-1 and inv-1", response.Code, service.accepted, response.Body, test.status)
+			}
+			if test.err == nil && !strings.Contains(response.Body.String(), `"organization_id":"org-1"`) {
+				t.Fatalf("body = %s, want the new membership", response.Body)
+			}
+		})
 	}
 }
