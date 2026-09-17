@@ -51,11 +51,12 @@ docker compose -f compose.oryxa.yaml up -d --build
 
 ## Service layout
 
-Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/auth`, `/billing`, `/email`, `/files`, `/knowledge`, `/rag` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
+Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/apps`, `/auth`, `/billing`, `/email`, `/files`, `/knowledge`, `/rag` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
 
 ```text
 /
 ├── agents/                # Agent system; primary is its adk-go engine
+├── apps/                  # A member's third-party apps, through Composio
 ├── auth/                  # Identity and access service
 ├── billing/               # Subscriptions and entitlements
 ├── email/                 # Email delivery service
@@ -123,6 +124,16 @@ same control. An AI has three tools: `list_teams`, `call_team`, and
 `call_team_members`. It publishes as `oryxa.teams` and consumes from its own
 EventBridge queue. Its contract lives in `teams/README.md`.
 
+`/apps` owns a member's third-party apps. Composio holds every credential and
+runs the calls; apps holds what no vendor can decide: which connection a call
+uses, derived from auth's answer about the caller and never from the request,
+which tools may run without the member confirming, and what is announced when
+something happens. A tool Composio marks read-only may run unconfirmed;
+anything else needs an idempotency key, so a retry is not a second change. Apps
+offers agents four MCP tools rather than the catalog's thousands, verifies every
+Composio webhook before reading it, and publishes `oryxa.apps`. Its contract
+lives in `apps/README.md`.
+
 `/agents` holds the agent system. `/agents/primary` is its adk-go engine,
 where Krude works as the member it assists. It runs in the binary as the
 `agents` service, and its
@@ -136,31 +147,31 @@ identity, never as a service impersonating them: a run the member is present
 for forwards their own token, and a run they are absent for asks auth for a
 short-lived token under the grant they gave (`agents/primary/internal/memberauth`).
 
-Connecting third-party apps is being rebuilt on Composio. The `connections`
-and `integrations` services, their event contracts, the generated provider
-clients, knowledge's GitHub, Notion and Slack sources, and Krude's
-integrations toolboxes were archived on 2026-09-17. The code is at tag
-`archive/connections-and-integrations-2026-09-17`, and a `git checkout` of
-that tag restores any of it.
+Third-party apps are the `/apps` service, on Composio. The `connections` and
+`integrations` services, their event contracts, the generated provider clients,
+knowledge's GitHub, Notion and Slack sources, and Krude's integrations
+toolboxes were archived on 2026-09-17; the code is at tag
+`archive/connections-and-integrations-2026-09-17`, and a `git checkout` of that
+tag restores any of it.
 
 | | Where it stands |
 | --- | --- |
-| Connecting an app | Nothing today. The web app's connection screens still call the archived API until the web app is refactored |
-| Acting in an app | No tools; Krude has only its sandbox and browser toolboxes |
-| Reacting to an app | No triggers |
+| Connecting an app | Composio's hosted flow, for every app Composio holds an app for or that takes a credential the member types in. The web app's connection screens still call the archived API until the web app is refactored |
+| Acting in an app | Krude's `apps` toolbox, over apps' MCP endpoint: reads run unconfirmed, writes ask the member and carry an idempotency key |
+| Reacting to an app | Triggers deliver, verified, as `apps.trigger.received.v1`. Nothing starts an agent run from one yet |
 | Running an agent as a member | Only `agents/primary`'s development UI runs Krude. The `agents` service has no run API, and the web app has no screen to grant or withdraw agent access |
 
 Not yet:
 
-- App connections, actions and triggers on Composio, behind Oryxa's own
-  member identity and write approvals.
+- An OAuth app of Oryxa's own, for apps Composio holds none for.
 - A run API in the `agents` service that forwards the member's own token, and
   a web screen for agent grants.
 - The agent grant against a provisioned Cognito agent client has not run yet.
+- An end-to-end run of apps against a real Composio project.
 
 ## Shared PostgreSQL and observability
 
-Auth, billing, files, knowledge, rag, teams and the ADK session runtime use
+Apps, auth, billing, files, knowledge, rag, teams and the ADK session runtime use
 `/internal/postgreskit`. The binary opens one native
 `pgxpool` that every service shares, sized by `ORYXA_DATABASE_MAX_CONNS`; `sqlx`
 wraps that same pool through pgx's `database/sql` adapter, so it does not create
