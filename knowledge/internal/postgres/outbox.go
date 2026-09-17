@@ -69,18 +69,30 @@ func (store *Store) MarkOutboxFailed(ctx context.Context, eventID string, retryA
 	return nil
 }
 
-// MarkEventHandled remembers an event the consumer acted on, and says whether
-// this is the first time. The bus delivers at least once, and pausing a source
-// or re-reading a document is not idempotent on its own.
-func (store *Store) MarkEventHandled(ctx context.Context, eventID, detailType string, now time.Time) (bool, error) {
-	tag, err := store.pool.Exec(ctx, `
+// EventHandled reports whether an event has already been recorded as
+// handled, without recording anything itself.
+func (store *Store) EventHandled(ctx context.Context, eventID string) (bool, error) {
+	var handled bool
+	if err := store.pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM knowledge_handled_events WHERE event_id = $1)`, eventID,
+	).Scan(&handled); err != nil {
+		return false, fmt.Errorf("check event handled: %w", err)
+	}
+	return handled, nil
+}
+
+// MarkEventHandled remembers an event whose handler has already succeeded.
+// The bus delivers at least once, so two redeliveries can race here; the
+// later insert is silently ignored rather than treated as an error, because
+// the handler it followed is idempotent under that race.
+func (store *Store) MarkEventHandled(ctx context.Context, eventID, detailType string, now time.Time) error {
+	if _, err := store.pool.Exec(ctx, `
 		INSERT INTO knowledge_handled_events (event_id, detail_type, handled_at)
 		VALUES ($1, $2, $3)
-		ON CONFLICT (event_id) DO NOTHING`, eventID, detailType, now)
-	if err != nil {
-		return false, fmt.Errorf("mark event handled: %w", err)
+		ON CONFLICT (event_id) DO NOTHING`, eventID, detailType, now); err != nil {
+		return fmt.Errorf("mark event handled: %w", err)
 	}
-	return tag.RowsAffected() == 1, nil
+	return nil
 }
 
 // DeleteHandledEventsBefore forgets events old enough that no redelivery can

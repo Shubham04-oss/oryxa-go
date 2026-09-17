@@ -54,7 +54,8 @@ type Store interface {
 	FinishRun(context.Context, domain.SyncRun, *domain.Event) error
 	Runs(context.Context, string, string, int) ([]domain.SyncRun, error)
 
-	MarkEventHandled(context.Context, string, string, time.Time) (bool, error)
+	EventHandled(context.Context, string) (bool, error)
+	MarkEventHandled(context.Context, string, string, time.Time) error
 	DeleteHandledEventsBefore(context.Context, time.Time) (int64, error)
 	DeleteRunsBefore(context.Context, time.Time) (int64, error)
 }

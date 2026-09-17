@@ -69,12 +69,19 @@ func (s *Service) retire(ctx context.Context, organizationID, createdBy, reason 
 	return nil
 }
 
-// Handled says whether this is the first time an event has been acted on.
-//
-// Pausing a source and retracting its documents are not idempotent the way
-// stopping an already-stopped subscription is: a redelivery would write a
-// second round of events for a retrieval pipeline to act on. The bus delivers
-// at least once, so the envelope's id is remembered before anything is done.
-func (s *Service) Handled(ctx context.Context, eventID, detailType string) (bool, error) {
+// AlreadyHandled says whether an event has already been acted on
+// successfully. It records nothing itself, so the caller can check this
+// before running a handler and record success only once the handler has
+// returned it.
+func (s *Service) AlreadyHandled(ctx context.Context, eventID string) (bool, error) {
+	return s.store.EventHandled(ctx, eventID)
+}
+
+// MarkHandled records that an event's handler has succeeded, so a later
+// redelivery finds it via AlreadyHandled and does not run the handler again.
+// It must be called only after the handler succeeded: recording it first
+// would mean a handler that then fails is never retried, since the
+// redelivery would see the event already marked handled and skip it.
+func (s *Service) MarkHandled(ctx context.Context, eventID, detailType string) error {
 	return s.store.MarkEventHandled(ctx, eventID, detailType, s.now())
 }

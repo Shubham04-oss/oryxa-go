@@ -508,17 +508,26 @@ func TestRemoveSourceRetractsWhatItHeld(t *testing.T) {
 	}
 }
 
-func TestMarkEventHandledIsTrueOnlyTheFirstTime(t *testing.T) {
+func TestEventHandledIsTrueOnlyAfterMarkEventHandled(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
-	first, err := store.MarkEventHandled(ctx, "evt_1", "connections.connection.disconnected.v1", testClock)
-	if err != nil || !first {
-		t.Fatalf("MarkEventHandled(first) = %v, %v, want true", first, err)
+	handled, err := store.EventHandled(ctx, "evt_1")
+	if err != nil || handled {
+		t.Fatalf("EventHandled(before) = %v, %v, want false", handled, err)
 	}
-	again, err := store.MarkEventHandled(ctx, "evt_1", "connections.connection.disconnected.v1", testClock)
-	if err != nil || again {
-		t.Fatalf("MarkEventHandled(redelivered) = %v, %v, want false", again, err)
+	if err := store.MarkEventHandled(ctx, "evt_1", "connections.connection.disconnected.v1", testClock); err != nil {
+		t.Fatalf("MarkEventHandled() error = %v", err)
+	}
+	handled, err = store.EventHandled(ctx, "evt_1")
+	if err != nil || !handled {
+		t.Fatalf("EventHandled(after) = %v, %v, want true", handled, err)
+	}
+	// A redelivery racing another one marks the same event again; that must
+	// be tolerated rather than treated as an error, since the handler it
+	// followed is idempotent under that race.
+	if err := store.MarkEventHandled(ctx, "evt_1", "connections.connection.disconnected.v1", testClock); err != nil {
+		t.Fatalf("MarkEventHandled(again) error = %v", err)
 	}
 
 	forgotten, err := store.DeleteHandledEventsBefore(ctx, testClock.Add(time.Hour))

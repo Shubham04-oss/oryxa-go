@@ -45,7 +45,10 @@ type application interface {
 	ConnectionDisconnected(context.Context, connectionsv1.ConnectionDisconnected) error
 	ConnectionNeedsReconnect(context.Context, connectionsv1.ConnectionNeedsReconnect) error
 	AppDeleted(context.Context, connectionsv1.AppDeleted) error
-	Handled(ctx context.Context, eventID, detailType string) (bool, error)
+	// AlreadyHandled checks without recording anything; MarkHandled records,
+	// and must only be called once the handler it followed has succeeded.
+	AlreadyHandled(ctx context.Context, eventID string) (bool, error)
+	MarkHandled(ctx context.Context, eventID, detailType string) error
 }
 
 type handler func(context.Context, json.RawMessage) error
@@ -95,11 +98,13 @@ type receivedEnvelope struct {
 // Handle decodes one SQS message body as an EventBridge event and dispatches
 // it to the subscribed handler.
 //
-// Unlike the lifecycle handlers elsewhere in this repo, these are not
-// naturally idempotent: pausing a source and retracting its documents both
-// write events a retrieval pipeline acts on, so a redelivery would tell it to
-// forget the same documents twice. The envelope's id is claimed before
-// anything is done, and a second delivery of it does nothing.
+// The bus delivers at least once. The envelope's id is checked before the
+// handler runs and recorded only once it has succeeded: recording it first
+// would turn a handler that then fails into an event nobody acts on, because
+// the redelivery would find it recorded and Poll would delete the message.
+// A handler that does run twice — it succeeded but the record failed, or two
+// deliveries raced — writes nothing the second time, because pausing and
+// retiring change only sources that are still active or not yet removed.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	var event eventBridgeEvent
 	if err := json.Unmarshal([]byte(body), &event); err != nil {
@@ -117,17 +122,22 @@ func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 		return fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, detail.Version, detail.EventID)
 	}
 
-	first, err := consumer.app.Handled(ctx, detail.EventID, event.DetailType)
+	already, err := consumer.app.AlreadyHandled(ctx, detail.EventID)
 	if err != nil {
 		return fmt.Errorf("event %s: %w", detail.EventID, err)
 	}
-	if !first {
+	if already {
 		consumer.logger.InfoContext(ctx, "event already handled", "event_id", detail.EventID, "detail_type", event.DetailType)
 		return nil
 	}
 
 	if err := subscribed.handle(ctx, detail.Data); err != nil {
 		return fmt.Errorf("event %s: %s: %w", detail.EventID, event.DetailType, err)
+	}
+	// A concurrent redelivery may be recording the same event; the second
+	// record is ignored.
+	if err := consumer.app.MarkHandled(ctx, detail.EventID, event.DetailType); err != nil {
+		return fmt.Errorf("event %s: mark handled: %w", detail.EventID, err)
 	}
 	consumer.logger.InfoContext(ctx, "event handled", "event_id", detail.EventID, "detail_type", event.DetailType)
 	return nil
