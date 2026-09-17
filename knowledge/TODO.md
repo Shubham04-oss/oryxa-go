@@ -66,7 +66,7 @@ pins the periodic sweep itself.
 | **Only four of seventeen providers** | `internal/sources/` | Box, Zendesk, Intercom and Figma already have generated clients in `internal/providerapi`, so each is a file in the shape of `github.go`. The others need hand-rolling like `slack.go`. |
 | **Team files need team ids you have to already know** | `internal/filesclient` | Files never returns team-scoped objects unless a team is named, and offers no way to enumerate teams. Indexing everything an organization holds means asking `teams` first. A source naming one team works fine today. |
 | **Slack reads channel history, not threads** | `internal/sources/slack.go` | Replies inside a thread are not walked. `thread_ts` is carried in metadata, so a consumer can at least group them. |
-| **One run's ceiling is ~20k documents** | `internal/application/sync.go` | `pagesPerRun` (200) × `pageSize` (100). A source with more gives the worker back and resumes next tick, which is the intent — but a first backfill of a very large repository takes several intervals to complete. |
+| **One run's ceiling is ~20k documents** | `internal/application/sync.go` | `pagesPerRun` (200) × `pageSize` (100). A source with more gives the worker back and resumes next tick, which is the intent — but a first backfill of a very large repository takes several intervals to complete. A full pass spanning several runs retracts against when the whole walk began, not against whichever run happens to finish it (`knowledge_cursors.walk_started_at`), so an earlier run's own reads are never mistaken for what the provider no longer has. |
 
 ---
 

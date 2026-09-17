@@ -625,13 +625,14 @@ func TestCursorRemembersWhereARunStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Cursor() error = %v", err)
 	}
-	if empty.Value != "" || empty.Watermark != nil {
+	if empty.Value != "" || empty.Watermark != nil || empty.WalkStartedAt != nil {
 		t.Fatalf("Cursor(never run) = %+v, want an empty cursor", empty)
 	}
 
 	watermark := testClock.Add(-time.Hour)
+	walkStarted := testClock.Add(-30 * time.Minute)
 	if err := store.SaveCursor(ctx, domain.Cursor{
-		SourceID: source.ID, Value: "page-2", Watermark: &watermark, UpdatedAt: testClock,
+		SourceID: source.ID, Value: "page-2", Watermark: &watermark, WalkStartedAt: &walkStarted, UpdatedAt: testClock,
 	}); err != nil {
 		t.Fatalf("SaveCursor() error = %v", err)
 	}
@@ -641,6 +642,25 @@ func TestCursorRemembersWhereARunStopped(t *testing.T) {
 	}
 	if read.Value != "page-2" || read.Watermark == nil || !read.Watermark.Equal(watermark) {
 		t.Fatalf("Cursor() = %+v", read)
+	}
+	if read.WalkStartedAt == nil || !read.WalkStartedAt.Equal(walkStarted) {
+		t.Fatalf("Cursor() walk_started_at = %v, want %v: a walk spanning several runs must resume knowing when it began", read.WalkStartedAt, walkStarted)
+	}
+
+	// A save with no walk in progress writes exactly what it is given, the
+	// same as any other cursor field: once a walk drains, the application
+	// layer stops carrying its start forward and this must actually clear.
+	if err := store.SaveCursor(ctx, domain.Cursor{
+		SourceID: source.ID, Value: "", Watermark: &watermark, UpdatedAt: testClock,
+	}); err != nil {
+		t.Fatalf("SaveCursor() error = %v", err)
+	}
+	drained, err := store.Cursor(ctx, source.ID)
+	if err != nil {
+		t.Fatalf("Cursor() error = %v", err)
+	}
+	if drained.WalkStartedAt != nil {
+		t.Fatalf("Cursor() walk_started_at = %v, want nil once the walk that started it is over", drained.WalkStartedAt)
 	}
 
 	if err := store.ClearCursor(ctx, source.ID); err != nil {

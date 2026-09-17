@@ -16,6 +16,14 @@ import (
 // testService wires the service to fakes and a frozen clock.
 func testService(t *testing.T, store *fakeStore, extractor *fakeExtractor) (*Service, *fakeConnections) {
 	t.Helper()
+	return testServiceWithClock(t, store, extractor, func() time.Time { return testClock })
+}
+
+// testServiceWithClock is testService with a clock the caller controls, for a
+// test that must tell two runs apart in time rather than see the same frozen
+// instant from both.
+func testServiceWithClock(t *testing.T, store *fakeStore, extractor *fakeExtractor, clock func() time.Time) (*Service, *fakeConnections) {
+	t.Helper()
 	connections := &fakeConnections{
 		connection: domain.Connection{ID: "con_1", OrganizationID: "org_1", AppID: "app_1", Provider: "github", Scope: "organization", Status: "active"},
 		credential: domain.Credential{AccessToken: "provider-token"},
@@ -29,9 +37,21 @@ func testService(t *testing.T, store *fakeStore, extractor *fakeExtractor) (*Ser
 		Directory:   &fakeDirectory{membership: domain.OrgMembership{OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember}},
 		Connections: connections,
 		Extractors:  registry,
-		Clock:       func() time.Time { return testClock },
+		Clock:       clock,
 	}, Config{})
 	return service, connections
+}
+
+// advancingClock moves forward by a second on every call, for a test where
+// two calls to Sync must be told apart in time — unlike testClock, which
+// never moves.
+func advancingClock(start time.Time) func() time.Time {
+	next := start
+	return func() time.Time {
+		now := next
+		next = next.Add(time.Second)
+		return now
+	}
 }
 
 // activeSource is a source already registered and claimed under a lease.
@@ -349,6 +369,64 @@ func TestSyncComesStraightBackWhenAPassStoppedEarly(t *testing.T) {
 	if !store.finishedNext.Equal(testClock) {
 		t.Fatalf("next run at %v, want now (%v): there is more of this source to read",
 			store.finishedNext, testClock)
+	}
+}
+
+func TestSyncRetractsOnlyWhatNeitherRunOfAWalkSaw(t *testing.T) {
+	// A source whose first full pass outgrows one run's page budget spans
+	// several runs before it drains. Retracting against the run that
+	// happens to finish the walk, rather than against when the walk itself
+	// began, would forget what an earlier run of that very walk already
+	// read — the bug the periodic sweep makes far more likely to bite, since
+	// a large source now revisits this every week instead of only once.
+	store := newFakeStore()
+	updated := testClock.Add(-time.Hour)
+	firstRunPages := make([]sources.Page, 0, pagesPerRun)
+	for range pagesPerRun {
+		firstRunPages = append(firstRunPages, sources.Page{
+			Items: []sources.Item{item("1", "seen by the first run", updated)}, Cursor: "more", Watermark: &updated,
+		})
+	}
+	secondRunPage := sources.Page{Items: []sources.Item{item("2", "seen by the second run", updated)}, Watermark: &updated}
+	extractor := &fakeExtractor{provider: "github", pages: append(firstRunPages, secondRunPage)}
+	// The clock must move between the two runs, or nothing distinguishes
+	// "the walk's start" from "this run's start" and the bug cannot show up.
+	service, _ := testServiceWithClock(t, store, extractor, advancingClock(testClock))
+	source := activeSource(store, "github")
+
+	// A document from an earlier walk that this one genuinely never finds:
+	// gone at the provider, unlike "1" and "2" which the walk still holds.
+	gone := domain.Document{
+		ID: "doc_gone", OrganizationID: "org_1", SourceID: source.ID, ExternalID: "3",
+		ContentHash: "unchanged", LastSeenAt: testClock.Add(-2 * time.Hour),
+	}
+	store.documents[source.ID+"\x00"+gone.ExternalID] = gone
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() [first run] error = %v", err)
+	}
+	if len(extractor.calls) != pagesPerRun {
+		t.Fatalf("fetched %d pages in the first run, want the per-run bound of %d", len(extractor.calls), pagesPerRun)
+	}
+	if store.retractUnseen != 0 {
+		t.Fatalf("retracted unseen documents %d times after the first run, want 0: the walk has not drained", store.retractUnseen)
+	}
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() [second run] error = %v", err)
+	}
+
+	if store.retractUnseen != 1 {
+		t.Fatalf("retracted unseen documents %d times, want 1 once the walk drains", store.retractUnseen)
+	}
+	if removed := store.documents[source.ID+"\x00"+gone.ExternalID]; removed.RemovedAt == nil {
+		t.Fatal("the document neither run of the walk saw was not retracted")
+	}
+	if kept := store.documents[source.ID+"\x001"]; kept.RemovedAt != nil {
+		t.Fatal("a document the walk's first run read was wrongly retracted against the second run's own start")
+	}
+	if kept := store.documents[source.ID+"\x002"]; kept.RemovedAt != nil {
+		t.Fatal("a document the walk's second run read was wrongly retracted")
 	}
 }
 

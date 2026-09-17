@@ -227,7 +227,14 @@ type Cursor struct {
 	// Watermark is the newest change knowledge has seen, for a provider that
 	// filters by time rather than paging.
 	Watermark *time.Time
-	UpdatedAt time.Time
+	// WalkStartedAt is when the walk this cursor is mid-way through began:
+	// the first of what can be several runs, when a source outgrows one
+	// run's page budget. Set when a walk starts from the beginning, carried
+	// unchanged while it resumes, and cleared once it drains. A full pass
+	// retracts what it did not see against this, not against whichever run
+	// happens to finish it.
+	WalkStartedAt *time.Time
+	UpdatedAt     time.Time
 }
 
 // RunStatus is where an extraction run ended up.

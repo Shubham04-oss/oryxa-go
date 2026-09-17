@@ -69,6 +69,13 @@ func (s *Service) Sync(ctx context.Context, source domain.Source, lease string) 
 		full = true
 		cursor = domain.Cursor{SourceID: source.ID}
 	}
+	if cursor.Value == "" {
+		// A walk is beginning now rather than resuming one already under
+		// way. Recorded so that if this walk outlives the run that started
+		// it, a later run can still retract against when the walk itself
+		// began, not against whichever run happens to finish it.
+		cursor.WalkStartedAt = &startedAt
+	}
 	kind := knowledgev1.SyncIncremental
 	if full {
 		kind = knowledgev1.SyncBackfill
@@ -191,7 +198,17 @@ func (s *Service) runCompleted(ctx context.Context, source domain.Source, run do
 		// Only a pass that read the whole source may say what is missing from
 		// it, and only then does the watermark describe a closed window.
 		if run.Kind == knowledgev1.SyncBackfill {
-			removed, err := s.store.RetractUnseen(ctx, source.ID, run.StartedAt, now,
+			// The threshold is when the walk began, not when this run of it
+			// did: a walk spanning several runs stamped what earlier runs
+			// saw before this run started, and using this run's own start
+			// would retract that along with what is actually gone. A cursor
+			// saved before walk_started_at existed has none, so this run's
+			// start is the best available answer for it.
+			before := run.StartedAt
+			if cursor.WalkStartedAt != nil {
+				before = *cursor.WalkStartedAt
+			}
+			removed, err := s.store.RetractUnseen(ctx, source.ID, before, now,
 				func(document domain.Document) (domain.Event, error) {
 					return s.documentRemoved(source, document, knowledgev1.RemovedReasonDeleted)
 				})

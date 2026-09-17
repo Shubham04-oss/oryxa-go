@@ -164,9 +164,9 @@ func (store *Store) Document(ctx context.Context, organizationID, documentID str
 func (store *Store) Cursor(ctx context.Context, sourceID string) (domain.Cursor, error) {
 	cursor := domain.Cursor{SourceID: sourceID}
 	err := store.pool.QueryRow(ctx, `
-		SELECT value, watermark, updated_at
+		SELECT value, watermark, walk_started_at, updated_at
 		FROM knowledge_cursors
-		WHERE source_id = $1`, sourceID).Scan(&cursor.Value, &cursor.Watermark, &cursor.UpdatedAt)
+		WHERE source_id = $1`, sourceID).Scan(&cursor.Value, &cursor.Watermark, &cursor.WalkStartedAt, &cursor.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return cursor, nil
 	}
@@ -178,16 +178,20 @@ func (store *Store) Cursor(ctx context.Context, sourceID string) (domain.Cursor,
 }
 
 // SaveCursor records where a run has reached. It is written per page, so a run
-// that dies resumes rather than reading the whole source again.
+// that dies resumes rather than reading the whole source again. It writes
+// exactly the cursor it is given, walk_started_at included: the caller
+// carries that forward itself while a walk is under way and leaves it unset
+// once one ends, so there is nothing here for a previous value to survive.
 func (store *Store) SaveCursor(ctx context.Context, cursor domain.Cursor) error {
 	if _, err := store.pool.Exec(ctx, `
-		INSERT INTO knowledge_cursors (source_id, value, watermark, updated_at)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO knowledge_cursors (source_id, value, watermark, walk_started_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (source_id) DO UPDATE SET
 			value = excluded.value,
 			watermark = excluded.watermark,
+			walk_started_at = excluded.walk_started_at,
 			updated_at = excluded.updated_at`,
-		cursor.SourceID, cursor.Value, cursor.Watermark, cursor.UpdatedAt); err != nil {
+		cursor.SourceID, cursor.Value, cursor.Watermark, cursor.WalkStartedAt, cursor.UpdatedAt); err != nil {
 		return mapWriteError("save cursor", err)
 	}
 	return nil
