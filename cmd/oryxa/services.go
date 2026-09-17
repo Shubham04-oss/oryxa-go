@@ -6,6 +6,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/connections"
 	"github.com/Shubham04-oss/oryxa-go/email"
 	"github.com/Shubham04-oss/oryxa-go/files"
+	"github.com/Shubham04-oss/oryxa-go/integrations"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/teams"
 )
@@ -19,5 +20,6 @@ var definitions = []host.Definition{
 	billing.Definition,
 	files.Definition,
 	connections.Definition,
+	integrations.Definition,
 	email.Definition,
 }
