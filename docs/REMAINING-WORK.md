@@ -80,6 +80,16 @@ subscription either, so an agent can act in a provider but not watch one,
 although each provider's skill already describes its events
 ([integrations/README.md, Later](../integrations/README.md#later)).
 
+The intended shape batches: events collect for a while, across providers,
+before one run wakes the agent, rather than one run per event. That has two
+consequences for the rest of this document. A trigger that arrives before the
+batch would close gains nothing, so a provider that cannot sign its deliveries
+can be polled instead (§3.1). And batching does not relax verification: a
+forged event inside a batch still reaches the agent. Still open: what closes a
+batch — a count, a maximum wait, or both, so that a lone event is not held
+indefinitely — whether batches are per member or per subscription, and
+whether anything, such as a direct mention, should skip the wait.
+
 ### Guardrails are off
 
 `agents/primary/internal/guardrail` screens input and output through Bedrock's
@@ -112,33 +122,33 @@ preferences and billing. It has nothing for the newer services:
 
 ## 3. Decisions only the owner can make
 
-### 3.1 Triggers for Google Drive and Confluence
+### 3.1 Triggers for Google Drive and Confluence: poll them
 
 The first provider survey listed Google Drive, Jira, Notion and Confluence as
 unable to have a verified delivery. Checked again on 2026-09-17 against each
 provider's documentation, that was too strong
 ([PROVIDER-READINESS.md](../integrations/internal/providers/PROVIDER-READINESS.md#four-do-not-deliver-the-usual-way)).
 Notion signs every delivery, and Jira signs with the app's own client secret,
-so those two are no longer decisions: Notion is in §4 and Jira's token format
-in §8. What remains is a real provider limit, with a verifiable route that
-costs something:
+so Notion is in §4 and Jira's token format in §8. Drive's `watch`
+notifications and Confluence really cannot be signed: Drive's carry only a
+token we choose, echoed back, and Confluence has no webhook API for OAuth 2.0
+apps at all.
 
-- **Google Drive.** `watch` notifications carry no signature — only a token we
-  choose, echoed back, which is the same assurance Microsoft Graph's
-  `clientState` already gives here. The Workspace Events API, generally
-  available since 2026-05-18, delivers through Pub/Sub with a signed JWT, but
-  wants a Pub/Sub topic in the OAuth app's Google Cloud project: one per
-  organization while organizations bring their own apps. Taking each `watch`
-  notification only as a prompt to fetch changes through the authenticated API
-  means a forged one can cause a fetch and nothing else.
-- **Confluence.** There is no webhook API for OAuth 2.0 apps. A Forge app can
-  deliver events with a token Atlassian signs, at the cost of Oryxa building
-  and owning an app that each site admin installs; polling is the other route.
+Because agents are to be woken in batches rather than per event (§1), those two
+do not need pushed deliveries. Polling — Drive's `changes.list` from a saved
+page token, Confluence's search by `lastmodified` — goes through the provider's
+API with the connection's own credential, so it is verified by construction,
+and while the poll interval is shorter than the batch window it costs the agent
+nothing in latency. It needs no Pub/Sub topic, no Forge app and no
+Oryxa-managed app; it needs a polled delivery kind in integrations (§4).
 
-The recommendation is actions for both now, and their triggers alongside
-Oryxa-managed apps (§4), which both signed routes want. If Drive triggers are
-wanted sooner, `watch` taken as a nudge is the safe form — and the owner's
-call, because it accepts a notification nobody signed.
+The signed push routes stay worth having once volume makes a request per
+connection per interval expensive: the Workspace Events API for Drive,
+generally available since 2026-05-18, which delivers through Pub/Sub with a
+signed JWT but wants a topic in the OAuth app's Google Cloud project; and a
+Forge app for Confluence and Jira, which Oryxa would build and each site admin
+install. What is left to decide is the batch window, which sets how often to
+poll.
 
 ### 3.2 What a member agrees to when knowledge reads files as them
 
@@ -193,6 +203,16 @@ No decision stands in the way of these.
   delivery that takes its secret from Notion's one-time handshake rather than
   from an admin
   ([PROVIDER-READINESS.md](../integrations/internal/providers/PROVIDER-READINESS.md#notion--signed-but-set-up-by-hand)).
+- **A polled delivery kind**, so Google Drive and Confluence can have triggers
+  without signed pushes (§3.1). Integrations would keep a cursor per
+  connection and call the provider on an interval, leased the way knowledge's
+  passes are, with one request covering every subscription on that
+  connection. Drive's cursor is a page token, which never expires, kept per
+  user and per shared drive since each has its own change log; its entries
+  are a file's current state, not a diff. Confluence's is a `lastmodified`
+  watermark, precise only to the minute, so windows overlap and changes are
+  deduplicated on content id and version. Jira can use it too until its token
+  format is confirmed (§8).
 - **A sweeper for `pending` subscriptions** left behind by a process that died
   mid-registration. Today only stopping one cleans it up.
 - **Per-request headers on provider calls.** Graph's `Prefer` cannot be sent,

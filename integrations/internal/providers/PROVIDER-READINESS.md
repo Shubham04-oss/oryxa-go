@@ -40,8 +40,8 @@ own reading — and each has a route that can be verified, at a different cost.
 | --- | --- | --- |
 | Notion | Ours | Deliveries are signed; only setting one up is manual. An app delivery whose secret arrives by handshake |
 | Atlassian (Jira) | Mostly ours | A token signed with the app's own client secret, in a format Atlassian does not document; or a secured admin webhook |
-| Google Drive | Google's, for `watch` | The Workspace Events API, generally available since 2026-05-18; or `watch` taken as a nudge |
-| Confluence | Atlassian's | No webhook API for OAuth 2.0 apps. A Forge app, or polling |
+| Google Drive | Google's, for `watch` | Polling its change log; the Workspace Events API, generally available since 2026-05-18; or `watch` taken as a nudge |
+| Confluence | Atlassian's | No webhook API for OAuth 2.0 apps. Polling, or a Forge app |
 
 ### Notion — signed, but set up by hand
 
@@ -97,8 +97,15 @@ Google's limit, and nothing built here changes it.
 It is, however, the same assurance integrations already accepts from
 Microsoft Graph, whose `clientState` is also a secret we choose and Graph
 echoes back — and a Drive notification carries less that could be forged.
-Two routes exist:
+Three routes exist:
 
+- **Polling `changes.list`.** Drive's change log is made to be polled: keep
+  the page token, which never expires, and ask for what changed since. It goes
+  through the API with the connection's own credential, so it is verified by
+  construction. Each shared drive keeps a change log of its own, and an entry
+  is a file's current state rather than a diff. Its cost is latency and a
+  request per connection per interval — and since agents are to be woken in
+  batches rather than per event, latency within the batch window costs nothing.
 - **The Workspace Events API.** Drive event subscriptions — a file added,
   moved, edited or trashed; access proposals; comments and replies; approvals —
   became generally available on 2026-05-18. Events arrive through Pub/Sub,
@@ -140,7 +147,9 @@ Two routes can be verified:
   site admin installs from an installation link. No Marketplace listing is
   needed, though an app with a license, or one submitted to the Marketplace,
   cannot be shared that way.
-- **Polling** Confluence's API for what changed, verifiable by construction and
+- **Polling** Confluence's search by `lastmodified`, which is precise to the
+  minute, so polls overlap and deduplicate on content id and version. It is
+  verifiable by construction and
   paid for in latency and requests. The contract has no polled delivery today.
 
 ### Asana — the provider issues the secret during the handshake
@@ -164,8 +173,8 @@ response carries `webhook.secret` — so the same change unblocks it too.
 | **Asana** | webhook, created via API | HMAC-SHA256 hex in `X-Hook-Signature`, secret from the handshake | Yes, with the new extension |
 | **Notion** | app delivery, set up in Notion's settings | HMAC-SHA256 in `X-Notion-Signature`, secret from the handshake | Yes, once an app delivery can take its secret from a handshake |
 | **Atlassian (Jira)** | webhook, created via API | bearer token signed with the app's client secret, **format undocumented** | After one real delivery is captured; secured admin webhooks now |
-| **Google Drive** | `watch`, or Workspace Events through Pub/Sub | `watch`: an echoed token only. Pub/Sub: a signed JWT | A decision: see the recommendation |
-| **Confluence** | **none** for OAuth 2.0 apps | a Forge Invocation Token, from a Forge app | A decision: see the recommendation |
+| **Google Drive** | polling `changes.list`; later Workspace Events through Pub/Sub | polling needs none. `watch`: an echoed token only. Pub/Sub: a signed JWT | Yes, by polling, once integrations has a polled delivery |
+| **Confluence** | polling search; **no webhook API** for OAuth 2.0 apps | polling needs none. A Forge app: a Forge Invocation Token | Yes, by polling, once integrations has a polled delivery |
 | Airtable, Box, Dropbox, Figma, Intercom, Salesforce, Zendesk | unconfirmed | unconfirmed | Not yet surveyed |
 
 ## Two things worth knowing about HubSpot and Atlassian
@@ -181,14 +190,14 @@ Capture one real Jira delivery from a test site before building Jira's
 triggers; if the token turns out not to be verifiable, secured admin webhooks
 are the documented fallback.
 
-For **Google Drive and Confluence**, give them actions now — actions need no
-delivery verification — and take their triggers up with Oryxa-managed apps:
-the Workspace Events API wants a Google Cloud project Oryxa owns, and a Forge
-app is itself an Oryxa-owned app, one that would also give Jira a fully
-documented route. If Drive's triggers are wanted sooner, `watch` with its token
-checked and each notification taken as a nudge carries the same assurance
-Microsoft Graph already has here. That choice is the owner's, because it
-accepts a notification nobody signed.
+For **Google Drive and Confluence**, poll. Agents are to be woken in batches
+rather than per event, so a trigger that arrives within the batch window is as
+good as a pushed one, and polling through the connection's own credential is
+verified by construction. That needs a polled delivery kind in integrations,
+and nothing from the providers or from Oryxa-managed apps. The signed push
+routes — the Workspace Events API, which wants a Google Cloud project Oryxa
+owns, and a Forge app, which would also give Jira a fully documented route —
+are worth taking up once volume makes polling expensive.
 
 Airtable, Box, Dropbox, Figma, Intercom, Salesforce and Zendesk have not been
 surveyed yet. Nothing above should be read as settled for those.
