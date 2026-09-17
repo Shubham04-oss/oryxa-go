@@ -251,49 +251,6 @@ func TestPollDeletesOnlyHandledMessages(t *testing.T) {
 	}
 }
 
-// The dispatcher is exercised only lightly here: a shared replacement for
-// every service's own outbox dispatcher is coming, so this proves the
-// claim/publish/mark contract works and stops there.
-type fakeOutbox struct {
-	events    []domain.OutboxEvent
-	published []string
-	failed    []string
-}
-
-func (fake *fakeOutbox) ClaimOutbox(context.Context, int) ([]domain.OutboxEvent, error) {
-	events := fake.events
-	fake.events = nil
-	return events, nil
-}
-
-func (fake *fakeOutbox) MarkOutboxPublished(_ context.Context, id string) error {
-	fake.published = append(fake.published, id)
-	return nil
-}
-
-func (fake *fakeOutbox) MarkOutboxFailed(_ context.Context, id string, _ time.Duration, _ string) error {
-	fake.failed = append(fake.failed, id)
-	return nil
-}
-
-type fakePublisher struct{ fail map[string]bool }
-
-func (fake fakePublisher) PublishEvent(_ context.Context, event domain.Event) error {
-	if fake.fail[event.ID] {
-		return errors.New("unavailable")
-	}
-	return nil
-}
-
-func TestDispatcherMarksEachEvent(t *testing.T) {
-	outbox := &fakeOutbox{events: []domain.OutboxEvent{{Event: domain.Event{ID: "evt_1"}}, {Event: domain.Event{ID: "evt_2"}}}}
-	dispatcher := NewDispatcher(outbox, fakePublisher{fail: map[string]bool{"evt_2": true}}, slog.New(slog.DiscardHandler))
-	dispatcher.flush(context.Background())
-	if fmt.Sprint(outbox.published) != "[evt_1]" || fmt.Sprint(outbox.failed) != "[evt_2]" {
-		t.Fatalf("published = %v, failed = %v", outbox.published, outbox.failed)
-	}
-}
-
 type fakeEventBridge struct {
 	input  *eventbridge.PutEventsInput
 	output *eventbridge.PutEventsOutput

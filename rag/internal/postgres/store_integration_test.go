@@ -530,6 +530,9 @@ func mustClaim(t *testing.T, store *Store, ctx context.Context) []domain.Documen
 	return claimed
 }
 
+// TestOutboxRoundTrip proves RecordEvents wrote the event; claiming, marking
+// and retrying are internal/outbox's own concern now, covered by its
+// table_integration_test.go.
 func TestOutboxRoundTrip(t *testing.T) {
 	store, ctx := openTestStore(t)
 	organizationID := uniqueOrganization()
@@ -539,30 +542,10 @@ func TestOutboxRoundTrip(t *testing.T) {
 	if err := store.RecordEvents(ctx, []domain.Event{event}); err != nil {
 		t.Fatalf("RecordEvents: %v", err)
 	}
-	claimed, err := store.ClaimOutbox(ctx, 50)
-	if err != nil {
-		t.Fatalf("ClaimOutbox: %v", err)
-	}
-	var found bool
-	for _, pending := range claimed {
-		if pending.ID == event.ID {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("the recorded event was not claimed")
-	}
-	if err := store.MarkOutboxPublished(ctx, event.ID); err != nil {
-		t.Fatalf("MarkOutboxPublished: %v", err)
-	}
-	again, err := store.ClaimOutbox(ctx, 50)
-	if err != nil {
-		t.Fatalf("ClaimOutbox: %v", err)
-	}
-	for _, pending := range again {
-		if pending.ID == event.ID {
-			t.Fatal("a published event was claimed again")
-		}
+	var pending bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM rag_outbox WHERE id = $1 AND published_at IS NULL)`,
+		event.ID).Scan(&pending); err != nil || !pending {
+		t.Fatalf("the recorded event was not in the outbox: found = %v, err = %v", pending, err)
 	}
 }
 
