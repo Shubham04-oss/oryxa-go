@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,17 +15,23 @@ import (
 
 // RegisterInput is what a member says to have something indexed.
 type RegisterInput struct {
-	Provider string
-	Target   map[string]string
-	Interval time.Duration
+	ConnectionID string
+	Provider     string
+	Target       map[string]string
+	Interval     time.Duration
 }
+
+// filesProvider is the one source that reads the organization's own storage
+// rather than a third-party app, so it takes no connection.
+const filesProvider = "files"
 
 // RegisterSource records something to index and schedules its first run.
 //
 // Everything that could make a later run impossible is checked now, while a
-// member is present to be told: a provider nothing can read, or a target the
-// extractor would not understand. The worst outcome is a source that looks
-// registered and quietly never produces anything.
+// member is present to be told: a provider nothing can read, a target the
+// extractor would not understand, or a connection that is not usable. The
+// worst outcome is a source that looks registered and quietly never produces
+// anything.
 func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Credentials, organizationID string, input RegisterInput) (domain.Source, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -60,6 +67,24 @@ func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Cre
 		Status:         domain.StatusActive,
 		Interval:       interval,
 	}
+	connectionID := strings.TrimSpace(input.ConnectionID)
+	if provider == filesProvider {
+		if connectionID != "" {
+			return domain.Source{}, fmt.Errorf(
+				"files is the organization's own storage and takes no connection: %w", domain.ErrInvalid)
+		}
+	} else {
+		connection, err := s.usableConnection(ctx, credentials, organizationID, connectionID, provider, caller.UserID)
+		if err != nil {
+			return domain.Source{}, err
+		}
+		source.ConnectionID = connection.ID
+		source.ComposioAccountID = connection.ComposioAccountID
+		// A Composio connection belongs to one member, full stop: nothing
+		// here reads it as a team or the organization at large.
+		source.Scope = domain.ScopeMember
+		source.MemberID = caller.UserID
+	}
 	teamID, memberID, err := domain.Place(source.Scope, source.TeamID, source.MemberID)
 	if err != nil {
 		return domain.Source{}, err
@@ -81,6 +106,37 @@ func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Cre
 	s.logger.InfoContext(ctx, "source registered",
 		"source_id", source.ID, "organization_id", organizationID, "provider", provider)
 	return source, nil
+}
+
+// usableConnection refuses now what a background run could not do later: a
+// connection for another toolkit, one that is not active, or one that is not
+// the caller's own. A member indexes only through their own connection —
+// there is no admin override, unlike an internal source — since a Composio
+// connection is one member's credential, not the organization's.
+func (s *Service) usableConnection(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID, provider, callerID string) (domain.AppConnection, error) {
+	if connectionID == "" {
+		return domain.AppConnection{}, fmt.Errorf("%s needs a connection_id: %w", provider, domain.ErrInvalid)
+	}
+	if s.apps == nil {
+		return domain.AppConnection{}, fmt.Errorf(
+			"reading %s needs apps, which is not configured: %w", provider, domain.ErrProviderUnavailable)
+	}
+	connection, err := s.apps.Connection(ctx, organizationID, connectionID, credentials)
+	if err != nil {
+		return domain.AppConnection{}, err
+	}
+	if connection.Toolkit != provider {
+		return domain.AppConnection{}, fmt.Errorf(
+			"the connection is for %s, not %s: %w", connection.Toolkit, provider, domain.ErrInvalid)
+	}
+	if connection.Status != "active" {
+		return domain.AppConnection{}, fmt.Errorf("the connection is %s: %w", connection.Status, domain.ErrConflict)
+	}
+	if connection.MemberID != callerID {
+		return domain.AppConnection{}, fmt.Errorf(
+			"a member indexes only through their own connection: %w", domain.ErrForbidden)
+	}
+	return connection, nil
 }
 
 // Sources lists what an organization has asked to index. An org admin sees
@@ -180,5 +236,19 @@ func (s *Service) retractions(reason string) func(domain.Source, []domain.Docume
 			events = append(events, event)
 		}
 		return events, nil
+	}
+}
+
+// pausedBy is the reason a source stopped, from what went wrong reading it,
+// for a run that discovers its connection needs attention before the event
+// saying so arrives.
+func pausedBy(err error) (string, bool) {
+	switch {
+	case errors.Is(err, domain.ErrNeedsReconnect):
+		return knowledgev1.PausedReasonNeedsReconnect, true
+	case errors.Is(err, domain.ErrScopeRequired):
+		return knowledgev1.PausedReasonScopeRequired, true
+	default:
+		return "", false
 	}
 }

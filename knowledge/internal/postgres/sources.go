@@ -10,7 +10,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 )
 
-const sourceColumns = `id, organization_id, connection_id, app_id, provider, target, scope, team_id, member_id,
+const sourceColumns = `id, organization_id, connection_id, app_id, composio_account_id, provider, target, scope, team_id, member_id,
 	created_by, status, reason, interval_seconds, sync_at, last_synced_at, attempts,
 	lease_token, lease_until, version, created_at, updated_at, full_sweep_at`
 
@@ -22,11 +22,11 @@ func (store *Store) CreateSource(ctx context.Context, source domain.Source, even
 	return store.inTx(ctx, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO knowledge_sources (
-				id, organization_id, connection_id, app_id, provider, target, scope, team_id, member_id,
+				id, organization_id, connection_id, app_id, composio_account_id, provider, target, scope, team_id, member_id,
 				created_by, status, reason, interval_seconds, sync_at, attempts, version, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 0, 1, $15, $15)`,
-			source.ID, source.OrganizationID, source.ConnectionID, source.AppID, source.Provider, target,
-			string(source.Scope), nullable(source.TeamID), nullable(source.MemberID), source.CreatedBy,
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, 1, $16, $16)`,
+			source.ID, source.OrganizationID, source.ConnectionID, source.AppID, source.ComposioAccountID, source.Provider,
+			target, string(source.Scope), nullable(source.TeamID), nullable(source.MemberID), source.CreatedBy,
 			string(source.Status), source.Reason, int(source.Interval/time.Second), source.SyncAt,
 			source.CreatedAt); err != nil {
 			return mapWriteError("create source", err)
@@ -61,6 +61,9 @@ func (store *Store) Sources(ctx context.Context, organizationID string, query do
 	}
 	if !query.Admin {
 		sql += ` AND created_by = ` + bind(query.CreatedBy)
+	}
+	if query.ConnectionID != "" {
+		sql += ` AND connection_id = ` + bind(query.ConnectionID)
 	}
 	if query.Provider != "" {
 		sql += ` AND provider = ` + bind(query.Provider)
@@ -205,6 +208,77 @@ func (store *Store) RemoveSources(ctx context.Context, organizationID, createdBy
 	return removed, err
 }
 
+// RemoveSourcesByConnection retires every source reading through one
+// connection, and retracts what they held in the same transaction. Unlike
+// RemoveSources, which retires by organization or creator, this runs when the
+// connection itself is gone for good: apps.connection.removed.v1.
+func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+	var removed []domain.Source
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		sources, err := querySources(ctx, tx, `
+			UPDATE knowledge_sources
+			SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+			    updated_at = $2, version = version + 1
+			WHERE connection_id = $1 AND status <> 'removed'
+			RETURNING `+sourceColumns, connectionID, now)
+		if err != nil {
+			return err
+		}
+		for _, source := range sources {
+			documents, err := retractDocuments(ctx, tx, source.ID, now)
+			if err != nil {
+				return err
+			}
+			if events == nil {
+				continue
+			}
+			recorded, err := events(source, documents)
+			if err != nil {
+				return err
+			}
+			if err := insertEvents(ctx, tx, recorded...); err != nil {
+				return err
+			}
+		}
+		removed = sources
+		return nil
+	})
+	return removed, err
+}
+
+// PauseSources stops every live source reading through one connection, and
+// writes one event for each. Running it again pauses nothing and writes
+// nothing, so a redelivered event is harmless.
+func (store *Store) PauseSources(ctx context.Context, connectionID, reason string, now time.Time, event func(domain.Source) (domain.Event, error)) ([]domain.Source, error) {
+	var paused []domain.Source
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		sources, err := querySources(ctx, tx, `
+			UPDATE knowledge_sources
+			SET status = 'paused', reason = $2, sync_at = NULL,
+			    lease_token = NULL, lease_until = NULL, updated_at = $3, version = version + 1
+			WHERE connection_id = $1 AND status = 'active'
+			RETURNING `+sourceColumns, connectionID, reason, now)
+		if err != nil {
+			return err
+		}
+		for _, source := range sources {
+			if event == nil {
+				continue
+			}
+			recorded, err := event(source)
+			if err != nil {
+				return err
+			}
+			if err := insertEvents(ctx, tx, recorded); err != nil {
+				return err
+			}
+		}
+		paused = sources
+		return nil
+	})
+	return paused, err
+}
+
 // RemoveSource retires one source a member asked to stop indexing, retracting
 // its documents with it.
 func (store *Store) RemoveSource(ctx context.Context, organizationID, sourceID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error {
@@ -268,8 +342,8 @@ func scanSource(rows pgx.Rows) (domain.Source, error) {
 	var scope, status string
 	var teamID, memberID, leaseToken *string
 	var intervalSeconds int
-	if err := rows.Scan(&source.ID, &source.OrganizationID, &source.ConnectionID, &source.AppID, &source.Provider,
-		&target, &scope, &teamID, &memberID, &source.CreatedBy, &status, &source.Reason, &intervalSeconds,
+	if err := rows.Scan(&source.ID, &source.OrganizationID, &source.ConnectionID, &source.AppID, &source.ComposioAccountID,
+		&source.Provider, &target, &scope, &teamID, &memberID, &source.CreatedBy, &status, &source.Reason, &intervalSeconds,
 		&source.SyncAt, &source.LastSyncedAt, &source.Attempts, &leaseToken, &source.LeaseUntil,
 		&source.Version, &source.CreatedAt, &source.UpdatedAt, &source.FullSweepAt); err != nil {
 		return domain.Source{}, fmt.Errorf("scan source: %w", err)

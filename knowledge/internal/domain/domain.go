@@ -21,7 +21,9 @@ var (
 	ErrForbidden           = errors.New("forbidden")
 	ErrUnauthorized        = errors.New("unauthorized")
 	ErrConflict            = errors.New("conflict")
+	ErrNeedsReconnect      = errors.New("connection needs reconnect")
 	ErrCredentialRejected  = errors.New("provider rejected the credential")
+	ErrScopeRequired       = errors.New("scope required")
 	ErrRateLimited         = errors.New("too many requests")
 	ErrProviderUnavailable = errors.New("provider unavailable")
 	// ErrLeaseLost means another replica claimed the source while this run was
@@ -99,11 +101,14 @@ type Source struct {
 	ID             string `json:"id"`
 	OrganizationID string `json:"organization_id"`
 	// ConnectionID and AppID name what a provider source reads through. An
-	// internal source, such as the organization's own files, has neither, and
-	// no provider sources are built today; the schema and events keep both.
+	// internal source, such as the organization's own files, has neither.
 	ConnectionID string `json:"connection_id,omitempty"`
 	AppID        string `json:"app_id,omitempty"`
-	Provider     string `json:"provider"`
+	// ComposioAccountID is the connected account Composio proxies calls
+	// through for this source, taken from the connection at registration.
+	// Empty for an internal source, which is read with a grant instead.
+	ComposioAccountID string `json:"-"`
+	Provider          string `json:"provider"`
 	// Target is what to index at the provider, in the provider's terms, such
 	// as {"repository": "acme/api"}.
 	Target   map[string]string `json:"target"`
@@ -151,9 +156,23 @@ func (source Source) Extractable() error {
 // SourceQuery narrows a listing. An org admin sees the organization's
 // sources; anyone else sees the ones they registered.
 type SourceQuery struct {
-	CreatedBy string
-	Provider  string
-	Admin     bool
+	CreatedBy    string
+	ConnectionID string
+	Provider     string
+	Admin        bool
+}
+
+// AppConnection is what apps answered about one of a member's connections to
+// a third-party app: the little of it a provider source needs to decide
+// whether it may index through it, and what to read it with. Apps forwards
+// nothing secret; the credential itself never leaves Composio.
+type AppConnection struct {
+	ID                string
+	Toolkit           string
+	Status            string
+	MemberID          string
+	ComposioAccountID string
+	Label             string
 }
 
 // Document is one thing a source holds, normalized. Body is the text a

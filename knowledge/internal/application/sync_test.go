@@ -299,6 +299,62 @@ func TestSyncReadsAsTheMemberWhoRegisteredTheSource(t *testing.T) {
 	}
 }
 
+func TestSyncReadsAProviderSourceThroughItsComposioAccountNeverAGrant(t *testing.T) {
+	store := newFakeStore()
+	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{{}}}
+	service, grants := testService(t, store, extractor)
+	source := activeSource(store, "github")
+	source.ConnectionID = "apc_1"
+	source.ComposioAccountID = "ca_1"
+	store.sources[source.ID] = source
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if len(grants.members) != 0 {
+		t.Fatalf("grants was minted for %v, want none: a Composio account never reads through a grant", grants.members)
+	}
+	if len(extractor.calls) != 1 {
+		t.Fatalf("fetched %d pages, want 1", len(extractor.calls))
+	}
+	if got := extractor.calls[0].Credential.Metadata["composio_account_id"]; got != "ca_1" {
+		t.Fatalf("composio_account_id = %q, want ca_1", got)
+	}
+	if extractor.calls[0].Credential.AccessToken != "" {
+		t.Fatal("a Composio credential must never carry an access token: the account is proxied through, not held")
+	}
+}
+
+func TestSyncPausesEveryProviderSourceOnAConnectionThatNeedsReconnecting(t *testing.T) {
+	// A run that discovers its connection needs attention should not wait for
+	// the apps.connection.expired.v1 event to say so: every other source on
+	// the same connection is paused right away.
+	store := newFakeStore()
+	failing := &fakeExtractor{provider: "github", errs: []error{domain.ErrNeedsReconnect}}
+	service, _ := testService(t, store, failing)
+	source := activeSource(store, "github")
+	source.ConnectionID = "apc_1"
+	source.ComposioAccountID = "ca_1"
+	store.sources[source.ID] = source
+
+	sibling := source
+	sibling.ID = "src_2"
+	store.sources[sibling.ID] = sibling
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if got := store.sources[source.ID].Status; got != domain.StatusPaused {
+		t.Fatalf("source status = %s, want paused", got)
+	}
+	if got := store.sources[sibling.ID].Status; got != domain.StatusPaused {
+		t.Fatalf("sibling source status = %s, want paused: it reads through the same connection", got)
+	}
+	if store.failedReason != "" {
+		t.Fatalf("failed the source with %q, want nothing: it was paused, not backed off", store.failedReason)
+	}
+}
+
 func TestSyncFailsWithoutAGrantToReadAs(t *testing.T) {
 	store := newFakeStore()
 	extractor := &fakeExtractor{provider: "files"}
