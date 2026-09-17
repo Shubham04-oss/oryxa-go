@@ -70,6 +70,11 @@ func (s *Service) receiveApp(ctx context.Context, provider providers.Provider, r
 		}
 		for _, subscription := range subscriptions {
 			for _, event := range reception.Events {
+				// An event that belongs to one account is that account's
+				// alone, however many accounts share the delivery.
+				if event.AccountKey != "" && event.AccountKey != accountKey {
+					continue
+				}
 				if !subscription.Accepts(firstNonEmpty(event.Type, event.Name)) {
 					continue
 				}

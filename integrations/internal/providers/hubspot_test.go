@@ -123,6 +123,22 @@ func TestHubspotReceive(t *testing.T) {
 		if reception.Events[1].Resource.Type != "deal" {
 			t.Errorf("second event resource = %+v, want a deal", reception.Events[1].Resource)
 		}
+		// Each event belongs to its own portal, so it reaches no other.
+		if reception.Events[0].AccountKey != "33" || reception.Events[1].AccountKey != "44" {
+			t.Errorf("event accounts = %q, %q, want each event's own portal", reception.Events[0].AccountKey, reception.Events[1].AccountKey)
+		}
+	})
+
+	t.Run("a portal with several events is named once", func(t *testing.T) {
+		body := []byte(`[{"portalId":33,"objectId":1,"eventId":1,"eventType":"contact.creation","attemptNumber":0},` +
+			`{"portalId":33,"objectId":2,"eventId":2,"eventType":"contact.creation","attemptNumber":0}]`)
+		reception, err := hubspotReceive(hubspotSigned(secret, http.MethodPost, hubspotTestRoute, body, hubspotTestStamp), secret, fixedNow)
+		if err != nil {
+			t.Fatalf("hubspotReceive() error = %v", err)
+		}
+		if len(reception.AccountKeys) != 1 || reception.AccountKeys[0] != "33" {
+			t.Fatalf("AccountKeys = %v, want the portal once", reception.AccountKeys)
+		}
 	})
 
 	t.Run("a wrong signature is refused", func(t *testing.T) {

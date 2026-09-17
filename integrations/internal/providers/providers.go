@@ -199,8 +199,14 @@ type Event struct {
 	// RegistrationID names the registration a delivery says it came through,
 	// when it says, so one meant for another registration is ignored.
 	RegistrationID string
-	Resource       integrationsv1.Resource
-	Actor          *integrationsv1.Actor
+	// AccountKey is the one account an event of an app delivery belongs to,
+	// when a delivery carries events for several accounts at once, as a
+	// HubSpot batch does. Empty means the event concerns every account the
+	// delivery is for, as a Slack event in a channel shared by several
+	// workspaces does.
+	AccountKey string
+	Resource   integrationsv1.Resource
+	Actor      *integrationsv1.Actor
 	// OccurredAt is when it happened, when the provider says; zero means when
 	// it was received.
 	OccurredAt time.Time

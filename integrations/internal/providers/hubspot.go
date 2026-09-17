@@ -108,9 +108,10 @@ type hubspotDelivery struct {
 	ChangeSource   string      `json:"changeSource"`
 }
 
-// hubspotReceive verifies a delivery's v3 signature and reads it. The account
-// keys are the portals it names, so an event reaches the subscriptions of the
-// connections that belong to them.
+// hubspotReceive verifies a delivery's v3 signature and reads it. One batch
+// can carry events from several portals, so the account keys are every portal
+// it names and each event keeps its own: an event reaches only the
+// subscriptions of connections to the portal it happened in.
 func hubspotReceive(delivery Delivered, secret []byte, now time.Time) (Reception, error) {
 	if err := hubspotVerify(delivery, secret, now); err != nil {
 		return Reception{}, err
@@ -120,6 +121,7 @@ func hubspotReceive(delivery Delivered, secret []byte, now time.Time) (Reception
 		return Reception{}, fmt.Errorf("%w: HubSpot payload is not a JSON array", domain.ErrInvalid)
 	}
 	var portals []string
+	seen := map[string]bool{}
 	events := make([]Event, 0, len(delivered))
 	for _, item := range delivered {
 		eventType := strings.TrimSpace(item.EventType)
@@ -130,7 +132,10 @@ func hubspotReceive(delivery Delivered, secret []byte, now time.Time) (Reception
 		if portal == "" {
 			return Reception{}, fmt.Errorf("%w: HubSpot event names no portal", domain.ErrInvalid)
 		}
-		portals = append(portals, portal)
+		if !seen[portal] {
+			seen[portal] = true
+			portals = append(portals, portal)
+		}
 
 		// HubSpot says eventId is not guaranteed unique, and a retry repeats
 		// it, so the attempt number is what tells a redelivery from a new
@@ -148,6 +153,7 @@ func hubspotReceive(delivery Delivered, secret []byte, now time.Time) (Reception
 			Type:       eventType,
 			DeliveryID: item.EventID.String(),
 			Key:        key,
+			AccountKey: portal,
 			Resource:   hubspotResource(eventType, item),
 			OccurredAt: occurredAt,
 			Payload:    hubspotEventPayload(item, delivery.Body),
