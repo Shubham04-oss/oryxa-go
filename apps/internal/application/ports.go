@@ -126,6 +126,7 @@ type Composio interface {
 	Tools(ctx context.Context, query composio.ToolQuery) (composio.Page[composio.Tool], error)
 	Tool(ctx context.Context, slug string) (composio.Tool, error)
 	ExecuteTool(ctx context.Context, slug string, request composio.ExecuteRequest) (composio.ExecuteResult, error)
+	Proxy(ctx context.Context, request composio.ProxyRequest) (composio.ProxyResponse, error)
 	TriggerTypes(ctx context.Context, query composio.TriggerTypeQuery) (composio.Page[composio.TriggerType], error)
 	UpsertTrigger(ctx context.Context, slug, connectedAccountID string, config json.RawMessage) (string, error)
 	DeleteTrigger(ctx context.Context, id string) error

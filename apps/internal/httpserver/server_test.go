@@ -28,6 +28,7 @@ type fakeService struct {
 	organization string
 	connectInput application.ConnectInput
 	runInput     application.RunToolInput
+	proxyInput   application.ProxyInput
 	triggerInput application.TriggerInput
 	removed      string
 	listedScope  bool
@@ -119,6 +120,14 @@ func (fake *fakeService) RunTool(_ context.Context, credentials authclient.Crede
 	return fake.run, nil
 }
 
+func (fake *fakeService) Proxy(_ context.Context, credentials authclient.Credentials, organizationID string, input application.ProxyInput) (application.ProxyResult, error) {
+	fake.credentials, fake.organization, fake.proxyInput = credentials, organizationID, input
+	if fake.err != nil {
+		return application.ProxyResult{}, fake.err
+	}
+	return application.ProxyResult{Status: 200, Data: json.RawMessage(`{"items":[1]}`)}, nil
+}
+
 func (fake *fakeService) CreateTrigger(_ context.Context, credentials authclient.Credentials, organizationID string, input application.TriggerInput) (domain.Trigger, error) {
 	fake.credentials, fake.organization, fake.triggerInput = credentials, organizationID, input
 	if fake.err != nil {
@@ -198,6 +207,7 @@ func TestRoutesNeedACaller(t *testing.T) {
 		{http.MethodGet, "/v1/organizations/org_1/apps/connections/apc_1"},
 		{http.MethodDelete, "/v1/organizations/org_1/apps/connections/apc_1"},
 		{http.MethodPost, "/v1/organizations/org_1/apps/tools/GITHUB_LIST_ISSUES/run"},
+		{http.MethodPost, "/v1/organizations/org_1/apps/read"},
 		{http.MethodGet, "/v1/organizations/org_1/apps/triggers"},
 		{http.MethodPost, "/v1/organizations/org_1/apps/triggers"},
 		{http.MethodDelete, "/v1/organizations/org_1/apps/triggers/apt_1"},
@@ -461,6 +471,42 @@ func TestRunToolAnswersAFailedRunAsAnAnswer(t *testing.T) {
 	body := decodeBody(t, recorder)
 	if body["successful"] != false || body["error"] != "Validation failed" {
 		t.Fatalf("body = %v", body)
+	}
+}
+
+func TestReadRouteProxiesTheAppsOwnAPI(t *testing.T) {
+	t.Parallel()
+	fake := &fakeService{}
+	server := newServer(t, fake)
+
+	recorder := call(server, http.MethodPost, "/v1/organizations/org_1/apps/read",
+		`{"connection_id":"apc_1","toolkit":"notion","endpoint":"/v1/search","method":"POST","body":{"page_size":100},"headers":{"Notion-Version":"2022-06-28"}}`,
+		"Authorization", "Bearer member")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
+	}
+	if fake.proxyInput.ConnectionID != "apc_1" || fake.proxyInput.Toolkit != "notion" ||
+		fake.proxyInput.Endpoint != "/v1/search" || fake.proxyInput.Method != "POST" {
+		t.Fatalf("input = %+v", fake.proxyInput)
+	}
+	if string(fake.proxyInput.Body) != `{"page_size":100}` || fake.proxyInput.Headers["Notion-Version"] != "2022-06-28" {
+		t.Fatalf("input = %+v", fake.proxyInput)
+	}
+	body := decodeBody(t, recorder)
+	if body["status"].(float64) != 200 {
+		t.Fatalf("body = %v", body)
+	}
+
+	// It needs a caller like every other organization route.
+	if recorder := call(server, http.MethodPost, "/v1/organizations/org_1/apps/read", `{"endpoint":"/v1/search"}`); recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("without a caller = %d", recorder.Code)
+	}
+	// A write is refused with the code that says why.
+	refusing := newServer(t, &fakeService{err: fmt.Errorf("POST /v1/pages is not a read: %w", domain.ErrNotReadOnly)})
+	recorder = call(refusing, http.MethodPost, "/v1/organizations/org_1/apps/read",
+		`{"toolkit":"notion","endpoint":"/v1/pages","method":"POST"}`, "Authorization", "Bearer member")
+	if recorder.Code != http.StatusForbidden || errorCode(t, recorder) != "not_read_only" {
+		t.Fatalf("a write = %d %s", recorder.Code, recorder.Body)
 	}
 }
 

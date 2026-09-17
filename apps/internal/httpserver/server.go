@@ -41,6 +41,7 @@ type appsService interface {
 	Connection(ctx context.Context, credentials authclient.Credentials, organizationID, id string) (domain.Connection, error)
 	RemoveConnection(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
 	RunTool(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.RunToolInput) (application.ToolRun, error)
+	Proxy(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ProxyInput) (application.ProxyResult, error)
 	CreateTrigger(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.TriggerInput) (domain.Trigger, error)
 	Triggers(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]domain.Trigger, error)
 	RemoveTrigger(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
@@ -84,6 +85,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("GET /v1/organizations/{organizationID}/apps/connections/{connectionID}", server.getConnection)
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/connections/{connectionID}", server.removeConnection)
 	server.handle("POST /v1/organizations/{organizationID}/apps/tools/{tool}/run", server.runTool)
+	server.handle("POST /v1/organizations/{organizationID}/apps/read", server.proxy)
 	server.handle("GET /v1/organizations/{organizationID}/apps/triggers", server.listTriggers)
 	server.handle("POST /v1/organizations/{organizationID}/apps/triggers", server.createTrigger)
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/triggers/{triggerID}", server.removeTrigger)
@@ -312,6 +314,36 @@ func RunView(run application.ToolRun) map[string]any {
 		view["error"] = run.Action.Error
 	}
 	return view
+}
+
+// proxy reads an app's own API through the caller's connection, for a service
+// inside Oryxa that has to page through what an app holds rather than run a
+// tool. Only reads pass; the application decides which those are.
+func (server *Server) proxy(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	var body struct {
+		ConnectionID string            `json:"connection_id"`
+		Toolkit      string            `json:"toolkit"`
+		Endpoint     string            `json:"endpoint"`
+		Method       string            `json:"method"`
+		Body         json.RawMessage   `json:"body"`
+		Headers      map[string]string `json:"headers"`
+	}
+	if !server.decode(writer, request, &body) {
+		return
+	}
+	result, err := server.service.Proxy(request.Context(), credentials, request.PathValue("organizationID"), application.ProxyInput{
+		ConnectionID: body.ConnectionID, Toolkit: body.Toolkit, Endpoint: body.Endpoint,
+		Method: body.Method, Body: body.Body, Headers: body.Headers,
+	})
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, result)
 }
 
 type triggerView struct {

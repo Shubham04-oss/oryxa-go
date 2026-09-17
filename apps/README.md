@@ -28,9 +28,10 @@ auth ── organization deleted, member removed ──▶ apps-events queue
 ## Composio holds the credentials, apps holds the rules
 
 Composio answers to one project API key that reaches **every** user in the
-project. That key lives only in this process. It is never forwarded, never
-given to an agent, and never put in an event, because anything holding it could
-act as anyone.
+project. Apps reads it from its own environment and never passes it on: not to
+a caller, not to an agent, not into an event, because anything holding it could
+act as anyone. Knowledge holds a copy of its own today, which is a gap, not the
+design — see [Reading an app's own API](#reading-an-apps-own-api).
 
 So nothing outside this service chooses whose account a call uses. Every call
 asks auth who the caller is, and derives the Composio user from that:
@@ -114,6 +115,30 @@ Failures come back as codes a model can act on rather than prose:
 `agents/primary/internal/agents/apps.go` and its skill in
 `toolboxes/apps.md`.
 
+## Reading an app's own API
+
+A tool run answers what a tool returns. Paging through what an app *holds* —
+a repository's files, a channel's history, a workspace's pages — is a different
+shape, so `POST /v1/organizations/{org}/apps/read` proxies one request to the
+app's own API through the caller's connection, with Composio placing the
+credential.
+
+Only reads pass. A GET or HEAD always does; a POST only where the app's own
+read API is one (Notion's search and database queries, Slack's history), from a
+list apps keeps. Anything else is refused as `not_read_only`, because a change
+is a tool run: recorded, keyed, and confirmed by the member. An endpoint must
+be a path under the app's own API — another host, a relative path or one
+climbing out with dot segments is refused — and `Authorization`, `Cookie`,
+`Host` and `X-API-Key` are not headers a caller may set.
+
+**Knowledge does not use this yet.** Its provider sources read Composio's proxy
+directly, with `COMPOSIO_API_KEY` of their own, because a scheduled pass has no
+member to act as: this route decides the account from who is asking, and nobody
+is. So the project key is in two services today rather than one. It moves
+behind this route once knowledge can mint a member token under a grant — the
+same thing its files source waits on
+([docs/REMAINING-WORK.md §3.2](../docs/REMAINING-WORK.md#32-what-a-member-agrees-to-when-knowledge-reads-files-as-them)).
+
 ## Triggers
 
 A member subscribes one of their own active connections to an event its app
@@ -154,6 +179,7 @@ mutation also needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 | `GET /v1/organizations/{org}/apps/connections/{id}` | One connection |
 | `DELETE /v1/organizations/{org}/apps/connections/{id}` | Disconnect: Composio deletes the account and revokes its credential |
 | `POST /v1/organizations/{org}/apps/tools/{tool}/run` | Run a tool |
+| `POST /v1/organizations/{org}/apps/read` | Read the app's own API through the caller's connection — GETs, and the few read endpoints that are POSTs |
 | `POST /v1/organizations/{org}/apps/triggers` | Subscribe a connection to an app's event |
 | `GET /v1/organizations/{org}/apps/triggers` | The caller's triggers |
 | `DELETE /v1/organizations/{org}/apps/triggers/{id}` | Unsubscribe |
@@ -207,8 +233,9 @@ token Composio might include ever reaches a struct, a log or a row.
 
 ## Security
 
-- The project API key is read once, from `COMPOSIO_API_KEY`, and never leaves
-  the process.
+- The project API key is read from `COMPOSIO_API_KEY` and never passed on by
+  apps. Knowledge reads the same variable for its own sources, so today the key
+  is in two services rather than one.
 - A member's browser round trip is bound by a random state, of which only the
   SHA-256 hash is stored, and a return page must be under
   `APPS_ALLOWED_ORIGINS` — checked against dot segments and encoded ones, so a
@@ -343,7 +370,8 @@ anything else in that database.
   be connected. Today they are refused as not connectable.
 - **Triggers to agent runs**: `apps.trigger.received.v1` is published but
   nothing starts a run from it yet.
-- **Knowledge over Composio**, so a source reads an app through the member's
-  connection rather than a credential Oryxa holds.
+- **Knowledge behind the read route**, so the project API key is in one
+  service rather than two. It waits on a member-acting token for a scheduled
+  pass.
 - **A tool allow-list per organization**, for an admin who wants writes limited
   to certain apps.

@@ -199,13 +199,19 @@ From [rag/README.md, Open decisions](../rag/README.md#open-decisions):
 
 No decision stands in the way of these.
 
-### Knowledge over Composio
+### The Composio project key is in two services
 
-Knowledge's app sources were archived with the provider clients. Composio never
-hands out a token, so a source reads through `tools/execute/proxy` or a
-toolkit's read tools, as the member who registered it — the same connection an
-agent would use. Nothing else in knowledge changes: a document still leaves as
-`knowledge.document.published.v1`.
+Knowledge's GitHub, Notion and Slack sources read through Composio's proxy with
+`COMPOSIO_API_KEY` of their own, because a scheduled pass has no member to act
+as. Apps offers `POST /v1/organizations/{org}/apps/read`, which derives the
+account from who is asking and refuses anything but a read — but nobody is
+asking during a pass.
+
+That key reaches every user in the Composio project, so having it in two
+services doubles where it can leak from. Moving knowledge behind apps' read
+route needs a token that acts as the member who registered the source, which is
+the same thing knowledge's files source waits on (§3.2). Until then both
+services read it from the same `.env`, and rotating it means rotating both.
 
 ### Knowledge
 

@@ -387,6 +387,9 @@ type fakeComposio struct {
 	executed        []composio.ExecuteRequest
 	result          composio.ExecuteResult
 	executeErr      error
+	proxied         []composio.ProxyRequest
+	proxyResult     composio.ProxyResponse
+	proxyErr        error
 	upserts         []string
 	upsertID        string
 	deletedTriggers []string
@@ -397,7 +400,8 @@ func newFakeComposio() *fakeComposio {
 	return &fakeComposio{
 		toolkits: map[string]composio.Toolkit{}, accounts: map[string][]composio.ConnectedAccount{},
 		tools: map[string]composio.Tool{}, result: composio.ExecuteResult{Successful: true, Data: json.RawMessage(`{"ok":true}`), LogID: "log_1"},
-		upsertID: "ti_1",
+		proxyResult: composio.ProxyResponse{Status: 200, Data: json.RawMessage(`{"items":[]}`)},
+		upsertID:    "ti_1",
 	}
 }
 
@@ -514,6 +518,16 @@ func (fake *fakeComposio) ExecuteTool(_ context.Context, _ string, request compo
 		return composio.ExecuteResult{}, fake.executeErr
 	}
 	return fake.result, nil
+}
+
+func (fake *fakeComposio) Proxy(_ context.Context, request composio.ProxyRequest) (composio.ProxyResponse, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.proxied = append(fake.proxied, request)
+	if fake.proxyErr != nil {
+		return composio.ProxyResponse{}, fake.proxyErr
+	}
+	return fake.proxyResult, nil
 }
 
 func (fake *fakeComposio) TriggerTypes(context.Context, composio.TriggerTypeQuery) (composio.Page[composio.TriggerType], error) {
