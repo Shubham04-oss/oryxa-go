@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 
 	integrationsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/integrations/v1"
@@ -80,4 +81,36 @@ func Answered(value any) json.RawMessage {
 		return nil
 	}
 	return encoded
+}
+
+// ProviderBaseURL is where an action calls a provider reached through the
+// organization's own address or account, rather than one fixed host.
+//
+// A bare host is the app's domain, which connections filled into the URLs the
+// flow used: Zendesk's acme for acme.zendesk.com. Where the provider reported
+// the address with the token it issued, that wins, because it is the one the
+// provider itself named and it can differ per account: Salesforce's org comes
+// back as instance_url and is not the login host the app named as its domain.
+// A value that already carries a scheme is used as it is, so a provider whose
+// domain is a whole origin needs no special case.
+//
+// preferred names the field to read first. An empty result means the
+// connection did not carry what the provider needs, which an action must
+// answer as domain.ErrInvalid rather than calling a guessed address.
+func ProviderBaseURL(credential domain.Credential, preferred string) string {
+	for _, name := range []string{preferred, "instance_url", "base_url", "host"} {
+		if name == "" {
+			continue
+		}
+		if value := withoutScheme(credential.Metadata[name]); value != "" {
+			return value
+		}
+	}
+	return withoutScheme(credential.Domain)
+}
+
+// withoutScheme trims surrounding space and a trailing slash, and leaves a
+// value that already names an origin alone.
+func withoutScheme(value string) string {
+	return strings.TrimRight(strings.TrimSpace(value), "/")
 }
