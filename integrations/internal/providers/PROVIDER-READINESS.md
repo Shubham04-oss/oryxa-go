@@ -1,95 +1,121 @@
 # Provider readiness: the 13 without a surface
 
 Connections connects 17 providers. Four of them — GitHub, Slack, Linear,
-Microsoft — also have a provider here: a subscription target, a delivery that
-is verified, events, and actions. The other 13 have connections but nothing to
-trigger on and nothing to call. This note is the survey for giving them one,
-and the reason it exists is that **they do not all fit the contract the first
-four were built against**.
+Microsoft — also have a provider here: a subscription target, a verified
+delivery, events, and actions. The other 13 have connections but nothing to
+trigger on and nothing to call.
 
-Everything below is checked against the provider's own documentation. Where a
-claim is not yet confirmed it says so.
+This is the survey for giving them one. It exists because **they do not all
+fit the contract the first four were built against**, and the difference is not
+a matter of effort — five of the 13 cannot have a verified delivery at all, for
+four different reasons. Everything below is checked against each provider's own
+documentation or OpenAPI specification; sources are in `docs/research/`.
 
-## What the contract asks of a provider
+The headline: **of the 13, exactly one — HubSpot — is ready to build today
+without either a framework decision or an unresolved reverse-engineering
+question.**
 
-`Provider` in `internal/providers/providers.go` supports exactly two shapes,
-and `TestBuiltinProvidersAreConsistent` enforces the choice:
+## The contract, and what it assumes
+
+`Provider` supports two shapes, enforced by `TestBuiltinProvidersAreConsistent`:
 
 - **`DeliveryWebhook`** — integrations registers something per subscription,
-  supplying a `CallbackURL` and its own generated `Secret`, and removes it
-  again. Needs `Register` and `Unregister`; must not set `AccountKey`.
-- **`DeliveryApp`** — the provider sends everything to one URL configured on
-  the provider's app. Needs `AccountKey` to route a delivery to the
-  connections it belongs to; must not set `Register`.
+  supplying a `CallbackURL` and a secret, and removes it again.
+- **`DeliveryApp`** — the provider sends everything to one URL set on its app.
 
-Both need a `Target` that validates what a subscription watches, and a
-`Receive` that verifies a delivery and reads it.
+Both need a `Receive` that proves a delivery is genuine. Every provider built
+so far can do that: GitHub and Linear sign with an HMAC over the body using a
+secret we supply, Slack signs with the app's signing secret, Microsoft Graph
+uses a `clientState` it echoes back.
 
-The part that decides how much work a provider is, is **who chooses the
-signing secret and how a delivery is proved genuine**. Two of the 13 fail the
-current contract outright.
+## Five cannot prove a delivery is genuine
 
-## The two that do not fit
+This is the finding that matters. Each is blocked for a different reason, and
+none of them is "more work" — they need a decision.
 
-### Asana — the provider chooses the secret, during the registration call
+### Google Drive — no signature exists
 
-Asana's webhook is established, then Asana itself `POST`s to the target URL
-with an `X-Hook-Secret` header. The receiver must echo that value back in an
-`X-Hook-Secret` response header and answer `200`/`204`; only then does the
-create call return `201`. That secret — not one we generated — is what signs
-every later delivery, as `X-Hook-Signature`, HMAC-SHA256 over the body.
+Drive push notifications carry no HMAC, no shared secret, no timestamp and no
+published sender addresses. Google's security model is that the channel token
+is unguessable and the address is secret; the token exists so you can check
+"that each incoming message is for a channel that your application created".
+A receiver can compare `X-Goog-Channel-Token` in constant time and correlate
+`X-Goog-Channel-ID`/`X-Goog-Resource-ID`, and that is all. No replay protection
+is possible. The notification body is always empty.
 
-The mismatch is precise. `subscriptions.go` generates the secret and stores it
-*after* `Register` returns, and `Register` has no way to answer a handshake
-because `Reception.Reply` belongs to `Receive`, which never sees the handshake.
-Supporting Asana needs one of:
+The verifiable alternative is the Workspace Events API with a Pub/Sub topic,
+whose push delivery supports OIDC JWT authentication — a different transport,
+not a different header.
 
-- a `Registration.Secret` the application persists after `Register` returns,
-  replacing the one it generated, or
-- a provider-declared option saying "the provider issues the secret".
+### Atlassian (Jira) — a bearer token whose verification is undocumented
 
-The first is smaller and generalises to every provider that issues its own
-secret. It is a framework change, not a provider change, and it should be made
-deliberately rather than smuggled into a provider file.
+Dynamic webhooks have **no shared secret and no body HMAC**; `WebhookDetails`
+has no `secret` field. Deliveries carry `Authorization: Bearer <token>`, and
+Atlassian says only that it "is signed with the app's client secret" and that
+verifying it "with a library" is recommended. It does not document the
+algorithm, the claims, the issuer, the audience or the lifetime.
 
-Asana also sends a heartbeat with an **empty** `events` array every eight
-hours, and deletes a webhook it cannot reach for 24 hours, so `Receive` must
-treat an empty event list as a success rather than a malformed delivery.
+The `X-Hub-Signature` scheme in Atlassian's docs belongs to *admin webhooks*, a
+different mechanism, and does not apply. So Jira cannot be built until someone
+captures a real delivery and reverse-engineers the token — a task that needs a
+live Jira site, not documentation.
 
-### Google Drive — a delivery cannot be verified at all
+### Notion — webhooks exist but cannot be created through the API
 
-Drive push notifications are `changes.watch` / `files.watch`: a channel with an
-`id`, a `type` of `web_hook`, an `address`, and a `token`. Notifications arrive
-as a bare `POST` carrying `X-Goog-Channel-ID`, `X-Goog-Resource-ID`,
-`X-Goog-Resource-State`, `X-Goog-Channel-Token` and `X-Goog-Message-Number`.
+Verification itself is strong (`X-Notion-Signature`, HMAC-SHA256 over the raw
+body). The problem is registration: there are **zero webhook paths** in
+Notion's OpenAPI spec. Subscriptions are created in a dashboard and the URL is
+immutable once verified. Our service could only ever be the receiver, with a
+human configuring each one — which is not what a subscription API here means.
 
-There is no HMAC. Google's model is that the channel token is unguessable and
-the address is secret. That means `Receive` has nothing to verify: it can
-compare the echoed channel token, which proves only that the sender knew a
-value that travelled in a URL. Against the rest of this service — where every
-other provider's deliveries are proved with a signature — accepting Drive
-notifications unverified is a decision to make explicitly, not a gap to paper
-over. Additionally the notification body is empty: it says only *that*
-something changed, so an action has to follow up with `changes.list` from a
-stored page token.
+There is also no documented replay window, so deliveries would need deduping on
+the event ID as the only defence.
 
-## What this means for the order of work
+### Confluence — no webhook API at all
 
-The 13 are not 13 equal pieces of work. They fall into three groups:
+Verified by absence: no webhooks API group, zero webhook paths in the official
+specifications. Webhooks are descriptor-only, so eventing would need Forge or
+Connect. Confluence *actions* over the same token work fine.
 
-| Group | Providers | What they need |
-| --- | --- | --- |
-| Fits the contract as it stands | HubSpot, Atlassian, ClickUp, Airtable, Box, Dropbox, Salesforce | A provider file, actions, a skill and tests, in the existing shape |
-| Needs the secret-issuing extension | Asana | The framework change above, then an ordinary provider |
-| Needs a decision before any code | Google Drive, Notion, Figma, Intercom | Unverifiable deliveries, or no subscription API at all |
+### Asana — the provider issues the secret during the handshake
 
-The third group is why this note exists. Google is the single most requested
-provider and it is the one whose deliveries cannot be authenticated; shipping
-it first would mean either weakening `ErrUnverified` for one provider or
-documenting a hole. That should be the user's call, with the trade-off stated,
-not a quiet exception.
+Asana `POST`s to the target with `X-Hook-Secret` and requires it echoed back
+before the create returns `201`. That secret, not one we generated, signs every
+later delivery. This was the framework gap — **now closed**: `Registration`
+carries a `Secret` and `ActivateSubscription` takes an optional replacement.
+Asana is otherwise an ordinary provider, and must treat its empty heartbeat
+payload as a success.
 
-Confirmation still outstanding for Atlassian, HubSpot, Notion, ClickUp,
-Airtable, Box, Dropbox and Salesforce signature details. Nothing above should
-be treated as settled for those until their documentation is read the same way
-Asana's was.
+**ClickUp is the same shape** — its create endpoint takes no secret and the
+response carries `webhook.secret` — so the same change unblocks it too.
+
+## What is ready
+
+| Provider | Delivery | Verification | Ready? |
+| --- | --- | --- | --- |
+| **HubSpot** | webhook, created via API | v3 HMAC-SHA256, base64, 5-min window — fully specified | **Yes** |
+| **ClickUp** | webhook, created via API | HMAC-SHA256 hex in `X-Signature`, secret from the create response | Yes, with the new extension |
+| **Asana** | webhook, created via API | HMAC-SHA256 hex in `X-Hook-Signature`, secret from the handshake | Yes, with the new extension |
+| **Atlassian** | webhook, created via API | bearer JWT, **undocumented** | Blocked |
+| **Google Drive** | `files.watch` / `changes.watch` | **none exists** | Blocked |
+| **Notion** | dashboard only | strong, but no registration API | Blocked |
+| **Confluence** | **none exists** | — | Blocked |
+| Airtable, Box, Dropbox, Figma, Intercom, Salesforce, Zendesk | unconfirmed | unconfirmed | Not yet surveyed |
+
+## Two things worth knowing before building HubSpot or Atlassian
+
+- **HubSpot's current generation is dated `2026-09`**, not `v3` — `/crm/objects/2026-09/contacts`. Its webhook subscriptions live at `/app-webhooks/2026-09/{appId}/subscriptions`, and the request field is `eventType`, not `subscriptionType`. A **private app cannot manage webhooks through the API at all** (documented, verbatim: "not currently supported"), so runtime subscription creation requires a legacy public app. The deals path is inconsistent inside HubSpot's own docs — the spec says `/crm/objects/2026-09/0-3`, the guide says `/deals`.
+- **Atlassian's `GET/POST /rest/api/3/search` is fully removed**, not deprecated. The replacement `/search/jql` is cursor-based, so any `startAt`/`total` pagination must become `nextPageToken`. Dynamic webhooks also expire after 30 days and need a scheduled refresh, and OAuth2 allows only 5 webhooks per app per user per tenant.
+
+## Recommendation
+
+Build the three that are ready — **HubSpot, ClickUp, Asana** — and give the
+five blocked providers **actions only**. Actions need no delivery verification
+at all, so Google, Notion, Atlassian and Confluence can have a useful surface
+immediately, with triggers deferred until the verification question is settled
+per provider. That is a decision for the user, not something to work around
+quietly: accepting an unverifiable delivery, or reverse-engineering an
+undocumented token, are both choices with security consequences.
+
+Airtable, Box, Dropbox, Figma, Intercom, Salesforce and Zendesk have not been
+surveyed yet. Nothing above should be read as settled for those.
