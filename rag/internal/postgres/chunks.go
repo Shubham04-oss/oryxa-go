@@ -51,19 +51,6 @@ func (row chunkRow) chunk() (domain.Chunk, error) {
 	}, nil
 }
 
-// SyncResult says what a re-cut document changed.
-type SyncResult struct {
-	// Fresh are the chunks that need embedding: new text, or text that moved
-	// into a chunk that did not exist before.
-	Fresh []domain.Chunk
-	// Reused are the chunks whose text is byte-for-byte what it was, so the
-	// vector already written for them is still correct.
-	Reused []domain.Chunk
-	// Removed are the chunk ids that no longer exist. Their pgvector rows go
-	// by cascade; an S3 Vectors corpus needs them deleted by key.
-	Removed []string
-}
-
 // SyncChunks replaces a document's chunks with a freshly cut set, keeping the
 // ones whose text did not change.
 //
@@ -74,8 +61,8 @@ type SyncResult struct {
 //
 // The caller supplies chunks without ids; this assigns them, reusing the id of
 // a matching chunk so its vector row stays attached.
-func (store *Store) SyncChunks(ctx context.Context, document domain.Document, chunks []domain.Chunk, at time.Time) (SyncResult, error) {
-	var result SyncResult
+func (store *Store) SyncChunks(ctx context.Context, document domain.Document, chunks []domain.Chunk, at time.Time) (domain.ChunkSync, error) {
+	var result domain.ChunkSync
 	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
 		var existing []struct {
 			ID     string `db:"id"`
@@ -94,7 +81,7 @@ func (store *Store) SyncChunks(ctx context.Context, document domain.Document, ch
 			available[row.SHA256] = append(available[row.SHA256], row.ID)
 		}
 
-		result = SyncResult{}
+		result = domain.ChunkSync{}
 		claimed := make(map[string]bool, len(existing))
 		for index := range chunks {
 			chunk := &chunks[index]
@@ -163,7 +150,7 @@ func (store *Store) SyncChunks(ctx context.Context, document domain.Document, ch
 		return nil
 	})
 	if err != nil {
-		return SyncResult{}, err
+		return domain.ChunkSync{}, err
 	}
 	return result, nil
 }

@@ -267,3 +267,20 @@ func (vector Vector) Validate(spec EmbeddingSpec) error {
 	}
 	return nil
 }
+
+// ChunkSync says what re-cutting a document changed.
+//
+// The split is the whole point of re-cutting rather than rebuilding: only
+// Fresh costs an embedding call, so a one-word edit to a long document is one
+// call rather than one per chunk.
+type ChunkSync struct {
+	// Fresh are the chunks that need embedding: new text, or text that moved
+	// into a chunk that did not exist before.
+	Fresh []Chunk
+	// Reused are the chunks whose text is byte-for-byte what it was, so the
+	// vector already written for them is still correct.
+	Reused []Chunk
+	// Removed are the chunk ids that no longer exist. Their pgvector rows go
+	// by cascade; an S3 Vectors corpus needs them deleted by key.
+	Removed []string
+}
