@@ -9,6 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
+
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	connectionsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/connections/v1"
 
@@ -325,6 +329,144 @@ func TestDispatcherKeepsAnEventTheSinkRefused(t *testing.T) {
 	if len(outbox.failed) != 1 {
 		t.Fatalf("marked %d failed, want 1", len(outbox.failed))
 	}
+}
+
+// fakeQueue answers a scripted sequence of receives and records every
+// receive and delete Poll makes, each on its own channel, so a test can wait
+// for one happening rather than sleeping and hoping. A receive past the
+// script blocks until the context is cancelled — the same shape a real long
+// poll takes when nothing has arrived — which is what lets a test stop Poll
+// deterministically. Poll only ever has one receive in flight at a time, so
+// count needs no lock of its own.
+type fakeQueue struct {
+	receives []receiveResult
+	count    int
+
+	calls   chan time.Time
+	deleted chan []string
+}
+
+type receiveResult struct {
+	messages []sqstypes.Message
+	err      error
+}
+
+func newFakeQueue(receives ...receiveResult) *fakeQueue {
+	return &fakeQueue{receives: receives, calls: make(chan time.Time, 100), deleted: make(chan []string, 100)}
+}
+
+func (queue *fakeQueue) ReceiveMessage(ctx context.Context, _ *sqs.ReceiveMessageInput, _ ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error) {
+	index := queue.count
+	queue.count++
+	queue.calls <- time.Now()
+
+	if index >= len(queue.receives) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	next := queue.receives[index]
+	if next.err != nil {
+		return nil, next.err
+	}
+	return &sqs.ReceiveMessageOutput{Messages: next.messages}, nil
+}
+
+func (queue *fakeQueue) DeleteMessageBatch(_ context.Context, input *sqs.DeleteMessageBatchInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
+	ids := make([]string, len(input.Entries))
+	for i, entry := range input.Entries {
+		ids[i] = aws.ToString(entry.ReceiptHandle)
+	}
+	queue.deleted <- ids
+	return &sqs.DeleteMessageBatchOutput{}, nil
+}
+
+func recvCall(t *testing.T, calls <-chan time.Time) time.Time {
+	t.Helper()
+	select {
+	case when := <-calls:
+		return when
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Poll to call ReceiveMessage")
+		return time.Time{}
+	}
+}
+
+func recvDeleted(t *testing.T, deleted <-chan []string) []string {
+	t.Helper()
+	select {
+	case ids := <-deleted:
+		return ids
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Poll to delete a handled message")
+		return nil
+	}
+}
+
+func waitPollReturns(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Poll did not return once its context was cancelled")
+	}
+}
+
+func TestPollHandsEachMessageToHandleAndDeletesOnlyWhatSucceeded(t *testing.T) {
+	app := newFakeApplication()
+	consumer := NewConsumer(app, nil)
+	good := delivery(t, connectionsv1.Source, connectionsv1.AppDeletedDetailType, "evt_1",
+		connectionsv1.AppDeleted{AppID: "app_1"})
+
+	queue := newFakeQueue(receiveResult{messages: []sqstypes.Message{
+		{MessageId: aws.String("m1"), ReceiptHandle: aws.String("rh1"), Body: aws.String(good)},
+		{MessageId: aws.String("m2"), ReceiptHandle: aws.String("rh2"), Body: aws.String("not json")},
+	}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { consumer.Poll(ctx, queue, "queue-url"); close(done) }()
+
+	deleted := recvDeleted(t, queue.deleted)
+	cancel()
+	waitPollReturns(t, done)
+
+	if len(app.acted) != 1 || app.acted[0] != connectionsv1.AppDeletedDetailType {
+		t.Fatalf("acted = %v, want one call for the message Handle could decode", app.acted)
+	}
+	if len(deleted) != 1 || deleted[0] != "rh1" {
+		t.Fatalf("deleted receipt handles = %v, want only rh1: the message Handle failed on stays for redelivery", deleted)
+	}
+}
+
+func TestPollBacksOffAfterAReceiveErrorBeforeTryingAgain(t *testing.T) {
+	original := receiveBackoff
+	receiveBackoff = 30 * time.Millisecond
+	defer func() { receiveBackoff = original }()
+
+	consumer := NewConsumer(newFakeApplication(), nil)
+	queue := newFakeQueue(receiveResult{err: errors.New("the queue did not answer")})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { consumer.Poll(ctx, queue, "queue-url"); close(done) }()
+
+	first := recvCall(t, queue.calls)
+	second := recvCall(t, queue.calls)
+	cancel()
+	waitPollReturns(t, done)
+
+	if gap := second.Sub(first); gap < receiveBackoff/2 {
+		t.Fatalf("retried after %s, want at least about %s: a receive error must back off before trying again", gap, receiveBackoff)
+	}
+}
+
+func TestPollReturnsOnceItsContextIsCancelled(t *testing.T) {
+	consumer := NewConsumer(newFakeApplication(), nil)
+	queue := newFakeQueue() // no receive ever answers; a real long poll looks the same
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() { consumer.Poll(ctx, queue, "queue-url"); close(done) }()
+	waitPollReturns(t, done)
 }
 
 func TestRetryDelayDoublesUntilItIsCapped(t *testing.T) {
