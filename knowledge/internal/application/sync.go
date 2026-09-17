@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
@@ -279,11 +280,24 @@ func (s *Service) runFailed(ctx context.Context, source domain.Source, run domai
 	return nil
 }
 
-// credential is what the source is read with. A source with no connection is
-// internal, and is read with nothing.
+// credential is what the source is read with.
+//
+// A source with no connection is internal, and internal storage has no
+// service identity to accept: it is read as the member who registered it,
+// under the grant they gave.
 func (s *Service) credential(ctx context.Context, source domain.Source) (domain.Credential, error) {
 	if source.ConnectionID == "" {
-		return domain.Credential{}, nil
+		if s.grants == nil {
+			return domain.Credential{}, fmt.Errorf(
+				"reading %s acts as a member, and no grant is configured: %w", source.Provider, domain.ErrForbidden)
+		}
+		token, err := s.grants.MemberToken(ctx, source.OrganizationID, source.CreatedBy)
+		if err != nil {
+			return domain.Credential{}, err
+		}
+		return domain.Credential{
+			AccessToken: token, In: "header", Name: "Authorization", Prefix: "Bearer ",
+		}, nil
 	}
 	return s.connections.Token(ctx, connectionsclient.TokenRequest{
 		OrganizationID: source.OrganizationID,

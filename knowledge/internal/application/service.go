@@ -71,10 +71,23 @@ type Connections interface {
 	Forget(string)
 }
 
+// Grants mints a token that acts as a member while they are away.
+//
+// An internal source is read through a service that has no service identity
+// to offer: files forwards the caller's credentials to auth and accepts
+// nothing else, so there is no bare-service way in. Auth's agent grant — a
+// member's standing consent for work to run as them — is what fills that gap.
+// Without one configured, an internal source says so rather than failing
+// somewhere less obvious.
+type Grants interface {
+	MemberToken(ctx context.Context, organizationID, memberID string) (string, error)
+}
+
 type Dependencies struct {
 	Store       Store
 	Directory   Directory
 	Connections Connections
+	Grants      Grants
 	Extractors  sources.Registry
 	Logger      *slog.Logger
 	Clock       func() time.Time
@@ -88,6 +101,7 @@ type Service struct {
 	store       Store
 	directory   Directory
 	connections Connections
+	grants      Grants
 	extractors  sources.Registry
 	logger      *slog.Logger
 	now         func() time.Time
@@ -99,6 +113,7 @@ func New(dependencies Dependencies, config Config) *Service {
 		store:       dependencies.Store,
 		directory:   dependencies.Directory,
 		connections: dependencies.Connections,
+		grants:      dependencies.Grants,
 		extractors:  dependencies.Extractors,
 		logger:      dependencies.Logger,
 		now:         dependencies.Clock,
