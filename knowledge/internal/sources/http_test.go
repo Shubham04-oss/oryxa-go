@@ -239,6 +239,42 @@ func TestDoRefusesAnAnswerTooBigToHold(t *testing.T) {
 	}
 }
 
+func TestDoRetriesAConnectionThatFailed(t *testing.T) {
+	provider := &fakeProvider{
+		failures: []error{errors.New("connection reset by peer"), nil},
+		answers:  []*http.Response{nil, answer(http.StatusOK, "{}", nil)},
+	}
+	client, _ := testClient(t, provider)
+
+	response, err := client.Do(context.Background(), request(t), domain.Credential{})
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if response.Status != http.StatusOK {
+		t.Fatalf("Do() status = %d, want 200", response.Status)
+	}
+	if len(provider.calls) != 2 {
+		t.Fatalf("made %d calls, want 2", len(provider.calls))
+	}
+}
+
+func TestDoReportsAConnectionThatKeptFailing(t *testing.T) {
+	provider := &fakeProvider{failures: []error{
+		errors.New("connection reset by peer"),
+		errors.New("connection reset by peer"),
+		errors.New("connection reset by peer"),
+		errors.New("connection reset by peer"),
+	}}
+	client, _ := testClient(t, provider)
+
+	if _, err := client.Do(context.Background(), request(t), domain.Credential{}); !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("Do() error = %v, want ErrProviderUnavailable", err)
+	}
+	if len(provider.calls) != maxAttempts {
+		t.Fatalf("made %d calls, want %d", len(provider.calls), maxAttempts)
+	}
+}
+
 func TestDoStopsWhenTheRunWasCancelled(t *testing.T) {
 	provider := &fakeProvider{failures: []error{context.Canceled}}
 	client, _ := testClient(t, provider)
