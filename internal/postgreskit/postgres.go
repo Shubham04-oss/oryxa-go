@@ -29,6 +29,9 @@ type Config struct {
 	// Schema, when set, leads this pool's PostgreSQL search_path. Public stays
 	// behind it so extension-owned types such as vector remain resolvable.
 	Schema string
+	// MaxConns sizes the pool unless URL sets pool_max_conns itself. Zero
+	// keeps pgx's default of four or the CPU count, whichever is larger.
+	MaxConns int32
 }
 
 type Database struct {
@@ -54,6 +57,9 @@ func Open(ctx context.Context, config Config) (*Database, error) {
 			return nil, errors.New("postgres schema must be a lowercase SQL identifier")
 		}
 		poolConfig.ConnConfig.RuntimeParams["search_path"] = config.Schema + ",public"
+	}
+	if config.MaxConns > 0 && !strings.Contains(config.URL, "pool_max_conns") {
+		poolConfig.MaxConns = config.MaxConns
 	}
 	if poolConfig.ConnConfig.ConnectTimeout == 0 {
 		poolConfig.ConnConfig.ConnectTimeout = 5 * time.Second

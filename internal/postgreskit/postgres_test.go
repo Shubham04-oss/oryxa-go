@@ -66,3 +66,33 @@ func TestOpenSharesPGXPoolWithSQLXAndRegistersVector(t *testing.T) {
 		t.Fatalf("vector = %v", got)
 	}
 }
+
+func TestOpenSizesThePoolUnlessTheURLDoes(t *testing.T) {
+	databaseURL := os.Getenv("POSTGRESKIT_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("POSTGRESKIT_TEST_DATABASE_URL is not set")
+	}
+	sized, err := Open(context.Background(), Config{URL: databaseURL, ApplicationName: "oryxa-postgreskit-test", MaxConns: 17})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sized.Close()
+	if got := sized.Pool.Config().MaxConns; got != 17 {
+		t.Fatalf("MaxConns = %d, want 17", got)
+	}
+
+	separator := "?"
+	if strings.Contains(databaseURL, "?") {
+		separator = "&"
+	}
+	named, err := Open(context.Background(), Config{
+		URL: databaseURL + separator + "pool_max_conns=3", ApplicationName: "oryxa-postgreskit-test", MaxConns: 17,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer named.Close()
+	if got := named.Pool.Config().MaxConns; got != 3 {
+		t.Fatalf("MaxConns = %d, want the URL's 3", got)
+	}
+}
