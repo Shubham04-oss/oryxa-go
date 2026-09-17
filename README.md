@@ -4,7 +4,7 @@ Oryxa is an AWS-backed Go monorepo. It starts with a single Go module and will g
 
 ## Service layout
 
-Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/auth`, `/billing`, `/connections`, `/email`, `/files`, `/integrations` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
+Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/auth`, `/billing`, `/connections`, `/email`, `/files`, `/integrations`, `/rag` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
 
 ```text
 /
@@ -15,6 +15,7 @@ Each service owns a lowercase, hyphen-free directory at the repository root. The
 ├── email/                 # Email delivery service
 ├── files/                 # Organization object storage on S3
 ├── integrations/          # Provider triggers and actions, over HTTP and MCP
+├── rag/                   # Corpora, chunking, embeddings and grounded answers
 ├── teams/                 # Teams service
 ├── contracts/             # Versioned event contracts services publish
 ├── internal/              # Module-private shared runtime boundaries
@@ -64,7 +65,15 @@ registers, renews or removes something, or runs an action. Its contract lives
 in `integrations/README.md`. `/files` owns organization object storage: a
 private S3
 bucket, PostgreSQL metadata, and credential-free `oryxa.files` events. Other
-services never talk to the bucket; they ask files. `/teams` owns teams inside an
+services never talk to the bucket; they ask files. `/rag` owns retrieval:
+corpora and the documents in them, the chunks they become, the vectors behind
+those, and the grounded answers they support. A corpus pins its embedding
+provider, model, width and metric at creation and never changes them, because
+vectors from two models do not share a space. Vectors live in pgvector or in
+Amazon S3 Vectors; the chunk text stays in PostgreSQL either way, so a citation
+addresses a byte range of a document still on disk. Rag takes extracted text
+and says so: turning a PDF or a page into text stays upstream. Its contract
+lives in `rag/README.md`. `/teams` owns teams inside an
 organization and who is on them: organization admins and team admins share the
 same control. An AI has three tools: `list_teams`, `call_team`, and
 `call_team_members`. It publishes as `oryxa.teams` and consumes from its own
@@ -107,7 +116,7 @@ Not yet:
 
 ## Shared PostgreSQL and observability
 
-Auth, billing, connections, files, integrations, teams and the ADK session
+Auth, billing, connections, files, integrations, rag, teams and the ADK session
 runtime use `/internal/postgreskit`. Each process owns one native `pgxpool`; `sqlx` wraps
 that same pool through pgx's `database/sql` adapter, so it does not create a
 second connection budget. PostgreSQL statements and transactions remain on
@@ -120,7 +129,7 @@ The boundary discovers these database capabilities:
 | --- | --- | --- |
 | ltree | `ltree` | Version discovery and optional startup enforcement |
 | pg_trgm | `pg_trgm` | Version discovery and optional startup enforcement |
-| pgvector | `vector` | Per-connection pgx vector codec registration |
+| pgvector | `vector` | Per-connection pgx vector codec registration; rag requires it |
 | [Apache AGE](https://age.apache.org/) | `age` | Version discovery and optional startup enforcement |
 
 Applications do not run `CREATE EXTENSION`; the database image or managed
@@ -139,7 +148,7 @@ docker --context mac-mini exec oryxa-go-postgres-1 \
 ```
 
 `/internal/observability` gives agents primary, auth, billing, connections,
-email, files, integrations and teams structured JSON logs,
+email, files, integrations, rag and teams structured JSON logs,
 W3C trace propagation, HTTP/AWS SDK/pgx spans, PostgreSQL pool metrics, and Go
 runtime metrics. Set `OTEL_EXPORTER_OTLP_ENDPOINT` for OTLP/gRPC export, or use
 the standard signal-specific trace and metric endpoint variables. With no
