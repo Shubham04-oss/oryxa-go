@@ -50,6 +50,7 @@ type fakeStore struct {
 	failed     []string
 	reasons    []string
 	released   []string
+	embedded   []string
 }
 
 func (fake *fakeStore) Corpus(context.Context, string, string) (domain.Corpus, error) {
@@ -78,6 +79,13 @@ func (fake *fakeStore) SyncChunks(_ context.Context, _ domain.Document, chunks [
 		return domain.ChunkSync{Fresh: fresh}, nil
 	}
 	return fake.sync, nil
+}
+
+func (fake *fakeStore) MarkChunksEmbedded(_ context.Context, chunkIDs []string, _ time.Time) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.embedded = append(fake.embedded, chunkIDs...)
+	return nil
 }
 
 func (fake *fakeStore) ClaimDocuments(context.Context, int, time.Duration) ([]domain.Document, error) {

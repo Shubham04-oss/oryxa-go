@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -350,4 +351,33 @@ func (store *Store) ReleaseDocument(ctx context.Context, documentID string) erro
 		return fmt.Errorf("release document: %w", err)
 	}
 	return nil
+}
+
+// DocumentsBySource finds every document indexed from one source, across all
+// of an organization's corpora.
+//
+// Scanning each corpus's newest documents instead would quietly miss the ones
+// in a corpus holding more than a page of them, and a deleted file would go on
+// answering questions out of the index.
+func (store *Store) DocumentsBySource(ctx context.Context, organizationID string, kind domain.SourceKind, ref string) ([]domain.Document, error) {
+	if strings.TrimSpace(ref) == "" {
+		return nil, nil
+	}
+	var rows []documentRow
+	if err := store.db.SelectContext(ctx, &rows, `
+		SELECT `+documentColumns+`
+		FROM rag_documents
+		WHERE organization_id = $1 AND source_kind = $2 AND source_ref = $3
+		ORDER BY created_at, id`, organizationID, string(kind), ref); err != nil {
+		return nil, fmt.Errorf("list documents by source: %w", err)
+	}
+	documents := make([]domain.Document, 0, len(rows))
+	for _, row := range rows {
+		document, err := row.document()
+		if err != nil {
+			return nil, err
+		}
+		documents = append(documents, document)
+	}
+	return documents, nil
 }

@@ -261,10 +261,24 @@ func TestSyncChunksReusesUnchangedChunks(t *testing.T) {
 	}
 
 	now := time.Now().UTC()
+	// The pipeline records a chunk as embedded only once its vector is
+	// written, and only those are reusable, so this does the same.
+	embed := func(sync domain.ChunkSync) {
+		t.Helper()
+		ids := make([]string, 0, len(sync.Fresh))
+		for _, chunk := range sync.Fresh {
+			ids = append(ids, chunk.ID)
+		}
+		if err := store.MarkChunksEmbedded(ctx, ids, now); err != nil {
+			t.Fatalf("MarkChunksEmbedded: %v", err)
+		}
+	}
+
 	first, err := store.SyncChunks(ctx, document, chunks("alpha", "bravo", "charlie"), now)
 	if err != nil {
 		t.Fatalf("SyncChunks: %v", err)
 	}
+	embed(first)
 	if len(first.Fresh) != 3 || len(first.Reused) != 0 || len(first.Removed) != 0 {
 		t.Fatalf("first sync = %d fresh, %d reused, %d removed", len(first.Fresh), len(first.Reused), len(first.Removed))
 	}
@@ -279,6 +293,7 @@ func TestSyncChunksReusesUnchangedChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncChunks: %v", err)
 	}
+	embed(second)
 	if len(second.Fresh) != 1 || len(second.Reused) != 2 {
 		t.Fatalf("second sync = %d fresh, %d reused, want 1 and 2", len(second.Fresh), len(second.Reused))
 	}
@@ -299,6 +314,7 @@ func TestSyncChunksReusesUnchangedChunks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncChunks: %v", err)
 	}
+	embed(third)
 	if len(third.Fresh) != 0 || len(third.Reused) != 2 {
 		t.Fatalf("reordering = %d fresh, %d reused, want 0 and 2", len(third.Fresh), len(third.Reused))
 	}
@@ -432,32 +448,48 @@ func TestClaimDocumentsLeasesWorkOnce(t *testing.T) {
 	organizationID := uniqueOrganization()
 	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
 
+	// The worker claims across every organization, because that is its job.
+	// So this asserts on its own documents rather than on counts: another
+	// test's pending documents are legitimately in the same queue.
+	mine := map[string]bool{}
 	for index := range 3 {
 		body := fmt.Sprintf("document %d", index)
-		if _, _, err := store.UpsertDocument(ctx,
+		document, _, err := store.UpsertDocument(ctx,
 			newDocument(corpus, domain.Source{Kind: domain.SourceInline}, "Doc", body), body,
-			testEvent(t, "rag.document.received.v1")); err != nil {
+			testEvent(t, "rag.document.received.v1"))
+		if err != nil {
 			t.Fatalf("UpsertDocument: %v", err)
 		}
+		mine[document.ID] = true
 	}
 
-	first, err := store.ClaimDocuments(ctx, 2, time.Minute)
-	if err != nil {
-		t.Fatalf("ClaimDocuments: %v", err)
+	claimOwn := func() []domain.Document {
+		t.Helper()
+		var own []domain.Document
+		for pass := 0; pass < 20 && len(own) < len(mine); pass++ {
+			claimed, err := store.ClaimDocuments(ctx, 10, time.Minute)
+			if err != nil {
+				t.Fatalf("ClaimDocuments: %v", err)
+			}
+			if len(claimed) == 0 {
+				break
+			}
+			for _, document := range claimed {
+				if mine[document.ID] {
+					own = append(own, document)
+				}
+			}
+		}
+		return own
 	}
-	if len(first) != 2 {
-		t.Fatalf("claimed %d documents, want 2", len(first))
-	}
-	second, err := store.ClaimDocuments(ctx, 5, time.Minute)
-	if err != nil {
-		t.Fatalf("ClaimDocuments: %v", err)
-	}
-	if len(second) != 1 {
-		t.Fatalf("claimed %d documents the second time, want the 1 left", len(second))
+
+	claimed := claimOwn()
+	if len(claimed) != len(mine) {
+		t.Fatalf("claimed %d of my %d documents", len(claimed), len(mine))
 	}
 	// Two workers must never embed the same document twice.
 	held := map[string]bool{}
-	for _, document := range append(first, second...) {
+	for _, document := range claimed {
 		if held[document.ID] {
 			t.Fatalf("document %s was claimed twice", document.ID)
 		}
@@ -466,19 +498,36 @@ func TestClaimDocumentsLeasesWorkOnce(t *testing.T) {
 			t.Fatalf("a claimed document is %q, want ingesting", document.Status)
 		}
 	}
+	// Everything of mine is leased now, so another pass finds none of it.
+	for _, document := range mustClaim(t, store, ctx) {
+		if mine[document.ID] {
+			t.Fatalf("document %s was claimed while another worker held its lease", document.ID)
+		}
+	}
 
 	// A worker that stops mid-ingest puts its document back without counting
 	// the attempt as a failure.
-	if err := store.ReleaseDocument(ctx, first[0].ID); err != nil {
+	if err := store.ReleaseDocument(ctx, claimed[0].ID); err != nil {
 		t.Fatalf("ReleaseDocument: %v", err)
 	}
-	released, err := store.ClaimDocuments(ctx, 5, time.Minute)
+	var returned bool
+	for _, document := range mustClaim(t, store, ctx) {
+		if document.ID == claimed[0].ID {
+			returned = true
+		}
+	}
+	if !returned {
+		t.Fatal("the released document did not come back")
+	}
+}
+
+func mustClaim(t *testing.T, store *Store, ctx context.Context) []domain.Document {
+	t.Helper()
+	claimed, err := store.ClaimDocuments(ctx, 25, time.Minute)
 	if err != nil {
 		t.Fatalf("ClaimDocuments: %v", err)
 	}
-	if len(released) != 1 || released[0].ID != first[0].ID {
-		t.Fatalf("the released document did not come back: %+v", released)
-	}
+	return claimed
 }
 
 func TestOutboxRoundTrip(t *testing.T) {
@@ -545,5 +594,119 @@ func TestDeleteCorpusTakesEverythingWithIt(t *testing.T) {
 	}
 	if err := store.DeleteCorpus(ctx, organizationID, corpus.ID, testEvent(t, "rag.corpus.deleted.v1")); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("deleting a corpus twice returned %v, want ErrNotFound", err)
+	}
+}
+
+// TestSyncChunksWillNotReuseAChunkThatWasNeverEmbedded is the regression for
+// the worst failure this service could have: a document that looks searchable
+// and holds no vectors.
+//
+// The first attempt writes every chunk row and then fails while embedding. On
+// the retry those rows match by hash. If matching by hash were enough they
+// would come back as reused, nothing would be embedded, and the document would
+// be marked ready holding nothing at all.
+func TestSyncChunksWillNotReuseAChunkThatWasNeverEmbedded(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	body := "body"
+	document, _, err := store.UpsertDocument(ctx,
+		newDocument(corpus, domain.Source{Kind: domain.SourceInline}, "Doc", body), body,
+		testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+	chunks := []domain.Chunk{
+		{Ordinal: 0, Text: "alpha", TokenCount: 1, SHA256: domain.Hash("alpha"), StartByte: 0, EndByte: 5},
+		{Ordinal: 1, Text: "bravo", TokenCount: 1, SHA256: domain.Hash("bravo"), StartByte: 5, EndByte: 10},
+	}
+	now := time.Now().UTC()
+
+	// Attempt one: rows written, embedding then fails, nothing marked.
+	first, err := store.SyncChunks(ctx, document, chunks, now)
+	if err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+	if len(first.Fresh) != 2 {
+		t.Fatalf("first attempt = %d fresh, want 2", len(first.Fresh))
+	}
+
+	// The retry must embed them again, not treat them as already done.
+	second, err := store.SyncChunks(ctx, document, chunks, now)
+	if err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+	if len(second.Fresh) != 2 || len(second.Reused) != 0 {
+		t.Fatalf("after a failed embed the retry found %d fresh and %d reused; "+
+			"reusing an unembedded chunk would mark the document searchable with no vectors",
+			len(second.Fresh), len(second.Reused))
+	}
+
+	// Once the vectors are recorded, the saving comes back.
+	embedded := make([]string, 0, len(second.Fresh))
+	for _, chunk := range second.Fresh {
+		embedded = append(embedded, chunk.ID)
+	}
+	if err := store.MarkChunksEmbedded(ctx, embedded, now); err != nil {
+		t.Fatalf("MarkChunksEmbedded: %v", err)
+	}
+	third, err := store.SyncChunks(ctx, document, chunks, now)
+	if err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+	if len(third.Fresh) != 0 || len(third.Reused) != 2 {
+		t.Fatalf("after the vectors were recorded = %d fresh, %d reused, want 0 and 2",
+			len(third.Fresh), len(third.Reused))
+	}
+}
+
+// TestDocumentsBySourceFindsEveryCopy backs removing what a deleted file left
+// behind. Reading each corpus's newest page instead would miss the documents
+// in a corpus holding more than one.
+func TestDocumentsBySourceFindsEveryCopy(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	const fileID = "file_shared"
+	body := "the same file, indexed once"
+	wanted, _, err := store.UpsertDocument(ctx,
+		newDocument(corpus, domain.Source{Kind: domain.SourceFile, Ref: fileID}, "Shared", body), body,
+		testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+	// Plenty of other documents, so a page-limited scan would not reach it.
+	for index := range 5 {
+		other := fmt.Sprintf("another document %d", index)
+		if _, _, err := store.UpsertDocument(ctx,
+			newDocument(corpus, domain.Source{Kind: domain.SourceInline}, "Other", other), other,
+			testEvent(t, "rag.document.received.v1")); err != nil {
+			t.Fatalf("UpsertDocument: %v", err)
+		}
+	}
+
+	found, err := store.DocumentsBySource(ctx, organizationID, domain.SourceFile, fileID)
+	if err != nil {
+		t.Fatalf("DocumentsBySource: %v", err)
+	}
+	if len(found) != 1 || found[0].ID != wanted.ID {
+		t.Fatalf("DocumentsBySource returned %d documents, want the one indexed from that file", len(found))
+	}
+	none, err := store.DocumentsBySource(ctx, organizationID, domain.SourceFile, "file_never_indexed")
+	if err != nil {
+		t.Fatalf("DocumentsBySource: %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("a file that was never indexed matched %d documents", len(none))
+	}
+
+	ids, err := store.ChunkIDs(ctx, organizationID, wanted.ID)
+	if err != nil {
+		t.Fatalf("ChunkIDs: %v", err)
+	}
+	if len(ids) != 0 {
+		t.Fatalf("an un-ingested document has %d chunks", len(ids))
 	}
 }

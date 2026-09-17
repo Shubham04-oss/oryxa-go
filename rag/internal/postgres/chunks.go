@@ -65,19 +65,29 @@ func (store *Store) SyncChunks(ctx context.Context, document domain.Document, ch
 	var result domain.ChunkSync
 	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
 		var existing []struct {
-			ID     string `db:"id"`
-			SHA256 string `db:"sha256"`
+			ID         string     `db:"id"`
+			SHA256     string     `db:"sha256"`
+			EmbeddedAt *time.Time `db:"embedded_at"`
 		}
 		if err := tx.SelectContext(ctx, &existing, `
-			SELECT id, sha256 FROM rag_chunks WHERE document_id = $1 ORDER BY ordinal
+			SELECT id, sha256, embedded_at FROM rag_chunks WHERE document_id = $1 ORDER BY ordinal
 			FOR UPDATE`, document.ID); err != nil {
 			return fmt.Errorf("read existing chunks: %w", err)
 		}
+		// Only a chunk whose vector was actually written can be reused.
+		// Matching on the text hash alone is not enough: a first attempt
+		// writes every chunk row and may then fail while embedding them, and
+		// on the retry those rows would look reusable and the document would
+		// be marked searchable holding no vectors at all.
+		//
 		// Chunks with identical text are rare but possible — a repeated
 		// boilerplate paragraph — so each hash holds a queue of ids rather
 		// than one, and each is claimed at most once.
 		available := make(map[string][]string, len(existing))
 		for _, row := range existing {
+			if row.EmbeddedAt == nil {
+				continue
+			}
 			available[row.SHA256] = append(available[row.SHA256], row.ID)
 		}
 
@@ -297,4 +307,33 @@ func pgTextArray(values []string) string {
 	}
 	builder.WriteByte('}')
 	return builder.String()
+}
+
+// MarkChunksEmbedded records that these chunks' vectors are in the store.
+//
+// It runs after the vectors are written, never before, because it is what a
+// later re-cut trusts when it decides a chunk need not be paid for again.
+func (store *Store) MarkChunksEmbedded(ctx context.Context, chunkIDs []string, at time.Time) error {
+	if len(chunkIDs) == 0 {
+		return nil
+	}
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE rag_chunks SET embedded_at = $2 WHERE id = ANY($1)`,
+		pgTextArray(chunkIDs), at); err != nil {
+		return fmt.Errorf("mark chunks embedded: %w", err)
+	}
+	return nil
+}
+
+// ChunkIDs lists a document's chunks, so a caller can take their vectors out
+// of a store that has no cascade of its own before the rows go.
+func (store *Store) ChunkIDs(ctx context.Context, organizationID, documentID string) ([]string, error) {
+	var ids []string
+	if err := store.db.SelectContext(ctx, &ids, `
+		SELECT id FROM rag_chunks
+		WHERE organization_id = $1 AND document_id = $2
+		ORDER BY ordinal`, organizationID, documentID); err != nil {
+		return nil, fmt.Errorf("list chunk ids: %w", err)
+	}
+	return ids, nil
 }

@@ -195,7 +195,7 @@ func TestSearchPassesEveryKnobDown(t *testing.T) {
 	if query.Text != "how often do credentials rotate?" || query.TopK != 5 || query.Mode != domain.ModeHybrid {
 		t.Fatalf("query = %+v", query)
 	}
-	if query.MinScore != 0.3 || query.Diversity != 0.7 || !query.Rerank || query.OverFetch != 6 {
+	if query.MinScore != 0.3 || query.Diversity == nil || *query.Diversity != 0.7 || !query.Rerank || query.OverFetch != 6 {
 		t.Fatalf("knobs = %+v", query)
 	}
 	if len(query.Filter.DocumentIDs) != 1 || len(query.Filter.Conditions) != 1 {

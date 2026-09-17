@@ -34,6 +34,7 @@ type Store interface {
 	Corpus(ctx context.Context, organizationID, corpusID string) (domain.Corpus, error)
 	DocumentBody(ctx context.Context, documentID string) (string, error)
 	SyncChunks(ctx context.Context, document domain.Document, chunks []domain.Chunk, at time.Time) (domain.ChunkSync, error)
+	MarkChunksEmbedded(ctx context.Context, chunkIDs []string, at time.Time) error
 	ClaimDocuments(ctx context.Context, limit int, lease time.Duration) ([]domain.Document, error)
 	MarkDocumentReady(ctx context.Context, documentID string, chunkCount int, at time.Time, event domain.Event) error
 	MarkDocumentFailed(ctx context.Context, documentID, reason string, at time.Time, event domain.Event) error
@@ -255,6 +256,16 @@ func (pipeline *Pipeline) index(ctx context.Context, document domain.Document) (
 			return Result{}, err
 		}
 		result.Usage = usage
+		// Only now are these chunks reusable. Recording it before the vectors
+		// landed would let a retry after a failed embed skip them and mark
+		// the document searchable holding nothing.
+		fresh := make([]string, 0, len(sync.Fresh))
+		for _, chunk := range sync.Fresh {
+			fresh = append(fresh, chunk.ID)
+		}
+		if err := pipeline.store.MarkChunksEmbedded(ctx, fresh, at); err != nil {
+			return Result{}, err
+		}
 	}
 
 	indexed, err := pipeline.event(rageventsv1.DocumentIndexedDetailType, rageventsv1.DocumentIndexed{

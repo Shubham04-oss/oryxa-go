@@ -41,6 +41,8 @@ type Store interface {
 	UpsertDocument(ctx context.Context, document domain.Document, body string, event domain.Event) (domain.Document, postgres.Upsert, error)
 	Document(ctx context.Context, organizationID, documentID string) (domain.Document, error)
 	Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, limit int) ([]domain.Document, error)
+	DocumentsBySource(ctx context.Context, organizationID string, kind domain.SourceKind, ref string) ([]domain.Document, error)
+	ChunkIDs(ctx context.Context, organizationID, documentID string) ([]string, error)
 	DeleteDocument(ctx context.Context, organizationID, documentID string, event domain.Event) ([]string, error)
 
 	UpsertOrganization(ctx context.Context, organizationID, name string, at time.Time) error
@@ -454,11 +456,18 @@ func (service *Service) DeleteDocument(ctx context.Context, credentials authclie
 	if err != nil {
 		return err
 	}
-	chunkIDs, err := service.store.DeleteDocument(ctx, organizationID, documentID, event)
+	// The vectors go before the rows, as they do when a corpus is deleted. If
+	// the rows went first and this failed, the vectors would be left with
+	// nothing pointing at them: unfindable, and still costing money to store.
+	chunkIDs, err := service.store.ChunkIDs(ctx, organizationID, documentID)
 	if err != nil {
 		return err
 	}
-	return service.deleteVectors(ctx, corpus, chunkIDs)
+	if err := service.deleteVectors(ctx, corpus, chunkIDs); err != nil {
+		return err
+	}
+	_, err = service.store.DeleteDocument(ctx, organizationID, documentID, event)
+	return err
 }
 
 // Search returns the passages a question matches, without writing an answer.

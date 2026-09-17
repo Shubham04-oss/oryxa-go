@@ -158,7 +158,11 @@ type Query struct {
 	// Diversity is the MMR trade-off: 1 keeps pure relevance, 0 maximises
 	// spread. It matters when a corpus holds near-duplicates, where the top
 	// results would otherwise be the same passage from five documents.
-	Diversity float64 `json:"diversity,omitempty"`
+	//
+	// It is a pointer because 0 is a meaningful setting and would otherwise be
+	// indistinguishable from not asking, which Normalize turns into 1 — the
+	// opposite of what was asked for. Normalize always leaves it set.
+	Diversity *float64 `json:"diversity,omitempty"`
 	// Rerank sends the fused candidates through a cross-encoder before the
 	// cut to TopK. It is the largest quality gain available per query, and
 	// also the largest latency cost, so it is opt-in.
@@ -194,10 +198,11 @@ func (query Query) Normalize() (Query, error) {
 	if query.OverFetch < 1 || query.OverFetch > 20 {
 		return Query{}, fmt.Errorf("over_fetch must be between 1 and 20: %w", ErrInvalid)
 	}
-	if query.Diversity == 0 {
-		query.Diversity = 1
+	if query.Diversity == nil {
+		relevance := 1.0
+		query.Diversity = &relevance
 	}
-	if query.Diversity < 0 || query.Diversity > 1 {
+	if *query.Diversity < 0 || *query.Diversity > 1 {
 		return Query{}, fmt.Errorf("diversity must be between 0 and 1: %w", ErrInvalid)
 	}
 	if query.MinScore < 0 || query.MinScore > 1 {

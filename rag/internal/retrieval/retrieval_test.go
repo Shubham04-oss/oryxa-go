@@ -418,7 +418,7 @@ func TestDiversifySuppressesNearDuplicates(t *testing.T) {
 
 	// Asking for spread brings in the passage that says something else.
 	diverse, err := retriever.Search(context.Background(), testCorpus(),
-		domain.Query{Text: "q", Mode: domain.ModeDense, TopK: 2, Diversity: 0.3})
+		domain.Query{Text: "q", Mode: domain.ModeDense, TopK: 2, Diversity: pointerTo(0.3)})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -576,5 +576,107 @@ func TestDenseFailureIsReported(t *testing.T) {
 	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
 	if _, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q"}); err == nil {
 		t.Fatal("a failing vector store was swallowed")
+	}
+}
+
+func pointerTo[T any](value T) *T { return &value }
+
+// TestRerankPoolLargerThanTheCeiling guards a silent failure: a big candidate
+// pool used to exceed what the cross-encoder accepts, which errored, was
+// swallowed as a warning, and left rerank:true doing nothing at all.
+func TestRerankPoolLargerThanTheCeiling(t *testing.T) {
+	t.Parallel()
+	const candidates = MaxRerankPassages + 40
+	hits := make([]vectorstore.Hit, 0, candidates)
+	for index := range candidates {
+		hits = append(hits, vectorstore.Hit{ChunkID: fmt.Sprintf("chk_%03d", index), Score: 1 - float64(index)/1000})
+	}
+	var asked int
+	reranker := &fakeRerankerCounting{onRerank: func(passages []string) ([]Scored, error) {
+		asked = len(passages)
+		if len(passages) > MaxRerankPassages {
+			return nil, fmt.Errorf("too many passages: %d", len(passages))
+		}
+		// Reverse the order, so the effect is unmistakable.
+		scored := make([]Scored, 0, len(passages))
+		for index := range passages {
+			scored = append(scored, Scored{Index: index, Score: float64(index) / 1000})
+		}
+		return scored, nil
+	}}
+	retriever := New(&fakeChunks{}, fakeVectors{&fakeVectorStore{hits: hits}},
+		fakeEmbedders{&fakeEmbedder{}}, reranker, nil)
+
+	results, err := retriever.Search(context.Background(), testCorpus(),
+		domain.Query{Text: "q", Mode: domain.ModeDense, TopK: 100, OverFetch: 2, Rerank: true})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if !results.Reranked {
+		t.Fatalf("a %d-candidate pool defeated reranking entirely", candidates)
+	}
+	if asked > MaxRerankPassages {
+		t.Fatalf("sent %d passages to the reranker, over the ceiling of %d", asked, MaxRerankPassages)
+	}
+	// The reranker put the last of its batch first.
+	if results.Matches[0].Chunk.ID != fmt.Sprintf("chk_%03d", MaxRerankPassages-1) {
+		t.Fatalf("top match is %s; the reranker's order was not applied", results.Matches[0].Chunk.ID)
+	}
+	// The tail it never saw is still there, below what it judged.
+	if len(results.Matches) != 100 {
+		t.Fatalf("got %d matches, want the full top_k", len(results.Matches))
+	}
+}
+
+type fakeRerankerCounting struct {
+	onRerank func([]string) ([]Scored, error)
+}
+
+func (fake *fakeRerankerCounting) Rerank(_ context.Context, _ string, passages []string, _ int) ([]Scored, error) {
+	return fake.onRerank(passages)
+}
+
+// TestFusionIgnoresARetrieverThatFoundNothing guards a threshold bug: a
+// lexical index matching nothing used to halve every hybrid score, so
+// min_score rejected results the same query in dense mode passed.
+func TestFusionIgnoresARetrieverThatFoundNothing(t *testing.T) {
+	t.Parallel()
+	chunks := &fakeChunks{} // the lexical side matches nothing
+	vectors := &fakeVectorStore{hits: []vectorstore.Hit{{ChunkID: "chk_a", Score: 0.9}}}
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+
+	results, err := retriever.Search(context.Background(), testCorpus(),
+		domain.Query{Text: "q", Mode: domain.ModeHybrid, MinScore: 0.9})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results.Matches) != 1 {
+		t.Fatalf("got %d matches; a silent lexical index must not halve the score and trip min_score",
+			len(results.Matches))
+	}
+	if got := results.Matches[0].Score; got < 0.999 {
+		t.Fatalf("score = %v, want 1: only the retriever that answered should set the scale", got)
+	}
+}
+
+func TestDiversityZeroIsHonoured(t *testing.T) {
+	t.Parallel()
+	// 0 means maximum spread. If it were indistinguishable from unset it
+	// would become 1, which is the exact opposite.
+	duplicate := "Credentials must be rotated every ninety days without exception."
+	chunks := &fakeChunks{texts: map[string]string{
+		"chk_a": duplicate, "chk_b": duplicate, "chk_c": "Holidays accrue monthly and carry over.",
+	}}
+	vectors := &fakeVectorStore{hits: []vectorstore.Hit{
+		{ChunkID: "chk_a", Score: 0.95}, {ChunkID: "chk_b", Score: 0.94}, {ChunkID: "chk_c", Score: 0.1},
+	}}
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	results, err := retriever.Search(context.Background(), testCorpus(),
+		domain.Query{Text: "q", Mode: domain.ModeDense, TopK: 2, Diversity: pointerTo(0.0)})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if got := chunkIDs(results.Matches); got[1] != "chk_c" {
+		t.Fatalf("matches = %v; maximum spread should have taken the passage that is not a duplicate", got)
 	}
 }

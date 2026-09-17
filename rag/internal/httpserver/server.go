@@ -327,13 +327,13 @@ func (server *Server) deleteDocument(writer http.ResponseWriter, request *http.R
 }
 
 type queryRequest struct {
-	Query     string  `json:"query"`
-	TopK      int     `json:"top_k"`
-	Mode      string  `json:"mode"`
-	MinScore  float64 `json:"min_score"`
-	Diversity float64 `json:"diversity"`
-	Rerank    bool    `json:"rerank"`
-	OverFetch int     `json:"over_fetch"`
+	Query     string   `json:"query"`
+	TopK      int      `json:"top_k"`
+	Mode      string   `json:"mode"`
+	MinScore  float64  `json:"min_score"`
+	Diversity *float64 `json:"diversity"`
+	Rerank    bool     `json:"rerank"`
+	OverFetch int      `json:"over_fetch"`
 	Filter    *struct {
 		DocumentIDs []string `json:"document_ids"`
 		Conditions  []struct {
@@ -434,8 +434,10 @@ func (server *Server) credentials(writer http.ResponseWriter, request *http.Requ
 
 // handleError maps a domain error onto a status.
 //
-// Forbidden becomes not found for anything scoped to a corpus, because the
-// alternative tells a caller that something exists which they may not see.
+// It maps only. Turning a forbidden into a not found, so an error never
+// reveals that something exists which the caller may not see, happens in the
+// service where the access decision is made — this layer never learns enough
+// to make that call itself.
 func (server *Server) handleError(writer http.ResponseWriter, request *http.Request, err error) {
 	switch {
 	case errors.Is(err, domain.ErrUnauthorized):

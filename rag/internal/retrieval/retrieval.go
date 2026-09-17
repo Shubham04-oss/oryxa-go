@@ -28,6 +28,11 @@ const (
 	lexicalRetriever = "lexical"
 )
 
+// MaxRerankPassages is how many candidates go to the cross-encoder in one
+// call. A larger candidate pool is reranked down to this and the rest keeps
+// its fused order.
+const MaxRerankPassages = 100
+
 // Chunks is what retrieval needs from PostgreSQL: the lexical half of the
 // search, and the text and provenance of whatever either half found.
 type Chunks interface {
@@ -140,7 +145,7 @@ func (retriever *Retriever) Search(ctx context.Context, corpus domain.Corpus, qu
 
 	// Diversification runs on more candidates than are wanted, so it has
 	// something to choose between, and the cut to TopK happens after.
-	matches = diversify(matches, query.Diversity, query.TopK)
+	matches = diversify(matches, *query.Diversity, query.TopK)
 	if len(matches) > query.TopK {
 		matches = matches[:query.TopK]
 	}
@@ -238,6 +243,16 @@ func (retriever *Retriever) hydrate(ctx context.Context, corpus domain.Corpus, c
 // rerank reorders candidates with a cross-encoder and replaces the fused score
 // with its relevance, which is a better number and already on a fixed scale.
 func (retriever *Retriever) rerank(ctx context.Context, query domain.Query, matches []domain.Match) ([]domain.Match, error) {
+	// A cross-encoder reads every passage against the question, so there is a
+	// ceiling on how many go in one call. Rerank the best candidates and leave
+	// the tail in fused order below them: a pool larger than the ceiling would
+	// otherwise fail the whole rerank and silently return the fused order for
+	// everything, which is what a large top_k would have quietly done.
+	tail := []domain.Match(nil)
+	if len(matches) > MaxRerankPassages {
+		tail = matches[MaxRerankPassages:]
+		matches = matches[:MaxRerankPassages]
+	}
 	passages := make([]string, 0, len(matches))
 	for _, match := range matches {
 		// The heading trail goes to the reranker for the same reason it is
@@ -262,5 +277,7 @@ func (retriever *Retriever) rerank(ctx context.Context, query domain.Query, matc
 	sort.SliceStable(reordered, func(first, second int) bool {
 		return reordered[first].Score > reordered[second].Score
 	})
-	return reordered, nil
+	// The tail was not judged by the cross-encoder, so it keeps its fused
+	// score and sits below everything that was.
+	return append(reordered, tail...), nil
 }

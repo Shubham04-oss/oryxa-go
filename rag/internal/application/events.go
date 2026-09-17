@@ -64,40 +64,45 @@ func (service *Service) TeamDeleted(ctx context.Context, event teamseventsv1.Tea
 // Without this, a file a member deleted would go on answering questions out of
 // the index, quoting text that no longer exists anywhere they can check.
 func (service *Service) ObjectDeleted(ctx context.Context, event fileseventsv1.ObjectDeleted) error {
-	corpora, err := service.store.CorporaForWipe(ctx, event.OrganizationID, "", "")
+	// Found by source rather than by reading each corpus's newest documents:
+	// that would miss the ones in a corpus holding more than a page of them,
+	// and the deleted file would go on answering questions out of the index.
+	documents, err := service.store.DocumentsBySource(ctx, event.OrganizationID, domain.SourceFile, event.FileID)
 	if err != nil {
 		return err
 	}
-	for _, corpus := range corpora {
-		documents, err := service.store.Documents(ctx, event.OrganizationID, corpus.ID, "", MaxDocumentsPerPage)
+	for _, document := range documents {
+		corpus, err := service.store.Corpus(ctx, event.OrganizationID, document.CorpusID)
+		if err != nil {
+			if isMissing(err) {
+				// The corpus went first and took the document with it.
+				continue
+			}
+			return err
+		}
+		removal, err := service.event(rageventsv1.DocumentRemovedDetailType, rageventsv1.DocumentRemoved{
+			DocumentID: document.ID, CorpusID: corpus.ID, OrganizationID: event.OrganizationID,
+			SourceKind: string(document.Source.Kind), SourceRef: document.Source.Ref,
+			Reason: rageventsv1.ReasonSourceDeleted, RemovedAt: event.DeletedAt,
+		})
 		if err != nil {
 			return err
 		}
-		for _, document := range documents {
-			if document.Source.Kind != domain.SourceFile || document.Source.Ref != event.FileID {
+		chunkIDs, err := service.store.ChunkIDs(ctx, event.OrganizationID, document.ID)
+		if err != nil {
+			return err
+		}
+		if err := service.deleteVectors(ctx, corpus, chunkIDs); err != nil {
+			return err
+		}
+		if _, err := service.store.DeleteDocument(ctx, event.OrganizationID, document.ID, removal); err != nil {
+			if isMissing(err) {
 				continue
 			}
-			removal, err := service.event(rageventsv1.DocumentRemovedDetailType, rageventsv1.DocumentRemoved{
-				DocumentID: document.ID, CorpusID: corpus.ID, OrganizationID: event.OrganizationID,
-				SourceKind: string(document.Source.Kind), SourceRef: document.Source.Ref,
-				Reason: rageventsv1.ReasonSourceDeleted, RemovedAt: event.DeletedAt,
-			})
-			if err != nil {
-				return err
-			}
-			chunkIDs, err := service.store.DeleteDocument(ctx, event.OrganizationID, document.ID, removal)
-			if err != nil {
-				if isMissing(err) {
-					continue
-				}
-				return err
-			}
-			if err := service.deleteVectors(ctx, corpus, chunkIDs); err != nil {
-				return err
-			}
-			service.logger.InfoContext(ctx, "removed a document whose file was deleted",
-				"document_id", document.ID, "corpus_id", corpus.ID, "file_id", event.FileID)
+			return err
 		}
+		service.logger.InfoContext(ctx, "removed a document whose file was deleted",
+			"document_id", document.ID, "corpus_id", corpus.ID, "file_id", event.FileID)
 	}
 	return nil
 }

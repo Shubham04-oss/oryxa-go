@@ -279,7 +279,7 @@ func TestQueryNormalize(t *testing.T) {
 	if got.Mode != ModeHybrid || got.TopK != DefaultTopK || got.OverFetch != DefaultOverFetch {
 		t.Fatalf("defaults not applied: %+v", got)
 	}
-	if got.Diversity != 1 {
+	if got.Diversity == nil || *got.Diversity != 1 {
 		t.Fatalf("diversity = %v, want 1 (pure relevance)", got.Diversity)
 	}
 	if got.Candidates() != DefaultTopK*DefaultOverFetch {
@@ -292,7 +292,7 @@ func TestQueryNormalize(t *testing.T) {
 		{Text: "x", TopK: MaxTopK + 1},
 		{Text: "x", TopK: -1},
 		{Text: "x", Mode: SearchMode("magic")},
-		{Text: "x", Diversity: 1.5},
+		{Text: "x", Diversity: pointerTo(1.5)},
 		{Text: "x", MinScore: 2},
 		{Text: "x", OverFetch: 99},
 		{Text: strings.Repeat("x", MaxQueryCharacters+1)},
@@ -508,5 +508,31 @@ func TestNewIDCarriesItsPrefixAndIsUnique(t *testing.T) {
 			t.Fatalf("NewID repeated %q", id)
 		}
 		seen[id] = true
+	}
+}
+
+func pointerTo[T any](value T) *T { return &value }
+
+// TestDiversityZeroIsExpressible is the difference between a knob and a
+// footgun: 0 is documented as maximum spread, and if it were indistinguishable
+// from not asking it would silently become 1, the exact opposite.
+func TestDiversityZeroIsExpressible(t *testing.T) {
+	t.Parallel()
+	spread, err := Query{Text: "q", Diversity: pointerTo(0.0)}.Normalize()
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if spread.Diversity == nil || *spread.Diversity != 0 {
+		t.Fatalf("diversity = %v, want the 0 that was asked for", spread.Diversity)
+	}
+	unset, err := Query{Text: "q"}.Normalize()
+	if err != nil {
+		t.Fatalf("Normalize: %v", err)
+	}
+	if *unset.Diversity != 1 {
+		t.Fatalf("an unset diversity = %v, want 1", *unset.Diversity)
+	}
+	if _, err := (Query{Text: "q", Diversity: pointerTo(-0.1)}).Normalize(); err == nil {
+		t.Fatal("a negative diversity was accepted")
 	}
 }

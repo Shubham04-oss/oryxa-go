@@ -51,7 +51,14 @@ func fuse(lists []ranked) []fused {
 	}
 	byChunk := map[string]*fused{}
 	order := make([]string, 0, 64)
+	// Only the retrievers that returned something take part in the scale. A
+	// lexical index that matched nothing must not halve every score, or
+	// min_score would reject results that the same query in dense mode passes.
+	answered := 0
 	for _, list := range lists {
+		if len(list.hits) > 0 {
+			answered++
+		}
 		for position, hit := range list.hits {
 			entry, seen := byChunk[hit.ChunkID]
 			if !seen {
@@ -70,7 +77,7 @@ func fuse(lists []ranked) []fused {
 			}
 		}
 	}
-	best := float64(len(lists)) / (RRFConstant + 1)
+	best := float64(max(answered, 1)) / (RRFConstant + 1)
 	results := make([]fused, 0, len(order))
 	for _, chunkID := range order {
 		entry := byChunk[chunkID]
