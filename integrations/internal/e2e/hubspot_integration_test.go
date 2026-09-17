@@ -20,16 +20,15 @@ import (
 )
 
 // hubspotSend posts a batch to a HubSpot app's webhook URL, signed the v3
-// way: HMAC-SHA256, base64-encoded, over the method, the request URI, the raw
-// body and the timestamp (epoch milliseconds), as HubSpot signs it.
+// way: HMAC-SHA256, base64-encoded, over the method, the whole URL called, the
+// raw body and the timestamp (epoch milliseconds), as HubSpot signs it.
 func hubspotSend(t *testing.T, webhookURL, clientSecret string, at time.Time, body string) (int, http.Header, []byte) {
 	t.Helper()
-	parsed, err := url.Parse(webhookURL)
-	if err != nil {
+	if _, err := url.Parse(webhookURL); err != nil {
 		t.Fatal(err)
 	}
 	timestamp := strconv.FormatInt(at.UnixMilli(), 10)
-	message := http.MethodPost + parsed.RequestURI() + body + timestamp
+	message := http.MethodPost + webhookURL + body + timestamp
 	mac := hmac.New(sha256.New, []byte(clientSecret))
 	mac.Write([]byte(message))
 	signature := base64.StdEncoding.EncodeToString(mac.Sum(nil))

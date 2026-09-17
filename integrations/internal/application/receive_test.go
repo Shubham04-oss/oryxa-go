@@ -94,6 +94,25 @@ func TestReceiveWebhookPublishesATriggerOnce(t *testing.T) {
 	}
 }
 
+// A provider that signs the whole URL it called, as HubSpot does, must be
+// handed the public webhook URL: the request arrives with only its path, and
+// a proxy in front may have rewritten the host it came to.
+func TestReceiveHandsTheProviderThePublicURLItCalled(t *testing.T) {
+	h := newHarness(t)
+	subscription := h.subscribe(t)
+	uri := "/v1/webhooks/hooks/" + subscription.Route + "?attempt=2"
+
+	if _, err := h.service.Receive(context.Background(), "hooks", subscription.Route, providers.Delivered{Method: http.MethodPost, URI: uri}); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.hooks.received) != 1 {
+		t.Fatalf("provider Receive calls = %d, want 1", len(h.hooks.received))
+	}
+	if got, want := h.hooks.received[0].delivery.URL, testPublicURL+uri; got != want {
+		t.Fatalf("Delivered.URL = %q, want %q", got, want)
+	}
+}
+
 func TestReceiveRefusesWhatARouteDoesNotName(t *testing.T) {
 	h := newHarness(t)
 	subscription := h.subscribe(t)

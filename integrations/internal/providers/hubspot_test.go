@@ -14,23 +14,21 @@ import (
 )
 
 // hubspotSigned builds a delivery signed the way HubSpot signs one: the v3
-// signature over method + URI + body + timestamp, keyed with the app's client
-// secret and base64-encoded. The URI the signature covers is the absolute one
-// HubSpot called, so a path is completed with the host here exactly as the
-// provider completes it.
+// signature over method + URL + body + timestamp, keyed with the app's client
+// secret and base64-encoded. The URL the signature covers is the absolute one
+// HubSpot called, which integrations hands the provider as Delivered.URL.
 func hubspotSigned(secret []byte, method, uri string, body []byte, timestamp string) Delivered {
-	signed := uri
+	address := uri
 	if uri != "" && uri[0] == '/' {
-		signed = "https://conn.example.com" + hubspotDecodedQuery(uri)
+		address = "https://conn.example.com" + uri
 	}
 	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(method + signed + string(body) + timestamp))
+	mac.Write([]byte(method + hubspotDecodedQuery(address) + string(body) + timestamp))
 	header := http.Header{}
 	header.Set("X-HubSpot-Signature-Version", "v3")
 	header.Set("X-HubSpot-Signature-V3", base64.StdEncoding.EncodeToString(mac.Sum(nil)))
 	header.Set("X-HubSpot-Request-Timestamp", timestamp)
-	header.Set("Host", "conn.example.com")
-	return Delivered{Header: header, Body: body, Method: method, URI: uri}
+	return Delivered{Header: header, Body: body, Method: method, URI: uri, URL: address}
 }
 
 const hubspotTestRoute = "/v1/webhooks/hubspot/route-secret-0123456789abcdef"
@@ -196,11 +194,21 @@ func TestHubspotReceive(t *testing.T) {
 	t.Run("a delivery signed for another URI is refused", func(t *testing.T) {
 		body := []byte(`[{"portalId":33,"objectId":1,"eventId":1,"eventType":"contact.creation"}]`)
 		delivery := hubspotSigned(secret, http.MethodPost, "/v1/webhooks/hubspot/someone-elses-route", body, hubspotTestStamp)
-		delivery.URI = hubspotTestRoute
+		delivery.URI, delivery.URL = hubspotTestRoute, "https://conn.example.com"+hubspotTestRoute
 		if _, err := hubspotReceive(delivery, secret, fixedNow); !errors.Is(err, ErrUnverified) {
 			t.Fatalf("hubspotReceive() error = %v, want ErrUnverified", err)
 		}
 	})
+}
+
+func TestHubspotRefusesADeliveryWithoutItsURL(t *testing.T) {
+	secret := []byte("hubspot-client-secret")
+	body := []byte(`[{"portalId":33,"objectId":1,"eventId":1,"eventType":"contact.creation"}]`)
+	delivery := hubspotSigned(secret, http.MethodPost, hubspotTestRoute, body, hubspotTestStamp)
+	delivery.URL = ""
+	if _, err := hubspotReceive(delivery, secret, fixedNow); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("hubspotReceive() without a URL error = %v, want ErrUnverified", err)
+	}
 }
 
 // TestHubspotSignedURIDecodesOnlyTheQuery covers the detail implementers get
@@ -239,8 +247,7 @@ func TestHubspotSignedURIDecodesOnlyTheQuery(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			delivery := Delivered{URI: testCase.uri, Header: http.Header{}}
-			delivery.Header.Set("Host", "conn.example.com")
+			delivery := Delivered{URI: testCase.uri, URL: "https://conn.example.com" + testCase.uri}
 			if got := hubspotSignedURI(delivery); got != testCase.want {
 				t.Fatalf("hubspotSignedURI() = %q, want %q", got, testCase.want)
 			}
