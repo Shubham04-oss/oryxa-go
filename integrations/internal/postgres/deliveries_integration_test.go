@@ -24,10 +24,6 @@ func TestRecordDelivery(t *testing.T) {
 	if err := store.CreateSubscription(ctx, sub2, &event2); err != nil {
 		t.Fatalf("CreateSubscription() error = %v", err)
 	}
-	if _, err := store.ClaimOutbox(ctx, 10); err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-
 	deliveryEvent := testEvent("integrations.delivery.received.v1", now)
 	recorded, err := store.RecordDelivery(ctx, sub1.ID, "delivery-key-1", now, deliveryEvent)
 	if err != nil {
@@ -36,13 +32,7 @@ func TestRecordDelivery(t *testing.T) {
 	if !recorded {
 		t.Fatalf("RecordDelivery() first = false, want true")
 	}
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
-	if len(claimed) != 1 || claimed[0].ID != deliveryEvent.ID {
-		t.Fatalf("ClaimOutbox() after RecordDelivery() = %+v, want exactly [%s]", claimed, deliveryEvent.ID)
-	}
+	assertOutboxHas(t, ctx, store, deliveryEvent.ID, true)
 
 	repeatEvent := testEvent("integrations.delivery.received.v1", now)
 	recorded, err = store.RecordDelivery(ctx, sub1.ID, "delivery-key-1", now.Add(time.Minute), repeatEvent)
@@ -52,9 +42,7 @@ func TestRecordDelivery(t *testing.T) {
 	if recorded {
 		t.Fatalf("RecordDelivery() repeat = true, want false")
 	}
-	if claimed, err := store.ClaimOutbox(ctx, 10); err != nil || len(claimed) != 0 {
-		t.Fatalf("ClaimOutbox() after a repeat delivery = %+v, %v, want none", claimed, err)
-	}
+	assertOutboxHas(t, ctx, store, repeatEvent.ID, false)
 
 	otherSubEvent := testEvent("integrations.delivery.received.v1", now)
 	recorded, err = store.RecordDelivery(ctx, sub2.ID, "delivery-key-1", now, otherSubEvent)
@@ -64,8 +52,19 @@ func TestRecordDelivery(t *testing.T) {
 	if !recorded {
 		t.Fatalf("RecordDelivery() same key for another subscription = false, want true (new)")
 	}
-	if claimed, err := store.ClaimOutbox(ctx, 10); err != nil || len(claimed) != 1 || claimed[0].ID != otherSubEvent.ID {
-		t.Fatalf("ClaimOutbox() after another subscription's delivery = %+v, %v", claimed, err)
+	assertOutboxHas(t, ctx, store, otherSubEvent.ID, true)
+}
+
+// assertOutboxHas checks whether an event with the given id is (or is not) in
+// integrations_outbox.
+func assertOutboxHas(t *testing.T, ctx context.Context, store *Store, eventID string, want bool) {
+	t.Helper()
+	var found bool
+	if err := store.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM integrations_outbox WHERE id = $1)`, eventID).Scan(&found); err != nil {
+		t.Fatalf("query outbox for %s: %v", eventID, err)
+	}
+	if found != want {
+		t.Fatalf("outbox has %s = %v, want %v", eventID, found, want)
 	}
 }
 
@@ -80,9 +79,6 @@ func TestDeleteDeliveriesBefore(t *testing.T) {
 	if err := store.CreateSubscription(ctx, sub, &event); err != nil {
 		t.Fatalf("CreateSubscription() error = %v", err)
 	}
-	if _, err := store.ClaimOutbox(ctx, 10); err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
-	}
 
 	old := now.Add(-48 * time.Hour)
 	recent := now.Add(-time.Hour)
@@ -93,9 +89,6 @@ func TestDeleteDeliveriesBefore(t *testing.T) {
 	}
 	if _, err := store.RecordDelivery(ctx, sub.ID, "recent-key", recent, testEvent("integrations.delivery.received.v1", recent)); err != nil {
 		t.Fatalf("RecordDelivery(recent) error = %v", err)
-	}
-	if _, err := store.ClaimOutbox(ctx, 10); err != nil {
-		t.Fatalf("ClaimOutbox() error = %v", err)
 	}
 
 	removed, err := store.DeleteDeliveriesBefore(ctx, cutoff)
