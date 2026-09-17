@@ -90,7 +90,7 @@ Billing verifies each delivery's Standard Webhooks signature and rejects anythin
 
 ## Provision
 
-Billing uses `/internal/postgreskit`, the same PostgreSQL boundary as auth, connections, files and teams: one instrumented `pgxpool`, with sqlx on that pool. Tables are created by the embedded migration when `ORYXA_AUTO_MIGRATE` is true, the default. Logs, HTTP access, AWS SDK and pgx spans come from `/internal/observability`; OTLP export is opt-in through `OTEL_EXPORTER_OTLP_ENDPOINT`. The queue auth's organization events arrive on is provisioned like the other services' AWS resources:
+Billing uses `/internal/postgreskit`, the same PostgreSQL boundary as auth, files and teams: one instrumented `pgxpool`, with sqlx on that pool. Tables are created by the embedded migration when `ORYXA_AUTO_MIGRATE` is true, the default. Logs, HTTP access, AWS SDK and pgx spans come from `/internal/observability`; OTLP export is opt-in through `OTEL_EXPORTER_OTLP_ENDPOINT`. The queue auth's organization events arrive on is provisioned like the other services' AWS resources:
 
 ```sh
 (set -a && . ./.env && go run ./billing/infra/events/cmd/provision)

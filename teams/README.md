@@ -1,6 +1,6 @@
 # Teams service
 
-Teams owns teams inside an organization and who is on them. Auth remains the identity and organization/membership boundary; billing remains subscriptions and entitlements; email remains delivery; connections remains third-party accounts and their credentials. Teams never verifies a token itself: it forwards the caller's bearer token or session cookie to auth and acts on the membership auth returns.
+Teams owns teams inside an organization and who is on them. Auth remains the identity and organization/membership boundary; billing remains subscriptions and entitlements; email remains delivery; Teams never verifies a token itself: it forwards the caller's bearer token or session cookie to auth and acts on the membership auth returns.
 
 Services talk through EventBridge. Teams publishes source `oryxa.teams` on `EVENT_BUS_NAME` in the same envelope every Oryxa publisher uses, and consumes what it needs from its own `teams-events` queue. Other services never read teams' data. Consumers must deduplicate by `event_id`, because outbox delivery is at least once.
 
