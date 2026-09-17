@@ -37,6 +37,9 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
+	// Aliased: this file's own outbox variable is agents primary's, an
+	// *events.Outbox, and would otherwise shadow the package.
+	sharedoutbox "github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -82,7 +85,14 @@ func main() {
 		eventClient := eventbridge.NewFromConfig(eventConfig, func(options *eventbridge.Options) {
 			options.BaseEndpoint = aws.String(settings.EventBridgeEndpoint)
 		})
-		dispatcher := events.NewDispatcher(outbox, events.NewPublisher(eventClient, settings.EventBusName), slog.Default())
+		publisher := events.NewPublisher(eventClient, settings.EventBusName)
+		table, err := sharedoutbox.NewTable(sessionStore.Database().Pool, "agents_primary.agents_outbox")
+		if err != nil {
+			log.Fatalf("events outbox table: %v", err)
+		}
+		dispatcher := sharedoutbox.NewDispatcher(table, sharedoutbox.PublisherFunc(func(ctx context.Context, event sharedoutbox.Event) error {
+			return publisher.PublishEvent(ctx, events.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+		}), slog.Default())
 		go dispatcher.Run(ctx)
 		log.Printf("events dispatcher publishing to bus %q at %s", settings.EventBusName, settings.EventBridgeEndpoint)
 	} else {

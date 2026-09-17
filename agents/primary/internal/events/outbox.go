@@ -42,6 +42,12 @@ func (outbox *Outbox) Ensure(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS agents_outbox_pending_idx
 			ON ` + schema + `.agents_outbox (available_at, occurred_at, id)
 			WHERE published_at IS NULL`,
+		// A claim is now owned, by internal/outbox: it stamps the rows it hands
+		// out with a token, and marks published or failed only touch a row that
+		// still carries the same token. Without it a dispatcher whose claim
+		// expired mid-batch could mark a row another replica had since
+		// re-claimed, clearing that claim's lock while it was still publishing.
+		`ALTER TABLE ` + schema + `.agents_outbox ADD COLUMN IF NOT EXISTS claim_token text`,
 	}
 	for _, statement := range statements {
 		if _, err := outbox.database.SQLX.ExecContext(ctx, statement); err != nil {
@@ -87,8 +93,13 @@ type outboxRow struct {
 	Attempts   int             `db:"attempts"`
 }
 
-// ClaimOutbox claims up to limit available events for the dispatcher, locking
-// them for 30 seconds so replicas do not publish the same row at once.
+// ClaimOutbox claims up to limit available events, locking them for 30
+// seconds so replicas do not publish the same row at once. The dispatcher
+// built in cmd/devui/main.go no longer calls this: it claims and marks
+// through internal/outbox instead, with a claim token this does not carry.
+// This stays because adksession's own integration test reads a session's
+// event back through it; deleting it needs that test changed too, outside
+// this change's scope.
 func (outbox *Outbox) ClaimOutbox(ctx context.Context, limit int) ([]OutboxEvent, error) {
 	var rows []outboxRow
 	err := outbox.database.SQLX.SelectContext(ctx, &rows, `
@@ -123,27 +134,4 @@ func (outbox *Outbox) ClaimOutbox(ctx context.Context, limit int) ([]OutboxEvent
 		})
 	}
 	return events, nil
-}
-
-func (outbox *Outbox) MarkOutboxPublished(ctx context.Context, eventID string) error {
-	if _, err := outbox.database.SQLX.ExecContext(ctx, `
-		UPDATE `+schema+`.agents_outbox
-		SET published_at = now(), locked_until = NULL, last_error = NULL
-		WHERE id = $1`, eventID); err != nil {
-		return fmt.Errorf("mark outbox published: %w", err)
-	}
-	return nil
-}
-
-func (outbox *Outbox) MarkOutboxFailed(ctx context.Context, eventID string, retryAfter time.Duration, message string) error {
-	if _, err := outbox.database.SQLX.ExecContext(ctx, `
-		UPDATE `+schema+`.agents_outbox
-		SET attempts = attempts + 1,
-		    available_at = now() + ($2 * interval '1 millisecond'),
-		    locked_until = NULL,
-		    last_error = left($3, 1000)
-		WHERE id = $1`, eventID, retryAfter.Milliseconds(), message); err != nil {
-		return fmt.Errorf("mark outbox failed: %w", err)
-	}
-	return nil
 }

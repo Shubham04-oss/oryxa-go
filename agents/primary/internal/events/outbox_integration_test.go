@@ -52,56 +52,22 @@ func TestOutboxLifecycle(t *testing.T) {
 		t.Fatal("RecordEvents() error = nil for an event without an id")
 	}
 
-	claimed, err := outbox.ClaimOutbox(ctx, 10)
-	if err != nil {
+	// Claiming, marking and retrying are internal/outbox's own concern now:
+	// see its table_integration_test.go. This only has to prove both events
+	// were actually written, and the bad one was not.
+	var pending int
+	if err := database.SQLX.QueryRowContext(ctx, `SELECT count(*) FROM `+schema+`.agents_outbox WHERE id = ANY($1) AND published_at IS NULL`,
+		[]string{publishable.ID, retryable.ID}).Scan(&pending); err != nil {
 		t.Fatal(err)
 	}
-	claimable := map[string]bool{}
-	for _, event := range claimed {
-		claimable[event.ID] = true
+	if pending != 2 {
+		t.Fatalf("pending outbox events = %d, want 2", pending)
 	}
-	if !claimable[publishable.ID] || !claimable[retryable.ID] {
-		t.Fatalf("claimed %v, want both events", claimable)
-	}
-
-	if err := outbox.MarkOutboxPublished(ctx, publishable.ID); err != nil {
+	var total int
+	if err := database.SQLX.QueryRowContext(ctx, `SELECT count(*) FROM `+schema+`.agents_outbox WHERE detail_type = $1`, "agents.bad.v1").Scan(&total); err != nil {
 		t.Fatal(err)
 	}
-	if err := outbox.MarkOutboxFailed(ctx, retryable.ID, time.Second, "bus is down"); err != nil {
-		t.Fatal(err)
-	}
-
-	// The failed event is available again after its backoff, so claim until
-	// only the published one is missing from the pending set.
-	deadline := time.Now().Add(3 * time.Second)
-	foundAgain := false
-	for time.Now().Before(deadline) && !foundAgain {
-		again, err := outbox.ClaimOutbox(ctx, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, event := range again {
-			if event.ID == publishable.ID {
-				t.Fatal("a published event was claimed again")
-			}
-			if event.ID == retryable.ID {
-				foundAgain = event.Attempts == 1
-			}
-		}
-		if !foundAgain {
-			time.Sleep(200 * time.Millisecond)
-		}
-	}
-	if !foundAgain {
-		t.Fatal("the retried event was never claimed again")
-	}
-
-	var attempts int
-	var lastError string
-	if err := database.SQLX.QueryRowContext(ctx, `SELECT attempts, last_error FROM `+schema+`.agents_outbox WHERE id = $1`, retryable.ID).Scan(&attempts, &lastError); err != nil {
-		t.Fatal(err)
-	}
-	if attempts != 1 || lastError != "bus is down" {
-		t.Fatalf("attempts = %d, last_error = %q", attempts, lastError)
+	if total != 0 {
+		t.Fatalf("outbox events for the refused event = %d, want 0", total)
 	}
 }
