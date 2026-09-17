@@ -22,9 +22,10 @@ const notionMaxPage = 100
 
 // Notion reads the pages an integration can see: either every page search
 // turns up, or the rows of one database. A database's schema and rows moved
-// into a data source underneath it in the API version this client speaks
-// (2025-09-03), so indexing "a database" means resolving it to that data
-// source first and querying the data source, never the database, for rows.
+// into one or more data sources underneath it in the API version this client
+// speaks (2025-09-03), so indexing "a database" means resolving it to those
+// data sources first and querying each of them, never the database, for
+// rows.
 type Notion struct {
 	client *Client
 	server string
@@ -54,6 +55,12 @@ func (source *Notion) Target(target map[string]string) error {
 // keeps as the body instead is a page's title and its properties, which
 // still gives a retrieval pipeline something to work with until that gap is
 // closed.
+//
+// A database can hold several data sources since the 2025-09-03 split, and
+// every one of them holds rows worth indexing. Fetch walks them in turn: the
+// cursor it hands back, once one data source is drained, names the next one
+// to query rather than ending the walk, so the source is not drained until
+// every data source is.
 func (source *Notion) Fetch(ctx context.Context, request Request) (Page, error) {
 	client, err := notion.NewClientWithResponses(source.server,
 		notion.WithHTTPClient(source.client.For(request.Credential)),
@@ -63,26 +70,44 @@ func (source *Notion) Fetch(ctx context.Context, request Request) (Page, error) 
 	}
 
 	size := Limit(request.Limit, notionMaxPage)
-	var cursor *string
-	if value := request.Cursor.Value; value != "" {
-		cursor = &value
-	}
-
 	database := strings.TrimSpace(request.Source.Target["database"])
+
 	var list notionPageList
+	var nextCursor string
 	if database == "" {
+		var cursor *string
+		if value := request.Cursor.Value; value != "" {
+			cursor = &value
+		}
 		list, err = notionSearch(ctx, client, int32(size), cursor)
 		if err != nil {
 			return Page{}, err
 		}
+		if list.HasMore && list.NextCursor != nil {
+			nextCursor = *list.NextCursor
+		}
 	} else {
-		dataSourceID, resolveErr := notionDataSourceID(ctx, client, database)
+		dataSourceIDs, resolveErr := notionDataSourceIDs(ctx, client, database)
 		if resolveErr != nil {
 			return Page{}, resolveErr
 		}
-		list, err = notionQuery(ctx, client, dataSourceID, size, cursor)
+		index, inner := decodeNotionCursor(request.Cursor.Value)
+		if index < 0 || index >= len(dataSourceIDs) {
+			index, inner = 0, "" // a cursor from before, or outside, this database starts over
+		}
+		var cursor *string
+		if inner != "" {
+			cursor = &inner
+		}
+		list, err = notionQuery(ctx, client, dataSourceIDs[index], size, cursor)
 		if err != nil {
 			return Page{}, err
+		}
+		switch {
+		case list.HasMore && list.NextCursor != nil:
+			nextCursor = encodeNotionCursor(index, *list.NextCursor)
+		case index+1 < len(dataSourceIDs):
+			nextCursor = encodeNotionCursor(index+1, "")
 		}
 	}
 
@@ -94,9 +119,7 @@ func (source *Notion) Fetch(ctx context.Context, request Request) (Page, error) 
 		page.Items = append(page.Items, notionItem(entry))
 		page.Watermark = watermarkAfter(page.Watermark, entry.LastEditedTime)
 	}
-	if list.HasMore && list.NextCursor != nil {
-		page.Cursor = *list.NextCursor
-	}
+	page.Cursor = nextCursor
 	return page, nil
 }
 
@@ -135,16 +158,17 @@ func notionQuery(ctx context.Context, client *notion.ClientWithResponses, dataSo
 	return notionDecodePages(answer.Body)
 }
 
-// notionDataSourceID resolves a database to the data source Fetch actually
-// queries. A database made before the 2025-09-03 split still has exactly
-// one; this reads that one and does not try to choose among several.
-func notionDataSourceID(ctx context.Context, client *notion.ClientWithResponses, databaseID string) (string, error) {
+// notionDataSourceIDs resolves a database to every data source Fetch queries
+// it through. A database made before the 2025-09-03 split still has exactly
+// one; a database split since can have several, and rows live under all of
+// them, not only the first.
+func notionDataSourceIDs(ctx context.Context, client *notion.ClientWithResponses, databaseID string) ([]string, error) {
 	answer, err := client.RetrieveADatabaseWithResponse(ctx, databaseID, &notion.RetrieveADatabaseParams{})
 	if err != nil {
-		return "", providerError(err)
+		return nil, providerError(err)
 	}
 	if answer.JSON200 == nil {
-		return "", StatusError(answer.HTTPResponse.StatusCode, answer.HTTPResponse.Header)
+		return nil, StatusError(answer.HTTPResponse.StatusCode, answer.HTTPResponse.Header)
 	}
 	var database struct {
 		DataSources []struct {
@@ -152,12 +176,51 @@ func notionDataSourceID(ctx context.Context, client *notion.ClientWithResponses,
 		} `json:"data_sources"`
 	}
 	if err := json.Unmarshal(answer.Body, &database); err != nil {
-		return "", fmt.Errorf("read the database's answer: %w", err)
+		return nil, fmt.Errorf("read the database's answer: %w", err)
 	}
 	if len(database.DataSources) == 0 {
-		return "", fmt.Errorf("database %q has no data source: %w", databaseID, domain.ErrInvalid)
+		return nil, fmt.Errorf("database %q has no data source: %w", databaseID, domain.ErrInvalid)
 	}
-	return database.DataSources[0].ID, nil
+	ids := make([]string, len(database.DataSources))
+	for i, dataSource := range database.DataSources {
+		ids[i] = dataSource.ID
+	}
+	return ids, nil
+}
+
+// notionCursor is Fetch's own cursor for a database with several data
+// sources: which one is being read, and Notion's own cursor within it.
+// Encoded as JSON so it round-trips through the plain text column a cursor
+// is stored in without needing a delimiter Notion's own cursor is promised
+// never to contain.
+type notionCursor struct {
+	Index  int    `json:"i"`
+	Cursor string `json:"c,omitempty"`
+}
+
+// decodeNotionCursor reads back what encodeNotionCursor wrote. Anything
+// unreadable — including a plain Notion cursor a walk already under way
+// saved before a database could hold more than one data source — starts
+// over at the first data source rather than failing the run; Fetch treats a
+// negative or out-of-range index the same way.
+func decodeNotionCursor(value string) (index int, cursor string) {
+	if value == "" {
+		return 0, ""
+	}
+	var decoded notionCursor
+	if err := json.Unmarshal([]byte(value), &decoded); err != nil {
+		return 0, ""
+	}
+	return decoded.Index, decoded.Cursor
+}
+
+func encodeNotionCursor(index int, cursor string) string {
+	encoded, err := json.Marshal(notionCursor{Index: index, Cursor: cursor})
+	if err != nil {
+		// Index is an int and Cursor a string: both always encode.
+		return ""
+	}
+	return string(encoded)
 }
 
 func notionDecodePages(body []byte) (notionPageList, error) {
