@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/Shubham04-oss/oryxa-go/auth"
+	"github.com/Shubham04-oss/oryxa-go/billing"
 	"github.com/Shubham04-oss/oryxa-go/connections"
 	"github.com/Shubham04-oss/oryxa-go/email"
 	"github.com/Shubham04-oss/oryxa-go/files"
@@ -15,6 +16,7 @@ import (
 var definitions = []host.Definition{
 	auth.Definition,
 	teams.Definition,
+	billing.Definition,
 	files.Definition,
 	connections.Definition,
 	email.Definition,

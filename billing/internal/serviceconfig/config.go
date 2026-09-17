@@ -4,28 +4,21 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/dodo"
 )
 
-const defaultRegion = "ap-south-1"
-
+// Config is what billing reads for itself. The listener, the database, the
+// AWS region and the event bus are the host's.
 type Config struct {
-	Address            string
-	AWSRegion          string
-	DatabaseURL        string
-	PostgresExtensions []string
-	AutoMigrate        bool
 	// AuthURL is where billing asks auth who a caller is.
 	AuthURL string
 	// BillingURL is the app's billing page.
 	BillingURL     string
 	AllowedOrigins []string
 	PlansFile      string
-	EventBusName   string
 	// EventsQueueURL is the queue auth's organization events arrive on.
 	// Without it billing doesn't learn about new, renamed or deleted
 	// organizations.
@@ -34,12 +27,10 @@ type Config struct {
 	Dodo                dodo.Config
 }
 
-func FromEnv() (Config, error) {
-	autoMigrate, err := boolValue("BILLING_AUTO_MIGRATE", true)
-	if err != nil {
-		return Config{}, err
-	}
-	reminderDays, err := intValue("BILLING_RENEWAL_REMINDER_DAYS", 7)
+// FromEnv reads billing's configuration through getenv, which a host layers
+// its own defaults under.
+func FromEnv(getenv func(string) string) (Config, error) {
+	reminderDays, err := intValue(getenv, "BILLING_RENEWAL_REMINDER_DAYS", 7)
 	if err != nil {
 		return Config{}, err
 	}
@@ -48,26 +39,20 @@ func FromEnv() (Config, error) {
 	}
 
 	config := Config{
-		Address:             valueOrDefault("BILLING_ADDRESS", ":8080"),
-		AWSRegion:           valueOrDefault("AWS_REGION", defaultRegion),
-		DatabaseURL:         strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		PostgresExtensions:  splitList(os.Getenv("POSTGRES_REQUIRED_EXTENSIONS")),
-		AutoMigrate:         autoMigrate,
-		AuthURL:             strings.TrimRight(strings.TrimSpace(os.Getenv("AUTH_URL")), "/"),
-		BillingURL:          strings.TrimSpace(os.Getenv("BILLING_URL")),
-		AllowedOrigins:      splitList(os.Getenv("BILLING_ALLOWED_ORIGINS")),
-		PlansFile:           strings.TrimSpace(os.Getenv("BILLING_PLANS_FILE")),
-		EventBusName:        valueOrDefault("EVENT_BUS_NAME", "default"),
-		EventsQueueURL:      strings.TrimSpace(os.Getenv("BILLING_EVENTS_QUEUE_URL")),
+		AuthURL:             strings.TrimRight(strings.TrimSpace(getenv("AUTH_URL")), "/"),
+		BillingURL:          strings.TrimSpace(getenv("BILLING_URL")),
+		AllowedOrigins:      splitList(getenv("BILLING_ALLOWED_ORIGINS")),
+		PlansFile:           strings.TrimSpace(getenv("BILLING_PLANS_FILE")),
+		EventsQueueURL:      strings.TrimSpace(getenv("BILLING_EVENTS_QUEUE_URL")),
 		RenewalReminderDays: reminderDays,
 		Dodo: dodo.Config{
-			APIKey:     strings.TrimSpace(os.Getenv("DODO_PAYMENTS_API_KEY")),
-			WebhookKey: strings.TrimSpace(os.Getenv("DODO_PAYMENTS_WEBHOOK_KEY")),
-			BaseURL:    strings.TrimSpace(os.Getenv("DODO_PAYMENTS_BASE_URL")),
+			APIKey:     strings.TrimSpace(getenv("DODO_PAYMENTS_API_KEY")),
+			WebhookKey: strings.TrimSpace(getenv("DODO_PAYMENTS_WEBHOOK_KEY")),
+			BaseURL:    strings.TrimSpace(getenv("DODO_PAYMENTS_BASE_URL")),
 		},
 	}
-	if config.DatabaseURL == "" || config.AuthURL == "" || config.BillingURL == "" {
-		return Config{}, errors.New("DATABASE_URL, AUTH_URL, and BILLING_URL are required")
+	if config.AuthURL == "" || config.BillingURL == "" {
+		return Config{}, errors.New("AUTH_URL and BILLING_URL are required")
 	}
 	for name, value := range map[string]string{"AUTH_URL": config.AuthURL, "BILLING_URL": config.BillingURL} {
 		if parsed, err := url.Parse(value); err != nil || parsed.Scheme == "" || parsed.Host == "" {
@@ -79,7 +64,7 @@ func FromEnv() (Config, error) {
 		config.AllowedOrigins = []string{parsed.Scheme + "://" + parsed.Host}
 	}
 
-	switch environment := valueOrDefault("DODO_PAYMENTS_ENVIRONMENT", "test_mode"); environment {
+	switch environment := valueOrDefault(getenv, "DODO_PAYMENTS_ENVIRONMENT", "test_mode"); environment {
 	case "test_mode":
 	case "live_mode":
 		config.Dodo.LiveMode = true
@@ -92,8 +77,8 @@ func FromEnv() (Config, error) {
 	return config, nil
 }
 
-func valueOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+func valueOrDefault(getenv func(string) string, name, fallback string) string {
+	if value := strings.TrimSpace(getenv(name)); value != "" {
 		return value
 	}
 	return fallback
@@ -109,20 +94,8 @@ func splitList(value string) []string {
 	return result
 }
 
-func boolValue(name string, fallback bool) (bool, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.ParseBool(value)
-	if err != nil {
-		return false, errors.New(name + " must be true or false")
-	}
-	return parsed, nil
-}
-
-func intValue(name string, fallback int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(name))
+func intValue(getenv func(string) string, name string, fallback int) (int, error) {
+	value := strings.TrimSpace(getenv(name))
 	if value == "" {
 		return fallback, nil
 	}

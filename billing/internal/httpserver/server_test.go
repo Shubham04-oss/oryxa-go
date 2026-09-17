@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -95,6 +96,22 @@ func serve(server http.Handler, method, target, body string, change func(*http.R
 
 func bearer(request *http.Request) {
 	request.Header.Set("Authorization", "Bearer token-1")
+}
+
+func TestPatternsNameEveryRoute(t *testing.T) {
+	server := New(&fakeService{}, fakeParser{}, Config{}, nil)
+	patterns := server.Patterns()
+	if len(patterns) < 6 {
+		t.Fatalf("patterns = %v", patterns)
+	}
+	wildcards := regexp.MustCompile(`\{[^}]+\}`)
+	for _, pattern := range patterns {
+		method, path, _ := strings.Cut(pattern, " ")
+		request := httptest.NewRequest(method, wildcards.ReplaceAllString(path, "x"), nil)
+		if _, matched := server.mux.Handler(request); matched != pattern {
+			t.Errorf("%s routes to %q", pattern, matched)
+		}
+	}
 }
 
 func TestPlans(t *testing.T) {
