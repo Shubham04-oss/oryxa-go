@@ -10,8 +10,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/teams/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/postgres"
@@ -45,7 +47,14 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	store := postgres.New(platform.Database)
 	service := application.New(store, authclient.New(config.AuthURL), logger)
 
-	dispatcher := events.NewDispatcher(store, events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName), logger)
+	publisher := events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName)
+	table, err := outbox.NewTable(store.Pool(), "teams_outbox")
+	if err != nil {
+		return host.Service{}, err
+	}
+	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
+		return publisher.PublishEvent(ctx, domain.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+	}), logger)
 	workers := []host.Worker{dispatcher.Run}
 	if config.EventsQueueURL != "" {
 		consumer := events.NewConsumer(service, logger)

@@ -74,12 +74,9 @@ func TestStoreLifecycle(t *testing.T) {
 		t.Fatalf("demote last admin error = %v, want conflict", err)
 	}
 
-	claimed, err := store.ClaimOutbox(ctx, 10)
-	if err != nil || len(claimed) < 2 {
-		t.Fatalf("ClaimOutbox() = %d, err = %v", len(claimed), err)
-	}
-	if err := store.MarkOutboxPublished(ctx, claimed[0].ID); err != nil {
-		t.Fatalf("MarkOutboxPublished() error = %v", err)
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM teams_outbox WHERE id LIKE $1`, eventPrefix+"%").Scan(&outboxCount); err != nil || outboxCount < 2 {
+		t.Fatalf("outbox events = %d, err = %v, want at least 2", outboxCount, err)
 	}
 
 	if err := store.DeleteTeam(ctx, organizationID, teamID, []domain.Event{testEvent(eventPrefix+"-deleted", "teams.team.deleted.v1", now)}); err != nil {
