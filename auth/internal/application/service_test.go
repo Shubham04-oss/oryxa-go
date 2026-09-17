@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -239,6 +240,45 @@ func TestInviteMemberCreatesHashedTokenAndDomainEvent(t *testing.T) {
 	}
 	if event.Email != "member@example.com" || !strings.Contains(event.AcceptURL, "token=") {
 		t.Fatalf("unexpected invitation event: %+v", event)
+	}
+}
+
+// TestInviteMemberAcceptURLPreservesExistingQueryAndFragment guards against
+// the accept URL going back to plain concatenation: INVITATION_ACCEPT_URL
+// can itself carry a query (say, an analytics tag) or a fragment, and the
+// token must be added to it the same way tokenURL adds one to the email
+// verification and password reset links, not appended after a bare "?".
+func TestInviteMemberAcceptURLPreservesExistingQueryAndFragment(t *testing.T) {
+	store := &fakeStore{
+		actorMembership: domain.Membership{OrganizationID: "org-1", UserID: "owner-1", Role: domain.RoleOwner},
+		organization:    domain.Organization{ID: "org-1", Name: "Acme"},
+	}
+	service := NewWithConfig(store, Config{InvitationAcceptURL: "https://app.example.com/invitations/accept?ref=welcome-email#invite"})
+	service.now = fixedTime
+
+	_, token, err := service.InviteMember(context.Background(), "owner-1", "org-1", InviteMemberInput{
+		Email: "member@example.com",
+		Role:  domain.RoleMember,
+	})
+	if err != nil {
+		t.Fatalf("InviteMember() error = %v", err)
+	}
+	var event autheventsv1.MemberInvited
+	if err := json.Unmarshal(store.events[0].Data, &event); err != nil {
+		t.Fatalf("decode invitation event: %v", err)
+	}
+	parsed, err := url.Parse(event.AcceptURL)
+	if err != nil {
+		t.Fatalf("parse accept URL: %v", err)
+	}
+	if parsed.Query().Get("ref") != "welcome-email" {
+		t.Fatalf("accept URL dropped its existing query: %q", event.AcceptURL)
+	}
+	if parsed.Query().Get("token") != token {
+		t.Fatalf("accept URL token = %q, want %q: %q", parsed.Query().Get("token"), token, event.AcceptURL)
+	}
+	if parsed.Fragment != "invite" {
+		t.Fatalf("accept URL dropped its fragment: %q", event.AcceptURL)
 	}
 }
 
