@@ -1,8 +1,19 @@
 import { QueryClient } from "@tanstack/react-query";
 import { isRedirect } from "@tanstack/react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Organization } from "./client";
-import { ensureSession, resolveOrganization, safeRedirect } from "./session";
+import {
+	acceptReceivedInvitation,
+	type Organization,
+	type ReceivedInvitation,
+	type Session,
+} from "./client";
+import {
+	ensureReceivedInvitations,
+	ensureSession,
+	isInvitationRedirect,
+	resolveOrganization,
+	safeRedirect,
+} from "./session";
 
 function organization(id: string): Organization {
 	return {
@@ -90,5 +101,96 @@ describe("ensureSession", () => {
 		expect(outcome).toMatchObject({
 			options: { search: { redirect: "/app/teams" }, to: "/auth/sign-in" },
 		});
+	});
+});
+
+describe("isInvitationRedirect", () => {
+	it("recognizes a return to an invitation", () => {
+		expect(isInvitationRedirect("/invitations/accept?token=abc")).toBe(true);
+		expect(isInvitationRedirect("/invitations")).toBe(true);
+	});
+
+	it("leaves every other return alone", () => {
+		for (const value of [
+			"/app",
+			"/invitationsx",
+			"/app/invitations",
+			undefined,
+		]) {
+			expect(isInvitationRedirect(value)).toBe(false);
+		}
+	});
+});
+
+describe("ensureReceivedInvitations", () => {
+	const invitation: ReceivedInvitation = {
+		created_at: "2026-09-15T00:00:00Z",
+		expires_at: "2026-09-22T00:00:00Z",
+		id: "inv_1",
+		organization_id: "org_1",
+		organization_name: "Odd Works",
+		role: "member",
+	};
+
+	function session(organizations: Organization[]): Session {
+		return {
+			organizations,
+			user: {
+				created_at: "2026-09-15T00:00:00Z",
+				email: "asha@example.com",
+				id: "user-1",
+				updated_at: "2026-09-15T00:00:00Z",
+			},
+		};
+	}
+
+	it("lists what is waiting for a member without an organization", async () => {
+		const fetch = vi.fn(answer(200, { invitations: [invitation] }));
+		vi.stubGlobal("fetch", fetch);
+
+		await expect(
+			ensureReceivedInvitations(new QueryClient(), session([])),
+		).resolves.toEqual([invitation]);
+		expect(fetch).toHaveBeenCalledWith(
+			"/v1/invitations",
+			expect.objectContaining({ credentials: "include", method: "GET" }),
+		);
+	});
+
+	it("sends a member with nothing to join to set up an organization", async () => {
+		vi.stubGlobal("fetch", vi.fn(answer(200, { invitations: [] })));
+
+		const outcome = await ensureReceivedInvitations(
+			new QueryClient(),
+			session([]),
+		).catch((error: unknown) => error);
+		expect(isRedirect(outcome)).toBe(true);
+		expect(outcome).toMatchObject({ options: { to: "/onboarding" } });
+	});
+
+	it("keeps a member who already has an organization on the page", async () => {
+		vi.stubGlobal("fetch", vi.fn(answer(200, { invitations: [] })));
+
+		await expect(
+			ensureReceivedInvitations(
+				new QueryClient(),
+				session([organization("org_1")]),
+			),
+		).resolves.toEqual([]);
+	});
+});
+
+describe("acceptReceivedInvitation", () => {
+	it("accepts the invitation by its encoded ID", async () => {
+		const fetch = vi.fn(
+			answer(200, { organization_id: "org_1", role: "member" }),
+		);
+		vi.stubGlobal("fetch", fetch);
+
+		await acceptReceivedInvitation("inv/1");
+		expect(fetch).toHaveBeenCalledWith(
+			"/v1/invitations/inv%2F1/accept",
+			expect.objectContaining({ method: "POST" }),
+		);
 	});
 });

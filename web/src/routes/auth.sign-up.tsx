@@ -11,13 +11,25 @@ import {
 	type SignUpInput,
 	signUpSchema,
 } from "../lib/auth/schemas";
+import { isInvitationRedirect, safeRedirect } from "../lib/auth/session";
+
+interface SignUpSearch {
+	redirect?: string;
+}
 
 export const Route = createFileRoute("/auth/sign-up")({
+	// Sign-in passes on where to go afterwards, such as the invitation that
+	// sent a new member here.
+	validateSearch: (search: Record<string, unknown>): SignUpSearch => ({
+		redirect: safeRedirect(search.redirect),
+	}),
 	component: SignUpPage,
 	head: () => ({ meta: [{ title: "Create account · The Weirdly ODD" }] }),
 });
 
 function SignUpPage() {
+	const { redirect } = Route.useSearch();
+	const invited = isInvitationRedirect(redirect);
 	const [errors, setErrors] = useState<
 		Partial<Record<keyof SignUpInput, string>>
 	>({});
@@ -56,17 +68,22 @@ function SignUpPage() {
 	return (
 		<AuthShell>
 			<h1 className="auth-heading">Create account</h1>
-			<p className="auth-subheading">Start with your work email.</p>
+			<p className="auth-subheading">
+				{invited
+					? "Use the email address your invitation was sent to."
+					: "Start with your work email."}
+			</p>
 
 			{submittedEmail ? (
 				<Alert className="auth-success">
 					<AlertDescription>
 						Check {submittedEmail} to verify your account.
+						{invited ? " Then sign in to accept your invitation." : ""}
 					</AlertDescription>
 				</Alert>
 			) : (
 				<>
-					<GoogleButton returnTo="/app" />
+					<GoogleButton returnTo={redirect ?? "/app"} />
 					<div className="auth-divider">or</div>
 
 					{formError ? (
@@ -115,7 +132,7 @@ function SignUpPage() {
 
 			<p className="auth-footer">
 				Already have an account?{" "}
-				<Link className="auth-link" to="/auth/sign-in">
+				<Link className="auth-link" search={{ redirect }} to="/auth/sign-in">
 					Sign in
 				</Link>
 			</p>

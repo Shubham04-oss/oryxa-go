@@ -13,7 +13,7 @@ import {
 	type SignInInput,
 	signInSchema,
 } from "../lib/auth/schemas";
-import { safeRedirect } from "../lib/auth/session";
+import { isInvitationRedirect, safeRedirect } from "../lib/auth/session";
 
 interface SignInSearch {
 	redirect?: string;
@@ -73,7 +73,11 @@ function SignInPage() {
 	return (
 		<AuthShell>
 			<h1 className="auth-heading">Welcome back</h1>
-			<p className="auth-subheading">Sign in to The Weirdly ODD.</p>
+			<p className="auth-subheading">
+				{isInvitationRedirect(redirect)
+					? "Sign in with the email address your invitation was sent to."
+					: "Sign in to The Weirdly ODD."}
+			</p>
 
 			<GoogleButton returnTo={destination} />
 			<div className="auth-divider">or</div>
@@ -119,7 +123,7 @@ function SignInPage() {
 
 			<p className="auth-footer">
 				New here?{" "}
-				<Link className="auth-link" to="/auth/sign-up">
+				<Link className="auth-link" search={{ redirect }} to="/auth/sign-up">
 					Create account
 				</Link>
 			</p>
