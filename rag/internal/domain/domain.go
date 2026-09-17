@@ -125,11 +125,15 @@ func (access TeamAccess) CanSee() bool { return access.TeamID != "" }
 // vector and the number of keys it will filter on, so a corpus written under
 // looser rules would index on pgvector and then fail to move. Keeping one
 // bound for both backends means the corpus is portable by construction.
+// The total is the tighter of the two backends' per-vector budgets for
+// metadata that can be filtered on, rather than the larger one, so a corpus
+// indexed on pgvector can be moved to S3 Vectors without rewriting what its
+// callers are allowed to store.
 const (
 	MaxMetadataKeys      = 16
 	MaxMetadataKeyLength = 63
 	MaxMetadataValue     = 1024
-	MaxMetadataBytes     = 8 << 10
+	MaxMetadataBytes     = 2 << 10
 )
 
 // metadataKeyPattern keeps keys safe to use as JSON paths, as S3 Vectors

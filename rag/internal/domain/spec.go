@@ -91,6 +91,22 @@ func (backend Backend) Valid() bool {
 	return backend == BackendPgvector || backend == BackendS3Vectors
 }
 
+// Supports reports whether a backend can serve a metric at all.
+//
+// S3 Vectors indexes on cosine or euclidean only. Accepting an inner-product
+// corpus for it and finding out at the first write would leave a corpus that
+// exists, accepts documents and can never be searched.
+func (backend Backend) Supports(metric Metric) error {
+	if backend == BackendS3Vectors && metric == MetricInnerProduct {
+		return fmt.Errorf("S3 Vectors indexes on %q or %q, not %q: %w",
+			MetricCosine, MetricL2, MetricInnerProduct, ErrInvalid)
+	}
+	if !metric.Valid() {
+		return fmt.Errorf("embedding metric is not allowed: %w", ErrInvalid)
+	}
+	return nil
+}
+
 // InputKind says which side of the search a text is on.
 //
 // Every model here is trained asymmetrically: the same sentence embedded as a

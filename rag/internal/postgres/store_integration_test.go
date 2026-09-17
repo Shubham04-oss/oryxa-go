@@ -1,0 +1,549 @@
+package postgres
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
+)
+
+// openTestStore connects to the database the integration tests run against.
+// Without RAG_TEST_DATABASE_URL they skip, so the ordinary unit run needs no
+// PostgreSQL.
+func openTestStore(t *testing.T) (*Store, context.Context) {
+	t.Helper()
+	databaseURL := os.Getenv("RAG_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("RAG_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	t.Cleanup(cancel)
+	store, err := Open(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(store.Close)
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	// Running the migrations twice is how a restarted service starts, so it
+	// has to be as uneventful as the first time.
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("second Migrate: %v", err)
+	}
+	return store, ctx
+}
+
+func testEvent(t *testing.T, detailType string) domain.Event {
+	t.Helper()
+	id, err := domain.NewID(domain.EventIDPrefix)
+	if err != nil {
+		t.Fatalf("NewID: %v", err)
+	}
+	return domain.Event{ID: id, DetailType: detailType, OccurredAt: time.Now().UTC(), Data: json.RawMessage(`{}`)}
+}
+
+func testCorpus(t *testing.T, store *Store, ctx context.Context, organizationID string, spec domain.EmbeddingSpec) domain.Corpus {
+	t.Helper()
+	id, err := domain.NewID(domain.CorpusIDPrefix)
+	if err != nil {
+		t.Fatalf("NewID: %v", err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	corpus := domain.Corpus{
+		ID:             id,
+		OrganizationID: organizationID,
+		Slug:           "handbook-" + strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(id[4:14])),
+		Name:           "Handbook",
+		Scope:          domain.ScopeOrganization,
+		Spec:           spec,
+		Backend:        domain.BackendPgvector,
+		Chunking:       domain.DefaultChunkPolicy(spec),
+		Metadata:       domain.Metadata{"team": "platform"},
+		CreatedBy:      "usr_integration",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if err := store.CreateCorpus(ctx, corpus, testEvent(t, "rag.corpus.created.v1")); err != nil {
+		t.Fatalf("CreateCorpus: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_, _ = store.db.ExecContext(cleanupCtx, `DELETE FROM rag_corpora WHERE organization_id = $1`, organizationID)
+		_, _ = store.db.ExecContext(cleanupCtx, `DELETE FROM rag_organizations WHERE organization_id = $1`, organizationID)
+		_, _ = store.db.ExecContext(cleanupCtx, `DELETE FROM rag_outbox WHERE published_at IS NULL AND detail_type LIKE 'rag.%'`)
+	})
+	return corpus
+}
+
+func uniqueOrganization() string {
+	return "org-it-" + time.Now().UTC().Format("20060102150405.000000000")
+}
+
+func titanSpec() domain.EmbeddingSpec {
+	return domain.EmbeddingSpec{
+		Provider: domain.ProviderBedrock, Model: "amazon.titan-embed-text-v2:0",
+		Dimensions: 1024, Metric: domain.MetricCosine,
+	}
+}
+
+func TestCorpusLifecycle(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	read, err := store.Corpus(ctx, organizationID, corpus.ID)
+	if err != nil {
+		t.Fatalf("Corpus: %v", err)
+	}
+	if !read.Spec.Equal(corpus.Spec) {
+		t.Fatalf("spec came back as %v, want %v", read.Spec, corpus.Spec)
+	}
+	if read.Chunking != corpus.Chunking || read.Backend != corpus.Backend {
+		t.Fatalf("corpus = %+v", read)
+	}
+	if read.Metadata["team"] != "platform" {
+		t.Fatalf("metadata = %v", read.Metadata)
+	}
+
+	bySlug, err := store.CorpusBySlug(ctx, organizationID, strings.ToUpper(corpus.Slug))
+	if err != nil || bySlug.ID != corpus.ID {
+		t.Fatalf("CorpusBySlug = (%v, %v)", bySlug.ID, err)
+	}
+
+	// Another organization must not see it, and must not be told it exists.
+	if _, err := store.Corpus(ctx, "org-someone-else", corpus.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("a corpus in another organization read as %v, want ErrNotFound", err)
+	}
+
+	corpora, err := store.Corpora(ctx, organizationID, CorpusQuery{MemberID: "usr_integration"})
+	if err != nil {
+		t.Fatalf("Corpora: %v", err)
+	}
+	if len(corpora) != 1 || corpora[0].ID != corpus.ID {
+		t.Fatalf("Corpora returned %d corpora", len(corpora))
+	}
+}
+
+func TestCorpusSlugIsUniquePerOrganization(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	id, _ := domain.NewID(domain.CorpusIDPrefix)
+	duplicate := corpus
+	duplicate.ID = id
+	err := store.CreateCorpus(ctx, duplicate, testEvent(t, "rag.corpus.created.v1"))
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("a duplicate slug was accepted: %v", err)
+	}
+}
+
+func TestCorpusRefusesAnUnsearchableCombination(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	// S3 Vectors cannot index on inner product. The database enforces it as
+	// well as the domain, so a corpus that could accept documents and never
+	// answer a query cannot be recorded at all.
+	id, _ := domain.NewID(domain.CorpusIDPrefix)
+	bad := corpus
+	bad.ID = id
+	bad.Slug = corpus.Slug + "x"
+	bad.Backend = domain.BackendS3Vectors
+	bad.Spec.Metric = domain.MetricInnerProduct
+	if err := store.CreateCorpus(ctx, bad, testEvent(t, "rag.corpus.created.v1")); err == nil {
+		t.Fatal("an inner-product corpus on S3 Vectors was recorded")
+	}
+}
+
+func newDocument(corpus domain.Corpus, source domain.Source, title, body string) domain.Document {
+	id, _ := domain.NewID(domain.DocumentIDPrefix)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	return domain.Document{
+		ID:             id,
+		CorpusID:       corpus.ID,
+		OrganizationID: corpus.OrganizationID,
+		Source:         source,
+		Title:          title,
+		ContentType:    "text/markdown",
+		ContentSHA256:  domain.Hash(body),
+		ByteSize:       int64(len(body)),
+		Metadata:       domain.Metadata{"team": "platform"},
+		CreatedBy:      "usr_integration",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+}
+
+func TestDocumentUpsertIsIdempotentOnContent(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	body := "# Rotation\n\nCredentials rotate every ninety days.\n"
+	source := domain.Source{Kind: domain.SourceFile, Ref: "file_abc123"}
+
+	stored, outcome, err := store.UpsertDocument(ctx, newDocument(corpus, source, "Runbook", body), body, testEvent(t, "rag.document.received.v1"))
+	if err != nil || outcome != UpsertCreated {
+		t.Fatalf("first upsert = (%v, %v)", outcome, err)
+	}
+	if stored.Status != domain.StatusPending {
+		t.Fatalf("a new document is %q, want pending", stored.Status)
+	}
+
+	// Not ingested yet, so the same bytes are still work to do.
+	_, outcome, err = store.UpsertDocument(ctx, newDocument(corpus, source, "Runbook", body), body, testEvent(t, "rag.document.received.v1"))
+	if err != nil || outcome != UpsertChanged {
+		t.Fatalf("re-offering a pending document = (%v, %v), want changed", outcome, err)
+	}
+
+	if err := store.MarkDocumentReady(ctx, stored.ID, 3, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil {
+		t.Fatalf("MarkDocumentReady: %v", err)
+	}
+
+	// Now the same bytes are a no-op, which is what lets a pipeline
+	// re-deliver everything it has without paying to re-embed it.
+	again, outcome, err := store.UpsertDocument(ctx, newDocument(corpus, source, "Runbook", body), body, testEvent(t, "rag.document.received.v1"))
+	if err != nil || outcome != UpsertUnchanged {
+		t.Fatalf("re-offering identical content = (%v, %v), want unchanged", outcome, err)
+	}
+	if again.ID != stored.ID {
+		t.Fatalf("a second document was created: %s then %s", stored.ID, again.ID)
+	}
+
+	// Different bytes from the same source replace it and need ingesting.
+	changedBody := body + "\nA rotation that fails pages the on-call engineer.\n"
+	changed, outcome, err := store.UpsertDocument(ctx, newDocument(corpus, source, "Runbook", changedBody), changedBody, testEvent(t, "rag.document.received.v1"))
+	if err != nil || outcome != UpsertChanged {
+		t.Fatalf("changed content = (%v, %v)", outcome, err)
+	}
+	if changed.ID != stored.ID {
+		t.Fatalf("changed content made a second document: %s then %s", stored.ID, changed.ID)
+	}
+	if changed.Status != domain.StatusPending {
+		t.Fatalf("a changed document is %q, want pending", changed.Status)
+	}
+	if changed.IngestedAt != nil {
+		t.Fatal("a changed document kept the previous ingest time")
+	}
+}
+
+func TestSyncChunksReusesUnchangedChunks(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	body := "one two three"
+	source := domain.Source{Kind: domain.SourceInline}
+	document, _, err := store.UpsertDocument(ctx, newDocument(corpus, source, "Doc", body), body, testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+
+	chunks := func(texts ...string) []domain.Chunk {
+		out := make([]domain.Chunk, 0, len(texts))
+		for index, text := range texts {
+			out = append(out, domain.Chunk{
+				Ordinal: index, Text: text, TokenCount: 1, SHA256: domain.Hash(text),
+				HeadingPath: []string{"Top"}, StartByte: index * 10, EndByte: index*10 + len(text),
+			})
+		}
+		return out
+	}
+
+	now := time.Now().UTC()
+	first, err := store.SyncChunks(ctx, document, chunks("alpha", "bravo", "charlie"), now)
+	if err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+	if len(first.Fresh) != 3 || len(first.Reused) != 0 || len(first.Removed) != 0 {
+		t.Fatalf("first sync = %d fresh, %d reused, %d removed", len(first.Fresh), len(first.Reused), len(first.Removed))
+	}
+	originalIDs := map[string]string{}
+	for _, chunk := range first.Fresh {
+		originalIDs[chunk.Text] = chunk.ID
+	}
+
+	// One paragraph edited. Only that chunk should need embedding again —
+	// this is the difference between one call and three on every edit.
+	second, err := store.SyncChunks(ctx, document, chunks("alpha", "BRAVO edited", "charlie"), now)
+	if err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+	if len(second.Fresh) != 1 || len(second.Reused) != 2 {
+		t.Fatalf("second sync = %d fresh, %d reused, want 1 and 2", len(second.Fresh), len(second.Reused))
+	}
+	if second.Fresh[0].Text != "BRAVO edited" {
+		t.Fatalf("the wrong chunk was re-embedded: %q", second.Fresh[0].Text)
+	}
+	if len(second.Removed) != 1 || second.Removed[0] != originalIDs["bravo"] {
+		t.Fatalf("removed = %v, want the old bravo chunk", second.Removed)
+	}
+	for _, chunk := range second.Reused {
+		if originalIDs[chunk.Text] != chunk.ID {
+			t.Fatalf("reused chunk %q got a new id, so its vector would be orphaned", chunk.Text)
+		}
+	}
+
+	// A paragraph that only moved keeps its vector, even at a new ordinal.
+	third, err := store.SyncChunks(ctx, document, chunks("charlie", "alpha"), now)
+	if err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+	if len(third.Fresh) != 0 || len(third.Reused) != 2 {
+		t.Fatalf("reordering = %d fresh, %d reused, want 0 and 2", len(third.Fresh), len(third.Reused))
+	}
+	if len(third.Removed) != 1 {
+		t.Fatalf("removed = %v, want the edited chunk", third.Removed)
+	}
+	for _, chunk := range third.Reused {
+		if originalIDs[chunk.Text] != chunk.ID {
+			t.Fatalf("chunk %q changed id when it only moved", chunk.Text)
+		}
+	}
+
+	stored, err := store.Chunks(ctx, organizationID, corpus.ID, []string{originalIDs["charlie"], originalIDs["alpha"]})
+	if err != nil {
+		t.Fatalf("Chunks: %v", err)
+	}
+	if len(stored) != 2 || stored[0].Text != "charlie" || stored[1].Text != "alpha" {
+		t.Fatalf("Chunks did not preserve the order it was asked in: %+v", stored)
+	}
+	if stored[0].Ordinal != 0 || stored[1].Ordinal != 1 {
+		t.Fatalf("ordinals were not rewritten: %d and %d", stored[0].Ordinal, stored[1].Ordinal)
+	}
+	if len(stored[0].HeadingPath) != 1 || stored[0].HeadingPath[0] != "Top" {
+		t.Fatalf("heading path = %v", stored[0].HeadingPath)
+	}
+}
+
+func TestLexicalSearchFindsExactTerms(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	body := "irrelevant"
+	document, _, err := store.UpsertDocument(ctx, newDocument(corpus, domain.Source{Kind: domain.SourceInline}, "Doc", body), body, testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+	texts := []string{
+		"The error ERR_ROTATION_4471 means the credential could not be replaced.",
+		"Holidays are accrued monthly and carry over to the next year.",
+		"Rotation happens every ninety days without intervention.",
+	}
+	chunks := make([]domain.Chunk, 0, len(texts))
+	for index, text := range texts {
+		chunks = append(chunks, domain.Chunk{
+			Ordinal: index, Text: text, TokenCount: 12, SHA256: domain.Hash(text),
+			StartByte: index * 100, EndByte: index*100 + len(text),
+			Metadata: domain.Metadata{"team": map[bool]string{true: "platform", false: "people"}[index != 1]},
+		})
+	}
+	if _, err := store.SyncChunks(ctx, document, chunks, time.Now().UTC()); err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+
+	// An exact identifier is precisely what a dense retriever misses and what
+	// the lexical half is here for.
+	hits, err := store.LexicalSearch(ctx, corpus, "ERR_ROTATION_4471", 10, domain.Filter{})
+	if err != nil {
+		t.Fatalf("LexicalSearch: %v", err)
+	}
+	if len(hits) == 0 {
+		t.Fatal("the exact error code was not found")
+	}
+	if hits[0].ChunkID != chunks[0].ID {
+		t.Fatalf("the top hit was not the chunk containing the code")
+	}
+
+	// A metadata filter must narrow the lexical side as well as the dense one,
+	// or a filtered query would leak through one half of the hybrid.
+	hits, err = store.LexicalSearch(ctx, corpus, "rotation", 10, domain.Filter{
+		Conditions: []domain.Condition{{Key: "team", Operator: domain.OperatorEqual, Values: []string{"people"}}},
+	})
+	if err != nil {
+		t.Fatalf("LexicalSearch: %v", err)
+	}
+	for _, hit := range hits {
+		if hit.ChunkID == chunks[0].ID || hit.ChunkID == chunks[2].ID {
+			t.Fatalf("a chunk outside the filter was returned: %s", hit.ChunkID)
+		}
+	}
+
+	// Punctuation must not blow up the query parser.
+	for _, query := range []string{"what's the (rotation) policy?", `"ninety days"`, "rotation -holidays", "!!!"} {
+		if _, err := store.LexicalSearch(ctx, corpus, query, 5, domain.Filter{}); err != nil {
+			t.Fatalf("LexicalSearch(%q): %v", query, err)
+		}
+	}
+}
+
+func TestDeleteDocumentReturnsItsChunksAndCascades(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	body := "body"
+	document, _, err := store.UpsertDocument(ctx, newDocument(corpus, domain.Source{Kind: domain.SourceInline}, "Doc", body), body, testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+	sync, err := store.SyncChunks(ctx, document, []domain.Chunk{
+		{Ordinal: 0, Text: "a", TokenCount: 1, SHA256: domain.Hash("a"), StartByte: 0, EndByte: 1},
+		{Ordinal: 1, Text: "b", TokenCount: 1, SHA256: domain.Hash("b"), StartByte: 1, EndByte: 2},
+	}, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+
+	// The ids come back before the rows go, because S3 Vectors has no cascade
+	// and the caller needs the keys to delete there.
+	chunkIDs, err := store.DeleteDocument(ctx, organizationID, document.ID, testEvent(t, "rag.document.removed.v1"))
+	if err != nil {
+		t.Fatalf("DeleteDocument: %v", err)
+	}
+	if len(chunkIDs) != len(sync.Fresh) {
+		t.Fatalf("DeleteDocument returned %d chunk ids, want %d", len(chunkIDs), len(sync.Fresh))
+	}
+	remaining, err := store.Chunks(ctx, organizationID, corpus.ID, chunkIDs)
+	if err != nil {
+		t.Fatalf("Chunks: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("%d chunks survived their document", len(remaining))
+	}
+	if _, err := store.Document(ctx, organizationID, document.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the document read as %v after deletion", err)
+	}
+}
+
+func TestClaimDocumentsLeasesWorkOnce(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	for index := range 3 {
+		body := fmt.Sprintf("document %d", index)
+		if _, _, err := store.UpsertDocument(ctx,
+			newDocument(corpus, domain.Source{Kind: domain.SourceInline}, "Doc", body), body,
+			testEvent(t, "rag.document.received.v1")); err != nil {
+			t.Fatalf("UpsertDocument: %v", err)
+		}
+	}
+
+	first, err := store.ClaimDocuments(ctx, 2, time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimDocuments: %v", err)
+	}
+	if len(first) != 2 {
+		t.Fatalf("claimed %d documents, want 2", len(first))
+	}
+	second, err := store.ClaimDocuments(ctx, 5, time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimDocuments: %v", err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("claimed %d documents the second time, want the 1 left", len(second))
+	}
+	// Two workers must never embed the same document twice.
+	held := map[string]bool{}
+	for _, document := range append(first, second...) {
+		if held[document.ID] {
+			t.Fatalf("document %s was claimed twice", document.ID)
+		}
+		held[document.ID] = true
+		if document.Status != domain.StatusIngesting {
+			t.Fatalf("a claimed document is %q, want ingesting", document.Status)
+		}
+	}
+
+	// A worker that stops mid-ingest puts its document back without counting
+	// the attempt as a failure.
+	if err := store.ReleaseDocument(ctx, first[0].ID); err != nil {
+		t.Fatalf("ReleaseDocument: %v", err)
+	}
+	released, err := store.ClaimDocuments(ctx, 5, time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimDocuments: %v", err)
+	}
+	if len(released) != 1 || released[0].ID != first[0].ID {
+		t.Fatalf("the released document did not come back: %+v", released)
+	}
+}
+
+func TestOutboxRoundTrip(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	event := testEvent(t, "rag.corpus.created.v1")
+	if err := store.RecordEvents(ctx, []domain.Event{event}); err != nil {
+		t.Fatalf("RecordEvents: %v", err)
+	}
+	claimed, err := store.ClaimOutbox(ctx, 50)
+	if err != nil {
+		t.Fatalf("ClaimOutbox: %v", err)
+	}
+	var found bool
+	for _, pending := range claimed {
+		if pending.ID == event.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the recorded event was not claimed")
+	}
+	if err := store.MarkOutboxPublished(ctx, event.ID); err != nil {
+		t.Fatalf("MarkOutboxPublished: %v", err)
+	}
+	again, err := store.ClaimOutbox(ctx, 50)
+	if err != nil {
+		t.Fatalf("ClaimOutbox: %v", err)
+	}
+	for _, pending := range again {
+		if pending.ID == event.ID {
+			t.Fatal("a published event was claimed again")
+		}
+	}
+}
+
+func TestDeleteCorpusTakesEverythingWithIt(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	body := "content"
+	document, _, err := store.UpsertDocument(ctx, newDocument(corpus, domain.Source{Kind: domain.SourceInline}, "Doc", body), body, testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+	if _, err := store.SyncChunks(ctx, document, []domain.Chunk{
+		{Ordinal: 0, Text: "a", TokenCount: 1, SHA256: domain.Hash("a"), StartByte: 0, EndByte: 1},
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+	documents, chunks, err := store.CorpusCounts(ctx, corpus.ID)
+	if err != nil || documents != 1 || chunks != 1 {
+		t.Fatalf("CorpusCounts = (%d, %d, %v)", documents, chunks, err)
+	}
+
+	if err := store.DeleteCorpus(ctx, organizationID, corpus.ID, testEvent(t, "rag.corpus.deleted.v1")); err != nil {
+		t.Fatalf("DeleteCorpus: %v", err)
+	}
+	if _, err := store.Document(ctx, organizationID, document.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("a document survived its corpus: %v", err)
+	}
+	if err := store.DeleteCorpus(ctx, organizationID, corpus.ID, testEvent(t, "rag.corpus.deleted.v1")); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("deleting a corpus twice returned %v, want ErrNotFound", err)
+	}
+}

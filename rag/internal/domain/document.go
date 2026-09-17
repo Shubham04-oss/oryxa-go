@@ -242,10 +242,15 @@ func (chunk Chunk) Provenance(document Document) Metadata {
 }
 
 // Vector is one chunk's embedding on its way to or from a store.
+//
+// DocumentID is carried alongside rather than read back out of Metadata: a
+// store filters and deletes by it, and a field that load-bearing should not
+// depend on a map key still being present.
 type Vector struct {
-	ChunkID  string
-	Values   []float32
-	Metadata Metadata
+	ChunkID    string
+	DocumentID string
+	Values     []float32
+	Metadata   Metadata
 }
 
 // Validate checks a vector against the spec its corpus pinned. Doing this
@@ -253,8 +258,8 @@ type Vector struct {
 // provider that quietly returned a short vector is caught at the boundary
 // rather than at query time.
 func (vector Vector) Validate(spec EmbeddingSpec) error {
-	if vector.ChunkID == "" {
-		return fmt.Errorf("a vector must name its chunk: %w", ErrInvalid)
+	if vector.ChunkID == "" || vector.DocumentID == "" {
+		return fmt.Errorf("a vector must name its chunk and its document: %w", ErrInvalid)
 	}
 	if len(vector.Values) != spec.Dimensions {
 		return fmt.Errorf("%s returned %d dimensions but the corpus is %d: %w",

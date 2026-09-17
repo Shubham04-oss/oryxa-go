@@ -1,0 +1,319 @@
+package postgres
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/jmoiron/sqlx"
+
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
+)
+
+const chunkColumns = `
+	id, document_id, corpus_id, organization_id, ordinal, body, token_count,
+	heading_path, start_byte, end_byte, sha256, metadata`
+
+type chunkRow struct {
+	ID             string   `db:"id"`
+	DocumentID     string   `db:"document_id"`
+	CorpusID       string   `db:"corpus_id"`
+	OrganizationID string   `db:"organization_id"`
+	Ordinal        int      `db:"ordinal"`
+	Body           string   `db:"body"`
+	TokenCount     int      `db:"token_count"`
+	HeadingPath    []string `db:"heading_path"`
+	StartByte      int      `db:"start_byte"`
+	EndByte        int      `db:"end_byte"`
+	SHA256         string   `db:"sha256"`
+	Metadata       []byte   `db:"metadata"`
+}
+
+func (row chunkRow) chunk() (domain.Chunk, error) {
+	metadata, err := decodeMetadata(row.Metadata)
+	if err != nil {
+		return domain.Chunk{}, err
+	}
+	return domain.Chunk{
+		ID:             row.ID,
+		DocumentID:     row.DocumentID,
+		CorpusID:       row.CorpusID,
+		OrganizationID: row.OrganizationID,
+		Ordinal:        row.Ordinal,
+		Text:           row.Body,
+		TokenCount:     row.TokenCount,
+		HeadingPath:    row.HeadingPath,
+		StartByte:      row.StartByte,
+		EndByte:        row.EndByte,
+		SHA256:         row.SHA256,
+		Metadata:       metadata,
+	}, nil
+}
+
+// SyncResult says what a re-cut document changed.
+type SyncResult struct {
+	// Fresh are the chunks that need embedding: new text, or text that moved
+	// into a chunk that did not exist before.
+	Fresh []domain.Chunk
+	// Reused are the chunks whose text is byte-for-byte what it was, so the
+	// vector already written for them is still correct.
+	Reused []domain.Chunk
+	// Removed are the chunk ids that no longer exist. Their pgvector rows go
+	// by cascade; an S3 Vectors corpus needs them deleted by key.
+	Removed []string
+}
+
+// SyncChunks replaces a document's chunks with a freshly cut set, keeping the
+// ones whose text did not change.
+//
+// This is the difference between a one-word edit costing one embedding call
+// and costing as many as the document has chunks. A chunk is matched by the
+// hash of its text, so a paragraph that only moved keeps its vector even
+// though its position changed.
+//
+// The caller supplies chunks without ids; this assigns them, reusing the id of
+// a matching chunk so its vector row stays attached.
+func (store *Store) SyncChunks(ctx context.Context, document domain.Document, chunks []domain.Chunk, at time.Time) (SyncResult, error) {
+	var result SyncResult
+	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
+		var existing []struct {
+			ID     string `db:"id"`
+			SHA256 string `db:"sha256"`
+		}
+		if err := tx.SelectContext(ctx, &existing, `
+			SELECT id, sha256 FROM rag_chunks WHERE document_id = $1 ORDER BY ordinal
+			FOR UPDATE`, document.ID); err != nil {
+			return fmt.Errorf("read existing chunks: %w", err)
+		}
+		// Chunks with identical text are rare but possible — a repeated
+		// boilerplate paragraph — so each hash holds a queue of ids rather
+		// than one, and each is claimed at most once.
+		available := make(map[string][]string, len(existing))
+		for _, row := range existing {
+			available[row.SHA256] = append(available[row.SHA256], row.ID)
+		}
+
+		result = SyncResult{}
+		claimed := make(map[string]bool, len(existing))
+		for index := range chunks {
+			chunk := &chunks[index]
+			if ids := available[chunk.SHA256]; len(ids) > 0 {
+				chunk.ID = ids[0]
+				available[chunk.SHA256] = ids[1:]
+				claimed[chunk.ID] = true
+				result.Reused = append(result.Reused, *chunk)
+				continue
+			}
+			if chunk.ID == "" {
+				id, err := domain.NewID(domain.ChunkIDPrefix)
+				if err != nil {
+					return err
+				}
+				chunk.ID = id
+			}
+			result.Fresh = append(result.Fresh, *chunk)
+		}
+		for _, row := range existing {
+			if !claimed[row.ID] {
+				result.Removed = append(result.Removed, row.ID)
+			}
+		}
+
+		if len(result.Removed) > 0 {
+			if _, err := tx.ExecContext(ctx, `
+				DELETE FROM rag_chunks WHERE document_id = $1 AND id = ANY($2)`,
+				document.ID, pgTextArray(result.Removed)); err != nil {
+				return fmt.Errorf("delete stale chunks: %w", err)
+			}
+		}
+		// Ordinals are unique per document and a re-cut moves chunks between
+		// them, so one row vacating an ordinal that another takes is a normal
+		// step rather than a conflict. Deferring the constraint asks the
+		// question at commit, when the rewrite is whole.
+		if _, err := tx.ExecContext(ctx, `SET CONSTRAINTS rag_chunks_ordinal_unique DEFERRED`); err != nil {
+			return fmt.Errorf("defer the chunk ordinal constraint: %w", err)
+		}
+		for _, chunk := range chunks {
+			metadata, err := encodeMetadata(chunk.Metadata)
+			if err != nil {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO rag_chunks (
+					id, document_id, corpus_id, organization_id, ordinal, body, token_count,
+					heading_path, heading_trail, start_byte, end_byte, sha256, metadata, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+				ON CONFLICT (id) DO UPDATE SET
+					ordinal = EXCLUDED.ordinal,
+					body = EXCLUDED.body,
+					token_count = EXCLUDED.token_count,
+					heading_path = EXCLUDED.heading_path,
+					heading_trail = EXCLUDED.heading_trail,
+					start_byte = EXCLUDED.start_byte,
+					end_byte = EXCLUDED.end_byte,
+					metadata = EXCLUDED.metadata`,
+				chunk.ID, document.ID, document.CorpusID, document.OrganizationID, chunk.Ordinal,
+				chunk.Text, chunk.TokenCount, pgTextArray(chunk.HeadingPath),
+				strings.Join(chunk.HeadingPath, " > "),
+				chunk.StartByte, chunk.EndByte, chunk.SHA256, metadata, at); err != nil {
+				return mapWriteError("upsert chunk", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return SyncResult{}, err
+	}
+	return result, nil
+}
+
+// Chunks reads chunks by id, scoped to the corpus, and returns them in the
+// order the ids were given. Retrieval has already ranked them, and re-sorting
+// here would throw that away.
+func (store *Store) Chunks(ctx context.Context, organizationID, corpusID string, ids []string) ([]domain.Chunk, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []chunkRow
+	if err := store.db.SelectContext(ctx, &rows, `
+		SELECT `+chunkColumns+`
+		FROM rag_chunks
+		WHERE organization_id = $1 AND corpus_id = $2 AND id = ANY($3)`,
+		organizationID, corpusID, pgTextArray(ids)); err != nil {
+		return nil, fmt.Errorf("read chunks: %w", err)
+	}
+	byID := make(map[string]domain.Chunk, len(rows))
+	for _, row := range rows {
+		chunk, err := row.chunk()
+		if err != nil {
+			return nil, err
+		}
+		byID[chunk.ID] = chunk
+	}
+	chunks := make([]domain.Chunk, 0, len(ids))
+	for _, id := range ids {
+		if chunk, found := byID[id]; found {
+			chunks = append(chunks, chunk)
+		}
+	}
+	return chunks, nil
+}
+
+// DocumentRefs reads the little about each document that travels with a match,
+// so a citation can be rendered without a second round trip per result.
+func (store *Store) DocumentRefs(ctx context.Context, organizationID string, ids []string) (map[string]domain.Ref, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var rows []struct {
+		ID         string `db:"id"`
+		Title      string `db:"title"`
+		SourceKind string `db:"source_kind"`
+		SourceRef  string `db:"source_ref"`
+	}
+	if err := store.db.SelectContext(ctx, &rows, `
+		SELECT id, title, source_kind, source_ref
+		FROM rag_documents
+		WHERE organization_id = $1 AND id = ANY($2)`, organizationID, pgTextArray(ids)); err != nil {
+		return nil, fmt.Errorf("read document references: %w", err)
+	}
+	refs := make(map[string]domain.Ref, len(rows))
+	for _, row := range rows {
+		refs[row.ID] = domain.Ref{
+			ID:     row.ID,
+			Title:  row.Title,
+			Source: domain.Source{Kind: domain.SourceKind(row.SourceKind), Ref: row.SourceRef},
+		}
+	}
+	return refs, nil
+}
+
+// LexicalHit is one match from the text index.
+type LexicalHit struct {
+	ChunkID string
+	Score   float64
+}
+
+// LexicalSearch is the other half of hybrid retrieval.
+//
+// It exists because vectors are bad at exactly what full-text search is good
+// at: an error code, an account number, a surname, a flag spelled exactly one
+// way. A dense retriever will happily return a passage about something
+// adjacent; this one returns the passage that contains the string.
+//
+// websearch_to_tsquery is used rather than plainto_tsquery because it accepts
+// what people actually type — quoted phrases, and a leading minus to exclude —
+// and because it never errors on punctuation the way to_tsquery does.
+func (store *Store) LexicalSearch(ctx context.Context, corpus domain.Corpus, text string, limit int, filter domain.Filter) ([]LexicalHit, error) {
+	if err := filter.Validate(); err != nil {
+		return nil, err
+	}
+	arguments := []any{corpus.OrganizationID, corpus.ID, text}
+	statement := `
+		SELECT id, ts_rank_cd(search_vector, query) AS score
+		FROM rag_chunks, websearch_to_tsquery('english', $3) AS query
+		WHERE organization_id = $1 AND corpus_id = $2 AND search_vector @@ query`
+	if len(filter.DocumentIDs) > 0 {
+		arguments = append(arguments, pgTextArray(filter.DocumentIDs))
+		statement += fmt.Sprintf(` AND document_id = ANY($%d)`, len(arguments))
+	}
+	for _, condition := range filter.Conditions {
+		arguments = append(arguments, condition.Key)
+		key := len(arguments)
+		switch condition.Operator {
+		case domain.OperatorEqual:
+			arguments = append(arguments, condition.Values[0])
+			statement += fmt.Sprintf(` AND metadata->>$%d = $%d`, key, len(arguments))
+		case domain.OperatorNotEqual:
+			arguments = append(arguments, condition.Values[0])
+			statement += fmt.Sprintf(` AND metadata->>$%d IS DISTINCT FROM $%d`, key, len(arguments))
+		case domain.OperatorIn:
+			arguments = append(arguments, pgTextArray(condition.Values))
+			statement += fmt.Sprintf(` AND metadata->>$%d = ANY($%d)`, key, len(arguments))
+		case domain.OperatorNotIn:
+			arguments = append(arguments, pgTextArray(condition.Values))
+			statement += fmt.Sprintf(` AND (metadata->>$%d IS NULL OR NOT (metadata->>$%d = ANY($%d)))`, key, key, len(arguments))
+		default:
+			return nil, fmt.Errorf("filter operator %q is not allowed: %w", condition.Operator, domain.ErrInvalid)
+		}
+	}
+	arguments = append(arguments, limit)
+	statement += fmt.Sprintf(` ORDER BY score DESC, id LIMIT $%d`, len(arguments))
+
+	var rows []struct {
+		ID    string  `db:"id"`
+		Score float64 `db:"score"`
+	}
+	if err := store.db.SelectContext(ctx, &rows, statement, arguments...); err != nil {
+		return nil, fmt.Errorf("lexical search: %w", err)
+	}
+	hits := make([]LexicalHit, 0, len(rows))
+	for _, row := range rows {
+		hits = append(hits, LexicalHit{ChunkID: row.ID, Score: row.Score})
+	}
+	return hits, nil
+}
+
+// pgTextArray renders a Go slice as a PostgreSQL text array literal.
+//
+// The sqlx path runs over database/sql, where a []string is not a value a
+// driver accepts. Rendering it here keeps every value a bound parameter — the
+// array is one parameter, not a list of them spliced into the statement.
+func pgTextArray(values []string) string {
+	if len(values) == 0 {
+		return "{}"
+	}
+	var builder strings.Builder
+	builder.WriteByte('{')
+	for index, value := range values {
+		if index > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteByte('"')
+		builder.WriteString(strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(value))
+		builder.WriteByte('"')
+	}
+	builder.WriteByte('}')
+	return builder.String()
+}

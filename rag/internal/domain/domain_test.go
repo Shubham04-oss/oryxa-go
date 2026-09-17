@@ -248,18 +248,22 @@ func TestMetadataMergeDoesNotMutate(t *testing.T) {
 func TestVectorValidateCatchesAMismatchedWidth(t *testing.T) {
 	t.Parallel()
 	spec := titanSpec()
-	if err := (Vector{ChunkID: "chk_1", Values: make([]float32, 1024)}).Validate(spec); err != nil {
+	if err := (Vector{ChunkID: "chk_1", DocumentID: "doc_1", Values: make([]float32, 1024)}).Validate(spec); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	err := (Vector{ChunkID: "chk_1", Values: make([]float32, 512)}).Validate(spec)
+	err := (Vector{ChunkID: "chk_1", DocumentID: "doc_1", Values: make([]float32, 512)}).Validate(spec)
 	if err == nil {
 		t.Fatal("a 512-wide vector was accepted into a 1024-wide corpus")
 	}
 	if !errors.Is(err, ErrConflict) {
 		t.Fatalf("error = %v, want ErrConflict", err)
 	}
-	if err := (Vector{Values: make([]float32, 1024)}).Validate(spec); err == nil {
+	// A store filters and deletes by both, so neither may be left out.
+	if err := (Vector{DocumentID: "doc_1", Values: make([]float32, 1024)}).Validate(spec); err == nil {
 		t.Fatal("a vector with no chunk was accepted")
+	}
+	if err := (Vector{ChunkID: "chk_1", Values: make([]float32, 1024)}).Validate(spec); err == nil {
+		t.Fatal("a vector with no document was accepted")
 	}
 }
 
