@@ -341,7 +341,14 @@ function IndexSourceDialog({
 						) : (
 							<Input
 								id={targetId}
-								onChange={(event) => setTarget(event.target.value)}
+								onChange={(event) => {
+									setTarget(event.target.value);
+									// Typing here is the same choice as "Enter one by
+									// hand instead": once made, the list loading in
+									// should not swap away what is already on screen
+									// and about to be sent.
+									setTypeItOut(true);
+								}}
 								placeholder={field.placeholder}
 								required={field.required}
 								value={target}
