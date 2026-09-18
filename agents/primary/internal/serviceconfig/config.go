@@ -69,6 +69,10 @@ type Config struct {
 	// RagURL is rag's own URL. When set, Krude gets the knowledge toolbox,
 	// which searches the member's and their organization's collections.
 	RagURL string
+	// KnowledgeMinRelevance is the reranker relevance below which Krude's
+	// knowledge search leaves a passage out; zero keeps every passage. It is
+	// on the scale of the reranker rag runs (see agents.KnowledgeConfig).
+	KnowledgeMinRelevance float64
 	// ArtifactBucket is the S3 bucket artifacts are kept in. Without it they
 	// are held in memory and go with the process.
 	ArtifactBucket string
@@ -150,6 +154,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	knowledgeMinRelevance, err := floatValue(getenv, "AGENTS_PRIMARY_KNOWLEDGE_MIN_RELEVANCE", 0, 0, 1)
+	if err != nil {
+		return Config{}, err
+	}
 	wakeupBatchSize, err := intValue(getenv, "AGENTS_WAKEUP_BATCH_SIZE", 5, 1, 100)
 	if err != nil {
 		return Config{}, err
@@ -195,6 +203,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		ModelPrices:           modelPrices,
 		AppsURL:               strings.TrimSpace(getenv("APPS_URL")),
 		RagURL:                strings.TrimSpace(getenv("RAG_URL")),
+		KnowledgeMinRelevance: knowledgeMinRelevance,
 		ArtifactBucket:        strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
 		S3Endpoint:            artifactEndpoint(getenv),
 		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),
@@ -283,6 +292,21 @@ func secondsValue(getenv func(string) string, name string, fallback, minimum, ma
 		return 0, fmt.Errorf("%s must be between %d and %d seconds", name, int(minimum/time.Second), int(maximum/time.Second))
 	}
 	return duration, nil
+}
+
+func floatValue(getenv func(string) string, name string, fallback, minimum, maximum float64) (float64, error) {
+	value := strings.TrimSpace(getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a number", name)
+	}
+	if parsed < minimum || parsed > maximum {
+		return 0, fmt.Errorf("%s must be between %g and %g", name, minimum, maximum)
+	}
+	return parsed, nil
 }
 
 func intValue(getenv func(string) string, name string, fallback, minimum, maximum int) (int, error) {

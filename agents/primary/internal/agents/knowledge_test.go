@@ -130,7 +130,7 @@ func TestKnowledgeSearchesAsTheMemberAndMergesTheBestPassages(t *testing.T) {
 			"corpus_org":    {match("Board notes", "knowledge:doc_9", "The board approved the launch.", 0.9)},
 		},
 	}
-	box, err := KnowledgeToolbox(KnowledgeConfig{Rag: rag, Tokens: fakeTokens{token: "should-not-be-minted"}})
+	box, err := KnowledgeToolbox(KnowledgeConfig{Rag: rag, Tokens: fakeTokens{token: "should-not-be-minted"}, MinRelevance: 0.2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,11 +147,11 @@ func TestKnowledgeSearchesAsTheMemberAndMergesTheBestPassages(t *testing.T) {
 			t.Fatalf("search = %q, want the member's own token, organization and query", call)
 		}
 	}
-	// Every search leaves out what a reranker judges irrelevant, so a
-	// question the documents cannot answer comes back with nothing.
+	// The configured floor rides on every search, so a question the
+	// documents cannot answer comes back with nothing.
 	for _, floor := range rag.minScores {
-		if floor != relevanceFloor {
-			t.Fatalf("searched with min_score %v, want the relevance floor %v", floor, relevanceFloor)
+		if floor != 0.2 {
+			t.Fatalf("searched with min_score %v, want the configured 0.2", floor)
 		}
 	}
 	// The organization's passage scored higher, so it comes first; the
@@ -179,6 +179,11 @@ func TestKnowledgeSearchUsesAnAgentTokenWhenTheMemberIsAway(t *testing.T) {
 	h.turn("user-1", map[string]any{OrganizationIDKey: "org-1"}, "Search.")
 	if searched := rag.searched(); len(searched) != 1 || !strings.Contains(searched[0], "agent-token") {
 		t.Fatalf("searches = %v, want one with the minted agent token", searched)
+	}
+	// Unset, the floor keeps every passage: nothing is left out on a scale
+	// no one calibrated.
+	if len(rag.minScores) != 1 || rag.minScores[0] != 0 {
+		t.Fatalf("searched with min_score %v, want none by default", rag.minScores)
 	}
 }
 

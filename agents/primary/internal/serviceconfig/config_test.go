@@ -41,6 +41,21 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.EventsQueueURL != "" || config.WakeupBatchSize != 5 || config.WakeupMaxWait != 2*time.Minute {
 		t.Fatalf("wake-up config = %+v", config)
 	}
+	if config.KnowledgeMinRelevance != 0 {
+		t.Fatalf("knowledge min relevance = %v, want off", config.KnowledgeMinRelevance)
+	}
+}
+
+func TestFromEnvReadsTheKnowledgeRelevanceFloor(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_KNOWLEDGE_MIN_RELEVANCE": " 0.2 "}))
+	if err != nil || config.KnowledgeMinRelevance != 0.2 {
+		t.Fatalf("FromEnv() = %v, %v", config.KnowledgeMinRelevance, err)
+	}
+	for _, value := range []string{"-0.1", "1.5", "high"} {
+		if _, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_KNOWLEDGE_MIN_RELEVANCE": value})); err == nil {
+			t.Errorf("FromEnv() error = nil for %q", value)
+		}
+	}
 }
 
 func TestFromEnvReadsWakeups(t *testing.T) {
