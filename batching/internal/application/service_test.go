@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -300,5 +301,89 @@ func TestATriggerIsScreenedBeforeItIsClassified(t *testing.T) {
 		if err != nil || classified != 0 || len(store.recorded) != 0 {
 			t.Fatalf("screened %d: error = %v, classified %d times, recorded %d", screened, err, classified, len(store.recorded))
 		}
+	}
+}
+
+// flakyProvider fails while down, and counts every time it is asked.
+type flakyProvider struct {
+	down  bool
+	asked int
+}
+
+func (provider *flakyProvider) Classify(context.Context, appsv1.TriggerReceived) (domain.Classification, error) {
+	provider.asked++
+	if provider.down {
+		return domain.Classification{}, errors.New("provider unavailable")
+	}
+	return domain.Classification{Lane: domain.LaneDigest, Priority: .2, Classifier: "jev-test"}, nil
+}
+
+// TestAFailingClassifierIsNotAskedAgainUntilItsCoolDownEnds: an outage must
+// not cost every trigger its timeout. After five failures in a row the
+// provider is left alone for a minute; then one trigger asks, a failure
+// waits another minute, and a success resumes classification. Opening and
+// closing are logged once each.
+func TestAFailingClassifierIsNotAskedAgainUntilItsCoolDownEnds(t *testing.T) {
+	provider := &flakyProvider{down: true}
+	var logs strings.Builder
+	classifier := NewResilientClassifier(provider, slog.New(slog.NewTextHandler(&logs, nil)))
+	clock := testClock
+	classifier.now = func() time.Time { return clock }
+	ctx := context.Background()
+	classify := func() domain.Classification {
+		t.Helper()
+		classification, err := classifier.Classify(ctx, appsv1.TriggerReceived{Toolkit: "slack", Trigger: "message"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return classification
+	}
+
+	for range breakerFailures {
+		classify()
+	}
+	if got := classify(); provider.asked != breakerFailures || got.Priority != domain.FallbackPriority || got.Classifier != "jev-fallback.v1" {
+		t.Fatalf("asked %d times, classification %+v; want the circuit open after %d failures", provider.asked, got, breakerFailures)
+	}
+
+	clock = clock.Add(breakerCooldown)
+	if ask, probe := classifier.admit(); !ask || !probe {
+		t.Fatalf("admit() after the cool-down = %t, %t, want one probe", ask, probe)
+	}
+	if ask, _ := classifier.admit(); ask {
+		t.Fatal("a second trigger asked while the first was probing")
+	}
+	classifier.settle(ctx, errors.New("still down"), true)
+	classify()
+	if provider.asked != breakerFailures {
+		t.Fatalf("asked %d times right after a failed probe, want the circuit open again", provider.asked)
+	}
+
+	clock = clock.Add(breakerCooldown)
+	provider.down = false
+	if got := classify(); got.Classifier != "jev-test" {
+		t.Fatalf("the probe = %+v, want the provider's answer", got)
+	}
+	classify()
+	if provider.asked != breakerFailures+2 {
+		t.Fatalf("asked %d times, want every trigger asked once the circuit closed", provider.asked)
+	}
+	if opened, closed := strings.Count(logs.String(), "without asking it"), strings.Count(logs.String(), "answered again"); opened != 1 || closed != 1 {
+		t.Fatalf("logged the circuit opening %d times and closing %d, want once each:\n%s", opened, closed, logs.String())
+	}
+}
+
+func TestACallerGivingUpDoesNotOpenTheCircuit(t *testing.T) {
+	provider := &flakyProvider{down: true}
+	classifier := NewResilientClassifier(provider, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 2 * breakerFailures {
+		if _, err := classifier.Classify(ctx, appsv1.TriggerReceived{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if provider.asked != 2*breakerFailures {
+		t.Fatalf("asked %d times, want the circuit still closed", provider.asked)
 	}
 }

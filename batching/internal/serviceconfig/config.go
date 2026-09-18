@@ -11,6 +11,12 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/domain"
 )
 
+// MaxJevTimeout is the longest BATCHING_JEV_TIMEOUT may be. A message is
+// handled within one classification and a few statements, and the queue must
+// hide it from other replicas for longer than that or it is handled twice;
+// the provisioner's visibility timeout is checked against this.
+const MaxJevTimeout = 10 * time.Second
+
 type Config struct {
 	EventsQueueURL      string
 	EventBridgeEndpoint string
@@ -64,6 +70,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	jevTimeout, err := duration(getenv, "BATCHING_JEV_TIMEOUT", 3*time.Second)
 	if err != nil {
 		return Config{}, err
+	}
+	if jevTimeout > MaxJevTimeout {
+		return Config{}, fmt.Errorf("BATCHING_JEV_TIMEOUT must not exceed %s", MaxJevTimeout)
 	}
 	immediate, err := decimal(getenv, "BATCHING_JEV_IMMEDIATE_PROBABILITY", .85)
 	if err != nil {

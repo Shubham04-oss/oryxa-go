@@ -54,11 +54,19 @@ func TestFromEnvRejectsInvalidPolicy(t *testing.T) {
 		"relative url":    {"EVENTBRIDGE_ENDPOINT": "localhost:4566"},
 		"typesafe url":    {"TYPESAFE_BASE_URL": "typesafe.test"},
 		"bad probability": {"BATCHING_JEV_IMMEDIATE_PROBABILITY": "1.1"},
+		"slow classifier": {"BATCHING_JEV_TIMEOUT": "11s"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := FromEnv(env(values)); err == nil {
 				t.Fatal("FromEnv() error = nil")
 			}
 		})
+	}
+}
+
+func TestTheClassifierMayTakeUpToTenSeconds(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{"BATCHING_JEV_TIMEOUT": "10s"}))
+	if err != nil || config.JevTimeout != MaxJevTimeout {
+		t.Fatalf("FromEnv() = %s, %v", config.JevTimeout, err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
@@ -50,32 +51,116 @@ func (DigestClassifier) Classify(context.Context, appsv1.TriggerReceived) (domai
 	return domain.Classification{Lane: domain.LaneDigest, Priority: 0, Classifier: "default-digest.v1"}, nil
 }
 
+const (
+	// breakerFailures is how many classifications in a row may fail before
+	// ResilientClassifier stops asking its provider, for breakerCooldown.
+	breakerFailures = 5
+	breakerCooldown = time.Minute
+)
+
 // ResilientClassifier preserves ingestion when the external classifier is
 // unavailable. Its fallback, domain.FallbackPriority, accelerates the event
 // without turning a provider outage into one agent turn per webhook.
+//
+// It is also a circuit breaker. After breakerFailures failures in a row it
+// stops asking the provider for breakerCooldown and answers with the
+// fallback at once, so an outage costs each trigger its timeout only until
+// then. After the cool-down one trigger asks again: its success closes the
+// circuit, and its failure keeps it open for another cool-down.
 type ResilientClassifier struct {
 	primary Classifier
 	logger  *slog.Logger
+	now     func() time.Time
+
+	mutex     sync.Mutex
+	failures  int       // in a row, while the circuit is closed
+	openUntil time.Time // zero while the circuit is closed
+	probing   bool      // one trigger is asking whether the provider is back
 }
 
 func NewResilientClassifier(primary Classifier, logger *slog.Logger) *ResilientClassifier {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &ResilientClassifier{primary: primary, logger: logger}
+	return &ResilientClassifier{primary: primary, logger: logger, now: time.Now}
 }
 
 func (classifier *ResilientClassifier) Classify(ctx context.Context, trigger appsv1.TriggerReceived) (domain.Classification, error) {
+	ask, probe := classifier.admit()
+	if !ask {
+		return fallback("Jev not asked while its circuit is open; accelerated digest fallback"), nil
+	}
 	classification, err := classifier.primary.Classify(ctx, trigger)
+	opened, closed := classifier.settle(ctx, err, probe)
+	if closed {
+		classifier.logger.InfoContext(ctx, "Jev answered again; classifying with it")
+	}
 	if err == nil {
 		return classification, nil
 	}
 	classifier.logger.ErrorContext(ctx, "Jev classification failed; using an accelerated digest", "error", err,
 		"toolkit", trigger.Toolkit, "trigger", trigger.Trigger)
+	if opened {
+		classifier.logger.WarnContext(ctx, "Jev failed repeatedly; using the accelerated digest without asking it for a while",
+			"failures", breakerFailures, "cooldown", breakerCooldown.String())
+	}
+	return fallback("Jev unavailable; accelerated digest fallback"), nil
+}
+
+func fallback(reason string) domain.Classification {
 	return domain.Classification{
-		Lane: domain.LaneDigest, Priority: domain.FallbackPriority, Classifier: "jev-fallback.v1",
-		Reason: "Jev unavailable; accelerated digest fallback",
-	}, nil
+		Lane: domain.LaneDigest, Priority: domain.FallbackPriority, Classifier: "jev-fallback.v1", Reason: reason,
+	}
+}
+
+// admit says whether to ask the provider, and whether this is the one call
+// asking whether an open circuit's provider is back.
+func (classifier *ResilientClassifier) admit() (ask, probe bool) {
+	classifier.mutex.Lock()
+	defer classifier.mutex.Unlock()
+	switch {
+	case classifier.openUntil.IsZero():
+		return true, false
+	case classifier.probing || classifier.now().Before(classifier.openUntil):
+		return false, false
+	default:
+		classifier.probing = true
+		return true, true
+	}
+}
+
+// settle counts how a call to the provider went, and says whether it opened
+// or closed the circuit. A caller that gave up says nothing about the
+// provider, so its failure counts for nothing.
+func (classifier *ResilientClassifier) settle(ctx context.Context, err error, probe bool) (opened, closed bool) {
+	classifier.mutex.Lock()
+	defer classifier.mutex.Unlock()
+	if probe {
+		classifier.probing = false
+	}
+	switch {
+	case err == nil:
+		classifier.failures = 0
+		if !classifier.openUntil.IsZero() {
+			classifier.openUntil = time.Time{}
+			return false, true
+		}
+	case ctx.Err() != nil:
+	case !classifier.openUntil.IsZero():
+		// Still down: a failed probe starts another cool-down. A call
+		// already under way when the circuit opened changes nothing.
+		if probe {
+			classifier.openUntil = classifier.now().Add(breakerCooldown)
+		}
+	default:
+		classifier.failures++
+		if classifier.failures >= breakerFailures {
+			classifier.failures = 0
+			classifier.openUntil = classifier.now().Add(breakerCooldown)
+			return true, false
+		}
+	}
+	return false, false
 }
 
 type store interface {

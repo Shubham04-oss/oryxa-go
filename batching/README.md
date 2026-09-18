@@ -62,8 +62,11 @@ projection of the app payload. This projection never replaces or truncates the
 payload stored for the agent. Provider failures become a fallback digest at
 `FallbackPriority` (0.4): the event stays durable and its soft deadline comes
 forward, but its pressure stays under the smallest target, so an outage cannot
-create one agent turn per webhook. With no API key, classification remains the
-deterministic digest policy.
+create one agent turn per webhook. After five failures in a row batching stops
+asking TypeSafe for a minute and takes the fallback at once, so an outage does
+not cost every trigger its timeout; then one trigger asks again, and a success
+resumes classification. Opening and closing are each logged once. With no API
+key, classification remains the deterministic digest policy.
 
 The service publishes through the shared transactional outbox. Claiming a due
 group and writing its output event are separate transactions connected by a
@@ -123,7 +126,9 @@ periodic hard cadence: ordinary traffic may release earlier, but never later.
 The service rejects values over `90m`; the default is `1h`, leaving operational
 headroom beneath the product's absolute delivery ceiling.
 `BATCHING_LARGEST_BATCH` must be at least the cold-start target, and the claim
-lease must exceed the sweep interval. At least two groups are handled per sweep
+lease must exceed the sweep interval. `BATCHING_JEV_TIMEOUT` may be at most
+`10s`, so a message is always handled well within the queue's 60-second
+visibility timeout and never handled twice for being slow. At least two groups are handled per sweep
 so immediate traffic cannot consume every worker slot and starve due digests.
 
 The current agents service still consumes app triggers directly. Do not route
@@ -138,8 +143,5 @@ Found in review before the first merge, and not yet addressed:
   every app payload — mail bodies, direct messages — to TypeSafe, for every
   organization, with no per-organization opt-in. Leave it unset until that
   sharing is approved. `TYPESAFE_BASE_URL` also accepts `http://`.
-- **A failing classifier costs every trigger its timeout.**
-  `BATCHING_JEV_TIMEOUT` has no ceiling, and one over a few seconds can
-  outrun the queue's visibility timeout.
 - **Throughput is bounded per replica**: at most `BATCHING_GROUPS_PER_SWEEP`
   groups per sweep interval, so the hard cadence holds only below that rate.
