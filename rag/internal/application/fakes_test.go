@@ -96,12 +96,13 @@ type documentsCall struct {
 // store_integration_test.go and all this layer needs to prove is that it asks
 // for the right page and passes back what the store answered.
 type fakeStore struct {
-	mu        sync.Mutex
-	corpora   map[string]domain.Corpus
-	documents map[string]domain.Document
-	chunkIDs  map[string][]string
-	orgs      map[string]string
-	events    []domain.Event
+	mu                sync.Mutex
+	corpora           map[string]domain.Corpus
+	documents         map[string]domain.Document
+	chunkIDs          map[string][]string
+	orgs              map[string]string
+	events            []domain.Event
+	knowledgeMappings map[string]domain.KnowledgeDocumentMapping
 
 	lastDocumentsCall documentsCall
 	documentsPage     []domain.Document
@@ -111,10 +112,11 @@ type fakeStore struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		corpora:   map[string]domain.Corpus{},
-		documents: map[string]domain.Document{},
-		chunkIDs:  map[string][]string{},
-		orgs:      map[string]string{},
+		corpora:           map[string]domain.Corpus{},
+		documents:         map[string]domain.Document{},
+		chunkIDs:          map[string][]string{},
+		orgs:              map[string]string{},
+		knowledgeMappings: map[string]domain.KnowledgeDocumentMapping{},
 	}
 }
 
@@ -336,6 +338,34 @@ func (store *fakeStore) RecordEvents(_ context.Context, events []domain.Event) e
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.events = append(store.events, events...)
+	return nil
+}
+
+func (store *fakeStore) KnowledgeDocumentMapping(_ context.Context, organizationID, knowledgeDocumentID string) (domain.KnowledgeDocumentMapping, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	mapping, ok := store.knowledgeMappings[knowledgeDocumentID]
+	if !ok || mapping.OrganizationID != organizationID {
+		return domain.KnowledgeDocumentMapping{}, domain.ErrNotFound
+	}
+	return mapping, nil
+}
+
+func (store *fakeStore) UpsertKnowledgeDocumentMapping(_ context.Context, mapping domain.KnowledgeDocumentMapping) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.knowledgeMappings[mapping.KnowledgeDocumentID] = mapping
+	return nil
+}
+
+func (store *fakeStore) DeleteKnowledgeDocumentMapping(_ context.Context, organizationID, knowledgeDocumentID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	mapping, ok := store.knowledgeMappings[knowledgeDocumentID]
+	if !ok || mapping.OrganizationID != organizationID {
+		return domain.ErrNotFound
+	}
+	delete(store.knowledgeMappings, knowledgeDocumentID)
 	return nil
 }
 

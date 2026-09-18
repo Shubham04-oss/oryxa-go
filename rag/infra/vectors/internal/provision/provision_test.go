@@ -8,6 +8,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	fileseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
+	knowledgeeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/events"
@@ -40,9 +41,10 @@ func TestEventPatternCoversEverythingTheConsumerHandles(t *testing.T) {
 		bySource[clause.Source[0]] = clause.DetailType
 	}
 	for source, want := range map[string][]string{
-		autheventsv1.Source:  events.AuthSubscriptions(),
-		teamseventsv1.Source: events.TeamSubscriptions(),
-		fileseventsv1.Source: events.FileSubscriptions(),
+		autheventsv1.Source:      events.AuthSubscriptions(),
+		teamseventsv1.Source:     events.TeamSubscriptions(),
+		fileseventsv1.Source:     events.FileSubscriptions(),
+		knowledgeeventsv1.Source: events.KnowledgeSubscriptions(),
 	} {
 		got, present := bySource[source]
 		if !present {

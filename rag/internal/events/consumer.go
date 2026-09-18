@@ -15,6 +15,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	fileseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
+	knowledgeeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 )
 
@@ -44,6 +45,16 @@ func FileSubscriptions() []string {
 	}
 }
 
+// KnowledgeSubscriptions is what rag listens for from knowledge: every
+// document it extracts, whichever source or provider it came from, and every
+// one that goes away.
+func KnowledgeSubscriptions() []string {
+	return []string{
+		knowledgeeventsv1.DocumentPublishedDetailType,
+		knowledgeeventsv1.DocumentRemovedDetailType,
+	}
+}
+
 type application interface {
 	OrganizationCreated(context.Context, autheventsv1.OrganizationCreated) error
 	OrganizationUpdated(context.Context, autheventsv1.OrganizationUpdated) error
@@ -51,6 +62,8 @@ type application interface {
 	MemberRemoved(context.Context, autheventsv1.MemberRemoved) error
 	TeamDeleted(context.Context, teamseventsv1.TeamDeleted) error
 	ObjectDeleted(context.Context, fileseventsv1.ObjectDeleted) error
+	DocumentPublished(context.Context, knowledgeeventsv1.DocumentPublished) error
+	DocumentRemoved(context.Context, knowledgeeventsv1.DocumentRemoved) error
 }
 
 type handler func(context.Context, json.RawMessage) error
@@ -68,12 +81,14 @@ type Consumer struct {
 func NewConsumer(app application, logger *slog.Logger) *Consumer {
 	return &Consumer{
 		handlers: map[string]subscription{
-			autheventsv1.OrganizationCreatedDetailType: {source: autheventsv1.Source, handle: decode(app.OrganizationCreated)},
-			autheventsv1.OrganizationUpdatedDetailType: {source: autheventsv1.Source, handle: decode(app.OrganizationUpdated)},
-			autheventsv1.OrganizationDeletedDetailType: {source: autheventsv1.Source, handle: decode(app.OrganizationDeleted)},
-			autheventsv1.MemberRemovedDetailType:       {source: autheventsv1.Source, handle: decode(app.MemberRemoved)},
-			teamseventsv1.TeamDeletedDetailType:        {source: teamseventsv1.Source, handle: decode(app.TeamDeleted)},
-			fileseventsv1.ObjectDeletedDetailType:      {source: fileseventsv1.Source, handle: decode(app.ObjectDeleted)},
+			autheventsv1.OrganizationCreatedDetailType:    {source: autheventsv1.Source, handle: decode(app.OrganizationCreated)},
+			autheventsv1.OrganizationUpdatedDetailType:    {source: autheventsv1.Source, handle: decode(app.OrganizationUpdated)},
+			autheventsv1.OrganizationDeletedDetailType:    {source: autheventsv1.Source, handle: decode(app.OrganizationDeleted)},
+			autheventsv1.MemberRemovedDetailType:          {source: autheventsv1.Source, handle: decode(app.MemberRemoved)},
+			teamseventsv1.TeamDeletedDetailType:           {source: teamseventsv1.Source, handle: decode(app.TeamDeleted)},
+			fileseventsv1.ObjectDeletedDetailType:         {source: fileseventsv1.Source, handle: decode(app.ObjectDeleted)},
+			knowledgeeventsv1.DocumentPublishedDetailType: {source: knowledgeeventsv1.Source, handle: decode(app.DocumentPublished)},
+			knowledgeeventsv1.DocumentRemovedDetailType:   {source: knowledgeeventsv1.Source, handle: decode(app.DocumentRemoved)},
 		},
 		logger: logger,
 	}

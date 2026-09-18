@@ -31,6 +31,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	fileseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
+	knowledgeeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/events"
@@ -123,7 +124,7 @@ func Run(ctx context.Context, clients Clients, config Config) (Output, error) {
 
 	rule, err := clients.EventBridge.PutRule(ctx, &eventbridge.PutRuleInput{
 		Name:         aws.String(ruleName),
-		Description:  aws.String("What rag indexed and can no longer keep: deleted organizations, members, teams and files"),
+		Description:  aws.String("What rag must index or drop: documents knowledge published or removed, and what rag indexed that is now gone (deleted organizations, members, teams and files)"),
 		EventBusName: aws.String(config.EventBusName),
 		EventPattern: aws.String(pattern),
 		State:        eventbridgetypes.RuleStateEnabled,
@@ -169,10 +170,12 @@ func Run(ctx context.Context, clients Clients, config Config) (Output, error) {
 
 // EventPattern is what rag listens for.
 //
-// Every one of these is something rag indexed going away. Without the rule the
+// Most of these are something rag indexed going away: without the rule the
 // index quietly outlives what it was built from, which is the failure that
-// matters most here: it keeps answering questions from text nobody is entitled
-// to see any more.
+// matters most here, because it keeps answering questions from text nobody is
+// entitled to see any more. Knowledge's two are the opposite direction — a
+// document to index or update — but travel on the same queue, since nothing
+// about receiving them differs from receiving a deletion.
 func EventPattern() (string, error) {
 	pattern, err := json.Marshal(map[string]any{
 		"$or": []map[string][]string{
@@ -187,6 +190,10 @@ func EventPattern() (string, error) {
 			{
 				"source":      {fileseventsv1.Source},
 				"detail-type": slices.Sorted(slices.Values(events.FileSubscriptions())),
+			},
+			{
+				"source":      {knowledgeeventsv1.Source},
+				"detail-type": slices.Sorted(slices.Values(events.KnowledgeSubscriptions())),
 			},
 		},
 	})
