@@ -87,7 +87,9 @@ needs configuration rather than a deploy.
 Vertex's text models also refuse a call carrying more than 20,000 tokens across
 its texts, whatever their count, so a batch closes at whichever limit it
 reaches first, packed to 90% of the token limit because a count here is an
-estimate.
+estimate. No estimate holds for every kind of text, so a call Vertex still
+refuses as too large is embedded in halves, and a text the provider says it
+truncated is logged: part of it is missing from its vector.
 
 Every call says whether it is embedding a document or a query. These models are
 trained asymmetrically — Cohere takes `input_type`, Vertex takes `task_type` —

@@ -150,8 +150,16 @@ func (client *Client) Embed(ctx context.Context, kind domain.InputKind, texts []
 			combined.Vectors = append(combined.Vectors, vector)
 		}
 		combined.Usage.Add(result.Usage)
+		combined.Truncated += result.Truncated
 	}
 	combined.Usage.EmbeddedTexts = len(texts)
+	if combined.Truncated > 0 {
+		// The provider read less than it was sent, so part of each of these
+		// texts is not in its vector. On an ingest it means chunks run longer
+		// than the model reads.
+		client.options.Logger.WarnContext(ctx, "the provider truncated texts to its input limit",
+			"model", client.spec.Model, "kind", kind, "truncated", combined.Truncated, "texts", len(texts))
+	}
 	return combined, nil
 }
 
@@ -200,6 +208,9 @@ func (client *Client) embedBatch(ctx context.Context, kind domain.InputKind, tex
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
+		if errors.Is(err, ErrBatchTooLarge) && len(texts) > 1 {
+			return client.embedHalves(ctx, kind, texts)
+		}
 		if !retryable(err) || attempt == client.options.MaxAttempts {
 			return Result{}, err
 		}
@@ -211,6 +222,28 @@ func (client *Client) embedBatch(ctx context.Context, kind domain.InputKind, tex
 		}
 	}
 	return Result{}, lastErr
+}
+
+// embedHalves embeds a batch the provider refused as too large in two halves,
+// each of which may be halved again. The batch was sized by an estimate, and
+// no estimate holds for every kind of text: code, and languages the model's
+// vocabulary serves less well, cost more tokens than they look.
+func (client *Client) embedHalves(ctx context.Context, kind domain.InputKind, texts []string) (Result, error) {
+	client.options.Logger.WarnContext(ctx, "an embedding call was over the model's token limit; embedding it in halves",
+		"model", client.spec.Model, "texts", len(texts))
+	middle := len(texts) / 2
+	first, err := client.embedBatch(ctx, kind, texts[:middle])
+	if err != nil {
+		return Result{}, err
+	}
+	second, err := client.embedBatch(ctx, kind, texts[middle:])
+	if err != nil {
+		return Result{}, err
+	}
+	first.Vectors = append(first.Vectors, second.Vectors...)
+	first.Usage.Add(second.Usage)
+	first.Truncated += second.Truncated
+	return first, nil
 }
 
 // backoff is exponential with jitter, and never exceeds MaxDelay: the result
