@@ -31,13 +31,25 @@ clients are not restored — both are hand-rolled on the shared paced client
 the way Slack already was, since Composio holds the credential and a
 generated client has nowhere to place one.
 
-**`files` still cannot be indexed, for one reason.**
+**`files` is indexed again (fixed).** `application.Grants` now has an
+implementation: `/internal/membertoken` redeems a member's standing agent
+grant at auth's `/v1/internal/agent-tokens`, the same route
+`agents/primary/internal/memberauth` has always used, and holds each token
+until shortly before it expires so a pass over many sources asks auth once.
 
-- **`application.Grants` has no implementation.** It mints a member-scoped
-  token for the files source, because `files` has no service identity —
-  every route there wants a member's own credentials. Until one is supplied,
-  the files source is not mounted. `agents/primary/internal/memberauth` is
-  the working precedent for minting one under auth's agent grant.
+`Mount` registers the files source once `FILES_URL` and
+`KNOWLEDGE_SERVICE_KEY_ID` are both set; without either it says which is
+missing and leaves the source off, as before. The deployment also has to
+name knowledge in auth's `AUTH_SERVICE_CALLERS` with the `agent` purpose —
+auth refuses a service it does not know, and that reads as
+`membertoken.ErrNotConfigured` rather than as a source that quietly never
+runs.
+
+Two things to know about it. A member who never granted answers
+`ErrGrantRequired`, which no retry fixes and which stops that source rather
+than falling back to anything wider. And `/internal/membertoken` duplicates
+`agents/primary/internal/memberauth`, which cannot be imported from outside
+`agents/primary`; the two speak the same route and should become one.
 
 ---
 

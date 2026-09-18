@@ -88,11 +88,15 @@ connection a member made in apps, so knowledge holds no credential of its own
 `COMPOSIO_API_KEY` is set, which is also why the project key is in two services
 (see above).
 
-The files source is still built and unmounted: it reads as the member who
-registered it and needs a grant to do that
-([knowledge/TODO.md §1](../knowledge/TODO.md#1-what-still-blocks-every-pass)).
-So an organization's own documents — the obvious first thing anyone would
-index — are the one thing knowledge cannot read. That waits on §3.2.
+The files source is mounted again. It reads as the member who registered it,
+and a scheduled pass has no member at a browser, so it redeems the standing
+agent grant they gave auth: `/internal/membertoken` exchanges one for a
+short-lived token at auth's `/v1/internal/agent-tokens`, the route agents has
+always used. It mounts once `FILES_URL` and `KNOWLEDGE_SERVICE_KEY_ID` are
+set and auth lists knowledge in `AUTH_SERVICE_CALLERS` with the `agent`
+purpose; short of any of those it says which is missing and stays off. So an
+organization's own documents can finally be indexed — against a stand-in
+auth, not yet against Cognito.
 
 Nothing has run a pass against a real app, either: it needs a connected
 account, which needs a member at a browser.

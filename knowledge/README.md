@@ -101,9 +101,18 @@ the source failing, so nothing is recorded against it.
 `github`, `notion` and `slack` take a `connection_id`, naming a connection a
 member made through `apps`; every call is proxied through Composio's API on
 the connected account behind it, never made directly. They mount only when
-`COMPOSIO_API_KEY` is set. `files` reads as the member who registered it, has
-no connection, and is built and tested but not mounted, because it has no
-grant to read as — see [Later](#later).
+`COMPOSIO_API_KEY` is set.
+
+`files` reads the organization's own storage as the member who registered it,
+and takes no connection. A scheduled pass has no member at a browser, so it
+redeems the standing agent grant they gave auth: `/internal/membertoken`
+exchanges it for a short-lived token at auth's `/v1/internal/agent-tokens`,
+holding each until shortly before it expires. It mounts once `FILES_URL` and
+`KNOWLEDGE_SERVICE_KEY_ID` are set and auth lists knowledge in
+`AUTH_SERVICE_CALLERS` with the `agent` purpose; short of any of those it
+says which is missing and stays off. A member who never granted stops their
+own source with `grant_required` rather than the pass falling back to
+anything wider.
 
 Only text is indexed. A media type holding none is refused rather than stored
 as though bytes were words; HTML is not read yet (see [Later](#later)).
