@@ -44,8 +44,10 @@ type Store interface {
 	// writing nothing, if the connection was already removed.
 	RemoveConnection(ctx context.Context, id, reason string, now time.Time, events func(domain.Connection, []domain.Trigger) ([]domain.Event, error)) (bool, error)
 	// ConnectionsAwaitingSubscribe answers the active connections owed an
-	// auto-subscribe, counting an attempt against each as it claims them.
-	ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempts, limit int, now time.Time) ([]domain.Connection, error)
+	// auto-subscribe, counting an attempt against each and leasing it until
+	// leaseUntil as it claims them, so a second pass cannot claim the same
+	// connection while this one still owns it.
+	ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempts, limit int, now, leaseUntil time.Time) ([]domain.Connection, error)
 	// MarkSubscribed records that a connection has been subscribed to what
 	// its app delivers.
 	MarkSubscribed(ctx context.Context, id string, now time.Time) error

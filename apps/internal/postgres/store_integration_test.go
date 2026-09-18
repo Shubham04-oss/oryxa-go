@@ -356,6 +356,84 @@ func TestRemoveConnectionRemovesItsTriggersAndAnswersFalseTheSecondTime(t *testi
 	}
 }
 
+// activateForAutoSubscribe records and activates a connection that wants
+// auto-subscribing, the way a completed callback leaves one. testConnection
+// does not set AutoSubscribe, since most of its callers do not care about it.
+func activateForAutoSubscribe(t *testing.T, store *Store, organizationID, memberID string) domain.Connection {
+	t.Helper()
+	ctx := context.Background()
+	connection := domain.Connection{
+		ID: "con_" + randomHex(8), OrganizationID: organizationID, MemberID: memberID, Toolkit: "github",
+		AuthConfigID: "ac_1", ComposioUserID: domain.ComposioUserID(organizationID, memberID),
+		ComposioAccountID: "acc_" + randomHex(8), Status: domain.ConnectionPending, AutoSubscribe: true,
+		CreatedAt: testClock, UpdatedAt: testClock,
+	}
+	if err := store.CreateConnection(ctx, connection, "state_"+randomHex(8),
+		testEvent(t, "apps.connection.initiated.v1")); err != nil {
+		t.Fatalf("CreateConnection() error = %v", err)
+	}
+	activated, _, err := store.ActivateConnection(ctx, connection.ID, "label", testClock.Add(time.Minute),
+		testEvent(t, "apps.connection.connected.v1"))
+	if err != nil {
+		t.Fatalf("ActivateConnection() error = %v", err)
+	}
+	return activated
+}
+
+// TestConnectionsAwaitingSubscribeLeasesWhatItClaims proves the lease closes
+// the window FOR UPDATE SKIP LOCKED leaves open: that lock protects only the
+// claiming statement itself, so without a lease a second pass ticking right
+// after the first commits would see the same connection as unclaimed and
+// take it again - doubling the Composio calls the real bug spent.
+func TestConnectionsAwaitingSubscribeLeasesWhatItClaims(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	connection := activateForAutoSubscribe(t, store, "org_1", "member_1")
+
+	now := testClock.Add(time.Minute)
+	leaseUntil := now.Add(10 * time.Minute)
+	first, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, now, leaseUntil)
+	if err != nil {
+		t.Fatalf("ConnectionsAwaitingSubscribe() error = %v", err)
+	}
+	if len(first) != 1 || first[0].ID != connection.ID {
+		t.Fatalf("first claim = %+v, want just the one connection", first)
+	}
+
+	// A second pass at the same instant - the same race the bug allowed -
+	// gets nothing: the lease this claim just took still holds.
+	again, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, now, leaseUntil)
+	if err != nil {
+		t.Fatalf("ConnectionsAwaitingSubscribe(same instant) error = %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("a second claim under the first's lease = %+v, want none", again)
+	}
+
+	// Once the lease has passed, and the connection is still unmarked and
+	// under its attempt limit, it is fair game again.
+	afterLease := leaseUntil.Add(time.Second)
+	retried, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, afterLease, afterLease.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("ConnectionsAwaitingSubscribe(after lease) error = %v", err)
+	}
+	if len(retried) != 1 || retried[0].ID != connection.ID {
+		t.Fatalf("claim after the lease = %+v, want the connection back", retried)
+	}
+
+	// A connection already marked subscribed is never claimed, leased or not.
+	if err := store.MarkSubscribed(ctx, connection.ID, afterLease); err != nil {
+		t.Fatalf("MarkSubscribed() error = %v", err)
+	}
+	done, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, afterLease.Add(time.Hour), afterLease.Add(time.Hour+10*time.Minute))
+	if err != nil {
+		t.Fatalf("ConnectionsAwaitingSubscribe(marked) error = %v", err)
+	}
+	if len(done) != 0 {
+		t.Fatalf("claimed a connection already marked subscribed: %+v", done)
+	}
+}
+
 func TestSaveAuthConfigAgreesUnderConcurrency(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

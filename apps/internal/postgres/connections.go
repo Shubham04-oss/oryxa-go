@@ -103,25 +103,30 @@ func (store *Store) FailConnection(ctx context.Context, id, reason string, now t
 }
 
 // ConnectionsAwaitingSubscribe answers the active connections that asked to
-// be subscribed to their app's events and have not been, oldest first, and
-// counts an attempt against each — so a toolkit that keeps failing is given
-// up on after maxAttempts rather than retried for ever.
+// be subscribed to their app's events and have not been, oldest first,
+// counts an attempt against each and leases it until leaseUntil - so a
+// toolkit that keeps failing is given up on after maxAttempts rather than
+// retried for ever, and a second pass cannot claim the same connection while
+// this one still owns it.
 //
-// Counting the attempt as they are claimed is also what keeps two replicas
-// from doing the same connection twice over: the row each reads back carries
-// the count it just took.
-func (store *Store) ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempts, limit int, now time.Time) ([]domain.Connection, error) {
+// FOR UPDATE SKIP LOCKED alone protects only this statement: once it commits,
+// a second replica's next tick would see the same rows as unclaimed again and
+// take them too, doubling the Composio calls. The lease is what closes that
+// window between passes, not just within one.
+func (store *Store) ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempts, limit int, now, leaseUntil time.Time) ([]domain.Connection, error) {
 	return queryConnections(ctx, store.pool, `
-		UPDATE apps_connections SET auto_subscribe_attempts = auto_subscribe_attempts + 1, updated_at = $3
+		UPDATE apps_connections SET auto_subscribe_attempts = auto_subscribe_attempts + 1,
+			auto_subscribe_claimed_until = $4, updated_at = $3
 		WHERE id IN (
 			SELECT id FROM apps_connections
 			WHERE status = 'active' AND auto_subscribe AND auto_subscribed_at IS NULL
 				AND auto_subscribe_attempts < $1
+				AND (auto_subscribe_claimed_until IS NULL OR auto_subscribe_claimed_until <= $3)
 			ORDER BY connected_at
 			LIMIT $2
 			FOR UPDATE SKIP LOCKED
 		)
-		RETURNING `+connectionColumns, maxAttempts, limit, now)
+		RETURNING `+connectionColumns, maxAttempts, limit, now, leaseUntil)
 }
 
 // MarkSubscribed records that a connection has been subscribed to what its

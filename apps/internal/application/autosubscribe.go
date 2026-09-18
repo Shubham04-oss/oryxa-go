@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 )
@@ -27,6 +28,10 @@ const (
 	// autoSubscribeConnections bounds how many connections one pass takes on,
 	// since each is a walk of its app's catalog and a call per event.
 	autoSubscribeConnections = 4
+	// autoSubscribeLease is how long a claim owns a connection against
+	// another pass, comfortably longer than one pass takes: a catalog walk
+	// plus up to AutoSubscribeLimit Composio calls.
+	autoSubscribeLease = 10 * time.Minute
 )
 
 // AutoSubscribeLimit is how many events one connection is subscribed to
@@ -43,7 +48,8 @@ func (s *Service) subscribeConnections(ctx context.Context) {
 	if !s.autoSubscribe {
 		return
 	}
-	owed, err := s.store.ConnectionsAwaitingSubscribe(ctx, autoSubscribeAttempts, autoSubscribeConnections, s.now().UTC())
+	now := s.now().UTC()
+	owed, err := s.store.ConnectionsAwaitingSubscribe(ctx, autoSubscribeAttempts, autoSubscribeConnections, now, now.Add(autoSubscribeLease))
 	if err != nil {
 		if ctx.Err() == nil {
 			s.logger.ErrorContext(ctx, "claim connections to subscribe", "error", err)

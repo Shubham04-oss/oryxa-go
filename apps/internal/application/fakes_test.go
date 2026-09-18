@@ -222,7 +222,13 @@ func (store *fakeStore) FailPendingConnectionsBefore(_ context.Context, cutoff, 
 	return int64(len(swept)), nil
 }
 
-func (store *fakeStore) ConnectionsAwaitingSubscribe(_ context.Context, maxAttempts, limit int, now time.Time) ([]domain.Connection, error) {
+// ConnectionsAwaitingSubscribe does not simulate the lease real SQL takes
+// (apps/internal/postgres/store_integration_test.go proves that against a
+// real database instead): every test here drives a single, sequential
+// maintenance pass, so there is no second replica for a lease to matter
+// against, and a frozen test clock would make one indistinguishable from a
+// connection still held by the first pass.
+func (store *fakeStore) ConnectionsAwaitingSubscribe(_ context.Context, maxAttempts, limit int, now, _ time.Time) ([]domain.Connection, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	var owed []domain.Connection

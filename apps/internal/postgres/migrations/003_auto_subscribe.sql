@@ -26,3 +26,12 @@ ALTER TABLE apps_connections
 CREATE INDEX IF NOT EXISTS apps_connections_awaiting_subscribe_idx
     ON apps_connections (connected_at)
     WHERE status = 'active' AND auto_subscribe AND auto_subscribed_at IS NULL;
+
+-- Until when a claim owns this connection. FOR UPDATE SKIP LOCKED protects
+-- only the claiming statement itself, so the moment it commits a second
+-- replica's next tick would otherwise see the same row as unclaimed and take
+-- it too - doubling the Composio calls and burning an attempt for nothing. A
+-- lease well past one pass (a catalog walk plus up to AutoSubscribeLimit
+-- Composio calls) closes that window.
+ALTER TABLE apps_connections
+    ADD COLUMN IF NOT EXISTS auto_subscribe_claimed_until timestamptz;
