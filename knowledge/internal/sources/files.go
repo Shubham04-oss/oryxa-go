@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -41,6 +42,11 @@ func NewFiles(client objectLister) *Files { return &Files{client: client} }
 
 func (source *Files) Provider() string { return "files" }
 
+// billingAttachment is the purpose files gives an invoice or receipt the
+// organization keeps. Files shows those to admins alone, and they are a
+// record of what the organization paid, not knowledge anyone should search.
+const billingAttachment = "billing.attachment"
+
 // Target accepts {"team": "<id>"} to index one team's files, {"purpose":
 // "<purpose>"} to narrow to a kind, or nothing to index the organization's
 // own shared files.
@@ -48,8 +54,13 @@ func (source *Files) Target(target map[string]string) error {
 	if team, named := target["team"]; named && strings.TrimSpace(team) == "" {
 		return MissingTarget("a team id")
 	}
-	if purpose, named := target["purpose"]; named && strings.TrimSpace(purpose) == "" {
-		return MissingTarget("a purpose")
+	if purpose, named := target["purpose"]; named {
+		switch strings.TrimSpace(purpose) {
+		case "":
+			return MissingTarget("a purpose")
+		case billingAttachment:
+			return fmt.Errorf("billing attachments are not indexed: %w", domain.ErrInvalid)
+		}
 	}
 	return nil
 }
@@ -68,13 +79,13 @@ func (source *Files) Fetch(ctx context.Context, request Request) (Page, error) {
 	}
 	// The scope is always named, and that matters more than it looks.
 	//
-	// A source here is organization-scoped, so everything it publishes is
-	// searchable by the whole organization. Files, asked with no scope at
-	// all, answers the caller's own private files alongside the shared ones
-	// — which would put the registering member's private files into an
-	// organization-wide index. So this asks for exactly the scope the
-	// documents will carry, and a member's own files are simply not what
-	// this source is for.
+	// Everything this source publishes carries its own scope: the
+	// organization's, or one team's when the target names a team. Files,
+	// asked with no scope at all, answers the caller's own private files
+	// alongside the shared ones — which would put the registering member's
+	// private files into an index others search. So this asks for exactly
+	// the scope the documents will carry, and a member's own files are simply
+	// not what this source is for.
 	query.Scope = string(domain.ScopeOrganization)
 	if query.TeamID != "" {
 		query.Scope = string(domain.ScopeTeam)
@@ -101,6 +112,9 @@ func (source *Files) Fetch(ctx context.Context, request Request) (Page, error) {
 			return page, nil
 		}
 		after = object.ID
+		if !publishable(object, query) {
+			continue
+		}
 
 		item, ok, err := source.read(ctx, request, object)
 		if err != nil {
@@ -113,6 +127,22 @@ func (source *Files) Fetch(ctx context.Context, request Request) (Page, error) {
 		page.Watermark = watermarkAfter(page.Watermark, object.CreatedAt)
 	}
 	return page, nil
+}
+
+// publishable is the second guard on what a pass publishes, after the scope
+// the listing asked for. The source reads as the member who registered it,
+// and that is an admin more often than not — only an admin can share a file
+// with the whole organization — so files answers an admin's view: billing
+// attachments included. An object is published only if it is what this
+// source's scope may carry, and never if it is a billing attachment.
+func publishable(object filesclient.Object, query filesclient.Query) bool {
+	if object.Purpose == billingAttachment {
+		return false
+	}
+	if object.Scope != query.Scope {
+		return false
+	}
+	return query.Scope != string(domain.ScopeTeam) || object.TeamID == query.TeamID
 }
 
 // read turns one stored object into an item, or says to pass over it.

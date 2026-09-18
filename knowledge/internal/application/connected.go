@@ -212,8 +212,9 @@ func (s *Service) FileStored(ctx context.Context, event filesv1.ObjectCreated) e
 			"organization_id", event.OrganizationID, "error", err)
 		return nil
 	}
-	// Read as whoever stored the file rather than as an admin: an admin also
-	// sees billing attachments, which are nobody's idea of knowledge.
+	// Read as whoever stored the file. Only an admin can share a file with
+	// the whole organization, so that is an admin, whose view also carries
+	// billing attachments; the files source never publishes those.
 	credentials := authclient.Credentials{Authorization: "Bearer " + token}
 	source, err := s.RegisterSource(ctx, credentials, event.OrganizationID, RegisterInput{
 		Provider: filesProvider, Interval: autoRegisterInterval,

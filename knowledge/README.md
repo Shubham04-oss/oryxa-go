@@ -50,8 +50,13 @@ which matters more than it looks. A source here is organization-scoped, so
 everything it publishes is searchable by the whole organization; files asked
 with no scope answers the caller's own private files alongside the shared
 ones, which would put one member's private files in front of everybody. It is
-read as whoever stored the file rather than as an admin, since an admin also
-sees billing attachments.
+read as whoever stored the file, and only an admin can share a file with the
+whole organization, so that view is an admin's: it carries the organization's
+billing attachments, which files shows admins alone. The source never
+publishes those, and refuses a target that asks for them.
+
+A files source registered for a team (`{"team": "<id>"}`) is the team's: what
+it reads is searchable by that team, not by the whole organization.
 
 A source a member removed is not registered again. Removing it is them saying
 their organization's files should not be indexed, and someone uploading

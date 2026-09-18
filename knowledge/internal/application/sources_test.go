@@ -65,6 +65,34 @@ func githubRegistration() RegisterInput {
 	return RegisterInput{ConnectionID: "apc_1", Provider: "github", Target: map[string]string{"repository": "acme/api"}}
 }
 
+// TestAFilesSourceForATeamIsTheTeams is a privacy rule. Files answers a team
+// member their team's files, and a source publishes what it reads under its
+// own scope: registered as the organization's, a team's files would become
+// searchable by everyone in it, further than anyone who stored them chose.
+func TestAFilesSourceForATeamIsTheTeams(t *testing.T) {
+	store := newFakeStore()
+	service := registrar(t, store, member())
+	credentials := authclient.Credentials{Authorization: "Bearer t"}
+
+	team, err := service.RegisterSource(context.Background(), credentials, "org_1",
+		RegisterInput{Provider: "files", Target: map[string]string{"team": "team_1"}})
+	if err != nil {
+		t.Fatalf("RegisterSource(team) error = %v", err)
+	}
+	if team.Scope != domain.ScopeTeam || team.TeamID != "team_1" || team.MemberID != "" {
+		t.Fatalf("team source = %+v, want it scoped to team_1", team)
+	}
+
+	organization, err := service.RegisterSource(context.Background(), credentials, "org_1",
+		RegisterInput{Provider: "files"})
+	if err != nil {
+		t.Fatalf("RegisterSource(organization) error = %v", err)
+	}
+	if organization.Scope != domain.ScopeOrganization || organization.TeamID != "" {
+		t.Fatalf("organization source = %+v, want it organization-scoped", organization)
+	}
+}
+
 func TestRegisterSourceStoresTheConnectionAndComposioAccount(t *testing.T) {
 	store := newFakeStore()
 	apps := &fakeApps{connection: usableConnection()}

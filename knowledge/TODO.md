@@ -167,15 +167,17 @@ whole reason a pass over thousands of unchanged documents publishes nothing.
 1. **Promote `golang.org/x/net` to a direct dependency for HTML?** Decided:
    yes. HTML is read now — see §9.
 6. **Whose view should the organization's files source read?** Open, and
-   deliberately parked. It reads as whoever stored the first shared file,
-   chosen because an admin's listing also carries billing attachments. But
-   that member can leave, and their grant goes with them; their view is not
-   the organization's view, only one that happens to overlap it for
-   organization-scoped files; and nothing says the first uploader should be
-   the one the whole organization's index depends on. The alternatives —
-   an organization-level grant, the owner, a service identity files would
-   have to accept — each cost something different. Revisit before this is
-   in front of real organizations.
+   deliberately parked. It reads as whoever stored the first shared file —
+   always an admin, since only an admin can share a file with the whole
+   organization. The one thing an admin's view adds to organization-scoped
+   files is billing attachments, and the source skips those itself, so what
+   it publishes is what every member could already see. What stays open is
+   availability: that member can leave, and their grant goes with them, and
+   nothing says the first uploader should be the one the whole
+   organization's index depends on. The alternatives — an organization-level
+   grant, the owner, a service identity files would have to accept — each
+   cost something different. Revisit before this is in front of real
+   organizations.
 2. **Adopt the `Name`/`Migrate`/`Handler`/`Workers` seam across the other
    seven services?** Decided: yes. It was proven here because this one was
    greenfield; `teams` adopted it first (`teams/service.go`), and this

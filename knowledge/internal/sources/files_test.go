@@ -41,7 +41,8 @@ func (files *fakeFiles) Content(_ context.Context, _, fileID, _ string) ([]byte,
 
 func storedFile(id, filename, contentType string) filesclient.Object {
 	return filesclient.Object{
-		ID: id, OrganizationID: "org_1", Filename: filename, ContentType: contentType,
+		ID: id, OrganizationID: "org_1", Scope: string(domain.ScopeOrganization),
+		Filename: filename, ContentType: contentType,
 		Purpose: "upload", SHA256: "abc", CreatedBy: "user-1",
 		CreatedAt: time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC),
 	}
@@ -201,6 +202,60 @@ func TestFilesAsksForOrganizationFilesAndNeverTheMembersOwn(t *testing.T) {
 				t.Fatalf("listed as scope %q, want the organization's own files alone", files.listedAs.Scope)
 			}
 		})
+	}
+}
+
+// TestFilesNeverPublishesABillingAttachment is a privacy rule. Only an admin
+// can share a file with the whole organization, so the member a files source
+// reads as is usually an admin — and an admin's listing carries the
+// organization's invoices and receipts, which files shows to admins alone.
+func TestFilesNeverPublishesABillingAttachment(t *testing.T) {
+	invoice := storedFile("file_1", "invoice.csv", "text/csv")
+	invoice.Purpose = "billing.attachment"
+	files := &fakeFiles{
+		objects: []filesclient.Object{invoice, storedFile("file_2", "handbook.md", "text/markdown")},
+		bodies:  map[string]string{"file_1": "amount,due", "file_2": "# handbook"},
+	}
+	page, err := NewFiles(files).Fetch(context.Background(), filesRequest())
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ExternalID != "file_2" {
+		t.Fatalf("Fetch() = %+v, want only the handbook", page.Items)
+	}
+	for _, fetched := range files.fetched {
+		if fetched == "file_1" {
+			t.Fatal("read the bytes of a billing attachment")
+		}
+	}
+	if err := NewFiles(files).Target(map[string]string{"purpose": "billing.attachment"}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("Target(billing attachments) error = %v, want ErrInvalid", err)
+	}
+}
+
+// TestFilesPublishesOnlyWhatItsScopeMayCarry is the second guard behind the
+// scope the listing asks for: whatever files answers, an object outside the
+// source's own scope, or another team's, is never published under it.
+func TestFilesPublishesOnlyWhatItsScopeMayCarry(t *testing.T) {
+	private := storedFile("file_1", "mine.md", "text/markdown")
+	private.Scope, private.MemberID = string(domain.ScopeMember), "user-1"
+	theirs := storedFile("file_2", "theirs.md", "text/markdown")
+	theirs.Scope, theirs.TeamID = string(domain.ScopeTeam), "team_2"
+	ours := storedFile("file_3", "ours.md", "text/markdown")
+	ours.Scope, ours.TeamID = string(domain.ScopeTeam), "team_1"
+	files := &fakeFiles{
+		objects: []filesclient.Object{private, theirs, ours},
+		bodies:  map[string]string{"file_1": "mine", "file_2": "theirs", "file_3": "ours"},
+	}
+	request := filesRequest()
+	request.Source.Target = map[string]string{"team": "team_1"}
+
+	page, err := NewFiles(files).Fetch(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ExternalID != "file_3" {
+		t.Fatalf("Fetch() = %+v, want only team_1's own file", page.Items)
 	}
 }
 

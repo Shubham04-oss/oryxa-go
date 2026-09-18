@@ -73,6 +73,15 @@ func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Cre
 			return domain.Source{}, fmt.Errorf(
 				"files is the organization's own storage and takes no connection: %w", domain.ErrInvalid)
 		}
+		// What the source publishes carries the scope of what it reads. A
+		// team's files are searchable by that team, never by the whole
+		// organization, whoever registered the source: files would answer a
+		// team member their team's files, and publishing those organization-
+		// wide would share them further than anyone who stored them chose.
+		if team := strings.TrimSpace(target["team"]); team != "" {
+			source.Scope = domain.ScopeTeam
+			source.TeamID = team
+		}
 	} else {
 		connection, err := s.usableConnection(ctx, credentials, organizationID, connectionID, provider, caller.UserID)
 		if err != nil {
