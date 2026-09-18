@@ -294,7 +294,7 @@ proxy does not close a run while Krude works:
 | `delta` | A piece of Krude's answer as it is written; the `message` that follows holds the whole text |
 | `tool_call` | `call_id`, `tool`, `arguments` (left out above 16 KiB) |
 | `tool_result` | `call_id`, `tool`; `failed` and `error` when it failed |
-| `confirmation` | `call_id` (what the answer names), `tool`, `arguments`, `hint`, `status` |
+| `confirmation` | `call_id` (what the answer names), `tool_call_id` (the call it holds back), `tool`, `arguments`, `hint` (the tool's own reason, left out when ADK gives only its default), `status` |
 | `artifact` | `artifact` (the file's name) and `version`, for a file the run kept |
 | `run_completed` | `run_id`, `usage` |
 | `run_failed` | `run_id`, and `error` in words the member can act on |

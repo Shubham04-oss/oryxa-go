@@ -85,9 +85,11 @@ type Item struct {
 	// Error says why a message, tool result or run went wrong.
 	Error string `json:"error,omitempty"`
 	// CallID ties a tool result to its call. On a confirmation it is the ID
-	// the member's answer names.
-	CallID string `json:"call_id,omitempty"`
-	Tool   string `json:"tool,omitempty"`
+	// the member's answer names, and ToolCallID the call it holds back, so a
+	// client can show that call as waiting rather than running.
+	CallID     string `json:"call_id,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Tool       string `json:"tool,omitempty"`
 	// Arguments are what the tool was called with.
 	Arguments map[string]any `json:"arguments,omitempty"`
 	// Failed marks a tool result that ended in an error.
@@ -216,11 +218,11 @@ func confirmationItem(event *session.Event, call *genai.FunctionCall, answers ma
 	}
 	item := Item{
 		Type: ItemConfirmation, ID: event.ID, At: at(event), Author: authorOf(event),
-		CallID: call.ID, Tool: original.Name, Arguments: original.Args, Status: ConfirmationPending,
+		CallID: call.ID, ToolCallID: original.ID, Tool: original.Name, Arguments: original.Args, Status: ConfirmationPending,
 	}
 	var requested toolconfirmation.ToolConfirmation
 	if decodeInto(call.Args["toolConfirmation"], &requested) {
-		item.Hint = requested.Hint
+		item.Hint = memberHint(requested.Hint)
 	}
 	if confirmed, answered := answers[call.ID]; answered {
 		item.Status = ConfirmationDeclined
@@ -229,6 +231,19 @@ func confirmationItem(event *session.Event, call *genai.FunctionCall, answers ma
 		}
 	}
 	return item, true
+}
+
+// adkDefaultHint opens the hint ADK gives every tool that asks without saying
+// why: words for a program answering it, not for the member.
+const adkDefaultHint = "Please approve or reject the tool call "
+
+// memberHint is a tool's own reason for asking, or nothing when all it has is
+// ADK's default, so the client can say it in its own words instead.
+func memberHint(hint string) string {
+	if strings.HasPrefix(strings.TrimSpace(hint), adkDefaultHint) {
+		return ""
+	}
+	return strings.TrimSpace(hint)
 }
 
 // confirmationAnswers collects the member's answers to confirmations, by the
