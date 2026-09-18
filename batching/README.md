@@ -42,6 +42,10 @@ event. The oldest persisted promise wins for a group. A burst, a higher
 priority, or reaching the target can only release the group earlier. Silence
 requires no new webhook: the database worker claims the partial group when its
 deadline arrives. Policy decisions are stamped `adaptive-ewma.v3`.
+The consumer, deadline sweeper, and outbox dispatcher run continuously for the
+full 24-hour day; member presence or working hours never pause delivery. The
+consumer handles each receive's messages (at most ten) side by side, so one
+waiting on the classifier holds up none of the others, removals included.
 
 Deadlines count from the trigger's `received_at`, when apps received it, not
 from when a replica records it: a trigger that took a while to arrive has
@@ -52,16 +56,13 @@ due as soon as it is recorded, and its deadlines stay within reach of the
 cadence arithmetic whatever a broken clock said. The traffic estimate takes
 each event at that time too, and gives the same answer whatever order the bus
 delivers events in.
-The consumer, deadline sweeper, and outbox dispatcher run continuously for the
-full 24-hour day; member presence or working hours never pause delivery. The
-consumer handles each receive's messages (at most ten) side by side, so one
-waiting on the classifier holds up none of the others, removals included.
 
 With `TYPESAFE_API_KEY` set, the classifier calls TypeSafe's System One API once
 per trigger. A trigger already recorded, or from something removed since, is
 screened out before it is classified, so the redelivery of a recorded trigger
-never reaches TypeSafe again. It asks two parallel questions: a Choice between `immediate` and
-`digest`, and a Noul for the probability that prompt attention is required.
+never reaches TypeSafe again. It asks two parallel questions: a Choice between
+`immediate` and `digest`, and a Noul for the probability that prompt attention
+is required.
 An event takes the immediate lane only when both its immediate probability and
 Choice confidence clear their configured gates. Otherwise the Noul probability
 and the Choice's immediate probability are combined by taking the larger value
@@ -77,11 +78,11 @@ payload stored for the agent. Provider failures become a fallback digest at
 `FallbackPriority` (0.4): the event stays durable and its soft deadline comes
 forward, but its pressure stays under the smallest target, so an outage cannot
 create one agent turn per webhook (unless `BATCHING_BATCH_SIZE=1` asks for
-exactly that). After five failures in a row batching stops
-asking TypeSafe for a minute and takes the fallback at once, so an outage does
-not cost every trigger its timeout; then one trigger asks again, and a success
-resumes classification. Opening and closing are each logged once. With no API
-key, classification remains the deterministic digest policy.
+exactly that). After five failures in a row batching stops asking TypeSafe for
+a minute and takes the fallback at once, so an outage does not cost every
+trigger its timeout; then one trigger asks again, and a success resumes
+classification. Opening and closing are each logged once. With no API key,
+classification remains the deterministic digest policy.
 
 The service publishes through the shared transactional outbox. Claiming a due
 group and writing its output event are separate transactions connected by a
@@ -138,23 +139,24 @@ BATCHING_JEV_MIN_CONFIDENCE=0.60
 
 `BATCHING_BATCH_SIZE` is the cold-start prior. Traffic moves a member's target
 between two, or the cold-start target when that is one, and
-`BATCHING_LARGEST_BATCH`. `BATCHING_MAX_WAIT` is the
-periodic hard cadence: ordinary traffic may release earlier, but never later.
-The service rejects values over `90m`; the default is `1h`, leaving operational
-headroom beneath the product's absolute delivery ceiling.
-`BATCHING_LARGEST_BATCH` must be at least the cold-start target, its default of
-20 included, and the claim lease must exceed the sweep interval. `BATCHING_JEV_TIMEOUT` may be at most
-`10s`, so a message is always handled well within the queue's 60-second
-visibility timeout and never handled twice for being slow.
-`BATCHING_GROUPS_PER_SWEEP` is how many groups one claim takes, at least two
-so immediate traffic cannot consume every slot and starve due digests. While
-claims come back full a sweep claims again, up to 32 times, so a backlog
-drains at the database's pace rather than that many groups per sweep
-interval.
+`BATCHING_LARGEST_BATCH`. `BATCHING_MAX_WAIT` is the periodic hard cadence:
+ordinary traffic may release earlier, but never later. The service rejects
+values over `90m`; the default is `1h`, leaving operational headroom beneath
+the product's absolute delivery ceiling. `BATCHING_LARGEST_BATCH` must be at
+least the cold-start target, its default of 20 included, and the claim lease
+must exceed the sweep interval. `BATCHING_JEV_TIMEOUT` may be at most `10s`, so
+a message is always handled well within the queue's 60-second visibility
+timeout and never handled twice for being slow. `BATCHING_GROUPS_PER_SWEEP` is
+how many groups one claim takes, at least two so immediate traffic cannot
+consume every slot and starve due digests. While claims come back full a sweep
+claims again, up to 32 times, so a backlog drains at the database's pace
+rather than that many groups per sweep interval.
 
-The current agents service still consumes app triggers directly. Do not route
-the ready event to agents until that consumer is switched off, or the same app
-activity can wake an agent twice.
+Agents consumes `batching.trigger-batch.ready.v1` in place of the app triggers
+themselves, and wakes Krude for each batch as soon as it arrives: batching has
+already decided when a member's triggers make a turn, so agents keeps no rule
+of its own. So the switch loses nothing, deploy batching with its queue before
+re-provisioning agents' rule.
 
 ## Known gaps
 
