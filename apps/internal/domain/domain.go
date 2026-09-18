@@ -93,11 +93,17 @@ type Connection struct {
 	// github_red-castle.
 	Label string
 	// ReturnTo is where the member's browser goes once they finish.
-	ReturnTo    string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	ConnectedAt *time.Time
-	RemovedAt   *time.Time
+	ReturnTo string
+	// AutoSubscribe says this connection should be subscribed to everything
+	// its app can deliver, once it is active. AutoSubscribedAt is when that
+	// finished; unset on an active connection that wants it means it is
+	// still owed.
+	AutoSubscribe    bool
+	AutoSubscribedAt *time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	ConnectedAt      *time.Time
+	RemovedAt        *time.Time
 }
 
 // ConnectionQuery narrows a listing. An org admin may list the organization's

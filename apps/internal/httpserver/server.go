@@ -164,24 +164,30 @@ func (server *Server) catalogTriggers(writer http.ResponseWriter, request *http.
 // connectionView is what a connection looks like over the wire. The state
 // that names its browser round trip is nobody's business once issued.
 type connectionView struct {
-	ID                string     `json:"id"`
-	Toolkit           string     `json:"toolkit"`
-	Status            string     `json:"status"`
-	StatusReason      string     `json:"status_reason,omitempty"`
-	Label             string     `json:"label,omitempty"`
-	MemberID          string     `json:"member_id"`
-	ComposioAccountID string     `json:"composio_account_id,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	ConnectedAt       *time.Time `json:"connected_at,omitempty"`
-	RemovedAt         *time.Time `json:"removed_at,omitempty"`
+	ID                string `json:"id"`
+	Toolkit           string `json:"toolkit"`
+	Status            string `json:"status"`
+	StatusReason      string `json:"status_reason,omitempty"`
+	Label             string `json:"label,omitempty"`
+	MemberID          string `json:"member_id"`
+	ComposioAccountID string `json:"composio_account_id,omitempty"`
+	// AutoSubscribe says this connection is subscribed to everything its app
+	// delivers; AutoSubscribedAt when that finished, unset while it is still
+	// being done.
+	AutoSubscribe    bool       `json:"auto_subscribe"`
+	AutoSubscribedAt *time.Time `json:"auto_subscribed_at,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
+	ConnectedAt      *time.Time `json:"connected_at,omitempty"`
+	RemovedAt        *time.Time `json:"removed_at,omitempty"`
 }
 
 func viewConnection(connection domain.Connection) connectionView {
 	return connectionView{
 		ID: connection.ID, Toolkit: connection.Toolkit, Status: string(connection.Status),
 		StatusReason: connection.StatusReason, Label: connection.Label, MemberID: connection.MemberID,
-		ComposioAccountID: connection.ComposioAccountID, CreatedAt: connection.CreatedAt,
+		ComposioAccountID: connection.ComposioAccountID, AutoSubscribe: connection.AutoSubscribe,
+		AutoSubscribedAt: connection.AutoSubscribedAt, CreatedAt: connection.CreatedAt,
 		UpdatedAt: connection.UpdatedAt, ConnectedAt: connection.ConnectedAt, RemovedAt: connection.RemovedAt,
 	}
 }
@@ -195,12 +201,18 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		Toolkit  string `json:"toolkit"`
 		ReturnTo string `json:"return_to"`
 		Alias    string `json:"alias"`
+		// AutoSubscribe left out means the deployment's default, which is to
+		// subscribe to everything the app can deliver.
+		AutoSubscribe *bool `json:"auto_subscribe"`
 	}
 	if !server.decode(writer, request, &body) {
 		return
 	}
 	connection, redirectURL, err := server.service.Connect(request.Context(), credentials, request.PathValue("organizationID"),
-		application.ConnectInput{Toolkit: body.Toolkit, ReturnTo: body.ReturnTo, Alias: body.Alias})
+		application.ConnectInput{
+			Toolkit: body.Toolkit, ReturnTo: body.ReturnTo, Alias: body.Alias,
+			AutoSubscribe: body.AutoSubscribe,
+		})
 	if err != nil {
 		server.handleError(writer, request, err)
 		return

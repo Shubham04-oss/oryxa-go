@@ -154,6 +154,38 @@ delivers, such as `GITHUB_COMMIT_EVENT`. Composio watches the app — pushing
 webhooks where the app supports them, polling where it does not — and delivers
 to one project-wide subscription:
 
+### Connecting an app subscribes it
+
+A member who connects GitHub means to hear about GitHub, so connecting
+subscribes to every event the app can deliver rather than handing them a list
+of forty-six and asking which. What it cannot subscribe to is the events whose
+schema names a repository, a channel or a database: there is nothing to put
+there that would not be a guess at what the member meant, so those are left
+for them to add, and named in the log rather than counted.
+
+It does not happen in the callback — a toolkit's events are subscribed one
+Composio call at a time, and a member's browser is waiting on that redirect.
+The connection records that it is owed and the maintenance worker does it,
+which also survives a restart part-way through and can be retried without the
+member noticing. A connection carries `auto_subscribe` and
+`auto_subscribed_at`, so a caller can tell a connection still being set up
+from one that is done.
+
+Every subscription that fires wakes Krude, and every wake-up is a run, so
+connecting an app has a ceiling on what it can commit someone to:
+`AutoSubscribeLimit`, 25 events. Past it the rest are left for the member, the
+same as one needing configuration. An app the pass cannot read is tried again
+next tick, three times before it is left alone.
+
+Two ways to turn it off:
+
+| Off | How |
+| --- | --- |
+| For one connection | `"auto_subscribe": false` in the connect request |
+| For the deployment | `APPS_AUTO_SUBSCRIBE=false` |
+
+A member naming it outranks the deployment's default, either way.
+
 ### A subscription is checked against the trigger's own definition
 
 Composio accepts a subscription it will never deliver anything for, and there
@@ -238,7 +270,7 @@ mutation also needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 | `GET /v1/apps/catalog/{toolkit}/triggers` | The events an app can deliver |
 | `GET /v1/apps/connect/callback` | Where Composio returns a member's browser |
 | `POST /v1/apps/webhooks/composio` | Where Composio delivers events |
-| `POST /v1/organizations/{org}/apps/connections` | Start connecting an app; answers the link to send the member to |
+| `POST /v1/organizations/{org}/apps/connections` | Start connecting an app; answers the link to send the member to. `auto_subscribe: false` connects without subscribing to its events |
 | `GET /v1/organizations/{org}/apps/connections` | The caller's connections, or with `?scope=organization` an admin's view of everyone's |
 | `GET /v1/organizations/{org}/apps/connections/{id}` | One connection |
 | `DELETE /v1/organizations/{org}/apps/connections/{id}` | Disconnect: Composio deletes the account and revokes its credential |
@@ -310,7 +342,7 @@ Apps uses `/internal/postgreskit`. Other services never read these tables.
 
 | Table | Holds |
 | --- | --- |
-| `apps_connections` | A member's connection to an app: its Composio account, status and label, and the hash of its pending round trip |
+| `apps_connections` | A member's connection to an app: its Composio account, status and label, the hash of its pending round trip, and whether it has been subscribed to what the app delivers |
 | `apps_auth_configs` | The auth config the project connects each app with, so two members agree on one |
 | `apps_triggers` | What a connection is subscribed to, the Composio instance behind it, how it delivers, and whether it ever has |
 | `apps_actions` | Tool runs, with the idempotency key a write can be replayed under |

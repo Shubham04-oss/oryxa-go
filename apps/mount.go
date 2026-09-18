@@ -70,9 +70,10 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Sink:      events.NewPublisher(eventClient, platform.EventBusName),
 		Logger:    logger,
 	}, Config{
-		PublicBaseURL:  config.PublicBaseURL,
-		AllowedOrigins: config.AllowedOrigins,
-		WebhookSecret:  config.ComposioWebhookSecret,
+		PublicBaseURL:   config.PublicBaseURL,
+		AllowedOrigins:  config.AllowedOrigins,
+		WebhookSecret:   config.ComposioWebhookSecret,
+		NoAutoSubscribe: config.NoAutoSubscribe,
 	})
 	if err != nil {
 		return host.Service{}, err

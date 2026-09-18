@@ -77,6 +77,9 @@ func (s *Service) RunMaintenance(ctx context.Context) {
 
 func (s *Service) maintain(ctx context.Context) {
 	now := s.now().UTC()
+	// Subscribing a newly connected app is work the callback could not do
+	// with a member's browser waiting on it.
+	s.subscribeConnections(ctx)
 	// A member who started connecting and never came back is as much an
 	// ending as a refusal, and the only one nothing else would report.
 	abandoned := func(connections []domain.Connection) ([]domain.Event, error) {

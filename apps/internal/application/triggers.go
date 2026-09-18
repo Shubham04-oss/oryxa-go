@@ -92,9 +92,17 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 		return domain.Trigger{}, err
 	}
 
-	composioID, err := s.composio.UpsertTrigger(ctx, slug, connection.ComposioAccountID, config)
+	return s.subscribe(ctx, connection, definition, config)
+}
+
+// subscribe records one subscription against a connection, which is the same
+// work whether a member asked for it or connecting the app did. It acts as
+// the connection's own member: the caller has already decided that is
+// allowed.
+func (s *Service) subscribe(ctx context.Context, connection domain.Connection, definition domain.TriggerDefinition, config json.RawMessage) (domain.Trigger, error) {
+	composioID, err := s.composio.UpsertTrigger(ctx, definition.Slug, connection.ComposioAccountID, config)
 	if err != nil {
-		return domain.Trigger{}, composioError("subscribe to "+slug, err)
+		return domain.Trigger{}, composioError("subscribe to "+definition.Slug, err)
 	}
 	id, err := newID("apt")
 	if err != nil {
@@ -105,26 +113,26 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 	// still needs its webhook registered explains a silence nothing else
 	// would.
 	event, err := s.event(appsv1.TriggerSubscribedDetailType, appsv1.TriggerSubscribed{
-		TriggerID: id, ConnectionID: connection.ID, OrganizationID: organizationID, MemberID: caller.UserID,
-		Toolkit: connection.Toolkit, Trigger: slug, Kind: definition.Kind,
-		ManualSetup: definition.ManualSetup, SubscribedAt: now,
+		TriggerID: id, ConnectionID: connection.ID, OrganizationID: connection.OrganizationID,
+		MemberID: connection.MemberID, Toolkit: connection.Toolkit, Trigger: definition.Slug,
+		Kind: definition.Kind, ManualSetup: definition.ManualSetup, SubscribedAt: now,
 	})
 	if err != nil {
 		return domain.Trigger{}, err
 	}
 	trigger, created, err := s.store.CreateTrigger(ctx, domain.Trigger{
-		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, ConnectionID: connection.ID,
-		Toolkit: connection.Toolkit, Slug: slug, Config: config, ComposioTriggerID: composioID,
-		Status: domain.TriggerActive, Kind: definition.Kind, ManualSetup: definition.ManualSetup,
-		CreatedAt: now, UpdatedAt: now,
+		ID: id, OrganizationID: connection.OrganizationID, MemberID: connection.MemberID,
+		ConnectionID: connection.ID, Toolkit: connection.Toolkit, Slug: definition.Slug, Config: config,
+		ComposioTriggerID: composioID, Status: domain.TriggerActive, Kind: definition.Kind,
+		ManualSetup: definition.ManualSetup, CreatedAt: now, UpdatedAt: now,
 	}, event)
 	if err != nil {
 		return domain.Trigger{}, err
 	}
 	if created {
 		s.logger.InfoContext(ctx, "trigger subscribed", "trigger_id", trigger.ID,
-			"organization_id", organizationID, "trigger", slug, "kind", definition.Kind,
-			"manual_setup", definition.ManualSetup)
+			"organization_id", connection.OrganizationID, "trigger", definition.Slug,
+			"kind", definition.Kind, "manual_setup", definition.ManualSetup)
 	}
 	return trigger, nil
 }

@@ -28,6 +28,10 @@ type ConnectInput struct {
 	ReturnTo string
 	// Alias names the account, to tell several connections to one app apart.
 	Alias string
+	// AutoSubscribe says whether connecting should subscribe to everything
+	// this app can deliver. Unset means the deployment's own default, which
+	// is to subscribe.
+	AutoSubscribe *bool
 }
 
 // callbackPath is where Composio sends a member's browser back to.
@@ -85,7 +89,12 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	connection := domain.Connection{
 		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, Toolkit: toolkit,
 		AuthConfigID: config.AuthConfigID, ComposioUserID: userID, ComposioAccountID: link.ConnectedAccountID,
-		Status: domain.ConnectionPending, ReturnTo: returnTo, CreatedAt: now, UpdatedAt: now,
+		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: s.autoSubscribe,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if input.AutoSubscribe != nil {
+		// A member saying so outranks the deployment's default, either way.
+		connection.AutoSubscribe = *input.AutoSubscribe
 	}
 	// Announced as it starts, so what follows — connected or failed — is
 	// always the end of something the bus saw begin.

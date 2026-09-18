@@ -36,6 +36,12 @@ type Config struct {
 	// WebhookSecret verifies Composio's webhook deliveries. Without one,
 	// every delivery is refused.
 	WebhookSecret string
+	// NoAutoSubscribe stops a newly connected app from being subscribed to
+	// everything it can deliver. Connecting subscribes by default, because a
+	// member who connects GitHub means to hear about GitHub; a deployment
+	// that would rather they chose sets this, and a member can always say so
+	// per connection.
+	NoAutoSubscribe bool
 }
 
 type Dependencies struct {
@@ -55,6 +61,9 @@ type Service struct {
 	publicBaseURL string
 	returnOrigins []*url.URL
 	webhookSecret string
+	// autoSubscribe says a newly connected app is subscribed to everything it
+	// can deliver.
+	autoSubscribe bool
 	// wait paces the short poll a connection's callback makes for Composio
 	// to finish; a var-like field so tests need not sleep.
 	wait func(context.Context, time.Duration) error
@@ -75,6 +84,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		now:           dependencies.Clock,
 		publicBaseURL: strings.TrimRight(config.PublicBaseURL, "/"),
 		webhookSecret: config.WebhookSecret,
+		autoSubscribe: !config.NoAutoSubscribe,
 		wait:          sleep,
 		tools:         map[string]cachedTool{},
 	}

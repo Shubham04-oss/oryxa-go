@@ -31,6 +31,9 @@ type fakeStore struct {
 	actions     map[string]domain.Action
 	handled     map[string]bool
 	events      []domain.Event
+	// subscribeAttempts counts what ConnectionsAwaitingSubscribe has claimed,
+	// the way the column does.
+	subscribeAttempts map[string]int
 }
 
 func newFakeStore() *fakeStore {
@@ -38,6 +41,7 @@ func newFakeStore() *fakeStore {
 		connections: map[string]domain.Connection{}, states: map[string]string{},
 		authConfigs: map[string]AuthConfig{}, triggers: map[string]domain.Trigger{},
 		actions: map[string]domain.Action{}, handled: map[string]bool{},
+		subscribeAttempts: map[string]int{},
 	}
 }
 
@@ -216,6 +220,40 @@ func (store *fakeStore) FailPendingConnectionsBefore(_ context.Context, cutoff, 
 	}
 	store.events = append(store.events, built...)
 	return int64(len(swept)), nil
+}
+
+func (store *fakeStore) ConnectionsAwaitingSubscribe(_ context.Context, maxAttempts, limit int, now time.Time) ([]domain.Connection, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var owed []domain.Connection
+	for id, connection := range store.connections {
+		if connection.Status != domain.ConnectionActive || !connection.AutoSubscribe || connection.AutoSubscribedAt != nil {
+			continue
+		}
+		if store.subscribeAttempts[id] >= maxAttempts {
+			continue
+		}
+		store.subscribeAttempts[id]++
+		owed = append(owed, connection)
+		if len(owed) == limit {
+			break
+		}
+	}
+	sort.Slice(owed, func(i, j int) bool { return owed[i].ID < owed[j].ID })
+	return owed, nil
+}
+
+func (store *fakeStore) MarkSubscribed(_ context.Context, id string, now time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	connection, ok := store.connections[id]
+	if !ok || connection.AutoSubscribedAt != nil {
+		return nil
+	}
+	marked := now.UTC()
+	connection.AutoSubscribedAt = &marked
+	store.connections[id] = connection
+	return nil
 }
 
 func (store *fakeStore) AuthConfig(_ context.Context, toolkit string) (AuthConfig, error) {
@@ -405,24 +443,27 @@ func (directory *fakeDirectory) Membership(_ context.Context, organizationID str
 // fakeComposio answers apps' Composio calls from what a test sets, and
 // records what it was asked.
 type fakeComposio struct {
-	mu              sync.Mutex
-	toolkits        map[string]composio.Toolkit
-	toolkitsErr     error
-	authConfigs     []composio.AuthConfig
-	created         []string // auth config kinds created: managed or scheme
-	links           []composio.LinkRequest
-	accounts        map[string][]composio.ConnectedAccount // successive reads
-	deleted         []string
-	revoked         []bool
-	tools           map[string]composio.Tool
-	executed        []composio.ExecuteRequest
-	result          composio.ExecuteResult
-	executeErr      error
-	proxied         []composio.ProxyRequest
-	proxyResult     composio.ProxyResponse
-	proxyErr        error
-	upserts         []string
-	upsertID        string
+	mu          sync.Mutex
+	toolkits    map[string]composio.Toolkit
+	toolkitsErr error
+	authConfigs []composio.AuthConfig
+	created     []string // auth config kinds created: managed or scheme
+	links       []composio.LinkRequest
+	accounts    map[string][]composio.ConnectedAccount // successive reads
+	deleted     []string
+	revoked     []bool
+	tools       map[string]composio.Tool
+	executed    []composio.ExecuteRequest
+	result      composio.ExecuteResult
+	executeErr  error
+	proxied     []composio.ProxyRequest
+	proxyResult composio.ProxyResponse
+	proxyErr    error
+	upserts     []string
+	upsertID    string
+	// upsertPerSlug answers a distinct instance id per trigger, the way
+	// Composio does for different triggers on one account.
+	upsertPerSlug   bool
 	deletedTriggers []string
 	deleteErr       error
 	// triggerTypes is the catalog a subscription is checked against, by
@@ -618,6 +659,9 @@ func (fake *fakeComposio) UpsertTrigger(_ context.Context, slug, accountID strin
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	fake.upserts = append(fake.upserts, slug+"@"+accountID)
+	if fake.upsertPerSlug {
+		return "ti_" + slug + "@" + accountID, nil
+	}
 	return fake.upsertID, nil
 }
 

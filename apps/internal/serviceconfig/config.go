@@ -32,6 +32,11 @@ type Config struct {
 	// EventsQueueURL is the queue auth's events arrive on. Without it apps
 	// does not learn that a member left or an organization was deleted.
 	EventsQueueURL string
+	// NoAutoSubscribe stops a newly connected app from being subscribed to
+	// everything it can deliver. Connecting subscribes by default; set
+	// APPS_AUTO_SUBSCRIBE=false for a deployment that would rather members
+	// chose their own events.
+	NoAutoSubscribe bool
 }
 
 // FromEnv reads apps' configuration through getenv, which a host layers its
@@ -48,6 +53,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		EventBridgeEndpoint:   endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
 		SQSEndpoint:           endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
 		EventsQueueURL:        strings.TrimSpace(getenv("APPS_EVENTS_QUEUE_URL")),
+		NoAutoSubscribe:       strings.EqualFold(strings.TrimSpace(getenv("APPS_AUTO_SUBSCRIBE")), "false"),
 	}
 	if config.AuthURL == "" || config.ComposioAPIKey == "" || config.PublicBaseURL == "" {
 		return Config{}, errors.New("AUTH_URL, COMPOSIO_API_KEY and APPS_PUBLIC_BASE_URL are required")

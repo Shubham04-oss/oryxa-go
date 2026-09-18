@@ -11,7 +11,8 @@ import (
 )
 
 const connectionColumns = `id, organization_id, member_id, toolkit, auth_config_id, composio_user_id,
-	composio_account_id, status, status_reason, label, return_to, created_at, updated_at, connected_at, removed_at`
+	composio_account_id, status, status_reason, label, return_to, auto_subscribe, auto_subscribed_at,
+	created_at, updated_at, connected_at, removed_at`
 
 // CreateConnection records a pending connection, with the hash of the state
 // its browser round trip carries so PendingConnection can find it again. The
@@ -22,11 +23,12 @@ func (store *Store) CreateConnection(ctx context.Context, connection domain.Conn
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO apps_connections (
 				id, organization_id, member_id, toolkit, auth_config_id, composio_user_id, composio_account_id,
-				status, status_reason, label, state_hash, return_to, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)`,
+				status, status_reason, label, state_hash, return_to, auto_subscribe, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)`,
 			connection.ID, connection.OrganizationID, connection.MemberID, connection.Toolkit, connection.AuthConfigID,
 			connection.ComposioUserID, nullable(connection.ComposioAccountID), string(connection.Status),
-			connection.StatusReason, connection.Label, nullable(stateHash), connection.ReturnTo, connection.CreatedAt,
+			connection.StatusReason, connection.Label, nullable(stateHash), connection.ReturnTo,
+			connection.AutoSubscribe, connection.CreatedAt,
 		); err != nil {
 			return mapWriteError("create connection", err)
 		}
@@ -98,6 +100,39 @@ func (store *Store) FailConnection(ctx context.Context, id, reason string, now t
 		return insertEvents(ctx, tx, event)
 	})
 	return failed, err
+}
+
+// ConnectionsAwaitingSubscribe answers the active connections that asked to
+// be subscribed to their app's events and have not been, oldest first, and
+// counts an attempt against each — so a toolkit that keeps failing is given
+// up on after maxAttempts rather than retried for ever.
+//
+// Counting the attempt as they are claimed is also what keeps two replicas
+// from doing the same connection twice over: the row each reads back carries
+// the count it just took.
+func (store *Store) ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempts, limit int, now time.Time) ([]domain.Connection, error) {
+	return queryConnections(ctx, store.pool, `
+		UPDATE apps_connections SET auto_subscribe_attempts = auto_subscribe_attempts + 1, updated_at = $3
+		WHERE id IN (
+			SELECT id FROM apps_connections
+			WHERE status = 'active' AND auto_subscribe AND auto_subscribed_at IS NULL
+				AND auto_subscribe_attempts < $1
+			ORDER BY connected_at
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING `+connectionColumns, maxAttempts, limit, now)
+}
+
+// MarkSubscribed records that a connection has been subscribed to what its
+// app delivers, so it is not claimed again.
+func (store *Store) MarkSubscribed(ctx context.Context, id string, now time.Time) error {
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE apps_connections SET auto_subscribed_at = $2, updated_at = $2
+		WHERE id = $1 AND auto_subscribed_at IS NULL`, id, now); err != nil {
+		return mapWriteError("mark a connection subscribed", err)
+	}
+	return nil
 }
 
 // Connection reads one connection of an organization, whatever its status.
@@ -291,7 +326,8 @@ func scanConnection(rows pgx.Rows) (domain.Connection, error) {
 	var composioAccountID *string
 	if err := rows.Scan(&connection.ID, &connection.OrganizationID, &connection.MemberID, &connection.Toolkit,
 		&connection.AuthConfigID, &connection.ComposioUserID, &composioAccountID, &status, &connection.StatusReason,
-		&connection.Label, &connection.ReturnTo, &connection.CreatedAt, &connection.UpdatedAt,
+		&connection.Label, &connection.ReturnTo, &connection.AutoSubscribe, &connection.AutoSubscribedAt,
+		&connection.CreatedAt, &connection.UpdatedAt,
 		&connection.ConnectedAt, &connection.RemovedAt); err != nil {
 		return domain.Connection{}, fmt.Errorf("scan connection: %w", err)
 	}
