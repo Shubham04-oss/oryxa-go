@@ -63,7 +63,8 @@ const (
 // ConnectionInitiated is a member starting to connect an app: the link has
 // been made and they have been sent to it. Nothing can act through the
 // connection yet, and it may never become usable — every initiated
-// connection ends as either ConnectionConnected or ConnectionFailed.
+// connection ends as ConnectionConnected, ConnectionFailed, or
+// ConnectionRemoved, when it is removed while still pending.
 type ConnectionInitiated struct {
 	ConnectionID   string    `json:"connection_id"`
 	OrganizationID string    `json:"organization_id"`

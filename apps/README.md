@@ -359,11 +359,12 @@ happened is visible only in a log line.
 | `apps.action.failed.v1` | A write did not, in one word — never the app's own |
 
 A connection's life is a closed story on the bus: every `initiated` ends as
-exactly one of `connected` or `failed`, and a connected one ends as `expired`
-or `removed`. `failed` carries a constant rather than the prose a member
-reads, since it is grouped and counted — `denied_at_provider`,
-`wrong_account`, or `abandoned` for a member who started and never came back,
-which the maintenance sweep announces and nothing else would report.
+`connected`, `failed`, or `removed` when it is removed while still pending,
+and a connected one itself ends as `expired` or `removed`. `failed` carries
+a constant rather than the prose a member reads, since it is grouped and
+counted — `denied_at_provider`, `wrong_account`, or `abandoned` for a member
+who started and never came back, which the maintenance sweep announces and
+nothing else would report.
 
 A trigger's has four ends: `unsubscribed` when a member or admin takes it
 away, `disabled` when Composio stops it, and otherwise it goes with its
