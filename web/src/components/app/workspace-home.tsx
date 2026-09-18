@@ -1,15 +1,19 @@
-import { Link } from "@tanstack/react-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowUpRight, Blocks, Clock3, ListTodo, ScanText } from "lucide-react";
 import { useRef, useState } from "react";
 import { ThreadComposer } from "@/components/app/thread-composer";
 import { WorkspaceSection } from "@/components/app/workspace-section";
+import { Skeleton } from "@/components/ui/skeleton";
+import { apiErrorMessage } from "@/lib/api/client";
 import { useWorkspace } from "@/lib/auth/session";
-
-const recentThreads = [
-	{ title: "Plan the launch checklist", updated: "3 min" },
-	{ title: "Review billing edge cases", updated: "Yesterday" },
-	{ title: "Shape the connections rollout", updated: "Monday" },
-];
+import { relativeTime } from "@/lib/format";
+import {
+	createThread,
+	threadsQueryKey,
+	threadsQueryOptions,
+} from "@/lib/threads/client";
+import { stashPendingMessage } from "@/lib/threads/pending-message";
 
 const starters = [
 	{
@@ -37,12 +41,43 @@ const starters = [
 
 export function WorkspaceHome() {
 	const { organization } = useWorkspace();
+	const queryClient = useQueryClient();
+	const navigate = useNavigate();
 	const composerRef = useRef<HTMLTextAreaElement>(null);
 	const [draft, setDraft] = useState("");
+	const [error, setError] = useState("");
+
+	const startThread = useMutation({
+		mutationFn: async (message: string) => {
+			const thread = await createThread(organization.id);
+			// The thread does not exist yet when the member hits send, so its
+			// first message rides along to the conversation page instead.
+			stashPendingMessage(thread.id, message);
+			return thread;
+		},
+		onSuccess: async (thread) => {
+			setDraft("");
+			await queryClient.invalidateQueries({
+				queryKey: threadsQueryKey(organization.id),
+			});
+			await navigate({
+				params: { threadId: thread.id },
+				to: "/app/threads/$threadId",
+			});
+		},
+	});
 
 	function applyStarter(prompt: string) {
 		setDraft(prompt);
 		requestAnimationFrame(() => composerRef.current?.focus());
+	}
+
+	function submit(message: string) {
+		setError("");
+		startThread.mutate(message, {
+			onError: (caught) =>
+				setError(apiErrorMessage(caught, "Could not start a new thread")),
+		});
 	}
 
 	return (
@@ -53,10 +88,13 @@ export function WorkspaceHome() {
 			</header>
 
 			<ThreadComposer
+				disabled={startThread.isPending}
 				inputRef={composerRef}
 				onChange={setDraft}
+				onSubmit={submit}
 				value={draft}
 			/>
+			{error ? <p className="workspace-launchpad-error">{error}</p> : null}
 
 			<div className="workspace-home-panels">
 				<WorkspaceSection title="Start here">
@@ -87,23 +125,62 @@ export function WorkspaceHome() {
 					action={<Link to="/app/threads">View all</Link>}
 					title="Recent"
 				>
-					<div className="workspace-naked-list">
-						{recentThreads.map((thread) => (
-							<Link
-								className="workspace-recent-row"
-								key={thread.title}
-								to="/app/threads"
-							>
-								<span>{thread.title}</span>
-								<small>
-									<Clock3 />
-									{thread.updated}
-								</small>
-							</Link>
-						))}
-					</div>
+					<RecentThreads />
 				</WorkspaceSection>
 			</div>
 		</section>
+	);
+}
+
+function RecentThreads() {
+	const { organization } = useWorkspace();
+	const threads = useQuery(threadsQueryOptions(organization.id));
+
+	if (threads.isPending) {
+		return (
+			<div className="workspace-naked-list">
+				{["first", "second", "third"].map((row) => (
+					<div className="workspace-recent-row" key={row}>
+						<Skeleton className="h-3 w-40" />
+						<Skeleton className="h-3 w-12" />
+					</div>
+				))}
+			</div>
+		);
+	}
+
+	if (threads.isError) {
+		return (
+			<p className="workspace-naked-empty">
+				{apiErrorMessage(threads.error, "Could not load recent threads.")}
+			</p>
+		);
+	}
+
+	if (threads.data.length === 0) {
+		return (
+			<p className="workspace-naked-empty">
+				Nothing yet. Start a thread above.
+			</p>
+		);
+	}
+
+	return (
+		<div className="workspace-naked-list">
+			{threads.data.slice(0, 3).map((thread) => (
+				<Link
+					className="workspace-recent-row"
+					key={thread.id}
+					params={{ threadId: thread.id }}
+					to="/app/threads/$threadId"
+				>
+					<span>{thread.title || "New thread"}</span>
+					<small>
+						<Clock3 />
+						{relativeTime(thread.updated_at)}
+					</small>
+				</Link>
+			))}
+		</div>
 	);
 }

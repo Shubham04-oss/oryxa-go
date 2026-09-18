@@ -74,7 +74,14 @@ function requestBody(body: unknown): BodyInit | undefined {
 	return JSON.stringify(body);
 }
 
-export async function apiRequest<T = void>(
+/**
+ * Sends one request with the session cookie, refreshing an expired access
+ * token and retrying once when allowed. Returns the raw `Response` so a
+ * caller that wants something other than a JSON body — an event stream, a
+ * download — can read it directly; `apiRequest` is the JSON wrapper most
+ * calls want.
+ */
+export async function apiFetch(
 	path: string,
 	{
 		body,
@@ -82,7 +89,7 @@ export async function apiRequest<T = void>(
 		refreshSession: canRefresh = true,
 		signal,
 	}: ApiRequestOptions = {},
-): Promise<T> {
+): Promise<Response> {
 	const send = () =>
 		fetch(apiUrl(path), {
 			body: requestBody(body),
@@ -99,6 +106,14 @@ export async function apiRequest<T = void>(
 	if (response.status === 401 && canRefresh && (await refreshSession())) {
 		response = await send();
 	}
+	return response;
+}
+
+export async function apiRequest<T = void>(
+	path: string,
+	options: ApiRequestOptions = {},
+): Promise<T> {
+	const response = await apiFetch(path, options);
 	if (!response.ok) {
 		throw await requestError(response);
 	}
@@ -108,7 +123,8 @@ export async function apiRequest<T = void>(
 	return (await response.json()) as T;
 }
 
-async function requestError(response: Response): Promise<ApiError> {
+/** Parses a failed response's body into an `ApiError`, for callers that read `Response` themselves. */
+export async function requestError(response: Response): Promise<ApiError> {
 	let body: ErrorBody = {};
 	try {
 		body = (await response.json()) as ErrorBody;
