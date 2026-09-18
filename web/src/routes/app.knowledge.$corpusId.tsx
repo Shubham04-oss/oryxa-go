@@ -15,8 +15,10 @@ import { useWorkspace } from "@/lib/auth/session";
 import { formatDate } from "@/lib/format";
 import {
 	type CorpusDocument,
+	chunkCountLabel,
 	corpusQueryOptions,
 	type DocumentStatus,
+	documentCountLabel,
 	documentsInfiniteQueryOptions,
 	externalSourceLink,
 	scopeLabel,
@@ -112,7 +114,7 @@ function KnowledgeCorpusPage() {
 			actions={<BackToKnowledge />}
 			description={
 				corpus.data
-					? `${scopeLabel(corpus.data.scope)} · ${corpus.data.document_count} documents`
+					? `${scopeLabel(corpus.data.scope)} · ${documentCountLabel(corpus.data.document_count)}`
 					: undefined
 			}
 			title={corpus.data?.name ?? "Knowledge collection"}
@@ -142,7 +144,7 @@ function DocumentRow({ document }: { document: CorpusDocument }) {
 	const link = externalSourceLink(document.source);
 	const summary = [
 		formatBytes(document.byte_size),
-		`${document.chunk_count} chunks`,
+		chunkCountLabel(document.chunk_count),
 		`added ${formatDate(document.created_at)}`,
 	].join(" · ");
 

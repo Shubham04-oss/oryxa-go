@@ -1550,6 +1550,113 @@ a:focus-visible {
 	border-radius: 16px 16px 16px 4px;
 }
 
+/* Krude's answers, rendered from Markdown. The bubble keeps a plain
+   message's line breaks; here the blocks space themselves. */
+.thread-markdown {
+	white-space: normal;
+}
+
+.thread-markdown > :first-child {
+	margin-top: 0;
+}
+
+.thread-markdown > :last-child {
+	margin-bottom: 0;
+}
+
+.thread-markdown :is(p, ul, ol, pre, table, blockquote) {
+	margin: 0 0 0.625rem;
+}
+
+.thread-markdown :is(h1, h2, h3, h4, h5, h6) {
+	margin: 0.875rem 0 0.375rem;
+	font-size: 0.875rem;
+	font-weight: 600;
+	line-height: 1.4;
+}
+
+.thread-markdown :is(ul, ol) {
+	padding-left: 1.25rem;
+}
+
+.thread-markdown ul {
+	list-style: disc;
+}
+
+.thread-markdown ol {
+	list-style: decimal;
+}
+
+.thread-markdown li + li {
+	margin-top: 0.25rem;
+}
+
+.thread-markdown li > :is(ul, ol) {
+	margin: 0.25rem 0 0;
+}
+
+.thread-markdown strong {
+	font-weight: 600;
+}
+
+.thread-markdown a {
+	color: inherit;
+	text-decoration: underline;
+	text-underline-offset: 2px;
+}
+
+.thread-markdown code {
+	padding: 0.0625rem 0.3125rem;
+	background: var(--muted);
+	border-radius: 5px;
+	font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	font-size: 0.75rem;
+}
+
+.thread-markdown pre {
+	padding: 0.625rem 0.75rem;
+	overflow-x: auto;
+	background: var(--muted);
+	border-radius: 10px;
+}
+
+.thread-markdown pre code {
+	padding: 0;
+	background: none;
+	white-space: pre;
+}
+
+.thread-markdown blockquote {
+	padding-left: 0.75rem;
+	color: var(--ink-muted);
+	border-left: 2px solid var(--border-strong);
+}
+
+.thread-markdown table {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	border-collapse: collapse;
+	font-size: 0.75rem;
+}
+
+.thread-markdown :is(th, td) {
+	padding: 0.3125rem 0.625rem;
+	text-align: left;
+	border: 1px solid var(--border-strong);
+}
+
+.thread-markdown th {
+	font-weight: 600;
+	background: var(--muted);
+}
+
+.thread-markdown hr {
+	margin: 0.75rem 0;
+	border: 0;
+	border-top: 1px solid var(--border-strong);
+}
+
 .thread-message-notice {
 	margin: 0;
 	padding: 0.5rem 0.75rem;
