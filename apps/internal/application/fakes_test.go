@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -29,6 +31,9 @@ type fakeStore struct {
 	actions     map[string]domain.Action
 	handled     map[string]bool
 	events      []domain.Event
+	// subscribeAttempts counts what ConnectionsAwaitingSubscribe has claimed,
+	// the way the column does.
+	subscribeAttempts map[string]int
 }
 
 func newFakeStore() *fakeStore {
@@ -36,6 +41,7 @@ func newFakeStore() *fakeStore {
 		connections: map[string]domain.Connection{}, states: map[string]string{},
 		authConfigs: map[string]AuthConfig{}, triggers: map[string]domain.Trigger{},
 		actions: map[string]domain.Action{}, handled: map[string]bool{},
+		subscribeAttempts: map[string]int{},
 	}
 }
 
@@ -51,7 +57,7 @@ func (store *fakeStore) published(detailType string) []domain.Event {
 	return matched
 }
 
-func (store *fakeStore) CreateConnection(_ context.Context, connection domain.Connection, stateHash string) error {
+func (store *fakeStore) CreateConnection(_ context.Context, connection domain.Connection, stateHash string, event domain.Event) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if _, taken := store.states[stateHash]; taken {
@@ -59,6 +65,7 @@ func (store *fakeStore) CreateConnection(_ context.Context, connection domain.Co
 	}
 	store.connections[connection.ID] = connection
 	store.states[stateHash] = connection.ID
+	store.events = append(store.events, event)
 	return nil
 }
 
@@ -94,7 +101,7 @@ func (store *fakeStore) ActivateConnection(_ context.Context, id, label string, 
 	return connection, true, nil
 }
 
-func (store *fakeStore) FailConnection(_ context.Context, id, reason string, now time.Time) (bool, error) {
+func (store *fakeStore) FailConnection(_ context.Context, id, reason string, now time.Time, event domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	connection := store.connections[id]
@@ -104,6 +111,7 @@ func (store *fakeStore) FailConnection(_ context.Context, id, reason string, now
 	connection.Status, connection.StatusReason, connection.UpdatedAt = domain.ConnectionFailed, reason, now
 	store.connections[id] = connection
 	store.clearState(id)
+	store.events = append(store.events, event)
 	return true, nil
 }
 
@@ -191,19 +199,71 @@ func (store *fakeStore) RemoveConnection(_ context.Context, id, reason string, n
 	return true, nil
 }
 
-func (store *fakeStore) FailPendingConnectionsBefore(_ context.Context, cutoff, now time.Time) (int64, error) {
+func (store *fakeStore) FailPendingConnectionsBefore(_ context.Context, cutoff, now time.Time, events func([]domain.Connection) ([]domain.Event, error)) (int64, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	var failed int64
+	var swept []domain.Connection
 	for id, connection := range store.connections {
 		if connection.Status == domain.ConnectionPending && connection.CreatedAt.Before(cutoff) {
 			connection.Status, connection.UpdatedAt = domain.ConnectionFailed, now
 			store.connections[id] = connection
 			store.clearState(id)
-			failed++
+			swept = append(swept, connection)
 		}
 	}
-	return failed, nil
+	if len(swept) == 0 {
+		return 0, nil
+	}
+	built, err := events(swept)
+	if err != nil {
+		return 0, err
+	}
+	store.events = append(store.events, built...)
+	return int64(len(swept)), nil
+}
+
+// ConnectionsAwaitingSubscribe does not simulate the lease real SQL takes
+// (apps/internal/postgres/store_integration_test.go proves that against a
+// real database instead): every test here drives a single, sequential
+// maintenance pass, so there is no second replica for a lease to matter
+// against, and a frozen test clock would make one indistinguishable from a
+// connection still held by the first pass.
+func (store *fakeStore) ConnectionsAwaitingSubscribe(_ context.Context, maxAttempts, limit int, now, _ time.Time) ([]domain.Connection, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var owed []domain.Connection
+	for id, connection := range store.connections {
+		if connection.Status != domain.ConnectionActive || !connection.AutoSubscribe || connection.AutoSubscribedAt != nil {
+			continue
+		}
+		if store.subscribeAttempts[id] >= maxAttempts {
+			continue
+		}
+		store.subscribeAttempts[id]++
+		// The real UPDATE ... RETURNING hands back the row it just
+		// incremented, attempts and all.
+		connection.AutoSubscribeAttempts = store.subscribeAttempts[id]
+		store.connections[id] = connection
+		owed = append(owed, connection)
+		if len(owed) == limit {
+			break
+		}
+	}
+	sort.Slice(owed, func(i, j int) bool { return owed[i].ID < owed[j].ID })
+	return owed, nil
+}
+
+func (store *fakeStore) MarkSubscribed(_ context.Context, id string, now time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	connection, ok := store.connections[id]
+	if !ok || connection.AutoSubscribedAt != nil {
+		return nil
+	}
+	marked := now.UTC()
+	connection.AutoSubscribedAt = &marked
+	store.connections[id] = connection
+	return nil
 }
 
 func (store *fakeStore) AuthConfig(_ context.Context, toolkit string) (AuthConfig, error) {
@@ -226,7 +286,7 @@ func (store *fakeStore) SaveAuthConfig(_ context.Context, config AuthConfig) (Au
 	return config, nil
 }
 
-func (store *fakeStore) CreateTrigger(_ context.Context, trigger domain.Trigger) (domain.Trigger, bool, error) {
+func (store *fakeStore) CreateTrigger(_ context.Context, trigger domain.Trigger, event domain.Event) (domain.Trigger, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	for _, existing := range store.triggers {
@@ -235,6 +295,7 @@ func (store *fakeStore) CreateTrigger(_ context.Context, trigger domain.Trigger)
 		}
 	}
 	store.triggers[trigger.ID] = trigger
+	store.events = append(store.events, event)
 	return trigger, true, nil
 }
 
@@ -264,7 +325,8 @@ func (store *fakeStore) Triggers(_ context.Context, organizationID string, query
 	defer store.mu.Unlock()
 	var listed []domain.Trigger
 	for _, trigger := range store.triggers {
-		if trigger.OrganizationID != organizationID || trigger.Status == domain.TriggerRemoved ||
+		if trigger.OrganizationID != organizationID ||
+			(!query.IncludeRemoved && trigger.Status == domain.TriggerRemoved) ||
 			(query.MemberID != "" && trigger.MemberID != query.MemberID) ||
 			(query.ConnectionID != "" && trigger.ConnectionID != query.ConnectionID) {
 			continue
@@ -274,7 +336,7 @@ func (store *fakeStore) Triggers(_ context.Context, organizationID string, query
 	return listed, nil
 }
 
-func (store *fakeStore) RemoveTrigger(_ context.Context, id string, now time.Time) (bool, error) {
+func (store *fakeStore) RemoveTrigger(_ context.Context, id string, now time.Time, event domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	trigger := store.triggers[id]
@@ -283,6 +345,7 @@ func (store *fakeStore) RemoveTrigger(_ context.Context, id string, now time.Tim
 	}
 	trigger.Status, trigger.UpdatedAt = domain.TriggerRemoved, now
 	store.triggers[id] = trigger
+	store.events = append(store.events, event)
 	return true, nil
 }
 
@@ -338,6 +401,23 @@ func (store *fakeStore) RecordWebhook(_ context.Context, eventID, _ string, _ ti
 	return true, nil
 }
 
+func (store *fakeStore) RecordTriggerDelivery(_ context.Context, eventID, _, triggerID string, now time.Time, event domain.Event) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.handled[eventID] {
+		return false, nil
+	}
+	store.handled[eventID] = true
+	if trigger, live := store.triggers[triggerID]; live && trigger.Status != domain.TriggerRemoved {
+		delivered := now.UTC()
+		trigger.DeliveryCount++
+		trigger.LastDeliveryAt = &delivered
+		store.triggers[triggerID] = trigger
+	}
+	store.events = append(store.events, event)
+	return true, nil
+}
+
 func (store *fakeStore) EventHandled(_ context.Context, eventID string) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -374,26 +454,40 @@ func (directory *fakeDirectory) Membership(_ context.Context, organizationID str
 // fakeComposio answers apps' Composio calls from what a test sets, and
 // records what it was asked.
 type fakeComposio struct {
-	mu              sync.Mutex
-	toolkits        map[string]composio.Toolkit
-	toolkitsErr     error
-	authConfigs     []composio.AuthConfig
-	created         []string // auth config kinds created: managed or scheme
-	links           []composio.LinkRequest
-	accounts        map[string][]composio.ConnectedAccount // successive reads
-	deleted         []string
-	revoked         []bool
-	tools           map[string]composio.Tool
-	executed        []composio.ExecuteRequest
-	result          composio.ExecuteResult
-	executeErr      error
-	proxied         []composio.ProxyRequest
-	proxyResult     composio.ProxyResponse
-	proxyErr        error
-	upserts         []string
-	upsertID        string
+	mu          sync.Mutex
+	toolkits    map[string]composio.Toolkit
+	toolkitsErr error
+	authConfigs []composio.AuthConfig
+	created     []string // auth config kinds created: managed or scheme
+	links       []composio.LinkRequest
+	accounts    map[string][]composio.ConnectedAccount // successive reads
+	deleted     []string
+	revoked     []bool
+	tools       map[string]composio.Tool
+	executed    []composio.ExecuteRequest
+	result      composio.ExecuteResult
+	executeErr  error
+	proxied     []composio.ProxyRequest
+	proxyResult composio.ProxyResponse
+	proxyErr    error
+	upserts     []string
+	// upsertUsers is the Composio user each upsert named, in order.
+	upsertUsers []string
+	// upsertErr is what every upsert answers instead, when set.
+	upsertErr error
+	upsertID  string
+	// upsertPerSlug answers a distinct instance id per trigger, the way
+	// Composio does for different triggers on one account.
+	upsertPerSlug   bool
 	deletedTriggers []string
 	deleteErr       error
+	// triggerTypes is the catalog a subscription is checked against, by
+	// toolkit. triggerPages splits one toolkit's answer over cursors, so the
+	// walk over them is exercised.
+	triggerTypes   map[string][]composio.TriggerType
+	triggerPages   int
+	triggerTypeErr error
+	triggerLists   int
 }
 
 func newFakeComposio() *fakeComposio {
@@ -402,6 +496,18 @@ func newFakeComposio() *fakeComposio {
 		tools: map[string]composio.Tool{}, result: composio.ExecuteResult{Successful: true, Data: json.RawMessage(`{"ok":true}`), LogID: "log_1"},
 		proxyResult: composio.ProxyResponse{Status: 200, Data: json.RawMessage(`{"items":[]}`)},
 		upsertID:    "ti_1",
+		triggerTypes: map[string][]composio.TriggerType{
+			// What a GitHub connection can be subscribed to in these tests: a
+			// pushed event needing a repository, and a polled one needing
+			// nothing.
+			"github": {{
+				Slug: "GITHUB_COMMIT_EVENT", Name: "Commit", Toolkit: "github", Kind: "webhook",
+				Config: json.RawMessage(`{"type":"object","properties":{"owner":{"type":"string"},"repo":{"type":"string"}},"required":["owner","repo"]}`),
+			}, {
+				Slug: "GITHUB_STAR_ADDED_EVENT", Name: "Star", Toolkit: "github", Kind: "poll",
+				Config: json.RawMessage(`{"type":"object","properties":{}}`),
+			}},
+		},
 	}
 }
 
@@ -530,14 +636,52 @@ func (fake *fakeComposio) Proxy(_ context.Context, request composio.ProxyRequest
 	return fake.proxyResult, nil
 }
 
-func (fake *fakeComposio) TriggerTypes(context.Context, composio.TriggerTypeQuery) (composio.Page[composio.TriggerType], error) {
-	return composio.Page[composio.TriggerType]{}, nil
-}
-
-func (fake *fakeComposio) UpsertTrigger(_ context.Context, slug, accountID string, _ json.RawMessage) (string, error) {
+// TriggerTypes answers one toolkit's trigger definitions, in pages when
+// triggerPages asks for them, so the catalog's walk over cursors is
+// exercised rather than assumed.
+func (fake *fakeComposio) TriggerTypes(_ context.Context, query composio.TriggerTypeQuery) (composio.Page[composio.TriggerType], error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	fake.triggerLists++
+	if fake.triggerTypeErr != nil {
+		return composio.Page[composio.TriggerType]{}, fake.triggerTypeErr
+	}
+	var items []composio.TriggerType
+	for _, toolkit := range query.Toolkits {
+		items = append(items, fake.triggerTypes[toolkit]...)
+	}
+	size := fake.triggerPages
+	if size <= 0 {
+		return composio.Page[composio.TriggerType]{Items: items}, nil
+	}
+	start := 0
+	if query.Cursor != "" {
+		parsed, err := strconv.Atoi(query.Cursor)
+		if err != nil {
+			return composio.Page[composio.TriggerType]{}, fmt.Errorf("bad cursor %q", query.Cursor)
+		}
+		start = parsed
+	}
+	end := min(start+size, len(items))
+	page := composio.Page[composio.TriggerType]{Items: items[start:end]}
+	if end < len(items) {
+		page.NextCursor = strconv.Itoa(end)
+	}
+	return page, nil
+}
+
+func (fake *fakeComposio) UpsertTrigger(_ context.Context, slug string, subscription composio.TriggerSubscription) (string, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	accountID := subscription.ConnectedAccountID
 	fake.upserts = append(fake.upserts, slug+"@"+accountID)
+	fake.upsertUsers = append(fake.upsertUsers, subscription.UserID)
+	if fake.upsertErr != nil {
+		return "", fake.upsertErr
+	}
+	if fake.upsertPerSlug {
+		return "ti_" + slug + "@" + accountID, nil
+	}
 	return fake.upsertID, nil
 }
 
@@ -548,13 +692,15 @@ func (fake *fakeComposio) DeleteTrigger(_ context.Context, id string) error {
 	return fake.deleteErr
 }
 
-// Callers every test shares: a member, another member, an org admin and an
-// agent acting for the first member, all in org_1.
+// Callers every test shares: a member, another member, an org admin, an
+// agent acting for the first member, and an agent acting for the admin, all
+// in org_1.
 var (
-	memberToken = authclient.Credentials{Authorization: "Bearer member"}
-	otherToken  = authclient.Credentials{Authorization: "Bearer other"}
-	adminToken  = authclient.Credentials{Authorization: "Bearer admin"}
-	agentToken  = authclient.Credentials{Authorization: "Bearer agent"}
+	memberToken     = authclient.Credentials{Authorization: "Bearer member"}
+	otherToken      = authclient.Credentials{Authorization: "Bearer other"}
+	adminToken      = authclient.Credentials{Authorization: "Bearer admin"}
+	agentToken      = authclient.Credentials{Authorization: "Bearer agent"}
+	adminAgentToken = authclient.Credentials{Authorization: "Bearer admin-agent"}
 )
 
 type harness struct {
@@ -570,10 +716,11 @@ func newHarness(t *testing.T) harness {
 	service, err := New(Dependencies{
 		Store: store,
 		Directory: &fakeDirectory{members: map[string]domain.OrgMembership{
-			memberToken.Authorization: {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember},
-			otherToken.Authorization:  {OrganizationID: "org_1", UserID: "user-2", Role: domain.OrgRoleMember},
-			adminToken.Authorization:  {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin},
-			agentToken.Authorization:  {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember, Agent: true},
+			memberToken.Authorization:     {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember},
+			otherToken.Authorization:      {OrganizationID: "org_1", UserID: "user-2", Role: domain.OrgRoleMember},
+			adminToken.Authorization:      {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin},
+			agentToken.Authorization:      {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember, Agent: true},
+			adminAgentToken.Authorization: {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin, Agent: true},
 		}},
 		Composio: fake,
 		Clock:    func() time.Time { return testClock },

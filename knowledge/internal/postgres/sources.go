@@ -53,7 +53,10 @@ func (store *Store) Source(ctx context.Context, organizationID, sourceID string)
 }
 
 func (store *Store) Sources(ctx context.Context, organizationID string, query domain.SourceQuery) ([]domain.Source, error) {
-	sql := `SELECT ` + sourceColumns + ` FROM knowledge_sources WHERE organization_id = $1 AND status <> 'removed'`
+	sql := `SELECT ` + sourceColumns + ` FROM knowledge_sources WHERE organization_id = $1`
+	if !query.IncludeRemoved {
+		sql += ` AND status <> 'removed'`
+	}
 	args := []any{organizationID}
 	bind := func(value any) string {
 		args = append(args, value)
@@ -244,6 +247,50 @@ func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID 
 		return nil
 	})
 	return removed, err
+}
+
+// HastenSource brings forward the next sweep of one source, because someone
+// asked for it. Unlike the trigger-driven sweep it does not check when the
+// source was last read: a person asking has a reason the schedule does not
+// know — a permission they just fixed, something they just changed at the
+// provider — and refusing them because a pass ran a minute ago would make
+// the button a lie. It answers false for a source that is not active, or one
+// already due sooner.
+func (store *Store) HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error) {
+	tag, err := store.pool.Exec(ctx, `
+		UPDATE knowledge_sources
+		SET sync_at = $3, updated_at = $3, version = version + 1
+		WHERE organization_id = $1 AND id = $2 AND status = 'active'
+		  AND sync_at IS NOT NULL AND sync_at > $3`, organizationID, sourceID, at)
+	if err != nil {
+		return false, fmt.Errorf("hasten a source: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+// HastenSources brings forward the next sweep of every healthy source on a
+// connection, because the app said something in it changed.
+//
+// It never delays one already due sooner. A source swept within floor is
+// brought forward to floor after that sweep rather than to now: a busy
+// channel delivers faster than any provider should be read, but what it
+// reported should not then wait a whole interval. And a source that is
+// failing keeps its backoff — last_synced_at is its last success, however
+// long ago, so the floor alone would let every delivery hammer a provider
+// that is refusing it. Answers how many moved.
+func (store *Store) HastenSources(ctx context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error) {
+	tag, err := store.pool.Exec(ctx, `
+		UPDATE knowledge_sources
+		SET sync_at = GREATEST($2, COALESCE(last_synced_at + make_interval(secs => $3), $2)),
+		    updated_at = $2, version = version + 1
+		WHERE connection_id = $1 AND status = 'active' AND attempts = 0
+		  AND sync_at IS NOT NULL
+		  AND sync_at > GREATEST($2, COALESCE(last_synced_at + make_interval(secs => $3), $2))`,
+		connectionID, at, floor.Seconds())
+	if err != nil {
+		return 0, fmt.Errorf("hasten sources: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // PauseSources stops every live source reading through one connection, and

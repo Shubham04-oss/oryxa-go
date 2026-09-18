@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
 // defaultFullSweepInterval is how often a source already indexed is read
@@ -24,6 +26,18 @@ type Config struct {
 	// once COMPOSIO_API_KEY says provider sources are on. It is a host URL
 	// variable: when apps runs in this process, the host defaults it there.
 	AppsURL string
+	// FilesURL is where the organization's own stored files are read, and
+	// ServiceKeyID is the KMS key knowledge signs its own identity with when
+	// asking auth for a member's token. The files source is mounted only
+	// when both are set, since it reads as the member who registered it and
+	// has no other way in.
+	FilesURL     string
+	ServiceKeyID string
+	// ServiceCallers are the services allowed to read a document's body
+	// through the internal API, which is how a retrieval pipeline reads back
+	// what an event was too large to carry. Empty means the internal API
+	// refuses every call.
+	ServiceCallers []serviceauth.Caller
 	// ComposioAPIKey turns on GitHub, Notion and Slack: without it knowledge
 	// mounts no extractor for them, only files. ComposioBaseURL overrides
 	// Composio's own API, for a test double.
@@ -55,6 +69,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	config := Config{
 		AuthURL:             endpoint(getenv, "AUTH_URL"),
 		AppsURL:             endpoint(getenv, "APPS_URL"),
+		FilesURL:            endpoint(getenv, "FILES_URL"),
+		ServiceKeyID:        strings.TrimSpace(getenv("KNOWLEDGE_SERVICE_KEY_ID")),
 		ComposioAPIKey:      strings.TrimSpace(getenv("COMPOSIO_API_KEY")),
 		ComposioBaseURL:     endpoint(getenv, "COMPOSIO_BASE_URL"),
 		AllowedOrigins:      splitList(getenv("KNOWLEDGE_ALLOWED_ORIGINS")),
@@ -62,6 +78,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		SQSEndpoint:         endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
 		EventsQueueURL:      strings.TrimSpace(getenv("KNOWLEDGE_EVENTS_QUEUE_URL")),
 		FullSweepInterval:   fullSweepInterval,
+	}
+	if config.ServiceCallers, err = serviceauth.ParseCallers(getenv("KNOWLEDGE_SERVICE_CALLERS")); err != nil {
+		return Config{}, fmt.Errorf("KNOWLEDGE_SERVICE_CALLERS: %w", err)
 	}
 	if config.AuthURL == "" {
 		return Config{}, errors.New("AUTH_URL is required")
@@ -72,6 +91,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	for _, check := range []struct{ name, value string }{
 		{"AUTH_URL", config.AuthURL},
 		{"APPS_URL", config.AppsURL},
+		{"FILES_URL", config.FilesURL},
 		{"COMPOSIO_BASE_URL", config.ComposioBaseURL},
 		{"EVENTBRIDGE_ENDPOINT", config.EventBridgeEndpoint},
 		{"AWS_ENDPOINT_URL_SQS", config.SQSEndpoint},

@@ -19,11 +19,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/s3vectors"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
@@ -34,6 +36,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/generation"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/ingest"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgeclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/retrieval"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/serviceconfig"
@@ -178,7 +181,27 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("FILES_URL is not set: documents can only be submitted as text")
 	}
 
-	service := application.New(store, authclient.New(config.AuthURL), teams, files, vectors,
+	// A document over knowledge's event budget travels without its body.
+	// Reading it back is what keeps the largest documents an organization
+	// has — the handbook, the specification, the long thread — from being
+	// the ones it cannot search.
+	var documents application.Documents
+	switch {
+	case config.KnowledgeURL == "":
+		logger.Warn("KNOWLEDGE_URL is not set: a knowledge document too large to carry on the bus cannot be read back")
+	case config.ServiceKeyID == "":
+		logger.Warn("RAG_SERVICE_KEY_ID is not set: a knowledge document too large to carry on the bus cannot be read back, " +
+			"since reading it means proving which service is asking")
+	default:
+		documents = knowledgeclient.New(knowledgeclient.Config{
+			BaseURL: config.KnowledgeURL,
+			Signer: serviceauth.Signer{
+				Client: kms.NewFromConfig(platform.AWS), KeyID: config.ServiceKeyID, Service: Name,
+			},
+		})
+	}
+
+	service := application.New(store, authclient.New(config.AuthURL), teams, files, documents, vectors,
 		retriever, generator, application.Defaults{
 			Provider:           config.DefaultProvider,
 			Model:              config.DefaultModel,

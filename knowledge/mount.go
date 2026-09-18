@@ -2,27 +2,35 @@ package knowledge
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/membertoken"
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/appsclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/filesclient"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 )
 
-// Definition is how a host builds knowledge. Nothing calls knowledge over
-// HTTP, so it names no URL variable of its own for other services to reach it
-// by.
-var Definition = host.Definition{Name: Name, Migrate: Migrate, Mount: Mount}
+// Definition is how a host builds knowledge. Rag reads back a document too
+// large to have travelled on the bus from knowledge's internal API, at
+// KNOWLEDGE_URL, which defaults to this process when it runs knowledge.
+var Definition = host.Definition{Name: Name, URLVariable: "KNOWLEDGE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs knowledge's schema.
 func Migrate(ctx context.Context, platform host.Platform) error {
@@ -32,10 +40,10 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	return postgres.New(platform.Database).Migrate(ctx)
 }
 
-// Mount assembles knowledge on what the host shares. The files source waits
-// on a Grants implementation — see TODO.md — so it is never mounted here
-// either; GitHub, Notion and Slack are mounted only once COMPOSIO_API_KEY
-// says app sources are on.
+// Mount assembles knowledge on what the host shares. GitHub, Notion and
+// Slack are mounted once COMPOSIO_API_KEY says app sources are on; files,
+// which reads as the member who registered it, once FILES_URL and
+// KNOWLEDGE_SERVICE_KEY_ID give it a way to act as one.
 func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if platform.Database == nil {
 		return host.Service{}, host.ErrDatabaseRequired
@@ -50,16 +58,60 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}
 
 	var apps application.Apps
-	var extractors sources.Registry
+	extractors := sources.Registry{}
 	if config.ComposioAPIKey != "" {
 		composioClient, err := composio.New(composio.Config{APIKey: config.ComposioAPIKey, BaseURL: config.ComposioBaseURL})
 		if err != nil {
 			return host.Service{}, err
 		}
 		apps = appsclient.New(config.AppsURL)
-		extractors = Builtin(composioClient)
+		for provider, extractor := range Builtin(composioClient) {
+			extractors[provider] = extractor
+		}
 	} else {
 		logger.Warn("COMPOSIO_API_KEY is not set: app sources (GitHub, Notion, Slack) are off")
+	}
+
+	// Acting as a member while they are away is what the files source reads
+	// with, and what registering a newly connected app's contents for them
+	// needs. Auth's standing grant fills that, redeemed with knowledge's own
+	// signed identity.
+	var grants application.Grants
+	if config.ServiceKeyID != "" {
+		grants = memberGrants{tokens: membertoken.New(membertoken.Config{
+			AuthURL: config.AuthURL,
+			Signer: serviceauth.Signer{
+				Client: kms.NewFromConfig(platform.AWS), KeyID: config.ServiceKeyID, Service: Name,
+			},
+		})}
+	} else {
+		logger.Warn("KNOWLEDGE_SERVICE_KEY_ID is not set: knowledge cannot act as a member while they are away, " +
+			"so neither the organization's own files nor what a newly connected app holds are indexed for them")
+	}
+	// Files is the one source with nobody to act as: every route there wants
+	// a member's own credentials, and a scheduled pass has none.
+	switch {
+	case config.FilesURL == "":
+		logger.Warn("FILES_URL is not set: the organization's own files are not indexed")
+	case grants != nil:
+		files := sources.NewFiles(filesclient.New(config.FilesURL))
+		extractors[files.Provider()] = files
+	}
+
+	// A retrieval pipeline reads back a body too large to have travelled on
+	// the bus through the internal API. Without named callers there is no
+	// internal API, and the largest documents stay unindexed.
+	var serviceVerifier httpserver.ServiceVerifier
+	if len(config.ServiceCallers) > 0 {
+		verifier, err := serviceauth.NewVerifier(serviceauth.VerifierConfig{
+			Keys: kms.NewFromConfig(platform.AWS), Audience: Name, Callers: config.ServiceCallers,
+		})
+		if err != nil {
+			return host.Service{}, err
+		}
+		serviceVerifier = verifier
+	} else {
+		logger.Warn("KNOWLEDGE_SERVICE_CALLERS is not set: a document too large to carry on the bus cannot be read back, so the largest documents are not indexed")
 	}
 
 	eventClient := eventbridge.NewFromConfig(platform.AWS, func(options *eventbridge.Options) {
@@ -71,11 +123,14 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Store:      postgres.New(platform.Database),
 		Directory:  authclient.New(config.AuthURL),
 		Apps:       apps,
-		Grants:     nil,
+		Grants:     grants,
 		Sink:       events.NewPublisher(eventClient, platform.EventBusName),
 		Extractors: extractors,
 		Logger:     logger,
-	}, Config{AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval})
+	}, Config{
+		AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval,
+		Services: serviceVerifier,
+	})
 	if err != nil {
 		return host.Service{}, err
 	}
@@ -102,4 +157,31 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 30 * time.Second},
 		Workers:  workers,
 	}, nil
+}
+
+// memberTokens is what memberGrants asks; *membertoken.Client answers it.
+type memberTokens interface {
+	MemberToken(ctx context.Context, organizationID, memberID string) (string, error)
+}
+
+// memberGrants puts auth's answers about a member's grant in knowledge's own
+// terms, so work that needed a token can tell a member who has to grant again
+// from a deployment that may not ask, and both from an auth that is only
+// down for a moment — the one of the three worth trying again.
+type memberGrants struct{ tokens memberTokens }
+
+func (grants memberGrants) MemberToken(ctx context.Context, organizationID, memberID string) (string, error) {
+	token, err := grants.tokens.MemberToken(ctx, organizationID, memberID)
+	switch {
+	case err == nil:
+		return token, nil
+	case errors.Is(err, membertoken.ErrGrantRequired):
+		return "", fmt.Errorf("%w: %w", domain.ErrGrantRequired, err)
+	case errors.Is(err, membertoken.ErrNotConfigured):
+		return "", fmt.Errorf("%w: %w", domain.ErrForbidden, err)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "", err
+	default:
+		return "", fmt.Errorf("%w: %w", domain.ErrProviderUnavailable, err)
+	}
 }

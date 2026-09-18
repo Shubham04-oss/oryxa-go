@@ -35,6 +35,7 @@ type fakeService struct {
 	listedKit    string
 
 	connection domain.Connection
+	targets    []application.Target
 	redirect   string
 	completion application.Completion
 	trigger    domain.Trigger
@@ -134,6 +135,14 @@ func (fake *fakeService) CreateTrigger(_ context.Context, credentials authclient
 		return domain.Trigger{}, fake.err
 	}
 	return fake.trigger, nil
+}
+
+func (fake *fakeService) ConnectionTargets(_ context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]application.Target, error) {
+	fake.credentials, fake.organization = credentials, organizationID
+	if fake.err != nil {
+		return nil, fake.err
+	}
+	return fake.targets, nil
 }
 
 func (fake *fakeService) Triggers(_ context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]domain.Trigger, error) {

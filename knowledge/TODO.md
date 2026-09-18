@@ -31,13 +31,25 @@ clients are not restored — both are hand-rolled on the shared paced client
 the way Slack already was, since Composio holds the credential and a
 generated client has nowhere to place one.
 
-**`files` still cannot be indexed, for one reason.**
+**`files` is indexed again (fixed).** `application.Grants` now has an
+implementation: `/internal/membertoken` redeems a member's standing agent
+grant at auth's `/v1/internal/agent-tokens`, the same route
+`agents/primary/internal/memberauth` has always used, and holds each token
+until shortly before it expires so a pass over many sources asks auth once.
 
-- **`application.Grants` has no implementation.** It mints a member-scoped
-  token for the files source, because `files` has no service identity —
-  every route there wants a member's own credentials. Until one is supplied,
-  the files source is not mounted. `agents/primary/internal/memberauth` is
-  the working precedent for minting one under auth's agent grant.
+`Mount` registers the files source once `FILES_URL` and
+`KNOWLEDGE_SERVICE_KEY_ID` are both set; without either it says which is
+missing and leaves the source off, as before. The deployment also has to
+name knowledge in auth's `AUTH_SERVICE_CALLERS` with the `agent` purpose —
+auth refuses a service it does not know, and that reads as
+`membertoken.ErrNotConfigured` rather than as a source that quietly never
+runs.
+
+Two things to know about it. A member who never granted answers
+`ErrGrantRequired`, which no retry fixes and which stops that source rather
+than falling back to anything wider. And `/internal/membertoken` duplicates
+`agents/primary/internal/memberauth`, which cannot be imported from outside
+`agents/primary`; the two speak the same route and should become one.
 
 ---
 
@@ -134,10 +146,48 @@ finds something the provider no longer has; see §2.
 
 ---
 
+## 9. HTML is read (fixed)
+
+`transform` read plain text, Markdown, CSV and JSON, and refused everything
+else — so a GitHub issue, a Notion page or a mail body delivered as HTML was
+skipped in silence. `golang.org/x/net` is a direct dependency now and
+`transform/html.go` takes the text out: the title first, then the prose, with
+a line break wherever a block element begins or ends. Script, style,
+`noscript`, `template`, `svg` and comments hold no prose and are dropped;
+attributes are never indexed.
+
+Two things worth keeping in mind if this is changed. The stored media type is
+`text/plain`, not `text/html`, because the body is no longer markup and must
+not claim to be. And the hash is over the extracted text — that is what keeps
+a provider re-serializing a page from looking like a change, which is the
+whole reason a pass over thousands of unchanged documents publishes nothing.
+
+## 10. Trigger payloads in knowledge's queue
+
+Knowledge consumes `apps.trigger.received.v1` only to learn which connection
+changed, but the event carries the app's whole payload, so mail bodies and
+messages pass through `knowledge-events` and, for an event that keeps failing,
+sit in its dead-letter queue for its retention. Apps wipes the same payloads
+from its own outbox once published. An EventBridge input transformer on a
+separate rule for this detail type could hand knowledge the connection alone;
+it needs the provisioner to create two rules rather than one.
+
 ## 8. Decisions that are not mine to make
 
-1. **Promote `golang.org/x/net` to a direct dependency for HTML?** Unblocks
-   HTML documents, such as mail and rich pages.
+1. **Promote `golang.org/x/net` to a direct dependency for HTML?** Decided:
+   yes. HTML is read now — see §9.
+6. **Whose view should the organization's files source read?** Open, and
+   deliberately parked. It reads as whoever stored the first shared file —
+   always an admin, since only an admin can share a file with the whole
+   organization. The one thing an admin's view adds to organization-scoped
+   files is billing attachments, and the source skips those itself, so what
+   it publishes is what every member could already see. What stays open is
+   availability: that member can leave, and their grant goes with them, and
+   nothing says the first uploader should be the one the whole
+   organization's index depends on. The alternatives — an organization-level
+   grant, the owner, a service identity files would have to accept — each
+   cost something different. Revisit before this is in front of real
+   organizations.
 2. **Adopt the `Name`/`Migrate`/`Handler`/`Workers` seam across the other
    seven services?** Decided: yes. It was proven here because this one was
    greenfield; `teams` adopted it first (`teams/service.go`), and this

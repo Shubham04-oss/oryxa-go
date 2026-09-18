@@ -28,6 +28,10 @@ type ConnectInput struct {
 	ReturnTo string
 	// Alias names the account, to tell several connections to one app apart.
 	Alias string
+	// AutoSubscribe says whether connecting should subscribe to everything
+	// this app can deliver. Unset means the deployment's own default, which
+	// is to subscribe.
+	AutoSubscribe *bool
 }
 
 // callbackPath is where Composio sends a member's browser back to.
@@ -85,9 +89,27 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	connection := domain.Connection{
 		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, Toolkit: toolkit,
 		AuthConfigID: config.AuthConfigID, ComposioUserID: userID, ComposioAccountID: link.ConnectedAccountID,
-		Status: domain.ConnectionPending, ReturnTo: returnTo, CreatedAt: now, UpdatedAt: now,
+		Status: domain.ConnectionPending, ReturnTo: returnTo, AutoSubscribe: s.autoSubscribe,
+		CreatedAt: now, UpdatedAt: now,
 	}
-	if err := s.store.CreateConnection(ctx, connection, stateHash); err != nil {
+	if input.AutoSubscribe != nil {
+		// Recorded either way; whether it is ever acted on is a separate
+		// question, decided at subscribe time by s.autoSubscribe. The
+		// deployment switch (APPS_AUTO_SUBSCRIBE=false) is a kill switch, not
+		// a default it merely falls back to: off means nothing is
+		// auto-subscribed, whatever this connection asked for.
+		connection.AutoSubscribe = *input.AutoSubscribe
+	}
+	// Announced as it starts, so what follows — connected or failed — is
+	// always the end of something the bus saw begin.
+	event, err := s.event(appsv1.ConnectionInitiatedDetailType, appsv1.ConnectionInitiated{
+		ConnectionID: id, OrganizationID: organizationID, MemberID: caller.UserID,
+		Toolkit: toolkit, InitiatedAt: now,
+	})
+	if err != nil {
+		return domain.Connection{}, "", err
+	}
+	if err := s.store.CreateConnection(ctx, connection, stateHash, event); err != nil {
 		return domain.Connection{}, "", err
 	}
 	s.logger.InfoContext(ctx, "app connection started",
@@ -188,7 +210,7 @@ func (s *Service) CompleteConnection(ctx context.Context, state, reportedStatus,
 	}
 	if reportedAccountID != "" && reportedAccountID != connection.ComposioAccountID {
 		s.logger.WarnContext(ctx, "callback named another account", "connection_id", connection.ID)
-		return Completion{}, s.refuse(ctx, connection, "the callback named another account")
+		return Completion{}, s.refuse(ctx, connection, "the callback named another account", appsv1.FailedWrongAccount)
 	}
 
 	for attempt := range connectPolls {
@@ -199,20 +221,20 @@ func (s *Service) CompleteConnection(ctx context.Context, state, reportedStatus,
 		if account.UserID != connection.ComposioUserID || account.Toolkit != connection.Toolkit ||
 			(account.AuthConfigID != "" && account.AuthConfigID != connection.AuthConfigID) {
 			s.logger.WarnContext(ctx, "connected account belongs to someone else", "connection_id", connection.ID)
-			return Completion{}, s.refuse(ctx, connection, "the account belongs to another member or app")
+			return Completion{}, s.refuse(ctx, connection, "the account belongs to another member or app", appsv1.FailedWrongAccount)
 		}
 		switch account.Status {
 		case composio.StatusActive:
 			return s.activate(ctx, connection, account)
 		case composio.StatusFailed, composio.StatusExpired, composio.StatusRevoked, composio.StatusInactive:
-			if err := s.fail(ctx, connection, strings.ToLower(account.Status)); err != nil {
+			if err := s.fail(ctx, connection, strings.ToLower(account.Status), appsv1.FailedDeniedAtProvider); err != nil {
 				return Completion{}, err
 			}
 			connection.Status = domain.ConnectionFailed
 			return Completion{Connection: connection, ReturnTo: connection.ReturnTo}, nil
 		}
 		if reportedStatus == "failed" {
-			if err := s.fail(ctx, connection, "the member did not finish connecting"); err != nil {
+			if err := s.fail(ctx, connection, "the member did not finish connecting", appsv1.FailedDeniedAtProvider); err != nil {
 				return Completion{}, err
 			}
 			connection.Status = domain.ConnectionFailed
@@ -253,8 +275,20 @@ func (s *Service) activate(ctx context.Context, connection domain.Connection, ac
 	return Completion{Connection: activated, ReturnTo: connection.ReturnTo}, nil
 }
 
-func (s *Service) fail(ctx context.Context, connection domain.Connection, reason string) error {
-	if _, err := s.store.FailConnection(ctx, connection.ID, reason, s.now().UTC()); err != nil {
+// fail marks a pending connection failed. Reason is what a member reads, in
+// this service's own words or Composio's status; cause is the one of
+// appsv1's Failed constants the bus carries, since an event's reason is
+// grouped and counted and must not be prose that changes.
+func (s *Service) fail(ctx context.Context, connection domain.Connection, reason, cause string) error {
+	now := s.now().UTC()
+	event, err := s.event(appsv1.ConnectionFailedDetailType, appsv1.ConnectionFailed{
+		ConnectionID: connection.ID, OrganizationID: connection.OrganizationID, MemberID: connection.MemberID,
+		Toolkit: connection.Toolkit, Reason: cause, FailedAt: now,
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := s.store.FailConnection(ctx, connection.ID, reason, now, event); err != nil {
 		return err
 	}
 	return nil
@@ -262,8 +296,8 @@ func (s *Service) fail(ctx context.Context, connection domain.Connection, reason
 
 // refuse fails a connection whose callback cannot be believed, and says so:
 // its state is spent, so the same trick cannot be tried against it again.
-func (s *Service) refuse(ctx context.Context, connection domain.Connection, reason string) error {
-	if err := s.fail(ctx, connection, reason); err != nil {
+func (s *Service) refuse(ctx context.Context, connection domain.Connection, reason, cause string) error {
+	if err := s.fail(ctx, connection, reason, cause); err != nil {
 		return err
 	}
 	return fmt.Errorf("%s: %w", reason, domain.ErrForbidden)

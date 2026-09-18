@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -33,19 +34,32 @@ type knowledgeService interface {
 	Sources(ctx context.Context, credentials authclient.Credentials, organizationID string, query domain.SourceQuery) ([]domain.Source, error)
 	Source(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.Source, error)
 	RemoveSource(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) error
+	SyncSource(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.Source, error)
 	Runs(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string, limit int) ([]domain.SyncRun, error)
 	Document(ctx context.Context, credentials authclient.Credentials, organizationID, documentID string) (domain.Document, error)
+	DocumentBody(ctx context.Context, organizationID, documentID string) (domain.Document, error)
 	Extractors() []string
 }
 
 type Config struct {
 	// AllowedOrigins may send cookie-authenticated mutations.
 	AllowedOrigins []string
+	// Services identifies a service calling the internal API, which is how a
+	// retrieval pipeline reads back a body too large to have travelled on
+	// the bus. Nil means the internal API refuses every call.
+	Services ServiceVerifier
+}
+
+// ServiceVerifier checks a signed service token naming knowledge as its
+// audience.
+type ServiceVerifier interface {
+	Verify(context.Context, string) (serviceauth.Claims, error)
 }
 
 type Server struct {
 	service        knowledgeService
 	allowedOrigins map[string]struct{}
+	services       ServiceVerifier
 	logger         *slog.Logger
 	mux            *http.ServeMux
 	patterns       []string
@@ -55,7 +69,10 @@ func New(service knowledgeService, config Config, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	server := &Server{service: service, allowedOrigins: map[string]struct{}{}, logger: logger, mux: http.NewServeMux()}
+	server := &Server{
+		service: service, allowedOrigins: map[string]struct{}{},
+		services: config.Services, logger: logger, mux: http.NewServeMux(),
+	}
 	for _, origin := range config.AllowedOrigins {
 		if parsed, err := url.Parse(origin); err == nil && parsed.Scheme != "" && parsed.Host != "" {
 			server.allowedOrigins[parsed.Scheme+"://"+parsed.Host] = struct{}{}
@@ -66,10 +83,12 @@ func New(service knowledgeService, config Config, logger *slog.Logger) *Server {
 		writer.WriteHeader(http.StatusNoContent)
 	})
 	server.handle("GET /v1/sources/providers", server.providers)
+	server.handle("GET /v1/internal/organizations/{organizationID}/documents/{documentID}/body", server.documentBody)
 	server.handle("GET /v1/organizations/{organizationID}/sources", server.listSources)
 	server.handle("POST /v1/organizations/{organizationID}/sources", server.registerSource)
 	server.handle("GET /v1/organizations/{organizationID}/sources/{sourceID}", server.getSource)
 	server.handle("DELETE /v1/organizations/{organizationID}/sources/{sourceID}", server.removeSource)
+	server.handle("POST /v1/organizations/{organizationID}/sources/{sourceID}/sync", server.syncSource)
 	server.handle("GET /v1/organizations/{organizationID}/sources/{sourceID}/runs", server.listRuns)
 	server.handle("GET /v1/organizations/{organizationID}/documents/{documentID}", server.getDocument)
 	return server
@@ -319,4 +338,82 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
+}
+
+// internalServicePurpose is the only purpose the internal API accepts,
+// whatever else a calling service may be configured for.
+const internalServicePurpose = "documents"
+
+// documentBody answers one document's body to a service, which is how a
+// retrieval pipeline reads back what an event was too small to carry.
+//
+// It identifies the caller and nothing else: a service has no member to be,
+// so there is no access rule here to apply beyond which services a
+// deployment admits. That is why it answers one document by id and never a
+// listing.
+func (server *Server) documentBody(writer http.ResponseWriter, request *http.Request) {
+	if server.services == nil {
+		// A deployment that named no callers has no internal API at all,
+		// and says so the same way it would for a route that is not there.
+		writeError(writer, http.StatusNotFound, "not_found", "no such route")
+		return
+	}
+	token := request.Header.Get(serviceauth.Header)
+	if token == "" {
+		writeError(writer, http.StatusUnauthorized, "unauthorized", "a service token is required")
+		return
+	}
+	claims, err := server.services.Verify(request.Context(), token)
+	switch {
+	case errors.Is(err, serviceauth.ErrPurposeNotAllowed):
+		writeError(writer, http.StatusForbidden, "forbidden", "the service may not use this purpose")
+		return
+	case errors.Is(err, serviceauth.ErrInvalidToken):
+		writeError(writer, http.StatusUnauthorized, "unauthorized", "the service token is invalid")
+		return
+	case err != nil:
+		server.logger.ErrorContext(request.Context(), "check an internal caller", "error", err)
+		writeError(writer, http.StatusServiceUnavailable, "provider_unavailable", "service identity could not be checked; retry")
+		return
+	}
+	if claims.Purpose != internalServicePurpose {
+		writeError(writer, http.StatusForbidden, "forbidden", "the service may not use this purpose")
+		return
+	}
+
+	document, err := server.service.DocumentBody(request.Context(),
+		request.PathValue("organizationID"), request.PathValue("documentID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	// Written without HTML escaping: the default turns every <, > and & into
+	// six bytes, and a body near knowledge's 4 MiB ceiling that is mostly
+	// markup-like text could otherwise outgrow what the caller will read.
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(map[string]any{
+		"id": document.ID, "source_id": document.SourceID, "external_id": document.ExternalID,
+		"mime": document.MIME, "content_hash": document.ContentHash, "body": document.Body,
+		"byte_size": document.ByteSize,
+	})
+}
+
+// syncSource reads a source now rather than at its next interval, because a
+// member asked. The pass runs on the worker that was going to run it anyway,
+// so this answers as soon as the schedule is moved.
+func (server *Server) syncSource(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	source, err := server.service.SyncSource(request.Context(), credentials,
+		request.PathValue("organizationID"), request.PathValue("sourceID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view(source))
 }

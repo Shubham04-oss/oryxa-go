@@ -85,6 +85,9 @@ type Config struct {
 	// holds is trusted before a pass reads it from the beginning again. Zero
 	// defaults inside application to domain.DefaultFullSweepInterval.
 	FullSweepInterval time.Duration
+	// Services identifies a service reading a document's body through the
+	// internal API. Nil means that route refuses every call.
+	Services httpserver.ServiceVerifier
 }
 
 // Service is knowledge, ready to mount.
@@ -120,9 +123,11 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	}, application.Config{ServiceName: Name, FullSweepInterval: config.FullSweepInterval})
 
 	service := &Service{
-		app:      app,
-		store:    dependencies.Store,
-		handler:  httpserver.New(app, httpserver.Config{AllowedOrigins: config.AllowedOrigins}, logger),
+		app:   app,
+		store: dependencies.Store,
+		handler: httpserver.New(app, httpserver.Config{
+			AllowedOrigins: config.AllowedOrigins, Services: config.Services,
+		}, logger),
 		consumer: events.NewConsumer(app, logger),
 	}
 	if dependencies.Sink != nil {

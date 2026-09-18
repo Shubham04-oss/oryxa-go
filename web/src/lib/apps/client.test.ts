@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/client";
 import {
 	appsErrorMessage,
@@ -9,11 +9,25 @@ import {
 	connectReturnNotice,
 	connectReturnTo,
 	groupConnectionsByToolkit,
+	listConnectionTargets,
 	nonConnectableReason,
 	parseConnectReturn,
 	type Toolkit,
+	type TriggerConfigField,
 	triggerConfigCapability,
+	triggerConfigFieldSubmission,
 } from "./client";
+
+function json(status: number, body: unknown): Response {
+	return new Response(JSON.stringify(body), {
+		headers: { "Content-Type": "application/json" },
+		status,
+	});
+}
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 function connection(overrides: Partial<Connection>): Connection {
 	return {
@@ -150,6 +164,20 @@ describe("groupConnectionsByToolkit", () => {
 	});
 });
 
+describe("listConnectionTargets", () => {
+	it("asks the connection's own targets path, not an encoded copy of it", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(json(200, { targets: [] }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await listConnectionTargets("org_1", "apc_1");
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/organizations/org_1/apps/connections/apc_1/targets",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+});
+
 describe("triggerConfigCapability", () => {
 	it("needs nothing when there is no schema", () => {
 		expect(triggerConfigCapability(undefined)).toEqual({ kind: "none" });
@@ -189,7 +217,7 @@ describe("triggerConfigCapability", () => {
 		expect(byName.get("verbose")).toMatchObject({ type: "boolean" });
 	});
 
-	it("treats integer as a number field", () => {
+	it("keeps integer distinct from number, so a fraction is still refused", () => {
 		const capability = triggerConfigCapability({
 			properties: { count: { type: "integer" } },
 			type: "object",
@@ -198,24 +226,156 @@ describe("triggerConfigCapability", () => {
 		if (capability.kind !== "form") throw new Error("expected a form");
 		expect(capability.fields[0]).toMatchObject({
 			name: "count",
-			type: "number",
+			type: "integer",
 		});
 	});
 
-	it("is unsupported when a required property is not a flat type", () => {
+	// Composio's catalog is written by as many teams as it has apps, so a
+	// property arrives in every shape JSON Schema allows. Each of these used
+	// to make the whole trigger unaddable.
+
+	it("collects a list of scalars a line at a time", () => {
+		const capability = triggerConfigCapability({
+			properties: { labels: { items: { type: "string" }, type: "array" } },
+			required: ["labels"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({
+			name: "labels",
+			required: true,
+			type: "strings",
+		});
+	});
+
+	it("collects a list whose items the schema does not describe", () => {
+		const capability = triggerConfigCapability({
+			properties: { labels: { type: "array" } },
+			required: ["labels"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({ type: "strings" });
+	});
+
+	it("offers an enum as a choice rather than free text, keeping each value's own type", () => {
+		const capability = triggerConfigCapability({
+			properties: {
+				state: { enum: ["open", "closed", "all"], type: "string" },
+			},
+			required: ["state"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({
+			options: [
+				{ label: "open", value: "open" },
+				{ label: "closed", value: "closed" },
+				{ label: "all", value: "all" },
+			],
+			type: "select",
+		});
+	});
+
+	it("offers an integer or boolean enum as a choice too, typed rather than stringified", () => {
+		const capability = triggerConfigCapability({
+			properties: {
+				priority: { enum: [1, 5, 15], type: "integer" },
+				verbose: { enum: [true, false], type: "boolean" },
+			},
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		const byName = new Map(
+			capability.fields.map((field) => [field.name, field]),
+		);
+		expect(byName.get("priority")).toMatchObject({
+			options: [
+				{ label: "1", value: 1 },
+				{ label: "5", value: 5 },
+				{ label: "15", value: 15 },
+			],
+			type: "select",
+		});
+		expect(byName.get("verbose")).toMatchObject({
+			options: [
+				{ label: "true", value: true },
+				{ label: "false", value: false },
+			],
+			type: "select",
+		});
+	});
+
+	it("offers a list of enum values as a choice too", () => {
+		const capability = triggerConfigCapability({
+			properties: {
+				states: { items: { enum: ["open", "closed"] }, type: "array" },
+			},
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({
+			options: [
+				{ label: "open", value: "open" },
+				{ label: "closed", value: "closed" },
+			],
+			type: "strings",
+		});
+	});
+
+	it("treats a nullable property as the type it can hold", () => {
+		const capability = triggerConfigCapability({
+			properties: { since: { type: ["string", "null"] } },
+			required: ["since"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({ type: "string" });
+	});
+
+	it("collects a property written as one of several shapes", () => {
+		const capability = triggerConfigCapability({
+			properties: {
+				target: { anyOf: [{ type: "string" }, { type: "integer" }] },
+			},
+			required: ["target"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({ type: "string" });
+	});
+
+	it("is unsupported when a required property is an object nothing can type", () => {
 		expect(
 			triggerConfigCapability({
-				properties: { labels: { type: "array" } },
-				required: ["labels"],
+				properties: { filter: { type: "object" } },
+				required: ["filter"],
 				type: "object",
 			}),
 		).toEqual({ kind: "unsupported" });
 	});
 
-	it("skips an unsupported optional property rather than failing the whole form", () => {
+	it("is unsupported when a required property is a list of objects", () => {
+		expect(
+			triggerConfigCapability({
+				properties: { rules: { items: { type: "object" }, type: "array" } },
+				required: ["rules"],
+				type: "object",
+			}),
+		).toEqual({ kind: "unsupported" });
+	});
+
+	it("skips an uncollectable optional property rather than failing the whole form", () => {
 		const capability = triggerConfigCapability({
 			properties: {
-				labels: { type: "array" },
+				filter: { type: "object" },
 				repo: { type: "string" },
 			},
 			required: ["repo"],
@@ -224,6 +384,158 @@ describe("triggerConfigCapability", () => {
 		expect(capability.kind).toBe("form");
 		if (capability.kind !== "form") throw new Error("expected a form");
 		expect(capability.fields.map((field) => field.name)).toEqual(["repo"]);
+	});
+});
+
+function configField(
+	overrides: Partial<TriggerConfigField> = {},
+): TriggerConfigField {
+	return {
+		name: "count",
+		required: false,
+		title: "Count",
+		type: "string",
+		...overrides,
+	};
+}
+
+describe("triggerConfigFieldSubmission", () => {
+	it("leaves an untouched, optional field out of the config", () => {
+		expect(triggerConfigFieldSubmission(configField(), undefined)).toEqual({
+			kind: "absent",
+		});
+	});
+
+	it("sends an untouched field's default instead of leaving it out", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ default: "main", required: true }),
+				undefined,
+			),
+		).toEqual({ kind: "value", value: "main" });
+	});
+
+	it("sends an untouched but required field's default even when typed as 0", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ default: 0, required: true, type: "integer" }),
+				undefined,
+			),
+		).toEqual({ kind: "value", value: 0 });
+	});
+
+	it("blocks a required field left blank with no default, before any round trip", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ required: true, title: "Repository" }),
+				undefined,
+			),
+		).toEqual({ kind: "blocked", problem: "Repository is required." });
+	});
+
+	it("leaves an optional field with no default out, same as before", () => {
+		expect(
+			triggerConfigFieldSubmission(configField({ required: false }), "   "),
+		).toEqual({ kind: "absent" });
+	});
+
+	it("sends an untouched checkbox's own default rather than false", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ default: true, type: "boolean" }),
+				undefined,
+			),
+		).toEqual({ kind: "value", value: true });
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "boolean" }), undefined),
+		).toEqual({ kind: "value", value: false });
+	});
+
+	it("sends an explicitly unchecked checkbox as false even with a true default", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ default: true, type: "boolean" }),
+				false,
+			),
+		).toEqual({ kind: "value", value: false });
+	});
+
+	it("sends a whole number for an integer field", () => {
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "integer" }), "5"),
+		).toEqual({ kind: "value", value: 5 });
+	});
+
+	it("blocks a fraction typed into an integer field", () => {
+		const result = triggerConfigFieldSubmission(
+			configField({ title: "Retry count", type: "integer" }),
+			"5.5",
+		);
+		expect(result).toEqual({
+			kind: "blocked",
+			problem: "Retry count must be a whole number.",
+		});
+	});
+
+	it("blocks non-numeric text typed into an integer field", () => {
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "integer" }), "abc")
+				.kind,
+		).toBe("blocked");
+	});
+
+	it("sends a number field's value as typed, decimals included", () => {
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "number" }), "5.5"),
+		).toEqual({ kind: "value", value: 5.5 });
+	});
+
+	it("sends a select's chosen value as its own type, not a string", () => {
+		const field = configField({
+			options: [
+				{ label: "1", value: 1 },
+				{ label: "5", value: 5 },
+			],
+			type: "select",
+		});
+		expect(triggerConfigFieldSubmission(field, 5)).toEqual({
+			kind: "value",
+			value: 5,
+		});
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "select" }), true),
+		).toEqual({ kind: "value", value: true });
+	});
+
+	it("does not mistake a select's false or 0 for an untouched field", () => {
+		const field = configField({
+			options: [
+				{ label: "On", value: true },
+				{ label: "Off", value: false },
+			],
+			required: true,
+			type: "select",
+		});
+		expect(triggerConfigFieldSubmission(field, false)).toEqual({
+			kind: "value",
+			value: false,
+		});
+	});
+
+	it("sends a matching line's typed value for a list with enum options", () => {
+		const field = configField({
+			options: [
+				{ label: "1", value: 1 },
+				{ label: "2", value: 2 },
+			],
+			type: "strings",
+		});
+		expect(triggerConfigFieldSubmission(field, "1\n2\nother")).toEqual({
+			kind: "value",
+			// A line naming an option sends its typed number, not the string it
+			// was typed as; a line naming nothing known is passed through as-is.
+			value: [1, 2, "other"],
+		});
 	});
 });
 

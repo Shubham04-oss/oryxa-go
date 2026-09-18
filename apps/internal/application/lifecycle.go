@@ -77,7 +77,27 @@ func (s *Service) RunMaintenance(ctx context.Context) {
 
 func (s *Service) maintain(ctx context.Context) {
 	now := s.now().UTC()
-	if failed, err := s.store.FailPendingConnectionsBefore(ctx, now.Add(-pendingLinkLifetime), now); err != nil {
+	// Subscribing a newly connected app is work the callback could not do
+	// with a member's browser waiting on it.
+	s.subscribeConnections(ctx)
+	// A member who started connecting and never came back is as much an
+	// ending as a refusal, and the only one nothing else would report.
+	abandoned := func(connections []domain.Connection) ([]domain.Event, error) {
+		events := make([]domain.Event, 0, len(connections))
+		for _, connection := range connections {
+			event, err := s.event(appsv1.ConnectionFailedDetailType, appsv1.ConnectionFailed{
+				ConnectionID: connection.ID, OrganizationID: connection.OrganizationID,
+				MemberID: connection.MemberID, Toolkit: connection.Toolkit,
+				Reason: appsv1.FailedAbandoned, FailedAt: now,
+			})
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, event)
+		}
+		return events, nil
+	}
+	if failed, err := s.store.FailPendingConnectionsBefore(ctx, now.Add(-pendingLinkLifetime), now, abandoned); err != nil {
 		if ctx.Err() == nil {
 			s.logger.ErrorContext(ctx, "fail abandoned connections", "error", err)
 		}

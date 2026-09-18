@@ -21,6 +21,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
 	appsErrorMessage,
 	catalogTriggerTypesQueryOptions,
 	createTrigger,
@@ -29,6 +37,7 @@ import {
 	type TriggerConfigField,
 	type TriggerType,
 	triggerConfigCapability,
+	triggerConfigFieldSubmission,
 	triggersQueryOptions,
 } from "@/lib/apps/client";
 
@@ -252,7 +261,10 @@ function AddTriggerRow({
 }: AddTriggerRowProps) {
 	const capability = triggerConfigCapability(type.config_schema);
 	const [expanded, setExpanded] = useState(false);
-	const [values, setValues] = useState<Record<string, boolean | string>>({});
+	const [values, setValues] = useState<
+		Record<string, boolean | number | string>
+	>({});
+	const [problem, setProblem] = useState("");
 	const add = useMutation({
 		mutationFn: (config: Record<string, unknown>) =>
 			createTrigger(organizationId, {
@@ -264,6 +276,7 @@ function AddTriggerRow({
 			onAdded();
 			setExpanded(false);
 			setValues({});
+			setProblem("");
 		},
 	});
 
@@ -291,16 +304,16 @@ function AddTriggerRow({
 		}
 		const config: Record<string, unknown> = {};
 		for (const field of capability.fields) {
-			const raw = values[field.name];
-			if (field.type === "boolean") {
-				config[field.name] = raw === true;
-				continue;
+			const outcome = triggerConfigFieldSubmission(field, values[field.name]);
+			if (outcome.kind === "blocked") {
+				setProblem(outcome.problem);
+				return;
 			}
-			if (typeof raw !== "string" || raw.trim() === "") {
-				continue;
+			if (outcome.kind === "value") {
+				config[field.name] = outcome.value;
 			}
-			config[field.name] = field.type === "number" ? Number(raw) : raw;
 		}
+		setProblem("");
 		add.mutate(config);
 	}
 
@@ -328,7 +341,10 @@ function AddTriggerRow({
 					</Button>
 				) : (
 					<Button
-						onClick={() => setExpanded((current) => !current)}
+						onClick={() => {
+							setExpanded((current) => !current);
+							setProblem("");
+						}}
 						size="sm"
 						type="button"
 						variant="ghost"
@@ -355,6 +371,7 @@ function AddTriggerRow({
 							value={values[field.name]}
 						/>
 					))}
+					{problem ? <AppAlert>{problem}</AppAlert> : null}
 					<Button disabled={add.isPending} size="sm" type="submit">
 						{add.isPending ? "Adding…" : "Subscribe"}
 					</Button>
@@ -364,10 +381,15 @@ function AddTriggerRow({
 	);
 }
 
+/** A Select works in string keys; this is how an option's own typed value becomes one. */
+function optionKey(value: boolean | number | string): string {
+	return JSON.stringify(value);
+}
+
 interface TriggerConfigInputProps {
 	field: TriggerConfigField;
-	onChange: (value: boolean | string) => void;
-	value: boolean | string | undefined;
+	onChange: (value: boolean | number | string) => void;
+	value: boolean | number | string | undefined;
 }
 
 function TriggerConfigInput({
@@ -390,22 +412,95 @@ function TriggerConfigInput({
 		);
 	}
 
+	const label = (
+		<Label htmlFor={id}>
+			{field.title}
+			{field.required ? " *" : ""}
+		</Label>
+	);
+	const hint = field.description ? (
+		<p className="dialog-field-hint">{field.description}</p>
+	) : null;
+
+	// An enum is the values the app itself named, so it is chosen rather than
+	// typed: nothing else would be accepted anyway. The Select itself only
+	// deals in string keys, so each option's own JSON-typed value travels
+	// alongside its label and is what onChange actually reports.
+	if (field.type === "select" && field.options !== undefined) {
+		const options = field.options;
+		const chosen = value !== undefined ? value : field.default;
+		const chosenKey = chosen === undefined ? undefined : optionKey(chosen);
+		const selected = options.some(
+			(option) => optionKey(option.value) === chosenKey,
+		)
+			? chosenKey
+			: undefined;
+		return (
+			<div className="dialog-field">
+				{label}
+				<Select
+					onValueChange={(key) => {
+						const option = options.find(
+							(candidate) => optionKey(candidate.value) === key,
+						);
+						if (option) {
+							onChange(option.value);
+						}
+					}}
+					required={field.required}
+					value={selected ?? ""}
+				>
+					<SelectTrigger id={id}>
+						<SelectValue placeholder="Choose…" />
+					</SelectTrigger>
+					<SelectContent>
+						{options.map((option) => (
+							<SelectItem
+								key={optionKey(option.value)}
+								value={optionKey(option.value)}
+							>
+								{option.label}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+				{hint}
+			</div>
+		);
+	}
+
+	// A list is typed one per line, which needs no tag widget and no parsing
+	// a member has to guess at.
+	if (field.type === "strings") {
+		return (
+			<div className="dialog-field">
+				{label}
+				<Textarea
+					id={id}
+					onChange={(event) => onChange(event.target.value)}
+					placeholder="One per line"
+					required={field.required}
+					rows={3}
+					value={typeof value === "string" ? value : ""}
+				/>
+				{hint}
+			</div>
+		);
+	}
+
+	const isNumeric = field.type === "integer" || field.type === "number";
 	return (
 		<div className="dialog-field">
-			<Label htmlFor={id}>
-				{field.title}
-				{field.required ? " *" : ""}
-			</Label>
+			{label}
 			<Input
 				id={id}
 				onChange={(event) => onChange(event.target.value)}
 				required={field.required}
-				type={field.type === "number" ? "number" : "text"}
+				step={field.type === "integer" ? 1 : undefined}
+				type={isNumeric ? "number" : "text"}
 				value={typeof value === "string" ? value : ""}
 			/>
-			{field.description ? (
-				<p className="dialog-field-hint">{field.description}</p>
-			) : null}
+			{hint}
 		</div>
 	);
 }

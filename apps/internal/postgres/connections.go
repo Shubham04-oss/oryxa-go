@@ -11,25 +11,29 @@ import (
 )
 
 const connectionColumns = `id, organization_id, member_id, toolkit, auth_config_id, composio_user_id,
-	composio_account_id, status, status_reason, label, return_to, created_at, updated_at, connected_at, removed_at`
+	composio_account_id, status, status_reason, label, return_to, auto_subscribe, auto_subscribed_at,
+	auto_subscribe_attempts, created_at, updated_at, connected_at, removed_at`
 
 // CreateConnection records a pending connection, with the hash of the state
 // its browser round trip carries so PendingConnection can find it again. The
 // hash lives apart from the domain value: nothing but the store ever looks a
 // connection up by it.
-func (store *Store) CreateConnection(ctx context.Context, connection domain.Connection, stateHash string) error {
-	if _, err := store.pool.Exec(ctx, `
-		INSERT INTO apps_connections (
-			id, organization_id, member_id, toolkit, auth_config_id, composio_user_id, composio_account_id,
-			status, status_reason, label, state_hash, return_to, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)`,
-		connection.ID, connection.OrganizationID, connection.MemberID, connection.Toolkit, connection.AuthConfigID,
-		connection.ComposioUserID, nullable(connection.ComposioAccountID), string(connection.Status),
-		connection.StatusReason, connection.Label, nullable(stateHash), connection.ReturnTo, connection.CreatedAt,
-	); err != nil {
-		return mapWriteError("create connection", err)
-	}
-	return nil
+func (store *Store) CreateConnection(ctx context.Context, connection domain.Connection, stateHash string, event domain.Event) error {
+	return store.inTx(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO apps_connections (
+				id, organization_id, member_id, toolkit, auth_config_id, composio_user_id, composio_account_id,
+				status, status_reason, label, state_hash, return_to, auto_subscribe, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)`,
+			connection.ID, connection.OrganizationID, connection.MemberID, connection.Toolkit, connection.AuthConfigID,
+			connection.ComposioUserID, nullable(connection.ComposioAccountID), string(connection.Status),
+			connection.StatusReason, connection.Label, nullable(stateHash), connection.ReturnTo,
+			connection.AutoSubscribe, connection.CreatedAt,
+		); err != nil {
+			return mapWriteError("create connection", err)
+		}
+		return insertEvents(ctx, tx, event)
+	})
 }
 
 // PendingConnection finds the connection a state hash names while it is
@@ -75,18 +79,65 @@ func (store *Store) ActivateConnection(ctx context.Context, id, label string, no
 	return activated, changed, err
 }
 
-// FailConnection marks a pending connection failed and clears its state
-// hash. Nothing ever subscribed to a connection that never finished
-// connecting, so this writes no event.
-func (store *Store) FailConnection(ctx context.Context, id, reason string, now time.Time) (bool, error) {
-	tag, err := store.pool.Exec(ctx, `
-		UPDATE apps_connections
-		SET status = 'failed', status_reason = $2, state_hash = NULL, updated_at = $3
-		WHERE id = $1 AND status = 'pending'`, id, reason, now)
-	if err != nil {
-		return false, mapWriteError("fail connection", err)
+// FailConnection marks a pending connection failed, clears its state hash
+// and writes event. A connection that never finished is an ending like any
+// other, and only this says it happened — the member's browser is gone by
+// the time anything else could.
+func (store *Store) FailConnection(ctx context.Context, id, reason string, now time.Time, event domain.Event) (bool, error) {
+	failed := false
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE apps_connections
+			SET status = 'failed', status_reason = $2, state_hash = NULL, updated_at = $3
+			WHERE id = $1 AND status = 'pending'`, id, reason, now)
+		if err != nil {
+			return mapWriteError("fail connection", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return nil
+		}
+		failed = true
+		return insertEvents(ctx, tx, event)
+	})
+	return failed, err
+}
+
+// ConnectionsAwaitingSubscribe answers the active connections that asked to
+// be subscribed to their app's events and have not been, oldest first,
+// counts an attempt against each and leases it until leaseUntil - so a
+// toolkit that keeps failing is given up on after maxAttempts rather than
+// retried for ever, and a second pass cannot claim the same connection while
+// this one still owns it.
+//
+// FOR UPDATE SKIP LOCKED alone protects only this statement: once it commits,
+// a second replica's next tick would see the same rows as unclaimed again and
+// take them too, doubling the Composio calls. The lease is what closes that
+// window between passes, not just within one.
+func (store *Store) ConnectionsAwaitingSubscribe(ctx context.Context, maxAttempts, limit int, now, leaseUntil time.Time) ([]domain.Connection, error) {
+	return queryConnections(ctx, store.pool, `
+		UPDATE apps_connections SET auto_subscribe_attempts = auto_subscribe_attempts + 1,
+			auto_subscribe_claimed_until = $4, updated_at = $3
+		WHERE id IN (
+			SELECT id FROM apps_connections
+			WHERE status = 'active' AND auto_subscribe AND auto_subscribed_at IS NULL
+				AND auto_subscribe_attempts < $1
+				AND (auto_subscribe_claimed_until IS NULL OR auto_subscribe_claimed_until <= $3)
+			ORDER BY connected_at
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING `+connectionColumns, maxAttempts, limit, now, leaseUntil)
+}
+
+// MarkSubscribed records that a connection has been subscribed to what its
+// app delivers, so it is not claimed again.
+func (store *Store) MarkSubscribed(ctx context.Context, id string, now time.Time) error {
+	if _, err := store.pool.Exec(ctx, `
+		UPDATE apps_connections SET auto_subscribed_at = $2, updated_at = $2
+		WHERE id = $1 AND auto_subscribed_at IS NULL`, id, now); err != nil {
+		return mapWriteError("mark a connection subscribed", err)
 	}
-	return tag.RowsAffected() == 1, nil
+	return nil
 }
 
 // Connection reads one connection of an organization, whatever its status.
@@ -222,15 +273,36 @@ func (store *Store) RemoveConnection(ctx context.Context, id, reason string, now
 // FailPendingConnectionsBefore fails every pending connection whose browser
 // round trip began before cutoff and so is never coming back, freeing its
 // account id and state hash for a fresh attempt.
-func (store *Store) FailPendingConnectionsBefore(ctx context.Context, cutoff, now time.Time) (int64, error) {
-	tag, err := store.pool.Exec(ctx, `
-		UPDATE apps_connections
-		SET status = 'failed', status_reason = 'link expired', state_hash = NULL, updated_at = $2
-		WHERE status = 'pending' AND created_at < $1`, cutoff, now)
+//
+// The connections it failed are returned from the update itself, so the
+// events are built from exactly the rows this sweep changed and written in
+// the same transaction — two replicas sweeping at once cannot both announce
+// the same abandoned connection.
+func (store *Store) FailPendingConnectionsBefore(ctx context.Context, cutoff, now time.Time, events func([]domain.Connection) ([]domain.Event, error)) (int64, error) {
+	var count int64
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		failed, err := queryConnections(ctx, tx, `
+			UPDATE apps_connections
+			SET status = 'failed', status_reason = 'link expired', state_hash = NULL, updated_at = $2
+			WHERE status = 'pending' AND created_at < $1
+			RETURNING `+connectionColumns, cutoff, now)
+		if err != nil {
+			return fmt.Errorf("fail expired pending connections: %w", err)
+		}
+		count = int64(len(failed))
+		if count == 0 {
+			return nil
+		}
+		built, err := events(failed)
+		if err != nil {
+			return err
+		}
+		return insertEvents(ctx, tx, built...)
+	})
 	if err != nil {
-		return 0, fmt.Errorf("fail expired pending connections: %w", err)
+		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	return count, nil
 }
 
 func queryConnections(ctx context.Context, db querier, sql string, args ...any) ([]domain.Connection, error) {
@@ -259,7 +331,8 @@ func scanConnection(rows pgx.Rows) (domain.Connection, error) {
 	var composioAccountID *string
 	if err := rows.Scan(&connection.ID, &connection.OrganizationID, &connection.MemberID, &connection.Toolkit,
 		&connection.AuthConfigID, &connection.ComposioUserID, &composioAccountID, &status, &connection.StatusReason,
-		&connection.Label, &connection.ReturnTo, &connection.CreatedAt, &connection.UpdatedAt,
+		&connection.Label, &connection.ReturnTo, &connection.AutoSubscribe, &connection.AutoSubscribedAt,
+		&connection.AutoSubscribeAttempts, &connection.CreatedAt, &connection.UpdatedAt,
 		&connection.ConnectedAt, &connection.RemovedAt); err != nil {
 		return domain.Connection{}, fmt.Errorf("scan connection: %w", err)
 	}
