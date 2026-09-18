@@ -3,6 +3,7 @@ package serviceconfig
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +78,14 @@ type Config struct {
 	// (serviceauth.Signer), naming itself to auth when it asks for an agent
 	// token on a member's behalf.
 	ServiceKeyID string
+	// AllowedOrigins may send cookie-authenticated requests that change
+	// something, such as starting a run, from a member's browser.
+	AllowedOrigins []string
+	// RunTimeout bounds one run of the run API.
+	RunTimeout time.Duration
+	// DatabaseMaxConns sizes the pool the service keeps for ADK's tables,
+	// apart from the pool the other services share.
+	DatabaseMaxConns int
 }
 
 // FromEnv reads primary's configuration through getenv, which a host layers
@@ -120,6 +129,18 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("AGENTS_PRIMARY_GUARDRAIL_VERSION must be a numbered snapshot, not DRAFT")
 		}
 	}
+	runTimeout, err := secondsValue(getenv, "AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS", 10*time.Minute, time.Minute, time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	databaseMaxConns, err := intValue(getenv, "AGENTS_PRIMARY_DATABASE_MAX_CONNS", 8, 1, 256)
+	if err != nil {
+		return Config{}, err
+	}
+	allowedOrigins, err := originList(getenv, "AGENTS_ALLOWED_ORIGINS")
+	if err != nil {
+		return Config{}, err
+	}
 	modelPrices := strings.TrimSpace(getenv("AGENTS_PRIMARY_MODEL_PRICES"))
 	if _, err := pricing.ParseOverrides(modelPrices); err != nil {
 		return Config{}, err
@@ -156,7 +177,29 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		S3Endpoint:            artifactEndpoint(getenv),
 		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),
 		ServiceKeyID:          strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
+		AllowedOrigins:        allowedOrigins,
+		RunTimeout:            runTimeout,
+		DatabaseMaxConns:      databaseMaxConns,
 	}, nil
+}
+
+// originList reads a comma-separated list of absolute origins, such as
+// https://app.oryxa.ai, refusing anything else rather than silently allowing
+// less than was meant.
+func originList(getenv func(string) string, name string) ([]string, error) {
+	var origins []string
+	for _, value := range strings.Split(getenv(name), ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		parsed, err := url.Parse(value)
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return nil, fmt.Errorf("%s must list absolute origins such as https://app.example.com", name)
+		}
+		origins = append(origins, parsed.Scheme+"://"+parsed.Host)
+	}
+	return origins, nil
 }
 
 // artifactEndpoint is the S3 endpoint override, the service-specific one

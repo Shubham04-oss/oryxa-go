@@ -43,8 +43,8 @@ func Open(ctx context.Context, databaseURL string, autoMigrate bool) (*Store, er
 	}
 
 	if autoMigrate {
-		if _, err := database.SQLX.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS agents_primary`); err != nil {
-			return closeOnError(fmt.Errorf("create ADK postgres schema: %w", err))
+		if err := Migrate(ctx, database); err != nil {
+			return closeOnError(err)
 		}
 	} else {
 		var exists bool
@@ -57,7 +57,45 @@ func Open(ctx context.Context, databaseURL string, autoMigrate bool) (*Store, er
 			return closeOnError(errors.New("ADK postgres schema agents_primary does not exist and AGENTS_PRIMARY_AUTO_MIGRATE is false"))
 		}
 	}
+	store, err := NewStore(database)
+	if err != nil {
+		return closeOnError(err)
+	}
+	return store, nil
+}
 
+// NewStore builds the session service over database, a pool whose
+// search_path leads with agents_primary: ADK names its tables without a
+// schema. It contacts nothing, so a service can assemble itself over a pool
+// that has not connected yet. The store owns database from here on, and
+// Close closes it.
+func NewStore(database *postgreskit.Database) (*Store, error) {
+	sessions, err := sessionService(database)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{database: database, sessions: sessions}, nil
+}
+
+// Migrate creates the agents_primary schema and keeps ADK's tables current in
+// it. database must lead its search_path with agents_primary, as NewStore's
+// does: the schema has to exist before ADK creates its unqualified tables, or
+// they would land in the next schema on the path.
+func Migrate(ctx context.Context, database *postgreskit.Database) error {
+	if _, err := database.SQLX.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS agents_primary`); err != nil {
+		return fmt.Errorf("create ADK postgres schema: %w", err)
+	}
+	sessions, err := sessionService(database)
+	if err != nil {
+		return err
+	}
+	if err := adkdatabase.AutoMigrate(sessions); err != nil {
+		return fmt.Errorf("migrate ADK sessions: %w", err)
+	}
+	return nil
+}
+
+func sessionService(database *postgreskit.Database) (session.Service, error) {
 	gormDB, err := gorm.Open(postgres.New(postgres.Config{Conn: database.SQLX.DB}), &gorm.Config{
 		DisableAutomaticPing: true,
 		// PostgreSQL is instrumented below GORM. Silence GORM's SQL logger so a
@@ -65,18 +103,13 @@ func Open(ctx context.Context, databaseURL string, autoMigrate bool) (*Store, er
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
-		return closeOnError(fmt.Errorf("open ADK session database: %w", err))
+		return nil, fmt.Errorf("open ADK session database: %w", err)
 	}
 	sessions, err := adkdatabase.NewSessionServiceFromDB(gormDB)
 	if err != nil {
-		return closeOnError(fmt.Errorf("create ADK session service: %w", err))
+		return nil, fmt.Errorf("create ADK session service: %w", err)
 	}
-	if autoMigrate {
-		if err := adkdatabase.AutoMigrate(sessions); err != nil {
-			return closeOnError(fmt.Errorf("migrate ADK sessions: %w", err))
-		}
-	}
-	return &Store{database: database, sessions: sessions}, nil
+	return sessions, nil
 }
 
 // Sessions returns the persistent service passed to ADK's launcher or runner.

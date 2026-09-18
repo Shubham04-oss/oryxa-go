@@ -90,6 +90,9 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		{"knowledge", "/v1/organizations/org_1/sources", http.StatusUnauthorized, ""},
 		{"rag", "/v1/organizations/org_1/corpora", http.StatusUnauthorized, ""},
 		{"apps", "/v1/organizations/org_1/apps/connections", http.StatusUnauthorized, ""},
+		// Without a Google Cloud project there is no model to run Krude on,
+		// and agents says so rather than keeping the process from starting.
+		{"agents", "/v1/organizations/org_1/threads", http.StatusServiceUnavailable, `"agents_unavailable"`},
 		{"nobody", "/v1/unknown", http.StatusNotFound, ""},
 	}
 	for _, probe := range probes {

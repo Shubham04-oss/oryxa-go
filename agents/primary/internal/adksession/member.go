@@ -28,9 +28,9 @@ type Member struct {
 	Role             string
 }
 
-// ErrMemberNotFound reports that the user belongs to no organization, so there
-// is nothing to seed a session with. The session is still created; it simply
-// starts with no member state.
+// ErrMemberNotFound reports that the user belongs to no organization, or not
+// to the one asked for, so there is nothing to seed a session with. The
+// session is still created; it simply starts with the state its caller sent.
 var ErrMemberNotFound = errors.New("member belongs to no organization")
 
 // memberReader reads members from auth's tables over the same shared pool the
@@ -39,18 +39,19 @@ type memberReader struct {
 	database *postgreskit.Database
 }
 
-// Member returns the member for the given user, and their first organization
-// and role in it. Callers seed a session's state from it.
-func (r memberReader) Member(ctx context.Context, userID string) (Member, error) {
+// Member returns the member for the given user in organizationID, or in
+// their first organization when organizationID is empty, with their role in
+// it. Callers seed a session's state from it.
+func (r memberReader) Member(ctx context.Context, userID, organizationID string) (Member, error) {
 	var member Member
 	err := r.database.Pool.QueryRow(ctx, `
 		SELECT u.id, u.display_name, u.email, o.id, o.name, m.role
 		FROM auth_users u
 		JOIN auth_memberships m ON m.user_id = u.id
 		JOIN auth_organizations o ON o.id = m.organization_id
-		WHERE u.id = $1
+		WHERE u.id = $1 AND ($2 = '' OR o.id = $2)
 		ORDER BY m.joined_at, m.organization_id
-		LIMIT 1`, userID).
+		LIMIT 1`, userID, organizationID).
 		Scan(&member.UserID, &member.DisplayName, &member.Email, &member.OrganizationID, &member.OrganizationName, &member.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Member{}, ErrMemberNotFound

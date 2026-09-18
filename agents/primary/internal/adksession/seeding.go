@@ -21,9 +21,10 @@ const (
 	StateOrganizationID = "organization_id"
 )
 
-// memberFinder reads the member a session is created for.
+// memberFinder reads the member a session is created for: in the named
+// organization, or in their first when none is named.
 type memberFinder interface {
-	Member(ctx context.Context, userID string) (Member, error)
+	Member(ctx context.Context, userID, organizationID string) (Member, error)
 }
 
 // SessionEvents records a session's lifecycle for the events outbox. The
@@ -49,10 +50,15 @@ type seedingSessionService struct {
 }
 
 // Create seeds member state into the new session when the request's user is a
-// member. A user who belongs to no organization keeps the state the caller
-// sent, so the development UI can still create bare sessions.
+// member. A caller that sets organization_id in the request's state is seeded
+// from that organization; one that does not, from the user's first. A user
+// who is not a member there keeps the state the caller sent, so the
+// development UI can still create bare sessions. Seeding decides nothing
+// about access: whoever creates a session for a member checks that they
+// belong to the organization first, as the run API does with auth.
 func (s seedingSessionService) Create(ctx context.Context, request *session.CreateRequest) (*session.CreateResponse, error) {
-	member, err := s.members.Member(ctx, request.UserID)
+	organizationID, _ := request.State[StateOrganizationID].(string)
+	member, err := s.members.Member(ctx, request.UserID, organizationID)
 	if errors.Is(err, ErrMemberNotFound) {
 		created, err := s.Service.Create(ctx, request)
 		s.recordCreated(ctx, request.AppName, request.UserID, created, err)
