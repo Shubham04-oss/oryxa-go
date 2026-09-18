@@ -1,5 +1,11 @@
 import { queryOptions } from "@tanstack/react-query";
-import { apiFetch, apiPath, apiRequest, requestError } from "../api/client";
+import {
+	apiFetch,
+	apiPath,
+	apiRequest,
+	apiUrl,
+	requestError,
+} from "../api/client";
 import { createEventStreamReader } from "./event-stream";
 
 export interface Thread {
@@ -20,6 +26,7 @@ export type ItemType =
 	| "tool_call"
 	| "tool_result"
 	| "confirmation"
+	| "artifact"
 	| "run_started"
 	| "run_completed"
 	| "run_failed";
@@ -34,13 +41,17 @@ export interface ItemUsage {
 export interface Item {
 	/** tool_call (omitted when very large) and confirmation (always present). */
 	arguments?: Record<string, unknown>;
+	/** artifact: the file's name; encode each "/"-separated segment to fetch it. */
+	artifact?: string;
 	at?: string;
+	/** "member", the agent's name, or "apps" for a batched wake-up from the member's connected apps. */
 	author?: string;
 	/** tool_call/tool_result pairing; on a confirmation, the id an answer must name. */
 	call_id?: string;
 	/** On a message: why the model stopped without answering. On tool_result: the tool's error. On run_failed: what to tell the member. */
 	error?: string;
 	failed?: boolean;
+	/** confirmation: words for the member; empty when ADK left only its developer-facing default. */
 	hint?: string;
 	/** Stored event id (history and streamed finished items); deltas and run_* items have none. */
 	id?: string;
@@ -48,8 +59,12 @@ export interface Item {
 	status?: "pending" | "approved" | "declined";
 	text?: string;
 	tool?: string;
+	/** confirmation: the tool_call item it holds back; call_id above is still what the member's answer names. */
+	tool_call_id?: string;
 	type: ItemType;
 	usage?: ItemUsage;
+	/** artifact: which version this is. */
+	version?: number;
 }
 
 export interface ConfirmationAnswer {
@@ -67,6 +82,26 @@ function threadsPath(organizationId: string): string {
 
 function threadPath(organizationId: string, threadId: string): string {
 	return `${threadsPath(organizationId)}${apiPath`/${threadId}`}`;
+}
+
+/**
+ * Where the browser fetches an artifact's bytes, through the session cookie.
+ * A name can contain "/" (kept as path structure) and a "user:" prefix, so
+ * each segment is encoded on its own rather than encoding the whole name.
+ */
+export function artifactContentUrl(
+	organizationId: string,
+	threadId: string,
+	name: string,
+	version: number,
+): string {
+	const encodedName = name
+		.split("/")
+		.map((segment) => encodeURIComponent(segment))
+		.join("/");
+	return apiUrl(
+		`${threadPath(organizationId, threadId)}/artifacts/${encodedName}?version=${version}`,
+	);
 }
 
 /** Every thread in the organization, most recently active first. */

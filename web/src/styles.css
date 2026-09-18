@@ -2868,3 +2868,193 @@ a[data-variant][data-size="lg"] {
   font-size: 0.8125rem;
   line-height: 1.5;
 }
+
+/* === Agent access, artifacts, knowledge collections === */
+
+.agent-grant-controls {
+	display: flex;
+	align-items: center;
+	gap: 0.625rem;
+}
+
+.thread-tool[data-state="waiting_approval"] .thread-tool-summary,
+.thread-tool[data-state="waiting_approval"] .thread-tool-icon {
+	color: var(--workspace-warm);
+}
+
+.thread-tool[data-state="declined"] .thread-tool-summary,
+.thread-tool[data-state="declined"] .thread-tool-icon {
+	color: var(--ink-muted);
+}
+
+.thread-apps-update {
+	display: grid;
+	width: min(100%, 40rem);
+	gap: 0.5rem;
+	justify-self: start;
+	padding: 0.875rem 1rem;
+	background: var(--surface-strong);
+	border: 1px dashed var(--border-strong);
+	border-radius: 14px;
+}
+
+.thread-apps-update-label {
+	display: flex;
+	align-items: center;
+	gap: 0.4375rem;
+	color: var(--ink-muted);
+	font-size: 0.6875rem;
+	font-weight: 650;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+
+.thread-apps-update-label svg {
+	width: 0.8125rem;
+	height: 0.8125rem;
+}
+
+.thread-apps-update-text {
+	overflow-wrap: anywhere;
+	color: var(--ink);
+	font-size: 0.8125rem;
+	line-height: 1.55;
+	white-space: pre-wrap;
+}
+
+.thread-apps-update-toggle {
+	justify-self: start;
+	height: auto;
+	padding: 0;
+	color: var(--ink-muted);
+}
+
+.thread-artifact {
+	display: grid;
+	gap: 0.375rem;
+	justify-self: start;
+	margin: 0;
+}
+
+.thread-artifact-thumb {
+	display: block;
+	max-width: 16rem;
+	max-height: 12rem;
+	object-fit: contain;
+	background: var(--surface);
+	border: 1px solid var(--border-strong);
+	border-radius: 12px;
+}
+
+.thread-artifact-name {
+	overflow-wrap: anywhere;
+	color: var(--ink-muted);
+	font-size: 0.6875rem;
+}
+
+.thread-artifact-download {
+	display: inline-flex;
+	width: fit-content;
+	align-items: center;
+	gap: 0.5rem;
+	justify-self: start;
+	padding: 0.5rem 0.75rem;
+	overflow-wrap: anywhere;
+	color: var(--ink);
+	background: var(--surface);
+	border: 1px solid var(--border-strong);
+	border-radius: 10px;
+	font-size: 0.75rem;
+	font-weight: 590;
+	text-decoration: none;
+}
+
+.thread-artifact-download:hover {
+	background: var(--surface-strong);
+}
+
+.thread-artifact-download svg {
+	width: 0.875rem;
+	height: 0.875rem;
+	flex: 0 0 auto;
+	color: var(--ink-muted);
+}
+
+.knowledge-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+	gap: 1rem;
+}
+
+.knowledge-card {
+	color: inherit;
+	text-decoration: none;
+}
+
+.knowledge-card-inner {
+	display: grid;
+	gap: 0.625rem;
+	padding: 1.125rem 1.25rem;
+	transition:
+		background-color 140ms ease,
+		border-color 140ms ease;
+}
+
+.knowledge-card:hover .knowledge-card-inner {
+	background: var(--surface-strong);
+	border-color: var(--action-border-hover);
+}
+
+.knowledge-card-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.75rem;
+}
+
+.knowledge-card-header strong {
+	overflow: hidden;
+	color: var(--ink);
+	font-size: 0.875rem;
+	font-weight: 620;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.knowledge-card-scope {
+	flex: 0 0 auto;
+	padding: 0.1875rem 0.5rem;
+	color: var(--ink-muted);
+	background: var(--surface-strong);
+	border: 1px solid var(--border-strong);
+	border-radius: 999px;
+	font-size: 0.625rem;
+	font-weight: 590;
+}
+
+.knowledge-card-counts {
+	margin: 0;
+	color: var(--ink-muted);
+	font-size: 0.75rem;
+}
+
+.knowledge-card-hint {
+	display: inline-flex;
+	width: fit-content;
+	align-items: center;
+	gap: 0.375rem;
+	color: var(--status-active);
+	font-size: 0.6875rem;
+	font-weight: 590;
+}
+
+.knowledge-card-hint svg {
+	width: 0.75rem;
+	height: 0.75rem;
+}
+
+.knowledge-load-more {
+	display: flex;
+	justify-content: center;
+	padding: 0.75rem 1.25rem 1.125rem;
+}
