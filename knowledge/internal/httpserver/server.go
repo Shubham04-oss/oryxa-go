@@ -34,6 +34,7 @@ type knowledgeService interface {
 	Sources(ctx context.Context, credentials authclient.Credentials, organizationID string, query domain.SourceQuery) ([]domain.Source, error)
 	Source(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.Source, error)
 	RemoveSource(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) error
+	SyncSource(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.Source, error)
 	Runs(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string, limit int) ([]domain.SyncRun, error)
 	Document(ctx context.Context, credentials authclient.Credentials, organizationID, documentID string) (domain.Document, error)
 	DocumentBody(ctx context.Context, organizationID, documentID string) (domain.Document, error)
@@ -87,6 +88,7 @@ func New(service knowledgeService, config Config, logger *slog.Logger) *Server {
 	server.handle("POST /v1/organizations/{organizationID}/sources", server.registerSource)
 	server.handle("GET /v1/organizations/{organizationID}/sources/{sourceID}", server.getSource)
 	server.handle("DELETE /v1/organizations/{organizationID}/sources/{sourceID}", server.removeSource)
+	server.handle("POST /v1/organizations/{organizationID}/sources/{sourceID}/sync", server.syncSource)
 	server.handle("GET /v1/organizations/{organizationID}/sources/{sourceID}/runs", server.listRuns)
 	server.handle("GET /v1/organizations/{organizationID}/documents/{documentID}", server.getDocument)
 	return server
@@ -390,4 +392,21 @@ func (server *Server) documentBody(writer http.ResponseWriter, request *http.Req
 		"mime": document.MIME, "content_hash": document.ContentHash, "body": document.Body,
 		"byte_size": document.ByteSize,
 	})
+}
+
+// syncSource reads a source now rather than at its next interval, because a
+// member asked. The pass runs on the worker that was going to run it anyway,
+// so this answers as soon as the schedule is moved.
+func (server *Server) syncSource(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	source, err := server.service.SyncSource(request.Context(), credentials,
+		request.PathValue("organizationID"), request.PathValue("sourceID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view(source))
 }

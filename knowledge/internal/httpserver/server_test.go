@@ -408,3 +408,11 @@ func (service *fakeService) DocumentBody(_ context.Context, _, _ string) (domain
 	}
 	return service.document, nil
 }
+
+func (service *fakeService) SyncSource(_ context.Context, credentials authclient.Credentials, _, _ string) (domain.Source, error) {
+	service.seen = credentials
+	if service.err != nil {
+		return domain.Source{}, service.err
+	}
+	return service.source, nil
+}

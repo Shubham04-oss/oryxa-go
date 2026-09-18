@@ -9,6 +9,7 @@ import (
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 )
@@ -445,5 +446,99 @@ func TestFilesAreNotIndexedWhereNothingCanReadThem(t *testing.T) {
 	}
 	if len(store.sources) != 0 || len(grants.members) != 0 {
 		t.Fatalf("sources = %d, tokens = %v", len(store.sources), grants.members)
+	}
+}
+
+// A schedule cannot know that a member just fixed a permission, or just
+// changed something at the provider and wants to see it indexed. Asking is
+// how they say so.
+
+func TestAMemberCanReadASourceNow(t *testing.T) {
+	store := newFakeStore()
+	source := store.hastenable(t, "src_1", "apc_1", nil)
+	service, _ := connectedService(t, store, &fakeApps{connection: usableConnection()})
+
+	read, err := service.SyncSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.SyncAt == nil || !read.SyncAt.Equal(testClock) {
+		t.Fatalf("the source is due at %v, want now", read.SyncAt)
+	}
+	if store.sources["src_1"].SyncAt == nil || !store.sources["src_1"].SyncAt.Equal(testClock) {
+		t.Fatal("the stored schedule was not moved")
+	}
+}
+
+// TestAskingForASweptSourceIsNotRefused is the difference from a trigger: a
+// person has a reason the schedule does not know, so the two-minute floor
+// that keeps a busy app in check does not apply to them.
+func TestAskingForASweptSourceIsNotRefused(t *testing.T) {
+	store := newFakeStore()
+	justSwept := testClock.Add(-10 * time.Second)
+	source := store.hastenable(t, "src_1", "apc_1", &justSwept)
+	service, _ := connectedService(t, store, &fakeApps{connection: usableConnection()})
+
+	read, err := service.SyncSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.SyncAt == nil || !read.SyncAt.Equal(testClock) {
+		t.Fatalf("a member asking for a source swept 10s ago was left at %v", read.SyncAt)
+	}
+}
+
+// TestAskingNeverDelaysASourceAlreadyDue keeps the ask from pushing back a
+// sweep that was about to happen.
+func TestAskingNeverDelaysASourceAlreadyDue(t *testing.T) {
+	store := newFakeStore()
+	overdue := testClock.Add(-5 * time.Minute)
+	store.sources["src_1"] = domain.Source{
+		ID: "src_1", OrganizationID: "org_1", ConnectionID: "apc_1", Provider: "github",
+		Status: domain.StatusActive, Interval: time.Hour, SyncAt: &overdue, CreatedBy: "user-1",
+	}
+	service, _ := connectedService(t, store, &fakeApps{connection: usableConnection()})
+
+	read, err := service.SyncSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", "src_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.SyncAt == nil || !read.SyncAt.Equal(overdue) {
+		t.Fatalf("an overdue source was moved to %v, want it left alone", read.SyncAt)
+	}
+}
+
+func TestSyncSourceChecksWhoIsAskingAndWhatTheSourceIs(t *testing.T) {
+	store := newFakeStore()
+	store.hastenable(t, "src_mine", "apc_1", nil)
+
+	theirs := store.hastenable(t, "src_theirs", "apc_1", nil)
+	theirs.CreatedBy = "user-2"
+	store.sources[theirs.ID] = theirs
+
+	paused := store.hastenable(t, "src_paused", "apc_1", nil)
+	paused.Status = domain.StatusPaused
+	store.sources[paused.ID] = paused
+
+	removed := store.hastenable(t, "src_removed", "apc_1", nil)
+	removed.Status = domain.StatusRemoved
+	store.sources[removed.ID] = removed
+
+	service, _ := connectedService(t, store, &fakeApps{connection: usableConnection()})
+	for name, testCase := range map[string]struct {
+		sourceID string
+		want     error
+	}{
+		"another member's":                {sourceID: "src_theirs", want: domain.ErrNotFound},
+		"one that does not exist":         {sourceID: "src_nope", want: domain.ErrNotFound},
+		"one paused, needing a reconnect": {sourceID: "src_paused", want: domain.ErrNeedsReconnect},
+		"one already removed":             {sourceID: "src_removed", want: domain.ErrConflict},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := service.SyncSource(context.Background(), authclient.Credentials{Authorization: "Bearer t"}, "org_1", testCase.sourceID)
+			if !errors.Is(err, testCase.want) {
+				t.Fatalf("error = %v, want %v", err, testCase.want)
+			}
+		})
 	}
 }

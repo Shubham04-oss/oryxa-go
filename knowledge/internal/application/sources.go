@@ -203,6 +203,47 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 	return s.store.RemoveSource(ctx, organizationID, sourceID, s.now(), s.retractions(knowledgev1.RemovedReasonSourceRemoved))
 }
 
+// SyncSource reads a source now rather than at its next interval.
+//
+// A schedule cannot know that a member just fixed a permission, or just
+// changed something at the provider and wants to see it indexed. This is
+// them saying so. It moves the next sweep forward and answers; the pass
+// itself runs on the worker that was going to run it anyway, so nothing here
+// waits on a provider.
+//
+// A source already due sooner is left alone rather than pushed back, and one
+// that is not active answers what is wrong with it: a paused source needs
+// reconnecting, not hurrying.
+func (s *Service) SyncSource(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.Source, error) {
+	caller, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	source, err := s.store.Source(ctx, organizationID, sourceID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
+		// Answering not-found tells the caller nothing they did not know.
+		return domain.Source{}, domain.ErrNotFound
+	}
+	switch source.Status {
+	case domain.StatusActive:
+	case domain.StatusPaused:
+		return domain.Source{}, fmt.Errorf("this source is paused and will not read until its connection is reconnected: %w",
+			domain.ErrNeedsReconnect)
+	default:
+		return domain.Source{}, fmt.Errorf("this source is %s: %w", source.Status, domain.ErrConflict)
+	}
+	if _, err := s.store.HastenSource(ctx, organizationID, sourceID, s.now()); err != nil {
+		return domain.Source{}, err
+	}
+	// Read back rather than answering what was passed in, so a caller sees
+	// when the sweep will now be — which is now for a source that was
+	// waiting, and unchanged for one already due.
+	return s.store.Source(ctx, organizationID, sourceID)
+}
+
 // Document reads one document's body, for the caller fetching what an event
 // was too small to carry.
 func (s *Service) Document(ctx context.Context, credentials authclient.Credentials, organizationID, documentID string) (domain.Document, error) {

@@ -68,6 +68,24 @@ func (store *fakeStore) CreateSource(_ context.Context, source domain.Source, ev
 	return nil
 }
 
+// HastenSource moves one source, whatever its last sweep: a person asking
+// has a reason the schedule does not know.
+func (store *fakeStore) HastenSource(_ context.Context, organizationID, sourceID string, at time.Time) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	source, ok := store.sources[sourceID]
+	if !ok || source.OrganizationID != organizationID || source.Status != domain.StatusActive {
+		return false, nil
+	}
+	if source.SyncAt == nil || !source.SyncAt.After(at) {
+		return false, nil
+	}
+	hastened := at
+	source.SyncAt = &hastened
+	store.sources[sourceID] = source
+	return true, nil
+}
+
 // HastenSources models the real one: only live sources whose next sweep is
 // later than now, and only outside the floor since their last.
 func (store *fakeStore) HastenSources(_ context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error) {

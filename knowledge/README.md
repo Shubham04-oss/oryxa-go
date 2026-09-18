@@ -80,6 +80,20 @@ already usable, so most of what can go wrong is reported and dropped rather
 than retried: apps being briefly unreachable is worth another delivery, a
 refusal that will not change is not.
 
+## Reading a source now
+
+A schedule cannot know that a member just fixed a permission, or just changed
+something at the provider and wants to see it indexed. `POST .../sync` is them
+saying so: it moves the next sweep forward and answers, and the pass itself
+runs on the worker that was going to run it anyway, so nothing waits on a
+provider.
+
+Unlike a trigger it does not care when the source was last read — a person
+asking has a reason the schedule does not know, and refusing them because a
+pass ran a minute ago would make the button a lie. A source already due sooner
+is left alone rather than pushed back, and a paused one answers
+`needs_reconnect`: what is wrong with it is not something hurrying fixes.
+
 ## What an app reports is swept at once
 
 A trigger carries the app's own payload, in a shape that differs for every one
@@ -202,6 +216,7 @@ source never shows its lease, version or attempt count.
 | `POST` | `/v1/organizations/{organizationID}/sources` | Members | Register one: `{connection_id, provider, target, interval_seconds}` → `201`. `connection_id` names an `apps` connection for `github`, `notion` or `slack`; `files` takes none |
 | `GET` | `/v1/organizations/{organizationID}/sources/{sourceID}` | Its creator or an org admin | One source, including its `connection_id` |
 | `DELETE` | `/v1/organizations/{organizationID}/sources/{sourceID}` | Its creator or an org admin | Stop indexing it and retract what it held → `204` |
+| `POST` | `/v1/organizations/{organizationID}/sources/{sourceID}/sync` | Its creator or an org admin | Read it now rather than at its next interval |
 | `GET` | `/v1/organizations/{organizationID}/sources/{sourceID}/runs` | Its creator or an org admin | How recent passes went |
 | `GET` | `/v1/organizations/{organizationID}/documents/{documentID}` | Its source's creator or an org admin | A document's body, for what an event was too small to carry |
 | `GET` | `/v1/internal/organizations/{organizationID}/documents/{documentID}/body` | A named service | The same body, for a retrieval pipeline that has no member to be |

@@ -878,3 +878,66 @@ func readSyncAt(t *testing.T, store *Store, sourceID string) *time.Time {
 	}
 	return nil
 }
+
+// TestHastenSourceMovesOneSourceWhoeverAsks is the member-facing half: a
+// person has a reason the schedule does not know, so unlike a trigger this
+// does not care when the source was last read.
+func TestHastenSourceMovesOneSourceWhoeverAsks(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	later := testClock.Add(time.Hour)
+	justSwept := testClock.Add(-10 * time.Second)
+	asked := testSource(t, store, "org_1")
+	asked.SyncAt = &later
+	asked.LastSyncedAt = &justSwept
+	mustSchedule(t, store, asked)
+
+	other := testSource(t, store, "org_1")
+	other.SyncAt = &later
+	mustSchedule(t, store, other)
+
+	moved, err := store.HastenSource(ctx, "org_1", asked.ID, testClock)
+	if err != nil || !moved {
+		t.Fatalf("HastenSource() = %v, %v, want moved", moved, err)
+	}
+	if due := readSyncAt(t, store, asked.ID); due == nil || !due.Equal(testClock) {
+		t.Fatalf("the asked source is due at %v, want now", due)
+	}
+	if due := readSyncAt(t, store, other.ID); due == nil || !due.Equal(later) {
+		t.Fatalf("another source was moved to %v", due)
+	}
+
+	// Asking again changes nothing: it is already due.
+	if moved, err = store.HastenSource(ctx, "org_1", asked.ID, testClock); err != nil || moved {
+		t.Fatalf("HastenSource(already due) = %v, %v, want unmoved", moved, err)
+	}
+}
+
+func TestHastenSourceLeavesWhatIsNotItsToMove(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	later := testClock.Add(time.Hour)
+	source := testSource(t, store, "org_1")
+	source.SyncAt = &later
+	mustSchedule(t, store, source)
+
+	// Another organization's, which is not this caller's to hurry.
+	if moved, err := store.HastenSource(ctx, "org_2", source.ID, testClock); err != nil || moved {
+		t.Fatalf("HastenSource(wrong organization) = %v, %v, want unmoved", moved, err)
+	}
+	if due := readSyncAt(t, store, source.ID); due == nil || !due.Equal(later) {
+		t.Fatalf("another organization moved a source to %v", due)
+	}
+
+	// One that is not active has something wrong with it that hurrying does
+	// not fix.
+	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock,
+		func(domain.Source, []domain.Document) ([]domain.Event, error) { return nil, nil }); err != nil {
+		t.Fatalf("RemoveSource() error = %v", err)
+	}
+	if moved, err := store.HastenSource(ctx, "org_1", source.ID, testClock); err != nil || moved {
+		t.Fatalf("HastenSource(removed) = %v, %v, want unmoved", moved, err)
+	}
+}

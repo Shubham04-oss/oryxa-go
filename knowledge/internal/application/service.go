@@ -38,6 +38,10 @@ type Store interface {
 	// HastenSources brings forward the next sweep of a connection's live
 	// sources, no sooner than floor after their last.
 	HastenSources(ctx context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error)
+	// HastenSource brings forward one source's next sweep, because someone
+	// asked. It answers false for a source that is not active or already due
+	// sooner.
+	HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error)
 	// PauseSources stops every live source reading through one connection:
 	// apps.connection.expired.v1, or a run that just discovered the same
 	// thing the hard way.

@@ -248,6 +248,25 @@ func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID 
 
 // PauseSources stops every live source reading through one connection, and
 // writes one event for each. Running it again pauses nothing and writes
+// HastenSource brings forward the next sweep of one source, because someone
+// asked for it. Unlike the trigger-driven sweep it does not check when the
+// source was last read: a person asking has a reason the schedule does not
+// know — a permission they just fixed, something they just changed at the
+// provider — and refusing them because a pass ran a minute ago would make
+// the button a lie. It answers false for a source that is not active, or one
+// already due sooner.
+func (store *Store) HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error) {
+	tag, err := store.pool.Exec(ctx, `
+		UPDATE knowledge_sources
+		SET sync_at = $3, updated_at = $3, version = version + 1
+		WHERE organization_id = $1 AND id = $2 AND status = 'active'
+		  AND sync_at IS NOT NULL AND sync_at > $3`, organizationID, sourceID, at)
+	if err != nil {
+		return false, fmt.Errorf("hasten a source: %w", err)
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
 // HastenSources brings forward the next sweep of every live source on a
 // connection, because the app said something in it changed.
 //
