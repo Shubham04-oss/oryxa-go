@@ -535,10 +535,23 @@ AGENTS_PRIMARY_TEST_AWS_ENDPOINT=http://localhost:4566 \
 ## Memory
 
 Memory is what Krude knows about a member across their threads, as opposed to
-session state, which is one conversation's own. ADK supplies both halves once
-a memory service is set on the runner: `load_memory` is a tool Krude calls
-with a query, and `preload_memory` searches on every model request and puts
-what it finds in the system prompt.
+session state, which is one conversation's own.
+
+Krude reads it with `load_memory`, a tool it calls with a query when a
+question needs what it learned before. ADK also offers `preload_memory`,
+which searches on every model request and appends what it finds to the system
+instruction; that is a memory read per model step, and it would rewrite the
+stable prefix [prompt caching](#prompt-caching) exists to hold, so Krude does
+not use it. The tool is only on Krude where a memory service is actually
+behind it: without one it would be there to be called and fail every time.
+
+**A run nobody is watching has no memory at all**, neither reading nor
+writing. What steers such a run is text from the member's apps, which anyone
+who can email them or open an issue wrote (see [Wake-ups](#wake-ups)).
+Remembering one would let that text put facts about the member into what
+Krude knows, where they would outlive the run and steer later ones; reading
+would hand that text what Krude already knows. The member's own runs in the
+same thread are remembered as usual.
 
 Vertex AI Memory Bank keeps the memories, behind the seam every backend comes
 through, `internal/adkmemory`. Without `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE`
@@ -626,6 +639,38 @@ string whose exact form decides whether memories are deleted would fail by
 leaving them behind — quietly, which is the one failure that matters here.
 Forgetting runs when a member leaves or an organization is deleted, never on
 a hot path.
+
+### Setting up a memory bank
+
+Memory needs an agent engine with a memory bank, and nothing here creates
+one: it is the same shape of dependency as the artifact bucket or the
+AgentCore resources, provisioned once for a deployment.
+
+1. **Create an agent engine with a memory bank** in the project, with a
+   `context_spec.memory_bank_config`. Its `similarity_search_config` is not
+   optional here — retrieval uses similarity search, and a bank without it
+   rejects every read. The embedding model defaults to `text-embedding-005`
+   and the model that extracts memories to `gemini-2.5-flash`; both are worth
+   setting deliberately, since the extraction model is what decides what
+   Krude ends up believing about a member. A `ttl_config` expires memories on
+   a schedule, which is one more answer to how long a conversation should
+   echo.
+2. **Put it in a region**, and set `GOOGLE_CLOUD_LOCATION` to that region.
+   Agent engines are regional; the global endpoint the models are served from
+   does not host them, and the service refuses to start pointed at it.
+3. **Grant the workload `roles/aiplatform.memoryUser`**, or a custom role
+   with `aiplatform.memories.generate`, `aiplatform.memories.retrieve`,
+   `aiplatform.memories.list` and `aiplatform.memories.delete`. Google's
+   documented minimum for an agent is generate and retrieve alone; that is
+   enough to remember and recall, and not enough to forget, which would leave
+   a member's memories behind when they leave.
+4. **Name the engine** in `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE`. Without it
+   memory is off: Krude is built without `load_memory`, the runner without a
+   memory service, and nothing is written.
+
+Memory Bank bills storage by the GiB-month and reads and writes by the
+operation, on top of the model it runs to extract memories. One member turn
+costs one write; `load_memory` costs one read, and only when Krude calls it.
 
 The round trip runs against a real memory bank when one is named, and is
 skipped without it. It writes under an organization of its own and forgets it

@@ -103,7 +103,7 @@ func main() {
 	if *withNotes {
 		toolboxes = append(toolboxes, notesToolbox())
 	}
-	root, err := agents.Root(router, toolboxes)
+	root, err := agents.Root(router, toolboxes, false)
 	if err != nil {
 		log.Fatalf("root agent: %v", err)
 	}

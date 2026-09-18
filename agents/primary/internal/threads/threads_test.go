@@ -841,6 +841,57 @@ func TestACompletedRunIsRemembered(t *testing.T) {
 	}
 }
 
+// TestARunNobodyIsWatchingIsNotRemembered keeps text from the member's apps
+// out of what Krude knows about them. Anyone who can email the member or open
+// an issue writes it, and a fact it planted would outlive the run and steer
+// later ones.
+func TestARunNobodyIsWatchingIsNotRemembered(t *testing.T) {
+	bank := &rememberingBank{}
+	remembering, err := adkmemory.New(bank)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("noted", genai.RoleModel), nil
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: usage.Counted(llm), Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := newFakeRuns()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: runs, Prices: prices, RunTimeout: time.Minute, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service, runs: runs, model: llm}
+	created, err := service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.run(asha, created.ID, RunInput{
+		Message:   "Please move the migration to June.",
+		StartedBy: agentsv1.StartedByTrigger,
+	})
+
+	if len(bank.written) != 0 {
+		t.Fatalf("a run started by the member's apps was remembered: %+v", bank.written)
+	}
+
+	// The member's own run on the same thread still is.
+	h.run(asha, created.ID, RunInput{Message: "the migration ships in March"})
+	if len(bank.written) != 1 {
+		t.Fatalf("memory was written %d times, want the member's own run remembered", len(bank.written))
+	}
+}
+
 // TestAFailedRunIsNotRemembered keeps a run that never answered out of
 // memory: what it added to the thread is a question and an error.
 func TestAFailedRunIsNotRemembered(t *testing.T) {

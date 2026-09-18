@@ -287,7 +287,14 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 	// starts. ADK addresses memory by user alone, and a member can belong to
 	// more than one organization, so the scope cannot be left to be read off
 	// each request: this view answers within it or not at all.
-	if service.memory != nil {
+	//
+	// A run nobody is watching gets no memory at all, neither reading nor
+	// writing. What steers it is text from the member's apps, which anyone
+	// who can email them or open an issue wrote: remembering such a run would
+	// let that text put facts about the member into what Krude knows, where
+	// they would outlive the run and steer later ones, and reading would hand
+	// that text what Krude already knows.
+	if service.memory != nil && run.startedBy != agentsv1.StartedByTrigger {
 		scoped, err := service.memory.For(adkmemory.Scope{
 			OrganizationID: run.member.OrganizationID,
 			UserID:         run.member.UserID,

@@ -250,7 +250,35 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 	}
 
-	root, err := agents.Root(router, toolboxes)
+	// Memory is built before the agents, because whether Krude is given
+	// load_memory depends on there being a memory service to answer it.
+	if settings.MemoryAgentEngine != "" {
+		bank, err := adkmemory.NewMemoryBank(ctx, adkmemory.MemoryBankOptions{
+			ProjectID:   settings.GoogleCloudProject,
+			Location:    settings.GoogleCloudLocation,
+			AgentEngine: settings.MemoryAgentEngine,
+			Recalled:    settings.MemoryRecalled,
+		})
+		if err != nil {
+			return fail("memory bank", err)
+		}
+		krude.closers = append(krude.closers, func(context.Context) error {
+			if err := bank.Close(); err != nil {
+				return fmt.Errorf("close the memory bank: %w", err)
+			}
+			return nil
+		})
+		remembering, err := adkmemory.New(bank)
+		if err != nil {
+			return fail("memory", err)
+		}
+		krude.Memory = remembering
+		logger.InfoContext(ctx, "memories kept in Vertex AI Memory Bank", "agent_engine", settings.MemoryAgentEngine)
+	} else {
+		logger.InfoContext(ctx, "Krude remembers nothing between threads; set AGENTS_PRIMARY_MEMORY_AGENT_ENGINE to give it memory")
+	}
+
+	root, err := agents.Root(router, toolboxes, krude.Memory != nil)
 	if err != nil {
 		return fail("root agent", err)
 	}
@@ -279,32 +307,6 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		logger.InfoContext(ctx, "artifacts are held in memory and go with this process; set AGENTS_PRIMARY_ARTIFACT_BUCKET to keep them")
 	}
 	krude.Artifacts = artifacts
-
-	if settings.MemoryAgentEngine != "" {
-		bank, err := adkmemory.NewMemoryBank(ctx, adkmemory.MemoryBankOptions{
-			ProjectID:   settings.GoogleCloudProject,
-			Location:    settings.GoogleCloudLocation,
-			AgentEngine: settings.MemoryAgentEngine,
-			Recalled:    settings.MemoryRecalled,
-		})
-		if err != nil {
-			return fail("memory bank", err)
-		}
-		krude.closers = append(krude.closers, func(context.Context) error {
-			if err := bank.Close(); err != nil {
-				return fmt.Errorf("close the memory bank: %w", err)
-			}
-			return nil
-		})
-		remembering, err := adkmemory.New(bank)
-		if err != nil {
-			return fail("memory", err)
-		}
-		krude.Memory = remembering
-		logger.InfoContext(ctx, "memories kept in Vertex AI Memory Bank", "agent_engine", settings.MemoryAgentEngine)
-	} else {
-		logger.InfoContext(ctx, "Krude remembers nothing between threads; set AGENTS_PRIMARY_MEMORY_AGENT_ENGINE to give it memory")
-	}
 
 	return krude, nil
 }
