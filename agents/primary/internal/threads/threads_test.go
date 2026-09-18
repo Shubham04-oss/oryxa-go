@@ -312,8 +312,11 @@ func TestAToolThatAsksWaitsForTheMembersAnswer(t *testing.T) {
 	}
 	confirmations := find(items, ItemConfirmation)
 	if len(confirmations) != 1 || confirmations[0].Tool != "delete_file" || confirmations[0].Status != ConfirmationPending ||
-		confirmations[0].Arguments["name"] != "plan.txt" || confirmations[0].CallID == "" {
-		t.Fatalf("confirmations = %+v", confirmations)
+		confirmations[0].Arguments["name"] != "plan.txt" || confirmations[0].CallID == "" || confirmations[0].ToolCallID != calls[0].CallID {
+		t.Fatalf("confirmations = %+v, want one holding back call %s", confirmations, calls[0].CallID)
+	}
+	if confirmations[0].Hint != "" {
+		t.Fatalf("hint = %q, want ADK's default left out", confirmations[0].Hint)
 	}
 	if len(*h.deleted) != 0 {
 		t.Fatalf("the tool ran before it was confirmed: %v", *h.deleted)

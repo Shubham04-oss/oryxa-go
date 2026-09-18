@@ -2,6 +2,8 @@ package threads
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -31,6 +33,9 @@ const (
 	// ItemConfirmation is a tool waiting for the member to approve or
 	// decline it before it runs.
 	ItemConfirmation = "confirmation"
+	// ItemArtifact is a file a run kept, such as a browser screenshot or a
+	// file the sandbox saved, readable through the thread's artifact route.
+	ItemArtifact = "artifact"
 	// ItemRunStarted, ItemRunCompleted and ItemRunFailed bracket a run.
 	ItemRunStarted   = "run_started"
 	ItemRunCompleted = "run_completed"
@@ -80,9 +85,11 @@ type Item struct {
 	// Error says why a message, tool result or run went wrong.
 	Error string `json:"error,omitempty"`
 	// CallID ties a tool result to its call. On a confirmation it is the ID
-	// the member's answer names.
-	CallID string `json:"call_id,omitempty"`
-	Tool   string `json:"tool,omitempty"`
+	// the member's answer names, and ToolCallID the call it holds back, so a
+	// client can show that call as waiting rather than running.
+	CallID     string `json:"call_id,omitempty"`
+	ToolCallID string `json:"tool_call_id,omitempty"`
+	Tool       string `json:"tool,omitempty"`
 	// Arguments are what the tool was called with.
 	Arguments map[string]any `json:"arguments,omitempty"`
 	// Failed marks a tool result that ended in an error.
@@ -90,6 +97,9 @@ type Item struct {
 	// Hint and Status describe a confirmation.
 	Hint   string `json:"hint,omitempty"`
 	Status string `json:"status,omitempty"`
+	// Artifact and Version name a file a run kept.
+	Artifact string `json:"artifact,omitempty"`
+	Version  int64  `json:"version,omitempty"`
 	// RunID and Usage describe a run.
 	RunID string          `json:"run_id,omitempty"`
 	Usage *agentsv1.Usage `json:"usage,omitempty"`
@@ -107,7 +117,7 @@ func streamItems(event *session.Event) []Item {
 		if text == "" {
 			return nil
 		}
-		return []Item{{Type: ItemDelta, At: event.Timestamp, Author: authorOf(event), Text: text}}
+		return []Item{{Type: ItemDelta, At: at(event), Author: authorOf(event), Text: text}}
 	}
 	return eventItems(event, nil)
 }
@@ -144,7 +154,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 		case part.Text != "":
 			if message < 0 {
 				message = len(items)
-				items = append(items, Item{Type: ItemMessage, ID: event.ID, At: event.Timestamp, Author: author})
+				items = append(items, Item{Type: ItemMessage, ID: event.ID, At: at(event), Author: author})
 			}
 			items[message].Text += part.Text
 		case part.FunctionCall != nil:
@@ -155,7 +165,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 				continue
 			}
 			items = append(items, Item{
-				Type: ItemToolCall, ID: event.ID, At: event.Timestamp, Author: author,
+				Type: ItemToolCall, ID: event.ID, At: at(event), Author: author,
 				CallID: part.FunctionCall.ID, Tool: part.FunctionCall.Name,
 				Arguments: boundedArguments(part.FunctionCall.Args),
 			})
@@ -171,7 +181,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 				continue
 			}
 			item := Item{
-				Type: ItemToolResult, ID: event.ID, At: event.Timestamp, Author: author,
+				Type: ItemToolResult, ID: event.ID, At: at(event), Author: author,
 				CallID: response.ID, Tool: response.Name,
 			}
 			if failure := responseError(response.Response); failure != "" {
@@ -181,11 +191,17 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 			items = append(items, item)
 		}
 	}
+	for _, name := range slices.Sorted(maps.Keys(event.Actions.ArtifactDelta)) {
+		items = append(items, Item{
+			Type: ItemArtifact, ID: event.ID, At: at(event), Author: author,
+			Artifact: name, Version: event.Actions.ArtifactDelta[name],
+		})
+	}
 	// A model that stopped without answering, blocked or cut short, says why
 	// rather than leaving the member with nothing.
 	if failure := strings.TrimSpace(strings.Trim(event.ErrorCode+": "+event.ErrorMessage, ": ")); failure != "" && event.Author != adkUserAuthor {
 		if message < 0 {
-			items = append(items, Item{Type: ItemMessage, ID: event.ID, At: event.Timestamp, Author: author})
+			items = append(items, Item{Type: ItemMessage, ID: event.ID, At: at(event), Author: author})
 			message = len(items) - 1
 		}
 		items[message].Error = failure
@@ -201,12 +217,12 @@ func confirmationItem(event *session.Event, call *genai.FunctionCall, answers ma
 		return Item{}, false
 	}
 	item := Item{
-		Type: ItemConfirmation, ID: event.ID, At: event.Timestamp, Author: authorOf(event),
-		CallID: call.ID, Tool: original.Name, Arguments: original.Args, Status: ConfirmationPending,
+		Type: ItemConfirmation, ID: event.ID, At: at(event), Author: authorOf(event),
+		CallID: call.ID, ToolCallID: original.ID, Tool: original.Name, Arguments: original.Args, Status: ConfirmationPending,
 	}
 	var requested toolconfirmation.ToolConfirmation
 	if decodeInto(call.Args["toolConfirmation"], &requested) {
-		item.Hint = requested.Hint
+		item.Hint = memberHint(requested.Hint)
 	}
 	if confirmed, answered := answers[call.ID]; answered {
 		item.Status = ConfirmationDeclined
@@ -215,6 +231,19 @@ func confirmationItem(event *session.Event, call *genai.FunctionCall, answers ma
 		}
 	}
 	return item, true
+}
+
+// adkDefaultHint opens the hint ADK gives every tool that asks without saying
+// why: words for a program answering it, not for the member.
+const adkDefaultHint = "Please approve or reject the tool call "
+
+// memberHint is a tool's own reason for asking, or nothing when all it has is
+// ADK's default, so the client can say it in its own words instead.
+func memberHint(hint string) string {
+	if strings.HasPrefix(strings.TrimSpace(hint), adkDefaultHint) {
+		return ""
+	}
+	return strings.TrimSpace(hint)
 }
 
 // confirmationAnswers collects the member's answers to confirmations, by the
@@ -286,6 +315,15 @@ func eventText(event *session.Event) string {
 		}
 	}
 	return text.String()
+}
+
+// at is when an event happened, in UTC like everything else the API
+// answers: ADK stamps events in the server's own zone.
+func at(event *session.Event) time.Time {
+	if event.Timestamp.IsZero() {
+		return time.Time{}
+	}
+	return event.Timestamp.UTC()
 }
 
 func authorOf(event *session.Event) string {

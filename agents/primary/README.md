@@ -260,6 +260,7 @@ from inside a run.
 | `GET /v1/organizations/{org}/threads/{thread}` | The thread with its history as items, and `pending_confirmations` |
 | `DELETE /v1/organizations/{org}/threads/{thread}` | Removes the thread, and the artifacts its runs kept that are not the member's own `user:` ones |
 | `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run |
+| `GET /v1/organizations/{org}/threads/{thread}/artifacts/{name}` | A file the thread's runs kept, its latest version or `?version=` |
 
 A thread is `{"id", "title", "created_at", "updated_at"}`; its title is the
 first line of its first message.
@@ -293,7 +294,8 @@ proxy does not close a run while Krude works:
 | `delta` | A piece of Krude's answer as it is written; the `message` that follows holds the whole text |
 | `tool_call` | `call_id`, `tool`, `arguments` (left out above 16 KiB) |
 | `tool_result` | `call_id`, `tool`; `failed` and `error` when it failed |
-| `confirmation` | `call_id` (what the answer names), `tool`, `arguments`, `hint`, `status` |
+| `confirmation` | `call_id` (what the answer names), `tool_call_id` (the call it holds back), `tool`, `arguments`, `hint` (the tool's own reason, left out when ADK gives only its default), `status` |
+| `artifact` | `artifact` (the file's name) and `version`, for a file the run kept |
 | `run_completed` | `run_id`, `usage` |
 | `run_failed` | `run_id`, and `error` in words the member can act on |
 
@@ -323,9 +325,16 @@ its stream sets its own write deadline just past that, since the host sets
 none for this service. A member who stops listening stops the run: its context
 is the request's.
 
+**Artifacts.** A file a run keeps — a browser screenshot, something the
+sandbox saved — shows as an `artifact` item, and the artifacts route serves
+it to the thread's member. It is served from the app's own origin, so it can
+never run as a page there: every response carries a sandboxing
+`Content-Security-Policy` and `nosniff`, and only images, PDFs and plain text
+are shown in place; anything else, HTML included, downloads. A `user:` file
+is the member's own and reads through any of their threads.
+
 **Not yet.** A run is not durable: a closed tab or a deploy ends it, and what
-it had stored stays in the thread. Artifacts a run keeps are not served by
-this API.
+it had stored stays in the thread.
 
 ## Events agents consumes
 
