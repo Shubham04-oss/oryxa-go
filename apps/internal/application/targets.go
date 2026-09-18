@@ -152,11 +152,15 @@ func (s *Service) githubTargets(ctx context.Context, connection domain.Connectio
 	return targets, nil
 }
 
-// slackTargets lists the channels the connection is in. Slack answers ok
-// false with its own reason rather than an HTTP status, so that is read too.
+// slackTargets lists the channels the connection is in. users.conversations
+// is scoped to that - conversations.list answers every public channel in the
+// whole workspace, member or not, and knowledge auto-registers up to ten
+// targets from this list, which would otherwise be arbitrary workspace
+// channels. Slack answers ok false with its own reason rather than an HTTP
+// status, so that is read too.
 func (s *Service) slackTargets(ctx context.Context, connection domain.Connection) ([]Target, error) {
 	data, err := s.read(ctx, connection, http.MethodGet,
-		"/api/conversations.list?limit=200&exclude_archived=true&types=public_channel,private_channel", nil, nil)
+		"/api/users.conversations?types=public_channel,private_channel&exclude_archived=true&limit=200", nil, nil)
 	if err != nil {
 		return nil, err
 	}

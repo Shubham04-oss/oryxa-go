@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
@@ -74,6 +75,12 @@ func TestSlackTargetsAreTheChannelsByNameNotById(t *testing.T) {
 	}
 	if string(targets[0].Target) != `{"channel":"C0123456789"}` {
 		t.Fatalf("target payload = %s", targets[0].Target)
+	}
+	// users.conversations, not conversations.list: the channels the member
+	// who connected is actually in, not every public channel in the
+	// workspace.
+	if len(h.composio.proxied) != 1 || !strings.HasPrefix(h.composio.proxied[0].Endpoint, "/api/users.conversations") {
+		t.Fatalf("proxied = %+v", h.composio.proxied)
 	}
 }
 
