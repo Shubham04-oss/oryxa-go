@@ -50,10 +50,13 @@ asks again. The chunk text stays in PostgreSQL either way, so there is one
 answer to what a chunk says and a citation addresses a byte range of a document
 still on disk.
 
-| Backend | Where | Suits |
+| Backend | Where | Default |
 | --- | --- | --- |
-| `pgvector` (default) | The shared PostgreSQL, beside the chunk text | Anything searched interactively |
-| `s3vectors` | Amazon S3 Vectors, one index per corpus | Large, cold or archival corpora |
+| `s3vectors` | Amazon S3 Vectors, one index per corpus | Wherever `RAG_VECTOR_BUCKET_NAME` names a bucket: serverless, priced by use, about 100 ms a query when warm and under a second cold |
+| `pgvector` | The shared PostgreSQL, beside the chunk text | Where no bucket is named — local development and tests, since S3 Vectors has no local emulation — and the fastest to query |
+
+`RAG_DEFAULT_BACKEND` overrides either default, and a corpus keeps the backend
+it was created on, so changing the default moves only corpora made after it.
 
 pgvector needs a declared width before it can index a column, so there is one
 table per width — 256, 384, 512, 768, 1024, 1536 and 3072 — and
@@ -63,7 +66,11 @@ dimensions and `halfvec` past 4000, so 3072 (what `gemini-embedding-001`
 emits) is stored as `halfvec`, which is the only way to index it at all.
 
 S3 Vectors indexes on cosine or euclidean only, so an inner-product corpus on
-it is refused by the domain and by a database constraint. Its index name is a
+it is refused by the domain and by a database constraint. One query returns at
+most 100 results, so the candidates rag over-fetches for fusion and reranking
+are capped there, and a bucket holds at most 10,000 indexes: with one per
+corpus — and the knowledge bridge makes one per member whose apps it indexes —
+a deployment nearing that needs a second bucket or shared indexes. Its index name is a
 hash of the organization and corpus ids rather than the corpus id lower-cased,
 because index names allow only lowercase letters, digits and hyphens and a
 collision there would silently mix two organizations' documents.

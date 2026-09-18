@@ -115,7 +115,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		DefaultProvider: domain.Provider(valueOrDefault(getenv, "RAG_DEFAULT_EMBEDDING_PROVIDER", string(domain.ProviderBedrock))),
 		DefaultModel:    valueOrDefault(getenv, "RAG_DEFAULT_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0"),
 		DefaultMetric:   domain.Metric(valueOrDefault(getenv, "RAG_DEFAULT_METRIC", string(domain.MetricCosine))),
-		DefaultBackend:  domain.Backend(valueOrDefault(getenv, "RAG_DEFAULT_BACKEND", string(domain.BackendPgvector))),
+		DefaultBackend:  domain.Backend(valueOrDefault(getenv, "RAG_DEFAULT_BACKEND", string(defaultBackend(getenv)))),
 
 		AnswerProvider:     domain.Provider(valueOrDefault(getenv, "RAG_ANSWER_PROVIDER", string(domain.ProviderBedrock))),
 		AnswerModel:        strings.TrimSpace(getenv("RAG_ANSWER_MODEL")),
@@ -190,6 +190,18 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("RAG_RERANK_VERTEX_MODEL needs GOOGLE_CLOUD_PROJECT: the Ranking API bills a project")
 	}
 	return config, nil
+}
+
+// defaultBackend is where a new corpus's vectors go when nothing says: S3
+// Vectors wherever a vector bucket is configured — serverless, priced by use,
+// and keeping the vectors' bulk out of the shared PostgreSQL — and pgvector
+// where none is, which is local development and tests, since S3 Vectors has
+// no local emulation. A corpus keeps the backend it was created on.
+func defaultBackend(getenv func(string) string) domain.Backend {
+	if strings.TrimSpace(getenv("RAG_VECTOR_BUCKET_NAME")) != "" {
+		return domain.BackendS3Vectors
+	}
+	return domain.BackendPgvector
 }
 
 func valueOrDefault(getenv func(string) string, name, fallback string) string {
