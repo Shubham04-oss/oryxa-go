@@ -1,15 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import {
-	ArrowUpRight,
-	KeyRound,
-	Pencil,
-	Plug,
-	RefreshCw,
-	Star,
-	Unplug,
-} from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { ChevronDown, ChevronUp, Plug, RefreshCw, Unplug } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { AppAlert, QueryError } from "@/components/app/app-alert";
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import { EmptyState } from "@/components/app/empty-state";
@@ -18,49 +10,37 @@ import {
 	StatusBadge,
 } from "@/components/app/organization-settings";
 import { WorkspacePage } from "@/components/app/workspace-page";
-import {
-	ConnectToolDialog,
-	RenameConnectionDialog,
-	ReplaceKeyDialog,
-} from "@/components/connections/connection-dialogs";
+import { WorkspaceSection } from "@/components/app/workspace-section";
+import { ConnectAppDialog } from "@/components/apps/connect-app-dialog";
+import { ConnectionSources } from "@/components/apps/connection-sources";
+import { ConnectionTriggers } from "@/components/apps/connection-triggers";
+import { ToolkitIcon } from "@/components/apps/toolkit-icon";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { apiErrorMessage } from "@/lib/api/client";
-import { managesMembers } from "@/lib/auth/client";
+import { useToolkitCatalog } from "@/hooks/use-toolkit-catalog";
 import {
-	selectOrganization,
-	useMembership,
-	useWorkspace,
-} from "@/lib/auth/session";
-import {
-	type App,
-	appsQueryOptions,
+	appsErrorMessage,
 	type Connection,
-	type ConnectionViewer,
-	completeConnection,
-	connectFailure,
-	connectionAccess,
-	connectionProblem,
-	connectionsQueryKey,
+	canReconnect,
+	connect,
+	connectionStatusLabel,
+	connectionStatusTone,
 	connectionsQueryOptions,
-	connectMethod,
-	connectReturnUri,
+	connectReturnNotice,
+	connectReturnTo,
 	disconnectConnection,
-	placementOptions,
-	reconnectConnection,
-	updateConnection,
-} from "@/lib/connections/client";
-import { teamsQueryOptions } from "@/lib/teams/client";
+	parseConnectReturn,
+	type Toolkit,
+} from "@/lib/apps/client";
+import { useWorkspace } from "@/lib/auth/session";
 import {
-	credentialTypeNames,
-	toolName as providerName,
-	ToolGlyph,
-} from "@/lib/tools/catalog";
+	providersQueryOptions as knowledgeProvidersQueryOptions,
+	supportsSourceProvider,
+} from "@/lib/knowledge/client";
 
 interface ConnectionsSearch {
-	error?: string;
-	organization?: string;
-	session_id?: string;
+	app_connection?: string;
+	status?: string;
 }
 
 function searchText(value: unknown): string | undefined {
@@ -69,181 +49,95 @@ function searchText(value: unknown): string | undefined {
 
 export const Route = createFileRoute("/app/connections")({
 	validateSearch: (search: Record<string, unknown>): ConnectionsSearch => ({
-		error: searchText(search.error),
-		organization: searchText(search.organization),
-		session_id: searchText(search.session_id),
+		app_connection: searchText(search.app_connection),
+		status: searchText(search.status),
 	}),
 	component: ConnectionsPage,
 	head: () => ({ meta: [{ title: "Connections · The Weirdly ODD" }] }),
 });
 
-type Notice = { text: string; tone: "danger" | "success" };
-
-function connectionName(connection: Connection): string {
-	const tool = providerName(connection.provider);
-	const account =
-		connection.provider_account.name ?? connection.provider_account.id;
-	return `${tool} (${account})`;
+function toolkitName(toolkit: string): string {
+	return toolkit
+		.split(/[_-]/)
+		.filter(Boolean)
+		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+		.join(" ");
 }
 
 function ConnectionsPage() {
-	const { organization, organizations, user } = useWorkspace();
+	const { organization } = useWorkspace();
 	const search = Route.useSearch();
 	const navigate = useNavigate({ from: Route.fullPath });
 	const queryClient = useQueryClient();
-	const isOrgAdmin = managesMembers(useMembership(organization.id)?.role);
-	const apps = useQuery(appsQueryOptions(organization.id));
 	const connections = useQuery(connectionsQueryOptions(organization.id));
-	const teams = useQuery(teamsQueryOptions(organization.id));
-	const [notice, setNotice] = useState<Notice>();
-	const finished = useRef(false);
+	const knowledgeProviders = useQuery(knowledgeProvidersQueryOptions());
+	const catalog = useToolkitCatalog(
+		(connections.data ?? []).map((connection) => connection.toolkit),
+	);
+	const [notice, setNotice] = useState<{
+		text: string;
+		tone: "danger" | "info" | "success";
+	}>();
+	const handled = useRef(false);
 
-	// A provider sends the browser back here to finish connecting.
+	// Composio sends the member's browser back here once they finish connecting.
 	useEffect(() => {
-		const sessionId = search.session_id;
-		if (finished.current || (!sessionId && !search.error)) {
+		const result = parseConnectReturn({
+			app_connection: search.app_connection,
+			status: search.status,
+		});
+		if (handled.current || !result) {
 			return;
 		}
-		finished.current = true;
-		const organizationId = search.organization ?? organization.id;
-		if (
-			organizationId !== organization.id &&
-			organizations.some((candidate) => candidate.id === organizationId)
-		) {
-			selectOrganization(organizationId);
-		}
-		const clear = () => navigate({ replace: true, search: {} });
-		if (search.error || !sessionId) {
-			setNotice({ text: connectFailure(search.error ?? ""), tone: "danger" });
-			clear();
-			return;
-		}
-		completeConnection(organizationId, sessionId)
-			.then(async (connection) => {
-				await queryClient.invalidateQueries({
-					queryKey: connectionsQueryKey(organizationId),
-				});
-				setNotice({
-					text: `Connected ${connectionName(connection)}.`,
-					tone: "success",
-				});
-			})
-			.catch((error: unknown) =>
-				setNotice({
-					text: apiErrorMessage(
-						error,
-						"The connection did not finish. Start again.",
-					),
-					tone: "danger",
-				}),
-			)
-			.finally(clear);
+		handled.current = true;
+		setNotice(connectReturnNotice(result));
+		queryClient.invalidateQueries({
+			queryKey: connectionsQueryOptions(organization.id).queryKey,
+		});
+		navigate({ replace: true, search: {} });
 	}, [
 		navigate,
 		organization.id,
-		organizations,
 		queryClient,
-		search.error,
-		search.organization,
-		search.session_id,
+		search.app_connection,
+		search.status,
 	]);
 
-	const viewer: ConnectionViewer = {
-		isOrgAdmin,
-		manageableTeams: (teams.data ?? [])
-			.filter((team) => team.can_manage)
-			.map((team) => ({ id: team.id, name: team.name })),
-		userId: user.id,
-	};
-	const teamNames = new Map(
-		(teams.data ?? []).map((team) => [team.id, team.name]),
-	);
-
-	let connected: ReactNode;
+	let body = null;
 	if (connections.isPending) {
-		connected = <SettingsListSkeleton />;
+		body = <SettingsListSkeleton />;
 	} else if (connections.isError) {
-		connected = (
-			<div className="settings-section-alert">
-				<QueryError
-					error={connections.error}
-					fallback="Could not load connections"
-					onRetry={connections.refetch}
-				/>
-			</div>
+		body = (
+			<Card className="workspace-panel">
+				<div className="settings-section-alert">
+					<QueryError
+						error={connections.error}
+						fallback="Could not load connections"
+						onRetry={connections.refetch}
+					/>
+				</div>
+			</Card>
 		);
 	} else if (connections.data.length === 0) {
-		connected = (
-			<EmptyState
-				description="Connect a tool below so your assistants can work in it."
-				icon={Plug}
-				title="Nothing connected yet"
-			/>
+		body = (
+			<Card className="workspace-panel">
+				<EmptyState
+					description="Connect an app so Krude can watch it and search what it holds."
+					icon={Plug}
+					title="Nothing connected yet"
+				/>
+			</Card>
 		);
 	} else {
-		connected = (
-			<div className="settings-list">
+		body = (
+			<div className="apps-connections">
 				{connections.data.map((connection) => (
 					<ConnectionRow
 						connection={connection}
 						key={connection.id}
-						teamName={
-							connection.team_id ? teamNames.get(connection.team_id) : undefined
-						}
-						viewer={viewer}
-					/>
-				))}
-			</div>
-		);
-	}
-
-	const activeApps = (apps.data ?? []).filter((app) => app.status === "active");
-	let tools: ReactNode;
-	if (apps.isPending) {
-		tools = <SettingsListSkeleton />;
-	} else if (apps.isError) {
-		tools = (
-			<div className="settings-section-alert">
-				<QueryError
-					error={apps.error}
-					fallback="Could not load tools"
-					onRetry={apps.refetch}
-				/>
-			</div>
-		);
-	} else if (activeApps.length === 0) {
-		tools = (
-			<EmptyState
-				action={
-					isOrgAdmin ? (
-						<Button asChild size="sm">
-							<Link to="/app/settings/organization/tools">Enable tools</Link>
-						</Button>
-					) : undefined
-				}
-				description={
-					isOrgAdmin
-						? "Enable a tool so people can connect their accounts to it."
-						: "Ask an organization owner or admin to enable the tools you need."
-				}
-				icon={Plug}
-				title="No tools are enabled"
-			/>
-		);
-	} else {
-		tools = (
-			<div className="settings-list">
-				{activeApps.map((app) => (
-					<ToolConnectRow
-						app={app}
-						key={app.id}
-						onConnected={(connection) =>
-							setNotice({
-								text: `Connected ${connectionName(connection)}.`,
-								tone: "success",
-							})
-						}
-						viewer={viewer}
+						knowledgeProviders={knowledgeProviders.data ?? []}
+						organizationId={organization.id}
+						toolkit={catalog.get(connection.toolkit)}
 					/>
 				))}
 			</div>
@@ -252,267 +146,147 @@ function ConnectionsPage() {
 
 	return (
 		<WorkspacePage
-			description="Accounts connected for you, your teams, and the organization."
+			actions={
+				<ConnectAppDialog
+					organizationId={organization.id}
+					trigger={
+						<Button size="sm" type="button">
+							Connect an app
+						</Button>
+					}
+				/>
+			}
+			description="Connect apps for Krude to work in, watch for events, and search."
 			title="Connections"
 		>
 			<div className="workspace-blocks">
 				{notice ? <AppAlert tone={notice.tone}>{notice.text}</AppAlert> : null}
-				<section
-					aria-labelledby="connections-connected"
-					className="workspace-block"
-				>
-					<header className="workspace-block-header">
-						<h2 id="connections-connected">Connected accounts</h2>
-					</header>
-					<Card className="workspace-panel">{connected}</Card>
-				</section>
-				<section
-					aria-labelledby="connections-tools"
-					className="workspace-block"
-				>
-					<header className="workspace-block-header">
-						<h2 id="connections-tools">Connect a tool</h2>
-						{isOrgAdmin ? (
-							<Button asChild size="sm" variant="ghost">
-								<Link to="/app/settings/organization/tools">
-									Manage tools
-									<ArrowUpRight data-icon="inline-end" />
-								</Link>
-							</Button>
-						) : null}
-					</header>
-					<Card className="workspace-panel">{tools}</Card>
-				</section>
+				{body}
 			</div>
 		</WorkspacePage>
 	);
 }
 
-interface ToolConnectRowProps {
-	app: App;
-	onConnected: (connection: Connection) => void;
-	viewer: ConnectionViewer;
-}
-
-function ToolConnectRow({ app, onConnected, viewer }: ToolConnectRowProps) {
-	const { organization } = useWorkspace();
-	const toolName = providerName(app.provider);
-	const placements = placementOptions(app.credential_type, viewer);
-
-	return (
-		<div className="settings-list-row">
-			<span aria-hidden="true" className="settings-list-icon">
-				<ToolGlyph provider={app.provider} />
-			</span>
-			<div className="settings-list-copy">
-				<strong>{toolName}</strong>
-				<small>{credentialTypeNames[app.credential_type]}</small>
-			</div>
-			{placements.length > 0 ? (
-				<ConnectToolDialog
-					app={app}
-					onConnected={onConnected}
-					organizationId={organization.id}
-					placements={placements}
-					toolName={toolName}
-					trigger={
-						<Button size="sm" type="button">
-							Connect
-						</Button>
-					}
-				/>
-			) : (
-				<small className="settings-list-note">
-					Organization admins connect this
-				</small>
-			)}
-		</div>
-	);
-}
-
 interface ConnectionRowProps {
 	connection: Connection;
-	teamName: string | undefined;
-	viewer: ConnectionViewer;
+	knowledgeProviders: readonly string[];
+	organizationId: string;
+	toolkit: Toolkit | undefined;
 }
 
-function ConnectionRow({ connection, teamName, viewer }: ConnectionRowProps) {
-	const { organization } = useWorkspace();
+function ConnectionRow({
+	connection,
+	knowledgeProviders,
+	organizationId,
+	toolkit,
+}: ConnectionRowProps) {
 	const queryClient = useQueryClient();
-	const toolName = providerName(connection.provider);
-	const account =
-		connection.provider_account.name ?? connection.provider_account.id;
-	const access = connectionAccess(connection, viewer);
-	const problem = connectionProblem(connection);
-	const keyBased = connectMethod(connection.credential_type) === "key";
+	const [expanded, setExpanded] = useState(false);
+	const name = toolkit?.name ?? toolkitName(connection.toolkit);
 	const refresh = () =>
 		queryClient.invalidateQueries({
-			queryKey: connectionsQueryKey(organization.id),
+			queryKey: connectionsQueryOptions(organizationId).queryKey,
 		});
-	const makeDefault = useMutation({
-		mutationFn: () =>
-			updateConnection(organization.id, connection.id, { default: true }),
-		onSettled: refresh,
-	});
 	const reconnect = useMutation({
 		mutationFn: async () => {
-			const { authorization_url } = await reconnectConnection(
-				organization.id,
-				connection.id,
-				connectReturnUri(window.location.origin, organization.id),
-			);
-			window.location.assign(authorization_url);
+			const { redirect_url } = await connect(organizationId, {
+				returnTo: connectReturnTo(window.location.origin),
+				toolkit: connection.toolkit,
+			});
+			window.location.assign(redirect_url);
 		},
 	});
-	const actionError = makeDefault.error ?? reconnect.error;
-	const details = [
-		placementName(connection, teamName),
-		connection.label ? account : undefined,
-		connection.default ? "default" : undefined,
-	].filter(Boolean);
+	const canExpand = connection.status === "active";
 
 	return (
-		<div className="settings-list-row">
-			<span aria-hidden="true" className="settings-list-icon">
-				<ToolGlyph provider={connection.provider} />
-			</span>
-			<div className="settings-list-copy">
-				<strong>
-					{toolName} · {connection.label ?? account}
-				</strong>
-				<small>{details.join(" · ")}</small>
-				{problem ? (
-					<small className="settings-list-error">{problem}</small>
+		<Card className="workspace-panel">
+			<div className="settings-list-row">
+				<ToolkitIcon logo={toolkit?.logo} />
+				<div className="settings-list-copy">
+					<strong>
+						{name}
+						{connection.label ? ` · ${connection.label}` : ""}
+					</strong>
+					{connection.status_reason ? (
+						<small className="settings-list-error">
+							{connection.status_reason}
+						</small>
+					) : null}
+					{reconnect.isError ? (
+						<small className="settings-list-error">
+							{appsErrorMessage(reconnect.error, "Could not reconnect")}
+						</small>
+					) : null}
+				</div>
+				<StatusBadge tone={connectionStatusTone(connection.status)}>
+					{connectionStatusLabel(connection.status)}
+				</StatusBadge>
+				{canReconnect(connection.status) ? (
+					<Button
+						disabled={reconnect.isPending}
+						onClick={() => reconnect.mutate()}
+						size="sm"
+						type="button"
+						variant="ghost"
+					>
+						<RefreshCw data-icon="inline-start" />
+						{reconnect.isPending ? "Reconnecting…" : "Reconnect"}
+					</Button>
 				) : null}
-				{actionError ? (
-					<small className="settings-list-error">
-						{apiErrorMessage(actionError, "That did not work")}
-					</small>
+				{connection.status !== "removed" ? (
+					<ConfirmDialog
+						confirmLabel="Disconnect"
+						description={`Krude stops using this ${name} connection, and its access is revoked at ${name} where it allows it.`}
+						onConfirm={async () => {
+							await disconnectConnection(organizationId, connection.id);
+							await refresh();
+						}}
+						title={`Disconnect ${name}?`}
+						trigger={
+							<Button
+								aria-label={`Disconnect ${name}`}
+								size="icon-sm"
+								type="button"
+								variant="ghost"
+							>
+								<Unplug />
+							</Button>
+						}
+					/>
+				) : null}
+				{canExpand ? (
+					<Button
+						aria-expanded={expanded}
+						aria-label={expanded ? `Collapse ${name}` : `Expand ${name}`}
+						onClick={() => setExpanded((current) => !current)}
+						size="icon-sm"
+						type="button"
+						variant="ghost"
+					>
+						{expanded ? <ChevronUp /> : <ChevronDown />}
+					</Button>
 				) : null}
 			</div>
-			<StatusBadge tone={statusTone(connection)}>
-				{statusName(connection)}
-			</StatusBadge>
-			{access.change &&
-			connection.status === "active" &&
-			!connection.default ? (
-				<Button
-					disabled={makeDefault.isPending}
-					onClick={() => makeDefault.mutate()}
-					size="sm"
-					type="button"
-					variant="ghost"
-				>
-					<Star data-icon="inline-start" />
-					Make default
-				</Button>
+			{canExpand && expanded ? (
+				<div className="apps-connection-details">
+					<WorkspaceSection title="Wake Krude when…">
+						<ConnectionTriggers
+							connectionId={connection.id}
+							organizationId={organizationId}
+							toolkit={connection.toolkit}
+						/>
+					</WorkspaceSection>
+					{supportsSourceProvider(knowledgeProviders, connection.toolkit) ? (
+						<WorkspaceSection title="Searchable by Krude">
+							<ConnectionSources
+								connectionId={connection.id}
+								organizationId={organizationId}
+								provider={connection.toolkit}
+							/>
+						</WorkspaceSection>
+					) : null}
+				</div>
 			) : null}
-			{access.change && keyBased ? (
-				<ReplaceKeyDialog
-					connection={connection}
-					organizationId={organization.id}
-					toolName={toolName}
-					trigger={
-						<Button size="sm" type="button" variant="ghost">
-							<KeyRound data-icon="inline-start" />
-							Replace key
-						</Button>
-					}
-				/>
-			) : null}
-			{access.change && !keyBased ? (
-				<Button
-					disabled={reconnect.isPending}
-					onClick={() => reconnect.mutate()}
-					size="sm"
-					type="button"
-					variant="ghost"
-				>
-					<RefreshCw data-icon="inline-start" />
-					Reconnect
-				</Button>
-			) : null}
-			{access.change ? (
-				<RenameConnectionDialog
-					connection={connection}
-					organizationId={organization.id}
-					toolName={toolName}
-					trigger={
-						<Button
-							aria-label={`Label the ${toolName} connection`}
-							size="icon-sm"
-							type="button"
-							variant="ghost"
-						>
-							<Pencil />
-						</Button>
-					}
-				/>
-			) : null}
-			{access.disconnect ? (
-				<ConfirmDialog
-					confirmLabel="Disconnect"
-					description={`Assistants stop using this ${toolName} account, and its access is revoked where ${toolName} allows it.`}
-					onConfirm={async () => {
-						await disconnectConnection(organization.id, connection.id);
-						await refresh();
-					}}
-					title={`Disconnect ${toolName}?`}
-					trigger={
-						<Button
-							aria-label={`Disconnect ${toolName}`}
-							size="icon-sm"
-							type="button"
-							variant="ghost"
-						>
-							<Unplug />
-						</Button>
-					}
-				/>
-			) : null}
-		</div>
+		</Card>
 	);
-}
-
-function placementName(
-	connection: Connection,
-	teamName: string | undefined,
-): string {
-	switch (connection.scope) {
-		case "team":
-			return teamName ? `Team: ${teamName}` : "Team";
-		case "organization":
-			return "Organization";
-		default:
-			return "Personal";
-	}
-}
-
-function statusName(connection: Connection): string {
-	if (connection.status === "needs_reconnect") {
-		return "Needs reconnecting";
-	}
-	if (connection.status === "disconnected") {
-		return "Disconnected";
-	}
-	if (connection.blocked) {
-		return "Blocked";
-	}
-	return connection.health.state === "degraded"
-		? "Having trouble"
-		: "Connected";
-}
-
-function statusTone(
-	connection: Connection,
-): "active" | "danger" | "neutral" | "warning" {
-	if (connection.status === "needs_reconnect") {
-		return "danger";
-	}
-	if (connection.status === "disconnected") {
-		return "neutral";
-	}
-	return connection.blocked || connection.health.state === "degraded"
-		? "warning"
-		: "active";
 }

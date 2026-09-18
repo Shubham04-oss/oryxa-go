@@ -1,12 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowRight, Check, Plus, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { FormField } from "../components/auth/form-field";
-import {
-	ToolEnablement,
-	type ToolProvider,
-} from "../components/onboarding/tool-enablement";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { Card } from "../components/ui/card";
@@ -49,12 +45,7 @@ export const Route = createFileRoute("/onboarding")({
 	pendingComponent: OnboardingPending,
 });
 
-type OnboardingStep =
-	| "intro"
-	| "organization"
-	| "member"
-	| "tools"
-	| "complete";
+type OnboardingStep = "intro" | "organization" | "member" | "complete";
 type InviteDraft = InviteMemberInput & {
 	id: string;
 	status: "pending" | "sent";
@@ -81,9 +72,6 @@ function OnboardingIntroPage() {
 	const [inviteErrors, setInviteErrors] = useState<
 		Partial<Record<keyof InviteMemberInput, string>>
 	>({});
-	const [selectedTools, setSelectedTools] = useState<Set<ToolProvider>>(
-		new Set(),
-	);
 	const [formError, setFormError] = useState("");
 	const [submitting, setSubmitting] = useState(false);
 
@@ -150,23 +138,6 @@ function OnboardingIntroPage() {
 		);
 	}
 
-	function openTools() {
-		setFormError("");
-		setStep("tools");
-	}
-
-	function toggleTool(provider: ToolProvider) {
-		setSelectedTools((current) => {
-			const next = new Set(current);
-			if (next.has(provider)) {
-				next.delete(provider);
-			} else {
-				next.add(provider);
-			}
-			return next;
-		});
-	}
-
 	async function finishSetup() {
 		if (!organizationDraft) return;
 
@@ -192,11 +163,6 @@ function OnboardingIntroPage() {
 					),
 				);
 			}
-
-			sessionStorage.setItem(
-				"weirdly-odd:onboarding-tools",
-				JSON.stringify([...selectedTools]),
-			);
 
 			await reloadSession(queryClient);
 			setStep("complete");
@@ -385,16 +351,18 @@ function OnboardingIntroPage() {
 						<div className="onboarding-actions">
 							<Button
 								className="auth-button auth-button-primary"
-								onClick={openTools}
+								disabled={submitting}
+								onClick={finishSetup}
 								size="lg"
 								type="button"
 							>
-								Continue
+								{submitting ? "Finishing…" : "Continue"}
 							</Button>
 							{invitations.length === 0 ? (
 								<Button
 									className="onboarding-skip"
-									onClick={openTools}
+									disabled={submitting}
+									onClick={finishSetup}
 									type="button"
 									variant="ghost"
 								>
@@ -404,16 +372,6 @@ function OnboardingIntroPage() {
 						</div>
 					</Card>
 				</section>
-			) : null}
-
-			{step === "tools" ? (
-				<ToolEnablement
-					error={formError}
-					onFinish={finishSetup}
-					onToggle={toggleTool}
-					selected={selectedTools}
-					submitting={submitting}
-				/>
 			) : null}
 
 			{step === "complete" && createdOrganization ? (
@@ -429,6 +387,10 @@ function OnboardingIntroPage() {
 								{createdOrganization.name} is ready.
 							</AlertDescription>
 						</Alert>
+						<p className="onboarding-complete-note">
+							Connect your apps any time from{" "}
+							<Link to="/app/connections">Connections</Link>.
+						</p>
 						<div className="onboarding-actions">
 							<Button
 								className="auth-button auth-button-primary"
