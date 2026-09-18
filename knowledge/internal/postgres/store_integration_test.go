@@ -556,6 +556,35 @@ func TestSourcesFiltersByConnection(t *testing.T) {
 	}
 }
 
+// TestSourcesAnswersRemovedOnesOnlyWhenAsked: a listing never shows a source
+// a member removed, but deciding whether to register one on their behalf
+// has to see it, since removing it was them saying no.
+func TestSourcesAnswersRemovedOnesOnlyWhenAsked(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock, nil); err != nil {
+		t.Fatalf("RemoveSource() error = %v", err)
+	}
+
+	listed, err := store.Sources(ctx, "org_1", domain.SourceQuery{Admin: true, ConnectionID: source.ConnectionID})
+	if err != nil {
+		t.Fatalf("Sources() error = %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("Sources() = %d sources, want the removed one left out", len(listed))
+	}
+	listed, err = store.Sources(ctx, "org_1", domain.SourceQuery{
+		Admin: true, ConnectionID: source.ConnectionID, IncludeRemoved: true,
+	})
+	if err != nil {
+		t.Fatalf("Sources(include removed) error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != source.ID || listed[0].Status != domain.StatusRemoved {
+		t.Fatalf("Sources(include removed) = %+v, want the removed source", listed)
+	}
+}
+
 func TestPauseSourcesStopsWhatReadsThroughAConnection(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

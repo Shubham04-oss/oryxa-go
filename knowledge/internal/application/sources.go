@@ -40,7 +40,32 @@ func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Cre
 	if caller.Agent {
 		return domain.Source{}, fmt.Errorf("an agent cannot register a source: %w", domain.ErrForbidden)
 	}
+	return s.register(ctx, credentials, caller, organizationID, input)
+}
 
+// registerFor registers a source knowledge chose to index for a member —
+// what their newly connected app holds, or their organization's files —
+// with the token their standing grant redeems to.
+//
+// That token is an agent's: auth answers every grant-redeemed token as one.
+// The rule RegisterSource keeps, that an agent may not choose what gets
+// indexed, is about an agent choosing; nothing here was chosen by one. So it
+// is the one rule not applied. The source is still registered as that
+// member and checked as them, and a token that turns out to act as anyone
+// else registers nothing.
+func (s *Service) registerFor(ctx context.Context, credentials authclient.Credentials, organizationID, memberID string, input RegisterInput) (domain.Source, error) {
+	caller, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if caller.UserID != memberID {
+		return domain.Source{}, fmt.Errorf("the grant redeemed for a member acts as someone else: %w", domain.ErrForbidden)
+	}
+	return s.register(ctx, credentials, caller, organizationID, input)
+}
+
+// register records a source for a caller whose right to it has been decided.
+func (s *Service) register(ctx context.Context, credentials authclient.Credentials, caller domain.OrgMembership, organizationID string, input RegisterInput) (domain.Source, error) {
 	provider := strings.TrimSpace(input.Provider)
 	extractor, err := s.extractors.Extractor(provider)
 	if err != nil {

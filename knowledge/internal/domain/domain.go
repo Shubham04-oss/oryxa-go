@@ -32,6 +32,10 @@ var (
 	// ErrUnsupportedType means the document's content type holds no text
 	// knowledge can extract.
 	ErrUnsupportedType = errors.New("content type cannot be extracted")
+	// ErrGrantRequired means acting as a member needs the standing grant they
+	// give auth, and they have not given it or auth has dropped it. Only the
+	// member can fix that, so asking again changes nothing until they do.
+	ErrGrantRequired = errors.New("the member has not granted standing access")
 )
 
 type OrgRole string
@@ -160,6 +164,10 @@ type SourceQuery struct {
 	ConnectionID string
 	Provider     string
 	Admin        bool
+	// IncludeRemoved also answers sources a member removed. A listing never
+	// wants them; deciding whether to register something on a member's
+	// behalf does, since a source they removed is theirs saying no.
+	IncludeRemoved bool
 }
 
 // AppConnection is what apps answered about one of a member's connections to

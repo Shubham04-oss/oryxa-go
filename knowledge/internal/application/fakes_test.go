@@ -135,9 +135,15 @@ func (store *fakeStore) Source(_ context.Context, _, sourceID string) (domain.So
 func (store *fakeStore) Sources(_ context.Context, _ string, query domain.SourceQuery) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	// It answers what the real query does, filters and all: a fake that
+	// answered more once let a test pass that the database would have failed.
 	listed := []domain.Source{}
 	for _, source := range store.sources {
-		if !query.Admin && source.CreatedBy != query.CreatedBy {
+		switch {
+		case source.Status == domain.StatusRemoved && !query.IncludeRemoved,
+			!query.Admin && source.CreatedBy != query.CreatedBy,
+			query.ConnectionID != "" && source.ConnectionID != query.ConnectionID,
+			query.Provider != "" && source.Provider != query.Provider:
 			continue
 		}
 		listed = append(listed, source)
@@ -480,16 +486,23 @@ func (store *fakeStore) published(detailType string) int {
 // often it was asked.
 type fakeDirectory struct {
 	membership domain.OrgMembership
+	// agentToken is a token auth would answer as an agent's, the way it
+	// answers every token a standing grant redeems to.
+	agentToken string
 	err        error
 	calls      int
 }
 
-func (directory *fakeDirectory) Membership(context.Context, string, authclient.Credentials) (domain.OrgMembership, error) {
+func (directory *fakeDirectory) Membership(_ context.Context, _ string, credentials authclient.Credentials) (domain.OrgMembership, error) {
 	directory.calls++
 	if directory.err != nil {
 		return domain.OrgMembership{}, directory.err
 	}
-	return directory.membership, nil
+	membership := directory.membership
+	if directory.agentToken != "" && credentials.Authorization == "Bearer "+directory.agentToken {
+		membership.Agent = true
+	}
+	return membership, nil
 }
 
 // fakeApps answers what apps would about one of a member's connections.

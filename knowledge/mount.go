@@ -2,6 +2,8 @@ package knowledge
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -16,6 +18,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/appsclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/filesclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/httpserver"
@@ -69,24 +72,28 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("COMPOSIO_API_KEY is not set: app sources (GitHub, Notion, Slack) are off")
 	}
 
-	// Files is the one source with nobody to act as: every route there wants
-	// a member's own credentials, and a scheduled pass has none. Auth's
-	// standing grant is what fills that, so it is mounted only where both
-	// halves of reaching auth are configured.
+	// Acting as a member while they are away is what the files source reads
+	// with, and what registering a newly connected app's contents for them
+	// needs. Auth's standing grant fills that, redeemed with knowledge's own
+	// signed identity.
 	var grants application.Grants
-	switch {
-	case config.FilesURL == "":
-		logger.Warn("FILES_URL is not set: the organization's own files are not indexed")
-	case config.ServiceKeyID == "":
-		logger.Warn("KNOWLEDGE_SERVICE_KEY_ID is not set: the organization's own files are not indexed, " +
-			"since reading them means acting as the member who registered them")
-	default:
-		grants = membertoken.New(membertoken.Config{
+	if config.ServiceKeyID != "" {
+		grants = memberGrants{tokens: membertoken.New(membertoken.Config{
 			AuthURL: config.AuthURL,
 			Signer: serviceauth.Signer{
 				Client: kms.NewFromConfig(platform.AWS), KeyID: config.ServiceKeyID, Service: Name,
 			},
-		})
+		})}
+	} else {
+		logger.Warn("KNOWLEDGE_SERVICE_KEY_ID is not set: knowledge cannot act as a member while they are away, " +
+			"so neither the organization's own files nor what a newly connected app holds are indexed for them")
+	}
+	// Files is the one source with nobody to act as: every route there wants
+	// a member's own credentials, and a scheduled pass has none.
+	switch {
+	case config.FilesURL == "":
+		logger.Warn("FILES_URL is not set: the organization's own files are not indexed")
+	case grants != nil:
 		files := sources.NewFiles(filesclient.New(config.FilesURL))
 		extractors[files.Provider()] = files
 	}
@@ -150,4 +157,31 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Timeouts: host.Timeouts{Read: 15 * time.Second, Write: 30 * time.Second},
 		Workers:  workers,
 	}, nil
+}
+
+// memberTokens is what memberGrants asks; *membertoken.Client answers it.
+type memberTokens interface {
+	MemberToken(ctx context.Context, organizationID, memberID string) (string, error)
+}
+
+// memberGrants puts auth's answers about a member's grant in knowledge's own
+// terms, so work that needed a token can tell a member who has to grant again
+// from a deployment that may not ask, and both from an auth that is only
+// down for a moment — the one of the three worth trying again.
+type memberGrants struct{ tokens memberTokens }
+
+func (grants memberGrants) MemberToken(ctx context.Context, organizationID, memberID string) (string, error) {
+	token, err := grants.tokens.MemberToken(ctx, organizationID, memberID)
+	switch {
+	case err == nil:
+		return token, nil
+	case errors.Is(err, membertoken.ErrGrantRequired):
+		return "", fmt.Errorf("%w: %w", domain.ErrGrantRequired, err)
+	case errors.Is(err, membertoken.ErrNotConfigured):
+		return "", fmt.Errorf("%w: %w", domain.ErrForbidden, err)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "", err
+	default:
+		return "", fmt.Errorf("%w: %w", domain.ErrProviderUnavailable, err)
+	}
 }

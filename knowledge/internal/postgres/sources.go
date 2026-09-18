@@ -53,7 +53,10 @@ func (store *Store) Source(ctx context.Context, organizationID, sourceID string)
 }
 
 func (store *Store) Sources(ctx context.Context, organizationID string, query domain.SourceQuery) ([]domain.Source, error) {
-	sql := `SELECT ` + sourceColumns + ` FROM knowledge_sources WHERE organization_id = $1 AND status <> 'removed'`
+	sql := `SELECT ` + sourceColumns + ` FROM knowledge_sources WHERE organization_id = $1`
+	if !query.IncludeRemoved {
+		sql += ` AND status <> 'removed'`
+	}
 	args := []any{organizationID}
 	bind := func(value any) string {
 		args = append(args, value)

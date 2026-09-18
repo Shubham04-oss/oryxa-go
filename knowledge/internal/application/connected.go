@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
@@ -55,15 +57,21 @@ func (s *Service) ConnectionConnected(ctx context.Context, event appsv1.Connecti
 	if event.OrganizationID == "" || event.MemberID == "" || event.ConnectionID == "" {
 		return fmt.Errorf("a connected app needs an organization, a member and a connection: %w", domain.ErrInvalid)
 	}
+	// An app nothing here can read still delivers events; it is decided
+	// before anything is asked of auth or apps.
+	provider := providerFor(event.Toolkit)
+	if provider == "" {
+		return nil
+	}
+	if _, mounted := s.extractors[provider]; !mounted {
+		return nil
+	}
 	logger := s.logger.With("organization_id", event.OrganizationID,
 		"connection_id", event.ConnectionID, "toolkit", event.Toolkit)
 
 	token, err := s.grants.MemberToken(ctx, event.OrganizationID, event.MemberID)
 	if err != nil {
-		// A member who has not granted standing access cannot have anything
-		// registered for them, and no retry changes that.
-		logger.InfoContext(ctx, "nothing indexed for a newly connected app: no standing grant", "error", err)
-		return nil
+		return withoutGrant(ctx, logger, "nothing indexed for a newly connected app", err)
 	}
 	credentials := authclient.Credentials{Authorization: "Bearer " + token}
 
@@ -82,27 +90,46 @@ func (s *Service) ConnectionConnected(ctx context.Context, event appsv1.Connecti
 		return nil
 	}
 
-	registered, skipped := 0, 0
+	// What the connection already has counts. A redelivered event, or a
+	// member who registered something themselves first, must not take it
+	// past the ceiling; and a target a member removed stays removed, since
+	// removing it was them saying no.
+	existing, err := s.store.Sources(ctx, event.OrganizationID, domain.SourceQuery{
+		ConnectionID: event.ConnectionID, Admin: true, IncludeRemoved: true,
+	})
+	if err != nil {
+		return fmt.Errorf("look for what the connection already indexes: %w", err)
+	}
+	live := 0
+	for _, source := range existing {
+		if source.Status != domain.StatusRemoved {
+			live++
+		}
+	}
+
+	registered, present, leftOver := 0, 0, 0
 	for _, target := range targets {
-		if registered == autoRegisterLimit {
-			skipped = len(targets) - registered
-			break
+		if holdsTarget(existing, target.Target) {
+			present++
+			continue
 		}
-		provider := providerFor(event.Toolkit)
-		if provider == "" {
-			return nil
+		if live >= autoRegisterLimit {
+			leftOver++
+			continue
 		}
-		_, err := s.RegisterSource(ctx, credentials, event.OrganizationID, RegisterInput{
+		_, err := s.registerFor(ctx, credentials, event.OrganizationID, event.MemberID, RegisterInput{
 			ConnectionID: event.ConnectionID, Provider: provider,
 			Target: target.Target, Interval: autoRegisterInterval,
 		})
 		switch {
 		case err == nil:
 			registered++
+			live++
 		case errors.Is(err, domain.ErrConflict):
-			// Already indexed — a redelivery of this event, or a member who
-			// registered it themselves first. Either way it is done.
-			registered++
+			// Registered by someone else in the meantime; it is done, and it
+			// counts against the ceiling like any other.
+			present++
+			live++
 		default:
 			// One target failing says nothing about the rest: a repository
 			// whose name the extractor will not take should not cost a
@@ -112,8 +139,39 @@ func (s *Service) ConnectionConnected(ctx context.Context, event appsv1.Connecti
 		}
 	}
 	logger.InfoContext(ctx, "indexed what a newly connected app holds",
-		"registered", registered, "found", len(targets), "left_for_the_member", skipped)
+		"registered", registered, "already_there", present, "found", len(targets), "left_for_the_member", leftOver)
 	return nil
+}
+
+// holdsTarget reports whether one of sources, live or removed, reads target.
+func holdsTarget(sources []domain.Source, target map[string]string) bool {
+	checked, err := domain.CheckTarget(target)
+	if err != nil {
+		return false
+	}
+	for _, source := range sources {
+		if maps.Equal(source.Target, checked) {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutGrant decides what a missing token means for work knowledge chose
+// to do for a member. A member who has not granted, or a deployment that
+// may not ask, is reported and the event is done: no retry changes either.
+// Anything else is auth not answering, and the bus delivers the event again.
+func withoutGrant(ctx context.Context, logger *slog.Logger, what string, err error) error {
+	switch {
+	case errors.Is(err, domain.ErrGrantRequired):
+		logger.InfoContext(ctx, what+": the member has not granted standing access", "error", err)
+		return nil
+	case errors.Is(err, domain.ErrForbidden):
+		logger.WarnContext(ctx, what+": this deployment may not act as a member", "error", err)
+		return nil
+	default:
+		return fmt.Errorf("%s: act as the member: %w", what, err)
+	}
 }
 
 // triggerSweepFloor is how soon after a sweep a trigger may ask for another.
@@ -187,16 +245,18 @@ func (s *Service) FileStored(ctx context.Context, event filesv1.ObjectCreated) e
 		return nil
 	}
 	existing, err := s.store.Sources(ctx, event.OrganizationID,
-		domain.SourceQuery{Provider: filesProvider, Admin: true})
+		domain.SourceQuery{Provider: filesProvider, Admin: true, IncludeRemoved: true})
 	if err != nil {
 		return fmt.Errorf("look for the organization's files source: %w", err)
 	}
-	if len(existing) > 0 {
-		// Already indexed — or removed, which is a member saying their
-		// organization's files should not be. Neither is undone by someone
-		// uploading another file, so registering again is only ever the
-		// member's own doing.
-		return nil
+	for _, source := range existing {
+		if source.Scope == domain.ScopeOrganization {
+			// Already indexed — or removed, which is a member saying their
+			// organization's files should not be. Neither is undone by
+			// someone uploading another file, so registering again is only
+			// ever the member's own doing.
+			return nil
+		}
 	}
 
 	member := event.CreatedBy
@@ -208,15 +268,14 @@ func (s *Service) FileStored(ctx context.Context, event filesv1.ObjectCreated) e
 	}
 	token, err := s.grants.MemberToken(ctx, event.OrganizationID, member)
 	if err != nil {
-		s.logger.InfoContext(ctx, "the organization's files are not indexed: no standing grant",
-			"organization_id", event.OrganizationID, "error", err)
-		return nil
+		return withoutGrant(ctx, s.logger.With("organization_id", event.OrganizationID),
+			"the organization's files are not indexed", err)
 	}
 	// Read as whoever stored the file. Only an admin can share a file with
 	// the whole organization, so that is an admin, whose view also carries
 	// billing attachments; the files source never publishes those.
 	credentials := authclient.Credentials{Authorization: "Bearer " + token}
-	source, err := s.RegisterSource(ctx, credentials, event.OrganizationID, RegisterInput{
+	source, err := s.registerFor(ctx, credentials, event.OrganizationID, member, RegisterInput{
 		Provider: filesProvider, Interval: autoRegisterInterval,
 	})
 	switch {

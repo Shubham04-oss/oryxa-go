@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -21,8 +22,10 @@ func connectedService(t *testing.T, store *fakeStore, apps *fakeApps) (*Service,
 	t.Helper()
 	grants := &fakeGrants{token: "member-token"}
 	service := New(Dependencies{
-		Store:      store,
-		Directory:  &fakeDirectory{membership: member()},
+		Store: store,
+		// Auth answers every token a standing grant redeems to as an
+		// agent's, so the fake does too.
+		Directory:  &fakeDirectory{membership: member(), agentToken: "member-token"},
 		Apps:       apps,
 		Grants:     grants,
 		Extractors: sources.Registry{"github": &fakeExtractor{provider: "github"}},
@@ -107,7 +110,7 @@ func TestAMemberWhoNeverGrantedGetsNothingIndexed(t *testing.T) {
 	store := newFakeStore()
 	apps := &fakeApps{connection: usableConnection(), targets: repositories("acme/api")}
 	service, grants := connectedService(t, store, apps)
-	grants.err = errors.New("no grant")
+	grants.err = domain.ErrGrantRequired
 
 	if err := service.ConnectionConnected(context.Background(), connected()); err != nil {
 		t.Fatalf("a missing grant was reported as a failure: %v", err)
@@ -120,6 +123,107 @@ func TestAMemberWhoNeverGrantedGetsNothingIndexed(t *testing.T) {
 		if call == "targets:apc_1" {
 			t.Fatal("asked apps for targets without a token")
 		}
+	}
+}
+
+// TestAuthNotAnsweringIsWorthAnotherDelivery keeps a moment's outage at auth
+// from costing a member their indexing for good: only a member who has not
+// granted, or a deployment that may not ask, ends the event.
+func TestAuthNotAnsweringIsWorthAnotherDelivery(t *testing.T) {
+	store := newFakeStore()
+	apps := &fakeApps{connection: usableConnection(), targets: repositories("acme/api")}
+	service, grants := connectedService(t, store, apps)
+	grants.err = fmt.Errorf("mint a token: %w", domain.ErrProviderUnavailable)
+
+	if err := service.ConnectionConnected(context.Background(), connected()); !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("error = %v, want it reported so the bus redelivers", err)
+	}
+	files, fileGrants := filesService(t, store)
+	fileGrants.err = grants.err
+	if err := files.FileStored(context.Background(), storedFile("organization")); !errors.Is(err, domain.ErrProviderUnavailable) {
+		t.Fatalf("FileStored error = %v, want it reported so the bus redelivers", err)
+	}
+
+	// A deployment that may not act as members is configuration, not an
+	// outage: reported, and done.
+	grants.err = fmt.Errorf("auth refused this service: %w", domain.ErrForbidden)
+	if err := service.ConnectionConnected(context.Background(), connected()); err != nil {
+		t.Fatalf("error = %v, want none", err)
+	}
+	if len(store.sources) != 0 {
+		t.Fatalf("sources = %d, want none", len(store.sources))
+	}
+}
+
+// TestAGrantThatActsAsSomeoneElseRegistersNothing: whatever the token turns
+// out to be, a source is only ever registered as the member it was for.
+func TestAGrantThatActsAsSomeoneElseRegistersNothing(t *testing.T) {
+	store := newFakeStore()
+	apps := &fakeApps{connection: usableConnection(), targets: repositories("acme/api")}
+	service, _ := connectedService(t, store, apps)
+	event := connected()
+	event.MemberID = "user-2"
+
+	if err := service.ConnectionConnected(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 0 {
+		t.Fatalf("sources = %d, want none registered as another member", len(store.sources))
+	}
+}
+
+// TestATargetAMemberRemovedIsNotIndexedAgain: removing a repository's source
+// is the member saying no, and the connection announcing itself again does
+// not undo that.
+func TestATargetAMemberRemovedIsNotIndexedAgain(t *testing.T) {
+	store := newFakeStore()
+	store.sources["src_removed"] = domain.Source{
+		ID: "src_removed", OrganizationID: "org_1", Provider: "github", ConnectionID: "apc_1",
+		Target: map[string]string{"repository": "acme/api"}, Scope: domain.ScopeMember, MemberID: "user-1",
+		Status: domain.StatusRemoved, CreatedBy: "user-1",
+	}
+	apps := &fakeApps{connection: usableConnection(), targets: repositories("acme/api", "acme/web")}
+	service, _ := connectedService(t, store, apps)
+
+	if err := service.ConnectionConnected(context.Background(), connected()); err != nil {
+		t.Fatal(err)
+	}
+	live := 0
+	for _, source := range store.sources {
+		if source.Status == domain.StatusRemoved {
+			continue
+		}
+		live++
+		if source.Target["repository"] != "acme/web" {
+			t.Fatalf("registered %v again, which the member removed", source.Target)
+		}
+	}
+	if live != 1 {
+		t.Fatalf("live sources = %d, want acme/web alone", live)
+	}
+}
+
+// TestTheCeilingCountsWhatIsAlreadyIndexed keeps a redelivery, or a
+// connection whose targets came back in another order, from indexing a
+// second ten.
+func TestTheCeilingCountsWhatIsAlreadyIndexed(t *testing.T) {
+	store := newFakeStore()
+	for index := range autoRegisterLimit - 2 {
+		id := fmt.Sprintf("src_%d", index)
+		store.sources[id] = domain.Source{
+			ID: id, OrganizationID: "org_1", Provider: "github", ConnectionID: "apc_1",
+			Target: map[string]string{"repository": fmt.Sprintf("acme/old-%d", index)},
+			Scope:  domain.ScopeMember, MemberID: "user-1", Status: domain.StatusActive, CreatedBy: "user-1",
+		}
+	}
+	apps := &fakeApps{connection: usableConnection(), targets: repositories("acme/a", "acme/b", "acme/c", "acme/d")}
+	service, _ := connectedService(t, store, apps)
+
+	if err := service.ConnectionConnected(context.Background(), connected()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != autoRegisterLimit {
+		t.Fatalf("sources = %d, want the ceiling of %d counting what was there", len(store.sources), autoRegisterLimit)
 	}
 }
 
@@ -335,7 +439,7 @@ func filesService(t *testing.T, store *fakeStore) (*Service, *fakeGrants) {
 	grants := &fakeGrants{token: "member-token"}
 	service := New(Dependencies{
 		Store:      store,
-		Directory:  &fakeDirectory{membership: member()},
+		Directory:  &fakeDirectory{membership: member(), agentToken: "member-token"},
 		Grants:     grants,
 		Extractors: sources.Registry{"files": &fakeExtractor{provider: "files"}},
 		Clock:      func() time.Time { return testClock },
@@ -427,6 +531,25 @@ func TestASourceAMemberRemovedDoesNotComeBack(t *testing.T) {
 	// who removed it would not want. It stays removed.
 	if len(store.sources) != 1 {
 		t.Fatalf("sources = %d, want the removed one left alone", len(store.sources))
+	}
+}
+
+// TestATeamsFilesSourceIsNotTheOrganizations: a team indexing its own files
+// says nothing about the organization's, which the first shared upload
+// still starts.
+func TestATeamsFilesSourceIsNotTheOrganizations(t *testing.T) {
+	store := newFakeStore()
+	service, _ := filesService(t, store)
+	store.sources["src_team"] = domain.Source{
+		ID: "src_team", OrganizationID: "org_1", Provider: "files", Target: map[string]string{"team": "team_1"},
+		Scope: domain.ScopeTeam, TeamID: "team_1", Status: domain.StatusActive, CreatedBy: "user-2",
+	}
+
+	if err := service.FileStored(context.Background(), storedFile("organization")); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 2 {
+		t.Fatalf("sources = %d, want the team's and now the organization's", len(store.sources))
 	}
 }
 
