@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -35,7 +36,9 @@ type Config struct {
 	// NoAutoSubscribe stops a newly connected app from being subscribed to
 	// everything it can deliver. Connecting subscribes by default; set
 	// APPS_AUTO_SUBSCRIBE=false for a deployment that would rather members
-	// chose their own events.
+	// chose their own events. Parsed as a boolean (strconv.ParseBool, so
+	// true/false/1/0/T/F and case-insensitive variants); unset means on, and
+	// anything else refuses to start rather than silently keep the default.
 	NoAutoSubscribe bool
 }
 
@@ -43,6 +46,10 @@ type Config struct {
 // own defaults under.
 func FromEnv(getenv func(string) string) (Config, error) {
 	genericEndpoint := endpoint(getenv, "AWS_ENDPOINT_URL")
+	autoSubscribe, err := boolValue(getenv, "APPS_AUTO_SUBSCRIBE", true)
+	if err != nil {
+		return Config{}, err
+	}
 	config := Config{
 		AuthURL:               endpoint(getenv, "AUTH_URL"),
 		ComposioAPIKey:        strings.TrimSpace(getenv("COMPOSIO_API_KEY")),
@@ -53,7 +60,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		EventBridgeEndpoint:   endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
 		SQSEndpoint:           endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
 		EventsQueueURL:        strings.TrimSpace(getenv("APPS_EVENTS_QUEUE_URL")),
-		NoAutoSubscribe:       strings.EqualFold(strings.TrimSpace(getenv("APPS_AUTO_SUBSCRIBE")), "false"),
+		NoAutoSubscribe:       !autoSubscribe,
 	}
 	if config.AuthURL == "" || config.ComposioAPIKey == "" || config.PublicBaseURL == "" {
 		return Config{}, errors.New("AUTH_URL, COMPOSIO_API_KEY and APPS_PUBLIC_BASE_URL are required")
@@ -96,6 +103,22 @@ func splitList(value string) []string {
 		}
 	}
 	return result
+}
+
+// boolValue reads an environment variable as a boolean (strconv.ParseBool:
+// true/false/1/0/T/F, case-insensitive). Unset answers fallback; anything
+// else is a configuration error naming the variable, since silently keeping
+// the default on a typo is worse than refusing to start.
+func boolValue(getenv func(string) string, name string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", name)
+	}
+	return parsed, nil
 }
 
 func absoluteURL(value string) bool {
