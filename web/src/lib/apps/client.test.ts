@@ -260,7 +260,9 @@ describe("triggerConfigCapability", () => {
 
 	it("offers an enum as a choice rather than free text", () => {
 		const capability = triggerConfigCapability({
-			properties: { state: { enum: ["open", "closed", "all"], type: "string" } },
+			properties: {
+				state: { enum: ["open", "closed", "all"], type: "string" },
+			},
 			required: ["state"],
 			type: "object",
 		});
