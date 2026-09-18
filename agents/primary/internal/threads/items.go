@@ -115,7 +115,7 @@ func streamItems(event *session.Event) []Item {
 		if text == "" {
 			return nil
 		}
-		return []Item{{Type: ItemDelta, At: event.Timestamp, Author: authorOf(event), Text: text}}
+		return []Item{{Type: ItemDelta, At: at(event), Author: authorOf(event), Text: text}}
 	}
 	return eventItems(event, nil)
 }
@@ -152,7 +152,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 		case part.Text != "":
 			if message < 0 {
 				message = len(items)
-				items = append(items, Item{Type: ItemMessage, ID: event.ID, At: event.Timestamp, Author: author})
+				items = append(items, Item{Type: ItemMessage, ID: event.ID, At: at(event), Author: author})
 			}
 			items[message].Text += part.Text
 		case part.FunctionCall != nil:
@@ -163,7 +163,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 				continue
 			}
 			items = append(items, Item{
-				Type: ItemToolCall, ID: event.ID, At: event.Timestamp, Author: author,
+				Type: ItemToolCall, ID: event.ID, At: at(event), Author: author,
 				CallID: part.FunctionCall.ID, Tool: part.FunctionCall.Name,
 				Arguments: boundedArguments(part.FunctionCall.Args),
 			})
@@ -179,7 +179,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 				continue
 			}
 			item := Item{
-				Type: ItemToolResult, ID: event.ID, At: event.Timestamp, Author: author,
+				Type: ItemToolResult, ID: event.ID, At: at(event), Author: author,
 				CallID: response.ID, Tool: response.Name,
 			}
 			if failure := responseError(response.Response); failure != "" {
@@ -191,7 +191,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 	}
 	for _, name := range slices.Sorted(maps.Keys(event.Actions.ArtifactDelta)) {
 		items = append(items, Item{
-			Type: ItemArtifact, ID: event.ID, At: event.Timestamp, Author: author,
+			Type: ItemArtifact, ID: event.ID, At: at(event), Author: author,
 			Artifact: name, Version: event.Actions.ArtifactDelta[name],
 		})
 	}
@@ -199,7 +199,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 	// rather than leaving the member with nothing.
 	if failure := strings.TrimSpace(strings.Trim(event.ErrorCode+": "+event.ErrorMessage, ": ")); failure != "" && event.Author != adkUserAuthor {
 		if message < 0 {
-			items = append(items, Item{Type: ItemMessage, ID: event.ID, At: event.Timestamp, Author: author})
+			items = append(items, Item{Type: ItemMessage, ID: event.ID, At: at(event), Author: author})
 			message = len(items) - 1
 		}
 		items[message].Error = failure
@@ -215,7 +215,7 @@ func confirmationItem(event *session.Event, call *genai.FunctionCall, answers ma
 		return Item{}, false
 	}
 	item := Item{
-		Type: ItemConfirmation, ID: event.ID, At: event.Timestamp, Author: authorOf(event),
+		Type: ItemConfirmation, ID: event.ID, At: at(event), Author: authorOf(event),
 		CallID: call.ID, Tool: original.Name, Arguments: original.Args, Status: ConfirmationPending,
 	}
 	var requested toolconfirmation.ToolConfirmation
@@ -300,6 +300,15 @@ func eventText(event *session.Event) string {
 		}
 	}
 	return text.String()
+}
+
+// at is when an event happened, in UTC like everything else the API
+// answers: ADK stamps events in the server's own zone.
+func at(event *session.Event) time.Time {
+	if event.Timestamp.IsZero() {
+		return time.Time{}
+	}
+	return event.Timestamp.UTC()
 }
 
 func authorOf(event *session.Event) string {
