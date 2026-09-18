@@ -39,10 +39,11 @@ go run ./cmd/oryxa migrate            # install schemas, then exit
 | `DEPLOYMENT_ENVIRONMENT` (or `ENVIRONMENT`) | `development` | Named in logs and traces; `production` makes event queues required |
 | `ORYXA_REQUIRE_EVENT_QUEUES` | on in production | Refuse to start while a selected service's events queue is unset |
 
-Nine services consume events, each from its own queue: `AGENTS_EVENTS_QUEUE_URL`,
-`APPS_EVENTS_QUEUE_URL`, `AUTH_EVENTS_QUEUE_URL`, `BILLING_EVENTS_QUEUE_URL`,
-`EMAIL_QUEUE_URL`, `FILES_EVENTS_QUEUE_URL`, `KNOWLEDGE_EVENTS_QUEUE_URL`,
-`RAG_EVENTS_QUEUE_URL` and `TEAMS_EVENTS_QUEUE_URL`, each made by its service's
+Ten services consume events, each from its own queue: `AGENTS_EVENTS_QUEUE_URL`,
+`APPS_EVENTS_QUEUE_URL`, `AUTH_EVENTS_QUEUE_URL`, `BATCHING_EVENTS_QUEUE_URL`,
+`BILLING_EVENTS_QUEUE_URL`, `EMAIL_QUEUE_URL`, `FILES_EVENTS_QUEUE_URL`,
+`KNOWLEDGE_EVENTS_QUEUE_URL`, `RAG_EVENTS_QUEUE_URL` and
+`TEAMS_EVENTS_QUEUE_URL`, each made by its service's
 `infra/*/cmd/provision`. Without its queue a service only warns — and then
 never hears the events that remove what people deleted — so in production the
 process refuses to start instead, naming every queue that is missing.
