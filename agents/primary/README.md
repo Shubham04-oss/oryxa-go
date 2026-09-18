@@ -72,8 +72,8 @@ on reset, expiry replacement or graceful shutdown. Click, fill and reset always
 use ADK confirmation. Web content is treated as untrusted data, secret values
 are forbidden in model-driven fill calls, and common password/OTP/payment/file
 fields are rejected again inside the remote page. Screenshots become bounded
-ADK PNG artifacts instead of base64 model output; the ADK launcher keeps those
-artifacts in memory, so production still needs a durable artifact service.
+ADK PNG artifacts instead of base64 model output, kept wherever the artifact
+service keeps them (see [Artifacts](#artifacts)).
 
 **Dynamic sub-agents.** `create_subagent` registers a specialist for the rest
 of the conversation: Krude writes its name, a one-line description and its
@@ -275,6 +275,47 @@ report's cost is model tokens only: Google Search grounding and, later, tool
 calls are priced separately, and token usage inside sub-agent and helper runs
 is not visible in the event stream.
 
+## Artifacts
+
+An artifact is a file a conversation produced: a browser screenshot, a file
+the sandbox made, anything `save_artifact` keeps. `load_artifacts` reads one
+back by name. The sandbox is thrown away with the conversation; an artifact
+is not.
+
+`internal/s3artifact` is the durable store, an `artifact.Service` over S3 in
+adk-go's own key layout, the one `artifact/gcsartifact` uses:
+
+```text
+{appName}/{userID}/{sessionID}/{fileName}/{version}
+{appName}/{userID}/user/{fileName}/{version}       # a "user:" filename
+```
+
+A filename beginning with `user:` belongs to the member rather than to one
+conversation, so every session of theirs sees it; anything else is the
+session's own. Saving the same name again adds a version rather than
+replacing one: S3 cannot list and write atomically, so a save writes `max+1`
+with an `If-None-Match` precondition and retries with a fresh version when
+another writer took it, which means a version is never overwritten.
+
+Without `AGENTS_PRIMARY_ARTIFACT_BUCKET` the ADK launcher's in-memory service
+is used instead and artifacts go with the process. Create the bucket first —
+private, encrypted, and expiring its objects after 30 days, because a
+conversation is not an archive:
+
+```sh
+(set -a && . ./.env && go run ./agents/primary/infra/artifacts/cmd/provision)
+```
+
+Repeatable: a bucket that already exists keeps its objects and has its
+settings reapplied. The store's own round trip runs against a real S3 API
+when one is named, and is skipped without it:
+
+```sh
+AGENTS_PRIMARY_TEST_AWS_ENDPOINT=http://localhost:4566 \
+  AGENTS_PRIMARY_TEST_ARTIFACT_BUCKET=oryxa-agent-artifacts \
+  go test ./agents/primary/internal/s3artifact/
+```
+
 ## Events
 
 Agents primary publishes on EventBridge source `oryxa.agents` in the envelope
@@ -305,8 +346,9 @@ already in `internal/pricing`.
 ## Development UI
 
 ADK's web UI runs the agents locally. Its sessions, conversation events and
-state live in PostgreSQL, while artifacts and searchable memory remain in
-memory for now. The session store uses ADK's native relational service through
+state live in PostgreSQL, its artifacts in S3 when a bucket is named (see
+[Artifacts](#artifacts)), and searchable memory remains in memory for now.
+The session store uses ADK's native relational service through
 the repository's instrumented PostgreSQL pool and keeps its tables in the
 `agents_primary` schema. Log in for ADC and AWS once, start PostgreSQL, and
 set `GOOGLE_CLOUD_PROJECT` in `.env` to a project with the Vertex AI API
@@ -398,6 +440,7 @@ the one `oryxa` image; there is no Dockerfile of its own any more.
 | `AGENTS_PRIMARY_PROMPT_CACHE` | `true` | Use explicit Vertex cached contents for large stable prefixes |
 | `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |
 | `AGENTS_PRIMARY_CACHE_MIN_TOKENS` | `4096` | Smallest prefix worth an explicit cache; Vertex's floor for these models. Below it, implicit caching applies |
+| `AGENTS_PRIMARY_ARTIFACT_BUCKET` | unset | S3 bucket artifacts are kept in; without it they are held in memory and go with the process |
 | `EVENT_BUS_NAME` | `default` | EventBridge bus events publish on |
 | `EVENTBRIDGE_ENDPOINT` | unset | EventBridge endpoint override for the LocalStack emulator |
 | `DATABASE_URL` | unset | PostgreSQL connection for ADK sessions, events and state, and the read of the member's auth tables when a session is created; required by the ADK launcher |

@@ -20,7 +20,7 @@ var browserInstructions string
 func SandboxToolbox(toolset tool.Toolset) Toolbox {
 	return Toolbox{
 		Name:         "sandbox",
-		Description:  "Isolated code, shell and file operations in AWS Bedrock AgentCore for computation and data work.",
+		Description:  "A throwaway machine for executing code, shell commands and scratch files — computation and data work only, never the member's own repository, files or accounts. Use apps for those.",
 		Instructions: sandboxInstructions,
 		Toolset:      toolset,
 	}
@@ -31,7 +31,7 @@ func SandboxToolbox(toolset tool.Toolset) Toolbox {
 func BrowserToolbox(toolset tool.Toolset) Toolbox {
 	return Toolbox{
 		Name:         "browser",
-		Description:  "Isolated web navigation, semantic page inspection, screenshots and confirmed interactions in AWS Bedrock AgentCore Browser.",
+		Description:  "An anonymous browser for executing interactive web tasks — navigation, page inspection, screenshots — never signed in as the member anywhere. Use apps to reach an account the member connected.",
 		Instructions: browserInstructions,
 		Toolset:      toolset,
 	}
