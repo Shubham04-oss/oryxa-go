@@ -313,7 +313,7 @@ function AgentAccessSection() {
 					</div>
 				) : null}
 				<SettingsRow
-					description="Off. Krude will ask you directly whenever it needs something while you're away."
+					description="Off. Krude will say so in the thread instead of acting, the next time it needs this while you're away."
 					title="Agent access"
 				>
 					<Button
