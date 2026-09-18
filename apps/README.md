@@ -578,13 +578,28 @@ On 2026-09-18, against a real PostgreSQL 16 rather than Composio:
 | The store's own tests, including the trigger-delivery migration | `002_trigger_delivery.sql` installs, twice over, and a delivery's count, its event and its deduplication are one transaction |
 | The wake-up store's tests | A batch claims, leases, releases and drops as the waker expects |
 
+Against the same Composio project with a real GitHub account connected, on
+2026-09-19, running apps and knowledge from the binary on localhost (auth a
+stand-in, the database a throwaway schema, no tunnel):
+
+| Run for real | What it proved |
+| --- | --- |
+| `triggercheck` over GitHub, Slack, Gmail, Notion, Google Calendar and Linear | All 84 triggers read and checked; none refused; 35 need no configuration, 15 need a webhook registered by hand |
+| Connecting an account | The hosted link, the member authorizing in their own browser, and the callback activating the connection; `initiated` then `connected` written once each |
+| Auto-subscribe | Found that a project with two-factor protection refuses a subscription without its Composio user: every subscription, by hand or automatic, failed until the user was sent. With it, GitHub's three triggers needing no configuration subscribed |
+| Opting out | A trigger the member removed was left removed, and the two live ones untouched, when the pass ran again |
+| Subscribing by hand | `GITHUB_COMMIT_EVENT` with its owner and repo subscribed; one missing `repo` refused 400 naming it; another app's trigger refused 404 |
+| What a connection holds | Thirty-three repositories, most recently pushed first, each ready to register |
+| A tool | `GITHUB_GET_A_REPOSITORY` read a private repository through the account |
+| Knowledge reading through it | A GitHub source registered by hand read 41 pull requests in one pass, all published |
+| Disconnecting | The account deleted at Composio, every trigger recorded removed, `removed` written once |
+
 Not yet run, and not to be described as working:
 
-- **Connecting an account end to end.** The hosted flow was opened but not completed, so no account has been activated, no tool has run against a real app, and no trigger has been subscribed. Every path past activation is proven only against a stand-in.
-- **A real delivery from a real trigger.** The verified deliveries above were signed with the real subscription secret but sent by hand. GitHub's triggers are all `poll`, so a real one arrives on Composio's polling interval rather than instantly.
-- **`triggercheck` against the real catalog.** It is tested against a stand-in catalog, including the shapes it is meant to catch, but has never read Composio's own. Running it is the first thing to do with a project API key, since it needs no connected account.
-- **The outbox reaching the bus.** EventBridge pointed at a dead local endpoint for this run, and no event was written, so the dispatcher never published.
-- **Auth.** A stand-in answered membership; Cognito was not wired in.
+- **A real delivery from a real trigger.** The verified deliveries above were signed with the real subscription secret but sent by hand. The project's webhook still points at the 2026-09-18 tunnel, and re-pointing it mints a new secret.
+- **Slack and Notion accounts.** Their targets (a member's own channels; parent databases) are proven only against a stand-in.
+- **The outbox reaching the bus.** EventBridge pointed at a dead local endpoint for both runs; events were written and held, never published.
+- **Auth.** A stand-in answered membership; Cognito was not wired in, so indexing on connect, which redeems a member's grant, has not run.
 
 ## Later
 
