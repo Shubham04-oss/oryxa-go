@@ -260,7 +260,7 @@ describe("triggerConfigCapability", () => {
 		expect(capability.fields[0]).toMatchObject({ type: "strings" });
 	});
 
-	it("offers an enum as a choice rather than free text", () => {
+	it("offers an enum as a choice rather than free text, keeping each value's own type", () => {
 		const capability = triggerConfigCapability({
 			properties: {
 				state: { enum: ["open", "closed", "all"], type: "string" },
@@ -271,7 +271,41 @@ describe("triggerConfigCapability", () => {
 		expect(capability.kind).toBe("form");
 		if (capability.kind !== "form") throw new Error("expected a form");
 		expect(capability.fields[0]).toMatchObject({
-			options: ["open", "closed", "all"],
+			options: [
+				{ label: "open", value: "open" },
+				{ label: "closed", value: "closed" },
+				{ label: "all", value: "all" },
+			],
+			type: "select",
+		});
+	});
+
+	it("offers an integer or boolean enum as a choice too, typed rather than stringified", () => {
+		const capability = triggerConfigCapability({
+			properties: {
+				priority: { enum: [1, 5, 15], type: "integer" },
+				verbose: { enum: [true, false], type: "boolean" },
+			},
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		const byName = new Map(
+			capability.fields.map((field) => [field.name, field]),
+		);
+		expect(byName.get("priority")).toMatchObject({
+			options: [
+				{ label: "1", value: 1 },
+				{ label: "5", value: 5 },
+				{ label: "15", value: 15 },
+			],
+			type: "select",
+		});
+		expect(byName.get("verbose")).toMatchObject({
+			options: [
+				{ label: "true", value: true },
+				{ label: "false", value: false },
+			],
 			type: "select",
 		});
 	});
@@ -286,7 +320,10 @@ describe("triggerConfigCapability", () => {
 		expect(capability.kind).toBe("form");
 		if (capability.kind !== "form") throw new Error("expected a form");
 		expect(capability.fields[0]).toMatchObject({
-			options: ["open", "closed"],
+			options: [
+				{ label: "open", value: "open" },
+				{ label: "closed", value: "closed" },
+			],
 			type: "strings",
 		});
 	});
@@ -397,6 +434,54 @@ describe("triggerConfigFieldSubmission", () => {
 		expect(
 			triggerConfigFieldSubmission(configField({ type: "number" }), "5.5"),
 		).toEqual({ kind: "value", value: 5.5 });
+	});
+
+	it("sends a select's chosen value as its own type, not a string", () => {
+		const field = configField({
+			options: [
+				{ label: "1", value: 1 },
+				{ label: "5", value: 5 },
+			],
+			type: "select",
+		});
+		expect(triggerConfigFieldSubmission(field, 5)).toEqual({
+			kind: "value",
+			value: 5,
+		});
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "select" }), true),
+		).toEqual({ kind: "value", value: true });
+	});
+
+	it("does not mistake a select's false or 0 for an untouched field", () => {
+		const field = configField({
+			options: [
+				{ label: "On", value: true },
+				{ label: "Off", value: false },
+			],
+			required: true,
+			type: "select",
+		});
+		expect(triggerConfigFieldSubmission(field, false)).toEqual({
+			kind: "value",
+			value: false,
+		});
+	});
+
+	it("sends a matching line's typed value for a list with enum options", () => {
+		const field = configField({
+			options: [
+				{ label: "1", value: 1 },
+				{ label: "2", value: 2 },
+			],
+			type: "strings",
+		});
+		expect(triggerConfigFieldSubmission(field, "1\n2\nother")).toEqual({
+			kind: "value",
+			// A line naming an option sends its typed number, not the string it
+			// was typed as; a line naming nothing known is passed through as-is.
+			value: [1, 2, "other"],
+		});
 	});
 });
 

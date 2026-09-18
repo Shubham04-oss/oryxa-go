@@ -494,12 +494,23 @@ export function groupConnectionsByToolkit(
 		.sort((a, b) => a.toolkit.localeCompare(b.toolkit));
 }
 
+/** One choice in an enum, keeping the JSON value it sends alongside what a member reads. */
+export interface TriggerConfigOption {
+	label: string;
+	value: boolean | number | string;
+}
+
 export interface TriggerConfigField {
 	default?: boolean | number | string;
 	description?: string;
 	name: string;
-	/** The values a "select" field takes, in the order the catalog listed them. */
-	options?: string[];
+	/**
+	 * The choices a "select" field offers, or a "strings" field's own items
+	 * take, in the order the catalog listed them. Each keeps the enum's own
+	 * JSON value: the server matches an enum by type as well as value, so a
+	 * choice of `5` must still be the number `5` on submit, not `"5"`.
+	 */
+	options?: TriggerConfigOption[];
 	required: boolean;
 	title: string;
 	/**
@@ -617,12 +628,14 @@ function scalarField(
 		: undefined;
 }
 
-/** An enum's values as strings, when every one of them is a scalar. */
-function enumOptions(values: unknown[] | undefined): string[] | undefined {
+/** An enum's values as labeled, typed options, when every one of them is a scalar. */
+function enumOptions(
+	values: unknown[] | undefined,
+): TriggerConfigOption[] | undefined {
 	if (!Array.isArray(values) || values.length === 0) {
 		return undefined;
 	}
-	const options: string[] = [];
+	const options: TriggerConfigOption[] = [];
 	for (const value of values) {
 		if (
 			typeof value !== "string" &&
@@ -631,7 +644,7 @@ function enumOptions(values: unknown[] | undefined): string[] | undefined {
 		) {
 			return undefined;
 		}
-		options.push(String(value));
+		options.push({ label: String(value), value });
 	}
 	return options;
 }
@@ -720,15 +733,23 @@ export function triggerConfigFieldSubmission(
 	if (field.type === "boolean") {
 		return { kind: "value", value: raw === true };
 	}
-	if (typeof raw !== "string" || raw.trim() === "") {
+	// A select's own typed value can be `false` or `0`, so "blank" is judged
+	// by whether anything was chosen at all, not by JavaScript truthiness.
+	if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
 		return { kind: "absent" };
 	}
 	if (field.type === "strings") {
-		// A line each, so an empty one is not sent as an empty value.
-		const entries = raw
+		const byLabel = new Map(
+			(field.options ?? []).map((option) => [option.label, option.value]),
+		);
+		// A line each, so an empty one is not sent as an empty value; a line
+		// naming one of the item enum's own options sends its typed value
+		// rather than the label the member picked it by.
+		const entries = String(raw)
 			.split("\n")
 			.map((line) => line.trim())
-			.filter((line) => line !== "");
+			.filter((line) => line !== "")
+			.map((line) => byLabel.get(line) ?? line);
 		return entries.length > 0
 			? { kind: "value", value: entries }
 			: { kind: "absent" };
@@ -745,6 +766,8 @@ export function triggerConfigFieldSubmission(
 		}
 		return { kind: "value", value: parsed };
 	}
+	// A "select" hands back the option's own typed value already; "string" is
+	// typed as-is.
 	return { kind: "value", value: raw };
 }
 

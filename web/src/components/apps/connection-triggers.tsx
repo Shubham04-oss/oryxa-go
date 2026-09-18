@@ -261,7 +261,9 @@ function AddTriggerRow({
 }: AddTriggerRowProps) {
 	const capability = triggerConfigCapability(type.config_schema);
 	const [expanded, setExpanded] = useState(false);
-	const [values, setValues] = useState<Record<string, boolean | string>>({});
+	const [values, setValues] = useState<
+		Record<string, boolean | number | string>
+	>({});
 	const [problem, setProblem] = useState("");
 	const add = useMutation({
 		mutationFn: (config: Record<string, unknown>) =>
@@ -379,10 +381,15 @@ function AddTriggerRow({
 	);
 }
 
+/** A Select works in string keys; this is how an option's own typed value becomes one. */
+function optionKey(value: boolean | number | string): string {
+	return JSON.stringify(value);
+}
+
 interface TriggerConfigInputProps {
 	field: TriggerConfigField;
-	onChange: (value: boolean | string) => void;
-	value: boolean | string | undefined;
+	onChange: (value: boolean | number | string) => void;
+	value: boolean | number | string | undefined;
 }
 
 function TriggerConfigInput({
@@ -416,24 +423,42 @@ function TriggerConfigInput({
 	) : null;
 
 	// An enum is the values the app itself named, so it is chosen rather than
-	// typed: nothing else would be accepted anyway.
+	// typed: nothing else would be accepted anyway. The Select itself only
+	// deals in string keys, so each option's own JSON-typed value travels
+	// alongside its label and is what onChange actually reports.
 	if (field.type === "select" && field.options !== undefined) {
+		const options = field.options;
+		const chosen = value !== undefined ? value : field.default;
+		const chosenKey = chosen === undefined ? undefined : optionKey(chosen);
+		const selected = options.some(
+			(option) => optionKey(option.value) === chosenKey,
+		)
+			? chosenKey
+			: undefined;
 		return (
 			<div className="dialog-field">
 				{label}
 				<Select
-					onValueChange={(chosen) => onChange(chosen)}
-					value={
-						typeof value === "string" ? value : String(field.default ?? "")
-					}
+					onValueChange={(key) => {
+						const option = options.find(
+							(candidate) => optionKey(candidate.value) === key,
+						);
+						if (option) {
+							onChange(option.value);
+						}
+					}}
+					value={selected ?? ""}
 				>
 					<SelectTrigger id={id}>
 						<SelectValue placeholder="Choose…" />
 					</SelectTrigger>
 					<SelectContent>
-						{field.options.map((option) => (
-							<SelectItem key={option} value={option}>
-								{option}
+						{options.map((option) => (
+							<SelectItem
+								key={optionKey(option.value)}
+								value={optionKey(option.value)}
+							>
+								{option.label}
 							</SelectItem>
 						))}
 					</SelectContent>
