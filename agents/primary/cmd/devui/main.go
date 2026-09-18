@@ -36,6 +36,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	// Aliased: this file's own outbox variable is agents primary's, an
 	// *events.Outbox, and would otherwise shadow the package.
@@ -49,6 +50,19 @@ var defaultArgs = []string{
 	"web", "-port", "8087",
 	"api", "-webui_address", "localhost:8087",
 	"webui", "-api_server_address", "http://localhost:8087/api",
+}
+
+// devMemberTokenSource is a memberauth.TokenSource for local testing only. It
+// skips auth's real agent-token exchange — which needs an AWS KMS key, a
+// Cognito agent app client and a member's completed "agents may act for me"
+// consent, none of which are set up locally — and hands back a fixed bearer
+// token instead, from AGENTS_PRIMARY_DEVUI_MEMBER_TOKEN. Whatever verifies
+// that token decides the identity it resolves to; locally that's
+// test/cmd/authstub. Never point this at a real deployment.
+type devMemberTokenSource string
+
+func (t devMemberTokenSource) AgentToken(context.Context, string) (string, time.Time, error) {
+	return string(t), time.Now().Add(time.Hour), nil
 }
 
 func main() {
@@ -176,13 +190,16 @@ func main() {
 		agents.BrowserToolbox(browserTools),
 	}
 	if settings.AppsURL != "" {
-		if settings.AuthURL == "" || settings.ServiceKeyID == "" {
-			log.Printf("apps toolbox: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
-		}
-		tokens := memberauth.NewAuthClient(memberauth.AuthClientConfig{
+		var tokens memberauth.TokenSource = memberauth.NewAuthClient(memberauth.AuthClientConfig{
 			BaseURL: settings.AuthURL,
 			Signer:  serviceauth.Signer{Client: kms.NewFromConfig(awsConfig), KeyID: settings.ServiceKeyID, Service: "agents"},
 		})
+		if devToken := os.Getenv("AGENTS_PRIMARY_DEVUI_MEMBER_TOKEN"); devToken != "" {
+			log.Printf("member token: AGENTS_PRIMARY_DEVUI_MEMBER_TOKEN set, bypassing auth's agent-token exchange (local testing only)")
+			tokens = devMemberTokenSource(devToken)
+		} else if settings.AuthURL == "" || settings.ServiceKeyID == "" {
+			log.Printf("member token: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
+		}
 		appsToolbox, err := agents.AppsToolbox(agents.AppsConfig{
 			URL:    settings.AppsURL,
 			HTTP:   &http.Client{},
@@ -203,6 +220,25 @@ func main() {
 		log.Fatalf("root agent: %v", err)
 	}
 
+	artifacts := artifact.InMemoryService()
+	if settings.ArtifactBucket != "" {
+		artifactConfig := awsConfig
+		if settings.S3Endpoint != "" {
+			// The emulator takes any signature, so the client carries dummy
+			// credentials instead of asking for real ones, as the event
+			// client above does.
+			artifactConfig.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
+		}
+		stored, err := s3artifact.NewFromConfig(artifactConfig, settings.S3Endpoint, settings.ArtifactBucket)
+		if err != nil {
+			log.Fatalf("artifact store: %v", err)
+		}
+		artifacts = stored
+		log.Printf("artifacts stored in s3://%s", settings.ArtifactBucket)
+	} else {
+		log.Printf("artifacts are held in memory and go with this process; set AGENTS_PRIMARY_ARTIFACT_BUCKET to keep them")
+	}
+
 	args := os.Args[1:]
 	if len(args) == 0 {
 		args = defaultArgs
@@ -211,7 +247,7 @@ func main() {
 	if err := adk.Execute(ctx, &launcher.Config{
 		AgentLoader:     agent.NewSingleLoader(root),
 		SessionService:  sessionStore.Sessions(recorder),
-		ArtifactService: artifact.InMemoryService(),
+		ArtifactService: artifacts,
 	}, args); err != nil {
 		log.Fatalf("%v\n\n%s", err, adk.CommandLineSyntax())
 	}

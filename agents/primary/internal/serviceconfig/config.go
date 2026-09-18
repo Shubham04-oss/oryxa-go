@@ -65,6 +65,11 @@ type Config struct {
 	// toolbox (agents.AppsToolbox), which reaches every app a member has
 	// connected through Composio; when empty, Krude loads no apps toolbox.
 	AppsURL string
+	// ArtifactBucket is the S3 bucket artifacts are kept in. Without it they
+	// are held in memory and go with the process.
+	ArtifactBucket string
+	// S3Endpoint overrides AWS for artifacts, for the LocalStack emulator.
+	S3Endpoint string
 	// AuthURL is auth's own URL: agent tokens for a member-absent run are
 	// requested at {AuthURL}/v1/internal/agent-tokens.
 	AuthURL string
@@ -147,9 +152,22 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		GuardrailFailClosed:   guardrailFailClosed,
 		ModelPrices:           modelPrices,
 		AppsURL:               strings.TrimSpace(getenv("APPS_URL")),
+		ArtifactBucket:        strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
+		S3Endpoint:            artifactEndpoint(getenv),
 		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),
 		ServiceKeyID:          strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
 	}, nil
+}
+
+// artifactEndpoint is the S3 endpoint override, the service-specific one
+// ahead of the generic, exactly as files reads it.
+func artifactEndpoint(getenv func(string) string) string {
+	for _, name := range []string{"AWS_ENDPOINT_URL_S3", "AWS_ENDPOINT_URL"} {
+		if value := strings.TrimRight(strings.TrimSpace(getenv(name)), "/"); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func valueOrDefault(getenv func(string) string, name, fallback string) string {
