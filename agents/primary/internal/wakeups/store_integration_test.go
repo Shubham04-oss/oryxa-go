@@ -113,9 +113,16 @@ func TestABatchWaitsForItsSizeOrItsOldestEvent(t *testing.T) {
 		t.Fatalf("second claim = %+v, want only user_b's", batches)
 	}
 
-	// A lone event waits no longer than the wait.
+	// A lone event waits no longer than the wait. Its age decides that, and
+	// recorded_at is the insert's own clock, so the event is aged here
+	// rather than by hoping enough time passes between two statements.
 	record(t, store, organizationID, "user_c", "1")
-	lone, err := store.Claim(ctx, Rule{Size: 10, MaxWait: time.Millisecond, Largest: 20}, time.Minute, 100)
+	if _, err := store.database.Pool.Exec(ctx, `
+		UPDATE agents_primary.wakeup_events SET recorded_at = now() - interval '1 minute'
+		WHERE organization_id = $1 AND member_id = 'user_c'`, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	lone, err := store.Claim(ctx, Rule{Size: 10, MaxWait: time.Second, Largest: 20}, time.Minute, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

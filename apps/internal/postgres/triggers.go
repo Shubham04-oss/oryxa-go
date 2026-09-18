@@ -13,7 +13,8 @@ import (
 )
 
 const triggerColumns = `id, organization_id, member_id, connection_id, toolkit, slug, config,
-	composio_trigger_id, status, status_reason, created_at, updated_at`
+	composio_trigger_id, status, status_reason, kind, manual_setup, delivery_count, last_delivery_at,
+	created_at, updated_at`
 
 // CreateTrigger records a trigger, unless a live one already answers the
 // same Composio instance: Composio hands back the same trigger id for the
@@ -29,13 +30,13 @@ func (store *Store) CreateTrigger(ctx context.Context, trigger domain.Trigger) (
 		triggers, err := queryTriggers(ctx, tx, `
 			INSERT INTO apps_triggers (
 				id, organization_id, member_id, connection_id, toolkit, slug, config,
-				composio_trigger_id, status, status_reason, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+				composio_trigger_id, status, status_reason, kind, manual_setup, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
 			ON CONFLICT (composio_trigger_id) WHERE status <> 'removed' DO NOTHING
 			RETURNING `+triggerColumns,
 			trigger.ID, trigger.OrganizationID, trigger.MemberID, trigger.ConnectionID, trigger.Toolkit,
 			trigger.Slug, []byte(trigger.Config), trigger.ComposioTriggerID, string(trigger.Status),
-			trigger.StatusReason, trigger.CreatedAt)
+			trigger.StatusReason, trigger.Kind, trigger.ManualSetup, trigger.CreatedAt)
 		if err != nil {
 			return mapWriteError("create trigger", err)
 		}
@@ -167,13 +168,19 @@ func scanTrigger(rows pgx.Rows) (domain.Trigger, error) {
 	var trigger domain.Trigger
 	var config []byte
 	var status string
+	var lastDelivery *time.Time
 	if err := rows.Scan(&trigger.ID, &trigger.OrganizationID, &trigger.MemberID, &trigger.ConnectionID,
 		&trigger.Toolkit, &trigger.Slug, &config, &trigger.ComposioTriggerID, &status, &trigger.StatusReason,
+		&trigger.Kind, &trigger.ManualSetup, &trigger.DeliveryCount, &lastDelivery,
 		&trigger.CreatedAt, &trigger.UpdatedAt); err != nil {
 		return domain.Trigger{}, fmt.Errorf("scan trigger: %w", err)
 	}
 	trigger.Config = json.RawMessage(config)
 	trigger.Status = domain.TriggerStatus(status)
+	if lastDelivery != nil {
+		delivered := lastDelivery.UTC()
+		trigger.LastDeliveryAt = &delivered
+	}
 	trigger.CreatedAt = trigger.CreatedAt.UTC()
 	trigger.UpdatedAt = trigger.UpdatedAt.UTC()
 	return trigger, nil

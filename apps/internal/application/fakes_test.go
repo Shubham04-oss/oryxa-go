@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -338,6 +340,23 @@ func (store *fakeStore) RecordWebhook(_ context.Context, eventID, _ string, _ ti
 	return true, nil
 }
 
+func (store *fakeStore) RecordTriggerDelivery(_ context.Context, eventID, _, triggerID string, now time.Time, event domain.Event) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.handled[eventID] {
+		return false, nil
+	}
+	store.handled[eventID] = true
+	if trigger, live := store.triggers[triggerID]; live && trigger.Status != domain.TriggerRemoved {
+		delivered := now.UTC()
+		trigger.DeliveryCount++
+		trigger.LastDeliveryAt = &delivered
+		store.triggers[triggerID] = trigger
+	}
+	store.events = append(store.events, event)
+	return true, nil
+}
+
 func (store *fakeStore) EventHandled(_ context.Context, eventID string) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -394,6 +413,13 @@ type fakeComposio struct {
 	upsertID        string
 	deletedTriggers []string
 	deleteErr       error
+	// triggerTypes is the catalog a subscription is checked against, by
+	// toolkit. triggerPages splits one toolkit's answer over cursors, so the
+	// walk over them is exercised.
+	triggerTypes   map[string][]composio.TriggerType
+	triggerPages   int
+	triggerTypeErr error
+	triggerLists   int
 }
 
 func newFakeComposio() *fakeComposio {
@@ -402,6 +428,18 @@ func newFakeComposio() *fakeComposio {
 		tools: map[string]composio.Tool{}, result: composio.ExecuteResult{Successful: true, Data: json.RawMessage(`{"ok":true}`), LogID: "log_1"},
 		proxyResult: composio.ProxyResponse{Status: 200, Data: json.RawMessage(`{"items":[]}`)},
 		upsertID:    "ti_1",
+		triggerTypes: map[string][]composio.TriggerType{
+			// What a GitHub connection can be subscribed to in these tests: a
+			// pushed event needing a repository, and a polled one needing
+			// nothing.
+			"github": {{
+				Slug: "GITHUB_COMMIT_EVENT", Name: "Commit", Toolkit: "github", Kind: "webhook",
+				Config: json.RawMessage(`{"type":"object","properties":{"owner":{"type":"string"},"repo":{"type":"string"}},"required":["owner","repo"]}`),
+			}, {
+				Slug: "GITHUB_STAR_ADDED_EVENT", Name: "Star", Toolkit: "github", Kind: "poll",
+				Config: json.RawMessage(`{"type":"object","properties":{}}`),
+			}},
+		},
 	}
 }
 
@@ -530,8 +568,38 @@ func (fake *fakeComposio) Proxy(_ context.Context, request composio.ProxyRequest
 	return fake.proxyResult, nil
 }
 
-func (fake *fakeComposio) TriggerTypes(context.Context, composio.TriggerTypeQuery) (composio.Page[composio.TriggerType], error) {
-	return composio.Page[composio.TriggerType]{}, nil
+// TriggerTypes answers one toolkit's trigger definitions, in pages when
+// triggerPages asks for them, so the catalog's walk over cursors is
+// exercised rather than assumed.
+func (fake *fakeComposio) TriggerTypes(_ context.Context, query composio.TriggerTypeQuery) (composio.Page[composio.TriggerType], error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.triggerLists++
+	if fake.triggerTypeErr != nil {
+		return composio.Page[composio.TriggerType]{}, fake.triggerTypeErr
+	}
+	var items []composio.TriggerType
+	for _, toolkit := range query.Toolkits {
+		items = append(items, fake.triggerTypes[toolkit]...)
+	}
+	size := fake.triggerPages
+	if size <= 0 {
+		return composio.Page[composio.TriggerType]{Items: items}, nil
+	}
+	start := 0
+	if query.Cursor != "" {
+		parsed, err := strconv.Atoi(query.Cursor)
+		if err != nil {
+			return composio.Page[composio.TriggerType]{}, fmt.Errorf("bad cursor %q", query.Cursor)
+		}
+		start = parsed
+	}
+	end := min(start+size, len(items))
+	page := composio.Page[composio.TriggerType]{Items: items[start:end]}
+	if end < len(items) {
+		page.NextCursor = strconv.Itoa(end)
+	}
+	return page, nil
 }
 
 func (fake *fakeComposio) UpsertTrigger(_ context.Context, slug, accountID string, _ json.RawMessage) (string, error) {

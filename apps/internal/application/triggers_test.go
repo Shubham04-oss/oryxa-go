@@ -17,7 +17,7 @@ func TestCreateTriggerSubscribesTheCallersConnection(t *testing.T) {
 	connection := h.activeConnection("apc_1", "user-1", "github", "ca_1")
 
 	trigger, err := h.service.CreateTrigger(context.Background(), memberToken, "org_1", TriggerInput{
-		ConnectionID: connection.ID, Trigger: "github_commit_event", Config: json.RawMessage(`{"repo":"oryxa"}`),
+		ConnectionID: connection.ID, Trigger: "github_commit_event", Config: json.RawMessage(`{"owner":"oryxa-labs","repo":"oryxa"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -34,7 +34,7 @@ func TestCreateTriggerSubscribesTheCallersConnection(t *testing.T) {
 
 	// Asking again answers the subscription that exists rather than a second.
 	again, err := h.service.CreateTrigger(context.Background(), memberToken, "org_1", TriggerInput{
-		ConnectionID: connection.ID, Trigger: "GITHUB_COMMIT_EVENT", Config: json.RawMessage(`{"repo":"oryxa"}`),
+		ConnectionID: connection.ID, Trigger: "GITHUB_COMMIT_EVENT", Config: json.RawMessage(`{"owner":"oryxa-labs","repo":"oryxa"}`),
 	})
 	if err != nil {
 		t.Fatal(err)

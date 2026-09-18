@@ -61,6 +61,9 @@ type Service struct {
 
 	toolsMu sync.Mutex
 	tools   map[string]cachedTool
+	// triggers holds each app's trigger definitions for a while, so checking
+	// a subscription against the event it names costs no catalog walk.
+	triggers *triggerCatalog
 }
 
 func New(dependencies Dependencies, config Config) (*Service, error) {
@@ -81,6 +84,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	if service.now == nil {
 		service.now = time.Now
 	}
+	service.triggers = newTriggerCatalog(service.composio, func() time.Time { return service.now() })
 	for _, origin := range config.ReturnOrigins {
 		parsed, err := url.Parse(strings.TrimSpace(origin))
 		if err != nil || parsed.Scheme == "" || parsed.Host == "" {

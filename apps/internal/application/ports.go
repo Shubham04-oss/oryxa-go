@@ -84,6 +84,11 @@ type Store interface {
 	// events it caused, in one transaction. It answers false, writing
 	// nothing, if the delivery was already handled.
 	RecordWebhook(ctx context.Context, eventID, eventType string, now time.Time, events ...domain.Event) (bool, error)
+	// RecordTriggerDelivery is RecordWebhook for a delivery a trigger made,
+	// counting it against that trigger in the same transaction, so what a
+	// trigger says it delivered is exactly what was published for it. A
+	// redelivery writes nothing and answers false.
+	RecordTriggerDelivery(ctx context.Context, eventID, eventType, triggerID string, now time.Time, event domain.Event) (bool, error)
 	// EventHandled and MarkEventHandled deduplicate bus events.
 	EventHandled(ctx context.Context, eventID string) (bool, error)
 	MarkEventHandled(ctx context.Context, eventID, detailType string, now time.Time) error

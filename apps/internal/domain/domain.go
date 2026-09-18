@@ -137,8 +137,18 @@ type Trigger struct {
 	ComposioTriggerID string
 	Status            TriggerStatus
 	StatusReason      string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// Kind is what the catalog said when this was subscribed: webhook, which
+	// the app pushes, or poll, which arrives on Composio's own interval.
+	Kind string
+	// ManualSetup says the app itself still needs a webhook URL registered by
+	// hand, so this subscription delivers nothing until a member does that.
+	ManualSetup bool
+	// DeliveryCount and LastDeliveryAt are how a member, or an operator, can
+	// tell a live trigger from one that has never delivered anything.
+	DeliveryCount  int64
+	LastDeliveryAt *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // ActionStatus is how a tool run went.

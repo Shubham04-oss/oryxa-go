@@ -355,15 +355,31 @@ type triggerView struct {
 	Status       string          `json:"status"`
 	StatusReason string          `json:"status_reason,omitempty"`
 	MemberID     string          `json:"member_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// Kind is webhook when the app pushes its events and poll when Composio
+	// polls for them, which is the difference between an event arriving at
+	// once and arriving on an interval.
+	Kind string `json:"kind,omitempty"`
+	// ManualSetup says this subscription delivers nothing until the app's own
+	// webhook is registered by hand.
+	ManualSetup bool `json:"manual_setup,omitempty"`
+	// Setup is what is left to do, or to expect, in a member's terms. Empty
+	// for a trigger that needs nothing.
+	Setup string `json:"setup,omitempty"`
+	// DeliveryCount and LastDeliveryAt tell a live trigger from one that has
+	// never delivered anything.
+	DeliveryCount  int64      `json:"delivery_count"`
+	LastDeliveryAt *time.Time `json:"last_delivery_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 func viewTrigger(trigger domain.Trigger) triggerView {
 	return triggerView{
 		ID: trigger.ID, ConnectionID: trigger.ConnectionID, Toolkit: trigger.Toolkit, Trigger: trigger.Slug,
 		Config: trigger.Config, Status: string(trigger.Status), StatusReason: trigger.StatusReason,
-		MemberID: trigger.MemberID, CreatedAt: trigger.CreatedAt, UpdatedAt: trigger.UpdatedAt,
+		MemberID: trigger.MemberID, Kind: trigger.Kind, ManualSetup: trigger.ManualSetup,
+		Setup: application.TriggerSetup(trigger), DeliveryCount: trigger.DeliveryCount,
+		LastDeliveryAt: trigger.LastDeliveryAt, CreatedAt: trigger.CreatedAt, UpdatedAt: trigger.UpdatedAt,
 	}
 }
 

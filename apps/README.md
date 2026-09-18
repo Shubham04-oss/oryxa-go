@@ -154,6 +154,62 @@ delivers, such as `GITHUB_COMMIT_EVENT`. Composio watches the app — pushing
 webhooks where the app supports them, polling where it does not — and delivers
 to one project-wide subscription:
 
+### A subscription is checked against the trigger's own definition
+
+Composio accepts a subscription it will never deliver anything for, and there
+is no way to tell afterwards: the trigger sits there active and silent. So
+every subscription is checked against the catalog's own definition of that
+trigger first, and a member finds out here instead of by waiting.
+
+| Refused | Because |
+| --- | --- |
+| An event the connection's app does not deliver | A GitHub connection cannot be subscribed to `SLACK_RECEIVE_MESSAGE`; it is `not_found`, naming the app that was asked |
+| A config missing a field the trigger requires | `GITHUB_COMMIT_EVENT` without `owner` is accepted at Composio and delivers nothing |
+| A field whose type contradicts the trigger's schema | Likewise, and the message names the field |
+| A value outside a declared enum | Likewise |
+
+Only what is certainly wrong is refused. Composio publishes thousands of
+triggers whose schemas use keywords `domain.CheckTriggerConfig` does not
+model — `anyOf`, `$ref`, a nested `items` — and a valid subscription refused
+is worse than an invalid one passed on, since Composio checks it again anyway.
+Anything it cannot judge, it allows.
+
+Two things a member is told rather than refused, because the subscription is
+real either way and only the waiting differs:
+
+- **`manual_setup`** — the app needs the webhook Composio issues registered in
+  it by hand, as Slack's event subscriptions do. Nothing arrives until someone
+  does that. The catalog carries the app's own instructions.
+- **`kind: poll`** — the app pushes nothing, so Composio polls and an event
+  arrives on its interval rather than at once.
+
+Both are recorded on the trigger, and a trigger answers `setup` saying which
+applies in a member's own terms.
+
+### Whether a trigger has ever delivered
+
+A trigger carries `delivery_count` and `last_delivery_at`, written in the same
+transaction as the delivery's event, so what a trigger says it delivered and
+what reached the bus cannot disagree — and a redelivery counts once. This is
+the only way to tell a live subscription from a silent one, which matters most
+for the two cases above.
+
+### Checking the whole catalog
+
+The tests prove the pipeline against a trigger of every shape the catalog
+holds. They cannot prove the catalog holds only those shapes, so a command
+walks the real one and reports every trigger apps could not subscribe a member
+to, through the very code the service runs:
+
+```sh
+(set -a && . ./.env && go run ./apps/infra/composio/cmd/triggercheck)
+TRIGGERCHECK_TOOLKITS=github,slack,gmail go run ./apps/infra/composio/cmd/triggercheck
+```
+
+It only reads the catalog — nothing is subscribed and no account is touched —
+and exits non-zero if it finds a trigger that would be refused, so it can run
+as a check rather than only be read.
+
 ```text
 POST /v1/apps/webhooks/composio
 ```
@@ -188,8 +244,8 @@ mutation also needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 | `DELETE /v1/organizations/{org}/apps/connections/{id}` | Disconnect: Composio deletes the account and revokes its credential |
 | `POST /v1/organizations/{org}/apps/tools/{tool}/run` | Run a tool |
 | `POST /v1/organizations/{org}/apps/read` | Read the app's own API through the caller's connection — GETs, and the few read endpoints that are POSTs |
-| `POST /v1/organizations/{org}/apps/triggers` | Subscribe a connection to an app's event |
-| `GET /v1/organizations/{org}/apps/triggers` | The caller's triggers |
+| `POST /v1/organizations/{org}/apps/triggers` | Subscribe a connection to an app's event, checked against the trigger's own definition |
+| `GET /v1/organizations/{org}/apps/triggers` | The caller's triggers, with how each delivers and whether it ever has |
 | `DELETE /v1/organizations/{org}/apps/triggers/{id}` | Unsubscribe |
 
 Errors are `{"error":{"code","message"}}` with the codes
@@ -216,6 +272,10 @@ A trigger's payload is the app's own data, so it travels only as far as it must:
 over 128 KiB it is left out with `data_omitted`, and the outbox blanks it as
 soon as the event is published rather than keeping it for the retention window.
 
+`apps.trigger.received.v1` is consumed by agents, which records each event as
+a wake-up and hands a member's batch to Krude in their updates thread
+(`agents/primary/internal/inbound`, `agents/primary/internal/wakeups`).
+
 Consumed, from `oryxa.auth`: `auth.member.removed.v1` and
 `auth.organization.deleted.v1`. A connection is standing access to a member's
 own account, so it must not outlive their place in the organization — both take
@@ -230,7 +290,7 @@ Apps uses `/internal/postgreskit`. Other services never read these tables.
 | --- | --- |
 | `apps_connections` | A member's connection to an app: its Composio account, status and label, and the hash of its pending round trip |
 | `apps_auth_configs` | The auth config the project connects each app with, so two members agree on one |
-| `apps_triggers` | What a connection is subscribed to, and the Composio instance behind it |
+| `apps_triggers` | What a connection is subscribed to, the Composio instance behind it, how it delivers, and whether it ever has |
 | `apps_actions` | Tool runs, with the idempotency key a write can be replayed under |
 | `apps_handled_events` | Webhook and bus deliveries already acted on, since both deliver at least once |
 | `apps_outbox` | Events written in the same transaction as the change they describe |
@@ -372,6 +432,24 @@ APPS_TEST_DATABASE_URL=postgres://... go test ./apps/internal/postgres/
 They create a schema of their own and drop it afterwards, so they never touch
 anything else in that database.
 
+**The trigger pipeline is tested by shape, not by app.** Composio has
+thousands of triggers and no test can name them, but each is some combination
+of a few shapes, and the pipeline is blind to which app an event came from.
+So one trigger of every shape — pushed and polled, required config and none,
+an app needing its webhook registered by hand, payloads from a single field to
+deeply nested, an empty one, one that is an array, one carrying unicode and
+escapes — is driven through the whole path a real one takes:
+
+- `apps/internal/domain/triggerconfig_test.go` — what a config check accepts
+  and refuses, against the schema shapes the catalog publishes.
+- `apps/internal/application/triggers_conformance_test.go` — subscribing,
+  a signed delivery, the event it becomes with its payload intact, the
+  delivery counted, and a redelivery counted once.
+- `agents/primary/internal/inbound/triggers_conformance_test.go` — the other
+  half: across the bus, into the wake-up, into the message Krude reads.
+
+For the catalog itself, see [Checking the whole catalog](#checking-the-whole-catalog).
+
 ## What has and has not been run
 
 Against a real Composio project, through a cloudflared tunnel, on 2026-09-18:
@@ -387,10 +465,18 @@ Against a real Composio project, through a cloudflared tunnel, on 2026-09-18:
 | The refusals | `not_connected`, `not_read_only`, `invalid_request` for a short key, `not_found` for an unknown tool and an unknown app, `forbidden` for another organization and for an agent trying to connect |
 | Migrations | Installed through the binary into a schema of their own |
 
+On 2026-09-18, against a real PostgreSQL 16 rather than Composio:
+
+| Run for real | What it proved |
+| --- | --- |
+| The store's own tests, including the trigger-delivery migration | `002_trigger_delivery.sql` installs, twice over, and a delivery's count, its event and its deduplication are one transaction |
+| The wake-up store's tests | A batch claims, leases, releases and drops as the waker expects |
+
 Not yet run, and not to be described as working:
 
 - **Connecting an account end to end.** The hosted flow was opened but not completed, so no account has been activated, no tool has run against a real app, and no trigger has been subscribed. Every path past activation is proven only against a stand-in.
 - **A real delivery from a real trigger.** The verified deliveries above were signed with the real subscription secret but sent by hand. GitHub's triggers are all `poll`, so a real one arrives on Composio's polling interval rather than instantly.
+- **`triggercheck` against the real catalog.** It is tested against a stand-in catalog, including the shapes it is meant to catch, but has never read Composio's own. Running it is the first thing to do with a project API key, since it needs no connected account.
 - **The outbox reaching the bus.** EventBridge pointed at a dead local endpoint for this run, and no event was written, so the dispatcher never published.
 - **Auth.** A stand-in answered membership; Cognito was not wired in.
 
@@ -398,8 +484,6 @@ Not yet run, and not to be described as working:
 
 - **An OAuth app of Oryxa's own**, so apps that Composio holds no app for can
   be connected. Today they are refused as not connectable.
-- **Triggers to agent runs**: `apps.trigger.received.v1` is published but
-  nothing starts a run from it yet.
 - **Knowledge behind the read route**, so the project API key is in one
   service rather than two. It waits on a member-acting token for a scheduled
   pass.

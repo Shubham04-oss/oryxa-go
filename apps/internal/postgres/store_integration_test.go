@@ -614,6 +614,104 @@ func TestRecordWebhookDedupesByDeliveryID(t *testing.T) {
 	}
 }
 
+// TestRecordTriggerDeliveryCountsOnceAndOnlyWithItsEvent proves the one
+// thing a trigger's tally is for: it counts exactly the deliveries whose
+// events were published, so "this trigger has delivered n times" and the
+// bus cannot disagree - not on a redelivery, and not on a trigger that has
+// since been removed.
+func TestRecordTriggerDeliveryCountsOnceAndOnlyWithItsEvent(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	connection, _ := testConnection(t, store, "org_1", "member_1")
+	trigger := testTrigger(t, store, connection, "ct_"+randomHex(8))
+
+	if trigger.DeliveryCount != 0 || trigger.LastDeliveryAt != nil {
+		t.Fatalf("a new trigger has already delivered: %d, %v", trigger.DeliveryCount, trigger.LastDeliveryAt)
+	}
+
+	eventID := "whd_" + randomHex(8)
+	recorded, err := store.RecordTriggerDelivery(ctx, eventID, "composio.trigger.message", trigger.ID,
+		testClock, testEvent(t, "apps.trigger.received.v1"))
+	if err != nil || !recorded {
+		t.Fatalf("RecordTriggerDelivery() = %v, %v, want recorded", recorded, err)
+	}
+	delivered, err := store.Trigger(ctx, "org_1", trigger.ID)
+	if err != nil {
+		t.Fatalf("Trigger() error = %v", err)
+	}
+	if delivered.DeliveryCount != 1 || delivered.LastDeliveryAt == nil || !delivered.LastDeliveryAt.Equal(testClock) {
+		t.Fatalf("after one delivery: count = %d, last = %v", delivered.DeliveryCount, delivered.LastDeliveryAt)
+	}
+
+	// Composio redelivers what it is unsure reached us. Nothing is written
+	// twice: not the event, not the count.
+	recorded, err = store.RecordTriggerDelivery(ctx, eventID, "composio.trigger.message", trigger.ID,
+		testClock.Add(time.Minute), testEvent(t, "apps.trigger.received.v1"))
+	if err != nil || recorded {
+		t.Fatalf("RecordTriggerDelivery(redelivered) = %v, %v, want not recorded", recorded, err)
+	}
+	again, err := store.Trigger(ctx, "org_1", trigger.ID)
+	if err != nil {
+		t.Fatalf("Trigger() error = %v", err)
+	}
+	if again.DeliveryCount != 1 || !again.LastDeliveryAt.Equal(testClock) {
+		t.Fatalf("a redelivery counted again: count = %d, last = %v", again.DeliveryCount, again.LastDeliveryAt)
+	}
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox`).Scan(&outboxCount); err != nil || outboxCount != 1 {
+		t.Fatalf("outbox events = %d, error = %v, want still 1", outboxCount, err)
+	}
+
+	// A delivery about a trigger removed in the meantime is still recorded
+	// and still published - it describes something that happened - but
+	// counts against nothing.
+	if _, err := store.RemoveTrigger(ctx, trigger.ID, testClock.Add(time.Hour)); err != nil {
+		t.Fatalf("RemoveTrigger() error = %v", err)
+	}
+	recorded, err = store.RecordTriggerDelivery(ctx, "whd_"+randomHex(8), "composio.trigger.message", trigger.ID,
+		testClock.Add(2*time.Hour), testEvent(t, "apps.trigger.received.v1"))
+	if err != nil || !recorded {
+		t.Fatalf("RecordTriggerDelivery(removed trigger) = %v, %v, want recorded", recorded, err)
+	}
+	removed, err := store.Trigger(ctx, "org_1", trigger.ID)
+	if err != nil {
+		t.Fatalf("Trigger() error = %v", err)
+	}
+	if removed.DeliveryCount != 1 {
+		t.Fatalf("a removed trigger counted a delivery: %d", removed.DeliveryCount)
+	}
+}
+
+// TestCreateTriggerKeepsHowItDelivers proves the fields a member is told
+// about survive the round trip, since they are the whole reason the catalog
+// is read at subscribe time.
+func TestCreateTriggerKeepsHowItDelivers(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	connection, _ := testConnection(t, store, "org_1", "member_1")
+
+	created, ok, err := store.CreateTrigger(ctx, domain.Trigger{
+		ID: "trg_" + randomHex(8), OrganizationID: "org_1", MemberID: "member_1",
+		ConnectionID: connection.ID, Toolkit: connection.Toolkit, Slug: "SLACK_RECEIVE_MESSAGE",
+		Config: json.RawMessage(`{"channel":"C1"}`), ComposioTriggerID: "ct_" + randomHex(8),
+		Status: domain.TriggerActive, Kind: domain.TriggerKindWebhook, ManualSetup: true,
+		CreatedAt: testClock, UpdatedAt: testClock,
+	})
+	if err != nil || !ok {
+		t.Fatalf("CreateTrigger() = %+v, %v, %v, want created", created, ok, err)
+	}
+	if created.Kind != domain.TriggerKindWebhook || !created.ManualSetup {
+		t.Fatalf("kind = %q, manual setup = %v", created.Kind, created.ManualSetup)
+	}
+	read, err := store.Trigger(ctx, "org_1", created.ID)
+	if err != nil {
+		t.Fatalf("Trigger() error = %v", err)
+	}
+	if read.Kind != domain.TriggerKindWebhook || !read.ManualSetup {
+		t.Fatalf("read back: kind = %q, manual setup = %v", read.Kind, read.ManualSetup)
+	}
+}
+
 func TestFailPendingConnectionsBeforeFailsOnlyOldPendingOnes(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

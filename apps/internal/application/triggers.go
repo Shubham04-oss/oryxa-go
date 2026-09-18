@@ -37,6 +37,13 @@ type TriggerInput struct {
 // CreateTrigger subscribes one of the caller's own active connections to an
 // event its app delivers. Asking again for the same subscription answers the
 // one that exists.
+//
+// Every subscription is checked against the trigger's own definition in
+// Composio's catalog first, because the ways a subscription can be accepted
+// and then never deliver anything are all invisible afterwards: an event
+// belonging to another app, a config missing a field the trigger needs, an
+// app whose webhook a member still has to register by hand. A member finds
+// out here rather than by waiting for something that never arrives.
 func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Credentials, organizationID string, input TriggerInput) (domain.Trigger, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -72,6 +79,17 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 		return domain.Trigger{}, fmt.Errorf("the connection is %s: %w", connection.Status, domain.ErrNotConnected)
 	}
 
+	// The connection's own app decides which events it can deliver, so a
+	// trigger belonging to another app is not found rather than refused:
+	// this connection genuinely has no such event.
+	definition, err := s.triggers.Definition(ctx, connection.Toolkit, slug)
+	if err != nil {
+		return domain.Trigger{}, err
+	}
+	if err := domain.CheckTriggerConfig(definition.ConfigSchema, config); err != nil {
+		return domain.Trigger{}, err
+	}
+
 	composioID, err := s.composio.UpsertTrigger(ctx, slug, connection.ComposioAccountID, config)
 	if err != nil {
 		return domain.Trigger{}, composioError("subscribe to "+slug, err)
@@ -84,16 +102,33 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 	trigger, created, err := s.store.CreateTrigger(ctx, domain.Trigger{
 		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, ConnectionID: connection.ID,
 		Toolkit: connection.Toolkit, Slug: slug, Config: config, ComposioTriggerID: composioID,
-		Status: domain.TriggerActive, CreatedAt: now, UpdatedAt: now,
+		Status: domain.TriggerActive, Kind: definition.Kind, ManualSetup: definition.ManualSetup,
+		CreatedAt: now, UpdatedAt: now,
 	})
 	if err != nil {
 		return domain.Trigger{}, err
 	}
 	if created {
-		s.logger.InfoContext(ctx, "trigger subscribed",
-			"trigger_id", trigger.ID, "organization_id", organizationID, "trigger", slug)
+		s.logger.InfoContext(ctx, "trigger subscribed", "trigger_id", trigger.ID,
+			"organization_id", organizationID, "trigger", slug, "kind", definition.Kind,
+			"manual_setup", definition.ManualSetup)
 	}
 	return trigger, nil
+}
+
+// TriggerSetup is what a member still has to do, and what to expect, of a
+// subscription. It is advice, not a refusal: the subscription exists either
+// way. The catalog carries each trigger's own instructions for the doing of
+// it, at GET /v1/apps/catalog/{toolkit}/triggers.
+func TriggerSetup(trigger domain.Trigger) string {
+	switch {
+	case trigger.ManualSetup:
+		return "this trigger delivers nothing until the webhook Composio issues is registered in the app itself; the catalog carries the app's own instructions"
+	case trigger.Kind == domain.TriggerKindPoll:
+		return "this app does not push events, so Composio polls for them and one arrives on its polling interval rather than at once"
+	default:
+		return ""
+	}
 }
 
 // Triggers lists the caller's live triggers, optionally on one connection.
