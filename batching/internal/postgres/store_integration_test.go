@@ -569,3 +569,23 @@ func TestRemovingATriggerDropsOnlyWhatItReported(t *testing.T) {
 	sibling.TriggerID = "apt_kept"
 	recordTrigger(t, store, sibling)
 }
+
+// TestATriggerThatArrivesLateIsDueAtOnce: deadlines count from when apps
+// received a trigger, so one that reaches batching after its whole cadence
+// has passed goes in the next sweep instead of waiting another cadence.
+func TestATriggerThatArrivesLateIsDueAtOnce(t *testing.T) {
+	rule := domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+	late := testTrigger(organizationID, "user_1", "late", domain.LaneDigest)
+	late.ReceivedAt = time.Now().UTC().Add(-2 * time.Hour)
+	recordTrigger(t, store, late)
+	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ownBatches(claimed, organizationID)
+	if len(got) != 1 || got[0].FlushReason != "hard_deadline" || got[0].HardDueAt.After(time.Now()) {
+		t.Fatalf("claimed = %+v, want the late trigger due at its hard deadline", got)
+	}
+}

@@ -12,7 +12,8 @@ deterministic scheduler:
   bypass it through the `immediate` lane;
 - five events is the cold-start target, not a permanent threshold;
 - fast and slow time-decayed traffic estimates adapt the target per member;
-- every trigger receives persisted soft and hard deadlines on arrival;
+- every trigger receives persisted soft and hard deadlines on arrival,
+  counted from when apps received it;
 - the hard deadline is never extended by later traffic or policy changes;
 - cadence offsets are stable per member, avoiding one global hourly stampede;
 - one published batch carries at most twenty triggers;
@@ -40,7 +41,17 @@ fit in one cadence, and fixes the resulting target and deadlines onto each
 event. The oldest persisted promise wins for a group. A burst, a higher
 priority, or reaching the target can only release the group earlier. Silence
 requires no new webhook: the database worker claims the partial group when its
-deadline arrives. Policy decisions are stamped `adaptive-ewma.v2`.
+deadline arrives. Policy decisions are stamped `adaptive-ewma.v3`.
+
+Deadlines count from the trigger's `received_at`, when apps received it, not
+from when a replica records it: a trigger that took a while to arrive has
+waited that long already. A receipt time ahead of batching's clock counts as
+now, so a skewed clock cannot postpone a deadline. One more than 90 minutes
+old counts as 90 minutes old; that is past every cadence, so the trigger is
+due as soon as it is recorded, and its deadlines stay within reach of the
+cadence arithmetic whatever a broken clock said. The traffic estimate takes
+each event at that time too, and gives the same answer whatever order the bus
+delivers events in.
 The consumer, deadline sweeper, and outbox dispatcher run continuously for the
 full 24-hour day; member presence or working hours never pause delivery. The
 consumer handles each receive's messages (at most ten) side by side, so one

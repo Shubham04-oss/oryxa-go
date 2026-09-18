@@ -145,7 +145,8 @@ func screen(ctx context.Context, database querier, trigger domain.Trigger) (doma
 }
 
 func (store *Store) recordImmediate(ctx context.Context, tx pgx.Tx, trigger domain.Trigger) (domain.Admission, error) {
-	at := store.now().UTC()
+	// Due at once: its deadlines are its receipt, counted as a digest's are.
+	due := domain.CountFrom(trigger.ReceivedAt, store.now())
 	var data any
 	if len(trigger.Data) > 0 {
 		data = trigger.Data
@@ -161,7 +162,7 @@ func (store *Store) recordImmediate(ctx context.Context, tx pgx.Tx, trigger doma
 		trigger.ID, trigger.TriggerID, trigger.ConnectionID, trigger.OrganizationID, trigger.MemberID,
 		trigger.Toolkit, trigger.Trigger, data, trigger.DataOmitted, trigger.ReceivedAt,
 		trigger.Classification.Lane, trigger.Classification.Priority,
-		trigger.Classification.Classifier, trigger.Classification.Reason, at,
+		trigger.Classification.Classifier, trigger.Classification.Reason, due,
 		1+2*trigger.Classification.Priority)
 	if err != nil {
 		return 0, fmt.Errorf("record immediate trigger: %w", err)
@@ -200,7 +201,7 @@ func (store *Store) recordDigest(ctx context.Context, tx pgx.Tx, trigger domain.
 	if exists {
 		return domain.AlreadyRecorded, nil
 	}
-	profile, schedule, err := store.scheduler.Observe(profile, at,
+	profile, schedule, err := store.scheduler.Observe(profile, trigger.ReceivedAt, at,
 		trigger.OrganizationID+"/"+trigger.MemberID, trigger.Classification.Priority)
 	if err != nil {
 		return 0, fmt.Errorf("schedule digest trigger: %w", err)

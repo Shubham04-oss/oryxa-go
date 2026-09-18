@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	AdaptivePolicyVersion = "adaptive-ewma.v2"
+	AdaptivePolicyVersion = "adaptive-ewma.v3"
 	MaximumDeliveryDelay  = 90 * time.Minute
 	fastHalfLife          = 15 * time.Minute
 	slowHalfLife          = 90 * time.Minute
@@ -45,39 +45,67 @@ func (scheduler AdaptiveScheduler) Valid() bool {
 	return scheduler.rule.Size > 0 && scheduler.rule.MaxWait > 0 && scheduler.rule.MaxWait <= MaximumDeliveryDelay && scheduler.rule.Largest >= scheduler.rule.Size
 }
 
+// CountFrom is the time a trigger's deadlines count from: when apps received
+// it, since the promise is about how long what a member's app reported
+// waits, not about when a replica happened to record it. A receipt ahead of
+// the recording clock counts as the recording time, so a skewed clock cannot
+// postpone a deadline. A receipt more than MaximumDeliveryDelay before
+// recording counts as exactly that long before. Every cadence boundary after
+// it has passed either way, so the trigger is due as soon as it is recorded,
+// but its deadlines stay within a cadence of that rather than wherever a
+// broken clock or a long redelivery put them, and within the range the
+// cadence arithmetic can represent.
+func CountFrom(receivedAt, recordedAt time.Time) time.Time {
+	receivedAt, recordedAt = receivedAt.UTC(), recordedAt.UTC()
+	if receivedAt.After(recordedAt) {
+		return recordedAt
+	}
+	if earliest := recordedAt.Add(-MaximumDeliveryDelay); receivedAt.Before(earliest) {
+		return earliest
+	}
+	return receivedAt
+}
+
 // Observe advances the time-decayed profile and assigns this trigger its
-// schedule. The returned deadlines depend only on this observation and are
-// persisted with it; a later observation cannot postpone them.
-func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, at time.Time, key string, priority float64) (TrafficProfile, Schedule, error) {
+// schedule, counted from CountFrom(receivedAt, recordedAt). The returned
+// deadlines depend only on this observation and are persisted with it; a
+// later observation cannot postpone them.
+func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, receivedAt, recordedAt time.Time, key string, priority float64) (TrafficProfile, Schedule, error) {
 	if !scheduler.Valid() {
 		return profile, Schedule{}, errors.New("adaptive scheduler is not configured")
 	}
-	if at.IsZero() || key == "" || priority < 0 || priority > 1 {
-		return profile, Schedule{}, errors.New("adaptive observation needs a time, key, and priority between zero and one")
+	if receivedAt.IsZero() || recordedAt.IsZero() || key == "" || priority < 0 || priority > 1 {
+		return profile, Schedule{}, errors.New("adaptive observation needs its times, a key, and a priority between zero and one")
 	}
-	at = at.UTC()
+	at := CountFrom(receivedAt, recordedAt)
 	fastDecay := math.Ln2 / fastHalfLife.Hours()
 	slowDecay := math.Ln2 / slowHalfLife.Hours()
-	if profile.TotalEvents == 0 || profile.ObservedAt.IsZero() {
+	switch {
+	case profile.TotalEvents == 0 || profile.ObservedAt.IsZero():
 		// The configured cold target is an explicit prior of Size events per
 		// cadence. It prevents the first few samples from producing a wildly
 		// high or low target.
 		baseRate := float64(scheduler.rule.Size) / scheduler.rule.MaxWait.Hours()
-		profile.FastMass = baseRate / fastDecay
-		profile.SlowMass = baseRate / slowDecay
+		profile.FastMass = baseRate/fastDecay + 1
+		profile.SlowMass = baseRate/slowDecay + 1
+		profile.ObservedAt, profile.LastEventAt = at, at
+	case at.Before(profile.ObservedAt):
+		// The bus orders nothing, so an event can be older than one already
+		// observed. It adds its weight as of when it happened, and the
+		// profile's clock stays put: turning it back would decay the time in
+		// between twice. Either order gives the same estimate.
+		age := profile.ObservedAt.Sub(at).Hours()
+		profile.FastMass += math.Exp(-fastDecay * age)
+		profile.SlowMass += math.Exp(-slowDecay * age)
+	default:
+		elapsed := at.Sub(profile.ObservedAt).Hours()
+		profile.FastMass = profile.FastMass*math.Exp(-fastDecay*elapsed) + 1
+		profile.SlowMass = profile.SlowMass*math.Exp(-slowDecay*elapsed) + 1
 		profile.ObservedAt = at
-	} else {
-		elapsed := at.Sub(profile.ObservedAt)
-		if elapsed < 0 {
-			elapsed = 0
-		}
-		profile.FastMass *= math.Exp(-fastDecay * elapsed.Hours())
-		profile.SlowMass *= math.Exp(-slowDecay * elapsed.Hours())
 	}
-	profile.FastMass++
-	profile.SlowMass++
-	profile.ObservedAt = at
-	profile.LastEventAt = at
+	if at.After(profile.LastEventAt) {
+		profile.LastEventAt = at
+	}
 	profile.TotalEvents++
 
 	target := scheduler.rule.Size
