@@ -144,7 +144,8 @@ func TestConnectionTargetsChecksWhoIsAsking(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	theirs := h.activeConnection("apc_1", "user-2", "github", "ca_1")
-	expired := h.activeConnection("apc_2", "user-1", "github", "ca_2")
+	mine := h.activeConnection("apc_2", "user-1", "github", "ca_3")
+	expired := h.activeConnection("apc_3", "user-1", "github", "ca_2")
 	expired.Status = domain.ConnectionExpired
 	h.store.connections[expired.ID] = expired
 	h.answers(200, `[]`)
@@ -158,10 +159,22 @@ func TestConnectionTargetsChecksWhoIsAsking(t *testing.T) {
 	if _, err := h.service.ConnectionTargets(context.Background(), memberToken, "org_1", "apc_nope"); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("a connection that does not exist = %v, want not found", err)
 	}
-	// An org admin may see what a member's connection holds, the same as
-	// they may list it.
-	if _, err := h.service.ConnectionTargets(context.Background(), adminToken, "org_1", theirs.ID); err != nil {
-		t.Fatalf("an admin's = %v", err)
+	// A target is a live read through the connection's own credential: an
+	// org admin may see that a member's connection exists and remove it, but
+	// never act through it, so this is not found to them either.
+	if _, err := h.service.ConnectionTargets(context.Background(), adminToken, "org_1", theirs.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an admin's = %v, want not found", err)
+	}
+	// Nor may an agent acting for that admin: the caller's role does not
+	// change what an agent may reach, only whose member it acts as.
+	if _, err := h.service.ConnectionTargets(context.Background(), adminAgentToken, "org_1", theirs.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an admin's agent = %v, want not found", err)
+	}
+	// An agent acting for the member themself still works: knowledge calls
+	// this route with the member's own agent-grant token for the member's own
+	// connection.
+	if _, err := h.service.ConnectionTargets(context.Background(), agentToken, "org_1", mine.ID); err != nil {
+		t.Fatalf("an agent acting for the connection's own member = %v", err)
 	}
 }
 

@@ -56,7 +56,13 @@ func (s *Service) ConnectionTargets(ctx context.Context, credentials authclient.
 	if err != nil {
 		return nil, err
 	}
-	if connection.MemberID != caller.UserID && !caller.Role.IsOrgAdmin() {
+	// A target is read live through the connection's own credential, which is
+	// acting through it rather than merely seeing that it exists - the same
+	// line tools.go draws for running a tool: an org admin may see another
+	// member's connection, never act through it. So only the connection's own
+	// member may list what it holds, whether asking directly or through an
+	// agent acting for them.
+	if connection.MemberID != caller.UserID {
 		return nil, domain.ErrNotFound
 	}
 	switch connection.Status {

@@ -672,13 +672,15 @@ func (fake *fakeComposio) DeleteTrigger(_ context.Context, id string) error {
 	return fake.deleteErr
 }
 
-// Callers every test shares: a member, another member, an org admin and an
-// agent acting for the first member, all in org_1.
+// Callers every test shares: a member, another member, an org admin, an
+// agent acting for the first member, and an agent acting for the admin, all
+// in org_1.
 var (
-	memberToken = authclient.Credentials{Authorization: "Bearer member"}
-	otherToken  = authclient.Credentials{Authorization: "Bearer other"}
-	adminToken  = authclient.Credentials{Authorization: "Bearer admin"}
-	agentToken  = authclient.Credentials{Authorization: "Bearer agent"}
+	memberToken     = authclient.Credentials{Authorization: "Bearer member"}
+	otherToken      = authclient.Credentials{Authorization: "Bearer other"}
+	adminToken      = authclient.Credentials{Authorization: "Bearer admin"}
+	agentToken      = authclient.Credentials{Authorization: "Bearer agent"}
+	adminAgentToken = authclient.Credentials{Authorization: "Bearer admin-agent"}
 )
 
 type harness struct {
@@ -694,10 +696,11 @@ func newHarness(t *testing.T) harness {
 	service, err := New(Dependencies{
 		Store: store,
 		Directory: &fakeDirectory{members: map[string]domain.OrgMembership{
-			memberToken.Authorization: {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember},
-			otherToken.Authorization:  {OrganizationID: "org_1", UserID: "user-2", Role: domain.OrgRoleMember},
-			adminToken.Authorization:  {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin},
-			agentToken.Authorization:  {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember, Agent: true},
+			memberToken.Authorization:     {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember},
+			otherToken.Authorization:      {OrganizationID: "org_1", UserID: "user-2", Role: domain.OrgRoleMember},
+			adminToken.Authorization:      {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin},
+			agentToken.Authorization:      {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember, Agent: true},
+			adminAgentToken.Authorization: {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin, Agent: true},
 		}},
 		Composio: fake,
 		Clock:    func() time.Time { return testClock },
