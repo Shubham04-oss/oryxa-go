@@ -19,7 +19,7 @@ func TestCorporaAndSearchCallRagAsTheMember(t *testing.T) {
 			_, _ = writer.Write([]byte(`{"corpora":[{"id":"c1","name":"Mine","slug":"mine","scope":"member","document_count":3}]}`))
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/search"):
 			var body map[string]any
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body["query"] != "launch" || body["top_k"] != float64(5) || body["rerank"] != true {
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body["query"] != "launch" || body["top_k"] != float64(5) || body["rerank"] != true || body["min_score"] != 0.2 {
 				t.Errorf("search body = %v (%v)", body, err)
 			}
 			_, _ = writer.Write([]byte(`{"matches":[{"chunk":{"text":"Launch is on the 3rd.","heading_path":["Plan"]},"document":{"id":"d1","title":"Launch plan","source":{"kind":"external","ref":"https://notion.so/x"}},"score":0.8}],"reranked":false}`))
@@ -37,7 +37,7 @@ func TestCorporaAndSearchCallRagAsTheMember(t *testing.T) {
 	if len(corpora) != 1 || corpora[0].ID != "c1" || corpora[0].DocumentCount != 3 {
 		t.Fatalf("corpora = %+v", corpora)
 	}
-	matches, err := client.Search(context.Background(), "org 1", "c/1", "member-token", "launch", 5)
+	matches, err := client.Search(context.Background(), "org 1", "c/1", "member-token", "launch", 5, 0.2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestRagsRefusalsBecomeWordsAModelCanRepeat(t *testing.T) {
 			writer.WriteHeader(testCase.status)
 			_, _ = writer.Write([]byte(testCase.body))
 		}))
-		_, err := New(server.URL, nil).Search(context.Background(), "org_1", "c1", "t", "q", 5)
+		_, err := New(server.URL, nil).Search(context.Background(), "org_1", "c1", "t", "q", 5, 0)
 		server.Close()
 		if testCase.want != nil && !errors.Is(err, testCase.want) {
 			t.Errorf("status %d: error = %v, want %v", testCase.status, err, testCase.want)

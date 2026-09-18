@@ -20,11 +20,12 @@ import (
 // fakeRag stands in for rag: a few corpora, each answering a search with
 // passages scored by the corpus it came from.
 type fakeRag struct {
-	mu       sync.Mutex
-	corpora  []ragclient.Corpus
-	matches  map[string][]ragclient.Match
-	failures map[string]error
-	calls    []string
+	mu        sync.Mutex
+	corpora   []ragclient.Corpus
+	matches   map[string][]ragclient.Match
+	failures  map[string]error
+	calls     []string
+	minScores []float64
 }
 
 func (rag *fakeRag) record(call string) {
@@ -38,8 +39,11 @@ func (rag *fakeRag) Corpora(_ context.Context, organizationID, token string) ([]
 	return rag.corpora, nil
 }
 
-func (rag *fakeRag) Search(_ context.Context, organizationID, corpusID, token, query string, topK int) ([]ragclient.Match, error) {
+func (rag *fakeRag) Search(_ context.Context, organizationID, corpusID, token, query string, topK int, minScore float64) ([]ragclient.Match, error) {
 	rag.record(fmt.Sprintf("search %s %s %s %q %d", organizationID, corpusID, token, query, topK))
+	rag.mu.Lock()
+	rag.minScores = append(rag.minScores, minScore)
+	rag.mu.Unlock()
 	if err := rag.failures[corpusID]; err != nil {
 		return nil, err
 	}
@@ -141,6 +145,13 @@ func TestKnowledgeSearchesAsTheMemberAndMergesTheBestPassages(t *testing.T) {
 	for _, call := range searched {
 		if !strings.Contains(call, " org-1 ") || !strings.Contains(call, "member-own-token") || !strings.Contains(call, `"launch date"`) {
 			t.Fatalf("search = %q, want the member's own token, organization and query", call)
+		}
+	}
+	// Every search leaves out what a reranker judges irrelevant, so a
+	// question the documents cannot answer comes back with nothing.
+	for _, floor := range rag.minScores {
+		if floor != relevanceFloor {
+			t.Fatalf("searched with min_score %v, want the relevance floor %v", floor, relevanceFloor)
 		}
 	}
 	// The organization's passage scored higher, so it comes first; the

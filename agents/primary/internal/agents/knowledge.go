@@ -36,13 +36,21 @@ const (
 	// maxPassageRunes bounds each passage's text, so a search's result stays
 	// a small part of the model's context.
 	maxPassageRunes = 1500
+	// relevanceFloor is the reranker relevance below which a passage is left
+	// out. Measured over this repository's own documentation, questions the
+	// documents cannot answer topped out between 0.01 and 0.23 and answerable
+	// ones had a median of 0.68: at 0.2, nine in ten unanswerable questions
+	// came back with nothing, so Krude says the documents do not cover it
+	// rather than answering from a near miss, one answerable question in sixty
+	// did too, and Krude read a quarter of the text.
+	relevanceFloor = 0.2
 )
 
 // Knowledge is what the knowledge toolbox asks rag. ragclient.Client
 // implements it.
 type Knowledge interface {
 	Corpora(ctx context.Context, organizationID, token string) ([]ragclient.Corpus, error)
-	Search(ctx context.Context, organizationID, corpusID, token, query string, topK int) ([]ragclient.Match, error)
+	Search(ctx context.Context, organizationID, corpusID, token, query string, topK int, minScore float64) ([]ragclient.Match, error)
 }
 
 // KnowledgeConfig configures KnowledgeToolbox.
@@ -194,7 +202,7 @@ func (knowledge knowledgeTools) search(ctx agent.Context, args searchArgs) (sear
 	var group sync.WaitGroup
 	for index, collectionID := range collectionIDs {
 		group.Go(func() {
-			matches, err := knowledge.rag.Search(ctx, member.OrganizationID, collectionID, token, query, limit)
+			matches, err := knowledge.rag.Search(ctx, member.OrganizationID, collectionID, token, query, limit, relevanceFloor)
 			results[index] = found{collectionID: collectionID, matches: matches, err: err}
 		})
 	}
