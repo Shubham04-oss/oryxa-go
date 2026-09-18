@@ -177,6 +177,12 @@ already names for a document's removal, so it is retracted with
 rather than a new `"connection_removed"` this package cannot add to a contract
 it does not own.
 
+Rag is the one subscriber today: it indexes what `knowledge.document.published.v1`
+publishes into a corpus per owner and retracts what `knowledge.document.removed.v1`
+says is gone, entirely on its own side of the event — this package knows
+nothing about corpora, embeddings or chunks. See
+[rag/README.md, Knowledge documents](../rag/README.md#knowledge-documents).
+
 ## Database
 
 Knowledge uses `/internal/postgreskit`. Other services never read these tables.
