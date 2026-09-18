@@ -1,0 +1,411 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Trash2 } from "lucide-react";
+import { type ReactElement, useId, useState } from "react";
+import { AppAlert } from "@/components/app/app-alert";
+import { ConfirmDialog } from "@/components/app/confirm-dialog";
+import {
+	SettingsListEmpty,
+	SettingsListSkeleton,
+	StatusBadge,
+} from "@/components/app/organization-settings";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+	Dialog,
+	DialogContent,
+	DialogDescription,
+	DialogHeader,
+	DialogTitle,
+	DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+	appsErrorMessage,
+	catalogTriggerTypesQueryOptions,
+	createTrigger,
+	removeTrigger,
+	type Trigger,
+	type TriggerConfigField,
+	type TriggerType,
+	triggerConfigCapability,
+	triggersQueryOptions,
+} from "@/lib/apps/client";
+
+interface ConnectionTriggersProps {
+	connectionId: string;
+	organizationId: string;
+	toolkit: string;
+}
+
+/** "Wake Krude when…": a connection's event subscriptions, and adding more. */
+export function ConnectionTriggers({
+	connectionId,
+	organizationId,
+	toolkit,
+}: ConnectionTriggersProps) {
+	const queryClient = useQueryClient();
+	const triggers = useQuery(triggersQueryOptions(organizationId, connectionId));
+	const types = useQuery(catalogTriggerTypesQueryOptions(toolkit));
+	const typeBySlug = new Map(
+		(types.data?.triggers ?? []).map((type) => [type.trigger, type]),
+	);
+	const subscribed = new Set(
+		(triggers.data ?? []).map((trigger) => trigger.trigger),
+	);
+	const available = (types.data?.triggers ?? []).filter(
+		(type) => !subscribed.has(type.trigger),
+	);
+	const refresh = () =>
+		queryClient.invalidateQueries({
+			queryKey: triggersQueryOptions(organizationId, connectionId).queryKey,
+		});
+
+	return (
+		<div className="apps-panel">
+			<div className="apps-panel-header">
+				<p className="apps-panel-note">
+					Krude reads these events and reports them in your “Updates from your
+					apps” thread.
+				</p>
+				<AddTriggerDialog
+					available={available}
+					connectionId={connectionId}
+					loading={types.isPending}
+					onAdded={refresh}
+					organizationId={organizationId}
+					trigger={
+						<Button
+							disabled={types.isPending || types.isError}
+							size="sm"
+							type="button"
+							variant="ghost"
+						>
+							Add
+						</Button>
+					}
+				/>
+			</div>
+			{triggers.isPending ? <SettingsListSkeleton /> : null}
+			{triggers.isError ? (
+				<AppAlert>
+					{appsErrorMessage(triggers.error, "Could not load triggers")}
+				</AppAlert>
+			) : null}
+			{types.isError ? (
+				<AppAlert>
+					{appsErrorMessage(types.error, "Could not load this app's events")}
+				</AppAlert>
+			) : null}
+			{triggers.data?.length === 0 ? (
+				<SettingsListEmpty>Not watching anything yet.</SettingsListEmpty>
+			) : null}
+			{triggers.data && triggers.data.length > 0 ? (
+				<ul className="settings-list">
+					{triggers.data.map((trigger) => (
+						<TriggerRow
+							key={trigger.id}
+							onRemoved={refresh}
+							organizationId={organizationId}
+							trigger={trigger}
+							type={typeBySlug.get(trigger.trigger)}
+						/>
+					))}
+				</ul>
+			) : null}
+		</div>
+	);
+}
+
+interface TriggerRowProps {
+	onRemoved: () => void;
+	organizationId: string;
+	trigger: Trigger;
+	type: TriggerType | undefined;
+}
+
+function TriggerRow({
+	onRemoved,
+	organizationId,
+	trigger,
+	type,
+}: TriggerRowProps) {
+	const name = type?.name ?? trigger.trigger;
+
+	return (
+		<li className="settings-list-row">
+			<div className="settings-list-copy">
+				<strong>{name}</strong>
+				{type?.description ? <small>{type.description}</small> : null}
+			</div>
+			{trigger.status !== "active" ? (
+				<StatusBadge
+					tone={trigger.status === "disabled" ? "warning" : "neutral"}
+				>
+					{trigger.status === "disabled" ? "Disabled" : "Removed"}
+				</StatusBadge>
+			) : null}
+			<ConfirmDialog
+				confirmLabel="Stop"
+				description={`Krude stops watching ${name} on this connection.`}
+				onConfirm={async () => {
+					await removeTrigger(organizationId, trigger.id);
+					onRemoved();
+				}}
+				title="Stop watching this event?"
+				trigger={
+					<Button
+						aria-label={`Stop watching ${name}`}
+						size="icon-sm"
+						type="button"
+						variant="ghost"
+					>
+						<Trash2 />
+					</Button>
+				}
+			/>
+		</li>
+	);
+}
+
+interface AddTriggerDialogProps {
+	available: TriggerType[];
+	connectionId: string;
+	loading: boolean;
+	onAdded: () => void;
+	organizationId: string;
+	trigger: ReactElement;
+}
+
+function AddTriggerDialog({
+	available,
+	connectionId,
+	loading,
+	onAdded,
+	organizationId,
+	trigger,
+}: AddTriggerDialogProps) {
+	const [open, setOpen] = useState(false);
+	const [query, setQuery] = useState("");
+	const filtered = available.filter((type) =>
+		`${type.name} ${type.trigger}`
+			.toLowerCase()
+			.includes(query.trim().toLowerCase()),
+	);
+
+	return (
+		<Dialog onOpenChange={setOpen} open={open}>
+			<DialogTrigger asChild>{trigger}</DialogTrigger>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>Wake Krude on an event</DialogTitle>
+					<DialogDescription>
+						Choose what this connection should watch for.
+					</DialogDescription>
+				</DialogHeader>
+				{available.length > 5 ? (
+					<Input
+						aria-label="Search events"
+						onChange={(event) => setQuery(event.target.value)}
+						placeholder="Search events…"
+						value={query}
+					/>
+				) : null}
+				{loading ? <p className="dialog-note">Loading…</p> : null}
+				{!loading && filtered.length === 0 ? (
+					<p className="dialog-note">
+						{available.length === 0
+							? "Every event is already watched."
+							: "No events match."}
+					</p>
+				) : null}
+				{filtered.length > 0 ? (
+					<ul className="apps-catalog-list">
+						{filtered.map((type) => (
+							<AddTriggerRow
+								connectionId={connectionId}
+								key={type.trigger}
+								onAdded={onAdded}
+								organizationId={organizationId}
+								type={type}
+							/>
+						))}
+					</ul>
+				) : null}
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+interface AddTriggerRowProps {
+	connectionId: string;
+	onAdded: () => void;
+	organizationId: string;
+	type: TriggerType;
+}
+
+function AddTriggerRow({
+	connectionId,
+	onAdded,
+	organizationId,
+	type,
+}: AddTriggerRowProps) {
+	const capability = triggerConfigCapability(type.config_schema);
+	const [expanded, setExpanded] = useState(false);
+	const [values, setValues] = useState<Record<string, boolean | string>>({});
+	const add = useMutation({
+		mutationFn: (config: Record<string, unknown>) =>
+			createTrigger(organizationId, {
+				config,
+				connectionId,
+				trigger: type.trigger,
+			}),
+		onSuccess: () => {
+			onAdded();
+			setExpanded(false);
+			setValues({});
+		},
+	});
+
+	if (capability.kind === "unsupported") {
+		return (
+			<li
+				className="settings-list-row"
+				title="This trigger needs setup this page cannot collect yet."
+			>
+				<div className="settings-list-copy">
+					<strong>{type.name}</strong>
+					<small>{type.description}</small>
+				</div>
+				<Button disabled size="sm" type="button" variant="ghost">
+					Needs setup
+				</Button>
+			</li>
+		);
+	}
+
+	function submit() {
+		if (capability.kind !== "form") {
+			add.mutate({});
+			return;
+		}
+		const config: Record<string, unknown> = {};
+		for (const field of capability.fields) {
+			const raw = values[field.name];
+			if (field.type === "boolean") {
+				config[field.name] = raw === true;
+				continue;
+			}
+			if (typeof raw !== "string" || raw.trim() === "") {
+				continue;
+			}
+			config[field.name] = field.type === "number" ? Number(raw) : raw;
+		}
+		add.mutate(config);
+	}
+
+	return (
+		<li className="apps-trigger-add-row">
+			<div className="settings-list-row">
+				<div className="settings-list-copy">
+					<strong>{type.name}</strong>
+					<small>{type.description}</small>
+					{add.isError ? (
+						<small className="settings-list-error">
+							{appsErrorMessage(add.error, "Could not add this trigger")}
+						</small>
+					) : null}
+				</div>
+				{capability.kind === "none" ? (
+					<Button
+						disabled={add.isPending}
+						onClick={submit}
+						size="sm"
+						type="button"
+						variant="ghost"
+					>
+						{add.isPending ? "Adding…" : "Add"}
+					</Button>
+				) : (
+					<Button
+						onClick={() => setExpanded((current) => !current)}
+						size="sm"
+						type="button"
+						variant="ghost"
+					>
+						{expanded ? "Cancel" : "Add"}
+					</Button>
+				)}
+			</div>
+			{capability.kind === "form" && expanded ? (
+				<form
+					className="apps-trigger-form"
+					onSubmit={(event) => {
+						event.preventDefault();
+						submit();
+					}}
+				>
+					{capability.fields.map((field) => (
+						<TriggerConfigInput
+							field={field}
+							key={field.name}
+							onChange={(value) =>
+								setValues((current) => ({ ...current, [field.name]: value }))
+							}
+							value={values[field.name]}
+						/>
+					))}
+					<Button disabled={add.isPending} size="sm" type="submit">
+						{add.isPending ? "Adding…" : "Subscribe"}
+					</Button>
+				</form>
+			) : null}
+		</li>
+	);
+}
+
+interface TriggerConfigInputProps {
+	field: TriggerConfigField;
+	onChange: (value: boolean | string) => void;
+	value: boolean | string | undefined;
+}
+
+function TriggerConfigInput({
+	field,
+	onChange,
+	value,
+}: TriggerConfigInputProps) {
+	const id = useId();
+
+	if (field.type === "boolean") {
+		return (
+			<label className="apps-trigger-field-checkbox" htmlFor={id}>
+				<Checkbox
+					checked={typeof value === "boolean" ? value : Boolean(field.default)}
+					id={id}
+					onCheckedChange={(checked) => onChange(checked === true)}
+				/>
+				{field.title}
+			</label>
+		);
+	}
+
+	return (
+		<div className="dialog-field">
+			<Label htmlFor={id}>
+				{field.title}
+				{field.required ? " *" : ""}
+			</Label>
+			<Input
+				id={id}
+				onChange={(event) => onChange(event.target.value)}
+				required={field.required}
+				type={field.type === "number" ? "number" : "text"}
+				value={typeof value === "string" ? value : ""}
+			/>
+			{field.description ? (
+				<p className="dialog-field-hint">{field.description}</p>
+			) : null}
+		</div>
+	);
+}
