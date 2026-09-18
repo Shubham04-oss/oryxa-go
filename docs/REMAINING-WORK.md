@@ -97,30 +97,40 @@ index — are the one thing knowledge cannot read. That waits on §3.2.
 Nothing has run a pass against a real app, either: it needs a connected
 account, which needs a member at a browser.
 
-### Knowledge does not feed rag
+### Knowledge feeds rag
 
-Knowledge publishes `knowledge.document.published.v1` and
-`knowledge.document.removed.v1` for every document it extracts, and nothing
-consumes them. Rag's consumer (`rag/internal/events/consumer.go`) takes only
-auth, teams and files lifecycle events, and nothing outside rag calls its
-document API. Confirmed by reading both consumers and searching for callers.
+Built: rag consumes `knowledge.document.published.v1` and
+`knowledge.document.removed.v1` (`rag/internal/events/consumer.go`, handlers
+in `rag/internal/application/knowledge_events.go`) and indexes what they
+carry through its ordinary document path — `Store.UpsertDocument`, then the
+same ingest worker any other document goes through. One corpus per owner,
+matching a document's own scope (member, team or organization), created the
+first time it is needed at rag's own defaults; a `rag_knowledge_documents`
+table maps knowledge's document id to the rag document it became, so a later
+publish updates it in place — or moves it, if its reference changed — and a
+removal finds it. Detail in
+[rag/README.md, Knowledge documents](../rag/README.md#knowledge-documents).
 
-Rag's document model already has a source kind for extracted text
-(`external`: the text and the URI it came from), so what is missing is the
-bridge, not a new kind of document. Building it has to settle:
+Verified: unit tests for every branch (a new document, an unchanged hash, a
+changed hash, a changed reference, an out-of-order event, an omitted body, a
+refused scope, two different owners, all three scopes) and integration tests
+for the mapping table against a real PostgreSQL, including its cascade when a
+corpus or a document goes away some other way. Not run end to end against a
+live knowledge pass publishing onto a real queue rag consumes from.
 
-- **Which corpus** a source's documents land in, who creates it, and with
-  which embedding model — a corpus pins its model for good.
-- **Scope.** Every knowledge document carries its scope, team and member. A
-  member-scoped source's documents must not land in a corpus the whole
-  organization can search
-  ([knowledge/TODO.md §7](../knowledge/TODO.md#7-for-whoever-is-building-the-retrieval-side)).
-- **Omitted bodies.** A body over 128 KiB is not carried in the event, and
-  the endpoint that serves it answers only the source's creator or an org
-  admin — not a service acting on its own.
-- **Removal.** `knowledge.document.removed.v1` has to remove the rag document
-  it caused, so the mapping between the two has to be kept.
-- **Where extraction lives**, which is a decision (§3.3).
+What it does not close:
+
+- **Omitted bodies stay unindexed.** A document over knowledge's 128 KiB
+  event budget cannot be indexed at all, because rag has no way to fetch it
+  back — knowledge's body endpoint answers only the source's creator or an
+  org admin, never a service. The fix is an internal, service-authenticated
+  body route in knowledge; not built.
+- **Only member-scoped documents flow today.** Knowledge only ever sets a
+  connection-based source (`github`, `notion`, `slack`) to member scope, and
+  its one organization-scoped source, `files`, is still unmounted (see
+  above). So this bridge's team and organization branches are proven by unit
+  tests against a synthetic event, not by anything real knowledge code has
+  ever emitted, and team scope is not producible by any source at all yet.
 
 ### Krude searches corpora, but not a team's by default
 
@@ -216,14 +226,18 @@ agreement, or a separate grant the member gives and can withdraw.
 
 From [rag/README.md, Open decisions](../rag/README.md#open-decisions):
 
-- **Where extraction lives.** Rag takes extracted text and refuses anything
-  else, so that there is one answer about what a document says; knowledge
-  extracts. Settling this comes before building the bridge in §1.
 - **Whether reranking defaults on.** It is the largest quality gain per query
   and the largest latency cost, and opt-in today.
 - **Whether answering has a default model.** There is none, so a deployment
   that forgets to set one retrieves but cannot answer. A guessed default would
   fail at the first question instead of at startup.
+
+**Where extraction lives** was one of these and is now settled as a default,
+not a redesign: rag takes extracted text and refuses anything else, so that
+there is one answer about what a document says, and knowledge is the one
+extractor feeding it — which is what §1's bridge is built on. It can still be
+revisited — see
+[rag/README.md, Knowledge documents](../rag/README.md#knowledge-documents).
 
 ### 3.4 Knowledge's content
 

@@ -47,6 +47,12 @@ type Store interface {
 
 	UpsertOrganization(ctx context.Context, organizationID, name string, at time.Time) error
 	RecordEvents(ctx context.Context, events []domain.Event) error
+
+	// KnowledgeDocumentMapping and its writers back the bridge from knowledge:
+	// see knowledge_events.go.
+	KnowledgeDocumentMapping(ctx context.Context, organizationID, knowledgeDocumentID string) (domain.KnowledgeDocumentMapping, error)
+	UpsertKnowledgeDocumentMapping(ctx context.Context, mapping domain.KnowledgeDocumentMapping) error
+	DeleteKnowledgeDocumentMapping(ctx context.Context, organizationID, knowledgeDocumentID string) error
 }
 
 // Directory is auth: who the caller is in an organization.

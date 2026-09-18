@@ -196,7 +196,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		queue := sqs.NewFromConfig(platform.AWS)
 		workers = append(workers, func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) })
 	} else {
-		logger.Warn("RAG_EVENTS_QUEUE_URL is not set: rag will not hear about deleted organizations, members leaving them, deleted teams or deleted files")
+		logger.Warn("RAG_EVENTS_QUEUE_URL is not set: rag will not hear about deleted organizations, members leaving them, deleted teams, deleted files, or documents knowledge publishes or removes")
 	}
 
 	server := httpserver.New(service, httpserver.Config{

@@ -19,6 +19,7 @@ app ── rag HTTP ──▶ rag ── embed ──▶ Bedrock / Vertex AI
 auth ── organization deleted, member removed ──▶ rag-events queue
 teams ── team deleted ──▶ rag-events queue
 files ── object deleted ──▶ rag-events queue
+knowledge ── document published, document removed ──▶ rag-events queue
 ```
 
 ## What a corpus is
@@ -281,16 +282,101 @@ chunk text, embeddings or credentials.
 
 Rag consumes `auth.organization.created.v1`, `auth.organization.updated.v1`,
 `auth.organization.deleted.v1`, `auth.member.removed.v1`,
-`teams.team.deleted.v1` and `files.object.deleted.v1`.
+`teams.team.deleted.v1`, `files.object.deleted.v1`, and knowledge's
+`knowledge.document.published.v1` and `knowledge.document.removed.v1` (see
+[Knowledge documents](#knowledge-documents)).
 
-Each of those is something rag indexed going away, and an index outliving what
-it was built from is the failure that matters most here: it goes on answering
-questions from text nobody is entitled to see. A deleted organization takes
-every corpus with it; a member leaving takes their **member-scoped** corpora,
-while team and organization corpora they created stay, exactly as their files
-do; a deleted team takes its corpora; a deleted file takes the documents
-indexed from it. Vectors are dropped before the rows that point at them, so a
-half-finished wipe never leaves an orphan nobody can find.
+Every one but knowledge's is something rag indexed going away, and an index
+outliving what it was built from is the failure that matters most here: it
+goes on answering questions from text nobody is entitled to see. A deleted
+organization takes every corpus with it; a member leaving takes their
+**member-scoped** corpora, while team and organization corpora they created
+stay, exactly as their files do; a deleted team takes its corpora; a deleted
+file takes the documents indexed from it. Vectors are dropped before the rows
+that point at them, so a half-finished wipe never leaves an orphan nobody can
+find.
+
+## Knowledge documents
+
+Knowledge extracts documents from an organization's connected apps and
+publishes `knowledge.document.published.v1` and
+`knowledge.document.removed.v1` (`contracts/events/knowledge/v1`) for every
+one, whatever it came from. Rag consumes both, on the same `rag-events` queue
+every other lifecycle event arrives on, and indexes what they carry through
+the same path any other document goes through —
+`Store.UpsertDocument`, then the ordinary ingest worker — so nothing about
+chunking, embedding or removal needs to know a document came from knowledge
+rather than a member's own upload.
+
+This is where "where extraction lives" was settled: knowledge extracts, rag
+indexes the text it publishes, and rag builds no extractor of its own. That
+was an open decision; it is now a default, not a redesign, and can still be
+revisited — see docs/REMAINING-WORK.md.
+
+**Which corpus.** One corpus per owner, mirroring how a knowledge document's
+scope, team and member work everywhere else: a member-scoped document lands
+in that member's own corpus, a team-scoped one in that team's, an
+organization-scoped one in the organization's — never mixed. Rag creates the
+corpus the first time it is needed, at rag's own default embedding model,
+backend and chunking — the same defaults a member's own corpus gets when they
+name none — named "Knowledge from connected apps" and marked
+`origin: knowledge` in its metadata so it reads as what it is. The slug is
+deterministic — `knowledge-member-<member_id>`, `knowledge-team-<team_id>`,
+`knowledge-organization` — with any character a rag slug refuses turned into a
+hyphen (auth and teams mint ids that can hold underscores and uppercase
+letters, which a slug does not accept), so the same owner always resolves to
+the same slug. Two replicas racing to create it both land on rag's own
+unique-slug conflict rather than a race of their own: the loser reads back
+what the winner just created. A corpus a member or admin already created by
+hand at that exact slug is adopted rather than treated as a collision — the
+slug is deliberately the only thing that decides this.
+
+A team- or organization-scoped document names no member — knowledge ties a
+member id to a member-scoped document alone — so the corpus this bridge
+creates for one records `created_by` as `svc_knowledge` rather than a real
+member id. Rag's schema allows that (`created_by` only has to be non-empty
+text); `svc_knowledge` is shaped so it can never equal a real one, so it
+cannot pick up the "creator may delete their own corpus" right that column
+otherwise carries. A team manager or an org admin can still remove it.
+
+**Which document.** Source kind `external`. `ref` is the event's URL when it
+is a valid, absolute URI of at most 2048 characters, so a citation can point
+back at it; otherwise `knowledge:<document_id>`. Title comes from the event,
+falling back to its external id; content type comes from the event's MIME
+when rag accepts it, otherwise `text/plain`. Metadata carries
+`knowledge_document_id`, `knowledge_source_id` and `provider`.
+
+**Idempotency and removal.** `rag_knowledge_documents` maps a knowledge
+document id to the organization, corpus and rag document it became, with the
+content hash and extraction time of the version it reflects. A published
+event whose hash matches the mapped one does nothing. A new hash replaces the
+text in place, on the same rag document, unless the event's reference changed
+— its URL moved — in which case the old document is deleted and a new one
+created under the new reference, since the unique key a document is matched
+on is its corpus and its ref together. An event older, by its own extraction
+time, than what is already mapped is ignored rather than regressing a newer
+version: delivery is at least once and not necessarily in order.
+`knowledge.document.removed.v1` deletes the mapped rag document through rag's
+normal delete path and the mapping row with it. A corpus left with no
+documents after that is left alone — an empty corpus is harmless and will be
+reused. A corpus or a document going away some other way — an organization, a
+team or a member wiped — takes its mapping row with it by cascade, so nothing
+here has to notice separately.
+
+**Omitted bodies.** A published event whose body was too large to carry
+(`body_omitted: true`, over knowledge's 128 KiB event budget) is not indexed:
+rag has no way to fetch it back, since knowledge's body endpoint answers only
+the source's creator or an org admin, never a service. A version already
+indexed from an earlier, smaller-bodied event is removed rather than left
+answering from text that no longer matches the source. The real fix — an
+internal, service-authenticated body route in knowledge — is not built; see
+docs/REMAINING-WORK.md.
+
+**Scope safety.** A document missing the id its scope needs — no member id at
+member scope, no team id at team scope — is refused and logged rather than
+guessed at: the one mistake this bridge must never make is a member-scoped
+document landing somewhere the whole organization, or the wrong team, can
+read it.
 
 ## Provision
 
@@ -435,13 +521,10 @@ Things that work as written, but are narrower than they will need to be.
 
 ## Open decisions
 
-These need a person, not a commit.
+These need a person, not a commit. Where extraction lives was one of these —
+see [Knowledge documents](#knowledge-documents) for where it settled as a
+default rather than a redesign.
 
-- **Where extraction lives.** Rag takes extracted text and refuses anything
-  else, on the reasoning that doing it in two places would mean two answers
-  about what a document says. If extraction should instead live here, that
-  changes the service's shape and the accepted content types, and is worth
-  settling before more is built on the current boundary.
 - **Whether reranking should default on.** It is the largest quality gain per
   query and the largest latency cost. It is opt-in today because that trade
   belongs to whoever is watching the latency.
@@ -458,4 +541,5 @@ These need a person, not a commit.
   ([agents/primary/README.md](../agents/primary/README.md#knowledge-toolbox)).
 - A web screen: corpora, documents and their ingest status have an API and no
   interface.
-- Extraction, as above.
+- Extraction of anything rag does not already take as text — knowledge is the
+  one extractor feeding it today; see [Knowledge documents](#knowledge-documents).

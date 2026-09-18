@@ -18,6 +18,7 @@ import (
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	fileseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
+	knowledgeeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 	rageventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/rag/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
@@ -27,13 +28,15 @@ import (
 // fakeApplication records what the consumer dispatched to it, one slice per
 // method, so a test can check both that a handler ran and what it was given.
 type fakeApplication struct {
-	created []autheventsv1.OrganizationCreated
-	updated []autheventsv1.OrganizationUpdated
-	deleted []autheventsv1.OrganizationDeleted
-	removed []autheventsv1.MemberRemoved
-	teams   []teamseventsv1.TeamDeleted
-	objects []fileseventsv1.ObjectDeleted
-	err     error
+	created   []autheventsv1.OrganizationCreated
+	updated   []autheventsv1.OrganizationUpdated
+	deleted   []autheventsv1.OrganizationDeleted
+	removed   []autheventsv1.MemberRemoved
+	teams     []teamseventsv1.TeamDeleted
+	objects   []fileseventsv1.ObjectDeleted
+	published []knowledgeeventsv1.DocumentPublished
+	forgotten []knowledgeeventsv1.DocumentRemoved
+	err       error
 }
 
 func (fake *fakeApplication) OrganizationCreated(_ context.Context, data autheventsv1.OrganizationCreated) error {
@@ -66,6 +69,16 @@ func (fake *fakeApplication) ObjectDeleted(_ context.Context, data fileseventsv1
 	return fake.err
 }
 
+func (fake *fakeApplication) DocumentPublished(_ context.Context, data knowledgeeventsv1.DocumentPublished) error {
+	fake.published = append(fake.published, data)
+	return fake.err
+}
+
+func (fake *fakeApplication) DocumentRemoved(_ context.Context, data knowledgeeventsv1.DocumentRemoved) error {
+	fake.forgotten = append(fake.forgotten, data)
+	return fake.err
+}
+
 // delivery is one message body exactly as EventBridge, via SQS, would
 // present it: the outer envelope naming the source and detail type, and the
 // inner one this service itself writes onto every event it publishes.
@@ -85,6 +98,7 @@ func TestEverySubscribedEventHasAHandler(t *testing.T) {
 	subscribed = append(subscribed, AuthSubscriptions()...)
 	subscribed = append(subscribed, TeamSubscriptions()...)
 	subscribed = append(subscribed, FileSubscriptions()...)
+	subscribed = append(subscribed, KnowledgeSubscriptions()...)
 	for _, detailType := range subscribed {
 		if _, ok := consumer.handlers[detailType]; !ok {
 			t.Fatalf("%s is subscribed but nothing handles it", detailType)
@@ -110,6 +124,7 @@ func TestSubscriptionsNameTheSourceEachEventComesFrom(t *testing.T) {
 	checkSource(AuthSubscriptions(), autheventsv1.Source)
 	checkSource(TeamSubscriptions(), teamseventsv1.Source)
 	checkSource(FileSubscriptions(), fileseventsv1.Source)
+	checkSource(KnowledgeSubscriptions(), knowledgeeventsv1.Source)
 }
 
 func TestHandleDispatchesEachSubscribedEventToItsOwnMethod(t *testing.T) {
@@ -127,6 +142,10 @@ func TestHandleDispatchesEachSubscribedEventToItsOwnMethod(t *testing.T) {
 		`{"team_id":"team_eng","organization_id":"org_1","name":"Engineering","deleted_by":"user-1","deleted_at":"2026-09-14T16:00:00Z"}`)))
 	must(t, consumer.Handle(context.Background(), delivery(fileseventsv1.Source, fileseventsv1.ObjectDeletedDetailType, 1,
 		`{"file_id":"file_1","organization_id":"org_1","reason":"deleted","deleted_at":"2026-09-14T17:00:00Z"}`)))
+	must(t, consumer.Handle(context.Background(), delivery(knowledgeeventsv1.Source, knowledgeeventsv1.DocumentPublishedDetailType, 1,
+		`{"document_id":"doc_1","organization_id":"org_1","source_id":"src_1","provider":"github","scope":"member","member_id":"user-1","external_id":"42","kind":"issue","mime":"text/plain","content_hash":"abc","body":"hello","extracted_at":"2026-09-14T18:00:00Z"}`)))
+	must(t, consumer.Handle(context.Background(), delivery(knowledgeeventsv1.Source, knowledgeeventsv1.DocumentRemovedDetailType, 1,
+		`{"document_id":"doc_1","organization_id":"org_1","source_id":"src_1","provider":"github","external_id":"42","reason":"deleted","removed_at":"2026-09-14T19:00:00Z"}`)))
 
 	if len(app.created) != 1 || app.created[0].Name != "Acme" {
 		t.Fatalf("OrganizationCreated = %+v", app.created)
@@ -145,6 +164,12 @@ func TestHandleDispatchesEachSubscribedEventToItsOwnMethod(t *testing.T) {
 	}
 	if len(app.objects) != 1 || app.objects[0].FileID != "file_1" {
 		t.Fatalf("ObjectDeleted = %+v", app.objects)
+	}
+	if len(app.published) != 1 || app.published[0].DocumentID != "doc_1" || app.published[0].MemberID != "user-1" {
+		t.Fatalf("DocumentPublished = %+v", app.published)
+	}
+	if len(app.forgotten) != 1 || app.forgotten[0].DocumentID != "doc_1" {
+		t.Fatalf("DocumentRemoved = %+v", app.forgotten)
 	}
 }
 
