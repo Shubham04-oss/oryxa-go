@@ -372,7 +372,7 @@ Kept short; the pull requests hold the detail.
   sweep; paged rag's document lists and tested its access rules, events and
   clients; and fixed auth's invitation links and agent-grant `return_to`,
   along with three bugs found while proving those.
-- **The run API** (`feat/agents-run-api`): the `agents` service serves a
+- **PR #23**, the run API: the `agents` service serves a
   member's threads with Krude and streams each run, with the member's own
   token on it, confirmations answered through the API, one run per thread
   across replicas, and run events with a per-model cost. Krude's assembly
