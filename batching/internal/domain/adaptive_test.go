@@ -73,6 +73,27 @@ func TestPriorityAddsPressureAndOnlyBringsTheSoftDeadlineForward(t *testing.T) {
 	}
 }
 
+// TestAFallbackTriggerNeverMakesAGroupDueByItself keeps a classifier outage
+// from becoming one agent turn per webhook: the fallback still brings the
+// soft deadline forward, but alone it never reaches any target.
+func TestAFallbackTriggerNeverMakesAGroupDueByItself(t *testing.T) {
+	if pressure := 1 + priorityPressure*FallbackPriority; pressure >= minimumTargetSize {
+		t.Fatalf("fallback pressure = %v, want it under the smallest target %d", pressure, minimumTargetSize)
+	}
+	scheduler := testScheduler(t)
+	_, ordinary, err := scheduler.Observe(TrafficProfile{}, adaptiveTestTime, "org_1/user_1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, fallback, err := scheduler.Observe(TrafficProfile{}, adaptiveTestTime, "org_1/user_1", FallbackPriority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.Pressure >= float64(fallback.TargetSize) || !fallback.SoftDueAt.Before(ordinary.SoftDueAt) {
+		t.Fatalf("fallback = %+v, ordinary = %+v", fallback, ordinary)
+	}
+}
+
 func TestCadenceOffsetIsStablePerMember(t *testing.T) {
 	first := cadenceBoundary(adaptiveTestTime, time.Hour, "org_1/user_1")
 	second := cadenceBoundary(first.Add(-time.Minute), time.Hour, "org_1/user_1")

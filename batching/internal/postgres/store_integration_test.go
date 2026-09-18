@@ -207,6 +207,60 @@ func TestCompletingAClaimAtomicallyWritesTheOutbox(t *testing.T) {
 	}
 }
 
+// TestForgettingAMemberTakesTheirUnpublishedBatches: a batch completed just
+// before the member was removed still waits in the outbox with their
+// payloads, and is not published after they are gone. Another member's
+// stays.
+func TestForgettingAMemberTakesTheirUnpublishedBatches(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 1, MaxWait: time.Millisecond, Largest: 20})
+	ctx := context.Background()
+	write := func(id, memberID string) {
+		t.Helper()
+		if _, err := store.database.Pool.Exec(ctx, `
+			INSERT INTO batching_outbox (id, detail_type, detail, occurred_at)
+			VALUES ($1, 'batching.trigger-batch.ready.v1', $2, now())`,
+			organizationID+"_"+id, `{"organization_id":"`+organizationID+`","member_id":"`+memberID+`","triggers":[]}`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("gone", "user_1")
+	write("stays", "user_2")
+
+	if err := store.Forget(ctx, organizationID, "user_1"); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	rows, err := store.database.Pool.Query(ctx, `SELECT id FROM batching_outbox WHERE id LIKE $1 ORDER BY id`, organizationID+"%")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, id)
+	}
+	if rows.Err() != nil {
+		t.Fatal(rows.Err())
+	}
+	if len(left) != 1 || left[0] != organizationID+"_stays" {
+		t.Fatalf("outbox = %v, want only the other member's batch", left)
+	}
+
+	// The organization going takes everything of it.
+	if err := store.Forget(ctx, organizationID, ""); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.database.Pool.QueryRow(ctx, `SELECT count(*) FROM batching_outbox WHERE id LIKE $1`, organizationID+"%").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("outbox rows = %d after the organization was deleted, want none", count)
+	}
+}
+
 func TestAQuietPeriodFlushesItsPartialBatchAtThePersistedDeadline(t *testing.T) {
 	rule := domain.Rule{Size: 5, MaxWait: 250 * time.Millisecond, Largest: 20}
 	store, organizationID := testStore(t, rule)

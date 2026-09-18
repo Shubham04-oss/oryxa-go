@@ -18,6 +18,13 @@ const (
 	priorityDeadlineLead  = 0.75
 )
 
+// FallbackPriority is what a trigger gets when its classifier could not be
+// asked. It brings the trigger's soft deadline forward, but its pressure,
+// 1 + priorityPressure×FallbackPriority, stays under minimumTargetSize, so one
+// such trigger never makes a group due by itself and a classifier outage is
+// not one agent turn per webhook.
+const FallbackPriority = 0.4
+
 // AdaptiveScheduler combines two exponentially decayed arrival-rate views.
 // The fast view reacts to regime changes and bursts; the slow view prevents
 // one short interval from completely rewriting a member's normal behavior.

@@ -18,8 +18,14 @@ deterministic scheduler:
 - one published batch carries at most twenty triggers;
 - each original EventBridge event ID is stored as the idempotency key;
 - trigger payloads are preserved; an oversized group becomes multiple events
-  rather than a truncated event;
-- member and organization deletion events erase pending trigger data.
+  rather than a truncated event, and a single trigger too large for any batch
+  (encoding can grow a payload apps accepted past the budget) goes without its
+  data, flagged `data_omitted`, the way apps sends one it cannot carry, rather
+  than holding every trigger queued behind it;
+- member and organization deletion events erase pending trigger data,
+  including batches completed but not yet published;
+- a published batch's payloads are blanked from the outbox once it is on the
+  bus, as apps does with its own trigger events.
 
 The scheduler is not a leaky or token bucket. It estimates arrivals with a
 15-minute fast half-life and a 90-minute slow half-life, predicts how many events
@@ -42,9 +48,10 @@ alias and records the versioned model returned by TypeSafe in every decision.
 
 Jev receives toolkit, trigger name, omission state, and at most a 48 KiB
 projection of the app payload. This projection never replaces or truncates the
-payload stored for the agent. Provider failures become a priority-1 digest:
-the event stays durable and is accelerated, while an outage cannot create one
-agent turn per webhook. With no API key, classification remains the
+payload stored for the agent. Provider failures become a fallback digest at
+`FallbackPriority` (0.4): the event stays durable and its soft deadline comes
+forward, but its pressure stays under the smallest target, so an outage cannot
+create one agent turn per webhook. With no API key, classification remains the
 deterministic digest policy.
 
 The service publishes through the shared transactional outbox. Claiming a due
@@ -109,3 +116,22 @@ so immediate traffic cannot consume every worker slot and starve due digests.
 The current agents service still consumes app triggers directly. Do not route
 the ready event to agents until that consumer is switched off, or the same app
 activity can wake an agent twice.
+
+## Known gaps
+
+Found in review before the first merge, and not yet addressed:
+
+- **Setting `TYPESAFE_API_KEY` is a data decision.** It sends up to 48 KiB of
+  every app payload — mail bodies, direct messages — to TypeSafe, for every
+  organization, with no per-organization opt-in. Leave it unset until that
+  sharing is approved. `TYPESAFE_BASE_URL` also accepts `http://`.
+- **The consumer waits on the classifier.** Messages are handled one at a
+  time and each is classified before the duplicate check, so a slow provider
+  slows the whole queue — deletion events included — and a redelivery sends
+  the payload again. `BATCHING_JEV_TIMEOUT` has no ceiling, and one over a
+  few seconds can outrun the queue's visibility timeout.
+- **A removed member can come back.** Nothing remembers a deletion, so a
+  trigger the bus delivers after the removal event starts a new group for
+  them. The agent that receives the batch still checks membership.
+- **Throughput is bounded per replica**: at most `BATCHING_GROUPS_PER_SWEEP`
+  groups per sweep interval, so the hard cadence holds only below that rate.

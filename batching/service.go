@@ -17,6 +17,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/jev"
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/serviceconfig"
+	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
@@ -71,7 +72,11 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		}
 	})
 	publisher := events.NewPublisher(eventClient, platform.EventBusName)
-	table, err := outbox.NewTable(store.Pool(), "batching_outbox")
+	// A published batch carries every trigger's app payload — mail bodies,
+	// messages — so once it is on the bus its copy here is blanked rather
+	// than kept for the outbox's retention, as apps does with its own.
+	table, err := outbox.NewTable(store.Pool(), "batching_outbox",
+		outbox.RedactOnPublish(batchingv1.TriggerBatchReadyDetailType))
 	if err != nil {
 		return host.Service{}, err
 	}

@@ -45,8 +45,8 @@ func (DigestClassifier) Classify(context.Context, appsv1.TriggerReceived) (domai
 }
 
 // ResilientClassifier preserves ingestion when the external classifier is
-// unavailable. Its high-priority digest fallback accelerates the event without
-// turning a provider outage into one agent turn per webhook.
+// unavailable. Its fallback, domain.FallbackPriority, accelerates the event
+// without turning a provider outage into one agent turn per webhook.
 type ResilientClassifier struct {
 	primary Classifier
 	logger  *slog.Logger
@@ -64,10 +64,10 @@ func (classifier *ResilientClassifier) Classify(ctx context.Context, trigger app
 	if err == nil {
 		return classification, nil
 	}
-	classifier.logger.ErrorContext(ctx, "Jev classification failed; using high-priority digest", "error", err,
+	classifier.logger.ErrorContext(ctx, "Jev classification failed; using an accelerated digest", "error", err,
 		"toolkit", trigger.Toolkit, "trigger", trigger.Trigger)
 	return domain.Classification{
-		Lane: domain.LaneDigest, Priority: 1, Classifier: "jev-fallback.v1",
+		Lane: domain.LaneDigest, Priority: domain.FallbackPriority, Classifier: "jev-fallback.v1",
 		Reason: "Jev unavailable; accelerated digest fallback",
 	}, nil
 }
@@ -189,9 +189,13 @@ func (service *Service) ready(ctx context.Context, batch domain.Batch) error {
 		return errors.New("claimed batch has no triggers")
 	}
 	readyAt := service.now().UTC()
-	detail, kept, err := batchDetail(batch, readyAt)
+	detail, kept, omitted, err := batchDetail(batch, readyAt)
 	if err != nil {
 		return err
+	}
+	if len(omitted) > 0 {
+		service.logger.WarnContext(ctx, "a trigger too large for any batch goes without its data",
+			"batch_id", batch.ID, "triggers", omitted)
 	}
 	if kept < len(batch.Triggers) {
 		overflow := make([]string, 0, len(batch.Triggers)-kept)
@@ -214,13 +218,16 @@ func (service *Service) ready(ctx context.Context, batch domain.Batch) error {
 }
 
 // batchDetail takes the largest whole prefix that fits. It never truncates an
-// app payload: overflow is returned to the waiting set for the next batch.
-func batchDetail(batch domain.Batch, readyAt time.Time) (json.RawMessage, int, error) {
+// app payload: overflow is returned to the waiting set for the next batch. A
+// trigger too large to fit even alone is sent without its data instead, and
+// named in the ids answered.
+func batchDetail(batch domain.Batch, readyAt time.Time) (json.RawMessage, int, []string, error) {
 	ready := batchingv1.TriggerBatchReady{
 		BatchID: batch.ID, OrganizationID: batch.OrganizationID, MemberID: batch.MemberID,
 		Lane: string(batch.Lane), FlushReason: batch.FlushReason, ReadyAt: readyAt,
 	}
 	var encoded []byte
+	var omitted []string
 	for index, trigger := range batch.Triggers {
 		ready.Triggers = append(ready.Triggers, batchingv1.Trigger{
 			EventID: trigger.ID, TriggerID: trigger.TriggerID, ConnectionID: trigger.ConnectionID,
@@ -251,18 +258,32 @@ func batchDetail(batch domain.Batch, readyAt time.Time) (json.RawMessage, int, e
 		ready.Pressure += trigger.Schedule.Pressure
 		candidate, err := json.Marshal(ready)
 		if err != nil {
-			return nil, 0, fmt.Errorf("encode trigger batch: %w", err)
+			return nil, 0, nil, fmt.Errorf("encode trigger batch: %w", err)
 		}
 		if len(candidate) > batchingv1.MaxBatchDataBytes {
-			if index == 0 {
-				return nil, 0, fmt.Errorf("trigger %s alone makes a %d byte batch, over the %d byte limit",
+			if index > 0 {
+				return encoded, index, omitted, nil
+			}
+			// Too large to travel even alone: apps checks a payload's raw
+			// bytes, and encoding can grow them past this budget (every <, >
+			// and & becomes six bytes). Refusing it would re-claim the same
+			// group for ever, holding every trigger queued behind it, so it
+			// goes the way apps sends a payload it cannot carry: without its
+			// data, and saying so.
+			alone := &ready.Triggers[len(ready.Triggers)-1]
+			alone.Data, alone.DataOmitted = nil, true
+			if candidate, err = json.Marshal(ready); err != nil {
+				return nil, 0, nil, fmt.Errorf("encode trigger batch: %w", err)
+			}
+			if len(candidate) > batchingv1.MaxBatchDataBytes {
+				return nil, 0, nil, fmt.Errorf("trigger %s makes a %d byte batch even without its data, over the %d byte limit",
 					trigger.ID, len(candidate), batchingv1.MaxBatchDataBytes)
 			}
-			return encoded, index, nil
+			omitted = append(omitted, trigger.ID)
 		}
 		encoded = candidate
 	}
-	return encoded, len(batch.Triggers), nil
+	return encoded, len(batch.Triggers), omitted, nil
 }
 
 func earlierTime(first, second time.Time) time.Time {

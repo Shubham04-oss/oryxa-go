@@ -420,6 +420,16 @@ func (store *Store) Forget(ctx context.Context, organizationID, memberID string)
 			WHERE organization_id = $1 AND ($2 = '' OR member_id = $2)`, organizationID, memberID); err != nil {
 			return fmt.Errorf("forget traffic profile: %w", err)
 		}
+		// A batch completed just before the removal still waits in the
+		// outbox with every payload in it. Not yet published, it is not yet
+		// anyone's, so it goes with the rest; one already published was
+		// blanked when it went.
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM batching_outbox
+			WHERE published_at IS NULL
+			  AND detail->>'organization_id' = $1 AND ($2 = '' OR detail->>'member_id' = $2)`, organizationID, memberID); err != nil {
+			return fmt.Errorf("forget unpublished batches: %w", err)
+		}
 		return nil
 	})
 }

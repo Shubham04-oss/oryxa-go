@@ -74,7 +74,7 @@ func TestResilientClassifierAcceleratesInsteadOfLosingAnEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if classification.Lane != domain.LaneDigest || classification.Priority != 1 || classification.Classifier != "jev-fallback.v1" {
+	if classification.Lane != domain.LaneDigest || classification.Priority != domain.FallbackPriority || classification.Classifier != "jev-fallback.v1" {
 		t.Fatalf("classification = %+v", classification)
 	}
 }
@@ -114,7 +114,7 @@ func TestBatchDetailSplitsWithoutTruncatingAnEvent(t *testing.T) {
 			{ID: "evt_1", Data: large, ReceivedAt: testClock, Classification: classification, Schedule: schedule},
 			{ID: "evt_2", Data: large, ReceivedAt: testClock.Add(time.Second), Classification: classification, Schedule: schedule},
 		}}
-	detail, kept, err := batchDetail(batch, testClock)
+	detail, kept, _, err := batchDetail(batch, testClock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +127,53 @@ func TestBatchDetailSplitsWithoutTruncatingAnEvent(t *testing.T) {
 	}
 	if ready.EventCount != 1 || ready.Pressure != 1 || ready.TargetSize != 2 {
 		t.Fatalf("ready = %+v", ready)
+	}
+}
+
+// TestATriggerTooLargeForAnyBatchGoesWithoutItsData: apps checks a payload's
+// raw bytes, and encoding grows every <, > and & to six, so a payload apps
+// carried can be too large for any batch here. Refused, it would be claimed
+// again for ever and hold every trigger behind it; it goes without its data
+// instead, the way apps sends a payload it cannot carry.
+func TestATriggerTooLargeForAnyBatchGoesWithoutItsData(t *testing.T) {
+	markup := json.RawMessage(`{"html":"` + strings.Repeat("<b></b>", 9<<10) + `"}`)
+	if len(markup) > 128<<10 {
+		t.Fatalf("the payload is %d bytes, over what apps itself carries", len(markup))
+	}
+	classification := domain.Classification{Lane: domain.LaneDigest, Classifier: "default-digest.v1"}
+	schedule := domain.Schedule{TargetSize: 2, Pressure: 1, SoftDueAt: testClock.Add(time.Hour), HardDueAt: testClock.Add(time.Hour), PolicyVersion: domain.AdaptivePolicyVersion}
+	batch := domain.Batch{ID: "bat_1", OrganizationID: "org_1", MemberID: "user_1", Lane: domain.LaneDigest,
+		Triggers: []domain.Trigger{
+			{ID: "evt_markup", Data: markup, ReceivedAt: testClock, Classification: classification, Schedule: schedule},
+			{ID: "evt_small", Data: json.RawMessage(`{"title":"hello"}`), ReceivedAt: testClock.Add(time.Second), Classification: classification, Schedule: schedule},
+		}}
+	detail, kept, omitted, err := batchDetail(batch, testClock)
+	if err != nil {
+		t.Fatalf("batchDetail() error = %v, want the trigger sent without its data", err)
+	}
+	if kept != 2 || len(omitted) != 1 || omitted[0] != "evt_markup" || len(detail) > batchingv1.MaxBatchDataBytes {
+		t.Fatalf("kept = %d, omitted = %v, bytes = %d", kept, omitted, len(detail))
+	}
+	var ready batchingv1.TriggerBatchReady
+	if err := json.Unmarshal(detail, &ready); err != nil {
+		t.Fatal(err)
+	}
+	if !ready.Triggers[0].DataOmitted || len(ready.Triggers[0].Data) != 0 {
+		t.Fatalf("the oversized trigger = %+v, want it without its data", ready.Triggers[0])
+	}
+	if ready.Triggers[1].DataOmitted || string(ready.Triggers[1].Data) != `{"title":"hello"}` {
+		t.Fatalf("the trigger behind it = %+v, want it whole", ready.Triggers[1])
+	}
+
+	// And the whole claim completes, rather than being claimed again.
+	store := &fakeStore{}
+	service := New(store, nil, Config{}, nil)
+	service.now = func() time.Time { return testClock }
+	if err := service.ready(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.completed) != 1 {
+		t.Fatalf("completed = %d batches, want 1", len(store.completed))
 	}
 }
 
