@@ -669,6 +669,60 @@ func TestRemoveSourcesByConnectionRetractsWhatItHeld(t *testing.T) {
 	}
 }
 
+// TestRemoveSourcesByTeamRetiresOnlyThatTeam is the regression for a deleted
+// team's documents coming back: rag drops the team's corpora when the team is
+// deleted, and a team source left running would publish into a new one.
+func TestRemoveSourcesByTeamRetiresOnlyThatTeam(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	team := func(teamID, repository string) domain.Source {
+		source := domain.Source{
+			ID: "src_" + randomHex(8), OrganizationID: "org_1", ConnectionID: "con_" + randomHex(4),
+			AppID: "app_1", Provider: "github", Target: map[string]string{"repository": repository},
+			Scope: domain.ScopeTeam, TeamID: teamID, CreatedBy: "user-1", Status: domain.StatusActive,
+			Interval: time.Hour, SyncAt: &testClock, CreatedAt: testClock,
+		}
+		if err := store.CreateSource(ctx, source, nil); err != nil {
+			t.Fatalf("CreateSource() error = %v", err)
+		}
+		return source
+	}
+	gone := team("team_gone", "acme/gone")
+	kept := team("team_kept", "acme/kept")
+	organization := testSource(t, store, "org_1")
+	if _, err := store.UpsertDocument(ctx, testDocument(gone, "issue-1", strings.Repeat("b", 64)), nil); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+
+	var retracted int
+	removed, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", testClock,
+		func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
+			retracted = len(documents)
+			events := make([]domain.Event, 0, len(documents))
+			for range documents {
+				events = append(events, testEvent(t, "knowledge.document.removed.v1"))
+			}
+			return events, nil
+		})
+	if err != nil {
+		t.Fatalf("RemoveSourcesByTeam() error = %v", err)
+	}
+	if len(removed) != 1 || removed[0].ID != gone.ID || retracted != 1 {
+		t.Fatalf("RemoveSourcesByTeam() = %d sources, %d documents retracted; want %s and its one document", len(removed), retracted, gone.ID)
+	}
+	for _, untouched := range []domain.Source{kept, organization} {
+		read, err := store.Source(ctx, "org_1", untouched.ID)
+		if err != nil || read.Status != domain.StatusActive {
+			t.Fatalf("source %s outside the deleted team = %s, %v; want it active", untouched.ID, read.Status, err)
+		}
+	}
+
+	// A redelivered event finds nothing further.
+	if again, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", testClock, nil); err != nil || len(again) != 0 {
+		t.Fatalf("RemoveSourcesByTeam(again) = %d, %v, want none", len(again), err)
+	}
+}
+
 func TestEventHandledIsTrueOnlyAfterMarkEventHandled(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

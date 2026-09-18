@@ -9,6 +9,7 @@ import (
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
+	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -373,6 +374,26 @@ func TestConnectionRemovedRetiresSourcesOnThatConnectionAndRetractsTheirDocument
 	if reasons := store.publishedReasons(knowledgev1.DocumentRemovedDetailType); len(reasons) != 1 ||
 		reasons[0] != knowledgev1.RemovedReasonConnectionRemoved {
 		t.Fatalf("retraction reasons = %v, want %q", reasons, knowledgev1.RemovedReasonConnectionRemoved)
+	}
+}
+
+func TestTeamDeletedRetiresThatTeamsSourcesAndRetractsTheirDocuments(t *testing.T) {
+	store := newFakeStore()
+	service := registrar(t, store, member())
+	store.sources["src_gone"] = domain.Source{ID: "src_gone", OrganizationID: "org_1", Scope: domain.ScopeTeam, TeamID: "team_gone", Status: domain.StatusActive}
+	store.sources["src_kept"] = domain.Source{ID: "src_kept", OrganizationID: "org_1", Scope: domain.ScopeTeam, TeamID: "team_kept", Status: domain.StatusActive}
+	store.documents["k"] = domain.Document{ID: "doc_1", OrganizationID: "org_1", SourceID: "src_gone", ExternalID: "1"}
+
+	if err := service.TeamDeleted(context.Background(), teamsv1.TeamDeleted{TeamID: "team_gone", OrganizationID: "org_1"}); err != nil {
+		t.Fatalf("TeamDeleted() error = %v", err)
+	}
+	if store.sources["src_gone"].Status != domain.StatusRemoved || store.sources["src_kept"].Status != domain.StatusActive {
+		t.Fatalf("statuses = %s and %s, want only the deleted team's source removed",
+			store.sources["src_gone"].Status, store.sources["src_kept"].Status)
+	}
+	if reasons := store.publishedReasons(knowledgev1.DocumentRemovedDetailType); len(reasons) != 1 ||
+		reasons[0] != knowledgev1.RemovedReasonTeamDeleted {
+		t.Fatalf("retraction reasons = %v, want %q", reasons, knowledgev1.RemovedReasonTeamDeleted)
 	}
 }
 

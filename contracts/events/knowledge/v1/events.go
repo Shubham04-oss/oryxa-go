@@ -182,6 +182,7 @@ const (
 	RemovedReasonConnectionRemoved   = "connection_removed"
 	RemovedReasonOrganizationDeleted = "organization_deleted"
 	RemovedReasonMemberLeft          = "member_left"
+	RemovedReasonTeamDeleted         = "team_deleted"
 	RemovedReasonNoLongerReadable    = "no_longer_readable"
 )
 

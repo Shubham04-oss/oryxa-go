@@ -178,34 +178,7 @@ func (store *Store) RemoveSources(ctx context.Context, organizationID, createdBy
 		sql += ` AND created_by = $3`
 		args = append(args, createdBy)
 	}
-	sql += ` RETURNING ` + sourceColumns
-
-	var removed []domain.Source
-	err := store.inTx(ctx, func(tx pgx.Tx) error {
-		sources, err := querySources(ctx, tx, sql, args...)
-		if err != nil {
-			return err
-		}
-		for _, source := range sources {
-			documents, err := retractDocuments(ctx, tx, source.ID, now)
-			if err != nil {
-				return err
-			}
-			if events == nil {
-				continue
-			}
-			recorded, err := events(source, documents)
-			if err != nil {
-				return err
-			}
-			if err := insertEvents(ctx, tx, recorded...); err != nil {
-				return err
-			}
-		}
-		removed = sources
-		return nil
-	})
-	return removed, err
+	return store.removeSources(ctx, sql+` RETURNING `+sourceColumns, args, now, events)
 }
 
 // RemoveSourcesByConnection retires every source reading through one
@@ -213,14 +186,35 @@ func (store *Store) RemoveSources(ctx context.Context, organizationID, createdBy
 // RemoveSources, which retires by organization or creator, this runs when the
 // connection itself is gone for good: apps.connection.removed.v1.
 func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+	return store.removeSources(ctx, `
+		UPDATE knowledge_sources
+		SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		    updated_at = $2, version = version + 1
+		WHERE connection_id = $1 AND status <> 'removed'
+		RETURNING `+sourceColumns, []any{connectionID, now}, now, events)
+}
+
+// RemoveSourcesByTeam retires every source a deleted team held, and retracts
+// what they held in the same transaction: teams.team.deleted.v1. Left
+// running, a deleted team's sources would go on publishing its documents,
+// and rag — which removes the team's corpora when the team goes — would build
+// it a new one from them.
+func (store *Store) RemoveSourcesByTeam(ctx context.Context, organizationID, teamID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+	return store.removeSources(ctx, `
+		UPDATE knowledge_sources
+		SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		    updated_at = $2, version = version + 1
+		WHERE organization_id = $1 AND scope = 'team' AND team_id = $3 AND status <> 'removed'
+		RETURNING `+sourceColumns, []any{organizationID, now, teamID}, now, events)
+}
+
+// removeSources runs a statement that retires sources and returns them, then
+// retracts each one's documents and records its events, all in one
+// transaction, so a source is never retired with its documents still live.
+func (store *Store) removeSources(ctx context.Context, statement string, args []any, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	var removed []domain.Source
 	err := store.inTx(ctx, func(tx pgx.Tx) error {
-		sources, err := querySources(ctx, tx, `
-			UPDATE knowledge_sources
-			SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
-			    updated_at = $2, version = version + 1
-			WHERE connection_id = $1 AND status <> 'removed'
-			RETURNING `+sourceColumns, connectionID, now)
+		sources, err := querySources(ctx, tx, statement, args...)
 		if err != nil {
 			return err
 		}

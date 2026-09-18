@@ -35,6 +35,9 @@ type Store interface {
 	// RemoveSourcesByConnection retires every source reading through one
 	// connection: apps.connection.removed.v1, which is gone for good.
 	RemoveSourcesByConnection(context.Context, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	// RemoveSourcesByTeam retires every source a deleted team held, and
+	// retracts what they held in the same transaction.
+	RemoveSourcesByTeam(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
 	// PauseSources stops every live source reading through one connection:
 	// apps.connection.expired.v1, or a run that just discovered the same
 	// thing the hard way.

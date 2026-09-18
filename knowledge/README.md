@@ -33,6 +33,7 @@ member ── registers a source, naming a connection ──▶ knowledge
 
 auth ── organization deleted, member removed ──▶ knowledge-events queue
 apps ── connection expired, connection removed ──▶ knowledge-events queue
+teams ── team deleted ──▶ knowledge-events queue
 ```
 
 ## Sources are registered, not discovered
@@ -165,17 +166,17 @@ Knowledge consumes:
 | `auth.member.removed.v1` | Retires the sources that member registered, since extraction reads as them |
 | `apps.connection.expired.v1` | Pauses every source reading through that connection; reconnecting is what resumes them |
 | `apps.connection.removed.v1` | Retires every source reading through that connection and retracts what they held, since it is not coming back |
+| `teams.team.deleted.v1` | Retires the deleted team's sources and retracts what they held. Rag removes the team's corpora on the same event; left running, the team's sources would publish into a new one |
 
 Unlike the lifecycle handlers elsewhere in this repo, these are not naturally
 idempotent — pausing a source and retracting documents both publish events a
 retrieval pipeline acts on — so the envelope's `event_id` is checked before
 anything is done and recorded once it succeeds.
 
-`apps.connection.removed.v1` carries no reason `contracts/events/knowledge/v1`
-already names for a document's removal, so it is retracted with
-`RemovedReasonConnectionLost` (`"connection_lost"`), the closest existing one,
-rather than a new `"connection_removed"` this package cannot add to a contract
-it does not own.
+Each retraction says why: `"connection_removed"` for a connection
+disconnected on purpose, as against `"connection_lost"` for one whose
+credential could not be renewed, and `"team_deleted"` for a deleted team, so a
+consumer can tell a member why their documents went.
 
 Rag is the one subscriber today: it indexes what `knowledge.document.published.v1`
 publishes into a corpus per owner and retracts what `knowledge.document.removed.v1`

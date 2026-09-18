@@ -153,6 +153,24 @@ func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionI
 	return removed, nil
 }
 
+func (store *fakeStore) RemoveSourcesByTeam(_ context.Context, organizationID, teamID string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	removed := []domain.Source{}
+	for id, source := range store.sources {
+		if source.OrganizationID != organizationID || source.Scope != domain.ScopeTeam || source.TeamID != teamID || source.Status == domain.StatusRemoved {
+			continue
+		}
+		source.Status = domain.StatusRemoved
+		store.sources[id] = source
+		removed = append(removed, source)
+		if err := store.retractAll(source, events); err != nil {
+			return nil, err
+		}
+	}
+	return removed, nil
+}
+
 func (store *fakeStore) PauseSources(_ context.Context, connectionID, reason string, _ time.Time, event func(domain.Source) (domain.Event, error)) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

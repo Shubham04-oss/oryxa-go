@@ -15,6 +15,7 @@ import (
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 )
 
 // Subscriptions are the detail types knowledge consumes, by source.
@@ -33,6 +34,9 @@ func Subscriptions() map[string][]string {
 			appsv1.ConnectionExpiredDetailType,
 			appsv1.ConnectionRemovedDetailType,
 		},
+		teamsv1.Source: {
+			teamsv1.TeamDeletedDetailType,
+		},
 	}
 }
 
@@ -43,6 +47,7 @@ type application interface {
 	MemberRemoved(context.Context, authv1.MemberRemoved) error
 	ConnectionExpired(context.Context, appsv1.ConnectionExpired) error
 	ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error
+	TeamDeleted(context.Context, teamsv1.TeamDeleted) error
 	// AlreadyHandled checks without recording anything; MarkHandled records,
 	// and must only be called once the handler it followed has succeeded.
 	AlreadyHandled(ctx context.Context, eventID string) (bool, error)
@@ -73,6 +78,7 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 			authv1.MemberRemovedDetailType:       {source: authv1.Source, handle: decode(app.MemberRemoved)},
 			appsv1.ConnectionExpiredDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionExpired)},
 			appsv1.ConnectionRemovedDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionRemoved)},
+			teamsv1.TeamDeletedDetailType:        {source: teamsv1.Source, handle: decode(app.TeamDeleted)},
 		},
 		app:    app,
 		logger: logger,
