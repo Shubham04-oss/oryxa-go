@@ -7,7 +7,6 @@ import (
 	"context"
 	"log"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -17,10 +16,8 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
-	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 	"google.golang.org/adk/v2/agent"
-	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/cmd/launcher"
 	"google.golang.org/adk/v2/cmd/launcher/console"
 	"google.golang.org/adk/v2/cmd/launcher/universal"
@@ -29,19 +26,13 @@ import (
 	"google.golang.org/adk/v2/cmd/launcher/web/webui"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcorebrowser"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcoresandbox"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/assembly"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	// Aliased: this file's own outbox variable is agents primary's, an
 	// *events.Outbox, and would otherwise shadow the package.
 	sharedoutbox "github.com/Shubham04-oss/oryxa-go/internal/outbox"
-	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
 // defaultArgs serves the web UI and the REST API behind it on one port, clear
@@ -112,132 +103,29 @@ func main() {
 	} else {
 		log.Printf("session events are recorded in the outbox; set EVENTBRIDGE_ENDPOINT to publish them now")
 	}
-	sandbox, err := agentcoresandbox.New(awsConfig, agentcoresandbox.Options{
-		CodeInterpreterIdentifier: settings.SandboxCodeInterpreter,
-		SessionTimeout:            settings.SandboxSessionTimeout,
+
+	var tokens memberauth.TokenSource
+	if devToken := os.Getenv("AGENTS_PRIMARY_DEVUI_MEMBER_TOKEN"); devToken != "" {
+		log.Printf("member token: AGENTS_PRIMARY_DEVUI_MEMBER_TOKEN set, bypassing auth's agent-token exchange (local testing only)")
+		tokens = devMemberTokenSource(devToken)
+	}
+
+	krude, err := assembly.Build(ctx, assembly.Options{
+		Settings: settings,
+		AWS:      awsConfig,
+		Logger:   slog.Default(),
+		Tokens:   tokens,
 	})
 	if err != nil {
-		log.Fatalf("AgentCore sandbox: %v", err)
+		log.Fatalf("assembly: %v", err)
 	}
 	defer func() {
 		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := sandbox.Close(shutdownContext); err != nil {
-			log.Printf("stop AgentCore sandboxes: %v", err)
+		if err := krude.Close(shutdownContext); err != nil {
+			log.Printf("stop Krude: %v", err)
 		}
 	}()
-	sandboxTools, err := agentcoresandbox.NewToolset(sandbox)
-	if err != nil {
-		log.Fatalf("AgentCore sandbox tools: %v", err)
-	}
-	browser, err := agentcorebrowser.New(awsConfig, agentcorebrowser.Options{
-		BrowserIdentifier: settings.BrowserIdentifier,
-		SessionTimeout:    settings.BrowserSessionTimeout,
-	})
-	if err != nil {
-		log.Fatalf("AgentCore browser: %v", err)
-	}
-	defer func() {
-		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := browser.Close(shutdownContext); err != nil {
-			log.Printf("stop AgentCore browsers: %v", err)
-		}
-	}()
-	browserTools, err := agentcorebrowser.NewToolset(browser)
-	if err != nil {
-		log.Fatalf("AgentCore browser tools: %v", err)
-	}
-	log.Printf("AWS AgentCore sandbox and browser configured in %s", settings.AWSRegion)
-
-	mainModel, err := agents.Gemini(ctx, settings.Model, settings.GoogleCloudProject, settings.GoogleCloudLocation)
-	if err != nil {
-		log.Fatalf("main model: %v", err)
-	}
-	liteModel, err := agents.Gemini(ctx, settings.ModelLite, settings.GoogleCloudProject, settings.GoogleCloudLocation)
-	if err != nil {
-		log.Fatalf("lite model: %v", err)
-	}
-
-	var promptCache modelcache.Store
-	if settings.Cache {
-		client, err := agents.GeminiClient(ctx, settings.GoogleCloudProject, settings.GoogleCloudLocation)
-		if err != nil {
-			log.Fatalf("prompt cache client: %v", err)
-		}
-		cacheStore := modelcache.NewGenaiStore(client, settings.CacheTTL)
-		promptCache = cacheStore
-		defer func() {
-			closeContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			if err := cacheStore.Close(closeContext); err != nil {
-				log.Printf("delete prompt caches: %v", err)
-			}
-		}()
-	}
-	cacheConfig := modelcache.Config{TTL: settings.CacheTTL, MinTokens: settings.CacheMinTokens}
-	router, err := modelrouter.New(
-		modelcache.Cached(mainModel, promptCache, cacheConfig),
-		modelcache.Cached(liteModel, promptCache, cacheConfig),
-	)
-	if err != nil {
-		log.Fatalf("model router: %v", err)
-	}
-	log.Printf("models: %s with %s for planning and bulk work; prompt cache %t", settings.Model, settings.ModelLite, settings.Cache)
-
-	toolboxes := []agents.Toolbox{
-		agents.SandboxToolbox(sandboxTools),
-		agents.BrowserToolbox(browserTools),
-	}
-	if settings.AppsURL != "" {
-		var tokens memberauth.TokenSource = memberauth.NewAuthClient(memberauth.AuthClientConfig{
-			BaseURL: settings.AuthURL,
-			Signer:  serviceauth.Signer{Client: kms.NewFromConfig(awsConfig), KeyID: settings.ServiceKeyID, Service: "agents"},
-		})
-		if devToken := os.Getenv("AGENTS_PRIMARY_DEVUI_MEMBER_TOKEN"); devToken != "" {
-			log.Printf("member token: AGENTS_PRIMARY_DEVUI_MEMBER_TOKEN set, bypassing auth's agent-token exchange (local testing only)")
-			tokens = devMemberTokenSource(devToken)
-		} else if settings.AuthURL == "" || settings.ServiceKeyID == "" {
-			log.Printf("member token: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
-		}
-		appsToolbox, err := agents.AppsToolbox(agents.AppsConfig{
-			URL:    settings.AppsURL,
-			HTTP:   &http.Client{},
-			Tokens: tokens,
-		})
-		if err != nil {
-			// Krude still runs without it: a member simply cannot reach the
-			// apps service's tools until APPS_URL is fixed and devui restarts.
-			log.Printf("apps toolbox unavailable, running without it: %v", err)
-		} else {
-			toolboxes = append(toolboxes, appsToolbox)
-			log.Printf("apps toolbox: %s", settings.AppsURL)
-		}
-	}
-
-	root, err := agents.Root(router, toolboxes)
-	if err != nil {
-		log.Fatalf("root agent: %v", err)
-	}
-
-	artifacts := artifact.InMemoryService()
-	if settings.ArtifactBucket != "" {
-		artifactConfig := awsConfig
-		if settings.S3Endpoint != "" {
-			// The emulator takes any signature, so the client carries dummy
-			// credentials instead of asking for real ones, as the event
-			// client above does.
-			artifactConfig.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
-		}
-		stored, err := s3artifact.NewFromConfig(artifactConfig, settings.S3Endpoint, settings.ArtifactBucket)
-		if err != nil {
-			log.Fatalf("artifact store: %v", err)
-		}
-		artifacts = stored
-		log.Printf("artifacts stored in s3://%s", settings.ArtifactBucket)
-	} else {
-		log.Printf("artifacts are held in memory and go with this process; set AGENTS_PRIMARY_ARTIFACT_BUCKET to keep them")
-	}
 
 	args := os.Args[1:]
 	if len(args) == 0 {
@@ -245,9 +133,9 @@ func main() {
 	}
 	adk := universal.NewLauncher(console.NewLauncher(), web.NewLauncher(api.NewLauncher(), webui.NewLauncher()))
 	if err := adk.Execute(ctx, &launcher.Config{
-		AgentLoader:     agent.NewSingleLoader(root),
+		AgentLoader:     agent.NewSingleLoader(krude.Root),
 		SessionService:  sessionStore.Sessions(recorder),
-		ArtifactService: artifacts,
+		ArtifactService: krude.Artifacts,
 	}, args); err != nil {
 		log.Fatalf("%v\n\n%s", err, adk.CommandLineSyntax())
 	}

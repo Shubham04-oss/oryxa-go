@@ -1,0 +1,237 @@
+// Package assembly builds Krude and everything it runs with — its models,
+// the AgentCore sandbox and browser, the apps toolbox and the artifact store
+// — once, for whatever runs it: the agents service in the oryxa binary, and
+// cmd/devui.
+package assembly
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/artifact"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcorebrowser"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcoresandbox"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
+)
+
+// Options are what Build needs.
+type Options struct {
+	Settings serviceconfig.Config
+	// AWS carries the region and middleware; the sandbox, browser, artifact
+	// store and agent-token signer are built from it.
+	AWS    aws.Config
+	Logger *slog.Logger
+	// Tokens mints an agent token for a run that carries no member access
+	// token of its own. When nil, Build uses auth's agent-token exchange if
+	// Settings names both AuthURL and ServiceKeyID, and otherwise none.
+	Tokens memberauth.TokenSource
+	// HTTP is the client the apps toolbox's MCP calls go out on. Defaults to
+	// a fresh http.Client.
+	HTTP *http.Client
+}
+
+// Krude is the assembled agent with what it runs with.
+type Krude struct {
+	// Root is Krude, the agent every conversation starts with.
+	Root agent.Agent
+	// Artifacts keeps what conversations produce: S3 when Settings names a
+	// bucket, memory otherwise.
+	Artifacts artifact.Service
+
+	// closers stops everything Build opened, kept in the order Build opened
+	// them. Close runs them in reverse — the same order devui's own defers
+	// unwound in before this assembly moved out of it — so relocating the
+	// wiring changes nothing about what stops when.
+	closers []func(context.Context) error
+}
+
+// Build assembles Krude. It contacts nothing but Google's credential
+// discovery: AWS credentials, the MCP session and every cache are resolved
+// on first use. If a step after the sandbox, browser or prompt cache are
+// created fails, Build closes whatever it already opened before returning
+// the error, so a failed build never leaks a running AgentCore session or an
+// explicit prompt cache.
+func Build(ctx context.Context, options Options) (*Krude, error) {
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	settings := options.Settings
+
+	krude := &Krude{}
+	// fail closes whatever krude has already opened and joins that close's
+	// own errors (if any) into the failure that triggered it, so a cleanup
+	// problem is never silently dropped on the way out.
+	fail := func(stage string, err error) (*Krude, error) {
+		return nil, errors.Join(fmt.Errorf("%s: %w", stage, err), krude.Close(ctx))
+	}
+
+	sandbox, err := agentcoresandbox.New(options.AWS, agentcoresandbox.Options{
+		CodeInterpreterIdentifier: settings.SandboxCodeInterpreter,
+		SessionTimeout:            settings.SandboxSessionTimeout,
+	})
+	if err != nil {
+		return fail("AgentCore sandbox", err)
+	}
+	krude.closers = append(krude.closers, func(ctx context.Context) error {
+		if err := sandbox.Close(ctx); err != nil {
+			return fmt.Errorf("stop AgentCore sandboxes: %w", err)
+		}
+		return nil
+	})
+	sandboxTools, err := agentcoresandbox.NewToolset(sandbox)
+	if err != nil {
+		return fail("AgentCore sandbox tools", err)
+	}
+
+	browser, err := agentcorebrowser.New(options.AWS, agentcorebrowser.Options{
+		BrowserIdentifier: settings.BrowserIdentifier,
+		SessionTimeout:    settings.BrowserSessionTimeout,
+	})
+	if err != nil {
+		return fail("AgentCore browser", err)
+	}
+	krude.closers = append(krude.closers, func(ctx context.Context) error {
+		if err := browser.Close(ctx); err != nil {
+			return fmt.Errorf("stop AgentCore browsers: %w", err)
+		}
+		return nil
+	})
+	browserTools, err := agentcorebrowser.NewToolset(browser)
+	if err != nil {
+		return fail("AgentCore browser tools", err)
+	}
+	logger.InfoContext(ctx, "AWS AgentCore sandbox and browser configured", "region", settings.AWSRegion)
+
+	mainModel, err := agents.Gemini(ctx, settings.Model, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+	if err != nil {
+		return fail("main model", err)
+	}
+	liteModel, err := agents.Gemini(ctx, settings.ModelLite, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+	if err != nil {
+		return fail("lite model", err)
+	}
+
+	// promptCache is left as an untyped nil modelcache.Store when caching is
+	// off, rather than a *modelcache.GenaiStore nil pointer boxed in the
+	// interface: modelcache.Cached checks the interface itself against nil to
+	// decide whether caching is active, and a boxed typed nil would not equal
+	// that nil.
+	var promptCache modelcache.Store
+	if settings.Cache {
+		client, err := agents.GeminiClient(ctx, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+		if err != nil {
+			return fail("prompt cache client", err)
+		}
+		cacheStore := modelcache.NewGenaiStore(client, settings.CacheTTL)
+		promptCache = cacheStore
+		krude.closers = append(krude.closers, func(ctx context.Context) error {
+			if err := cacheStore.Close(ctx); err != nil {
+				return fmt.Errorf("delete prompt caches: %w", err)
+			}
+			return nil
+		})
+	}
+	cacheConfig := modelcache.Config{TTL: settings.CacheTTL, MinTokens: settings.CacheMinTokens}
+	router, err := modelrouter.New(
+		usage.Counted(modelcache.Cached(mainModel, promptCache, cacheConfig)),
+		usage.Counted(modelcache.Cached(liteModel, promptCache, cacheConfig)),
+	)
+	if err != nil {
+		return fail("model router", err)
+	}
+	logger.InfoContext(ctx, "models: main model with lite model for planning and bulk work",
+		"model", settings.Model, "model_lite", settings.ModelLite, "prompt_cache", settings.Cache)
+
+	toolboxes := []agents.Toolbox{
+		agents.SandboxToolbox(sandboxTools),
+		agents.BrowserToolbox(browserTools),
+	}
+	if settings.AppsURL != "" {
+		tokens := options.Tokens
+		if tokens == nil {
+			if settings.AuthURL != "" && settings.ServiceKeyID != "" {
+				tokens = memberauth.NewAuthClient(memberauth.AuthClientConfig{
+					BaseURL: settings.AuthURL,
+					Signer:  serviceauth.Signer{Client: kms.NewFromConfig(options.AWS), KeyID: settings.ServiceKeyID, Service: "agents"},
+				})
+			} else {
+				logger.WarnContext(ctx, "member token: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
+			}
+		}
+		httpClient := options.HTTP
+		if httpClient == nil {
+			httpClient = &http.Client{}
+		}
+		appsToolbox, err := agents.AppsToolbox(agents.AppsConfig{
+			URL:    settings.AppsURL,
+			HTTP:   httpClient,
+			Tokens: tokens,
+		})
+		if err != nil {
+			// Krude still runs without it: a member simply cannot reach the
+			// apps service's tools until APPS_URL is fixed and the process
+			// restarts.
+			logger.WarnContext(ctx, "apps toolbox unavailable, running without it", "error", err)
+		} else {
+			toolboxes = append(toolboxes, appsToolbox)
+			logger.InfoContext(ctx, "apps toolbox", "url", settings.AppsURL)
+		}
+	}
+
+	root, err := agents.Root(router, toolboxes)
+	if err != nil {
+		return fail("root agent", err)
+	}
+	krude.Root = root
+
+	artifacts := artifact.InMemoryService()
+	if settings.ArtifactBucket != "" {
+		artifactConfig := options.AWS
+		if settings.S3Endpoint != "" {
+			// The emulator takes any signature, so the client carries dummy
+			// credentials instead of asking for real ones.
+			artifactConfig.Credentials = credentials.NewStaticCredentialsProvider("test", "test", "")
+		}
+		stored, err := s3artifact.NewFromConfig(artifactConfig, settings.S3Endpoint, settings.ArtifactBucket)
+		if err != nil {
+			return fail("artifact store", err)
+		}
+		artifacts = stored
+		logger.InfoContext(ctx, "artifacts stored in S3", "bucket", settings.ArtifactBucket)
+	} else {
+		logger.InfoContext(ctx, "artifacts are held in memory and go with this process; set AGENTS_PRIMARY_ARTIFACT_BUCKET to keep them")
+	}
+	krude.Artifacts = artifacts
+
+	return krude, nil
+}
+
+// Close stops what Krude opened: AgentCore sandboxes and browsers, and the
+// prompt caches this process created. It runs every closer regardless of
+// whether an earlier one failed — a stuck sandbox must never keep a cache
+// from being deleted — and joins whatever errors they return.
+func (krude *Krude) Close(ctx context.Context) error {
+	var failures []error
+	for i := len(krude.closers) - 1; i >= 0; i-- {
+		if err := krude.closers[i](ctx); err != nil {
+			failures = append(failures, err)
+		}
+	}
+	return errors.Join(failures...)
+}
