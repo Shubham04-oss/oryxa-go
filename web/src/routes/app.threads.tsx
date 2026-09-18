@@ -1,18 +1,9 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { MessageSquareText } from "lucide-react";
-import { ServicePlaceholder } from "@/components/app/service-placeholder";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/app/threads")({
-	component: ThreadsPage,
-	head: () => ({ meta: [{ title: "Threads · The Weirdly ODD" }] }),
+	component: ThreadsLayout,
 });
 
-function ThreadsPage() {
-	return (
-		<ServicePlaceholder
-			description="Every conversation, in one place."
-			icon={MessageSquareText}
-			title="Threads"
-		/>
-	);
+function ThreadsLayout() {
+	return <Outlet />;
 }
