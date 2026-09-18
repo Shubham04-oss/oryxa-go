@@ -138,11 +138,13 @@ Krude's `knowledge` toolbox searches rag as the member and cites what it finds
 ([agents/primary/README.md, Knowledge toolbox](../agents/primary/README.md#knowledge-toolbox)).
 Left out on purpose: it searches the corpora rag lists by default — the
 member's own and the organization's — and a team's only when named, since
-listing a member's teams means asking teams first. Nothing has searched a real
-corpus through it yet: rag needs Bedrock or Vertex to embed, and the only
-proof is against a stand-in for rag.
+listing a member's teams means asking teams first. It ran live on 2026-09-18
+against rag embedding with Vertex: Krude loaded the toolbox, searched an
+organization's corpus as the member and answered from its documents, over the
+API and in the web app. That run found rag listing every corpus as empty, so
+the toolbox had searched none (PR #33).
 
-### A run is not durable, and not yet run against Gemini
+### A run is not durable
 
 The `agents` service now serves the run API: a member's threads with Krude,
 each run streamed as server-sent events with the member's own token on it,
@@ -151,13 +153,15 @@ replicas, and `agents.run.completed.v1` / `agents.run.failed.v1` with a
 per-model cost ([agents/primary/README.md, Run API](../agents/primary/README.md#run-api)).
 What is left:
 
-- **Nothing has streamed a real answer yet.** A live run on 2026-09-18
-  created a thread, streamed the member's message back, and recorded the
-  failure when Vertex refused the development machine's Application Default
-  Credentials (`invalid_rapt`: the Google login needs signing in again,
-  `gcloud auth application-default login`). Every other path — confirmations
-  approved and declined, cost, isolation between members and organizations —
-  is proven against ADK's real runner with a scripted model.
+- **No confirmation has met a real model.** Gemini answers: on 2026-09-18
+  runs streamed `gemini-3.8-flash`'s answers — a thread and its title, the
+  answer as it was written, a follow-up that remembered the first question,
+  run records and `agents.run.completed.v1` with a per-model cost — and Krude
+  searched rag through its knowledge toolbox. No tool that asks for
+  confirmation has run for real: the sandbox needs AgentCore credentials, and
+  an app's write a connected account. Confirmations approved and declined, and
+  isolation between members and organizations, are proven against ADK's real
+  runner with a scripted model.
 - **A run ends with its request.** A closed tab or a deploy stops it; what it
   had stored stays in the thread. A durable run, one that outlives its
   stream, comes with runs that start from triggers.
@@ -355,10 +359,10 @@ reads. They prove nothing about whether the provider agrees.
 
 | Area | What has never run | What it needs |
 | --- | --- | --- |
-| Rag | Bedrock and Vertex embedding and answering; Bedrock reranking, the least exercised code in the service; S3 Vectors; the provisioner, which has never created anything | An AWS account — S3 Vectors has no local emulation — and a Vertex project ([rag/README.md](../rag/README.md#what-has-and-has-not-been-run)) |
+| Rag | Bedrock embedding; Bedrock and Vertex answering; Bedrock reranking, the least exercised code in the service; S3 Vectors; the provisioner, which has never created anything. Vertex embedding ran on 2026-09-18 | An AWS account — S3 Vectors has no local emulation — and `RAG_ANSWER_MODEL` to answer ([rag/README.md](../rag/README.md#what-has-and-has-not-been-run)) |
 | Apps | Connecting an account end to end, and therefore every path past it: a tool against a real app, a subscribed trigger, a real delivery, and the outbox reaching the bus. The catalog, tool marks, link creation, the webhook provisioner, webhook verification, MCP and the refusals all ran for real on 2026-09-18 ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)) | A member at a browser to finish Composio's hosted page, and LocalStack up for the bus |
 | Auth | The agent grant against a provisioned Cognito agent client | The agent client provisioned |
-| Agents | A run through the run API that Gemini answers: thread, stream, refusals and run records ran live on 2026-09-18, the model call failed on stale credentials | `gcloud auth application-default login` on the machine running it |
+| Agents | A tool that asks for confirmation, against a real model; the sandbox and browser; a wake-up. Runs Gemini answers, knowledge search through rag, and the web app's conversations ran on 2026-09-18 | AgentCore credentials or a connected app, and the `agents-events` queue |
 | Journey | `test/run.sh` has not run since PR #17 rewrote it for the one binary, and it covers teams, files and email only | Docker |
 
 ## 7. Before production

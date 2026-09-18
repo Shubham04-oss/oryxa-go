@@ -230,7 +230,7 @@ that path needs no origin check.
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |
 | `GET` | `/v1/capabilities` | Anyone | Which providers, backends and models this deployment serves |
-| `GET` | `/v1/organizations/{org}/corpora` | Members | List. Query `scope`, `team_id`. Default is the caller's own plus the organization's |
+| `GET` | `/v1/organizations/{org}/corpora` | Members | List, each with its document and chunk counts. Query `scope`, `team_id`. Default is the caller's own plus the organization's |
 | `POST` | `/v1/organizations/{org}/corpora` | Per placement | Create. `{name, slug, scope, team_id, embedding_provider, embedding_model, embedding_dimensions, embedding_metric, backend, chunking, metadata}` |
 | `GET` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | One corpus, with its document and chunk counts. `{corpus}` may be an id or the slug |
 | `DELETE` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | Delete the corpus, its documents and its vectors |
@@ -467,7 +467,11 @@ document lifecycles, incremental re-embedding, hybrid search, tenant scoping,
 the `halfvec` path at 3072 dimensions, the unindexed fallback width, and the
 cascade from a deleted document to its vectors. The two pgvector index
 ceilings in the schema — 2000 for `vector`, 4000 for `halfvec` — were measured
-there rather than assumed.
+there rather than assumed. Vertex embedding ran on 2026-09-18:
+`text-embedding-005` at 768 dimensions, through Application Default
+Credentials at the `global` location, embedded two documents (six chunks) and
+the queries against them, and searches as a member, and as Krude, came back
+with the right passages first.
 
 **Not run against the real thing.** Each of these is covered by a fake or a
 stub server, which proves the request shape this code builds and the response
@@ -476,7 +480,7 @@ shape it reads, and proves nothing about whether the provider agrees:
 | Path | What stands in for it | What is unverified |
 | --- | --- | --- |
 | Bedrock embedding (Titan, Cohere) | A fake `InvokeModel` | Request bodies, response shapes, throttling behaviour, real model ids |
-| Vertex embedding | An `httptest` server | The `:predict` contract, ADC auth, per-model batch limits |
+| Vertex embedding | An `httptest` server, and one small live run | Per-model batch limits, which six chunks never approached; the other two Vertex models |
 | Bedrock answering (`Converse`) | A fake `Converse` | Whether the grounding prompt holds, real model ids, guardrail behaviour |
 | Vertex answering (`generateContent`) | An `httptest` server | The same, plus ADC auth |
 | Bedrock reranking | Nothing beyond construction | The whole call. This is the least exercised code in the service |
@@ -487,10 +491,10 @@ S3 Vectors has no local emulation available: the LocalStack container in the
 root `docker-compose.yml` runs `events,sqs,dynamodb,s3`, and S3 Vectors is not
 among them. Exercising that backend means a real AWS account.
 
-The first live run should be a small corpus end to end — create, add one
-document, wait for `rag.document.indexed.v1`, search, answer — against each
-provider in turn. Expect the model ids and the Bedrock reranker to be where it
-goes wrong first.
+Vertex has gone as far as search; its answers, and every Bedrock path, have
+not run. The first live run of each should be a small corpus end to end —
+create, add one document, wait for `rag.document.indexed.v1`, search, answer.
+Expect the model ids and the Bedrock reranker to be where it goes wrong first.
 
 ## Known limits
 
