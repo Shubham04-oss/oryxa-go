@@ -89,6 +89,16 @@ type Config struct {
 	// DatabaseMaxConns sizes the pool the service keeps for ADK's tables,
 	// apart from the pool the other services share.
 	DatabaseMaxConns int
+	// EventsQueueURL is the queue app trigger events arrive on, and
+	// SQSEndpoint overrides where it is read from, for the emulator. Without
+	// a queue, nothing wakes Krude for a member's apps.
+	EventsQueueURL string
+	SQSEndpoint    string
+	// WakeupBatchSize and WakeupMaxWait decide when a member's waiting app
+	// events wake Krude: once this many wait, or the oldest has waited this
+	// long, whichever comes first.
+	WakeupBatchSize int
+	WakeupMaxWait   time.Duration
 }
 
 // FromEnv reads primary's configuration through getenv, which a host layers
@@ -140,6 +150,14 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	wakeupBatchSize, err := intValue(getenv, "AGENTS_WAKEUP_BATCH_SIZE", 5, 1, 100)
+	if err != nil {
+		return Config{}, err
+	}
+	wakeupMaxWait, err := secondsValue(getenv, "AGENTS_WAKEUP_MAX_WAIT_SECONDS", 2*time.Minute, 10*time.Second, 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
 	allowedOrigins, err := originList(getenv, "AGENTS_ALLOWED_ORIGINS")
 	if err != nil {
 		return Config{}, err
@@ -184,6 +202,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		AllowedOrigins:        allowedOrigins,
 		RunTimeout:            runTimeout,
 		DatabaseMaxConns:      databaseMaxConns,
+		EventsQueueURL:        strings.TrimSpace(getenv("AGENTS_EVENTS_QUEUE_URL")),
+		SQSEndpoint:           sqsEndpoint(getenv),
+		WakeupBatchSize:       wakeupBatchSize,
+		WakeupMaxWait:         wakeupMaxWait,
 	}, nil
 }
 
@@ -204,6 +226,17 @@ func originList(getenv func(string) string, name string) ([]string, error) {
 		origins = append(origins, parsed.Scheme+"://"+parsed.Host)
 	}
 	return origins, nil
+}
+
+// sqsEndpoint is the SQS endpoint override, the service-specific one ahead of
+// the generic, as apps reads it.
+func sqsEndpoint(getenv func(string) string) string {
+	for _, name := range []string{"AWS_ENDPOINT_URL_SQS", "AWS_ENDPOINT_URL"} {
+		if value := strings.TrimRight(strings.TrimSpace(getenv(name)), "/"); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // artifactEndpoint is the S3 endpoint override, the service-specific one

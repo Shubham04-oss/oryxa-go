@@ -38,6 +38,30 @@ func TestFromEnvDefaults(t *testing.T) {
 	if len(config.AllowedOrigins) != 0 || config.RunTimeout != 10*time.Minute || config.DatabaseMaxConns != 8 {
 		t.Fatalf("run API config = %+v", config)
 	}
+	if config.EventsQueueURL != "" || config.WakeupBatchSize != 5 || config.WakeupMaxWait != 2*time.Minute {
+		t.Fatalf("wake-up config = %+v", config)
+	}
+}
+
+func TestFromEnvReadsWakeups(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{
+		"AGENTS_EVENTS_QUEUE_URL":        " http://localhost:4566/000000000000/agents-events ",
+		"AWS_ENDPOINT_URL_SQS":           "http://localhost:4566/",
+		"AGENTS_WAKEUP_BATCH_SIZE":       "3",
+		"AGENTS_WAKEUP_MAX_WAIT_SECONDS": "30",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.EventsQueueURL != "http://localhost:4566/000000000000/agents-events" || config.SQSEndpoint != "http://localhost:4566" ||
+		config.WakeupBatchSize != 3 || config.WakeupMaxWait != 30*time.Second {
+		t.Fatalf("wake-up config = %+v", config)
+	}
+	for name, value := range map[string]string{"AGENTS_WAKEUP_BATCH_SIZE": "0", "AGENTS_WAKEUP_MAX_WAIT_SECONDS": "1"} {
+		if _, err := FromEnv(env(map[string]string{name: value})); err == nil {
+			t.Errorf("FromEnv() error = nil for %s=%q", name, value)
+		}
+	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {

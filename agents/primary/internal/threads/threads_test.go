@@ -496,6 +496,8 @@ func TestARunThatCannotStartSaysWhy(t *testing.T) {
 		{Message: "hi", Confirmations: []Answer{{ID: "c", Confirmed: true}}},
 		{Message: strings.Repeat("a", maxMessageRunes+1)},
 		{Confirmations: []Answer{{ID: "c", Confirmed: true}}},
+		{Message: "hi", StartedBy: "a stranger"},
+		{Confirmations: []Answer{{ID: "c", Confirmed: true}}, Wakeup: "wb_1"},
 	} {
 		if _, err := h.service.StartRun(context.Background(), asha, created.ID, input); !errors.Is(err, ErrInvalid) {
 			t.Errorf("StartRun(%.40v) = %v, want ErrInvalid", input, err)

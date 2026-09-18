@@ -46,6 +46,9 @@ var (
 const (
 	stateTitle     = "thread_title"
 	stateCreatedAt = "thread_created_at"
+	// stateWakeup is set, by the message itself, on a message that a batch
+	// of app events sent rather than the member.
+	stateWakeup = "wakeup_batch"
 )
 
 const (
@@ -162,13 +165,23 @@ func New(config Config) (*Service, error) {
 
 // Create starts a thread for the member in their organization.
 func (service *Service) Create(ctx context.Context, member Member) (Thread, error) {
+	return service.CreateTitled(ctx, member, "")
+}
+
+// CreateTitled starts a thread with a title of its own, rather than one
+// taken from its first message.
+func (service *Service) CreateTitled(ctx context.Context, member Member, title string) (Thread, error) {
+	state := map[string]any{
+		adksession.StateOrganizationID: member.OrganizationID,
+		stateCreatedAt:                 time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if title = bounded(strings.Join(strings.Fields(title), " "), maxTitleRunes); title != "" {
+		state[stateTitle] = title
+	}
 	created, err := service.sessions.Create(ctx, &session.CreateRequest{
 		AppName: service.appName,
 		UserID:  member.UserID,
-		State: map[string]any{
-			adksession.StateOrganizationID: member.OrganizationID,
-			stateCreatedAt:                 time.Now().UTC().Format(time.RFC3339Nano),
-		},
+		State:   state,
 	})
 	if err != nil {
 		return Thread{}, fmt.Errorf("create thread: %w", err)

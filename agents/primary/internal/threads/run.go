@@ -1,6 +1,7 @@
 package threads
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -44,6 +45,12 @@ var errLeaseLost = errors.New("the run lost its hold on the thread")
 type RunInput struct {
 	Message       string
 	Confirmations []Answer
+	// StartedBy is who starts the run, agentsv1.StartedByMember unless set.
+	StartedBy string
+	// Wakeup names the batch of app events a message carries, for a run
+	// that those events started rather than the member. The message then
+	// shows as from their apps, not from them.
+	Wakeup string
 }
 
 // Answer is the member's decision on one confirmation.
@@ -60,6 +67,7 @@ type Run struct {
 	member     Member
 	threadID   string
 	id         string
+	startedBy  string
 	content    *genai.Content
 	stateDelta map[string]any
 	started    time.Time
@@ -81,6 +89,12 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 		return nil, fmt.Errorf("%w: send a message or answer confirmations, not both at once", ErrInvalid)
 	case utf8.RuneCountInString(message) > maxMessageRunes:
 		return nil, fmt.Errorf("%w: a message holds at most %d characters", ErrInvalid, maxMessageRunes)
+	case input.Wakeup != "" && message == "":
+		return nil, fmt.Errorf("%w: a wake-up carries a message", ErrInvalid)
+	}
+	startedBy := cmp.Or(input.StartedBy, agentsv1.StartedByMember)
+	if startedBy != agentsv1.StartedByMember && startedBy != agentsv1.StartedByTrigger {
+		return nil, fmt.Errorf("%w: a run is started by a member or a trigger", ErrInvalid)
 	}
 
 	stored, err := service.thread(ctx, member, threadID)
@@ -89,14 +103,18 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 	}
 	pending := pendingConfirmations(sessionEvents(stored), service.agent.Name())
 
-	run := &Run{service: service, member: member, threadID: threadID}
+	run := &Run{service: service, member: member, threadID: threadID, startedBy: startedBy}
 	if message != "" {
 		if len(pending) > 0 {
 			return nil, ErrConfirmationPending
 		}
 		run.content = genai.NewContentFromText(message, genai.RoleUser)
+		run.stateDelta = map[string]any{}
 		if stateString(stored.State(), stateTitle) == "" {
-			run.stateDelta = map[string]any{stateTitle: titleFrom(message)}
+			run.stateDelta[stateTitle] = titleFrom(message)
+		}
+		if input.Wakeup != "" {
+			run.stateDelta[stateWakeup] = input.Wakeup
 		}
 	} else {
 		content, err := answerContent(input.Confirmations, pending)
@@ -114,7 +132,7 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 		SessionID:      threadID,
 		UserID:         member.UserID,
 		OrganizationID: member.OrganizationID,
-		StartedBy:      agentsv1.StartedByMember,
+		StartedBy:      startedBy,
 	}, service.lease); err != nil {
 		if errors.Is(err, runstore.ErrRunInProgress) {
 			return nil, ErrRunInProgress
@@ -235,7 +253,7 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 		return fmt.Errorf("build runner: %w", err)
 	}
 	options := []runner.RunOption{runner.WithYieldUserMessage()}
-	if run.stateDelta != nil {
+	if len(run.stateDelta) > 0 {
 		options = append(options, runner.WithStateDelta(run.stateDelta))
 	}
 	var failure error
@@ -314,7 +332,7 @@ func (run *Run) finish(ctx context.Context, counter *usage.Counter, failure erro
 		detailType = agentsv1.RunCompletedDetailType
 		detail = agentsv1.RunCompleted{
 			RunID: run.id, SessionID: run.threadID, UserID: run.member.UserID, OrganizationID: run.member.OrganizationID,
-			StartedBy: agentsv1.StartedByMember, Usage: total, Cost: cost, Models: models,
+			StartedBy: run.startedBy, Usage: total, Cost: cost, Models: models,
 			DurationMillis: duration, CompletedAt: now,
 		}
 	} else {
@@ -324,7 +342,7 @@ func (run *Run) finish(ctx context.Context, counter *usage.Counter, failure erro
 		detailType = agentsv1.RunFailedDetailType
 		detail = agentsv1.RunFailed{
 			RunID: run.id, SessionID: run.threadID, UserID: run.member.UserID, OrganizationID: run.member.OrganizationID,
-			StartedBy: agentsv1.StartedByMember, Error: reason, Usage: total, Cost: cost, Models: models,
+			StartedBy: run.startedBy, Error: reason, Usage: total, Cost: cost, Models: models,
 			DurationMillis: duration, FailedAt: now,
 		}
 		service.logger.WarnContext(ctx, "run failed", "run_id", run.id, "thread_id", run.threadID, "error", reason)

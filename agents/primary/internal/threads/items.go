@@ -44,9 +44,13 @@ const (
 	ConfirmationDeclined = "declined"
 )
 
-// AuthorMember is who a member's own messages are from. Everything else is
-// from the agent that wrote it, which in a thread is Krude.
-const AuthorMember = "member"
+// AuthorMember is who a member's own messages are from, and AuthorApps who
+// sent a message carrying events from their connected apps. Everything else
+// is from the agent that wrote it, which in a thread is Krude.
+const (
+	AuthorMember = "member"
+	AuthorApps   = "apps"
+)
 
 // adkUserAuthor is how ADK names the author of what a member sends.
 const adkUserAuthor = "user"
@@ -179,7 +183,7 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 	}
 	// A model that stopped without answering, blocked or cut short, says why
 	// rather than leaving the member with nothing.
-	if failure := strings.TrimSpace(strings.Trim(event.ErrorCode+": "+event.ErrorMessage, ": ")); failure != "" && author != AuthorMember {
+	if failure := strings.TrimSpace(strings.Trim(event.ErrorCode+": "+event.ErrorMessage, ": ")); failure != "" && event.Author != adkUserAuthor {
 		if message < 0 {
 			items = append(items, Item{Type: ItemMessage, ID: event.ID, At: event.Timestamp, Author: author})
 			message = len(items) - 1
@@ -285,10 +289,13 @@ func eventText(event *session.Event) string {
 }
 
 func authorOf(event *session.Event) string {
-	if event.Author == adkUserAuthor {
-		return AuthorMember
+	if event.Author != adkUserAuthor {
+		return event.Author
 	}
-	return event.Author
+	if _, woken := event.Actions.StateDelta[stateWakeup]; woken {
+		return AuthorApps
+	}
+	return AuthorMember
 }
 
 // responseError is the error a tool result reports, conventionally under
