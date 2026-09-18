@@ -240,6 +240,10 @@ func (store *fakeStore) ConnectionsAwaitingSubscribe(_ context.Context, maxAttem
 			continue
 		}
 		store.subscribeAttempts[id]++
+		// The real UPDATE ... RETURNING hands back the row it just
+		// incremented, attempts and all.
+		connection.AutoSubscribeAttempts = store.subscribeAttempts[id]
+		store.connections[id] = connection
 		owed = append(owed, connection)
 		if len(owed) == limit {
 			break

@@ -174,8 +174,10 @@ type connectionView struct {
 	MemberID          string `json:"member_id"`
 	ComposioAccountID string `json:"composio_account_id,omitempty"`
 	// AutoSubscribe says this connection is subscribed to everything its app
-	// delivers; AutoSubscribedAt when that finished, unset while it is still
-	// being done.
+	// delivers; AutoSubscribedAt when that finished. Unset does not mean
+	// still in progress forever - auto-subscribe gives up after a few failed
+	// attempts, logging a warning when it does, and the member can always
+	// subscribe by hand.
 	AutoSubscribe    bool       `json:"auto_subscribe"`
 	AutoSubscribedAt *time.Time `json:"auto_subscribed_at,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`

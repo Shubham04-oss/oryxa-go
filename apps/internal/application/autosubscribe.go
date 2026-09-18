@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -76,6 +77,7 @@ func (s *Service) subscribeEverything(ctx context.Context, connection domain.Con
 		// counted this one.
 		if ctx.Err() == nil {
 			logger.WarnContext(ctx, "read an app's events to subscribe to them", "error", err)
+			s.warnIfGivingUp(ctx, logger, connection)
 		}
 		return
 	}
@@ -118,6 +120,7 @@ func (s *Service) subscribeEverything(ctx context.Context, connection domain.Con
 			// business, not the member's: it is recorded and the rest go on.
 			if errors.Is(err, domain.ErrUnavailable) || errors.Is(err, domain.ErrRateLimited) {
 				logger.WarnContext(ctx, "subscribing was cut short", "trigger", definition.Slug, "error", err)
+				s.warnIfGivingUp(ctx, logger, connection)
 				return
 			}
 			logger.InfoContext(ctx, "an event could not be subscribed to",
@@ -148,6 +151,17 @@ func (s *Service) subscribeEverything(ctx context.Context, connection domain.Con
 		// add themselves, and they cannot ask for what they cannot see.
 		logger.InfoContext(ctx, "events left for the member to set up",
 			"triggers", strings.Join(needsConfig, ", "))
+	}
+}
+
+// warnIfGivingUp says, once, that a failed pass was this connection's last
+// allowed attempt. Without it, auto_subscribed_at simply stays NULL forever:
+// nothing else distinguishes "still being worked on" from "never going to
+// happen", and the member is left wondering why an app never sent anything.
+func (s *Service) warnIfGivingUp(ctx context.Context, logger *slog.Logger, connection domain.Connection) {
+	if connection.AutoSubscribeAttempts >= autoSubscribeAttempts {
+		logger.WarnContext(ctx, "auto-subscribe gave up on this connection after repeated failures; the member can still subscribe to its events by hand",
+			"attempts", connection.AutoSubscribeAttempts)
 	}
 }
 

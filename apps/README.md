@@ -194,15 +194,18 @@ It does not happen in the callback — a toolkit's events are subscribed one
 Composio call at a time, and a member's browser is waiting on that redirect.
 The connection records that it is owed and the maintenance worker does it,
 which also survives a restart part-way through and can be retried without the
-member noticing. A connection carries `auto_subscribe` and
-`auto_subscribed_at`, so a caller can tell a connection still being set up
-from one that is done.
+member noticing. A connection carries `auto_subscribe`, `auto_subscribed_at`
+and `auto_subscribe_attempts`. `auto_subscribed_at` unset does not by itself
+mean still being set up, though — it also means every attempt has been spent
+and auto-subscribe has given up, which `auto_subscribe_attempts` reaching the
+limit below says, and which is logged as a warning at the moment it happens.
 
 Every subscription that fires wakes Krude, and every wake-up is a run, so
 connecting an app has a ceiling on what it can commit someone to:
 `AutoSubscribeLimit`, 25 events. Past it the rest are left for the member, the
 same as one needing configuration. An app the pass cannot read is tried again
-next tick, three times before it is left alone.
+next tick, three times before it is left alone — the member can always
+subscribe by hand, and nothing here retries it further.
 
 Two ways to turn it off:
 

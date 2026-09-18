@@ -97,13 +97,17 @@ type Connection struct {
 	// AutoSubscribe says this connection should be subscribed to everything
 	// its app can deliver, once it is active. AutoSubscribedAt is when that
 	// finished; unset on an active connection that wants it means it is
-	// still owed.
-	AutoSubscribe    bool
-	AutoSubscribedAt *time.Time
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	ConnectedAt      *time.Time
-	RemovedAt        *time.Time
+	// still owed - or that auto-subscribe has given up after
+	// AutoSubscribeAttempts failed passes, which AutoSubscribeAttempts
+	// reaching the service's limit is what says, since a warning was also
+	// logged when it happened.
+	AutoSubscribe         bool
+	AutoSubscribedAt      *time.Time
+	AutoSubscribeAttempts int
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	ConnectedAt           *time.Time
+	RemovedAt             *time.Time
 }
 
 // ConnectionQuery narrows a listing. An org admin may list the organization's

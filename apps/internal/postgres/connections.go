@@ -12,7 +12,7 @@ import (
 
 const connectionColumns = `id, organization_id, member_id, toolkit, auth_config_id, composio_user_id,
 	composio_account_id, status, status_reason, label, return_to, auto_subscribe, auto_subscribed_at,
-	created_at, updated_at, connected_at, removed_at`
+	auto_subscribe_attempts, created_at, updated_at, connected_at, removed_at`
 
 // CreateConnection records a pending connection, with the hash of the state
 // its browser round trip carries so PendingConnection can find it again. The
@@ -332,7 +332,7 @@ func scanConnection(rows pgx.Rows) (domain.Connection, error) {
 	if err := rows.Scan(&connection.ID, &connection.OrganizationID, &connection.MemberID, &connection.Toolkit,
 		&connection.AuthConfigID, &connection.ComposioUserID, &composioAccountID, &status, &connection.StatusReason,
 		&connection.Label, &connection.ReturnTo, &connection.AutoSubscribe, &connection.AutoSubscribedAt,
-		&connection.CreatedAt, &connection.UpdatedAt,
+		&connection.AutoSubscribeAttempts, &connection.CreatedAt, &connection.UpdatedAt,
 		&connection.ConnectedAt, &connection.RemovedAt); err != nil {
 		return domain.Connection{}, fmt.Errorf("scan connection: %w", err)
 	}

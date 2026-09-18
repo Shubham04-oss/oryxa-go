@@ -1,10 +1,13 @@
 package application
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 
@@ -236,6 +239,62 @@ func TestAnAppThatKeepsFailingIsGivenUpOn(t *testing.T) {
 	}
 	if reads := h.composio.triggerLists; reads > autoSubscribeAttempts {
 		t.Fatalf("read the catalog %d times, want at most %d", reads, autoSubscribeAttempts)
+	}
+}
+
+// TestAutoSubscribeGivingUpIsLogged covers the alternative to a silent
+// auto_subscribed_at that stays NULL forever: on the pass that uses up the
+// connection's last allowed attempt, a warning says so, naming how many were
+// tried, so an operator - or the member - is not left guessing why an app's
+// events never arrived.
+func TestAutoSubscribeGivingUpIsLogged(t *testing.T) {
+	t.Parallel()
+	store := newFakeStore()
+	fake := newFakeComposio()
+	fake.triggerTypeErr = composio.ErrUnavailable
+	var logs bytes.Buffer
+	service, err := New(Dependencies{
+		Store: store, Directory: &fakeDirectory{}, Composio: fake,
+		Clock:  func() time.Time { return testClock },
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	}, Config{PublicBaseURL: "https://apps.oryxa.test", WebhookSecret: "whsec_test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connected := testClock
+	connection := domain.Connection{
+		ID: "apc_1", OrganizationID: "org_1", MemberID: "user-1", Toolkit: "github",
+		ComposioAccountID: "ca_1", Status: domain.ConnectionActive, AutoSubscribe: true,
+		CreatedAt: testClock, UpdatedAt: testClock, ConnectedAt: &connected,
+	}
+	store.connections[connection.ID] = connection
+
+	for attempt := 1; attempt <= autoSubscribeAttempts; attempt++ {
+		service.maintain(context.Background())
+		if attempt < autoSubscribeAttempts && strings.Contains(logs.String(), "gave up") {
+			t.Fatalf("gave up before the last attempt (attempt %d of %d): %s", attempt, autoSubscribeAttempts, logs.String())
+		}
+	}
+
+	if !strings.Contains(logs.String(), "auto-subscribe gave up") {
+		t.Fatalf("logs = %s, want a warning that auto-subscribe gave up", logs.String())
+	}
+	if store.connections[connection.ID].AutoSubscribedAt != nil {
+		t.Fatal("a connection nothing could be read for was marked done")
+	}
+	if got := store.connections[connection.ID].AutoSubscribeAttempts; got != autoSubscribeAttempts {
+		t.Fatalf("attempts = %d, want %d", got, autoSubscribeAttempts)
+	}
+
+	// It gave up: a further pass does not read the catalog again, and does
+	// not repeat the warning.
+	logs.Reset()
+	service.maintain(context.Background())
+	if reads := fake.triggerLists; reads != autoSubscribeAttempts {
+		t.Fatalf("read the catalog %d times, want exactly %d (no further attempts)", reads, autoSubscribeAttempts)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("logged again after giving up: %s", logs.String())
 	}
 }
 
