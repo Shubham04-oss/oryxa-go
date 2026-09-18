@@ -23,6 +23,7 @@ import (
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/session"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
@@ -114,7 +115,11 @@ type Config struct {
 	Sessions session.Service
 	// Artifacts keeps what runs produce. Optional.
 	Artifacts artifact.Service
-	Runs      RunStore
+	// Memory is what Krude remembers across a member's threads, scoped to
+	// the organization each run belongs to. Optional: without it a run has
+	// no memory at all, which is what ADK does with no memory service.
+	Memory *adkmemory.Service
+	Runs   RunStore
 	// Prices turns a run's tokens into what it cost.
 	Prices *pricing.Table
 	Logger *slog.Logger
@@ -131,6 +136,7 @@ type Service struct {
 	unattended agent.Agent
 	sessions   session.Service
 	artifacts  artifact.Service
+	memory     *adkmemory.Service
 	runs       RunStore
 	prices     *pricing.Table
 	logger     *slog.Logger
@@ -168,6 +174,7 @@ func New(config Config) (*Service, error) {
 		unattended: unattended,
 		sessions:   config.Sessions,
 		artifacts:  config.Artifacts,
+		memory:     config.Memory,
 		runs:       config.Runs,
 		prices:     config.Prices,
 		logger:     logger,
@@ -259,9 +266,20 @@ func (service *Service) Forget(ctx context.Context, organizationID, userID strin
 	if organizationID == "" {
 		return 0, errors.New("threads: forgetting needs an organization")
 	}
+	// What a conversation taught Krude goes with the conversation: memory
+	// distilled from threads in this organization would otherwise outlive
+	// the organization itself. It is forgotten even when no thread is left
+	// to remove, and a failure here does not hide one below — the queue
+	// delivers at least once and both halves are safe to repeat.
+	var failures []error
+	if service.memory != nil {
+		if err := service.memory.Forget(ctx, organizationID, userID); err != nil {
+			failures = append(failures, err)
+		}
+	}
 	listed, err := service.sessions.List(ctx, &session.ListRequest{AppName: service.appName, UserID: userID})
 	if err != nil {
-		return 0, fmt.Errorf("list threads to forget: %w", err)
+		return 0, errors.Join(append(failures, fmt.Errorf("list threads to forget: %w", err))...)
 	}
 	removed := 0
 	for _, stored := range listed.Sessions {
@@ -271,12 +289,12 @@ func (service *Service) Forget(ctx context.Context, organizationID, userID strin
 		if err := service.sessions.Delete(ctx, &session.DeleteRequest{
 			AppName: service.appName, UserID: stored.UserID(), SessionID: stored.ID(),
 		}); err != nil && !errors.Is(err, session.ErrNotFound) {
-			return removed, fmt.Errorf("forget thread: %w", err)
+			return removed, errors.Join(append(failures, fmt.Errorf("forget thread: %w", err))...)
 		}
 		service.deleteArtifacts(ctx, Member{UserID: stored.UserID(), OrganizationID: organizationID}, stored.ID())
 		removed++
 	}
-	return removed, nil
+	return removed, errors.Join(failures...)
 }
 
 // File is an artifact's content.

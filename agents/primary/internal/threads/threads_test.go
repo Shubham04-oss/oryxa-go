@@ -16,6 +16,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/artifact"
+	"google.golang.org/adk/v2/memory"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
@@ -23,6 +24,7 @@ import (
 
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
@@ -638,6 +640,107 @@ func TestForgettingAMemberOrAnOrganizationRemovesTheirThreadsThere(t *testing.T)
 	}
 	if _, err := h.service.Forget(ctx, "", ""); err == nil {
 		t.Fatal("Forget with no organization would forget everyone's threads")
+	}
+}
+
+// TestForgettingAlsoForgetsWhatKrudeRemembered checks that memory leaves with
+// the organization it was learned in. Threads and artifacts already go when a
+// member leaves or an organization is deleted; memory distilled from those
+// same threads must not be what outlives the place they were held in.
+func TestForgettingAlsoForgetsWhatKrudeRemembered(t *testing.T) {
+	ctx := context.Background()
+	remembering, err := adkmemory.New(adkmemory.InMemory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	krude, err := llmagent.New(llmagent.Config{
+		Name:  "krude",
+		Model: &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) { return nil, nil }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: newFakeRuns(), Prices: prices, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	view := func(member Member) memory.Service {
+		t.Helper()
+		scoped, err := remembering.For(adkmemory.Scope{
+			OrganizationID: member.OrganizationID, UserID: member.UserID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return scoped
+	}
+	remember := func(member Member, said string) {
+		t.Helper()
+		sessions := session.InMemoryService()
+		created, err := sessions.Create(ctx, &session.CreateRequest{AppName: "krude", UserID: member.UserID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		event := session.NewEvent(ctx, "invocation")
+		event.Author = "user"
+		event.Content = genai.NewContentFromText(said, genai.RoleUser)
+		if err := sessions.AppendEvent(ctx, created.Session, event); err != nil {
+			t.Fatal(err)
+		}
+		if err := view(member).AddSessionToMemory(ctx, created.Session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recalled := func(member Member) int {
+		t.Helper()
+		found, err := view(member).SearchMemory(ctx, &memory.SearchRequest{
+			AppName: "krude", UserID: member.UserID, Query: "migration",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(found.Memories)
+	}
+
+	ravi := Member{UserID: "user_ravi", OrganizationID: asha.OrganizationID}
+	ashaElsewhere := Member{UserID: asha.UserID, OrganizationID: "org_2"}
+	for member, said := range map[Member]string{
+		asha:          "the migration ships in March",
+		ravi:          "the migration needs review",
+		ashaElsewhere: "the migration is on hold",
+	} {
+		remember(member, said)
+	}
+
+	if _, err := service.Forget(ctx, asha.OrganizationID, asha.UserID); err != nil {
+		t.Fatalf("Forget(asha in %s): %v", asha.OrganizationID, err)
+	}
+	if got := recalled(asha); got != 0 {
+		t.Fatalf("a member who left is still remembered there: %d memories", got)
+	}
+	if got := recalled(ashaElsewhere); got != 1 {
+		t.Fatalf("leaving one organization took the member's memory in another: %d memories", got)
+	}
+	if got := recalled(ravi); got != 1 {
+		t.Fatalf("one member leaving took another's memory: %d memories", got)
+	}
+
+	if _, err := service.Forget(ctx, asha.OrganizationID, ""); err != nil {
+		t.Fatalf("Forget(%s): %v", asha.OrganizationID, err)
+	}
+	if got := recalled(ravi); got != 0 {
+		t.Fatalf("a deleted organization is still remembered: %d memories", got)
+	}
+	if got := recalled(ashaElsewhere); got != 1 {
+		t.Fatalf("deleting one organization took another's memories: %d memories", got)
 	}
 }
 

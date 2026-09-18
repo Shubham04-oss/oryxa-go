@@ -532,6 +532,56 @@ AGENTS_PRIMARY_TEST_AWS_ENDPOINT=http://localhost:4566 \
   go test ./agents/primary/internal/s3artifact/
 ```
 
+## Memory
+
+Memory is what Krude knows about a member across their threads, as opposed to
+session state, which is one conversation's own. ADK supplies both halves once
+a memory service is set on the runner: `load_memory` is a tool Krude calls
+with a query, and `preload_memory` searches on every model request and puts
+what it finds in the system prompt.
+
+No backend is wired yet, so the runner is built without a memory service and
+Krude remembers nothing between threads. What is in is the seam every backend
+has to come through, `internal/adkmemory`, because the thing that has to be
+right is not which backend keeps the memories but who is allowed to read them
+back.
+
+**Memory is scoped to an organization, not just a member.** ADK addresses
+memory by app name and user alone: `memory.SearchRequest` carries nothing
+else, and the runner fills it from the session's own user. But a member can
+belong to more than one organization — `adksession` seeds them into the one
+named on the session, or their first — and threads are already kept apart by
+the organization in their state. A memory service taking ADK's addressing at
+its word would answer a question asked in one organization with what it
+learned in another.
+
+So nothing in `adkmemory` is addressed by a user alone. A `Backend` is
+reached only through a `Scope`, which is one member in one organization and
+is invalid without both:
+
+| Type | What it is |
+| --- | --- |
+| `Scope` | Whose memory a read or write addresses. `Key` renders it as the single string a backend such as Memory Bank or mem0 addresses memory by, and no two scopes share a key |
+| `Backend` | Where memories are kept. Every call names the scope it acts in, so an implementation cannot answer outside one |
+| `Service.For` | The `memory.Service` one run is given. It holds its scope from the moment it is built |
+
+A run's scope is fixed in `internal/threads` before the run starts, from the
+member the request already resolved, rather than read off each request. The
+view refuses a request naming anyone else instead of answering it from the
+scope it happens to hold: a mismatch is a bug above it, and one that would
+read another member's memory, so it fails rather than guessing.
+
+**Memory is forgotten with the organization.** `Forget` removes every memory
+in an organization — only one member's, when a member is named — and the run
+API's own `Forget` calls it before it removes their threads, so the queue
+handler that already drops a departed member's threads and wake-ups drops
+what Krude learned from them too. Memory distilled from a conversation should
+no more outlive the organization it was held in than the conversation does.
+
+`InMemory` is a backend for development and tests, one ADK in-memory service
+per scope: the ranking is ADK's and the isolation is this package's. What it
+holds goes with the process.
+
 ## Events
 
 Agents primary publishes on EventBridge source `oryxa.agents` in the envelope
@@ -564,7 +614,8 @@ breakdown, priced by `internal/pricing`.
 
 ADK's web UI runs the agents locally. Its sessions, conversation events and
 state live in PostgreSQL, its artifacts in S3 when a bucket is named (see
-[Artifacts](#artifacts)), and searchable memory remains in memory for now.
+[Artifacts](#artifacts)), and it runs without a memory service, as the
+service does (see [Memory](#memory)).
 The session store uses ADK's native relational service through
 the repository's instrumented PostgreSQL pool and keeps its tables in the
 `agents_primary` schema. Log in for ADC and AWS once, start PostgreSQL, and

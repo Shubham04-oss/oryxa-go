@@ -17,12 +17,14 @@ import (
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/memory"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session/compaction"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
 
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
@@ -271,11 +273,27 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 		// steers it: only the agent that can reach nothing outside runs it.
 		answering = service.unattended
 	}
+	// The run's memory is bound to the member's organization before the run
+	// starts. ADK addresses memory by user alone, and a member can belong to
+	// more than one organization, so the scope cannot be left to be read off
+	// each request: this view answers within it or not at all.
+	var remembering memory.Service
+	if service.memory != nil {
+		scoped, err := service.memory.For(adkmemory.Scope{
+			OrganizationID: run.member.OrganizationID,
+			UserID:         run.member.UserID,
+		})
+		if err != nil {
+			return fmt.Errorf("scope memory to the member's organization: %w", err)
+		}
+		remembering = scoped
+	}
 	adkRunner, err := runner.New(runner.Config{
 		AppName:         service.appName,
 		Agent:           answering,
 		SessionService:  service.sessions,
 		ArtifactService: service.artifacts,
+		MemoryService:   remembering,
 	})
 	if err != nil {
 		return fmt.Errorf("build runner: %w", err)
