@@ -301,19 +301,28 @@ func (service *Service) Run(ctx context.Context) {
 	}
 }
 
+// claimsPerSweep bounds how many claims one sweep makes while each comes back
+// full. A backlog then drains at the database's pace, GroupsPerSweep groups a
+// claim, rather than GroupsPerSweep groups a sweep interval; the bound only
+// makes a sweep under constant load end, so retention and shutdown get their
+// turn.
+const claimsPerSweep = 32
+
 func (service *Service) flush(ctx context.Context) {
-	batches, err := service.store.ClaimDue(ctx, service.config.Rule, service.config.ClaimLease, service.config.GroupsPerSweep)
-	if err != nil {
-		if ctx.Err() == nil {
+	for range claimsPerSweep {
+		batches, err := service.store.ClaimDue(ctx, service.config.Rule, service.config.ClaimLease, service.config.GroupsPerSweep)
+		if err != nil && ctx.Err() == nil {
 			service.logger.ErrorContext(ctx, "claim due trigger batches failed", "error", err)
 		}
-		if len(batches) == 0 {
-			return
+		for _, batch := range batches {
+			if err := service.ready(ctx, batch); err != nil && ctx.Err() == nil {
+				service.logger.ErrorContext(ctx, "make trigger batch ready", "batch_id", batch.ID, "error", err)
+			}
 		}
-	}
-	for _, batch := range batches {
-		if err := service.ready(ctx, batch); err != nil && ctx.Err() == nil {
-			service.logger.ErrorContext(ctx, "make trigger batch ready", "batch_id", batch.ID, "error", err)
+		// A claim that came back short took everything due. One that failed
+		// is tried again next sweep.
+		if err != nil || ctx.Err() != nil || len(batches) == 0 || len(batches) < service.config.GroupsPerSweep {
+			return
 		}
 	}
 }

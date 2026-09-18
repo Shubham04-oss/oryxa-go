@@ -128,8 +128,12 @@ headroom beneath the product's absolute delivery ceiling.
 `BATCHING_LARGEST_BATCH` must be at least the cold-start target, and the claim
 lease must exceed the sweep interval. `BATCHING_JEV_TIMEOUT` may be at most
 `10s`, so a message is always handled well within the queue's 60-second
-visibility timeout and never handled twice for being slow. At least two groups are handled per sweep
-so immediate traffic cannot consume every worker slot and starve due digests.
+visibility timeout and never handled twice for being slow.
+`BATCHING_GROUPS_PER_SWEEP` is how many groups one claim takes, at least two
+so immediate traffic cannot consume every slot and starve due digests. While
+claims come back full a sweep claims again, up to 32 times, so a backlog
+drains at the database's pace rather than that many groups per sweep
+interval.
 
 The current agents service still consumes app triggers directly. Do not route
 the ready event to agents until that consumer is switched off, or the same app
@@ -143,5 +147,3 @@ Found in review before the first merge, and not yet addressed:
   every app payload — mail bodies, direct messages — to TypeSafe, for every
   organization, with no per-organization opt-in. Leave it unset until that
   sharing is approved. `TYPESAFE_BASE_URL` also accepts `http://`.
-- **Throughput is bounded per replica**: at most `BATCHING_GROUPS_PER_SWEEP`
-  groups per sweep interval, so the hard cadence holds only below that rate.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -28,6 +29,10 @@ type fakeStore struct {
 	discarded []string
 	unclaimed []string
 	claimErr  error
+	// backlog, when set, is how many due groups wait: each claim takes up to
+	// its limit of them.
+	backlog int
+	claims  int
 	// swept is the cutoff each sweep asked tombstones to be deleted before.
 	swept []time.Time
 }
@@ -42,8 +47,20 @@ func (store *fakeStore) Record(_ context.Context, trigger domain.Trigger) (domai
 	store.recorded = append(store.recorded, trigger)
 	return domain.Admitted, nil
 }
-func (store *fakeStore) ClaimDue(context.Context, domain.Rule, time.Duration, int) ([]domain.Batch, error) {
-	return store.batches, store.claimErr
+func (store *fakeStore) ClaimDue(_ context.Context, _ domain.Rule, _ time.Duration, limit int) ([]domain.Batch, error) {
+	store.claims++
+	if store.backlog == 0 {
+		return store.batches, store.claimErr
+	}
+	batches := make([]domain.Batch, min(limit, store.backlog))
+	store.backlog -= len(batches)
+	for index := range batches {
+		id := fmt.Sprintf("bat_%d_%d", store.claims, index)
+		batches[index] = domain.Batch{ID: id, OrganizationID: "org_1", MemberID: "user_1", Lane: domain.LaneDigest,
+			Triggers: []domain.Trigger{{ID: "evt_" + id, ReceivedAt: testClock,
+				Classification: domain.Classification{Lane: domain.LaneDigest, Classifier: "default-digest.v1"}}}}
+	}
+	return batches, nil
 }
 func (store *fakeStore) Unclaim(_ context.Context, _ string, ids []string) error {
 	store.unclaimed = append(store.unclaimed, ids...)
@@ -385,5 +402,26 @@ func TestACallerGivingUpDoesNotOpenTheCircuit(t *testing.T) {
 	}
 	if provider.asked != 2*breakerFailures {
 		t.Fatalf("asked %d times, want the circuit still closed", provider.asked)
+	}
+}
+
+// TestABacklogDrainsWithinOneSweep: a sweep keeps claiming while its claims
+// come back full, so a backlog drains at the database's pace rather than a
+// few groups a second, and stops at the first short claim.
+func TestABacklogDrainsWithinOneSweep(t *testing.T) {
+	store := &fakeStore{backlog: 20}
+	service := New(store, nil, Config{GroupsPerSweep: 8}, nil)
+	service.flush(context.Background())
+	if store.claims != 3 || len(store.completed) != 20 || store.backlog != 0 {
+		t.Fatalf("claims = %d, completed = %d, left = %d; want three claims taking all twenty", store.claims, len(store.completed), store.backlog)
+	}
+}
+
+func TestASweepUnderConstantLoadStillEnds(t *testing.T) {
+	store := &fakeStore{backlog: 100_000}
+	service := New(store, nil, Config{GroupsPerSweep: 8}, nil)
+	service.flush(context.Background())
+	if store.claims != claimsPerSweep || len(store.completed) != claimsPerSweep*8 {
+		t.Fatalf("claims = %d, completed = %d; want the sweep to stop after %d claims", store.claims, len(store.completed), claimsPerSweep)
 	}
 }
