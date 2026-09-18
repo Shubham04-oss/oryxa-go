@@ -5,16 +5,17 @@ configuration behind every agent interaction. adk-go is its engine and Gemini
 its model. The Cloudflare chat layer, `durable-agent`, talks to it over HTTP,
 and the supporting services in `secondary` sit beside it.
 
-Status: the engine is in. adk-go v2.4.0 runs Krude, a Gemini assistant with
-dedicated sub-agents, dynamic sub-agents, temporary helpers and toolboxes that
-load on demand with their own skills; the AgentCore sandbox and browser are
-wired today. A model router sends planning and bulk work to the lite model, a
-prompt cache layer holds large stable prefixes on Vertex, and the events
-outbox, publisher and dispatcher are in with contracts in
-`contracts/events/agents/v1`. `cmd/devui` opens it in ADK's development web UI.
-The service itself, mounted in the single `oryxa` binary as `agents`, still
-serves only `GET /healthz`; the run and stream API, and the wiring of the
-events and cache components into it, land next.
+Status: the engine is in, and members reach it. adk-go v2.4.0 runs Krude, a
+Gemini assistant with dedicated sub-agents, dynamic sub-agents, temporary
+helpers and toolboxes that load on demand with their own skills; the AgentCore
+sandbox and browser are wired today. A model router sends planning and bulk
+work to the lite model, a prompt cache layer holds large stable prefixes on
+Vertex, and the events outbox, publisher and dispatcher are in with contracts
+in `contracts/events/agents/v1`. The service, mounted in the single `oryxa`
+binary as `agents`, serves the run API: a member's threads with Krude, each
+run streamed as server-sent events with the member's own token on it (see
+[Run API](#run-api)). `cmd/devui` still opens the same Krude in ADK's
+development web UI.
 
 ## Agents
 
@@ -204,10 +205,100 @@ archived integrations service, were archived on 2026-09-17 with the
 connections and integrations services; the code is at tag
 `archive/connections-and-integrations-2026-09-17`.
 
-**Not yet.** There is no run API yet, so outside tests nothing calls
-`memberauth.WithAccessToken`; every development UI run acts through the
-member's standing grant instead, and a member who has not granted one cannot
-use the apps toolbox. No run starts from a trigger either.
+**Member present, in practice.** The run API puts the caller's own access
+token — the bearer token, or the web app's `oryxa_access` cookie, which holds
+the same token — on every run with `memberauth.WithAccessToken`, so a
+member's own turn needs no grant. A development UI run still acts through the
+member's standing grant, since ADK's launcher has no member token to forward.
+
+**Not yet.** No run starts from a trigger, so the member-absent path is
+exercised only by the development UI and tests.
+
+## Run API
+
+The `agents` service serves a member's conversations with Krude, called
+threads, under their organization. A thread is an ADK session whose user is
+the member and whose state names the organization it was started in, so a
+member reaches only their own threads, and only there. Every route asks auth
+who the caller is, forwarding their bearer token or `oryxa_access` cookie
+(`internal/authclient`); a cookie can change nothing unless the request comes
+from an origin in `AGENTS_ALLOWED_ORIGINS`, and an agent's own token is
+refused: a thread is the member's conversation, and an agent reaches Krude
+from inside a run.
+
+| Route | What it does |
+| --- | --- |
+| `GET /v1/organizations/{org}/threads` | The member's threads here, the most recently active first: `{"threads": [...]}` |
+| `POST /v1/organizations/{org}/threads` | Starts a thread; `201` with it. Its state is seeded from the member's auth record in this organization |
+| `GET /v1/organizations/{org}/threads/{thread}` | The thread with its history as items, and `pending_confirmations` |
+| `DELETE /v1/organizations/{org}/threads/{thread}` | Removes the thread, and the artifacts its runs kept that are not the member's own `user:` ones |
+| `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run |
+
+A thread is `{"id", "title", "created_at", "updated_at"}`; its title is the
+first line of its first message.
+
+**Runs.** A run's body is a message, `{"message": "..."}`, or the member's
+answers to the confirmations the thread is waiting on,
+`{"confirmations": [{"id": "...", "confirmed": true}]}` — never both. Every
+waiting confirmation is answered in one request, since an unanswered one
+would leave its tool neither run nor refused, and a message is refused with
+`409 confirmation_pending` until they are. Everything that can refuse a run
+happens before the stream opens, so a refusal is an ordinary JSON error:
+
+| Code | Status | When |
+| --- | --- | --- |
+| `invalid_request` | 400 | The body is not one of the two shapes, or answers something that is not waiting |
+| `unauthorized` / `forbidden` | 401 / 403 | Auth does not know the caller, or they are not in the organization; an agent's token; a cookie from another origin |
+| `not_found` | 404 | Not the member's thread in this organization |
+| `run_in_progress` | 409 | Another run is answering the thread |
+| `confirmation_pending` | 409 | A message while a tool waits for the member's answer |
+| `agents_unavailable` | 503 | This server has no Google Cloud project to run Krude on |
+
+Once the run starts, the response is `text/event-stream`, with the run's ID in
+`X-Oryxa-Run`. Each event is named after the item it carries and its data is
+the item as JSON; a `: keep-alive` comment goes out every 15 seconds, so a
+proxy does not close a run while Krude works:
+
+| Item | Carries |
+| --- | --- |
+| `run_started` | `run_id` |
+| `message` | `author` (`member`, or the agent), `text`; `error` when the model stopped without answering |
+| `delta` | A piece of Krude's answer as it is written; the `message` that follows holds the whole text |
+| `tool_call` | `call_id`, `tool`, `arguments` (left out above 16 KiB) |
+| `tool_result` | `call_id`, `tool`; `failed` and `error` when it failed |
+| `confirmation` | `call_id` (what the answer names), `tool`, `arguments`, `hint`, `status` |
+| `run_completed` | `run_id`, `usage` |
+| `run_failed` | `run_id`, and `error` in words the member can act on |
+
+A thread's history is the same items, without deltas or the run's own, each
+with the stored event's `id` so a client can match what it streamed; a
+confirmation there says whether it was `approved` or `declined`. A tool's
+reply that it is waiting for its confirmation is not shown as its result: the
+result comes when it runs.
+
+**One run at a time.** A run holds its thread in `agents_primary.agent_runs`
+while it runs, with a lease it renews every third of a minute: a partial
+unique index keeps a second running run off the thread across every replica,
+and the next run to start abandons one whose replica died once its lease has
+run out (`internal/runstore`). Every run is kept there with who started it,
+how it ended and what it cost.
+
+**Cost.** Every model Krude and its helpers run on is wrapped
+(`internal/usage`), so a run adds up the tokens of every model call it makes —
+Krude's own, and those of the planner, researcher, helpers and dynamic
+sub-agents, which run inside the tool call that started them. Finishing a run
+records its outcome and `agents.run.completed.v1` or `agents.run.failed.v1`
+in one transaction, each carrying the totals and a per-model breakdown priced
+by `internal/pricing`. A failed run still reports what it spent.
+
+**Deadlines.** A run lasts at most `AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS`, and
+its stream sets its own write deadline just past that, since the host sets
+none for this service. A member who stops listening stops the run: its context
+is the request's.
+
+**Not yet.** A run is not durable: a closed tab or a deploy ends it, and what
+it had stored stays in the thread. Artifacts a run keeps are not served by
+this API. Guardrails are not wired (see [Guardrails](#guardrails)).
 
 ## Models and routing
 
@@ -339,9 +430,10 @@ startup, and starts the dispatcher when `EVENTBRIDGE_ENDPOINT` is set — with
 dummy credentials for the emulator, like auth — so
 `EVENTBRIDGE_ENDPOINT=http://localhost:4566` publishes session events to the
 LocalStack bus from `docker-compose.yml`. Without an endpoint the rows wait in
-the outbox for the service to drain. `run.completed` and `run.failed` need the
-run API and land with it; the pricing table that fills their cost and prices is
-already in `internal/pricing`.
+the outbox for the service to drain. The service runs the dispatcher as a
+worker, and records `run.completed` and `run.failed` as each run ends (see
+[Run API](#run-api)); consumers get the run's totals and a per-model
+breakdown, priced by `internal/pricing`.
 
 ## Development UI
 
@@ -426,10 +518,32 @@ repository root's `.env`:
 curl -i http://localhost:8080/healthz
 ```
 
-Primary installs no schema of its own this way — `Migrate` is nil, since ADK's
-tables live in the separate pool Development UI above opens for them, not the
-one this command shares with the rest of `oryxa` — and it deploys as part of
-the one `oryxa` image; there is no Dockerfile of its own any more.
+Its migrations install `agents_primary.agent_runs` and the events outbox on
+the host's pool, then ADK's session tables. ADK names its tables without a
+schema, so they migrate, and the service keeps them, on a pool of its own
+whose search_path leads with `agents_primary`
+(`postgreskit.Database.WithSchema`), sized by
+`AGENTS_PRIMARY_DATABASE_MAX_CONNS` and connecting only when first used.
+`AGENTS_PRIMARY_AUTO_MIGRATE` is `cmd/devui`'s alone; the binary migrates
+under `ORYXA_AUTO_MIGRATE`.
+
+Without `GOOGLE_CLOUD_PROJECT` there is no model to run Krude on, and the
+service mounts anyway, answering every thread route with `503
+agents_unavailable` rather than stopping every other service in the process
+from starting. With it, the service needs the database and `AUTH_URL`, which
+defaults to this process when it runs auth. It deploys as part of the one
+`oryxa` image; there is no Dockerfile of its own.
+
+To drive the API locally without Cognito, run the auth stub, whose tokens are
+the seeded identities' role names (`test/identities`), and point `AUTH_URL` at
+it:
+
+```sh
+AUTHSTUB_ADDRESS=127.0.0.1:18080 go run ./test/cmd/authstub
+curl -X POST -H 'Authorization: Bearer owner' http://localhost:8080/v1/organizations/<org>/threads
+curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' \
+  -d '{"message":"hello"}' http://localhost:8080/v1/organizations/<org>/threads/<thread>/runs
+```
 
 ## Configuration
 
@@ -443,8 +557,8 @@ the one `oryxa` image; there is no Dockerfile of its own any more.
 | `AGENTS_PRIMARY_ARTIFACT_BUCKET` | unset | S3 bucket artifacts are kept in; without it they are held in memory and go with the process |
 | `EVENT_BUS_NAME` | `default` | EventBridge bus events publish on |
 | `EVENTBRIDGE_ENDPOINT` | unset | EventBridge endpoint override for the LocalStack emulator |
-| `DATABASE_URL` | unset | PostgreSQL connection for ADK sessions, events and state, and the read of the member's auth tables when a session is created; required by the ADK launcher |
-| `AGENTS_PRIMARY_AUTO_MIGRATE` | `true` | Create the `agents_primary` schema and migrate ADK session tables at startup |
+| `DATABASE_URL` | unset | PostgreSQL connection for ADK sessions, events and state, runs, and the read of the member's auth tables when a session is created |
+| `AGENTS_PRIMARY_AUTO_MIGRATE` | `true` | `cmd/devui` only: create the `agents_primary` schema and migrate ADK session tables at startup |
 | `AWS_REGION` | `ap-south-1` | AWS Region for Bedrock AgentCore; Mumbai supports the AgentCore tools |
 | `AGENTS_PRIMARY_SANDBOX_CODE_INTERPRETER_ID` | `aws.codeinterpreter.v1` | Built-in or provisioned AgentCore Code Interpreter identifier |
 | `AGENTS_PRIMARY_SANDBOX_SESSION_TIMEOUT_SECONDS` | `900` | Per-conversation sandbox lifetime; 60–28800 seconds |
@@ -456,6 +570,9 @@ the one `oryxa` image; there is no Dockerfile of its own any more.
 | `APPS_URL` | unset | The apps service's own URL; when set, `cmd/devui` builds the apps toolbox (see Acting for a member) |
 | `AUTH_URL` | unset | Auth's own URL; where a member-absent run exchanges the member's standing grant for an agent token |
 | `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |
+| `AGENTS_ALLOWED_ORIGINS` | unset | Origins, comma-separated, whose cookie-authenticated requests may start runs and change threads; the web app's |
+| `AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS` | `600` | Longest one run may take; 60–3600 seconds |
+| `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
 
-The HTTP server sets no write timeout: agent streams outlive any fixed write
-deadline, so each streaming handler sets its own.
+The host sets no write timeout for this service: a run's stream outlives any
+fixed write deadline, so the run route sets its own.

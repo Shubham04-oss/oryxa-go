@@ -65,28 +65,54 @@ type Cost struct {
 	TotalMicros  int64 `json:"total_micros"`
 }
 
-// RunCompleted announces a finished run with the usage it cost and the prices
-// that usage was billed at.
-type RunCompleted struct {
-	RunID          string      `json:"run_id"`
-	SessionID      string      `json:"session_id"`
-	UserID         string      `json:"user_id"`
-	OrganizationID string      `json:"organization_id,omitempty"`
-	Model          string      `json:"model"`
-	Usage          Usage       `json:"usage"`
-	Cost           Cost        `json:"cost"`
-	Prices         ModelPrices `json:"prices"`
-	DurationMillis int64       `json:"duration_millis"`
-	CompletedAt    time.Time   `json:"completed_at"`
+// Who started a run.
+const (
+	// StartedByMember is a member's own turn in a conversation.
+	StartedByMember = "member"
+)
+
+// ModelUsage is what one model spent within a run, priced at the rates it
+// was billed at.
+type ModelUsage struct {
+	Model  string      `json:"model"`
+	Usage  Usage       `json:"usage"`
+	Cost   Cost        `json:"cost"`
+	Prices ModelPrices `json:"prices"`
+	// Priced is false for a model the price table does not know. Its Cost and
+	// Prices are then zero rather than a guess, and the run's totals leave it
+	// out of Cost while still counting its tokens in Usage.
+	Priced bool `json:"priced"`
 }
 
-// RunFailed announces a run that ended in an error.
+// RunCompleted announces a finished run with what it cost. A run calls more
+// than one model — the conversation's own, and the lite model its planner,
+// helpers and sub-agents run on — so Usage and Cost are totals across every
+// model it called, and Models breaks them down.
+type RunCompleted struct {
+	RunID          string       `json:"run_id"`
+	SessionID      string       `json:"session_id"`
+	UserID         string       `json:"user_id"`
+	OrganizationID string       `json:"organization_id,omitempty"`
+	StartedBy      string       `json:"started_by"`
+	Usage          Usage        `json:"usage"`
+	Cost           Cost         `json:"cost"`
+	Models         []ModelUsage `json:"models"`
+	DurationMillis int64        `json:"duration_millis"`
+	CompletedAt    time.Time    `json:"completed_at"`
+}
+
+// RunFailed announces a run that ended in an error. The tokens it spent
+// before failing were still billed, so it carries them too.
 type RunFailed struct {
-	RunID          string    `json:"run_id"`
-	SessionID      string    `json:"session_id"`
-	UserID         string    `json:"user_id"`
-	OrganizationID string    `json:"organization_id,omitempty"`
-	Model          string    `json:"model"`
-	Error          string    `json:"error"`
-	FailedAt       time.Time `json:"failed_at"`
+	RunID          string       `json:"run_id"`
+	SessionID      string       `json:"session_id"`
+	UserID         string       `json:"user_id"`
+	OrganizationID string       `json:"organization_id,omitempty"`
+	StartedBy      string       `json:"started_by"`
+	Error          string       `json:"error"`
+	Usage          Usage        `json:"usage"`
+	Cost           Cost         `json:"cost"`
+	Models         []ModelUsage `json:"models"`
+	DurationMillis int64        `json:"duration_millis"`
+	FailedAt       time.Time    `json:"failed_at"`
 }

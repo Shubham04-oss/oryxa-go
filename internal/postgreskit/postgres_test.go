@@ -33,6 +33,40 @@ func TestDetachedReportsItsExtensions(t *testing.T) {
 	database.Close()
 }
 
+func TestWithSchemaLeadsTheSearchPathOfALazyPool(t *testing.T) {
+	shared := Detached(map[string]string{"vector": "0.8.6"})
+	defer shared.Close()
+
+	scoped, err := shared.WithSchema(context.Background(), "agents_primary", "oryxa-agents", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scoped.Close()
+	config := scoped.Pool.Config()
+	if got := config.ConnConfig.RuntimeParams["search_path"]; got != "agents_primary,public" {
+		t.Fatalf("search_path = %q, want agents_primary,public", got)
+	}
+	if got := config.ConnConfig.RuntimeParams["application_name"]; got != "oryxa-agents" {
+		t.Fatalf("application_name = %q", got)
+	}
+	if config.MaxConns != 3 {
+		t.Fatalf("MaxConns = %d, want 3", config.MaxConns)
+	}
+	// The pool it came from keeps its own search_path.
+	if got, set := shared.Pool.Config().ConnConfig.RuntimeParams["search_path"]; set {
+		t.Fatalf("the shared pool's search_path changed to %q", got)
+	}
+	if scoped.SQLX == nil {
+		t.Fatal("the scoped pool has no sqlx facade")
+	}
+	if err := scoped.RequireExtensions("pgvector"); err != nil {
+		t.Fatalf("the scoped pool lost the extensions it shares: %v", err)
+	}
+	if _, err := shared.WithSchema(context.Background(), "agents_primary, public", "", 0); err == nil {
+		t.Fatal("WithSchema() accepted a schema that is not one identifier")
+	}
+}
+
 func TestOpenDoesNotEchoInvalidDatabaseCredentials(t *testing.T) {
 	const secret = "database-password-must-not-leak"
 	_, err := Open(context.Background(), Config{

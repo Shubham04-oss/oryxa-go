@@ -12,9 +12,14 @@ import (
 type fakeMembers struct {
 	member Member
 	err    error
+	// asked records the organization each lookup named.
+	asked *[]string
 }
 
-func (f fakeMembers) Member(context.Context, string) (Member, error) {
+func (f fakeMembers) Member(_ context.Context, _, organizationID string) (Member, error) {
+	if f.asked != nil {
+		*f.asked = append(*f.asked, organizationID)
+	}
 	return f.member, f.err
 }
 
@@ -161,6 +166,51 @@ func TestSeedingSkipsUsersWhoAreNotMembers(t *testing.T) {
 	}
 	if _, err := created.Session.State().Get(StateOrgName); !errors.Is(err, session.ErrStateKeyNotExist) {
 		t.Fatalf("seeding reached a non-member: org_name = %v, error %v", got, err)
+	}
+}
+
+func TestSeedingUsesTheOrganizationTheCallerNamed(t *testing.T) {
+	var asked []string
+	service := seedingSessionService{
+		Service: session.InMemoryService(),
+		members: fakeMembers{asked: &asked, member: Member{
+			UserID: "user-owner", DisplayName: "Asha",
+			OrganizationID: "org_2", OrganizationName: "Second Org", Role: "member",
+		}},
+	}
+	created, err := service.Create(context.Background(), &session.CreateRequest{
+		AppName: "krude", UserID: "user-owner",
+		State: map[string]any{StateOrganizationID: "org_2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || asked[0] != "org_2" {
+		t.Fatalf("member lookups named %v, want [org_2]", asked)
+	}
+	if got, _ := created.Session.State().Get(StateOrgName); got != "Second Org" {
+		t.Fatalf("org_name = %v, want the named organization's", got)
+	}
+}
+
+func TestSeedingLeavesAnOrganizationItCannotFindAsSent(t *testing.T) {
+	var asked []string
+	service := seedingSessionService{Service: session.InMemoryService(), members: fakeMembers{asked: &asked, err: ErrMemberNotFound}}
+	created, err := service.Create(context.Background(), &session.CreateRequest{
+		AppName: "krude", UserID: "user-owner",
+		State: map[string]any{StateOrganizationID: "org_elsewhere"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != 1 || asked[0] != "org_elsewhere" {
+		t.Fatalf("member lookups named %v, want [org_elsewhere]", asked)
+	}
+	if got, _ := created.Session.State().Get(StateOrganizationID); got != "org_elsewhere" {
+		t.Fatalf("organization_id = %v, want the caller's", got)
+	}
+	if _, err := created.Session.State().Get(StateOrgName); !errors.Is(err, session.ErrStateKeyNotExist) {
+		t.Fatalf("a member lookup that found nobody seeded org_name: error %v", err)
 	}
 }
 

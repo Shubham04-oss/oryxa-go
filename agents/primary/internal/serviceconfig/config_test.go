@@ -35,6 +35,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.AppsURL != "" || config.AuthURL != "" || config.ServiceKeyID != "" {
 		t.Fatalf("apps config = %+v", config)
 	}
+	if len(config.AllowedOrigins) != 0 || config.RunTimeout != 10*time.Minute || config.DatabaseMaxConns != 8 {
+		t.Fatalf("run API config = %+v", config)
+	}
 }
 
 func TestFromEnvOverrides(t *testing.T) {
@@ -62,6 +65,9 @@ func TestFromEnvOverrides(t *testing.T) {
 		"APPS_URL":                                       " http://localhost:8091 ",
 		"AUTH_URL":                                       " http://localhost:8081 ",
 		"AGENTS_PRIMARY_SERVICE_KEY_ID":                  " arn:aws:kms:ap-south-1:1:key/agents ",
+		"AGENTS_ALLOWED_ORIGINS":                         " http://localhost:3000, https://app.oryxa.test/ ",
+		"AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS":             "300",
+		"AGENTS_PRIMARY_DATABASE_MAX_CONNS":              "4",
 	}))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
@@ -89,6 +95,24 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if config.AppsURL != "http://localhost:8091" || config.AuthURL != "http://localhost:8081" || config.ServiceKeyID != "arn:aws:kms:ap-south-1:1:key/agents" {
 		t.Fatalf("apps config = %+v", config)
+	}
+	if len(config.AllowedOrigins) != 2 || config.AllowedOrigins[0] != "http://localhost:3000" || config.AllowedOrigins[1] != "https://app.oryxa.test" {
+		t.Fatalf("allowed origins = %v", config.AllowedOrigins)
+	}
+	if config.RunTimeout != 5*time.Minute || config.DatabaseMaxConns != 4 {
+		t.Fatalf("run API config = %+v", config)
+	}
+}
+
+func TestFromEnvRejectsInvalidRunAPISettings(t *testing.T) {
+	for name, value := range map[string]string{
+		"AGENTS_ALLOWED_ORIGINS":             "localhost:3000",
+		"AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS": "10",
+		"AGENTS_PRIMARY_DATABASE_MAX_CONNS":  "0",
+	} {
+		if _, err := FromEnv(env(map[string]string{name: value})); err == nil {
+			t.Errorf("FromEnv() error = nil for %s=%q", name, value)
+		}
 	}
 }
 

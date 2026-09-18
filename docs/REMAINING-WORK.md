@@ -10,8 +10,7 @@ Nothing here is a promise about behaviour. Where something was confirmed — by
 a command, by reading the code, or against a provider's documentation — it
 says so; where it was only noticed in passing, it says that instead.
 
-Brought up to date on 2026-09-17, after the `apps` service replaced
-connections.
+Brought up to date on 2026-09-18, with the run API.
 
 **Direction.** Third-party apps reach first users through Composio rather than
 Oryxa's own connection layer. The `apps` service is that: built and tested, and
@@ -129,14 +128,27 @@ No toolbox in `agents/primary` searches rag or cites from it, so Krude cannot
 answer from an organization's own documents
 ([rag/README.md, Not yet](../rag/README.md#not-yet)).
 
-### There is no run API
+### A run is not durable, and not yet run against Gemini
 
-`agents/primary/service.go` mounts a health check and nothing else. Only
-`cmd/devui` runs Krude, and nothing outside tests forwards a present member's
-token or mints an agent token for an absent one
-([agents/primary/README.md](../agents/primary/README.md#acting-for-a-member)).
-The service's write deadline is deliberately zero so that a run can stream;
-a run handler has to set its own through `http.ResponseController`.
+The `agents` service now serves the run API: a member's threads with Krude,
+each run streamed as server-sent events with the member's own token on it,
+confirmations answered through it, one run per thread held by a lease across
+replicas, and `agents.run.completed.v1` / `agents.run.failed.v1` with a
+per-model cost ([agents/primary/README.md, Run API](../agents/primary/README.md#run-api)).
+What is left:
+
+- **Nothing has streamed a real answer yet.** A live run on 2026-09-18
+  created a thread, streamed the member's message back, and recorded the
+  failure when Vertex refused the development machine's Application Default
+  Credentials (`invalid_rapt`: the Google login needs signing in again,
+  `gcloud auth application-default login`). Every other path — confirmations
+  approved and declined, cost, isolation between members and organizations —
+  is proven against ADK's real runner with a scripted model.
+- **A run ends with its request.** A closed tab or a deploy stops it; what it
+  had stored stays in the thread. A durable run, one that outlives its
+  stream, comes with runs that start from triggers.
+- **Artifacts a run keeps are not served by the API**, so a browser
+  screenshot is not reachable from the web app yet.
 
 ### Triggers do not start runs
 
@@ -320,6 +332,7 @@ reads. They prove nothing about whether the provider agrees.
 | Rag | Bedrock and Vertex embedding and answering; Bedrock reranking, the least exercised code in the service; S3 Vectors; the provisioner, which has never created anything | An AWS account — S3 Vectors has no local emulation — and a Vertex project ([rag/README.md](../rag/README.md#what-has-and-has-not-been-run)) |
 | Apps | Connecting an account end to end, and therefore every path past it: a tool against a real app, a subscribed trigger, a real delivery, and the outbox reaching the bus. The catalog, tool marks, link creation, the webhook provisioner, webhook verification, MCP and the refusals all ran for real on 2026-09-18 ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)) | A member at a browser to finish Composio's hosted page, and LocalStack up for the bus |
 | Auth | The agent grant against a provisioned Cognito agent client | The agent client provisioned |
+| Agents | A run through the run API that Gemini answers: thread, stream, refusals and run records ran live on 2026-09-18, the model call failed on stale credentials | `gcloud auth application-default login` on the machine running it |
 | Journey | `test/run.sh` has not run since PR #17 rewrote it for the one binary, and it covers teams, files and email only | Docker |
 
 ## 7. Before production
@@ -359,6 +372,12 @@ Kept short; the pull requests hold the detail.
   sweep; paged rag's document lists and tested its access rules, events and
   clients; and fixed auth's invitation links and agent-grant `return_to`,
   along with three bugs found while proving those.
+- **PR #23**, the run API: the `agents` service serves a
+  member's threads with Krude and streams each run, with the member's own
+  token on it, confirmations answered through the API, one run per thread
+  across replicas, and run events with a per-model cost. Krude's assembly
+  moved out of `cmd/devui` so the service and the development UI run the
+  same agent.
 - **PR #20** built `/apps`: a member's third-party apps on Composio, with the
   safety layer Oryxa keeps — the connection a call uses derived from auth, a
   write needing an idempotency key and the member's confirmation, verified
