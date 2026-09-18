@@ -447,6 +447,7 @@ function TriggerConfigInput({
 							onChange(option.value);
 						}
 					}}
+					required={field.required}
 					value={selected ?? ""}
 				>
 					<SelectTrigger id={id}>

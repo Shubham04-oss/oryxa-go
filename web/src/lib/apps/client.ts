@@ -731,12 +731,24 @@ export function triggerConfigFieldSubmission(
 	raw: boolean | number | string | undefined,
 ): TriggerConfigFieldSubmission {
 	if (field.type === "boolean") {
-		return { kind: "value", value: raw === true };
+		// An untouched checkbox still shows its own default, so it should send
+		// that default rather than the false a bare `raw === true` would.
+		return {
+			kind: "value",
+			value: typeof raw === "boolean" ? raw : Boolean(field.default),
+		};
 	}
 	// A select's own typed value can be `false` or `0`, so "blank" is judged
 	// by whether anything was chosen at all, not by JavaScript truthiness.
 	if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
-		return { kind: "absent" };
+		// Composio would use the default anyway, shown or not — sending it is
+		// what makes the field's own displayed value the one that goes out.
+		if (field.default !== undefined) {
+			return { kind: "value", value: field.default };
+		}
+		return field.required
+			? { kind: "blocked", problem: `${field.title} is required.` }
+			: { kind: "absent" };
 	}
 	if (field.type === "strings") {
 		const byLabel = new Map(

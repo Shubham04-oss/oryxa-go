@@ -406,6 +406,60 @@ describe("triggerConfigFieldSubmission", () => {
 		});
 	});
 
+	it("sends an untouched field's default instead of leaving it out", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ default: "main", required: true }),
+				undefined,
+			),
+		).toEqual({ kind: "value", value: "main" });
+	});
+
+	it("sends an untouched but required field's default even when typed as 0", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ default: 0, required: true, type: "integer" }),
+				undefined,
+			),
+		).toEqual({ kind: "value", value: 0 });
+	});
+
+	it("blocks a required field left blank with no default, before any round trip", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ required: true, title: "Repository" }),
+				undefined,
+			),
+		).toEqual({ kind: "blocked", problem: "Repository is required." });
+	});
+
+	it("leaves an optional field with no default out, same as before", () => {
+		expect(
+			triggerConfigFieldSubmission(configField({ required: false }), "   "),
+		).toEqual({ kind: "absent" });
+	});
+
+	it("sends an untouched checkbox's own default rather than false", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ default: true, type: "boolean" }),
+				undefined,
+			),
+		).toEqual({ kind: "value", value: true });
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "boolean" }), undefined),
+		).toEqual({ kind: "value", value: false });
+	});
+
+	it("sends an explicitly unchecked checkbox as false even with a true default", () => {
+		expect(
+			triggerConfigFieldSubmission(
+				configField({ default: true, type: "boolean" }),
+				false,
+			),
+		).toEqual({ kind: "value", value: false });
+	});
+
 	it("sends a whole number for an integer field", () => {
 		expect(
 			triggerConfigFieldSubmission(configField({ type: "integer" }), "5"),
