@@ -37,6 +37,7 @@ import {
 	type TriggerConfigField,
 	type TriggerType,
 	triggerConfigCapability,
+	triggerConfigFieldSubmission,
 	triggersQueryOptions,
 } from "@/lib/apps/client";
 
@@ -261,6 +262,7 @@ function AddTriggerRow({
 	const capability = triggerConfigCapability(type.config_schema);
 	const [expanded, setExpanded] = useState(false);
 	const [values, setValues] = useState<Record<string, boolean | string>>({});
+	const [problem, setProblem] = useState("");
 	const add = useMutation({
 		mutationFn: (config: Record<string, unknown>) =>
 			createTrigger(organizationId, {
@@ -272,6 +274,7 @@ function AddTriggerRow({
 			onAdded();
 			setExpanded(false);
 			setValues({});
+			setProblem("");
 		},
 	});
 
@@ -299,27 +302,16 @@ function AddTriggerRow({
 		}
 		const config: Record<string, unknown> = {};
 		for (const field of capability.fields) {
-			const raw = values[field.name];
-			if (field.type === "boolean") {
-				config[field.name] = raw === true;
-				continue;
+			const outcome = triggerConfigFieldSubmission(field, values[field.name]);
+			if (outcome.kind === "blocked") {
+				setProblem(outcome.problem);
+				return;
 			}
-			if (typeof raw !== "string" || raw.trim() === "") {
-				continue;
+			if (outcome.kind === "value") {
+				config[field.name] = outcome.value;
 			}
-			if (field.type === "strings") {
-				// A line each, so an empty one is not sent as an empty value.
-				const entries = raw
-					.split("\n")
-					.map((line) => line.trim())
-					.filter((line) => line !== "");
-				if (entries.length > 0) {
-					config[field.name] = entries;
-				}
-				continue;
-			}
-			config[field.name] = field.type === "number" ? Number(raw) : raw;
 		}
+		setProblem("");
 		add.mutate(config);
 	}
 
@@ -347,7 +339,10 @@ function AddTriggerRow({
 					</Button>
 				) : (
 					<Button
-						onClick={() => setExpanded((current) => !current)}
+						onClick={() => {
+							setExpanded((current) => !current);
+							setProblem("");
+						}}
 						size="sm"
 						type="button"
 						variant="ghost"
@@ -374,6 +369,7 @@ function AddTriggerRow({
 							value={values[field.name]}
 						/>
 					))}
+					{problem ? <AppAlert>{problem}</AppAlert> : null}
 					<Button disabled={add.isPending} size="sm" type="submit">
 						{add.isPending ? "Adding…" : "Subscribe"}
 					</Button>
@@ -466,6 +462,7 @@ function TriggerConfigInput({
 		);
 	}
 
+	const isNumeric = field.type === "integer" || field.type === "number";
 	return (
 		<div className="dialog-field">
 			{label}
@@ -473,7 +470,8 @@ function TriggerConfigInput({
 				id={id}
 				onChange={(event) => onChange(event.target.value)}
 				required={field.required}
-				type={field.type === "number" ? "number" : "text"}
+				step={field.type === "integer" ? 1 : undefined}
+				type={isNumeric ? "number" : "text"}
 				value={typeof value === "string" ? value : ""}
 			/>
 			{hint}

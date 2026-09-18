@@ -13,7 +13,9 @@ import {
 	nonConnectableReason,
 	parseConnectReturn,
 	type Toolkit,
+	type TriggerConfigField,
 	triggerConfigCapability,
+	triggerConfigFieldSubmission,
 } from "./client";
 
 function json(status: number, body: unknown): Response {
@@ -215,7 +217,7 @@ describe("triggerConfigCapability", () => {
 		expect(byName.get("verbose")).toMatchObject({ type: "boolean" });
 	});
 
-	it("treats integer as a number field", () => {
+	it("keeps integer distinct from number, so a fraction is still refused", () => {
 		const capability = triggerConfigCapability({
 			properties: { count: { type: "integer" } },
 			type: "object",
@@ -224,7 +226,7 @@ describe("triggerConfigCapability", () => {
 		if (capability.kind !== "form") throw new Error("expected a form");
 		expect(capability.fields[0]).toMatchObject({
 			name: "count",
-			type: "number",
+			type: "integer",
 		});
 	});
 
@@ -345,6 +347,56 @@ describe("triggerConfigCapability", () => {
 		expect(capability.kind).toBe("form");
 		if (capability.kind !== "form") throw new Error("expected a form");
 		expect(capability.fields.map((field) => field.name)).toEqual(["repo"]);
+	});
+});
+
+function configField(
+	overrides: Partial<TriggerConfigField> = {},
+): TriggerConfigField {
+	return {
+		name: "count",
+		required: false,
+		title: "Count",
+		type: "string",
+		...overrides,
+	};
+}
+
+describe("triggerConfigFieldSubmission", () => {
+	it("leaves an untouched, optional field out of the config", () => {
+		expect(triggerConfigFieldSubmission(configField(), undefined)).toEqual({
+			kind: "absent",
+		});
+	});
+
+	it("sends a whole number for an integer field", () => {
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "integer" }), "5"),
+		).toEqual({ kind: "value", value: 5 });
+	});
+
+	it("blocks a fraction typed into an integer field", () => {
+		const result = triggerConfigFieldSubmission(
+			configField({ title: "Retry count", type: "integer" }),
+			"5.5",
+		);
+		expect(result).toEqual({
+			kind: "blocked",
+			problem: "Retry count must be a whole number.",
+		});
+	});
+
+	it("blocks non-numeric text typed into an integer field", () => {
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "integer" }), "abc")
+				.kind,
+		).toBe("blocked");
+	});
+
+	it("sends a number field's value as typed, decimals included", () => {
+		expect(
+			triggerConfigFieldSubmission(configField({ type: "number" }), "5.5"),
+		).toEqual({ kind: "value", value: 5.5 });
 	});
 });
 

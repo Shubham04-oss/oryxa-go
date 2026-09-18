@@ -502,8 +502,12 @@ export interface TriggerConfigField {
 	options?: string[];
 	required: boolean;
 	title: string;
-	/** "select" is an enum; "strings" is a list the member types one per line. */
-	type: "boolean" | "number" | "select" | "string" | "strings";
+	/**
+	 * "select" is an enum; "strings" is a list the member types one per line;
+	 * "integer" is still a number field, but one the server refuses a
+	 * fraction for.
+	 */
+	type: "boolean" | "integer" | "number" | "select" | "string" | "strings";
 }
 
 export type TriggerConfigCapability =
@@ -604,11 +608,11 @@ function isScalarType(name: string): boolean {
 
 function scalarField(
 	name: string,
-): "boolean" | "number" | "string" | undefined {
-	if (name === "integer") {
-		return "number";
-	}
-	return name === "boolean" || name === "number" || name === "string"
+): "boolean" | "integer" | "number" | "string" | undefined {
+	return name === "boolean" ||
+		name === "integer" ||
+		name === "number" ||
+		name === "string"
 		? name
 		: undefined;
 }
@@ -695,6 +699,53 @@ export function triggerConfigCapability(
 		return required.size > 0 ? { kind: "unsupported" } : { kind: "none" };
 	}
 	return { fields, kind: "form" };
+}
+
+export type TriggerConfigFieldSubmission =
+	| { kind: "absent" }
+	| { kind: "blocked"; problem: string }
+	| { kind: "value"; value: unknown };
+
+/**
+ * What one field contributes to a trigger's config on submit, from the value
+ * a member left in the form ("boolean" aside, undefined when they never
+ * touched it). Kept apart from the form itself so every field type's rules —
+ * an integer refusing a fraction, a blank field falling back to nothing —
+ * are exercised directly rather than through rendered inputs.
+ */
+export function triggerConfigFieldSubmission(
+	field: TriggerConfigField,
+	raw: boolean | number | string | undefined,
+): TriggerConfigFieldSubmission {
+	if (field.type === "boolean") {
+		return { kind: "value", value: raw === true };
+	}
+	if (typeof raw !== "string" || raw.trim() === "") {
+		return { kind: "absent" };
+	}
+	if (field.type === "strings") {
+		// A line each, so an empty one is not sent as an empty value.
+		const entries = raw
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line !== "");
+		return entries.length > 0
+			? { kind: "value", value: entries }
+			: { kind: "absent" };
+	}
+	if (field.type === "integer" || field.type === "number") {
+		const parsed = Number(raw);
+		// Number("") is 0, not NaN, which is why blank is handled above; from
+		// here, anything not a whole number is what an integer refuses.
+		if (field.type === "integer" && !Number.isInteger(parsed)) {
+			return {
+				kind: "blocked",
+				problem: `${field.title} must be a whole number.`,
+			};
+		}
+		return { kind: "value", value: parsed };
+	}
+	return { kind: "value", value: raw };
 }
 
 const appsErrorCopy: Partial<Record<string, string>> = {
