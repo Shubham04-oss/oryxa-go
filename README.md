@@ -157,7 +157,7 @@ tag restores any of it.
 
 | | Where it stands |
 | --- | --- |
-| Connecting an app | Composio's hosted flow, for every app Composio holds an app for or that takes a credential the member types in. The web app's connection screens still call the archived API until the web app is refactored |
+| Connecting an app | Composio's hosted flow, for every app Composio holds an app for or that takes a credential the member types in, started from the web app's Connections screen |
 | Acting in an app | Krude's `apps` toolbox, over apps' MCP endpoint: reads run unconfirmed, writes ask the member and carry an idempotency key |
 | Reacting to an app | Triggers deliver, verified, as `apps.trigger.received.v1`. Nothing starts an agent run from one yet |
 | Running an agent as a member | Only `agents/primary`'s development UI runs Krude. The `agents` service has no run API, and the web app has no screen to grant or withdraw agent access |
