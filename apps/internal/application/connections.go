@@ -93,7 +93,11 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if input.AutoSubscribe != nil {
-		// A member saying so outranks the deployment's default, either way.
+		// Recorded either way; whether it is ever acted on is a separate
+		// question, decided at subscribe time by s.autoSubscribe. The
+		// deployment switch (APPS_AUTO_SUBSCRIBE=false) is a kill switch, not
+		// a default it merely falls back to: off means nothing is
+		// auto-subscribed, whatever this connection asked for.
 		connection.AutoSubscribe = *input.AutoSubscribe
 	}
 	// Announced as it starts, so what follows — connected or failed — is

@@ -214,7 +214,17 @@ Two ways to turn it off:
 | For one connection | `"auto_subscribe": false` in the connect request |
 | For the deployment | `APPS_AUTO_SUBSCRIBE=false` |
 
-A member naming it outranks the deployment's default, either way.
+These are not the same kind of switch. A connection's own `auto_subscribe` is
+recorded either way and is the only thing a member chooses. The deployment's
+is a kill switch checked at subscribe time, not a default the connection's
+choice overrides: off means nothing is auto-subscribed, whatever any
+connection asked for; on, a connection that said no still gets nothing.
+
+Opting out afterwards, rather than at connect time, is per event: remove the
+triggers you do not want (`DELETE .../apps/triggers/{id}`). Auto-subscribe
+reads a connection's whole trigger history - live or removed - before every
+pass, so a slug already subscribed (even with the member's own filters) is
+left as it is, and one the member removed is never re-added on a later pass.
 
 ### A subscription is checked against the trigger's own definition
 
