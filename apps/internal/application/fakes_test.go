@@ -471,7 +471,11 @@ type fakeComposio struct {
 	proxyResult composio.ProxyResponse
 	proxyErr    error
 	upserts     []string
-	upsertID    string
+	// upsertUsers is the Composio user each upsert named, in order.
+	upsertUsers []string
+	// upsertErr is what every upsert answers instead, when set.
+	upsertErr error
+	upsertID  string
 	// upsertPerSlug answers a distinct instance id per trigger, the way
 	// Composio does for different triggers on one account.
 	upsertPerSlug   bool
@@ -666,10 +670,15 @@ func (fake *fakeComposio) TriggerTypes(_ context.Context, query composio.Trigger
 	return page, nil
 }
 
-func (fake *fakeComposio) UpsertTrigger(_ context.Context, slug, accountID string, _ json.RawMessage) (string, error) {
+func (fake *fakeComposio) UpsertTrigger(_ context.Context, slug string, subscription composio.TriggerSubscription) (string, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
+	accountID := subscription.ConnectedAccountID
 	fake.upserts = append(fake.upserts, slug+"@"+accountID)
+	fake.upsertUsers = append(fake.upsertUsers, subscription.UserID)
+	if fake.upsertErr != nil {
+		return "", fake.upsertErr
+	}
 	if fake.upsertPerSlug {
 		return "ti_" + slug + "@" + accountID, nil
 	}

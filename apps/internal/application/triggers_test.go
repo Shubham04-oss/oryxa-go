@@ -31,6 +31,12 @@ func TestCreateTriggerSubscribesTheCallersConnection(t *testing.T) {
 	if len(h.composio.upserts) != 1 || h.composio.upserts[0] != "GITHUB_COMMIT_EVENT@ca_1" {
 		t.Fatalf("upserts = %v", h.composio.upserts)
 	}
+	// The account's Composio user goes with it: a project with two-factor
+	// protection refuses a subscription without one, which is every
+	// subscription on such a project.
+	if len(h.composio.upsertUsers) != 1 || h.composio.upsertUsers[0] != connection.ComposioUserID || connection.ComposioUserID == "" {
+		t.Fatalf("upserted as users %v, want %q", h.composio.upsertUsers, connection.ComposioUserID)
+	}
 
 	// Asking again answers the subscription that exists rather than a second.
 	again, err := h.service.CreateTrigger(context.Background(), memberToken, "org_1", TriggerInput{

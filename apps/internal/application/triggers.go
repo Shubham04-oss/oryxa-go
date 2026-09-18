@@ -100,7 +100,9 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 // the connection's own member: the caller has already decided that is
 // allowed.
 func (s *Service) subscribe(ctx context.Context, connection domain.Connection, definition domain.TriggerDefinition, config json.RawMessage) (domain.Trigger, error) {
-	composioID, err := s.composio.UpsertTrigger(ctx, definition.Slug, connection.ComposioAccountID, config)
+	composioID, err := s.composio.UpsertTrigger(ctx, definition.Slug, composio.TriggerSubscription{
+		ConnectedAccountID: connection.ComposioAccountID, UserID: connection.ComposioUserID, Config: config,
+	})
 	if err != nil {
 		return domain.Trigger{}, composioError("subscribe to "+definition.Slug, err)
 	}

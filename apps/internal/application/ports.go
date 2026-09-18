@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
@@ -150,6 +149,6 @@ type Composio interface {
 	ExecuteTool(ctx context.Context, slug string, request composio.ExecuteRequest) (composio.ExecuteResult, error)
 	Proxy(ctx context.Context, request composio.ProxyRequest) (composio.ProxyResponse, error)
 	TriggerTypes(ctx context.Context, query composio.TriggerTypeQuery) (composio.Page[composio.TriggerType], error)
-	UpsertTrigger(ctx context.Context, slug, connectedAccountID string, config json.RawMessage) (string, error)
+	UpsertTrigger(ctx context.Context, slug string, subscription composio.TriggerSubscription) (string, error)
 	DeleteTrigger(ctx context.Context, id string) error
 }
