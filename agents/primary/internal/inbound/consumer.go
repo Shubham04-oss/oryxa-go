@@ -1,7 +1,12 @@
 // Package inbound handles what other services publish that agents must act
-// on: a member's app reporting something, which waits to wake Krude for
+// on: a batch of what a member's apps reported, ready to wake Krude for
 // them, and a member leaving an organization or the organization going
 // away, which takes their conversations with it.
+//
+// Batching decides when a member's app triggers make a batch — it sees every
+// trigger, and holds them across replicas and restarts — so agents consumes
+// its batches rather than the triggers themselves, and wakes Krude for each
+// one as soon as it arrives.
 package inbound
 
 import (
@@ -19,6 +24,7 @@ import (
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
 )
@@ -27,15 +33,16 @@ import (
 // provisioning the rule that feeds its queue.
 func Subscriptions() map[string][]string {
 	return map[string][]string{
-		appsv1.Source: {appsv1.TriggerReceivedDetailType},
-		authv1.Source: {authv1.MemberRemovedDetailType, authv1.OrganizationDeletedDetailType},
+		batchingv1.Source: {batchingv1.TriggerBatchReadyDetailType},
+		authv1.Source:     {authv1.MemberRemovedDetailType, authv1.OrganizationDeletedDetailType},
 	}
 }
 
-// Recorder keeps a trigger event until it wakes Krude. wakeups.Store
-// implements it.
+// Recorder keeps a batch's trigger events until they wake Krude, all of them
+// or none, so a wake-up never hands over part of a batch. It answers how many
+// it had not seen before. wakeups.Store implements it.
 type Recorder interface {
-	Record(ctx context.Context, event wakeups.Event) (bool, error)
+	RecordBatch(ctx context.Context, events []wakeups.Event) (int, error)
 }
 
 // Forgetter removes what a service keeps for an organization — only one
@@ -74,8 +81,8 @@ type receivedEnvelope struct {
 
 // Handle decodes one SQS message body as an EventBridge event and acts on
 // it. The bus delivers at least once, and every handler is safe to repeat: a
-// trigger is recorded by its event's own id, and forgetting what is already
-// gone removes nothing more.
+// batch's triggers are recorded by their own events' ids, and forgetting what
+// is already gone removes nothing more.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	var event eventBridgeEvent
 	if err := json.Unmarshal([]byte(body), &event); err != nil {
@@ -89,8 +96,15 @@ func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 		return fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, envelope.Version, envelope.EventID)
 	}
 	switch {
+	case event.Source == batchingv1.Source && event.DetailType == batchingv1.TriggerBatchReadyDetailType:
+		return consumer.batchReady(ctx, envelope)
 	case event.Source == appsv1.Source && event.DetailType == appsv1.TriggerReceivedDetailType:
-		return consumer.triggerReceived(ctx, envelope)
+		// Delivered straight from apps, as agents' rule did before batching
+		// took over; one can still be on the queue from then. Batching has
+		// its own copy and hands it over in a batch, so it is left to that
+		// rather than waking Krude for it alone.
+		consumer.logger.InfoContext(ctx, "an app trigger arrived directly; batching delivers it", "event_id", envelope.EventID)
+		return nil
 	case event.Source == authv1.Source && event.DetailType == authv1.MemberRemovedDetailType:
 		var removed authv1.MemberRemoved
 		if err := json.Unmarshal(envelope.Data, &removed); err != nil {
@@ -114,33 +128,49 @@ func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	}
 }
 
-func (consumer *Consumer) triggerReceived(ctx context.Context, envelope receivedEnvelope) error {
-	var trigger appsv1.TriggerReceived
-	if err := json.Unmarshal(envelope.Data, &trigger); err != nil {
-		return fmt.Errorf("event %s: decode trigger: %w", envelope.EventID, err)
+func (consumer *Consumer) batchReady(ctx context.Context, envelope receivedEnvelope) error {
+	var batch batchingv1.TriggerBatchReady
+	if err := json.Unmarshal(envelope.Data, &batch); err != nil {
+		return fmt.Errorf("event %s: decode trigger batch: %w", envelope.EventID, err)
 	}
-	if trigger.OrganizationID == "" || trigger.MemberID == "" {
+	if batch.OrganizationID == "" || batch.MemberID == "" {
 		// Nobody to wake: dropping it is the only thing to do, and retrying
 		// would not change that.
-		consumer.logger.WarnContext(ctx, "trigger event names no member; dropped", "event_id", envelope.EventID)
+		consumer.logger.WarnContext(ctx, "trigger batch names no member; dropped",
+			"event_id", envelope.EventID, "batch_id", batch.BatchID)
 		return nil
 	}
-	recorded, err := consumer.recorder.Record(ctx, wakeups.Event{
-		ID:             envelope.EventID,
-		OrganizationID: trigger.OrganizationID,
-		MemberID:       trigger.MemberID,
-		Toolkit:        trigger.Toolkit,
-		Trigger:        trigger.Trigger,
-		Data:           trigger.Data,
-		DataOmitted:    trigger.DataOmitted,
-		ReceivedAt:     trigger.ReceivedAt,
-	})
+	events := make([]wakeups.Event, 0, len(batch.Triggers))
+	for _, trigger := range batch.Triggers {
+		if trigger.EventID == "" {
+			return fmt.Errorf("event %s: batch %s carries a trigger with no event id", envelope.EventID, batch.BatchID)
+		}
+		// Each trigger keeps its own app event's id, the one it was recorded
+		// by when agents read triggers straight from apps, so a trigger seen
+		// then is recognised now rather than told twice.
+		events = append(events, wakeups.Event{
+			ID:             trigger.EventID,
+			OrganizationID: batch.OrganizationID,
+			MemberID:       batch.MemberID,
+			Toolkit:        trigger.Toolkit,
+			Trigger:        trigger.Trigger,
+			Data:           trigger.Data,
+			DataOmitted:    trigger.DataOmitted,
+			ReceivedAt:     trigger.ReceivedAt,
+		})
+	}
+	if len(events) == 0 {
+		consumer.logger.WarnContext(ctx, "trigger batch carries no triggers; dropped",
+			"event_id", envelope.EventID, "batch_id", batch.BatchID)
+		return nil
+	}
+	recorded, err := consumer.recorder.RecordBatch(ctx, events)
 	if err != nil {
 		return fmt.Errorf("event %s: %w", envelope.EventID, err)
 	}
-	if !recorded {
-		consumer.logger.InfoContext(ctx, "trigger event already recorded", "event_id", envelope.EventID)
-	}
+	consumer.logger.InfoContext(ctx, "trigger batch recorded to wake Krude",
+		"event_id", envelope.EventID, "batch_id", batch.BatchID, "triggers", len(events), "new", recorded,
+		"lane", batch.Lane, "flush_reason", batch.FlushReason)
 	return nil
 }
 

@@ -151,9 +151,9 @@ lives in `apps/README.md`.
 durable `oryxa.batching` batches. Its default policy coalesces five events or
 reaches a persisted per-member cadence deadline, adaptively changes the target
 from rolling traffic, caps a batch at twenty, preserves every trigger payload,
-and exposes a Jev-backed immediate lane. It does not yet replace
-the agents service's existing in-process app batching; that cutover happens
-after the ready-event consumer is integrated into the agent wakeup path. Its contract lives in
+and exposes a Jev-backed immediate lane. Agents consumes its
+`batching.trigger-batch.ready.v1` rather than app triggers themselves, and
+wakes Krude for each batch as it arrives. Its contract lives in
 `batching/README.md`.
 
 `/agents` holds the agent system. `/agents/primary` is its adk-go engine,
@@ -180,7 +180,7 @@ tag restores any of it.
 | --- | --- |
 | Connecting an app | Composio's hosted flow, for every app Composio holds an app for or that takes a credential the member types in, started from the web app's Connections screen |
 | Acting in an app | Krude's `apps` toolbox, over apps' MCP endpoint: reads run unconfirmed, writes ask the member and carry an idempotency key |
-| Reacting to an app | Triggers deliver, verified, as `apps.trigger.received.v1`, and wake Krude for their member in batches, in the member's "Updates from your apps" thread, to report what happened |
+| Reacting to an app | Triggers deliver, verified, as `apps.trigger.received.v1`; batching groups them per member, and each batch wakes Krude in the member's "Updates from your apps" thread, to report what happened |
 | Running an agent as a member | The `agents` service's run API: a member's threads with Krude, each run streamed as server-sent events with the member's own token on it, and a tool that asks first waiting for the member's answer. The web app has no screen to grant or withdraw agent access |
 
 Not yet:

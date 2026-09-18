@@ -38,7 +38,9 @@ func TestFromEnvDefaults(t *testing.T) {
 	if len(config.AllowedOrigins) != 0 || config.RunTimeout != 10*time.Minute || config.DatabaseMaxConns != 8 {
 		t.Fatalf("run API config = %+v", config)
 	}
-	if config.EventsQueueURL != "" || config.WakeupBatchSize != 5 || config.WakeupMaxWait != 2*time.Minute {
+	// Batching decides when triggers make a batch; one that arrives wakes
+	// Krude at once.
+	if config.EventsQueueURL != "" || config.WakeupBatchSize != 1 || config.WakeupMaxWait != 2*time.Minute {
 		t.Fatalf("wake-up config = %+v", config)
 	}
 	if config.KnowledgeMinRelevance != 0 {

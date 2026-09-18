@@ -58,6 +58,57 @@ func record(t *testing.T, store *Store, organizationID, memberID, id string) {
 	}
 }
 
+// TestARecordedBatchWakesKrudeWhole: a batch batching hands over is kept all
+// at once, recognised when the bus delivers it again, and claimed as one
+// wake-up — with agents' own rule at one event, since batching already
+// decided when.
+func TestARecordedBatchWakesKrudeWhole(t *testing.T) {
+	store, organizationID := testStore(t)
+	ctx := context.Background()
+	var events []Event
+	for _, id := range []string{"a", "b", "c"} {
+		events = append(events, Event{
+			ID: organizationID + "_member-1_" + id, OrganizationID: organizationID, MemberID: "member-1",
+			Toolkit: "gmail", Trigger: "GMAIL_NEW_MESSAGE", Data: json.RawMessage(`{"n":"` + id + `"}`), ReceivedAt: time.Now().UTC(),
+		})
+	}
+	recorded, err := store.RecordBatch(ctx, events)
+	if err != nil || recorded != 3 {
+		t.Fatalf("RecordBatch() = %d, %v; want all three", recorded, err)
+	}
+	again, err := store.RecordBatch(ctx, events)
+	if err != nil || again != 0 {
+		t.Fatalf("RecordBatch(again) = %d, %v; want nothing new", again, err)
+	}
+
+	batches, err := store.Claim(ctx, Rule{Size: 1, MaxWait: time.Hour, Largest: 20}, time.Minute, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := ours(batches, organizationID)
+	if len(own) != 1 || len(own[0].Events) != 3 {
+		t.Fatalf("claimed %+v, want the batch as one wake-up", own)
+	}
+
+	// One event unfit to keep refuses the batch before any of it is kept.
+	unfit := []Event{
+		{ID: organizationID + "_member-2_a", OrganizationID: organizationID, MemberID: "member-2", ReceivedAt: time.Now().UTC()},
+		{ID: organizationID + "_member-2_b", OrganizationID: organizationID, ReceivedAt: time.Now().UTC()},
+	}
+	if _, err := store.RecordBatch(ctx, unfit); err == nil {
+		t.Fatal("a batch with an event naming no member was kept")
+	}
+	var kept int
+	if err := store.database.Pool.QueryRow(ctx,
+		`SELECT count(*) FROM agents_primary.wakeup_events WHERE organization_id = $1 AND member_id = 'member-2'`,
+		organizationID).Scan(&kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept != 0 {
+		t.Fatalf("kept %d events of a refused batch, want none", kept)
+	}
+}
+
 // ours keeps the batches of this test's organization: the table is shared.
 func ours(batches []Batch, organizationID string) []Batch {
 	var kept []Batch

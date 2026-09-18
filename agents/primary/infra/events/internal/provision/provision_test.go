@@ -24,12 +24,12 @@ func TestEventPatternMatchesEverythingAgentsConsumes(t *testing.T) {
 	assertJSONEqual(t, pattern, `{
 		"$or": [
 			{
-				"source": ["oryxa.apps"],
-				"detail-type": ["apps.trigger.received.v1"]
-			},
-			{
 				"source": ["oryxa.auth"],
 				"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
+			},
+			{
+				"source": ["oryxa.batching"],
+				"detail-type": ["batching.trigger-batch.ready.v1"]
 			}
 		]
 	}`)
@@ -110,7 +110,7 @@ func TestRunCreatesTheQueueDeadLetterQueueAndRule(t *testing.T) {
 	if !ok {
 		t.Fatalf("rule %s was not created", ruleName)
 	}
-	assertJSONEqual(t, rule.pattern, `{"$or":[{"source":["oryxa.apps"],"detail-type":["apps.trigger.received.v1"]},{"source":["oryxa.auth"],"detail-type":["auth.member.removed.v1","auth.organization.deleted.v1"]}]}`)
+	assertJSONEqual(t, rule.pattern, `{"$or":[{"source":["oryxa.auth"],"detail-type":["auth.member.removed.v1","auth.organization.deleted.v1"]},{"source":["oryxa.batching"],"detail-type":["batching.trigger-batch.ready.v1"]}]}`)
 	if rule.state != eventbridgetypes.RuleStateEnabled {
 		t.Fatalf("rule state = %s, want ENABLED", rule.state)
 	}

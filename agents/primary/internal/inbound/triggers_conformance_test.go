@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
+	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
 )
@@ -17,8 +17,9 @@ import (
 // payloads is one payload of every shape an app delivers, matching the
 // corpus apps proves its own half against
 // (apps/internal/application/triggers_conformance_test.go). What differs
-// here is that these have already crossed the bus: whatever survives EventBridge's
-// envelope has to reach Krude readable, whatever the app that sent it.
+// here is that these have already crossed the bus twice, apps to batching and
+// batching to agents: whatever survives both envelopes has to reach Krude
+// readable, whatever the app that sent it.
 func payloads() map[string]string {
 	return map[string]string{
 		"an object of scalars":     `{"sha":"abc123","message":"first","additions":12}`,
@@ -36,34 +37,53 @@ func payloads() map[string]string {
 	}
 }
 
-// eventFor wraps a payload the way apps publishes it and EventBridge
-// delivers it, so the test reads the same bytes the consumer does in
-// production.
-func eventFor(t *testing.T, eventID, toolkit, trigger, payload string) string {
+// trigger is one app event the way batching carries it in a batch.
+func trigger(eventID, toolkit, name, payload string) batchingv1.Trigger {
+	found := batchingv1.Trigger{
+		EventID: eventID, TriggerID: "apt_1", ConnectionID: "apc_1", Toolkit: toolkit, Trigger: name,
+		ReceivedAt: time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC),
+	}
+	if payload != "" {
+		found.Data = json.RawMessage(payload)
+	}
+	return found
+}
+
+// batchFor wraps triggers the way batching publishes a batch and
+// EventBridge delivers it, so the test reads the same bytes the consumer
+// does in production.
+func batchFor(t *testing.T, eventID string, triggers ...batchingv1.Trigger) string {
 	t.Helper()
 	detail, err := json.Marshal(struct {
-		EventID string                 `json:"event_id"`
-		Version int                    `json:"version"`
-		Data    appsv1.TriggerReceived `json:"data"`
+		EventID string                       `json:"event_id"`
+		Version int                          `json:"version"`
+		Data    batchingv1.TriggerBatchReady `json:"data"`
 	}{
 		EventID: eventID, Version: 1,
-		Data: appsv1.TriggerReceived{
-			TriggerID: "apt_1", ConnectionID: "apc_1", OrganizationID: "org_1", MemberID: "user-1",
-			Toolkit: toolkit, Trigger: trigger, Data: json.RawMessage(payload),
-			ReceivedAt: time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC),
+		Data: batchingv1.TriggerBatchReady{
+			BatchID: "tbatch_" + eventID, OrganizationID: "org_1", MemberID: "user-1", Lane: batchingv1.LaneDigest,
+			EventCount: len(triggers), FlushReason: "target", Triggers: triggers,
+			ReadyAt: time.Date(2026, time.September, 17, 12, 5, 0, 0, time.UTC),
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	body, err := json.Marshal(map[string]any{
-		"id": "eb_" + eventID, "source": appsv1.Source,
-		"detail-type": appsv1.TriggerReceivedDetailType, "detail": json.RawMessage(detail),
+		"id": "eb_" + eventID, "source": batchingv1.Source,
+		"detail-type": batchingv1.TriggerBatchReadyDetailType, "detail": json.RawMessage(detail),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return string(body)
+}
+
+// eventFor is one payload in a batch of its own, as batching sends an
+// immediate trigger.
+func eventFor(t *testing.T, eventID, toolkit, name, payload string) string {
+	t.Helper()
+	return batchFor(t, "evt_batch_"+eventID, trigger(eventID, toolkit, name, payload))
 }
 
 // TestEveryPayloadShapeReachesAWakeUp walks a payload of every shape from
@@ -121,25 +141,9 @@ func TestAWakeUpNamesTheAppEvenWhenAPayloadIsLeftOut(t *testing.T) {
 	t.Parallel()
 	recorder := &recordingRecorder{}
 	consumer := NewConsumer(recorder, nil, nil)
-	detail, err := json.Marshal(map[string]any{
-		"event_id": "evt_1", "version": 1,
-		"data": appsv1.TriggerReceived{
-			TriggerID: "apt_1", OrganizationID: "org_1", MemberID: "user-1", Toolkit: "gmail",
-			Trigger: "GMAIL_NEW_GMAIL_MESSAGE", DataOmitted: true,
-			ReceivedAt: time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC),
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := json.Marshal(map[string]any{
-		"id": "eb_1", "source": appsv1.Source,
-		"detail-type": appsv1.TriggerReceivedDetailType, "detail": json.RawMessage(detail),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := consumer.Handle(context.Background(), string(body)); err != nil {
+	omitted := trigger("evt_1", "gmail", "GMAIL_NEW_GMAIL_MESSAGE", "")
+	omitted.DataOmitted = true
+	if err := consumer.Handle(context.Background(), batchFor(t, "evt_batch_1", omitted)); err != nil {
 		t.Fatal(err)
 	}
 	if len(recorder.events) != 1 || !recorder.events[0].DataOmitted {
@@ -160,16 +164,15 @@ func TestABurstOfEveryShapeMakesOneReadableWakeUp(t *testing.T) {
 	consumer := NewConsumer(recorder, nil, nil)
 	shapes := payloads()
 
-	index := 0
+	var triggers []batchingv1.Trigger
 	for _, payload := range shapes {
-		index++
-		if err := consumer.Handle(context.Background(),
-			eventFor(t, fmt.Sprintf("evt_%d", index), "github", "GITHUB_COMMIT_EVENT", payload)); err != nil {
-			t.Fatalf("handling event %d: %v", index, err)
-		}
+		triggers = append(triggers, trigger(fmt.Sprintf("evt_%d", len(triggers)+1), "github", "GITHUB_COMMIT_EVENT", payload))
 	}
-	if len(recorder.events) != len(shapes) {
-		t.Fatalf("events recorded = %d, want %d", len(recorder.events), len(shapes))
+	if err := consumer.Handle(context.Background(), batchFor(t, "evt_batch_1", triggers...)); err != nil {
+		t.Fatal(err)
+	}
+	if len(recorder.events) != len(shapes) || recorder.calls != 1 {
+		t.Fatalf("events recorded = %d in %d calls, want %d in one", len(recorder.events), recorder.calls, len(shapes))
 	}
 	message, told := wakeups.Message(wakeups.Batch{
 		ID: "wb_1", OrganizationID: "org_1", MemberID: "user-1", Events: recorder.events,
@@ -209,17 +212,23 @@ func TestTheBusDeliveringTwiceRecordsOneWakeUp(t *testing.T) {
 type recordingRecorder struct {
 	events []wakeups.Event
 	seen   map[string]bool
+	calls  int
 }
 
-func (recorder *recordingRecorder) Record(_ context.Context, event wakeups.Event) (bool, error) {
-	if recorder.seen != nil {
-		if recorder.seen[event.ID] {
-			return false, nil
+func (recorder *recordingRecorder) RecordBatch(_ context.Context, events []wakeups.Event) (int, error) {
+	recorder.calls++
+	recorded := 0
+	for _, event := range events {
+		if recorder.seen != nil {
+			if recorder.seen[event.ID] {
+				continue
+			}
+			recorder.seen[event.ID] = true
 		}
-		recorder.seen[event.ID] = true
+		recorder.events = append(recorder.events, event)
+		recorded++
 	}
-	recorder.events = append(recorder.events, event)
-	return true, nil
+	return recorded, nil
 }
 
 func sameJSON(t *testing.T, left, right json.RawMessage) bool {
