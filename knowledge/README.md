@@ -122,9 +122,12 @@ connection become due now rather than at their next hour. What the trigger
 reported is searchable through the same path as everything else, within
 seconds instead of up to an interval.
 
-Two rails: a trigger never delays a source already due sooner, and never
-brings one forward within two minutes of its last sweep — a busy channel
-delivers faster than any provider should be read.
+Three rails. A trigger never delays a source already due sooner. A source
+swept within the last two minutes is brought forward to two minutes after
+that sweep rather than to now — a busy channel delivers faster than any
+provider should be read, but what it reported should not then wait a whole
+interval. And a source that is failing keeps its backoff: a provider refusing
+it is not asked again on every delivery.
 
 ## Sources are registered, not discovered
 

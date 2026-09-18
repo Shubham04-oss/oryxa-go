@@ -93,16 +93,16 @@ func (store *fakeStore) HastenSources(_ context.Context, connectionID string, at
 	defer store.mu.Unlock()
 	var moved int64
 	for id, source := range store.sources {
-		if source.ConnectionID != connectionID || source.Status != domain.StatusActive {
-			continue
-		}
-		if source.SyncAt == nil || !source.SyncAt.After(at) {
-			continue
-		}
-		if source.LastSyncedAt != nil && source.LastSyncedAt.After(at.Add(-floor)) {
+		if source.ConnectionID != connectionID || source.Status != domain.StatusActive || source.Attempts > 0 {
 			continue
 		}
 		hastened := at
+		if source.LastSyncedAt != nil && source.LastSyncedAt.Add(floor).After(hastened) {
+			hastened = source.LastSyncedAt.Add(floor)
+		}
+		if source.SyncAt == nil || !source.SyncAt.After(hastened) {
+			continue
+		}
 		source.SyncAt = &hastened
 		store.sources[id] = source
 		moved++

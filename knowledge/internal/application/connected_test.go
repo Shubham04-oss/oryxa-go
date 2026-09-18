@@ -371,8 +371,10 @@ func TestABusyAppCannotSweepContinuously(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if due := store.sources["src_1"].SyncAt; due == nil || !due.Equal(testClock.Add(time.Hour)) {
-		t.Fatalf("a source swept 30s ago was brought forward to %v", due)
+	// Brought forward to the floor after its last sweep, however many
+	// deliveries ask: not now, and not a whole interval away either.
+	if due := store.sources["src_1"].SyncAt; due == nil || !due.Equal(justSwept.Add(triggerSweepFloor)) {
+		t.Fatalf("a source swept 30s ago is due at %v, want the floor after that sweep", due)
 	}
 
 	// Once the floor has passed, the next delivery does move it.
@@ -385,6 +387,27 @@ func TestABusyAppCannotSweepContinuously(t *testing.T) {
 	}
 	if due := store.sources["src_1"].SyncAt; due == nil || !due.Equal(testClock) {
 		t.Fatalf("a source last swept 10m ago is due at %v, want now", due)
+	}
+}
+
+// TestATriggerLeavesAFailingSourceToItsBackoff: a source a provider keeps
+// refusing is waiting on purpose, and a busy connection must not turn every
+// delivery into another refused read.
+func TestATriggerLeavesAFailingSourceToItsBackoff(t *testing.T) {
+	store := newFakeStore()
+	longAgo := testClock.Add(-10 * time.Hour)
+	store.hastenable(t, "src_1", "apc_1", &longAgo)
+	source := store.sources["src_1"]
+	source.Attempts = 3
+	store.sources["src_1"] = source
+	service, _ := connectedService(t, store, &fakeApps{connection: usableConnection()})
+
+	event := appsv1.TriggerReceived{ConnectionID: "apc_1", OrganizationID: "org_1", Toolkit: "slack"}
+	if err := service.TriggerReceived(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if due := store.sources["src_1"].SyncAt; due == nil || !due.Equal(testClock.Add(time.Hour)) {
+		t.Fatalf("a failing source was brought forward to %v", due)
 	}
 }
 

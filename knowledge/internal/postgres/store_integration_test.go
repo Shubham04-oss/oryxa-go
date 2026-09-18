@@ -855,7 +855,9 @@ func TestHastenSourcesBringsForwardOnlyWhatItShould(t *testing.T) {
 	}
 }
 
-func TestHastenSourcesLeavesOneSweptWithinTheFloor(t *testing.T) {
+// TestHastenSourcesDefersOneSweptWithinTheFloor: inside the floor a source
+// is brought forward to the floor, not to now and not left an interval away.
+func TestHastenSourcesDefersOneSweptWithinTheFloor(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
@@ -870,16 +872,53 @@ func TestHastenSourcesLeavesOneSweptWithinTheFloor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HastenSources() error = %v", err)
 	}
-	if moved != 0 {
-		t.Fatalf("moved %d sources swept within the floor, want none", moved)
+	if moved != 1 {
+		t.Fatalf("moved %d sources swept within the floor, want 1", moved)
+	}
+	if due := readSyncAt(t, store, source.ID); due == nil || !due.Equal(justSwept.Add(2*time.Minute)) {
+		t.Fatalf("due at %v, want the floor after the last sweep", due)
 	}
 
-	// Past the floor, the same delivery does move it.
-	if moved, err = store.HastenSources(ctx, source.ConnectionID, testClock, 10*time.Second); err != nil {
+	// The same delivery again changes nothing: it is already that soon.
+	if moved, err = store.HastenSources(ctx, source.ConnectionID, testClock, 2*time.Minute); err != nil || moved != 0 {
+		t.Fatalf("HastenSources(again) = %d, %v; want nothing moved", moved, err)
+	}
+
+	// Past the floor, a delivery brings it to now.
+	if moved, err = store.HastenSources(ctx, source.ConnectionID, testClock, 10*time.Second); err != nil || moved != 1 {
+		t.Fatalf("HastenSources(past the floor) = %d, %v; want 1", moved, err)
+	}
+	if due := readSyncAt(t, store, source.ID); due == nil || !due.Equal(testClock) {
+		t.Fatalf("due at %v, want now", due)
+	}
+}
+
+// TestHastenSourcesLeavesAFailingSourceToItsBackoff: last_synced_at is a
+// failing source's last success, however long ago, so the floor alone would
+// let every delivery pull it forward into another refused read.
+func TestHastenSourcesLeavesAFailingSourceToItsBackoff(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	backedOff := testClock.Add(5 * time.Hour)
+	longAgo := testClock.Add(-10 * time.Hour)
+	source := testSource(t, store, "org_1")
+	source.SyncAt = &backedOff
+	source.LastSyncedAt = &longAgo
+	mustSchedule(t, store, source)
+	if _, err := store.pool.Exec(ctx, `UPDATE knowledge_sources SET attempts = 3 WHERE id = $1`, source.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, err := store.HastenSources(ctx, source.ConnectionID, testClock, 2*time.Minute)
+	if err != nil {
 		t.Fatalf("HastenSources() error = %v", err)
 	}
-	if moved != 1 {
-		t.Fatalf("moved %d sources past the floor, want 1", moved)
+	if moved != 0 {
+		t.Fatalf("moved %d failing sources, want none", moved)
+	}
+	if due := readSyncAt(t, store, source.ID); due == nil || !due.Equal(backedOff) {
+		t.Fatalf("a failing source is due at %v, want its backoff kept", due)
 	}
 }
 

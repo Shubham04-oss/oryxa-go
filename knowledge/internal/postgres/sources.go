@@ -249,8 +249,6 @@ func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID 
 	return removed, err
 }
 
-// PauseSources stops every live source reading through one connection, and
-// writes one event for each. Running it again pauses nothing and writes
 // HastenSource brings forward the next sweep of one source, because someone
 // asked for it. Unlike the trigger-driven sweep it does not check when the
 // source was last read: a person asking has a reason the schedule does not
@@ -270,20 +268,24 @@ func (store *Store) HastenSource(ctx context.Context, organizationID, sourceID s
 	return tag.RowsAffected() == 1, nil
 }
 
-// HastenSources brings forward the next sweep of every live source on a
+// HastenSources brings forward the next sweep of every healthy source on a
 // connection, because the app said something in it changed.
 //
-// It never delays one already due sooner, and never brings a source forward
-// again within floor of its last sweep: a busy channel delivers faster than
-// any provider should be read, and a trigger is a hint that something
-// changed rather than an instruction to read now. Answers how many moved.
+// It never delays one already due sooner. A source swept within floor is
+// brought forward to floor after that sweep rather than to now: a busy
+// channel delivers faster than any provider should be read, but what it
+// reported should not then wait a whole interval. And a source that is
+// failing keeps its backoff — last_synced_at is its last success, however
+// long ago, so the floor alone would let every delivery hammer a provider
+// that is refusing it. Answers how many moved.
 func (store *Store) HastenSources(ctx context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error) {
 	tag, err := store.pool.Exec(ctx, `
 		UPDATE knowledge_sources
-		SET sync_at = $2, updated_at = $2, version = version + 1
-		WHERE connection_id = $1 AND status = 'active'
-		  AND sync_at IS NOT NULL AND sync_at > $2
-		  AND (last_synced_at IS NULL OR last_synced_at <= $2 - make_interval(secs => $3))`,
+		SET sync_at = GREATEST($2, COALESCE(last_synced_at + make_interval(secs => $3), $2)),
+		    updated_at = $2, version = version + 1
+		WHERE connection_id = $1 AND status = 'active' AND attempts = 0
+		  AND sync_at IS NOT NULL
+		  AND sync_at > GREATEST($2, COALESCE(last_synced_at + make_interval(secs => $3), $2))`,
 		connectionID, at, floor.Seconds())
 	if err != nil {
 		return 0, fmt.Errorf("hasten sources: %w", err)
@@ -291,6 +293,8 @@ func (store *Store) HastenSources(ctx context.Context, connectionID string, at t
 	return tag.RowsAffected(), nil
 }
 
+// PauseSources stops every live source reading through one connection, and
+// writes one event for each. Running it again pauses nothing and writes
 // nothing, so a redelivered event is harmless.
 func (store *Store) PauseSources(ctx context.Context, connectionID, reason string, now time.Time, event func(domain.Source) (domain.Event, error)) ([]domain.Source, error) {
 	var paused []domain.Source
