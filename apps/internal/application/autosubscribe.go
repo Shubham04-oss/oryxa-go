@@ -103,7 +103,7 @@ func (s *Service) subscribeEverything(ctx context.Context, connection domain.Con
 
 	wanted, needsConfig := autoSubscribable(definitions)
 	var alreadyPresent []string
-	subscribed := 0
+	subscribed, refused := 0, 0
 	for _, definition := range wanted {
 		if ctx.Err() != nil {
 			return
@@ -133,11 +133,24 @@ func (s *Service) subscribeEverything(ctx context.Context, connection domain.Con
 			}
 			logger.InfoContext(ctx, "an event could not be subscribed to",
 				"trigger", definition.Slug, "error", err)
+			refused++
 			continue
 		}
 		subscribed++
 	}
 
+	if subscribed == 0 && refused > 0 {
+		// One event refused is that event's business; every one refused
+		// says something about the request or the project, not the events —
+		// the first live run met exactly that, a project that wanted a field
+		// every subscription left out. It is a failed pass, tried again
+		// within the attempts a connection gets, rather than marked done
+		// with nothing subscribed.
+		logger.WarnContext(ctx, "every event this connection could subscribe to was refused",
+			"refused", refused)
+		s.warnIfGivingUp(ctx, logger, connection)
+		return
+	}
 	if err := s.store.MarkSubscribed(ctx, connection.ID, s.now().UTC()); err != nil {
 		// Left unmarked, it is claimed again; subscribing is idempotent, so
 		// the worst of that is a wasted pass.

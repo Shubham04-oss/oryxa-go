@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -247,6 +248,34 @@ func TestAnAppThatKeepsFailingIsGivenUpOn(t *testing.T) {
 // connection's last allowed attempt, a warning says so, naming how many were
 // tried, so an operator - or the member - is not left guessing why an app's
 // events never arrived.
+// TestAPassWhereEveryEventIsRefusedIsTriedAgain: one event refused is that
+// event's business, but every one refused says something about the request
+// or the project. The first live run met exactly that — a project wanting a
+// field every subscription left out — and the pass was marked done with
+// nothing subscribed. It is a failed pass now, tried again.
+func TestAPassWhereEveryEventIsRefusedIsTriedAgain(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	connection := h.awaiting("apc_1", "github", "ca_1")
+	h.composio.upsertErr = fmt.Errorf("%w: user_id is required to create or update a trigger", composio.ErrInvalid)
+
+	h.service.maintain(context.Background())
+	if h.store.connections[connection.ID].AutoSubscribedAt != nil {
+		t.Fatal("a pass that subscribed nothing was marked done")
+	}
+
+	// Once the refusal stops, the next pass subscribes and finishes.
+	h.composio.upsertErr = nil
+	h.composio.upsertPerSlug = true
+	h.service.maintain(context.Background())
+	if h.store.connections[connection.ID].AutoSubscribedAt == nil {
+		t.Fatal("the connection was not subscribed once Composio accepted it")
+	}
+	if len(h.store.triggers) == 0 {
+		t.Fatal("nothing was subscribed")
+	}
+}
+
 func TestAutoSubscribeGivingUpIsLogged(t *testing.T) {
 	t.Parallel()
 	store := newFakeStore()
