@@ -49,6 +49,12 @@ const refreshWindow = 2 * time.Minute
 // maxResponseBytes bounds what auth's answer may be.
 const maxResponseBytes = 1 << 20
 
+// requestTimeout bounds one request to auth. The callers are event handlers
+// and background passes whose contexts carry no deadline of their own, and
+// every caller asking for the same member waits on the one request out, so
+// an auth that stops answering must not hold them for ever.
+const requestTimeout = 30 * time.Second
+
 // Signer signs this service's own identity for auth. serviceauth.Signer
 // satisfies it.
 type Signer interface {
@@ -62,7 +68,8 @@ type Config struct {
 	// Signer proves which service is asking. Auth decides from its own
 	// configuration whether that service may mint tokens at all.
 	Signer Signer
-	// HTTP is the client requests go out on; http.DefaultClient when unset.
+	// HTTP is the client requests go out on; one that gives up after
+	// requestTimeout when unset.
 	HTTP *http.Client
 	// Now is the clock, for tests that need expiry to be decidable.
 	Now func() time.Time
@@ -99,7 +106,7 @@ type request struct {
 func New(config Config) *Client {
 	client := config.HTTP
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: requestTimeout}
 	}
 	now := config.Now
 	if now == nil {

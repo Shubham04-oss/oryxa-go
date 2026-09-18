@@ -27,10 +27,10 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 )
 
-// Definition is how a host builds knowledge. Nothing calls knowledge over
-// HTTP, so it names no URL variable of its own for other services to reach it
-// by.
-var Definition = host.Definition{Name: Name, Migrate: Migrate, Mount: Mount}
+// Definition is how a host builds knowledge. Rag reads back a document too
+// large to have travelled on the bus from knowledge's internal API, at
+// KNOWLEDGE_URL, which defaults to this process when it runs knowledge.
+var Definition = host.Definition{Name: Name, URLVariable: "KNOWLEDGE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs knowledge's schema.
 func Migrate(ctx context.Context, platform host.Platform) error {

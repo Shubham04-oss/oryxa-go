@@ -162,6 +162,16 @@ not claim to be. And the hash is over the extracted text — that is what keeps
 a provider re-serializing a page from looking like a change, which is the
 whole reason a pass over thousands of unchanged documents publishes nothing.
 
+## 10. Trigger payloads in knowledge's queue
+
+Knowledge consumes `apps.trigger.received.v1` only to learn which connection
+changed, but the event carries the app's whole payload, so mail bodies and
+messages pass through `knowledge-events` and, for an event that keeps failing,
+sit in its dead-letter queue for its retention. Apps wipes the same payloads
+from its own outbox once published. An EventBridge input transformer on a
+separate rule for this detail type could hand knowledge the connection alone;
+it needs the provisioner to create two rules rather than one.
+
 ## 8. Decisions that are not mine to make
 
 1. **Promote `golang.org/x/net` to a direct dependency for HTML?** Decided:

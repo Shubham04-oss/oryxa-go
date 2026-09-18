@@ -75,15 +75,24 @@ they are away: the sources are theirs, read as them, under the standing grant
 they gave auth. A member who never granted gets nothing registered and is no
 worse off than before — they can still register a source by hand.
 
-Bounded at ten. Every source is a scheduled pass against the provider for as
-long as it lives, so a member with four hundred repositories is choosing which
-matter rather than having all of them indexed on their behalf. The rest are
-left for them, at the same hourly interval an automatic one takes.
+Auth answers every token a grant redeems to as an agent's, and an agent may
+not choose what gets indexed. Nothing here is an agent choosing — knowledge
+decided, on an event apps published — so that one rule is not applied to it;
+every other check is, as the member, and a token acting as anyone else
+registers nothing.
+
+Bounded at ten, counting what the connection already has. Every source is a
+scheduled pass against the provider for as long as it lives, so a member with
+four hundred repositories is choosing which matter rather than having all of
+them indexed on their behalf. The rest are left for them, at the same hourly
+interval an automatic one takes. A target whose source a member removed is not
+registered again: removing it was them saying no.
 
 Nothing about it is essential to the connection, which is already made and
 already usable, so most of what can go wrong is reported and dropped rather
-than retried: apps being briefly unreachable is worth another delivery, a
-refusal that will not change is not.
+than retried: apps or auth being briefly unreachable is worth another
+delivery; a member who has not granted, or a refusal that will not change, is
+not.
 
 ## Reading a source now
 
@@ -191,10 +200,16 @@ redeems the standing agent grant they gave auth: `/internal/membertoken`
 exchanges it for a short-lived token at auth's `/v1/internal/agent-tokens`,
 holding each until shortly before it expires. It mounts once `FILES_URL` and
 `KNOWLEDGE_SERVICE_KEY_ID` are set and auth lists knowledge in
-`AUTH_SERVICE_CALLERS` with the `agent` purpose; short of any of those it
-says which is missing and stays off. A member who never granted stops their
-own source with `grant_required` rather than the pass falling back to
-anything wider.
+`AUTH_SERVICE_CALLERS` with the `agent` purpose. Without either setting it
+says which is missing at start and stays off; auth not listing knowledge shows
+on first use, as a warning and a `forbidden` pass. A member who never granted
+fails their own source with `grant_required` rather than the pass falling back
+to anything wider, and it is tried again, with backoff, so it resumes once
+they grant.
+
+A files source reads the organization's files, or one team's when its target
+names one, and publishes under that same scope. Billing attachments are never
+read, whoever the source reads as.
 
 Only text is indexed. A media type holding none is refused rather than stored
 as though bytes were words.
@@ -407,6 +422,16 @@ Knowledge deploys as part of the single `oryxa` image, behind the same public
 edge as every service it runs alongside. Its runtime identity needs
 `events:PutEvents` on the event bus, and `sqs:ReceiveMessage` and
 `sqs:DeleteMessage` on `knowledge-events`.
+
+Deploy the binary before running the events provisioner again. The rule is
+generated from what this build consumes, and a build that does not yet
+handle an event type the rule already routes refuses it until it lands in
+the dead-letter queue.
+
+`apps.trigger.received.v1` carries the app's whole payload — a mail body, a
+message — and knowledge reads only which connection it came from. It is
+deleted from the queue once handled, but one that keeps failing sits in the
+dead-letter queue for its retention; see TODO.md.
 
 ## Tests
 
