@@ -71,6 +71,18 @@ func (store *Store) Record(ctx context.Context, trigger domain.Trigger) (domain.
 	return admission, nil
 }
 
+// Screen says what Record would do with a trigger, without recording it.
+// The service asks before classifying, so neither a redelivery nor a trigger
+// from something since removed costs a classification, or sends its payload
+// to the classifier's provider again. Record still decides, under the
+// organization's lock.
+func (store *Store) Screen(ctx context.Context, trigger domain.Trigger) (domain.Admission, error) {
+	if trigger.ID == "" || trigger.OrganizationID == "" || trigger.MemberID == "" || trigger.ReceivedAt.IsZero() {
+		return 0, errors.New("a trigger needs its event id, organization, member, and received time")
+	}
+	return screen(ctx, store.database.Pool, trigger)
+}
+
 // record does Record's work in tx. It holds the organization's lock shared,
 // so triggers are recorded side by side while Forget, which holds it
 // exclusively, waits for those under way and they for it: a trigger is

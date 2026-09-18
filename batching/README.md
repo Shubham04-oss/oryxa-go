@@ -42,10 +42,14 @@ priority, or reaching the target can only release the group earlier. Silence
 requires no new webhook: the database worker claims the partial group when its
 deadline arrives. Policy decisions are stamped `adaptive-ewma.v2`.
 The consumer, deadline sweeper, and outbox dispatcher run continuously for the
-full 24-hour day; member presence or working hours never pause delivery.
+full 24-hour day; member presence or working hours never pause delivery. The
+consumer handles each receive's messages (at most ten) side by side, so one
+waiting on the classifier holds up none of the others, removals included.
 
 With `TYPESAFE_API_KEY` set, the classifier calls TypeSafe's System One API once
-per trigger and asks two parallel questions: a Choice between `immediate` and
+per trigger. A trigger already recorded, or from something removed since, is
+screened out before it is classified, so the redelivery of a recorded trigger
+never reaches TypeSafe again. It asks two parallel questions: a Choice between `immediate` and
 `digest`, and a Noul for the probability that prompt attention is required.
 An event takes the immediate lane only when both its immediate probability and
 Choice confidence clear their configured gates. Otherwise the Noul probability
@@ -134,10 +138,8 @@ Found in review before the first merge, and not yet addressed:
   every app payload — mail bodies, direct messages — to TypeSafe, for every
   organization, with no per-organization opt-in. Leave it unset until that
   sharing is approved. `TYPESAFE_BASE_URL` also accepts `http://`.
-- **The consumer waits on the classifier.** Messages are handled one at a
-  time and each is classified before the duplicate check, so a slow provider
-  slows the whole queue — deletion events included — and a redelivery sends
-  the payload again. `BATCHING_JEV_TIMEOUT` has no ceiling, and one over a
-  few seconds can outrun the queue's visibility timeout.
+- **A failing classifier costs every trigger its timeout.**
+  `BATCHING_JEV_TIMEOUT` has no ceiling, and one over a few seconds can
+  outrun the queue's visibility timeout.
 - **Throughput is bounded per replica**: at most `BATCHING_GROUPS_PER_SWEEP`
   groups per sweep interval, so the hard cadence holds only below that rate.

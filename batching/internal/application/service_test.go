@@ -19,6 +19,7 @@ var testClock = time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
 
 type fakeStore struct {
 	recorded  []domain.Trigger
+	screened  domain.Admission
 	admission domain.Admission
 	batches   []domain.Batch
 	completed []domain.Event
@@ -30,6 +31,9 @@ type fakeStore struct {
 	swept []time.Time
 }
 
+func (store *fakeStore) Screen(context.Context, domain.Trigger) (domain.Admission, error) {
+	return store.screened, nil
+}
 func (store *fakeStore) Record(_ context.Context, trigger domain.Trigger) (domain.Admission, error) {
 	if store.admission != domain.Admitted {
 		return store.admission, nil
@@ -276,5 +280,25 @@ func TestAppRemovalsDiscardTheirWaitingTriggers(t *testing.T) {
 	}
 	if err := service.TriggerUnsubscribed(ctx, appsv1.TriggerUnsubscribed{TriggerID: "apt_1"}); err == nil {
 		t.Fatal("TriggerUnsubscribed() without an organization error = nil")
+	}
+}
+
+// TestATriggerIsScreenedBeforeItIsClassified: a redelivery, or a trigger
+// from someone since removed, must not wait on the classifier, nor send its
+// payload to the classifier's provider a second time.
+func TestATriggerIsScreenedBeforeItIsClassified(t *testing.T) {
+	for _, screened := range []domain.Admission{domain.AlreadyRecorded, domain.Forgotten} {
+		store := &fakeStore{screened: screened}
+		classified := 0
+		service := New(store, ClassifierFunc(func(context.Context, appsv1.TriggerReceived) (domain.Classification, error) {
+			classified++
+			return domain.Classification{Lane: domain.LaneDigest, Classifier: "counting"}, nil
+		}), Config{}, nil)
+		err := service.TriggerReceived(context.Background(), "evt_apps_1", appsv1.TriggerReceived{
+			OrganizationID: "org_1", MemberID: "user_1", ReceivedAt: testClock,
+		})
+		if err != nil || classified != 0 || len(store.recorded) != 0 {
+			t.Fatalf("screened %d: error = %v, classified %d times, recorded %d", screened, err, classified, len(store.recorded))
+		}
 	}
 }

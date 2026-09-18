@@ -79,6 +79,7 @@ func (classifier *ResilientClassifier) Classify(ctx context.Context, trigger app
 }
 
 type store interface {
+	Screen(context.Context, domain.Trigger) (domain.Admission, error)
 	Record(context.Context, domain.Trigger) (domain.Admission, error)
 	ClaimDue(context.Context, domain.Rule, time.Duration, int) ([]domain.Batch, error)
 	Unclaim(context.Context, string, []string) error
@@ -118,6 +119,23 @@ func (service *Service) TriggerReceived(ctx context.Context, eventID string, tri
 	if eventID == "" || trigger.OrganizationID == "" || trigger.MemberID == "" || trigger.ReceivedAt.IsZero() {
 		return errors.New("a trigger event needs its event id, organization, member, and received time")
 	}
+	candidate := domain.Trigger{
+		ID: eventID, TriggerID: trigger.TriggerID, ConnectionID: trigger.ConnectionID,
+		OrganizationID: trigger.OrganizationID, MemberID: trigger.MemberID,
+		Toolkit: trigger.Toolkit, Trigger: trigger.Trigger, Data: trigger.Data,
+		DataOmitted: trigger.DataOmitted, ReceivedAt: trigger.ReceivedAt,
+	}
+	// Screened before it is classified: a redelivery, or a trigger from
+	// something since removed, must not wait on the classifier, nor send its
+	// payload to the classifier's provider again.
+	admission, err := service.store.Screen(ctx, candidate)
+	if err != nil {
+		return err
+	}
+	if admission != domain.Admitted {
+		service.report(ctx, eventID, admission)
+		return nil
+	}
 	classification, err := service.classifier.Classify(ctx, trigger)
 	if err != nil {
 		return fmt.Errorf("classify trigger: %w", err)
@@ -125,14 +143,8 @@ func (service *Service) TriggerReceived(ctx context.Context, eventID string, tri
 	if err := classification.Validate(); err != nil {
 		return fmt.Errorf("classify trigger: %w", err)
 	}
-	admission, err := service.store.Record(ctx, domain.Trigger{
-		ID: eventID, TriggerID: trigger.TriggerID, ConnectionID: trigger.ConnectionID,
-		OrganizationID: trigger.OrganizationID, MemberID: trigger.MemberID,
-		Toolkit: trigger.Toolkit, Trigger: trigger.Trigger, Data: trigger.Data,
-		DataOmitted: trigger.DataOmitted, ReceivedAt: trigger.ReceivedAt,
-		Classification: classification,
-	})
-	if err != nil {
+	candidate.Classification = classification
+	if admission, err = service.store.Record(ctx, candidate); err != nil {
 		return err
 	}
 	service.report(ctx, eventID, admission)

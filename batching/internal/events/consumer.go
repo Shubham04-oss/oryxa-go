@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -126,10 +127,16 @@ type queueAPI interface {
 
 var receiveBackoff = 5 * time.Second
 
+// receiveSize is how many messages one receive asks for, the most SQS
+// gives. They are handled side by side, so at most that many at once, and
+// one waiting on the classifier holds up none of the others, a removal
+// included.
+const receiveSize = 10
+
 func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL string) {
 	for {
 		output, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-			QueueUrl: aws.String(queueURL), MaxNumberOfMessages: 10, WaitTimeSeconds: 20,
+			QueueUrl: aws.String(queueURL), MaxNumberOfMessages: receiveSize, WaitTimeSeconds: 20,
 		})
 		if ctx.Err() != nil {
 			return
@@ -143,16 +150,7 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 			}
 			continue
 		}
-		var handled []sqstypes.DeleteMessageBatchRequestEntry
-		for index, message := range output.Messages {
-			if err := consumer.Handle(ctx, aws.ToString(message.Body)); err != nil {
-				consumer.logger.ErrorContext(ctx, "event failed", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
-				continue
-			}
-			handled = append(handled, sqstypes.DeleteMessageBatchRequestEntry{
-				Id: aws.String(strconv.Itoa(index)), ReceiptHandle: message.ReceiptHandle,
-			})
-		}
+		handled := consumer.handleAll(ctx, output.Messages)
 		if len(handled) == 0 {
 			continue
 		}
@@ -170,4 +168,31 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 				"code", aws.ToString(failure.Code), "message", aws.ToString(failure.Message))
 		}
 	}
+}
+
+// handleAll handles a receive's messages side by side, and answers the
+// delete entries for those handled. One that failed is left on the queue,
+// to be delivered again once its visibility timeout runs out.
+func (consumer *Consumer) handleAll(ctx context.Context, messages []sqstypes.Message) []sqstypes.DeleteMessageBatchRequestEntry {
+	handled := make([]bool, len(messages))
+	var group sync.WaitGroup
+	for index, message := range messages {
+		group.Go(func() {
+			if err := consumer.Handle(ctx, aws.ToString(message.Body)); err != nil {
+				consumer.logger.ErrorContext(ctx, "event failed", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
+				return
+			}
+			handled[index] = true
+		})
+	}
+	group.Wait()
+	var entries []sqstypes.DeleteMessageBatchRequestEntry
+	for index, message := range messages {
+		if handled[index] {
+			entries = append(entries, sqstypes.DeleteMessageBatchRequestEntry{
+				Id: aws.String(strconv.Itoa(index)), ReceiptHandle: message.ReceiptHandle,
+			})
+		}
+	}
+	return entries
 }

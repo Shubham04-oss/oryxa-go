@@ -133,6 +133,12 @@ func TestDigestWaitsForItsSizeAndInputDeliveryIsIdempotent(t *testing.T) {
 	if admission, err := store.Record(ctx, first); err != nil || admission != domain.AlreadyRecorded {
 		t.Fatalf("duplicate Record() = %d, %v", admission, err)
 	}
+	if admission, err := store.Screen(ctx, first); err != nil || admission != domain.AlreadyRecorded {
+		t.Fatalf("Screen() of a recorded trigger = %d, %v", admission, err)
+	}
+	if admission, err := store.Screen(ctx, testTrigger(organizationID, "user_1", "new", domain.LaneDigest)); err != nil || admission != domain.Admitted {
+		t.Fatalf("Screen() of a new trigger = %d, %v", admission, err)
+	}
 	var observations int
 	if err := store.database.Pool.QueryRow(ctx, `
 		SELECT total_events FROM batching_traffic_profiles
@@ -346,6 +352,9 @@ func TestATriggerDeliveredAfterItsMemberWasRemovedIsRefused(t *testing.T) {
 	refused(t, store, late)
 	refused(t, store, lateImmediate)
 	refused(t, store, early) // delivered again after the removal
+	if admission, err := store.Screen(ctx, late); err != nil || admission != domain.Forgotten {
+		t.Fatalf("Screen() = %d, %v, want forgotten", admission, err)
+	}
 	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND member_id = 'user_1'`, organizationID); got != 0 {
 		t.Fatalf("user_1 has %d triggers after the removal, want none", got)
 	}

@@ -3,10 +3,15 @@ package events
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/domain"
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
@@ -141,4 +146,104 @@ func TestPublisherUsesBatchingSourceAndEnvelope(t *testing.T) {
 	if *entry.Source != batchingv1.Source || *entry.EventBusName != "default" || *entry.DetailType != batchingv1.TriggerBatchReadyDetailType {
 		t.Fatalf("entry = %+v", entry)
 	}
+}
+
+// slowApplication holds every trigger until released, as a slow classifier
+// would, and handles removals at once.
+type slowApplication struct {
+	release chan struct{}
+	removed chan string
+}
+
+func (app *slowApplication) TriggerReceived(ctx context.Context, _ string, _ appsv1.TriggerReceived) error {
+	select {
+	case <-app.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+func (*slowApplication) ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error {
+	return nil
+}
+func (*slowApplication) TriggerUnsubscribed(context.Context, appsv1.TriggerUnsubscribed) error {
+	return nil
+}
+func (app *slowApplication) MemberRemoved(_ context.Context, event authv1.MemberRemoved) error {
+	app.removed <- event.UserID
+	return nil
+}
+func (*slowApplication) OrganizationDeleted(context.Context, authv1.OrganizationDeleted) error {
+	return nil
+}
+
+// fakeQueue hands out one receive, then waits; it reports what is deleted.
+type fakeQueue struct {
+	receives chan *sqs.ReceiveMessageOutput
+	deleted  chan []sqstypes.DeleteMessageBatchRequestEntry
+}
+
+func (queue *fakeQueue) ReceiveMessage(ctx context.Context, _ *sqs.ReceiveMessageInput, _ ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error) {
+	select {
+	case output := <-queue.receives:
+		return output, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (queue *fakeQueue) DeleteMessageBatch(_ context.Context, input *sqs.DeleteMessageBatchInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
+	queue.deleted <- input.Entries
+	return &sqs.DeleteMessageBatchOutput{}, nil
+}
+
+// TestPollHandlesAReceiveSideBySide: a trigger waiting on the classifier
+// must not hold up the rest of its receive — a removal least of all — and
+// only what was handled is deleted from the queue.
+func TestPollHandlesAReceiveSideBySide(t *testing.T) {
+	app := &slowApplication{release: make(chan struct{}), removed: make(chan string, 1)}
+	queue := &fakeQueue{receives: make(chan *sqs.ReceiveMessageOutput, 1), deleted: make(chan []sqstypes.DeleteMessageBatchRequestEntry, 1)}
+	message := func(id, body string) sqstypes.Message {
+		return sqstypes.Message{MessageId: aws.String(id), ReceiptHandle: aws.String("receipt_" + id), Body: aws.String(body)}
+	}
+	queue.receives <- &sqs.ReceiveMessageOutput{Messages: []sqstypes.Message{
+		message("slow", delivery(t, appsv1.Source, appsv1.TriggerReceivedDetailType, "evt_apps_1", appsv1.TriggerReceived{
+			OrganizationID: "org_1", MemberID: "user_1", ReceivedAt: time.Now(),
+		})),
+		message("removal", delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_auth_1",
+			authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user_2"})),
+		message("broken", `{not json`),
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		NewConsumer(app, nil).Poll(ctx, queue, "queue")
+	}()
+
+	select {
+	case user := <-app.removed:
+		if user != "user_2" {
+			t.Fatalf("removed %q", user)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the removal waited behind a trigger held by the classifier")
+	}
+	close(app.release)
+	select {
+	case entries := <-queue.deleted:
+		var receipts []string
+		for _, entry := range entries {
+			receipts = append(receipts, aws.ToString(entry.ReceiptHandle))
+		}
+		slices.Sort(receipts)
+		if strings.Join(receipts, ",") != "receipt_removal,receipt_slow" {
+			t.Fatalf("deleted %v, want the two handled messages", receipts)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("nothing was deleted")
+	}
+	cancel()
+	<-polled
 }
