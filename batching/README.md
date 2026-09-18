@@ -66,7 +66,10 @@ An event takes the immediate lane only when both its immediate probability and
 Choice confidence clear their configured gates. Otherwise the Noul probability
 and the Choice's immediate probability are combined by taking the larger value
 as its digest priority. The adapter defaults to the moving `jev-latest`
-alias and records the versioned model returned by TypeSafe in every decision.
+alias and records the versioned model returned by TypeSafe in every decision;
+a response naming a model over 100 characters is refused as malformed. The
+API key goes only over HTTPS: `TYPESAFE_BASE_URL` may use plain HTTP just to
+localhost, as tests do.
 
 Jev receives toolkit, trigger name, omission state, and at most a 48 KiB
 projection of the app payload. This projection never replaces or truncates the
@@ -160,4 +163,4 @@ Found in review before the first merge, and not yet addressed:
 - **Setting `TYPESAFE_API_KEY` is a data decision.** It sends up to 48 KiB of
   every app payload — mail bodies, direct messages — to TypeSafe, for every
   organization, with no per-organization opt-in. Leave it unset until that
-  sharing is approved. `TYPESAFE_BASE_URL` also accepts `http://`.
+  sharing is approved.

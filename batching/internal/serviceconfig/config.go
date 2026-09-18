@@ -2,6 +2,7 @@
 package serviceconfig
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -116,6 +117,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("%s must be an absolute URL", check.name)
 		}
 	}
+	if !httpsOrLocal(config.TypeSafeBaseURL) {
+		return Config{}, errors.New("TYPESAFE_BASE_URL must use HTTPS, except on localhost, since every request carries the API key")
+	}
 	return config, nil
 }
 
@@ -178,4 +182,16 @@ func endpointOr(getenv func(string) string, name, fallback string) string {
 func absoluteURL(value string) bool {
 	parsed, err := url.Parse(value)
 	return err == nil && parsed.Scheme != "" && parsed.Host != ""
+}
+
+// httpsOrLocal says a URL uses HTTPS, or HTTP on this machine as tests do.
+// Anywhere else plain HTTP would send the TypeSafe API key in cleartext.
+func httpsOrLocal(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
+	hostname := parsed.Hostname()
+	return parsed.Scheme == "https" ||
+		parsed.Scheme == "http" && (hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1")
 }
