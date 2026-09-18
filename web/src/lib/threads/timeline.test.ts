@@ -7,6 +7,7 @@ import {
 	humanizeToolName,
 	isImageArtifact,
 	type ToolEntry,
+	unseenLiveItems,
 } from "./timeline";
 
 describe("buildTimeline", () => {
@@ -213,12 +214,24 @@ describe("buildTimeline", () => {
 			{
 				at: "2026-09-18T10:00:00Z",
 				author: "krude",
-				id: "item_1",
+				id: "item_1/reports/summary.png@2",
 				kind: "artifact",
 				name: "reports/summary.png",
 				version: 2,
 			},
 		]);
+	});
+
+	it("tells apart the files one stored event kept", () => {
+		const items: Item[] = [
+			{ artifact: "chart.png", id: "event_1", type: "artifact", version: 1 },
+			{ artifact: "data.csv", id: "event_1", type: "artifact", version: 1 },
+		];
+
+		const ids = buildTimeline(items).map((entry) =>
+			entry.kind === "artifact" ? entry.id : "",
+		);
+		expect(new Set(ids).size).toBe(2);
 	});
 
 	it("defaults an artifact's version to 1 when the item omits it", () => {
@@ -316,6 +329,90 @@ describe("buildTimeline", () => {
 			(entry): entry is ToolEntry => entry.kind === "tool",
 		);
 		expect(tool).toMatchObject({ state: "done" });
+	});
+});
+
+describe("unseenLiveItems", () => {
+	const member: Item = {
+		author: "member",
+		id: "e1",
+		text: "hi",
+		type: "message",
+	};
+	const call: Item = {
+		call_id: "c1",
+		id: "e2",
+		tool: "knowledge_search",
+		type: "tool_call",
+	};
+	const result: Item = {
+		call_id: "c1",
+		id: "e3",
+		tool: "knowledge_search",
+		type: "tool_result",
+	};
+	const answer: Item = {
+		author: "krude",
+		id: "e4",
+		text: "Hello",
+		type: "message",
+	};
+	const deltas: Item[] = [
+		{ author: "krude", text: "Hel", type: "delta" },
+		{ author: "krude", text: "lo", type: "delta" },
+	];
+	const run: Item[] = [
+		{ run_id: "r1", type: "run_started" },
+		member,
+		call,
+		result,
+		...deltas,
+		answer,
+		{ run_id: "r1", type: "run_completed" },
+	];
+
+	it("shows a finished run once when the refetched history already holds it", () => {
+		const history = [member, call, result, answer];
+
+		const timeline = buildTimeline([
+			...history,
+			...unseenLiveItems(history, run),
+		]);
+
+		expect(timeline.map((entry) => entry.kind)).toEqual([
+			"message",
+			"tool",
+			"message",
+		]);
+		expect(
+			timeline.some((entry) => entry.kind === "message" && entry.pending),
+		).toBe(false);
+	});
+
+	it("keeps what a thread refetched mid-run does not hold yet", () => {
+		const history = [member, call];
+		const live = run.slice(0, 6);
+
+		const timeline = buildTimeline([
+			...history,
+			...unseenLiveItems(history, live),
+		]);
+
+		expect(timeline).toHaveLength(3);
+		expect(timeline[1]).toMatchObject({ kind: "tool", state: "done" });
+		expect(timeline[2]).toMatchObject({
+			kind: "message",
+			pending: true,
+			text: "Hello",
+		});
+	});
+
+	it("keeps every item when the history holds none of the run", () => {
+		const history: Item[] = [
+			{ author: "krude", id: "e0", text: "Earlier", type: "message" },
+		];
+
+		expect(unseenLiveItems(history, run)).toEqual(run);
 	});
 });
 

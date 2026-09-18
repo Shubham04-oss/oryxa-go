@@ -166,10 +166,12 @@ export function buildTimeline(items: Item[]): TimelineEntry[] {
 				break;
 			}
 			case "artifact": {
+				// One stored event can keep several files, and each of its items
+				// carries that event's id, so the file names this entry.
 				entries.push({
 					at: item.at,
 					author: item.author,
-					id: item.id ?? `artifact-${entries.length}`,
+					id: `${item.id ?? `artifact-${entries.length}`}/${item.artifact ?? ""}@${item.version ?? 1}`,
 					kind: "artifact",
 					name: item.artifact ?? "",
 					version: item.version ?? 1,
@@ -182,6 +184,41 @@ export function buildTimeline(items: Item[]): TimelineEntry[] {
 	}
 
 	return entries;
+}
+
+/**
+ * The streamed items a thread's history does not hold yet. A run's stream
+ * ends in a refetch of the thread, and until its streamed items are cleared
+ * the history holds them too, so both copies would show; a thread refetched
+ * mid-run already holds the run's first items. A stored item carries its
+ * event's id, which the streamed copy shares, so an item the history holds is
+ * left out, and so are the deltas that drafted a message it holds.
+ */
+export function unseenLiveItems(history: Item[], live: Item[]): Item[] {
+	const stored = new Set<string>();
+	for (const item of history) {
+		if (item.id !== undefined) {
+			stored.add(item.id);
+		}
+	}
+	const unseen: Item[] = [];
+	let draft: Item[] = [];
+	for (const item of live) {
+		if (item.type === "delta") {
+			draft.push(item);
+			continue;
+		}
+		const held = item.id !== undefined && stored.has(item.id);
+		if (!(held && item.type === "message")) {
+			unseen.push(...draft);
+		}
+		draft = [];
+		if (!held) {
+			unseen.push(item);
+		}
+	}
+	unseen.push(...draft);
+	return unseen;
 }
 
 /** A tool's name in words: "sandbox_execute_code" -> "Sandbox execute code". */

@@ -14,6 +14,7 @@ import { type UIEvent, useEffect, useRef, useState } from "react";
 import { AppAlert, QueryError } from "@/components/app/app-alert";
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import { ThreadComposer } from "@/components/app/thread-composer";
+import { MessageMarkdown } from "@/components/threads/message-markdown";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, apiErrorMessage } from "@/lib/api/client";
@@ -41,6 +42,7 @@ import {
 	type MessageEntry,
 	type TimelineEntry,
 	type ToolEntry,
+	unseenLiveItems,
 } from "@/lib/threads/timeline";
 
 const appsUpdatePreviewLines = 4;
@@ -202,7 +204,10 @@ function ThreadConversationPage() {
 	}
 
 	const history = thread.data?.items ?? [];
-	const timeline = buildTimeline([...history, ...liveItems]);
+	const timeline = buildTimeline([
+		...history,
+		...unseenLiveItems(history, liveItems),
+	]);
 	const memberEchoed = liveItems.some(
 		(item) => item.type === "message" && item.author === "member",
 	);
@@ -400,7 +405,7 @@ function MessageBlock({ entry }: { entry: MessageEntry }) {
 				aria-live={entry.pending ? "polite" : undefined}
 				className="thread-message-bubble"
 			>
-				{entry.text}
+				{isMember ? entry.text : <MessageMarkdown text={entry.text} />}
 			</div>
 			{entry.error ? (
 				<p className="thread-message-notice">{entry.error}</p>

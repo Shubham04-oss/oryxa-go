@@ -11,7 +11,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useWorkspace } from "@/lib/auth/session";
 import {
 	type Corpus,
+	chunkCountLabel,
 	corporaQueryOptions,
+	documentCountLabel,
 	isFromConnectedApps,
 	scopeLabel,
 } from "@/lib/rag/client";
@@ -96,14 +98,6 @@ function KnowledgeCard({ corpus }: { corpus: Corpus }) {
 			</Card>
 		</Link>
 	);
-}
-
-function documentCountLabel(count: number): string {
-	return `${count} document${count === 1 ? "" : "s"}`;
-}
-
-function chunkCountLabel(count: number): string {
-	return `${count} chunk${count === 1 ? "" : "s"}`;
 }
 
 function KnowledgeGridSkeleton() {

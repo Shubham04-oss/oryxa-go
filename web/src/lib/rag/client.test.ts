@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	type Corpus,
+	chunkCountLabel,
+	documentCountLabel,
 	externalSourceLink,
 	getCorpus,
 	isFromConnectedApps,
@@ -94,6 +96,15 @@ describe("scopeLabel", () => {
 		expect(scopeLabel("member")).toBe("Just you");
 		expect(scopeLabel("team")).toBe("Team");
 		expect(scopeLabel("organization")).toBe("Organization");
+	});
+});
+
+describe("count labels", () => {
+	it("say one document or chunk in the singular", () => {
+		expect(documentCountLabel(1)).toBe("1 document");
+		expect(chunkCountLabel(1)).toBe("1 chunk");
+		expect(documentCountLabel(0)).toBe("0 documents");
+		expect(chunkCountLabel(6)).toBe("6 chunks");
 	});
 });
 

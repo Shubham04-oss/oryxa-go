@@ -147,6 +147,14 @@ export function scopeLabel(scope: CorpusScope): string {
 	}
 }
 
+export function documentCountLabel(count: number): string {
+	return `${count} document${count === 1 ? "" : "s"}`;
+}
+
+export function chunkCountLabel(count: number): string {
+	return `${count} chunk${count === 1 ? "" : "s"}`;
+}
+
 /** Whether a collection was built from the member's connected apps, not added by hand. */
 export function isFromConnectedApps(corpus: Pick<Corpus, "metadata">): boolean {
 	return corpus.metadata?.origin === "knowledge";
