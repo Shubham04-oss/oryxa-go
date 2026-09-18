@@ -19,16 +19,22 @@ var testClock = time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
 
 type fakeStore struct {
 	recorded  []domain.Trigger
+	admission domain.Admission
 	batches   []domain.Batch
 	completed []domain.Event
 	forgot    []string
 	unclaimed []string
 	claimErr  error
+	// swept is the cutoff each sweep asked tombstones to be deleted before.
+	swept []time.Time
 }
 
-func (store *fakeStore) Record(_ context.Context, trigger domain.Trigger) (bool, error) {
+func (store *fakeStore) Record(_ context.Context, trigger domain.Trigger) (domain.Admission, error) {
+	if store.admission != domain.Admitted {
+		return store.admission, nil
+	}
 	store.recorded = append(store.recorded, trigger)
-	return true, nil
+	return domain.Admitted, nil
 }
 func (store *fakeStore) ClaimDue(context.Context, domain.Rule, time.Duration, int) ([]domain.Batch, error) {
 	return store.batches, store.claimErr
@@ -46,6 +52,10 @@ func (store *fakeStore) Forget(_ context.Context, organizationID, memberID strin
 	return nil
 }
 func (*fakeStore) DeleteBatched(context.Context, time.Time, int) (int, error) { return 0, nil }
+func (store *fakeStore) DeleteForgotten(_ context.Context, before time.Time) (int, error) {
+	store.swept = append(store.swept, before)
+	return 0, nil
+}
 
 func TestTriggerReceivedUsesTheClassifierAndPreservesThePayload(t *testing.T) {
 	store := &fakeStore{}
@@ -206,5 +216,32 @@ func TestRemovalEventsForgetTheRightScope(t *testing.T) {
 	}
 	if strings.Join(store.forgot, ",") != "org_1/user_1,org_2/" {
 		t.Fatalf("forgot = %v", store.forgot)
+	}
+}
+
+// TestARefusedTriggerIsAcknowledged: a trigger from a member removed after
+// apps received it is kept nowhere, and delivering it again would change
+// nothing, so it is not an error that keeps it on the queue.
+func TestARefusedTriggerIsAcknowledged(t *testing.T) {
+	store := &fakeStore{admission: domain.Forgotten}
+	service := New(store, nil, Config{}, nil)
+	err := service.TriggerReceived(context.Background(), "evt_apps_1", appsv1.TriggerReceived{
+		OrganizationID: "org_1", MemberID: "user_gone", ReceivedAt: testClock,
+	})
+	if err != nil {
+		t.Fatalf("TriggerReceived() error = %v, want the refusal acknowledged", err)
+	}
+	if len(store.recorded) != 0 {
+		t.Fatalf("recorded = %+v", store.recorded)
+	}
+}
+
+func TestTheSweepForgetsRemovalsOnlyAfterAMonth(t *testing.T) {
+	store := &fakeStore{}
+	service := New(store, nil, Config{}, nil)
+	service.now = func() time.Time { return testClock }
+	service.sweep(context.Background())
+	if len(store.swept) != 1 || !store.swept[0].Equal(testClock.Add(-30*24*time.Hour)) {
+		t.Fatalf("swept removals before %v, want %v", store.swept, testClock.Add(-30*24*time.Hour))
 	}
 }

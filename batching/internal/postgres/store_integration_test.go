@@ -48,6 +48,7 @@ func testStore(t *testing.T, rule domain.Rule) (*Store, string) {
 		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_triggers WHERE organization_id = $1`, organizationID)
 		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_traffic_profiles WHERE organization_id = $1`, organizationID)
 		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_outbox WHERE id LIKE $1`, organizationID+"%")
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_forgotten WHERE organization_id = $1`, organizationID)
 		database.Close()
 	})
 	return store, organizationID
@@ -64,10 +65,28 @@ func testTrigger(organizationID, memberID, id string, lane domain.Lane) domain.T
 
 func recordTrigger(t *testing.T, store *Store, trigger domain.Trigger) {
 	t.Helper()
-	recorded, err := store.Record(context.Background(), trigger)
-	if err != nil || !recorded {
-		t.Fatalf("Record(%s) = %t, %v", trigger.ID, recorded, err)
+	admission, err := store.Record(context.Background(), trigger)
+	if err != nil || admission != domain.Admitted {
+		t.Fatalf("Record(%s) = %d, %v", trigger.ID, admission, err)
 	}
+}
+
+// refused says Record kept nothing of a trigger because of a removal.
+func refused(t *testing.T, store *Store, trigger domain.Trigger) {
+	t.Helper()
+	admission, err := store.Record(context.Background(), trigger)
+	if err != nil || admission != domain.Forgotten {
+		t.Fatalf("Record(%s) = %d, %v, want it refused as forgotten", trigger.ID, admission, err)
+	}
+}
+
+func count(t *testing.T, store *Store, query string, args ...any) int {
+	t.Helper()
+	var found int
+	if err := store.database.Pool.QueryRow(context.Background(), query, args...).Scan(&found); err != nil {
+		t.Fatal(err)
+	}
+	return found
 }
 
 func ownBatches(batches []domain.Batch, organizationID string) []domain.Batch {
@@ -111,8 +130,8 @@ func TestDigestWaitsForItsSizeAndInputDeliveryIsIdempotent(t *testing.T) {
 	first := testTrigger(organizationID, "user_1", "1", domain.LaneDigest)
 	recordTrigger(t, store, first)
 	recordTrigger(t, store, testTrigger(organizationID, "user_1", "2", domain.LaneDigest))
-	if recorded, err := store.Record(ctx, first); err != nil || recorded {
-		t.Fatalf("duplicate Record() = %t, %v", recorded, err)
+	if admission, err := store.Record(ctx, first); err != nil || admission != domain.AlreadyRecorded {
+		t.Fatalf("duplicate Record() = %d, %v", admission, err)
 	}
 	var observations int
 	if err := store.database.Pool.QueryRow(ctx, `
@@ -304,5 +323,160 @@ func TestAQuietPeriodFlushesItsPartialBatchAtThePersistedDeadline(t *testing.T) 
 	quiet = ownBatches(quiet, organizationID)
 	if len(quiet) != 1 || len(quiet[0].Triggers) != 2 || quiet[0].FlushReason != "hard_deadline" {
 		t.Fatalf("quiet batch = %+v", quiet)
+	}
+}
+
+// TestATriggerDeliveredAfterItsMemberWasRemovedIsRefused: the bus orders
+// nothing, so a trigger apps received before a member was removed can arrive
+// after the removal. It must not start a new group for them, nor leave a
+// traffic profile behind; another member's triggers are untouched, and the
+// same member added back later is not held up.
+func TestATriggerDeliveredAfterItsMemberWasRemovedIsRefused(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	early := testTrigger(organizationID, "user_1", "early", domain.LaneDigest)
+	recordTrigger(t, store, early)
+	late := testTrigger(organizationID, "user_1", "late", domain.LaneDigest)
+	lateImmediate := testTrigger(organizationID, "user_1", "late_immediate", domain.LaneImmediate)
+	other := testTrigger(organizationID, "user_2", "other", domain.LaneDigest)
+
+	if err := store.Forget(ctx, organizationID, "user_1"); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, store, late)
+	refused(t, store, lateImmediate)
+	refused(t, store, early) // delivered again after the removal
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND member_id = 'user_1'`, organizationID); got != 0 {
+		t.Fatalf("user_1 has %d triggers after the removal, want none", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_traffic_profiles WHERE organization_id = $1 AND member_id = 'user_1'`, organizationID); got != 0 {
+		t.Fatalf("a refused trigger left %d traffic profiles, want none", got)
+	}
+	recordTrigger(t, store, other)
+
+	// Added back, the member's apps report something new: it is theirs.
+	returned := testTrigger(organizationID, "user_1", "returned", domain.LaneDigest)
+	returned.ReceivedAt = time.Now().UTC()
+	recordTrigger(t, store, returned)
+}
+
+func TestDeletingAnOrganizationRefusesEveryMembersLateTriggers(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	lateFirst := testTrigger(organizationID, "user_1", "late_1", domain.LaneDigest)
+	lateSecond := testTrigger(organizationID, "user_2", "late_2", domain.LaneImmediate)
+	if err := store.Forget(ctx, organizationID, ""); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, store, lateFirst)
+	refused(t, store, lateSecond)
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1`, organizationID); got != 0 {
+		t.Fatalf("the deleted organization has %d triggers, want none", got)
+	}
+}
+
+// TestForgetWaitsForATriggerStillBeingRecorded: a trigger whose insert is
+// not yet committed when the removal runs is invisible to the removal's
+// delete, so without the organization's lock it would outlive it.
+func TestForgetWaitsForATriggerStillBeingRecorded(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	tx, err := store.database.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if admission, err := store.record(ctx, tx, testTrigger(organizationID, "user_1", "in_flight", domain.LaneDigest)); err != nil || admission != domain.Admitted {
+		t.Fatalf("record() = %d, %v", admission, err)
+	}
+
+	forgotten := make(chan error, 1)
+	go func() { forgotten <- store.Forget(ctx, organizationID, "user_1") }()
+	select {
+	case err := <-forgotten:
+		t.Fatalf("Forget() returned %v while a trigger was still being recorded", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-forgotten; err != nil {
+		t.Fatal(err)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1`, organizationID); got != 0 {
+		t.Fatalf("%d triggers outlived the removal, want none", got)
+	}
+}
+
+// TestRecordWaitsForARemovalUnderWay and then honours its tombstone.
+func TestRecordWaitsForARemovalUnderWay(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	tx, err := store.database.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, organizationLock(organizationID)); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		admission domain.Admission
+		err       error
+	}
+	recorded := make(chan result, 1)
+	go func() {
+		admission, err := store.Record(ctx, testTrigger(organizationID, "user_1", "racing", domain.LaneDigest))
+		recorded <- result{admission, err}
+	}()
+	select {
+	case got := <-recorded:
+		t.Fatalf("Record() = %d, %v while a removal was under way", got.admission, got.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := remember(ctx, tx, organizationID, "user_1", "", "", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-recorded; got.err != nil || got.admission != domain.Forgotten {
+		t.Fatalf("Record() = %d, %v, want it refused once the removal committed", got.admission, got.err)
+	}
+}
+
+func TestExpiredRemovalsAreSwept(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	past := time.Now().UTC().Add(-45 * 24 * time.Hour)
+	store.now = func() time.Time { return past }
+	if err := store.Forget(ctx, organizationID, "user_old"); err != nil {
+		t.Fatal(err)
+	}
+	store.now = time.Now
+	if err := store.Forget(ctx, organizationID, "user_recent"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteForgotten(ctx, time.Now().UTC().Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	rows, err := store.database.Pool.Query(ctx, `SELECT member_id FROM batching_forgotten WHERE organization_id = $1`, organizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var memberID string
+		if err := rows.Scan(&memberID); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, memberID)
+	}
+	if rows.Err() != nil {
+		t.Fatal(rows.Err())
+	}
+	if len(left) != 1 || left[0] != "user_recent" {
+		t.Fatalf("removals left = %v, want only the recent one", left)
 	}
 }

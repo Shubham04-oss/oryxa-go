@@ -19,9 +19,15 @@ import (
 )
 
 const (
-	retention  = 7 * 24 * time.Hour
-	sweepEvery = time.Hour
-	sweepBatch = 500
+	retention = 7 * 24 * time.Hour
+	// forgottenRetention is how long a removal is remembered, so the bus
+	// cannot bring back what it removed. SQS keeps a message at most 14 days
+	// (the dead-letter queue keeps that long), EventBridge retries for a day,
+	// and apps' outbox retries before either; a month is comfortably past all
+	// of them, and a tombstone is only a few ids.
+	forgottenRetention = 30 * 24 * time.Hour
+	sweepEvery         = time.Hour
+	sweepBatch         = 500
 )
 
 // Classifier is the narrow integration point for Jev. It receives the
@@ -73,12 +79,13 @@ func (classifier *ResilientClassifier) Classify(ctx context.Context, trigger app
 }
 
 type store interface {
-	Record(context.Context, domain.Trigger) (bool, error)
+	Record(context.Context, domain.Trigger) (domain.Admission, error)
 	ClaimDue(context.Context, domain.Rule, time.Duration, int) ([]domain.Batch, error)
 	Unclaim(context.Context, string, []string) error
 	Complete(context.Context, domain.Batch, domain.Event) error
 	Forget(context.Context, string, string) error
 	DeleteBatched(context.Context, time.Time, int) (int, error)
+	DeleteForgotten(context.Context, time.Time) (int, error)
 }
 
 type Config struct {
@@ -117,7 +124,7 @@ func (service *Service) TriggerReceived(ctx context.Context, eventID string, tri
 	if err := classification.Validate(); err != nil {
 		return fmt.Errorf("classify trigger: %w", err)
 	}
-	recorded, err := service.store.Record(ctx, domain.Trigger{
+	admission, err := service.store.Record(ctx, domain.Trigger{
 		ID: eventID, TriggerID: trigger.TriggerID, ConnectionID: trigger.ConnectionID,
 		OrganizationID: trigger.OrganizationID, MemberID: trigger.MemberID,
 		Toolkit: trigger.Toolkit, Trigger: trigger.Trigger, Data: trigger.Data,
@@ -127,10 +134,20 @@ func (service *Service) TriggerReceived(ctx context.Context, eventID string, tri
 	if err != nil {
 		return err
 	}
-	if !recorded {
-		service.logger.InfoContext(ctx, "trigger already recorded", "event_id", eventID)
-	}
+	service.report(ctx, eventID, admission)
 	return nil
+}
+
+// report says why a trigger event was not kept. Neither is a failure: the
+// event is acknowledged, since delivering it again would change nothing.
+func (service *Service) report(ctx context.Context, eventID string, admission domain.Admission) {
+	switch admission {
+	case domain.AlreadyRecorded:
+		service.logger.InfoContext(ctx, "trigger already recorded", "event_id", eventID)
+	case domain.Forgotten:
+		service.logger.InfoContext(ctx, "trigger refused: its member or organization was removed after apps received it",
+			"event_id", eventID)
+	}
 }
 
 func (service *Service) MemberRemoved(ctx context.Context, event authv1.MemberRemoved) error {
@@ -294,7 +311,11 @@ func earlierTime(first, second time.Time) time.Time {
 }
 
 func (service *Service) sweep(ctx context.Context) {
-	before := service.now().Add(-retention)
+	now := service.now()
+	if _, err := service.store.DeleteForgotten(ctx, now.Add(-forgottenRetention)); err != nil && ctx.Err() == nil {
+		service.logger.WarnContext(ctx, "delete expired removals failed", "error", err)
+	}
+	before := now.Add(-retention)
 	for ctx.Err() == nil {
 		deleted, err := service.store.DeleteBatched(ctx, before, sweepBatch)
 		if err != nil {

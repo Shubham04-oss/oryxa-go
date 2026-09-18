@@ -23,7 +23,10 @@ deterministic scheduler:
   data, flagged `data_omitted`, the way apps sends one it cannot carry, rather
   than holding every trigger queued behind it;
 - member and organization deletion events erase pending trigger data,
-  including batches completed but not yet published;
+  including batches completed but not yet published, and are remembered for
+  a month, so a trigger apps received before the removal that the bus
+  delivers after it is refused instead of starting a new group; a member
+  added back later is not held up by what was forgotten;
 - a published batch's payloads are blanked from the outbox once it is on the
   bus, as apps does with its own trigger events.
 
@@ -130,8 +133,5 @@ Found in review before the first merge, and not yet addressed:
   slows the whole queue — deletion events included — and a redelivery sends
   the payload again. `BATCHING_JEV_TIMEOUT` has no ceiling, and one over a
   few seconds can outrun the queue's visibility timeout.
-- **A removed member can come back.** Nothing remembers a deletion, so a
-  trigger the bus delivers after the removal event starts a new group for
-  them. The agent that receives the batch still checks membership.
 - **Throughput is bounded per replica**: at most `BATCHING_GROUPS_PER_SWEEP`
   groups per sweep interval, so the hard cadence holds only below that rate.
