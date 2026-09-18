@@ -177,13 +177,15 @@ type connectionView struct {
 	// delivers; AutoSubscribedAt when that finished. Unset does not mean
 	// still in progress forever - auto-subscribe gives up after a few failed
 	// attempts, logging a warning when it does, and the member can always
-	// subscribe by hand.
-	AutoSubscribe    bool       `json:"auto_subscribe"`
-	AutoSubscribedAt *time.Time `json:"auto_subscribed_at,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	ConnectedAt      *time.Time `json:"connected_at,omitempty"`
-	RemovedAt        *time.Time `json:"removed_at,omitempty"`
+	// subscribe by hand. AutoSubscribeAttempts is how a caller tells the two
+	// apart: at the limit with AutoSubscribedAt unset, it has given up.
+	AutoSubscribe         bool       `json:"auto_subscribe"`
+	AutoSubscribedAt      *time.Time `json:"auto_subscribed_at,omitempty"`
+	AutoSubscribeAttempts int        `json:"auto_subscribe_attempts,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
+	ConnectedAt           *time.Time `json:"connected_at,omitempty"`
+	RemovedAt             *time.Time `json:"removed_at,omitempty"`
 }
 
 func viewConnection(connection domain.Connection) connectionView {
@@ -191,7 +193,8 @@ func viewConnection(connection domain.Connection) connectionView {
 		ID: connection.ID, Toolkit: connection.Toolkit, Status: string(connection.Status),
 		StatusReason: connection.StatusReason, Label: connection.Label, MemberID: connection.MemberID,
 		ComposioAccountID: connection.ComposioAccountID, AutoSubscribe: connection.AutoSubscribe,
-		AutoSubscribedAt: connection.AutoSubscribedAt, CreatedAt: connection.CreatedAt,
+		AutoSubscribedAt: connection.AutoSubscribedAt, AutoSubscribeAttempts: connection.AutoSubscribeAttempts,
+		CreatedAt: connection.CreatedAt,
 		UpdatedAt: connection.UpdatedAt, ConnectedAt: connection.ConnectedAt, RemovedAt: connection.RemovedAt,
 	}
 }
