@@ -147,6 +147,33 @@ behind this route once knowledge can mint a member token under a grant — the
 same thing its files source waits on
 ([docs/REMAINING-WORK.md §3.2](../docs/REMAINING-WORK.md#32-what-a-member-agrees-to-when-knowledge-reads-files-as-them)).
 
+## What a connection holds
+
+Indexing a repository, a channel or a database used to mean knowing its
+identifier — a Slack channel id, a Notion database id — and typing it into a
+box that could not tell a wrong one from a right one until the first pass
+failed. The connection can simply be asked:
+
+```text
+GET /v1/organizations/{org}/apps/connections/{id}/targets
+```
+
+It reads the app's own API through the same proxy as everything else, and
+answers what a member could index, each with the `target` knowledge registers
+a source with — so a caller passes it on rather than assembling it.
+
+| App | Lists | From |
+| --- | --- | --- |
+| `github` | Repositories, most recently pushed first, archived ones left out | `GET /user/repos` |
+| `slack` | Channels it is in, by name rather than id | `GET /api/conversations.list` |
+| `notion` | Data sources, which is what a query reads since the 2025-09-03 split | `POST /v1/search` |
+
+An app nothing can be indexed for answers an empty list rather than an error:
+that is a fact about the app, not a failure, and a picker wants to say
+"nothing to index here". An app that refuses the read — a missing scope, a
+credential it no longer likes — says so as `unavailable`, since an empty
+workspace and a refused one are not the same answer.
+
 ## Triggers
 
 A member subscribes one of their own active connections to an event its app
@@ -283,6 +310,7 @@ mutation also needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 | `POST /v1/organizations/{org}/apps/connections` | Start connecting an app; answers the link to send the member to. `auto_subscribe: false` connects without subscribing to its events |
 | `GET /v1/organizations/{org}/apps/connections` | The caller's connections, or with `?scope=organization` an admin's view of everyone's |
 | `GET /v1/organizations/{org}/apps/connections/{id}` | One connection |
+| `GET /v1/organizations/{org}/apps/connections/{id}/targets` | What the connection holds that can be indexed, read from the app itself |
 | `DELETE /v1/organizations/{org}/apps/connections/{id}` | Disconnect: Composio deletes the account and revokes its credential |
 | `POST /v1/organizations/{org}/apps/tools/{tool}/run` | Run a tool |
 | `POST /v1/organizations/{org}/apps/read` | Read the app's own API through the caller's connection — GETs, and the few read endpoints that are POSTs |

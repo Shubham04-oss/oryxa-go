@@ -287,6 +287,51 @@ export function catalogTriggerTypesQueryOptions(toolkit: string) {
 	});
 }
 
+/** One thing inside a connection that can be indexed, as the app itself lists it. */
+export interface ConnectionTarget {
+	description?: string;
+	id: string;
+	/** "repository", "channel" or "database" — what the app calls it. */
+	kind: string;
+	/** What a member reads: "#engineering" rather than C0123456789. */
+	name: string;
+	/** The `target` knowledge registers a source with, ready to pass on. */
+	target: Record<string, string>;
+}
+
+async function listConnectionTargets(
+	organizationId: string,
+	connectionId: string,
+): Promise<ConnectionTarget[]> {
+	const answer = await apiRequest<{ targets: ConnectionTarget[] }>(
+		apiPath`${connectionsPath(organizationId)}/${connectionId}/targets`,
+	);
+	return answer.targets ?? [];
+}
+
+/**
+ * What a connection holds, read from the app itself, so a member picks a
+ * repository or a channel instead of knowing its id. An app nothing can be
+ * indexed for answers an empty list, which is a fact rather than a failure.
+ */
+export function connectionTargetsQueryOptions(
+	organizationId: string,
+	connectionId: string,
+) {
+	return queryOptions({
+		queryFn: () => listConnectionTargets(organizationId, connectionId),
+		queryKey: [
+			...appsQueryKey(organizationId),
+			"connections",
+			connectionId,
+			"targets",
+		] as const,
+		// The app is asked once per visit: repositories and channels do not
+		// come and go while a member is choosing one.
+		staleTime: 60_000,
+	});
+}
+
 export function connectionsQueryOptions(
 	organizationId: string,
 	filter: ConnectionFilter = {},

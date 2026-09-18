@@ -42,6 +42,7 @@ type appsService interface {
 	RemoveConnection(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
 	RunTool(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.RunToolInput) (application.ToolRun, error)
 	Proxy(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ProxyInput) (application.ProxyResult, error)
+	ConnectionTargets(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]application.Target, error)
 	CreateTrigger(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.TriggerInput) (domain.Trigger, error)
 	Triggers(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]domain.Trigger, error)
 	RemoveTrigger(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
@@ -86,6 +87,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/connections/{connectionID}", server.removeConnection)
 	server.handle("POST /v1/organizations/{organizationID}/apps/tools/{tool}/run", server.runTool)
 	server.handle("POST /v1/organizations/{organizationID}/apps/read", server.proxy)
+	server.handle("GET /v1/organizations/{organizationID}/apps/connections/{connectionID}/targets", server.connectionTargets)
 	server.handle("GET /v1/organizations/{organizationID}/apps/triggers", server.listTriggers)
 	server.handle("POST /v1/organizations/{organizationID}/apps/triggers", server.createTrigger)
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/triggers/{triggerID}", server.removeTrigger)
@@ -393,6 +395,22 @@ func viewTrigger(trigger domain.Trigger) triggerView {
 		Setup: application.TriggerSetup(trigger), DeliveryCount: trigger.DeliveryCount,
 		LastDeliveryAt: trigger.LastDeliveryAt, CreatedAt: trigger.CreatedAt, UpdatedAt: trigger.UpdatedAt,
 	}
+}
+
+// connectionTargets answers what a member could index through a connection,
+// read from the app itself, so nobody has to know a channel's id.
+func (server *Server) connectionTargets(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	targets, err := server.service.ConnectionTargets(request.Context(), credentials,
+		request.PathValue("organizationID"), request.PathValue("connectionID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"targets": targets})
 }
 
 func (server *Server) listTriggers(writer http.ResponseWriter, request *http.Request) {
