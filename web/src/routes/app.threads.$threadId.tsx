@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
+	Ban,
 	CircleAlert,
 	CircleCheck,
+	FileDown,
+	Inbox,
 	Loader2,
 	ShieldQuestion,
 	Trash2,
@@ -16,6 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, apiErrorMessage } from "@/lib/api/client";
 import { useWorkspace } from "@/lib/auth/session";
 import {
+	artifactContentUrl,
 	type ConfirmationAnswer,
 	deleteThread,
 	type Item,
@@ -27,13 +31,19 @@ import {
 } from "@/lib/threads/client";
 import { takePendingMessage } from "@/lib/threads/pending-message";
 import {
+	type ArtifactEntry,
+	artifactFileName,
 	buildTimeline,
 	type ConfirmationEntry,
+	confirmationHint,
 	humanizeToolName,
+	isImageArtifact,
 	type MessageEntry,
 	type TimelineEntry,
 	type ToolEntry,
 } from "@/lib/threads/timeline";
+
+const appsUpdatePreviewLines = 4;
 
 export const Route = createFileRoute("/app/threads/$threadId")({
 	component: ThreadConversationPage,
@@ -273,10 +283,24 @@ function ThreadConversationPage() {
 					) : null}
 					{entries.map((entry) => {
 						if (entry.kind === "message") {
-							return <MessageBlock entry={entry} key={entry.id} />;
+							return entry.author === "apps" ? (
+								<AppsUpdateBlock entry={entry} key={entry.id} />
+							) : (
+								<MessageBlock entry={entry} key={entry.id} />
+							);
 						}
 						if (entry.kind === "tool") {
 							return <ToolBlock entry={entry} key={entry.callId} />;
+						}
+						if (entry.kind === "artifact") {
+							return (
+								<ArtifactBlock
+									entry={entry}
+									key={entry.id}
+									organizationId={organization.id}
+									threadId={threadId}
+								/>
+							);
 						}
 						const isActionable =
 							pendingIds.has(entry.callId) &&
@@ -385,11 +409,73 @@ function MessageBlock({ entry }: { entry: MessageEntry }) {
 	);
 }
 
+/**
+ * A batch of events from the member's connected apps that woke Krude
+ * (`author: "apps"`). It reads as a system notice, not a message from
+ * either side of the conversation, and starts collapsed since a batch can
+ * run long.
+ */
+function AppsUpdateBlock({ entry }: { entry: MessageEntry }) {
+	const [expanded, setExpanded] = useState(false);
+	const lines = entry.text.split("\n");
+	const hasMore = lines.length > appsUpdatePreviewLines;
+	const shown =
+		expanded || !hasMore
+			? entry.text
+			: lines.slice(0, appsUpdatePreviewLines).join("\n");
+
+	return (
+		<div className="thread-apps-update">
+			<div className="thread-apps-update-label">
+				<Inbox aria-hidden="true" />
+				<span>From your apps</span>
+			</div>
+			<div className="thread-apps-update-text">{shown}</div>
+			{hasMore ? (
+				<Button
+					className="thread-apps-update-toggle"
+					onClick={() => setExpanded((value) => !value)}
+					size="sm"
+					type="button"
+					variant="ghost"
+				>
+					{expanded ? "Show less" : "Show more"}
+				</Button>
+			) : null}
+		</div>
+	);
+}
+
 function toolStateLabel(state: ToolEntry["state"]): string {
-	if (state === "running") {
-		return "Running…";
+	switch (state) {
+		case "running":
+			return "Running…";
+		case "waiting_approval":
+			return "Waiting for your approval";
+		case "declined":
+			return "Declined";
+		case "failed":
+			return "Failed";
+		default:
+			return "Done";
 	}
-	return state === "failed" ? "Failed" : "Done";
+}
+
+function ToolStateIcon({ state }: { state: ToolEntry["state"] }) {
+	switch (state) {
+		case "running":
+			return (
+				<Loader2 aria-hidden="true" className="thread-tool-icon animate-spin" />
+			);
+		case "waiting_approval":
+			return <ShieldQuestion aria-hidden="true" className="thread-tool-icon" />;
+		case "failed":
+			return <CircleAlert aria-hidden="true" className="thread-tool-icon" />;
+		case "declined":
+			return <Ban aria-hidden="true" className="thread-tool-icon" />;
+		default:
+			return <CircleCheck aria-hidden="true" className="thread-tool-icon" />;
+	}
 }
 
 function ToolBlock({ entry }: { entry: ToolEntry }) {
@@ -397,16 +483,7 @@ function ToolBlock({ entry }: { entry: ToolEntry }) {
 	return (
 		<details className="thread-tool" data-state={entry.state}>
 			<summary className="thread-tool-summary">
-				{entry.state === "running" ? (
-					<Loader2
-						aria-hidden="true"
-						className="thread-tool-icon animate-spin"
-					/>
-				) : entry.state === "failed" ? (
-					<CircleAlert aria-hidden="true" className="thread-tool-icon" />
-				) : (
-					<CircleCheck aria-hidden="true" className="thread-tool-icon" />
-				)}
+				<ToolStateIcon state={entry.state} />
 				<span>{humanizeToolName(entry.tool)}</span>
 				<em>{toolStateLabel(entry.state)}</em>
 			</summary>
@@ -415,6 +492,49 @@ function ToolBlock({ entry }: { entry: ToolEntry }) {
 			) : null}
 			{detail ? <pre className="thread-tool-detail">{detail}</pre> : null}
 		</details>
+	);
+}
+
+interface ArtifactBlockProps {
+	entry: ArtifactEntry;
+	organizationId: string;
+	threadId: string;
+}
+
+/**
+ * A file a run kept. Cookies authenticate the artifacts route on this same
+ * origin, so a plain `<img>`/`<a>` fetches it with no token handling here.
+ */
+function ArtifactBlock({
+	entry,
+	organizationId,
+	threadId,
+}: ArtifactBlockProps) {
+	const url = artifactContentUrl(
+		organizationId,
+		threadId,
+		entry.name,
+		entry.version,
+	);
+	if (isImageArtifact(entry.name)) {
+		return (
+			<figure className="thread-artifact">
+				<a href={url} rel="noreferrer" target="_blank">
+					<img alt={entry.name} className="thread-artifact-thumb" src={url} />
+				</a>
+				<figcaption className="thread-artifact-name">{entry.name}</figcaption>
+			</figure>
+		);
+	}
+	return (
+		<a
+			className="thread-artifact-download"
+			download={artifactFileName(entry.name)}
+			href={url}
+		>
+			<FileDown aria-hidden="true" />
+			<span>{entry.name}</span>
+		</a>
 	);
 }
 
@@ -447,9 +567,9 @@ function ConfirmationBlock({
 					{entry.tool ? humanizeToolName(entry.tool) : "Confirmation needed"}
 				</span>
 			</div>
-			{entry.hint ? (
-				<p className="thread-confirmation-hint">{entry.hint}</p>
-			) : null}
+			<p className="thread-confirmation-hint">
+				{confirmationHint(entry.tool, entry.hint)}
+			</p>
 			{entry.arguments ? (
 				<pre className="thread-confirmation-args">
 					{formatJson(entry.arguments)}

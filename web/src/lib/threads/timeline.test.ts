@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { Item } from "./client";
-import { buildTimeline, humanizeToolName } from "./timeline";
+import {
+	artifactFileName,
+	buildTimeline,
+	confirmationHint,
+	humanizeToolName,
+	isImageArtifact,
+	type ToolEntry,
+} from "./timeline";
 
 describe("buildTimeline", () => {
 	it("renders the member's message and Krude's finished message in order", () => {
@@ -189,6 +196,127 @@ describe("buildTimeline", () => {
 
 		expect(buildTimeline(items)).toEqual([]);
 	});
+
+	it("renders an artifact item a run kept", () => {
+		const items: Item[] = [
+			{
+				artifact: "reports/summary.png",
+				at: "2026-09-18T10:00:00Z",
+				author: "krude",
+				id: "item_1",
+				type: "artifact",
+				version: 2,
+			},
+		];
+
+		expect(buildTimeline(items)).toEqual([
+			{
+				at: "2026-09-18T10:00:00Z",
+				author: "krude",
+				id: "item_1",
+				kind: "artifact",
+				name: "reports/summary.png",
+				version: 2,
+			},
+		]);
+	});
+
+	it("defaults an artifact's version to 1 when the item omits it", () => {
+		const items: Item[] = [{ artifact: "notes.txt", type: "artifact" }];
+
+		expect(buildTimeline(items)[0]).toMatchObject({
+			name: "notes.txt",
+			version: 1,
+		});
+	});
+
+	it("shows a tool chip waiting for approval while its confirmation is pending", () => {
+		const items: Item[] = [
+			{ call_id: "call_1", tool: "slack_post_message", type: "tool_call" },
+			{
+				call_id: "confirm_1",
+				status: "pending",
+				tool: "slack_post_message",
+				tool_call_id: "call_1",
+				type: "confirmation",
+			},
+		];
+
+		const tool = buildTimeline(items).find(
+			(entry): entry is ToolEntry => entry.kind === "tool",
+		);
+		expect(tool).toMatchObject({ state: "waiting_approval" });
+	});
+
+	it("returns a waiting tool call to running once its confirmation is approved", () => {
+		const items: Item[] = [
+			{ call_id: "call_1", tool: "slack_post_message", type: "tool_call" },
+			{
+				call_id: "confirm_1",
+				status: "approved",
+				tool_call_id: "call_1",
+				type: "confirmation",
+			},
+		];
+
+		const tool = buildTimeline(items).find(
+			(entry): entry is ToolEntry => entry.kind === "tool",
+		);
+		expect(tool).toMatchObject({ state: "running" });
+	});
+
+	it("still resolves to done once approved and its tool_result arrives", () => {
+		const items: Item[] = [
+			{ call_id: "call_1", tool: "slack_post_message", type: "tool_call" },
+			{
+				call_id: "confirm_1",
+				status: "approved",
+				tool_call_id: "call_1",
+				type: "confirmation",
+			},
+			{ call_id: "call_1", text: "posted", type: "tool_result" },
+		];
+
+		const tool = buildTimeline(items).find(
+			(entry): entry is ToolEntry => entry.kind === "tool",
+		);
+		expect(tool).toMatchObject({ resultText: "posted", state: "done" });
+	});
+
+	it("marks a declined tool call as declined when no result ever arrives", () => {
+		const items: Item[] = [
+			{ call_id: "call_1", tool: "slack_post_message", type: "tool_call" },
+			{
+				call_id: "confirm_1",
+				status: "declined",
+				tool_call_id: "call_1",
+				type: "confirmation",
+			},
+		];
+
+		const tool = buildTimeline(items).find(
+			(entry): entry is ToolEntry => entry.kind === "tool",
+		);
+		expect(tool).toMatchObject({ state: "declined" });
+	});
+
+	it("leaves a settled tool call's state alone if a confirmation still names it", () => {
+		const items: Item[] = [
+			{ call_id: "call_1", tool: "slack_post_message", type: "tool_call" },
+			{ call_id: "call_1", text: "posted", type: "tool_result" },
+			{
+				call_id: "confirm_1",
+				status: "approved",
+				tool_call_id: "call_1",
+				type: "confirmation",
+			},
+		];
+
+		const tool = buildTimeline(items).find(
+			(entry): entry is ToolEntry => entry.kind === "tool",
+		);
+		expect(tool).toMatchObject({ state: "done" });
+	});
 });
 
 describe("humanizeToolName", () => {
@@ -198,5 +326,67 @@ describe("humanizeToolName", () => {
 		);
 		expect(humanizeToolName("apps_run_write_tool")).toBe("Apps run write tool");
 		expect(humanizeToolName("researcher")).toBe("Researcher");
+	});
+});
+
+describe("confirmationHint", () => {
+	it("keeps a hint the backend already wrote", () => {
+		expect(
+			confirmationHint("slack_post_message", "This posts to #general."),
+		).toBe("This posts to #general.");
+	});
+
+	it("writes its own words when the backend left the developer-facing default out", () => {
+		expect(confirmationHint("slack_post_message", undefined)).toBe(
+			"Krude wants to use Slack post message. It only runs if you approve.",
+		);
+		expect(confirmationHint("slack_post_message", "")).toBe(
+			"Krude wants to use Slack post message. It only runs if you approve.",
+		);
+	});
+
+	it("still says something sensible with no tool name at all", () => {
+		expect(confirmationHint(undefined, undefined)).toBe(
+			"Krude wants to use a tool. It only runs if you approve.",
+		);
+	});
+});
+
+describe("artifactFileName", () => {
+	it("keeps a plain name as is", () => {
+		expect(artifactFileName("screenshot.png")).toBe("screenshot.png");
+	});
+
+	it("takes the trailing segment of a path-shaped name", () => {
+		expect(artifactFileName("reports/2026/summary.csv")).toBe("summary.csv");
+	});
+
+	it("keeps a user: prefix, since it has no slash to split on", () => {
+		expect(artifactFileName("user:notes.txt")).toBe("user:notes.txt");
+	});
+});
+
+describe("isImageArtifact", () => {
+	it("recognizes every inline-rendered image extension", () => {
+		for (const name of [
+			"a.png",
+			"a.jpg",
+			"a.jpeg",
+			"a.gif",
+			"a.webp",
+			"A.PNG",
+		]) {
+			expect(isImageArtifact(name)).toBe(true);
+		}
+	});
+
+	it("treats everything else as a download", () => {
+		for (const name of ["a.pdf", "a.txt", "a.csv", "noextension"]) {
+			expect(isImageArtifact(name)).toBe(false);
+		}
+	});
+
+	it("looks at the file name, not the whole path, for the extension", () => {
+		expect(isImageArtifact("screenshots/2026-09-18.png")).toBe(true);
 	});
 });

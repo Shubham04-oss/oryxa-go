@@ -16,7 +16,14 @@ export interface ToolEntry {
 	errorText?: string;
 	kind: "tool";
 	resultText?: string;
-	state: "running" | "done" | "failed";
+	/**
+	 * `waiting_approval` while a confirmation gating this call is pending;
+	 * `declined` when that confirmation was declined and no result ever
+	 * arrives for it. `approved` returns it to `running` until its
+	 * `tool_result` settles it into `done` or `failed`, same as an
+	 * unconfirmed call.
+	 */
+	state: "running" | "waiting_approval" | "done" | "failed" | "declined";
 	tool: string;
 }
 
@@ -29,7 +36,21 @@ export interface ConfirmationEntry {
 	tool?: string;
 }
 
-export type TimelineEntry = MessageEntry | ToolEntry | ConfirmationEntry;
+export interface ArtifactEntry {
+	at?: string;
+	author?: string;
+	id: string;
+	kind: "artifact";
+	/** The file's name, as the artifacts route expects it. */
+	name: string;
+	version: number;
+}
+
+export type TimelineEntry =
+	| MessageEntry
+	| ToolEntry
+	| ConfirmationEntry
+	| ArtifactEntry;
 
 /**
  * Groups a run's raw items — stored history, a live run's streamed items, or
@@ -118,13 +139,40 @@ export function buildTimeline(items: Item[]): TimelineEntry[] {
 				break;
 			}
 			case "confirmation": {
+				const status = item.status ?? "pending";
 				entries.push({
 					arguments: item.arguments,
 					callId: item.call_id ?? `confirmation-${entries.length}`,
 					hint: item.hint,
 					kind: "confirmation",
-					status: item.status ?? "pending",
+					status,
 					tool: item.tool,
+				});
+				// Link back to the tool_call this confirmation gates, so its chip
+				// can show that it is waiting rather than merely "Running…". A
+				// call already settled by its own tool_result is left alone.
+				const gated = item.tool_call_id
+					? toolEntryByCallId.get(item.tool_call_id)
+					: undefined;
+				if (gated && gated.state !== "done" && gated.state !== "failed") {
+					if (status === "pending") {
+						gated.state = "waiting_approval";
+					} else if (status === "declined") {
+						gated.state = "declined";
+					} else {
+						gated.state = "running";
+					}
+				}
+				break;
+			}
+			case "artifact": {
+				entries.push({
+					at: item.at,
+					author: item.author,
+					id: item.id ?? `artifact-${entries.length}`,
+					kind: "artifact",
+					name: item.artifact ?? "",
+					version: item.version ?? 1,
 				});
 				break;
 			}
@@ -142,4 +190,41 @@ export function humanizeToolName(tool: string): string {
 	return spaced === ""
 		? tool
 		: spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * Words for a confirmation card. ADK's own default hint
+ * ("Please approve or reject the tool call …") is for developers, so the
+ * backend leaves `hint` empty rather than send it; this fills in words for
+ * the member instead. A hint the backend did write is shown as given.
+ */
+export function confirmationHint(
+	tool: string | undefined,
+	hint: string | undefined,
+): string {
+	if (hint) {
+		return hint;
+	}
+	const name = tool ? humanizeToolName(tool) : "a tool";
+	return `Krude wants to use ${name}. It only runs if you approve.`;
+}
+
+const imageArtifactExtensions: ReadonlySet<string> = new Set([
+	"png",
+	"jpg",
+	"jpeg",
+	"gif",
+	"webp",
+]);
+
+/** The trailing path segment of an artifact's name, for a download link's file name. */
+export function artifactFileName(name: string): string {
+	const parts = name.split("/");
+	return parts[parts.length - 1] || name;
+}
+
+/** Whether an artifact's name looks like an image, shown inline rather than downloaded. */
+export function isImageArtifact(name: string): boolean {
+	const extension = artifactFileName(name).split(".").pop()?.toLowerCase();
+	return extension !== undefined && imageArtifactExtensions.has(extension);
 }

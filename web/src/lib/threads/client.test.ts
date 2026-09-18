@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	artifactContentUrl,
 	createThread,
 	deleteThread,
 	getThread,
@@ -248,5 +249,25 @@ describe("startRun", () => {
 			"/v1/auth/refresh",
 			runsPath,
 		]);
+	});
+});
+
+describe("artifactContentUrl", () => {
+	it("builds the artifact route with the version as a query parameter", () => {
+		expect(artifactContentUrl("org_1", "th_1", "summary.png", 2)).toBe(
+			"/v1/organizations/org_1/threads/th_1/artifacts/summary.png?version=2",
+		);
+	});
+
+	it("encodes each '/'-separated segment of the name on its own, keeping the slashes", () => {
+		expect(artifactContentUrl("org_1", "th_1", "reports/2026 q3.csv", 1)).toBe(
+			"/v1/organizations/org_1/threads/th_1/artifacts/reports/2026%20q3.csv?version=1",
+		);
+	});
+
+	it("encodes a user: prefix's special characters within its single segment", () => {
+		expect(artifactContentUrl("org_1", "th_1", "user:notes.txt", 1)).toBe(
+			"/v1/organizations/org_1/threads/th_1/artifacts/user%3Anotes.txt?version=1",
+		);
 	});
 });
