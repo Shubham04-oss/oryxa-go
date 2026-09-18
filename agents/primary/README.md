@@ -212,8 +212,10 @@ the same token — on every run with `memberauth.WithAccessToken`, so a
 member's own turn needs no grant. A development UI run still acts through the
 member's standing grant, since ADK's launcher has no member token to forward.
 
-**Not yet.** No run starts from a trigger, so the member-absent path is
-exercised only by the development UI and tests.
+**Member absent.** A wake-up runs with no token of the member's, so every
+tool that acts for them goes through `memberauth.TokenSource` and the grant
+they gave (see [Wake-ups](#wake-ups)). That grant has never been exchanged
+against a provisioned Cognito agent client.
 
 ### Knowledge toolbox
 
@@ -324,6 +326,62 @@ is the request's.
 **Not yet.** A run is not durable: a closed tab or a deploy ends it, and what
 it had stored stays in the thread. Artifacts a run keeps are not served by
 this API.
+
+## Events agents consumes
+
+The agents service reads its own queue, `AGENTS_EVENTS_QUEUE_URL`, which `go
+run ./agents/primary/infra/events/cmd/provision` creates with the rule that
+fills it (`internal/inbound`):
+
+| Detail type | What agents does |
+| --- | --- |
+| `apps.trigger.received.v1` | Keeps it to wake Krude for its member (see [Wake-ups](#wake-ups)) |
+| `auth.member.removed.v1` | Removes the member's threads in that organization, with what their runs kept, and their waiting wake-ups |
+| `auth.organization.deleted.v1` | The same for everyone in the organization |
+
+A conversation should not outlive the place it was held in, so both of auth's
+remove every thread there, the member's own `user:` artifacts aside, which
+belong to them rather than to the organization. Runs' records stay, for
+billing. Every handler is safe to repeat, since the bus delivers at least
+once. Without a queue, nothing wakes Krude and a member's threads outlive
+their place in an organization; the service says so at startup.
+
+## Wake-ups
+
+A member's connected apps report things — an email arrives, a pull request
+opens — as `apps.trigger.received.v1`, and agents wakes Krude for the member
+they belong to (`internal/wakeups`):
+
+- **Batched per member.** Events wait in `agents_primary.wakeup_events` until
+  `AGENTS_WAKEUP_BATCH_SIZE` of that member's have come (5), or the oldest has
+  waited `AGENTS_WAKEUP_MAX_WAIT_SECONDS` (120), whichever is first, so a lone
+  event is never held for long. One wake-up hands over at most 20, oldest
+  first; the rest wait for the next.
+- **In one thread of theirs.** Each member has an "Updates from your apps"
+  thread per organization, made the first time and made again if they delete
+  it. The events arrive there as a message from their apps (`author: apps`),
+  not from them, and Krude's answer follows.
+- **Told, not acted on.** The message hands Krude the events as data, never
+  instructions — nothing in them changes what it may do — and asks it to say
+  what happened and what needs the member's attention, reading more from
+  their apps when that helps, and changing nothing. A write would still stop
+  at a confirmation the member finds in the thread.
+- **As the member, with the member away.** The run carries no token of
+  theirs, so tools act under the standing grant they gave auth, or say they
+  cannot (see [Acting for a member](#acting-for-a-member)). The run is
+  recorded with `started_by: trigger`.
+- **At least once, and never for ever.** A delivery the bus repeats is kept
+  once, by the event's own ID. A batch is claimed with a lease just before its
+  run; a thread that is busy — the member is in it, or it waits for their
+  answer to a tool — puts the batch back for a minute without counting it
+  against the events, and a failed run counts against each; an event that has
+  failed three times is dropped and logged. A handled event keeps its ID for a
+  week, to recognise a late repeat, and loses the app's data at once.
+
+Not yet: nothing skips the wait for something urgent, such as a direct
+mention, since that means reading each app's payload; and Krude is only ever
+asked to report. What a member would have it do on its own is theirs to
+decide.
 
 ## Models and routing
 
@@ -609,6 +667,10 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
 | `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
+| `AGENTS_EVENTS_QUEUE_URL` | unset | Queue app trigger events arrive on; without it nothing wakes Krude for a member's apps (see [Wake-ups](#wake-ups)) |
+| `AWS_ENDPOINT_URL_SQS` | unset | SQS endpoint override for the LocalStack emulator |
+| `AGENTS_WAKEUP_BATCH_SIZE` | `5` | How many of a member's waiting events wake Krude at once; 1–100 |
+| `AGENTS_WAKEUP_MAX_WAIT_SECONDS` | `120` | Longest a member's oldest waiting event waits before waking Krude anyway; 10–86400 |
 
 The host sets no write timeout for this service: a run's stream outlives any
 fixed write deadline, so the run route sets its own.

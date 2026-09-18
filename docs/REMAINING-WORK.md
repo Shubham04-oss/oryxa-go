@@ -154,18 +154,20 @@ What is left:
 - **Artifacts a run keeps are not served by the API**, so a browser
   screenshot is not reachable from the web app yet.
 
-### Triggers do not start runs
+### Wake-ups have never run against a real queue
 
-Nothing turns an event from an app into an agent run as the member it belongs
-to. Apps publishes `apps.trigger.received.v1` with the app's payload, and no
-consumer reads it. The intended shape batches: events collect for a while, across apps,
-before one run wakes the agent, rather than one run per event. A trigger that
-arrives before the batch would close gains nothing, so a polled trigger is as
-good as a pushed one; and batching does not relax verification, because a
-forged event inside a batch still reaches the agent. Still open: what closes a
-batch — a count, a maximum wait, or both, so that a lone event is not held
-indefinitely — whether batches are per member or per subscription, and
-whether anything, such as a direct mention, should skip the wait.
+App trigger events now wake Krude: `agents` reads `apps.trigger.received.v1`
+from its own queue, batches each member's events, and hands a batch to Krude
+in the member's "Updates from your apps" thread, as data to report on, with
+the member away ([agents/primary/README.md, Wake-ups](../agents/primary/README.md#wake-ups)).
+The same queue brings auth's member-removed and organization-deleted events,
+which remove the threads held there. Proven against the development
+PostgreSQL and ADK's runner with a scripted model; no queue has been
+provisioned, so nothing has been delivered through SQS, and the member-absent
+grant wake-ups rely on has never run against Cognito.
+Still open, each a product decision: what, if anything, skips the batch wait
+(a direct mention); and whether Krude should ever do more on waking than
+report, which would need the member to say what, per trigger.
 
 ### Guardrails have never screened a real conversation
 
@@ -199,8 +201,11 @@ The web app is to be refactored, and until then it runs ahead of the backend:
 
 ### 3.1 How agent wake-ups batch
 
-What closes a batch, what it is keyed by, and what skips the wait (§1). This
-also sets how often an app is polled for a trigger that cannot be pushed.
+Built with defaults, each a setting: per member, a batch closes at 5 events
+or when the oldest has waited 2 minutes, at most 20 at once; nothing skips
+the wait; and Krude only reports what happened, changing nothing. Revisit
+what should skip the wait, and whether a member can give Krude standing
+instructions per trigger (§1).
 
 ### 3.2 What a member agrees to when knowledge reads files as them
 

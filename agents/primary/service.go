@@ -11,6 +11,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
@@ -18,10 +19,12 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/inbound"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
@@ -37,6 +40,13 @@ const schema = "agents_primary"
 // on the way down.
 const closeTimeout = 10 * time.Second
 
+// How app events wake Krude: how often due batches are looked for, and the
+// most events one wake-up hands over; the rest wait for the next.
+const (
+	wakeupInterval     = 15 * time.Second
+	wakeupLargestBatch = 20
+)
+
 // Definition is how a host builds agents primary.
 var Definition = host.Definition{Name: Name, Migrate: Migrate, Mount: Mount}
 
@@ -48,6 +58,9 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 		return host.ErrDatabaseRequired
 	}
 	if err := runstore.New(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	if err := wakeups.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
 	}
 	scoped, err := platform.Database.WithSchema(ctx, schema, "oryxa-migrate-agents", 2)
@@ -160,12 +173,42 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		return publisher.PublishEvent(ctx, events.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
 	}), logger)
 
+	workers := []host.Worker{dispatcher.Run}
+	if settings.EventsQueueURL != "" {
+		store := wakeups.NewStore(platform.Database)
+		consumer := inbound.NewConsumer(store, []inbound.Forgetter{
+			func(ctx context.Context, organizationID, memberID string) error {
+				_, err := service.Forget(ctx, organizationID, memberID)
+				return err
+			},
+			store.Forget,
+		}, logger)
+		queue := sqs.NewFromConfig(platform.AWS, func(options *sqs.Options) {
+			if settings.SQSEndpoint != "" {
+				options.BaseEndpoint = aws.String(settings.SQSEndpoint)
+			}
+		})
+		waker := wakeups.NewWaker(store, service, wakeups.Config{
+			Rule:     wakeups.Rule{Size: settings.WakeupBatchSize, MaxWait: settings.WakeupMaxWait, Largest: wakeupLargestBatch},
+			Interval: wakeupInterval,
+			// A claimed batch is held for as long as its run may take, and a
+			// little more, so a slow run is not woken twice.
+			Lease: settings.RunTimeout + time.Minute,
+		}, logger)
+		workers = append(workers,
+			func(ctx context.Context) { consumer.Poll(ctx, queue, settings.EventsQueueURL) },
+			waker.Run)
+		logger.Info("app events wake Krude", "batch_size", settings.WakeupBatchSize, "max_wait", settings.WakeupMaxWait.String())
+	} else {
+		logger.Warn("AGENTS_EVENTS_QUEUE_URL is not set: events from members' apps will not wake Krude, and a member's threads outlive their place in an organization")
+	}
+
 	logger.Info("agents mounted", "model", settings.Model, "model_lite", settings.ModelLite, "run_timeout", settings.RunTimeout.String())
 	return host.Service{
 		Handler:  server,
 		Routes:   server.Patterns(),
 		Timeouts: timeouts,
-		Workers:  []host.Worker{dispatcher.Run},
+		Workers:  workers,
 		Close:    closeAll,
 	}, nil
 }

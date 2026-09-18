@@ -69,6 +69,9 @@ type Cost struct {
 const (
 	// StartedByMember is a member's own turn in a conversation.
 	StartedByMember = "member"
+	// StartedByTrigger is a run that events from the member's connected apps
+	// woke, with the member not there.
+	StartedByTrigger = "trigger"
 )
 
 // ModelUsage is what one model spent within a run, priced at the rates it

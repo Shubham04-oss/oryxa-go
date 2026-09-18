@@ -46,6 +46,9 @@ var (
 const (
 	stateTitle     = "thread_title"
 	stateCreatedAt = "thread_created_at"
+	// stateWakeup is set, by the message itself, on a message that a batch
+	// of app events sent rather than the member.
+	stateWakeup = "wakeup_batch"
 )
 
 const (
@@ -162,13 +165,23 @@ func New(config Config) (*Service, error) {
 
 // Create starts a thread for the member in their organization.
 func (service *Service) Create(ctx context.Context, member Member) (Thread, error) {
+	return service.CreateTitled(ctx, member, "")
+}
+
+// CreateTitled starts a thread with a title of its own, rather than one
+// taken from its first message.
+func (service *Service) CreateTitled(ctx context.Context, member Member, title string) (Thread, error) {
+	state := map[string]any{
+		adksession.StateOrganizationID: member.OrganizationID,
+		stateCreatedAt:                 time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if title = bounded(strings.Join(strings.Fields(title), " "), maxTitleRunes); title != "" {
+		state[stateTitle] = title
+	}
 	created, err := service.sessions.Create(ctx, &session.CreateRequest{
 		AppName: service.appName,
 		UserID:  member.UserID,
-		State: map[string]any{
-			adksession.StateOrganizationID: member.OrganizationID,
-			stateCreatedAt:                 time.Now().UTC().Format(time.RFC3339Nano),
-		},
+		State:   state,
 	})
 	if err != nil {
 		return Thread{}, fmt.Errorf("create thread: %w", err)
@@ -222,6 +235,35 @@ func (service *Service) Delete(ctx context.Context, member Member, threadID stri
 	}
 	service.deleteArtifacts(ctx, member, threadID)
 	return nil
+}
+
+// Forget removes every thread in organizationID — only userID's, when one is
+// named — with what their runs kept, for a member who left the organization
+// or an organization that is gone. Nothing a conversation held should
+// outlive the place it was held in. It reports how many it removed; running
+// it again removes nothing more.
+func (service *Service) Forget(ctx context.Context, organizationID, userID string) (int, error) {
+	if organizationID == "" {
+		return 0, errors.New("threads: forgetting needs an organization")
+	}
+	listed, err := service.sessions.List(ctx, &session.ListRequest{AppName: service.appName, UserID: userID})
+	if err != nil {
+		return 0, fmt.Errorf("list threads to forget: %w", err)
+	}
+	removed := 0
+	for _, stored := range listed.Sessions {
+		if stateString(stored.State(), adksession.StateOrganizationID) != organizationID {
+			continue
+		}
+		if err := service.sessions.Delete(ctx, &session.DeleteRequest{
+			AppName: service.appName, UserID: stored.UserID(), SessionID: stored.ID(),
+		}); err != nil && !errors.Is(err, session.ErrNotFound) {
+			return removed, fmt.Errorf("forget thread: %w", err)
+		}
+		service.deleteArtifacts(ctx, Member{UserID: stored.UserID(), OrganizationID: organizationID}, stored.ID())
+		removed++
+	}
+	return removed, nil
 }
 
 // deleteArtifacts removes the files a thread's runs kept. The thread is
