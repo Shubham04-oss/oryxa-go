@@ -744,6 +744,143 @@ func TestForgettingAlsoForgetsWhatKrudeRemembered(t *testing.T) {
 	}
 }
 
+// rememberingBank records what a run handed to memory.
+type rememberingBank struct {
+	mu      sync.Mutex
+	written []struct {
+		scope adkmemory.Scope
+		said  []string
+	}
+}
+
+func (b *rememberingBank) Write(_ context.Context, scope adkmemory.Scope, conversation session.Session) error {
+	var said []string
+	for event := range conversation.Events().All() {
+		if event == nil || event.Content == nil {
+			continue
+		}
+		for _, part := range event.Content.Parts {
+			if part.Text != "" {
+				said = append(said, part.Text)
+			}
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.written = append(b.written, struct {
+		scope adkmemory.Scope
+		said  []string
+	}{scope, said})
+	return nil
+}
+
+func (b *rememberingBank) Search(context.Context, adkmemory.Scope, string) ([]memory.Entry, error) {
+	return nil, nil
+}
+
+func (b *rememberingBank) Forget(context.Context, string, string) error { return nil }
+
+// TestACompletedRunIsRemembered checks the write half of the wiring: without
+// it nothing ever calls AddSessionToMemory, since ADK does not, and a memory
+// service would sit behind the runner holding nothing.
+func TestACompletedRunIsRemembered(t *testing.T) {
+	bank := &rememberingBank{}
+	remembering, err := adkmemory.New(bank)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("noted", genai.RoleModel), nil
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: usage.Counted(llm), Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := newFakeRuns()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: runs, Prices: prices, RunTimeout: time.Minute, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service, runs: runs, model: llm}
+	created, err := service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.run(asha, created.ID, RunInput{Message: "the migration ships in March"})
+
+	if len(bank.written) != 1 {
+		t.Fatalf("memory was written %d times, want once", len(bank.written))
+	}
+	written := bank.written[0]
+	if written.scope.OrganizationID != asha.OrganizationID || written.scope.UserID != asha.UserID {
+		t.Fatalf("scope = %+v, want the member's own organization", written.scope)
+	}
+	if !slices.Contains(written.said, "the migration ships in March") {
+		t.Fatalf("remembered %q, want what the member said", written.said)
+	}
+
+	// A second run remembers its own turns, not the thread from the start.
+	h.run(asha, created.ID, RunInput{Message: "it slipped to April"})
+	if len(bank.written) != 2 {
+		t.Fatalf("memory was written %d times, want twice", len(bank.written))
+	}
+	second := bank.written[1]
+	if !slices.Contains(second.said, "it slipped to April") {
+		t.Fatalf("the second run remembered %q", second.said)
+	}
+	if slices.Contains(second.said, "the migration ships in March") {
+		t.Fatalf("the second run sent the whole thread again: %q", second.said)
+	}
+}
+
+// TestAFailedRunIsNotRemembered keeps a run that never answered out of
+// memory: what it added to the thread is a question and an error.
+func TestAFailedRunIsNotRemembered(t *testing.T) {
+	bank := &rememberingBank{}
+	remembering, err := adkmemory.New(bank)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return nil, errors.New("the model was unreachable")
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: usage.Counted(llm), Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := newFakeRuns()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: runs, Prices: prices, RunTimeout: time.Minute, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service, runs: runs, model: llm}
+	created, err := service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.run(asha, created.ID, RunInput{Message: "the migration ships in March"})
+
+	if len(bank.written) != 0 {
+		t.Fatalf("a failed run was remembered: %+v", bank.written)
+	}
+}
+
 // waitingModel answers only once the run is stopped.
 type waitingModel struct{}
 

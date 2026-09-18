@@ -73,6 +73,13 @@ type Config struct {
 	// knowledge search leaves a passage out; zero keeps every passage. It is
 	// on the scale of the reranker rag runs (see agents.KnowledgeConfig).
 	KnowledgeMinRelevance float64
+	// MemoryAgentEngine is the Vertex AI agent engine whose memory bank keeps
+	// what Krude remembers across a member's threads. Without it Krude has no
+	// memory: nothing is written and nothing is recalled. Its bank must have
+	// similarity search configured. MemoryRecalled bounds how many memories
+	// one search returns; zero leaves the default.
+	MemoryAgentEngine string
+	MemoryRecalled    int
 	// ArtifactBucket is the S3 bucket artifacts are kept in. Without it they
 	// are held in memory and go with the process.
 	ArtifactBucket string
@@ -162,6 +169,12 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// Memory Bank coerces anything above 100 down to it, so the ceiling is
+	// its own rather than one this service invents.
+	memoryRecalled, err := intValue(getenv, "AGENTS_PRIMARY_MEMORY_RECALLED", 0, 0, 100)
+	if err != nil {
+		return Config{}, err
+	}
 	wakeupMaxWait, err := secondsValue(getenv, "AGENTS_WAKEUP_MAX_WAIT_SECONDS", 2*time.Minute, 10*time.Second, 24*time.Hour)
 	if err != nil {
 		return Config{}, err
@@ -204,6 +217,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		AppsURL:               strings.TrimSpace(getenv("APPS_URL")),
 		RagURL:                strings.TrimSpace(getenv("RAG_URL")),
 		KnowledgeMinRelevance: knowledgeMinRelevance,
+		MemoryAgentEngine:     strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
+		MemoryRecalled:        memoryRecalled,
 		ArtifactBucket:        strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
 		S3Endpoint:            artifactEndpoint(getenv),
 		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),

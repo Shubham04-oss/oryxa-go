@@ -52,11 +52,30 @@ func (scope Scope) Validate() error {
 }
 
 // Key is the scope as one string, for a backend that addresses memory by a
-// single identifier, as Vertex AI Memory Bank and mem0 both do. It is stable
-// and distinct per scope: what one organization wrote is never what another
-// reads. Callers validate the scope first; an invalid one has no key.
+// single identifier, as mem0 does. It is stable and distinct per scope: what
+// one organization wrote is never what another reads. Callers validate the
+// scope first; an invalid one has no key.
 func (scope Scope) Key() string {
 	return scope.OrganizationID + scopeSeparator + scope.UserID
+}
+
+// The keys [Scope.Fields] partitions memory by.
+const (
+	FieldOrganizationID = "organization_id"
+	FieldUserID         = "user_id"
+)
+
+// Fields is the scope as the key-value map a backend that partitions along
+// several dimensions of its own is given, as Vertex AI Memory Bank does.
+// There the organization is a dimension the service itself matches on rather
+// than a convention this package encodes into a string, which is the
+// stronger of the two: Memory Bank returns a memory only when its scope has
+// the same keys and values as the one asked for.
+func (scope Scope) Fields() map[string]string {
+	return map[string]string{
+		FieldOrganizationID: scope.OrganizationID,
+		FieldUserID:         scope.UserID,
+	}
 }
 
 // Backend keeps what Krude remembers. Every call names the scope it acts in,

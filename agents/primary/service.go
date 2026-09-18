@@ -147,6 +147,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Unattended: krude.Unattended,
 		Sessions:   sessions,
 		Artifacts:  krude.Artifacts,
+		Memory:     krude.Memory,
 		Runs:       runstore.New(platform.Database),
 		Prices:     priceTable,
 		Logger:     logger,

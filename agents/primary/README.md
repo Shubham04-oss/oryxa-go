@@ -540,11 +540,10 @@ a memory service is set on the runner: `load_memory` is a tool Krude calls
 with a query, and `preload_memory` searches on every model request and puts
 what it finds in the system prompt.
 
-No backend is wired yet, so the runner is built without a memory service and
-Krude remembers nothing between threads. What is in is the seam every backend
-has to come through, `internal/adkmemory`, because the thing that has to be
-right is not which backend keeps the memories but who is allowed to read them
-back.
+Vertex AI Memory Bank keeps the memories, behind the seam every backend comes
+through, `internal/adkmemory`. Without `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE`
+there is no backend, the runner is built without a memory service, and Krude
+remembers nothing between threads.
 
 **Memory is scoped to an organization, not just a member.** ADK addresses
 memory by app name and user alone: `memory.SearchRequest` carries nothing
@@ -582,6 +581,62 @@ no more outlive the organization it was held in than the conversation does.
 per scope: the ranking is ADK's and the isolation is this package's. What it
 holds goes with the process.
 
+### Memory Bank
+
+Memory Bank does not keep conversations. It reads what was said, extracts the
+facts worth keeping, and consolidates them with what it already holds, so a
+preference stated once and contradicted later ends up as one fact rather than
+two. That extraction is the part worth buying rather than building: retrieval
+over an organization's own vectors is what `rag` already does.
+
+`MemoryBank` scopes by Memory Bank's own scope map, `Scope.Fields`, rather
+than by `Scope.Key`. The service returns a memory only to a request whose
+scope has the same keys and values, so the organization is a dimension
+matched where the memories are kept, not a convention this service encodes
+into a user string.
+
+Agent engines are regional, so `GOOGLE_CLOUD_LOCATION` has to name the region
+the engine is in rather than the global endpoint the models are served from,
+which is its default here. The service refuses to start with the wrong one,
+because the alternative is a resource path that is only wrong on the first
+run that needs it.
+
+It talks to the API itself rather than through ADK's `memory/vertexai`, for
+two reasons. ADK generates memories from a **Vertex session resource**, and
+threads live in this deployment's PostgreSQL, so there is no session in the
+agent engine to read; `Write` sends the conversation's own turns instead.
+And ADK hardcodes the scope to `{"user_id": …}`, which is the addressing this
+package exists to avoid.
+
+Only text is sent. A tool's call and its result are how an answer was reached
+rather than something the member said, and they carry whatever the tools
+read. A run sends only the turns it added, because Memory Bank re-reads
+everything it is given with a model and a thread resent from the beginning
+after every run costs more the longer it gets.
+
+Writing is bookkeeping after the answer, like compaction: a run hands its
+conversation over once it has finished successfully, and a memory that was
+not kept is a log line rather than a failed run. A failed run is not
+remembered at all — what it added to the thread is a question and an error.
+
+`Forget` reads the bank and matches the scope here rather than sending a
+listing filter. Memory Bank matches that filter by equality on the whole
+scope, so it cannot express "every member of this organization", and a filter
+string whose exact form decides whether memories are deleted would fail by
+leaving them behind — quietly, which is the one failure that matters here.
+Forgetting runs when a member leaves or an organization is deleted, never on
+a hot path.
+
+The round trip runs against a real memory bank when one is named, and is
+skipped without it. It writes under an organization of its own and forgets it
+afterwards:
+
+```sh
+GOOGLE_CLOUD_PROJECT=oryxa GOOGLE_CLOUD_LOCATION=us-central1 \
+  AGENTS_PRIMARY_TEST_MEMORY_AGENT_ENGINE=1234567890 \
+  go test ./agents/primary/internal/adkmemory/ -run TestMemoryBankRoundTrip
+```
+
 ## Events
 
 Agents primary publishes on EventBridge source `oryxa.agents` in the envelope
@@ -614,8 +669,9 @@ breakdown, priced by `internal/pricing`.
 
 ADK's web UI runs the agents locally. Its sessions, conversation events and
 state live in PostgreSQL, its artifacts in S3 when a bucket is named (see
-[Artifacts](#artifacts)), and it runs without a memory service, as the
-service does (see [Memory](#memory)).
+[Artifacts](#artifacts)), and it runs without memory: a memory is scoped to
+the organization it was learned in, and the UI's own `user` belongs to none
+(see [Memory](#memory)).
 The session store uses ADK's native relational service through
 the repository's instrumented PostgreSQL pool and keeps its tables in the
 `agents_primary` schema. Log in for ADC and AWS once, start PostgreSQL, and
@@ -731,6 +787,8 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |
 | `AGENTS_PRIMARY_CACHE_MIN_TOKENS` | `4096` | Smallest prefix worth an explicit cache; Vertex's floor for these models. Below it, implicit caching applies |
 | `AGENTS_PRIMARY_ARTIFACT_BUCKET` | unset | S3 bucket artifacts are kept in; without it they are held in memory and go with the process |
+| `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` | unset | Vertex AI agent engine whose memory bank holds what Krude remembers across a member's threads, scoped to their organization. Its bank needs similarity search configured. Without it Krude remembers nothing between threads (see [Memory](#memory)) |
+| `AGENTS_PRIMARY_MEMORY_RECALLED` | `0` (10) | How many memories one search returns. Memory Bank caps it at 100 |
 | `EVENT_BUS_NAME` | `default` | EventBridge bus events publish on |
 | `EVENTBRIDGE_ENDPOINT` | unset | EventBridge endpoint override for the LocalStack emulator |
 | `DATABASE_URL` | unset | PostgreSQL connection for ADK sessions, events and state, runs, and the read of the member's auth tables when a session is created |
