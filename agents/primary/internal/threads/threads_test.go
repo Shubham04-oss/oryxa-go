@@ -537,6 +537,47 @@ func TestADiscardedRunFreesItsThread(t *testing.T) {
 	}
 }
 
+func TestForgettingAMemberOrAnOrganizationRemovesTheirThreadsThere(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("ok", genai.RoleModel), nil
+	})
+	ctx := context.Background()
+	ravi := Member{UserID: "user_ravi", OrganizationID: "org_1"}
+	ashaElsewhere := Member{UserID: asha.UserID, OrganizationID: "org_2"}
+	for _, member := range []Member{asha, asha, ravi, ashaElsewhere} {
+		if _, err := h.service.Create(ctx, member); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := func(member Member) int {
+		t.Helper()
+		listed, err := h.service.List(ctx, member)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(listed)
+	}
+
+	removed, err := h.service.Forget(ctx, "org_1", asha.UserID)
+	if err != nil || removed != 2 {
+		t.Fatalf("Forget(asha in org_1) = %d, %v, want 2", removed, err)
+	}
+	if count(asha) != 0 || count(ravi) != 1 || count(ashaElsewhere) != 1 {
+		t.Fatalf("after Asha left org_1: asha %d, ravi %d, asha in org_2 %d", count(asha), count(ravi), count(ashaElsewhere))
+	}
+	if again, err := h.service.Forget(ctx, "org_1", asha.UserID); err != nil || again != 0 {
+		t.Fatalf("Forget again = %d, %v, want nothing more", again, err)
+	}
+
+	removed, err = h.service.Forget(ctx, "org_1", "")
+	if err != nil || removed != 1 || count(ravi) != 0 || count(ashaElsewhere) != 1 {
+		t.Fatalf("Forget(org_1) = %d, %v; ravi %d, asha in org_2 %d", removed, err, count(ravi), count(ashaElsewhere))
+	}
+	if _, err := h.service.Forget(ctx, "", ""); err == nil {
+		t.Fatal("Forget with no organization would forget everyone's threads")
+	}
+}
+
 func TestTitleFrom(t *testing.T) {
 	cases := map[string]string{
 		"  Plan   the launch  \nand more": "Plan the launch",

@@ -19,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/inbound"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
@@ -175,7 +176,13 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	workers := []host.Worker{dispatcher.Run}
 	if settings.EventsQueueURL != "" {
 		store := wakeups.NewStore(platform.Database)
-		consumer := wakeups.NewConsumer(store, logger)
+		consumer := inbound.NewConsumer(store, []inbound.Forgetter{
+			func(ctx context.Context, organizationID, memberID string) error {
+				_, err := service.Forget(ctx, organizationID, memberID)
+				return err
+			},
+			store.Forget,
+		}, logger)
 		queue := sqs.NewFromConfig(platform.AWS, func(options *sqs.Options) {
 			if settings.SQSEndpoint != "" {
 				options.BaseEndpoint = aws.String(settings.SQSEndpoint)
@@ -193,7 +200,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			waker.Run)
 		logger.Info("app events wake Krude", "batch_size", settings.WakeupBatchSize, "max_wait", settings.WakeupMaxWait.String())
 	} else {
-		logger.Warn("AGENTS_EVENTS_QUEUE_URL is not set: events from members' apps will not wake Krude")
+		logger.Warn("AGENTS_EVENTS_QUEUE_URL is not set: events from members' apps will not wake Krude, and a member's threads outlive their place in an organization")
 	}
 
 	logger.Info("agents mounted", "model", settings.Model, "model_lite", settings.ModelLite, "run_timeout", settings.RunTimeout.String())

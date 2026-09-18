@@ -160,9 +160,11 @@ App trigger events now wake Krude: `agents` reads `apps.trigger.received.v1`
 from its own queue, batches each member's events, and hands a batch to Krude
 in the member's "Updates from your apps" thread, as data to report on, with
 the member away ([agents/primary/README.md, Wake-ups](../agents/primary/README.md#wake-ups)).
-Proven against the development PostgreSQL and ADK's runner with a scripted
-model; no queue has been provisioned, so nothing has been delivered through
-SQS, and the member-absent grant it relies on has never run against Cognito.
+The same queue brings auth's member-removed and organization-deleted events,
+which remove the threads held there. Proven against the development
+PostgreSQL and ADK's runner with a scripted model; no queue has been
+provisioned, so nothing has been delivered through SQS, and the member-absent
+grant wake-ups rely on has never run against Cognito.
 Still open, each a product decision: what, if anything, skips the batch wait
 (a direct mention); and whether Krude should ever do more on waking than
 report, which would need the member to say what, per trigger.

@@ -327,13 +327,30 @@ is the request's.
 it had stored stays in the thread. Artifacts a run keeps are not served by
 this API.
 
+## Events agents consumes
+
+The agents service reads its own queue, `AGENTS_EVENTS_QUEUE_URL`, which `go
+run ./agents/primary/infra/events/cmd/provision` creates with the rule that
+fills it (`internal/inbound`):
+
+| Detail type | What agents does |
+| --- | --- |
+| `apps.trigger.received.v1` | Keeps it to wake Krude for its member (see [Wake-ups](#wake-ups)) |
+| `auth.member.removed.v1` | Removes the member's threads in that organization, with what their runs kept, and their waiting wake-ups |
+| `auth.organization.deleted.v1` | The same for everyone in the organization |
+
+A conversation should not outlive the place it was held in, so both of auth's
+remove every thread there, the member's own `user:` artifacts aside, which
+belong to them rather than to the organization. Runs' records stay, for
+billing. Every handler is safe to repeat, since the bus delivers at least
+once. Without a queue, nothing wakes Krude and a member's threads outlive
+their place in an organization; the service says so at startup.
+
 ## Wake-ups
 
 A member's connected apps report things — an email arrives, a pull request
-opens — as `apps.trigger.received.v1`. The agents service reads them from its
-queue (`AGENTS_EVENTS_QUEUE_URL`, which `go run
-./agents/primary/infra/events/cmd/provision` creates with the rule that fills
-it) and wakes Krude for the member they belong to (`internal/wakeups`):
+opens — as `apps.trigger.received.v1`, and agents wakes Krude for the member
+they belong to (`internal/wakeups`):
 
 - **Batched per member.** Events wait in `agents_primary.wakeup_events` until
   `AGENTS_WAKEUP_BATCH_SIZE` of that member's have come (5), or the oldest has

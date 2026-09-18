@@ -17,7 +17,6 @@ import (
 	"google.golang.org/adk/v2/session"
 
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
-	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
@@ -25,75 +24,6 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
-
-// --- the consumer ------------------------------------------------------------
-
-type fakeRecorder struct {
-	events []Event
-	seen   map[string]bool
-}
-
-func (recorder *fakeRecorder) Record(_ context.Context, event Event) (bool, error) {
-	if recorder.seen == nil {
-		recorder.seen = map[string]bool{}
-	}
-	if recorder.seen[event.ID] {
-		return false, nil
-	}
-	recorder.seen[event.ID] = true
-	recorder.events = append(recorder.events, event)
-	return true, nil
-}
-
-func delivery(t *testing.T, source, detailType, eventID string, trigger appsv1.TriggerReceived) string {
-	t.Helper()
-	data, err := json.Marshal(trigger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	detail, err := json.Marshal(map[string]any{"event_id": eventID, "version": 1, "data": json.RawMessage(data)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	body, err := json.Marshal(map[string]any{"id": "eb-1", "source": source, "detail-type": detailType, "detail": json.RawMessage(detail)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(body)
-}
-
-func TestTheConsumerRecordsEachTriggerOnce(t *testing.T) {
-	recorder := &fakeRecorder{}
-	consumer := NewConsumer(recorder, nil)
-	trigger := appsv1.TriggerReceived{
-		TriggerID: "tr_1", OrganizationID: "org_1", MemberID: "user_1", Toolkit: "gmail", Trigger: "GMAIL_NEW_MESSAGE",
-		Data: json.RawMessage(`{"subject":"Launch"}`), ReceivedAt: time.Unix(100, 0).UTC(),
-	}
-	body := delivery(t, appsv1.Source, appsv1.TriggerReceivedDetailType, "evt_1", trigger)
-	for range 2 {
-		if err := consumer.Handle(context.Background(), body); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if len(recorder.events) != 1 {
-		t.Fatalf("recorded %d events, want one", len(recorder.events))
-	}
-	got := recorder.events[0]
-	if got.ID != "evt_1" || got.MemberID != "user_1" || got.Toolkit != "gmail" || string(got.Data) != `{"subject":"Launch"}` {
-		t.Fatalf("recorded = %+v", got)
-	}
-	if err := consumer.Handle(context.Background(), delivery(t, "oryxa.elsewhere", appsv1.TriggerReceivedDetailType, "evt_2", trigger)); err == nil {
-		t.Fatal("an event from another source was accepted")
-	}
-	nobody := trigger
-	nobody.MemberID = ""
-	if err := consumer.Handle(context.Background(), delivery(t, appsv1.Source, appsv1.TriggerReceivedDetailType, "evt_3", nobody)); err != nil {
-		t.Fatalf("an event for nobody = %v, want it dropped without a retry", err)
-	}
-	if len(recorder.events) != 1 {
-		t.Fatalf("recorded %d events, want still one", len(recorder.events))
-	}
-}
 
 // --- the message -------------------------------------------------------------
 

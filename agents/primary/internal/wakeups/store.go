@@ -250,3 +250,25 @@ func (store *Store) SetThread(ctx context.Context, organizationID, memberID, thr
 	}
 	return nil
 }
+
+// Forget removes what is kept for waking Krude in organizationID — only
+// memberID's, when one is named — for a member who left or an organization
+// that is gone.
+func (store *Store) Forget(ctx context.Context, organizationID, memberID string) error {
+	if organizationID == "" {
+		return errors.New("forgetting wake-ups needs an organization")
+	}
+	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM agents_primary.wakeup_events
+			WHERE organization_id = $1 AND ($2 = '' OR member_id = $2)`, organizationID, memberID); err != nil {
+			return fmt.Errorf("forget wake-up events: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM agents_primary.wakeup_threads
+			WHERE organization_id = $1 AND ($2 = '' OR member_id = $2)`, organizationID, memberID); err != nil {
+			return fmt.Errorf("forget wake-up threads: %w", err)
+		}
+		return nil
+	})
+}

@@ -237,6 +237,35 @@ func (service *Service) Delete(ctx context.Context, member Member, threadID stri
 	return nil
 }
 
+// Forget removes every thread in organizationID — only userID's, when one is
+// named — with what their runs kept, for a member who left the organization
+// or an organization that is gone. Nothing a conversation held should
+// outlive the place it was held in. It reports how many it removed; running
+// it again removes nothing more.
+func (service *Service) Forget(ctx context.Context, organizationID, userID string) (int, error) {
+	if organizationID == "" {
+		return 0, errors.New("threads: forgetting needs an organization")
+	}
+	listed, err := service.sessions.List(ctx, &session.ListRequest{AppName: service.appName, UserID: userID})
+	if err != nil {
+		return 0, fmt.Errorf("list threads to forget: %w", err)
+	}
+	removed := 0
+	for _, stored := range listed.Sessions {
+		if stateString(stored.State(), adksession.StateOrganizationID) != organizationID {
+			continue
+		}
+		if err := service.sessions.Delete(ctx, &session.DeleteRequest{
+			AppName: service.appName, UserID: stored.UserID(), SessionID: stored.ID(),
+		}); err != nil && !errors.Is(err, session.ErrNotFound) {
+			return removed, fmt.Errorf("forget thread: %w", err)
+		}
+		service.deleteArtifacts(ctx, Member{UserID: stored.UserID(), OrganizationID: organizationID}, stored.ID())
+		removed++
+	}
+	return removed, nil
+}
+
 // deleteArtifacts removes the files a thread's runs kept. The thread is
 // already gone, so a failure here is logged rather than reported: the store
 // expires what is left.

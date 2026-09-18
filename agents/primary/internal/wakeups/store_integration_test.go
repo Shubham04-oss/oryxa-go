@@ -234,3 +234,37 @@ func TestTheUpdatesThreadIsRemembered(t *testing.T) {
 		t.Fatalf("Thread() = %q, %v, want the latest", threadID, err)
 	}
 }
+
+func TestForgettingRemovesAMembersOrAnOrganizationsWakeUps(t *testing.T) {
+	store, organizationID := testStore(t)
+	ctx := context.Background()
+	record(t, store, organizationID, "user_a", "1")
+	record(t, store, organizationID, "user_b", "1")
+	for _, member := range []string{"user_a", "user_b"} {
+		if err := store.SetThread(ctx, organizationID, member, "thread_"+member); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Forget(ctx, organizationID, "user_a"); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.Claim(ctx, Rule{Size: 1, MaxWait: time.Hour, Largest: 20}, time.Minute, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batches := ours(claimed, organizationID); len(batches) != 1 || batches[0].MemberID != "user_b" {
+		t.Fatalf("after user_a left: %+v, want only user_b's events", batches)
+	}
+	if threadID, _ := store.Thread(ctx, organizationID, "user_a"); threadID != "" {
+		t.Fatalf("user_a's thread is still remembered: %q", threadID)
+	}
+	if err := store.Forget(ctx, organizationID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if threadID, _ := store.Thread(ctx, organizationID, "user_b"); threadID != "" {
+		t.Fatalf("the organization's threads are still remembered: %q", threadID)
+	}
+	if err := store.Forget(ctx, "", ""); err == nil {
+		t.Fatal("Forget with no organization would forget everyone's wake-ups")
+	}
+}
