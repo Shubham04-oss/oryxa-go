@@ -160,13 +160,12 @@ tag restores any of it.
 | Connecting an app | Composio's hosted flow, for every app Composio holds an app for or that takes a credential the member types in. The web app's connection screens still call the archived API until the web app is refactored |
 | Acting in an app | Krude's `apps` toolbox, over apps' MCP endpoint: reads run unconfirmed, writes ask the member and carry an idempotency key |
 | Reacting to an app | Triggers deliver, verified, as `apps.trigger.received.v1`. Nothing starts an agent run from one yet |
-| Running an agent as a member | Only `agents/primary`'s development UI runs Krude. The `agents` service has no run API, and the web app has no screen to grant or withdraw agent access |
+| Running an agent as a member | The `agents` service's run API: a member's threads with Krude, each run streamed as server-sent events with the member's own token on it, and a tool that asks first waiting for the member's answer. The web app has no screen to grant or withdraw agent access |
 
 Not yet:
 
 - An OAuth app of Oryxa's own, for apps Composio holds none for.
-- A run API in the `agents` service that forwards the member's own token, and
-  a web screen for agent grants.
+- A web screen for agent grants.
 - The agent grant against a provisioned Cognito agent client has not run yet.
 - An end-to-end run of apps against a real Composio project.
 
