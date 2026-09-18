@@ -563,6 +563,61 @@ func TestVertexBatchesToWhatTheModelAccepts(t *testing.T) {
 	}
 }
 
+// TestVertexBatchesStayUnderTheRequestTokenLimit is the regression for a
+// document that could never be indexed: text-embedding-005 takes 250 texts a
+// call but refuses a call of more than 20,000 tokens, so a batch sized by count
+// alone failed on every attempt once a document's chunks were long enough.
+func TestVertexBatchesStayUnderTheRequestTokenLimit(t *testing.T) {
+	t.Parallel()
+	var mutex sync.Mutex
+	var requestTokens []int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body vertexRequest
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		tokens := 0
+		predictions := make([]string, 0, len(body.Instances))
+		for _, instance := range body.Instances {
+			tokens += chunkingEstimate(instance.Content)
+			predictions = append(predictions, `{"embeddings":{"values":[1,0,0,0]}}`)
+		}
+		mutex.Lock()
+		requestTokens = append(requestTokens, tokens)
+		mutex.Unlock()
+		_, _ = writer.Write([]byte(`{"predictions":[` + strings.Join(predictions, ",") + `]}`))
+	}))
+	defer server.Close()
+	spec := domain.EmbeddingSpec{Provider: domain.ProviderVertex, Model: "text-embedding-005", Dimensions: 4, Metric: domain.MetricCosine}
+	client, err := NewVertex(context.Background(), spec, VertexConfig{
+		Project: "p", Location: "global", HTTPClient: server.Client(), Endpoint: server.URL,
+	}, Options{})
+	if err != nil {
+		t.Fatalf("NewVertex: %v", err)
+	}
+	// 120 chunks of about 600 tokens: far under 250 texts, far over 20,000
+	// tokens in one call.
+	texts := make([]string, 120)
+	for index := range texts {
+		texts[index] = fmt.Sprintf("chunk %d ", index) + strings.Repeat("retrieval keeps passages whole ", 80)
+	}
+	result, err := client.Embed(context.Background(), domain.InputDocument, texts)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(result.Vectors) != len(texts) {
+		t.Fatalf("got %d vectors for %d texts", len(result.Vectors), len(texts))
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if len(requestTokens) < 4 {
+		t.Fatalf("made %d calls for about 72,000 tokens, want at least 4", len(requestTokens))
+	}
+	for _, tokens := range requestTokens {
+		if tokens > 20000 {
+			t.Fatalf("a call carried about %d tokens, over Vertex's 20,000", tokens)
+		}
+	}
+}
+
 func TestTruncateRespectsTheModelLimit(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("word ", 1000)
