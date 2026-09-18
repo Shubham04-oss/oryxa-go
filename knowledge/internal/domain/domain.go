@@ -175,6 +175,18 @@ type AppConnection struct {
 	Label             string
 }
 
+// AppTarget is one thing inside a connection that could be indexed, as apps
+// discovered it from the app itself. Target is what a source is registered
+// with, so nothing has to know each provider's spelling of one.
+type AppTarget struct {
+	// Kind is repository, channel or database.
+	Kind string
+	ID   string
+	// Name is what a member would read: "#engineering" rather than an id.
+	Name   string
+	Target map[string]string
+}
+
 // Document is one thing a source holds, normalized. Body is the text a
 // retrieval pipeline indexes; ContentHash over it is the version.
 type Document struct {

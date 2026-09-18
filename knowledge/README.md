@@ -35,6 +35,29 @@ auth ── organization deleted, member removed ──▶ knowledge-events queu
 apps ── connection expired, connection removed ──▶ knowledge-events queue
 ```
 
+## Connecting an app indexes what it holds
+
+A member who connects GitHub means Krude to know about their repositories.
+They used to have to come back afterwards, find the indexing panel and type a
+repository name into a box — and until they did, connecting an app made
+nothing searchable at all.
+
+Knowledge hears `apps.connection.connected.v1`, asks apps what the connection
+holds, and registers a source for each. It is the member's own work done while
+they are away: the sources are theirs, read as them, under the standing grant
+they gave auth. A member who never granted gets nothing registered and is no
+worse off than before — they can still register a source by hand.
+
+Bounded at ten. Every source is a scheduled pass against the provider for as
+long as it lives, so a member with four hundred repositories is choosing which
+matter rather than having all of them indexed on their behalf. The rest are
+left for them, at the same hourly interval an automatic one takes.
+
+Nothing about it is essential to the connection, which is already made and
+already usable, so most of what can go wrong is reported and dropped rather
+than retried: apps being briefly unreachable is worth another delivery, a
+refusal that will not change is not.
+
 ## Sources are registered, not discovered
 
 A source is one thing to index, such as the organization's own files. A member

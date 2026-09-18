@@ -49,11 +49,35 @@ func newFakeStore() *fakeStore {
 func (store *fakeStore) CreateSource(_ context.Context, source domain.Source, event *domain.Event) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	// The same thing is indexed once, which the schema enforces with a
+	// unique index over the live sources. Modelled here so a test cannot
+	// pass against a fake that permits what PostgreSQL refuses.
+	for _, existing := range store.sources {
+		if existing.Status == domain.StatusRemoved {
+			continue
+		}
+		if existing.OrganizationID == source.OrganizationID && existing.Provider == source.Provider &&
+			existing.ConnectionID == source.ConnectionID && sameTarget(existing.Target, source.Target) {
+			return domain.ErrConflict
+		}
+	}
 	store.sources[source.ID] = source
 	if event != nil {
 		store.events = append(store.events, *event)
 	}
 	return nil
+}
+
+func sameTarget(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (store *fakeStore) Source(_ context.Context, _, sourceID string) (domain.Source, error) {
@@ -429,8 +453,20 @@ func (directory *fakeDirectory) Membership(context.Context, string, authclient.C
 // fakeApps answers what apps would about one of a member's connections.
 type fakeApps struct {
 	connection domain.AppConnection
+	// targets is what a connection holds, and targetsErr what asking for it
+	// answers instead.
+	targets    []domain.AppTarget
+	targetsErr error
 	err        error
 	calls      []string
+}
+
+func (apps *fakeApps) Targets(_ context.Context, _, connectionID string, _ authclient.Credentials) ([]domain.AppTarget, error) {
+	apps.calls = append(apps.calls, "targets:"+connectionID)
+	if apps.targetsErr != nil {
+		return nil, apps.targetsErr
+	}
+	return apps.targets, nil
 }
 
 func (apps *fakeApps) Connection(_ context.Context, _, connectionID string, _ authclient.Credentials) (domain.AppConnection, error) {

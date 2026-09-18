@@ -52,6 +52,10 @@ func (app *fakeApplication) MemberRemoved(context.Context, authv1.MemberRemoved)
 	return app.act(authv1.MemberRemovedDetailType)
 }
 
+func (app *fakeApplication) ConnectionConnected(context.Context, appsv1.ConnectionConnected) error {
+	return app.act(appsv1.ConnectionConnectedDetailType)
+}
+
 func (app *fakeApplication) ConnectionExpired(context.Context, appsv1.ConnectionExpired) error {
 	return app.act(appsv1.ConnectionExpiredDetailType)
 }

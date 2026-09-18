@@ -30,6 +30,9 @@ func Subscriptions() map[string][]string {
 			authv1.MemberRemovedDetailType,
 		},
 		appsv1.Source: {
+			// A connection made is what makes an app's contents searchable;
+			// one lost is what stops them being answered out of.
+			appsv1.ConnectionConnectedDetailType,
 			appsv1.ConnectionExpiredDetailType,
 			appsv1.ConnectionRemovedDetailType,
 		},
@@ -41,6 +44,7 @@ func Subscriptions() map[string][]string {
 type application interface {
 	OrganizationDeleted(context.Context, authv1.OrganizationDeleted) error
 	MemberRemoved(context.Context, authv1.MemberRemoved) error
+	ConnectionConnected(context.Context, appsv1.ConnectionConnected) error
 	ConnectionExpired(context.Context, appsv1.ConnectionExpired) error
 	ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error
 	// AlreadyHandled checks without recording anything; MarkHandled records,
@@ -71,6 +75,7 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 		handlers: map[string]subscription{
 			authv1.OrganizationDeletedDetailType: {source: authv1.Source, handle: decode(app.OrganizationDeleted)},
 			authv1.MemberRemovedDetailType:       {source: authv1.Source, handle: decode(app.MemberRemoved)},
+			appsv1.ConnectionConnectedDetailType: {source: appsv1.Source, handle: decode(app.ConnectionConnected)},
 			appsv1.ConnectionExpiredDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionExpired)},
 			appsv1.ConnectionRemovedDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionRemoved)},
 		},

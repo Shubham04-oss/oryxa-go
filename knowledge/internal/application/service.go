@@ -74,6 +74,9 @@ type Directory interface {
 // usableConnection.
 type Apps interface {
 	Connection(ctx context.Context, organizationID, connectionID string, credentials authclient.Credentials) (domain.AppConnection, error)
+	// Targets is what a connection holds that could be indexed, as apps
+	// discovered it from the app itself.
+	Targets(ctx context.Context, organizationID, connectionID string, credentials authclient.Credentials) ([]domain.AppTarget, error)
 }
 
 // Grants mints a token that acts as a member while they are away.
