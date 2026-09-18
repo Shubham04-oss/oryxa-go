@@ -16,11 +16,18 @@ import {
 	SettingsPageBody,
 	SettingsRow,
 	SettingsSection,
+	StatusBadge,
 } from "@/components/app/organization-settings";
 import { WorkspacePage } from "@/components/app/workspace-page";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { ApiError, apiErrorMessage } from "@/lib/api/client";
+import {
+	agentGrantQueryOptions,
+	authorizeAgentGrant,
+	revokeAgentGrant,
+} from "@/lib/auth/agent-grant";
 import {
 	authErrorMessage,
 	removeMember,
@@ -32,6 +39,7 @@ import {
 	reloadSession,
 	useWorkspace,
 } from "@/lib/auth/session";
+import { formatDate } from "@/lib/format";
 import {
 	setTeamEmailNotices,
 	type TeamSummary,
@@ -75,6 +83,7 @@ function ProfileSettingsPage() {
 				</SettingsSection>
 				<YourOrganizations />
 				<TeamCallEmails />
+				<AgentAccessSection />
 				<SignIn />
 			</SettingsPageBody>
 		</WorkspacePage>
@@ -228,6 +237,106 @@ function TeamCallEmailRow({ team }: { team: TeamSummary }) {
 				onCheckedChange={(value) => toggle.mutate(value)}
 			/>
 		</div>
+	);
+}
+
+function AgentAccessSection() {
+	const grant = useQuery(agentGrantQueryOptions());
+	const queryClient = useQueryClient();
+	const authorize = useMutation({
+		mutationFn: () =>
+			authorizeAgentGrant(`${window.location.origin}/app/settings/profile`),
+		onSuccess: ({ authorization_url }) => {
+			window.location.assign(authorization_url);
+		},
+	});
+
+	let content: ReactNode;
+	if (grant.isPending) {
+		content = (
+			<SettingsRow description="Checking…" title="Agent access">
+				<Skeleton className="h-7 w-20" />
+			</SettingsRow>
+		);
+	} else if (grant.isError) {
+		content =
+			grant.error instanceof ApiError && grant.error.status === 404 ? (
+				<SettingsListEmpty>Not available on this server.</SettingsListEmpty>
+			) : (
+				<div className="settings-section-alert">
+					<QueryError
+						error={grant.error}
+						fallback="Could not check agent access"
+						onRetry={grant.refetch}
+					/>
+				</div>
+			);
+	} else if (grant.data.granted) {
+		content = (
+			<SettingsRow
+				description={
+					grant.data.created_at
+						? `Granted ${formatDate(grant.data.created_at)}.`
+						: "Granted."
+				}
+				title="Agent access"
+			>
+				<div className="agent-grant-controls">
+					<StatusBadge tone="active">On</StatusBadge>
+					<ConfirmDialog
+						confirmLabel="Revoke access"
+						description="Krude can no longer act for you while you're away. It can still help while you're here, and you can grant this again any time."
+						onConfirm={async () => {
+							await revokeAgentGrant();
+							await queryClient.invalidateQueries({
+								queryKey: agentGrantQueryOptions().queryKey,
+							});
+						}}
+						title="Revoke agent access?"
+						trigger={
+							<Button size="sm" type="button" variant="ghost">
+								Revoke
+							</Button>
+						}
+					/>
+				</div>
+			</SettingsRow>
+		);
+	} else {
+		content = (
+			<>
+				{authorize.isError ? (
+					<div className="settings-section-alert">
+						<AppAlert>
+							{apiErrorMessage(authorize.error, "Could not start that")}
+						</AppAlert>
+					</div>
+				) : null}
+				<SettingsRow
+					description="Off. Krude will ask you directly whenever it needs something while you're away."
+					title="Agent access"
+				>
+					<Button
+						disabled={authorize.isPending}
+						onClick={() => authorize.mutate()}
+						size="sm"
+						type="button"
+					>
+						{authorize.isPending ? "Redirecting…" : "Turn on"}
+					</Button>
+				</SettingsRow>
+			</>
+		);
+	}
+
+	return (
+		<SettingsSection
+			description="When events from your connected apps wake Krude, it acts with your own identity through this grant, and writes still ask you first. You can withdraw it any time."
+			id="account-agent-access"
+			title="Let Krude act for you while you're away"
+		>
+			{content}
+		</SettingsSection>
 	);
 }
 
