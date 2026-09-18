@@ -86,7 +86,7 @@ func (service *fakeThreads) Artifact(_ context.Context, member threads.Member, t
 		return threads.File{Name: name, MIMEType: "image/png", Data: []byte("png-bytes")}, nil
 	case name == "report.html" && version == 2:
 		return threads.File{Name: name, MIMEType: "text/html", Data: []byte("<script>alert(1)</script>")}, nil
-	case name == "user:notes/plan.txt":
+	case name == "user:plan.txt":
 		return threads.File{Name: name, MIMEType: "text/plain; charset=utf-8", Data: []byte("plan")}, nil
 	}
 	return threads.File{}, threads.ErrNotFound
@@ -377,10 +377,13 @@ func TestArtifactsAreServedWithoutEverRunningAsAPage(t *testing.T) {
 		!strings.Contains(page.Header().Get("Content-Security-Policy"), "sandbox") || page.Header().Get("X-Content-Type-Options") != "nosniff" {
 		t.Fatalf("an HTML artifact could render as a page: %d %v", page.Code, page.Header())
 	}
-	nested := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/user:notes/plan.txt", "", bearer)
-	if nested.Code != http.StatusOK || nested.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
-		!strings.Contains(nested.Header().Get("Content-Disposition"), `filename=plan.txt`) {
-		t.Fatalf("nested = %d %v", nested.Code, nested.Header())
+	members := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/user:plan.txt", "", bearer)
+	if members.Code != http.StatusOK || members.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
+		!strings.Contains(members.Header().Get("Content-Disposition"), `filename=plan.txt`) {
+		t.Fatalf("the member's own file = %d %v", members.Code, members.Header())
+	}
+	if nested := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/a/b.txt", "", bearer); nested.Code != http.StatusNotFound {
+		t.Fatalf("a name with a path in it = %d, want 404", nested.Code)
 	}
 	if missing := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_2/artifacts/screenshot.png", "", bearer); missing.Code != http.StatusNotFound {
 		t.Fatalf("another thread's artifact = %d, want 404", missing.Code)

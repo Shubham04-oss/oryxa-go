@@ -166,6 +166,17 @@ func Counted(llm model.LLM) model.LLM {
 // order, and stops pulling from llm as soon as the consumer stops ranging.
 func countedGenerateContent(ctx context.Context, llm model.LLM, request *model.LLMRequest, stream bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
+		// A call cut short — an error mid-stream, a cancelled run, a member
+		// who stopped listening — never gets its finished response, yet its
+		// prompt was billed. The newest usage a partial chunk carried is the
+		// best measure of it left.
+		var partial *genai.GenerateContentResponseUsageMetadata
+		counted := false
+		defer func() {
+			if !counted && partial != nil {
+				FromContext(ctx).Add(llm.Name(), partial)
+			}
+		}()
 		for response, err := range llm.GenerateContent(ctx, request, stream) {
 			// In streaming mode ADK's Gemini model yields every chunk with
 			// Partial = true (each chunk repeats the running usage), then one
@@ -173,8 +184,13 @@ func countedGenerateContent(ctx context.Context, llm model.LLM, request *model.L
 			// call's usage; in non-streaming mode the single response is
 			// already non-partial. Counting only non-partial, error-free
 			// responses counts each model call exactly once.
-			if err == nil && response != nil && response.UsageMetadata != nil && !response.Partial {
-				FromContext(ctx).Add(llm.Name(), response.UsageMetadata)
+			if err == nil && response != nil && response.UsageMetadata != nil {
+				if response.Partial {
+					partial = response.UsageMetadata
+				} else if !counted {
+					FromContext(ctx).Add(llm.Name(), response.UsageMetadata)
+					counted = true
+				}
 			}
 			if !yield(response, err) {
 				return

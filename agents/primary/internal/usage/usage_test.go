@@ -348,3 +348,30 @@ func TestCountedOmitsGoogleLLMVariantWhenInnerLacksIt(t *testing.T) {
 		t.Fatalf("Counted(fake) implements GetGoogleLLMVariant, want it not to when the inner model does not")
 	}
 }
+
+func TestCountedCountsTheLastPartialUsageOfACallCutShort(t *testing.T) {
+	counter := NewCounter()
+	ctx := WithCounter(context.Background(), counter)
+	cut := &scriptedLLM{name: "gemini-3.8-flash", script: []scriptedYield{
+		{response: &model.LLMResponse{Partial: true, UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 900, TotalTokenCount: 900}}},
+		{response: &model.LLMResponse{Partial: true, UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 900, CandidatesTokenCount: 30, TotalTokenCount: 930}}},
+		{err: errors.New("stream broke")},
+	}}
+	for range Counted(cut).GenerateContent(ctx, &model.LLMRequest{}, true) {
+	}
+	if got := counter.Total(); got.InputTokens != 900 || got.OutputTokens != 30 || got.TotalTokens != 930 {
+		t.Fatalf("total = %+v, want the last partial's usage", got)
+	}
+
+	// A consumer that stops early after the finished response counts it once.
+	finished := NewCounter()
+	whole := &scriptedLLM{name: "gemini-3.8-flash", script: []scriptedYield{
+		{response: &model.LLMResponse{Partial: true, UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 5, TotalTokenCount: 5}}},
+		{response: &model.LLMResponse{UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 10, CandidatesTokenCount: 2, TotalTokenCount: 12}}},
+	}}
+	for range Counted(whole).GenerateContent(WithCounter(context.Background(), finished), &model.LLMRequest{}, true) {
+	}
+	if got := finished.Total(); got.TotalTokens != 12 {
+		t.Fatalf("total = %+v, want only the finished response", got)
+	}
+}

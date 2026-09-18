@@ -96,11 +96,16 @@ func lastFunctionResponse(request *model.LLMRequest) *genai.FunctionResponse {
 }
 
 type fakeRuns struct {
-	mu       sync.Mutex
-	started  []runstore.Run
-	finished map[string]runstore.Outcome
-	events   map[string]events.Event
-	startErr error
+	mu        sync.Mutex
+	started   []runstore.Run
+	finished  map[string]runstore.Outcome
+	events    map[string]events.Event
+	cancelled []string
+	startErr  error
+	renewErr  error
+	// onStart runs as a run takes its thread, before it holds it: what
+	// another run could do in that moment.
+	onStart func()
 }
 
 func newFakeRuns() *fakeRuns {
@@ -108,6 +113,10 @@ func newFakeRuns() *fakeRuns {
 }
 
 func (runs *fakeRuns) Start(_ context.Context, run runstore.Run, _ time.Duration) error {
+	if hook := runs.onStart; hook != nil {
+		runs.onStart = nil
+		hook()
+	}
 	runs.mu.Lock()
 	defer runs.mu.Unlock()
 	if runs.startErr != nil {
@@ -117,7 +126,18 @@ func (runs *fakeRuns) Start(_ context.Context, run runstore.Run, _ time.Duration
 	return nil
 }
 
-func (runs *fakeRuns) Renew(context.Context, string, time.Duration) error { return nil }
+func (runs *fakeRuns) Cancel(_ context.Context, runID string) error {
+	runs.mu.Lock()
+	defer runs.mu.Unlock()
+	runs.cancelled = append(runs.cancelled, runID)
+	return nil
+}
+
+func (runs *fakeRuns) Renew(context.Context, string, time.Duration) error {
+	runs.mu.Lock()
+	defer runs.mu.Unlock()
+	return runs.renewErr
+}
 
 func (runs *fakeRuns) Finish(_ context.Context, runID string, outcome runstore.Outcome, event events.Event) error {
 	runs.mu.Lock()
@@ -369,6 +389,46 @@ func TestAToolThatAsksWaitsForTheMembersAnswer(t *testing.T) {
 	}
 }
 
+func TestARunChecksTheThreadOnlyOnceItHoldsIt(t *testing.T) {
+	h := newHarness(t, func(request *model.LLMRequest) (*genai.Content, error) {
+		if lastFunctionResponse(request) != nil {
+			return genai.NewContentFromText("Deleted it.", genai.RoleModel), nil
+		}
+		return &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
+			ID: "call_1", Name: "delete_file", Args: map[string]any{"name": "plan.txt"},
+		}}}}, nil
+	})
+	created, err := h.service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A message whose sender last saw the thread idle, while another run
+	// finishes by asking for a confirmation just before this one takes it.
+	var confirmationID string
+	h.runs.onStart = func() {
+		items, _ := h.run(asha, created.ID, RunInput{Message: "Delete plan.txt"})
+		confirmationID = find(items, ItemConfirmation)[0].CallID
+	}
+	if _, err := h.service.StartRun(context.Background(), asha, created.ID, RunInput{Message: "never mind"}); !errors.Is(err, ErrConfirmationPending) {
+		t.Fatalf("a message racing a new confirmation = %v, want ErrConfirmationPending", err)
+	}
+	if len(h.runs.cancelled) != 1 {
+		t.Fatalf("cancelled = %v, want the refused run released", h.runs.cancelled)
+	}
+
+	// An answer whose sender last saw the confirmation waiting, while another
+	// run applies the same answer first, must not run the tool again.
+	answer := RunInput{Confirmations: []Answer{{ID: confirmationID, Confirmed: true}}}
+	h.runs.onStart = func() { h.run(asha, created.ID, answer) }
+	if _, err := h.service.StartRun(context.Background(), asha, created.ID, answer); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a replayed answer = %v, want ErrInvalid", err)
+	}
+	if !slices.Equal(*h.deleted, []string{"plan.txt"}) {
+		t.Fatalf("deleted = %v, want the approved call to run exactly once", *h.deleted)
+	}
+}
+
 func TestADeclinedToolNeverRuns(t *testing.T) {
 	h := newHarness(t, func(request *model.LLMRequest) (*genai.Content, error) {
 		if lastFunctionResponse(request) != nil {
@@ -581,6 +641,54 @@ func TestForgettingAMemberOrAnOrganizationRemovesTheirThreadsThere(t *testing.T)
 	}
 }
 
+// waitingModel answers only once the run is stopped.
+type waitingModel struct{}
+
+func (waitingModel) Name() string { return testModel }
+
+func (waitingModel) GenerateContent(ctx context.Context, _ *model.LLMRequest, _ bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		<-ctx.Done()
+		yield(nil, ctx.Err())
+	}
+}
+
+func TestARunThatCannotRenewItsHoldForAWholeLeaseStops(t *testing.T) {
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: waitingModel{}, Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := newFakeRuns()
+	runs.renewErr = errors.New("the database stalled")
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(), Runs: runs, Prices: prices,
+		RunTimeout: time.Minute, Lease: 3 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service, runs: runs}
+	created, err := service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	items, run := h.run(asha, created.ID, RunInput{Message: "hi"})
+	if elapsed := time.Since(started); elapsed > 15*time.Second {
+		t.Fatalf("the run went on for %s without its hold", elapsed)
+	}
+	if last := items[len(items)-1]; last.Type != ItemRunFailed || last.Error != "Another run took over this thread." {
+		t.Fatalf("last item = %+v", last)
+	}
+	if outcome := runs.finished[run.ID()]; outcome.Status != runstore.StatusFailed {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+}
+
 func TestTitleFrom(t *testing.T) {
 	cases := map[string]string{
 		"  Plan   the launch  \nand more": "Plan the launch",
@@ -590,5 +698,51 @@ func TestTitleFrom(t *testing.T) {
 		if got := titleFrom(message); got != want {
 			t.Errorf("titleFrom(%q) = %q, want %q", message, got, want)
 		}
+	}
+}
+
+func TestATriggerRunIsAnsweredByTheUnattendedAgent(t *testing.T) {
+	answering := func(answer string) *scriptedModel {
+		return &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+			return genai.NewContentFromText(answer, genai.RoleModel), nil
+		}}
+	}
+	attended, err := llmagent.New(llmagent.Config{Name: "krude", Model: answering("attended"), Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unattended, err := llmagent.New(llmagent.Config{Name: "krude", Model: answering("unattended"), Instruction: "You are Krude, alone."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(Config{AppName: "krude", Agent: attended, Unattended: unattended, Sessions: session.InMemoryService(), Runs: newFakeRuns(), Prices: prices})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service}
+	created, err := service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	away := Member{UserID: asha.UserID, OrganizationID: asha.OrganizationID}
+	items, _ := h.run(away, created.ID, RunInput{Message: "events", StartedBy: agentsv1.StartedByTrigger, Wakeup: "wb_1"})
+	if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "unattended" {
+		t.Fatalf("a trigger run was answered by %q", answers[len(answers)-1].Text)
+	}
+	items, _ = h.run(asha, created.ID, RunInput{Message: "hi"})
+	if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "attended" {
+		t.Fatalf("a member's run was answered by %q", answers[len(answers)-1].Text)
+	}
+
+	other, err := llmagent.New(llmagent.Config{Name: "someone_else", Model: answering("x"), Instruction: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(Config{AppName: "krude", Agent: attended, Unattended: other, Sessions: session.InMemoryService(), Runs: newFakeRuns(), Prices: prices}); err == nil {
+		t.Fatal("New() accepted an unattended agent answering to another name")
 	}
 }

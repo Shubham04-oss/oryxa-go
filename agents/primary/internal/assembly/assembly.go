@@ -52,6 +52,9 @@ type Options struct {
 type Krude struct {
 	// Root is Krude, the agent every conversation starts with.
 	Root agent.Agent
+	// Unattended is Krude for a run nobody is watching, such as a wake-up:
+	// it reads the member's apps and knowledge, and can reach nothing else.
+	Unattended agent.Agent
 	// Artifacts keeps what conversations produce: S3 when Settings names a
 	// bucket, memory otherwise.
 	Artifacts artifact.Service
@@ -195,6 +198,9 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			logger.WarnContext(ctx, "member token: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
 		}
 	}
+	// What a run nobody watches may use: nothing that reaches outside, since
+	// text from the member's apps steers it. See agents.UnattendedRoot.
+	var unattended []agents.Toolbox
 	if settings.AppsURL != "" {
 		httpClient := options.HTTP
 		if httpClient == nil {
@@ -214,6 +220,15 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			toolboxes = append(toolboxes, appsToolbox)
 			logger.InfoContext(ctx, "apps toolbox", "url", settings.AppsURL)
 		}
+		readOnly, err := agents.AppsToolbox(agents.AppsConfig{
+			URL:      settings.AppsURL,
+			HTTP:     httpClient,
+			Tokens:   tokens,
+			ReadOnly: true,
+		})
+		if err == nil {
+			unattended = append(unattended, readOnly)
+		}
 	}
 	if settings.RagURL != "" {
 		knowledgeToolbox, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
@@ -224,6 +239,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			logger.WarnContext(ctx, "knowledge toolbox unavailable, running without it", "error", err)
 		} else {
 			toolboxes = append(toolboxes, knowledgeToolbox)
+			unattended = append(unattended, knowledgeToolbox)
 			logger.InfoContext(ctx, "knowledge toolbox", "url", settings.RagURL)
 		}
 	}
@@ -233,6 +249,11 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		return fail("root agent", err)
 	}
 	krude.Root = root
+	unattendedRoot, err := agents.UnattendedRoot(router, unattended)
+	if err != nil {
+		return fail("unattended root agent", err)
+	}
+	krude.Unattended = unattendedRoot
 
 	artifacts := artifact.InMemoryService()
 	if settings.ArtifactBucket != "" {

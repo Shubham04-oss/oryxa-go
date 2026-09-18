@@ -53,11 +53,18 @@ const maxStateTextRunes = 60
 //go:embed instructions/krude.md
 var krudeInstructionText string
 
+//go:embed instructions/krude_unattended.md
+var unattendedInstructionText string
+
 // krudeInstruction is a Go text/template rendered on every turn by instruction.
 // The sub-agents' instructions are ADK templates instead: {key} is replaced
 // with that session state value, and a turn fails when the key is missing
 // unless it is written {key?}.
 var krudeInstruction = template.Must(template.New("krude").Parse(krudeInstructionText))
+
+// unattendedInstruction is Krude's instruction for a run the member is not
+// there for, rendered the same way.
+var unattendedInstruction = template.Must(template.New("krude-unattended").Parse(unattendedInstructionText))
 
 // Gemini returns the named Gemini model on Vertex AI in the given Google Cloud
 // project and location. It authenticates with Application Default Credentials:
@@ -135,10 +142,43 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) 
 		Name:                RootName,
 		Description:         "Krude, a member's assistant.",
 		Model:               router.For(modelrouter.RoleChat),
-		InstructionProvider: instructionFor(catalog),
+		InstructionProvider: instructionFrom(krudeInstruction, catalog),
 		SubAgents:           subAgents,
 		Tools:               tools,
 		Toolsets:            []tool.Toolset{catalog.loaded(), subagents},
+	})
+}
+
+// UnattendedRoot returns Krude for a run the member is not there for, such
+// as a wake-up. What reaches Krude there is text from the member's apps,
+// which anyone who can email them or open an issue wrote, and nobody watches
+// what it does with it. So nothing in such a run may be able to send data
+// anywhere that text could name: no web research, no sub-agents or helpers
+// (which could do research of their own), no saved files, and only the
+// toolboxes given. The caller passes those that reach nothing outside, such
+// as knowledge and the apps' reads.
+//
+// It answers to the same name as Root, since it takes turns with Root in the
+// same thread.
+func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
+	if router == nil {
+		return nil, errors.New("a model router is required")
+	}
+	catalog, err := newToolCatalog(toolboxes)
+	if err != nil {
+		return nil, err
+	}
+	tools, err := buildTools(catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool)
+	if err != nil {
+		return nil, err
+	}
+	return llmagent.New(llmagent.Config{
+		Name:                RootName,
+		Description:         "Krude, reporting to a member who is away.",
+		Model:               router.For(modelrouter.RoleChat),
+		InstructionProvider: instructionFrom(unattendedInstruction, catalog),
+		Tools:               tools,
+		Toolsets:            []tool.Toolset{catalog.loaded()},
 	})
 }
 
@@ -158,14 +198,14 @@ func buildTools(builders ...func() (tool.Tool, error)) ([]tool.Tool, error) {
 	return tools, nil
 }
 
-// instructionFor renders Krude's instruction for the member in this session,
-// then appends the skill of every loaded toolbox, so a toolbox that is loaded
-// brings its usage instructions with it.
-func instructionFor(catalog *toolCatalog) func(agent.ReadonlyContext) (string, error) {
+// instructionFrom renders an instruction of Krude's for the member in this
+// session, then appends the skill of every loaded toolbox, so a toolbox that
+// is loaded brings its usage instructions with it.
+func instructionFrom(instruction *template.Template, catalog *toolCatalog) func(agent.ReadonlyContext) (string, error) {
 	return func(ctx agent.ReadonlyContext) (string, error) {
 		state := ctx.ReadonlyState()
 		var rendered strings.Builder
-		err := krudeInstruction.Execute(&rendered, struct{ UserName, UserAbout, OrgName, Member string }{
+		err := instruction.Execute(&rendered, struct{ UserName, UserAbout, OrgName, Member string }{
 			UserName:  stateText(state, UserNameKey, "the member you are talking with"),
 			UserAbout: stateText(state, UserAboutKey, ""),
 			OrgName:   stateText(state, OrgNameKey, "their organization"),

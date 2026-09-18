@@ -97,14 +97,18 @@ type RunStore interface {
 	Start(ctx context.Context, run runstore.Run, lease time.Duration) error
 	Renew(ctx context.Context, runID string, lease time.Duration) error
 	Finish(ctx context.Context, runID string, outcome runstore.Outcome, event events.Event) error
+	Cancel(ctx context.Context, runID string) error
 }
 
 // Config is what the service runs with.
 type Config struct {
 	// AppName is the ADK app threads belong to: Krude's name.
 	AppName string
-	// Agent answers every run.
-	Agent agent.Agent
+	// Agent answers every run a member starts, and Unattended every run a
+	// trigger starts, with nobody watching; it defaults to Agent. Both must
+	// answer to the same name, since they take turns in one thread.
+	Agent      agent.Agent
+	Unattended agent.Agent
 	// Sessions stores threads. It should seed a member's state when a thread
 	// is created, as adksession's does.
 	Sessions session.Service
@@ -124,6 +128,7 @@ type Config struct {
 type Service struct {
 	appName    string
 	agent      agent.Agent
+	unattended agent.Agent
 	sessions   session.Service
 	artifacts  artifact.Service
 	runs       RunStore
@@ -146,14 +151,21 @@ func New(config Config) (*Service, error) {
 		return nil, errors.New("threads: a run store is required")
 	case config.Prices == nil:
 		return nil, errors.New("threads: a price table is required")
+	case config.Unattended != nil && config.Unattended.Name() != config.Agent.Name():
+		return nil, errors.New("threads: the unattended agent must answer to the agent's own name")
 	}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	unattended := config.Unattended
+	if unattended == nil {
+		unattended = config.Agent
+	}
 	return &Service{
 		appName:    config.AppName,
 		agent:      config.Agent,
+		unattended: unattended,
 		sessions:   config.Sessions,
 		artifacts:  config.Artifacts,
 		runs:       config.Runs,
@@ -284,9 +296,15 @@ func (service *Service) Artifact(ctx context.Context, member Member, threadID, n
 	if _, err := service.thread(ctx, member, threadID); err != nil {
 		return File{}, err
 	}
-	loaded, err := service.artifacts.Load(ctx, &artifact.LoadRequest{
+	request := &artifact.LoadRequest{
 		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name, Version: version,
-	})
+	}
+	// A name ADK would refuse, such as one with a path separator, names no
+	// file a run could have kept.
+	if request.Validate() != nil {
+		return File{}, ErrNotFound
+	}
+	loaded, err := service.artifacts.Load(ctx, request)
 	if errors.Is(err, fs.ErrNotExist) {
 		return File{}, ErrNotFound
 	}

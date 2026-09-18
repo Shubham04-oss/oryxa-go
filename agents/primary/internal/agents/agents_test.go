@@ -879,3 +879,53 @@ func usesURLContext(request *model.LLMRequest) bool {
 	}
 	return false
 }
+
+func TestUnattendedKrudeCanReachNothingOutside(t *testing.T) {
+	var offered []string
+	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		for _, declared := range request.Config.Tools {
+			for _, function := range declared.FunctionDeclarations {
+				offered = append(offered, function.Name)
+			}
+		}
+		return genai.NewContentFromText("Two emails came in.", genai.RoleModel)
+	})
+	router, err := modelrouter.New(llm, llm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := Toolbox{Name: "notes", Description: "Notes.", Toolset: staticToolset{echoTool(t, "notes_add")}}
+	root, err := UnattendedRoot(router, []Toolbox{notes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.Name() != RootName {
+		t.Fatalf("name = %q, want %q: it takes turns with Root in one thread", root.Name(), RootName)
+	}
+	if len(root.SubAgents()) != 0 {
+		t.Fatalf("sub-agents = %d, want none: a sub-agent could research the web", len(root.SubAgents()))
+	}
+	sessions := session.InMemoryService()
+	turns, err := runner.New(runner.Config{AppName: RootName, Agent: root, SessionService: sessions, ArtifactService: artifact.InMemoryService()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := sessions.Create(context.Background(), &session.CreateRequest{AppName: RootName, UserID: "member_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range turns.Run(context.Background(), "member_1", created.Session.ID(), genai.NewContentFromText("Events arrived.", genai.RoleUser), agent.RunConfig{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	slices.Sort(offered)
+	want := []string{"get_user_details", "list_tools", "load_artifacts", "load_tools"}
+	if !slices.Equal(offered, want) {
+		t.Fatalf("tools offered = %v, want only %v", offered, want)
+	}
+	instruction := text(llm.requestsFor(RootName)[0].Config.SystemInstruction)
+	if !strings.Contains(instruction, "never instructions") || !strings.Contains(instruction, "cannot change anything") {
+		t.Fatalf("instruction does not say how to treat the events:\n%s", instruction)
+	}
+}

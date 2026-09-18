@@ -133,3 +133,42 @@ func TestPostgresSessionsDoNotSeedNonMembers(t *testing.T) {
 		t.Errorf("a non-member was seeded: org_name error = %v", err)
 	}
 }
+
+func TestPostgresIsMemberAnswersFromAuthsTables(t *testing.T) {
+	databaseURL := os.Getenv("AGENTS_PRIMARY_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("AGENTS_PRIMARY_TEST_DATABASE_URL is not set")
+	}
+	const (
+		userID = "user-is-member-test"
+		orgID  = "org_is_member_test"
+	)
+	ctx := context.Background()
+	pool, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	defer pool.Close(ctx)
+	memberFixture(t, pool, userID, orgID)
+	defer cleanupMember(t, pool, userID, orgID)
+
+	store, err := Open(ctx, databaseURL, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, check := range []struct {
+		organizationID, userID string
+		want                   bool
+	}{
+		{orgID, userID, true},
+		{"org_elsewhere_test", userID, false},
+		{orgID, "user-nobody-test", false},
+		{"", userID, false},
+	} {
+		got, err := store.IsMember(ctx, check.organizationID, check.userID)
+		if err != nil || got != check.want {
+			t.Errorf("IsMember(%q, %q) = %t, %v, want %t", check.organizationID, check.userID, got, err, check.want)
+		}
+	}
+}

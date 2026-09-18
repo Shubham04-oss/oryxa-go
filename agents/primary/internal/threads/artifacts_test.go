@@ -76,6 +76,9 @@ func TestAFileARunKeepsShowsInTheThreadAndCanBeRead(t *testing.T) {
 	if _, err := service.Artifact(context.Background(), asha, created.ID, "missing.png", 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a missing artifact = %v, want ErrNotFound", err)
 	}
+	if _, err := service.Artifact(context.Background(), asha, created.ID, "../shot.png", 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a name with a path in it = %v, want ErrNotFound", err)
+	}
 	someoneElse := Member{UserID: "user_ravi", OrganizationID: asha.OrganizationID}
 	if _, err := service.Artifact(context.Background(), someoneElse, created.ID, "shot.png", 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another member reading it = %v, want ErrNotFound", err)

@@ -61,3 +61,20 @@ func (r memberReader) Member(ctx context.Context, userID, organizationID string)
 	}
 	return member, nil
 }
+
+// IsMember reports whether userID still belongs to organizationID, read from
+// auth's tables. Work that nobody asked for in person, such as a wake-up,
+// checks it first: a member who left must not have threads made for them.
+func (s *Store) IsMember(ctx context.Context, organizationID, userID string) (bool, error) {
+	if organizationID == "" || userID == "" {
+		return false, nil
+	}
+	_, err := memberReader{database: s.database}.Member(ctx, userID, organizationID)
+	if errors.Is(err, ErrMemberNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
