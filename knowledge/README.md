@@ -178,7 +178,15 @@ own source with `grant_required` rather than the pass falling back to
 anything wider.
 
 Only text is indexed. A media type holding none is refused rather than stored
-as though bytes were words; HTML is not read yet (see [Later](#later)).
+as though bytes were words.
+
+HTML is read by taking its text out: the title, then the prose, with a line
+wherever a block element begins or ends so a list does not run together into
+one word nobody will search for. Script, style and comments are not prose and
+do not survive; neither do attributes. What is stored is `text/plain`, because
+that is what the body then is, and the hash is over those words rather than
+the markup — so a provider that re-serializes the same page has not changed
+it.
 
 ## API
 
@@ -377,6 +385,3 @@ KNOWLEDGE_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/
 
 ## Later
 
-- **HTML.** Only plain text, Markdown, CSV and JSON are read. HTML would mean
-  promoting `golang.org/x/net` from an indirect dependency, which is a
-  deliberate choice rather than an oversight.

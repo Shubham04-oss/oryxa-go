@@ -146,10 +146,36 @@ finds something the provider no longer has; see §2.
 
 ---
 
+## 9. HTML is read (fixed)
+
+`transform` read plain text, Markdown, CSV and JSON, and refused everything
+else — so a GitHub issue, a Notion page or a mail body delivered as HTML was
+skipped in silence. `golang.org/x/net` is a direct dependency now and
+`transform/html.go` takes the text out: the title first, then the prose, with
+a line break wherever a block element begins or ends. Script, style,
+`noscript`, `template`, `svg` and comments hold no prose and are dropped;
+attributes are never indexed.
+
+Two things worth keeping in mind if this is changed. The stored media type is
+`text/plain`, not `text/html`, because the body is no longer markup and must
+not claim to be. And the hash is over the extracted text — that is what keeps
+a provider re-serializing a page from looking like a change, which is the
+whole reason a pass over thousands of unchanged documents publishes nothing.
+
 ## 8. Decisions that are not mine to make
 
-1. **Promote `golang.org/x/net` to a direct dependency for HTML?** Unblocks
-   HTML documents, such as mail and rich pages.
+1. **Promote `golang.org/x/net` to a direct dependency for HTML?** Decided:
+   yes. HTML is read now — see §9.
+6. **Whose view should the organization's files source read?** Open, and
+   deliberately parked. It reads as whoever stored the first shared file,
+   chosen because an admin's listing also carries billing attachments. But
+   that member can leave, and their grant goes with them; their view is not
+   the organization's view, only one that happens to overlap it for
+   organization-scoped files; and nothing says the first uploader should be
+   the one the whole organization's index depends on. The alternatives —
+   an organization-level grant, the owner, a service identity files would
+   have to accept — each cost something different. Revisit before this is
+   in front of real organizations.
 2. **Adopt the `Name`/`Migrate`/`Handler`/`Workers` seam across the other
    seven services?** Decided: yes. It was proven here because this one was
    greenfield; `teams` adopted it first (`teams/service.go`), and this
