@@ -69,6 +69,11 @@ type modeResult struct {
 	RetrievedTokens float64 `json:"retrieved_tokens_mean"`
 	// Misses are the questions whose section no retrieved chunk touched.
 	Misses []string `json:"misses"`
+	// Empty counts answerable questions that came back with nothing, and
+	// TurnedAway unanswerable ones that did: with a score floor, the first is
+	// a wrong refusal and the second a right one.
+	Empty      int `json:"answerable_empty"`
+	TurnedAway int `json:"unanswerable_turned_away"`
 	// TopScores are the best score for each answerable question, and for each
 	// unanswerable one: how far apart they are says whether a threshold can
 	// tell "found it" from "nothing here".
@@ -202,7 +207,7 @@ func TestRetrievalQuality(t *testing.T) {
 		t.Logf("%-7s section hit@1 %.2f @3 %.2f @8 %.2f MRR %.3f | document hit@1 %.2f @8 %.2f MRR %.3f | %.0f tokens retrieved | p50 %.0fms p95 %.0fms, %d calls",
 			mode.Mode, mode.SectionHit["1"], mode.SectionHit["3"], mode.SectionHit["8"], mode.SectionMRR,
 			mode.DocumentHit["1"], mode.DocumentHit["8"], mode.DocumentMRR, mode.RetrievedTokens, mode.LatencyP50, mode.LatencyP95, mode.ProviderCalls)
-		t.Logf("        misses: %s", strings.Join(mode.Misses, ", "))
+		t.Logf("        misses: %s; answerable came back empty %d, unanswerable turned away %d", strings.Join(mode.Misses, ", "), mode.Empty, mode.TurnedAway)
 		t.Logf("        top score answerable median %.3f, unanswerable median %.3f max %.3f",
 			median(mode.AnswerableTop), median(mode.UnanswerableTop), maximum(mode.UnanswerableTop))
 	}
@@ -230,7 +235,12 @@ func measure(t *testing.T, ctx context.Context, retriever *retrieval.Retriever, 
 	callsBefore := counter.calls.Load()
 	for _, entry := range questions {
 		started := time.Now()
-		found, err := retriever.Search(ctx, corpus, domain.Query{Text: entry.Question, TopK: topK, Mode: mode, Rerank: rerank})
+		query := domain.Query{Text: entry.Question, TopK: topK, Mode: mode, Rerank: rerank}
+		if rerank {
+			// A floor on relevance means something only on a reranker's scores.
+			query.MinScore, _ = strconv.ParseFloat(os.Getenv("RAG_EVAL_MIN_SCORE"), 64)
+		}
+		found, err := retriever.Search(ctx, corpus, query)
 		if err != nil {
 			t.Fatalf("%s %s: %v", label, entry.ID, err)
 		}
@@ -247,7 +257,13 @@ func measure(t *testing.T, ctx context.Context, retriever *retrieval.Retriever, 
 		}
 		if entry.Kind == "unanswerable" {
 			result.UnanswerableTop = append(result.UnanswerableTop, top)
+			if len(found.Matches) == 0 {
+				result.TurnedAway++
+			}
 			continue
+		}
+		if len(found.Matches) == 0 {
+			result.Empty++
 		}
 		result.AnswerableTop = append(result.AnswerableTop, top)
 		result.Questions++
