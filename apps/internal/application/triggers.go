@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 
+	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
+
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
@@ -99,12 +101,23 @@ func (s *Service) CreateTrigger(ctx context.Context, credentials authclient.Cred
 		return domain.Trigger{}, err
 	}
 	now := s.now().UTC()
+	// The event carries how it delivers, since a subscription that polls or
+	// still needs its webhook registered explains a silence nothing else
+	// would.
+	event, err := s.event(appsv1.TriggerSubscribedDetailType, appsv1.TriggerSubscribed{
+		TriggerID: id, ConnectionID: connection.ID, OrganizationID: organizationID, MemberID: caller.UserID,
+		Toolkit: connection.Toolkit, Trigger: slug, Kind: definition.Kind,
+		ManualSetup: definition.ManualSetup, SubscribedAt: now,
+	})
+	if err != nil {
+		return domain.Trigger{}, err
+	}
 	trigger, created, err := s.store.CreateTrigger(ctx, domain.Trigger{
 		ID: id, OrganizationID: organizationID, MemberID: caller.UserID, ConnectionID: connection.ID,
 		Toolkit: connection.Toolkit, Slug: slug, Config: config, ComposioTriggerID: composioID,
 		Status: domain.TriggerActive, Kind: definition.Kind, ManualSetup: definition.ManualSetup,
 		CreatedAt: now, UpdatedAt: now,
-	})
+	}, event)
 	if err != nil {
 		return domain.Trigger{}, err
 	}
@@ -163,6 +176,15 @@ func (s *Service) RemoveTrigger(ctx context.Context, credentials authclient.Cred
 	if err := s.composio.DeleteTrigger(ctx, trigger.ComposioTriggerID); err != nil && !errors.Is(err, composio.ErrNotFound) {
 		return composioError("unsubscribe the trigger", err)
 	}
-	_, err = s.store.RemoveTrigger(ctx, trigger.ID, s.now().UTC())
+	now := s.now().UTC()
+	event, err := s.event(appsv1.TriggerUnsubscribedDetailType, appsv1.TriggerUnsubscribed{
+		TriggerID: trigger.ID, ConnectionID: trigger.ConnectionID, OrganizationID: trigger.OrganizationID,
+		MemberID: trigger.MemberID, Toolkit: trigger.Toolkit, Trigger: trigger.Slug,
+		ByAdmin: trigger.MemberID != caller.UserID, UnsubscribedAt: now,
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.store.RemoveTrigger(ctx, trigger.ID, now, event)
 	return err
 }

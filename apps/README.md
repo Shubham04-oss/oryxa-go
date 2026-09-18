@@ -258,23 +258,45 @@ Errors are `{"error":{"code","message"}}` with the codes
 Published on `oryxa.apps`, through the outbox, so a change and its event cannot
 disagree.
 
+Every change a member's apps go through is announced, so nothing that
+happened is visible only in a log line.
+
 | Detail type | Says |
 | --- | --- |
+| `apps.connection.initiated.v1` | A member started connecting an app and was sent to it |
 | `apps.connection.connected.v1` | A member connected an app |
+| `apps.connection.failed.v1` | A connection never became usable, and why |
 | `apps.connection.expired.v1` | Composio lost a connection's credential; the member must reconnect |
 | `apps.connection.removed.v1` | A connection is gone, and why |
+| `apps.trigger.subscribed.v1` | A member subscribed a connection to an event, with how it delivers |
+| `apps.trigger.unsubscribed.v1` | A member or an org admin took a trigger away |
 | `apps.trigger.received.v1` | An app delivered an event, with its payload |
 | `apps.trigger.disabled.v1` | Composio stopped a trigger, and why |
 | `apps.action.completed.v1` | A write ran |
 | `apps.action.failed.v1` | A write did not, in one word — never the app's own |
 
+A connection's life is a closed story on the bus: every `initiated` ends as
+exactly one of `connected` or `failed`, and a connected one ends as `expired`
+or `removed`. `failed` carries a constant rather than the prose a member
+reads, since it is grouped and counted — `denied_at_provider`,
+`wrong_account`, or `abandoned` for a member who started and never came back,
+which the maintenance sweep announces and nothing else would report.
+
+A trigger's has four ends: `unsubscribed` when a member or admin takes it
+away, `disabled` when Composio stops it, and otherwise it goes with its
+connection's `removed`.
+
 A trigger's payload is the app's own data, so it travels only as far as it must:
 over 128 KiB it is left out with `data_omitted`, and the outbox blanks it as
 soon as the event is published rather than keeping it for the retention window.
 
-`apps.trigger.received.v1` is consumed by agents, which records each event as
-a wake-up and hands a member's batch to Krude in their updates thread
-(`agents/primary/internal/inbound`, `agents/primary/internal/wakeups`).
+Who listens today: agents takes `trigger.received`, recording each as a
+wake-up and handing a member's batch to Krude in their updates thread
+(`agents/primary/internal/inbound`, `agents/primary/internal/wakeups`);
+knowledge takes `connection.expired` and `connection.removed`, pausing and
+retiring what read through them. The rest are announcements nothing consumes
+yet — published so that whatever needs them next does not have to go back and
+add them.
 
 Consumed, from `oryxa.auth`: `auth.member.removed.v1` and
 `auth.organization.deleted.v1`. A connection is standing access to a member's

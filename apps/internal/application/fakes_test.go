@@ -53,7 +53,7 @@ func (store *fakeStore) published(detailType string) []domain.Event {
 	return matched
 }
 
-func (store *fakeStore) CreateConnection(_ context.Context, connection domain.Connection, stateHash string) error {
+func (store *fakeStore) CreateConnection(_ context.Context, connection domain.Connection, stateHash string, event domain.Event) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if _, taken := store.states[stateHash]; taken {
@@ -61,6 +61,7 @@ func (store *fakeStore) CreateConnection(_ context.Context, connection domain.Co
 	}
 	store.connections[connection.ID] = connection
 	store.states[stateHash] = connection.ID
+	store.events = append(store.events, event)
 	return nil
 }
 
@@ -96,7 +97,7 @@ func (store *fakeStore) ActivateConnection(_ context.Context, id, label string, 
 	return connection, true, nil
 }
 
-func (store *fakeStore) FailConnection(_ context.Context, id, reason string, now time.Time) (bool, error) {
+func (store *fakeStore) FailConnection(_ context.Context, id, reason string, now time.Time, event domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	connection := store.connections[id]
@@ -106,6 +107,7 @@ func (store *fakeStore) FailConnection(_ context.Context, id, reason string, now
 	connection.Status, connection.StatusReason, connection.UpdatedAt = domain.ConnectionFailed, reason, now
 	store.connections[id] = connection
 	store.clearState(id)
+	store.events = append(store.events, event)
 	return true, nil
 }
 
@@ -193,19 +195,27 @@ func (store *fakeStore) RemoveConnection(_ context.Context, id, reason string, n
 	return true, nil
 }
 
-func (store *fakeStore) FailPendingConnectionsBefore(_ context.Context, cutoff, now time.Time) (int64, error) {
+func (store *fakeStore) FailPendingConnectionsBefore(_ context.Context, cutoff, now time.Time, events func([]domain.Connection) ([]domain.Event, error)) (int64, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	var failed int64
+	var swept []domain.Connection
 	for id, connection := range store.connections {
 		if connection.Status == domain.ConnectionPending && connection.CreatedAt.Before(cutoff) {
 			connection.Status, connection.UpdatedAt = domain.ConnectionFailed, now
 			store.connections[id] = connection
 			store.clearState(id)
-			failed++
+			swept = append(swept, connection)
 		}
 	}
-	return failed, nil
+	if len(swept) == 0 {
+		return 0, nil
+	}
+	built, err := events(swept)
+	if err != nil {
+		return 0, err
+	}
+	store.events = append(store.events, built...)
+	return int64(len(swept)), nil
 }
 
 func (store *fakeStore) AuthConfig(_ context.Context, toolkit string) (AuthConfig, error) {
@@ -228,7 +238,7 @@ func (store *fakeStore) SaveAuthConfig(_ context.Context, config AuthConfig) (Au
 	return config, nil
 }
 
-func (store *fakeStore) CreateTrigger(_ context.Context, trigger domain.Trigger) (domain.Trigger, bool, error) {
+func (store *fakeStore) CreateTrigger(_ context.Context, trigger domain.Trigger, event domain.Event) (domain.Trigger, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	for _, existing := range store.triggers {
@@ -237,6 +247,7 @@ func (store *fakeStore) CreateTrigger(_ context.Context, trigger domain.Trigger)
 		}
 	}
 	store.triggers[trigger.ID] = trigger
+	store.events = append(store.events, event)
 	return trigger, true, nil
 }
 
@@ -276,7 +287,7 @@ func (store *fakeStore) Triggers(_ context.Context, organizationID string, query
 	return listed, nil
 }
 
-func (store *fakeStore) RemoveTrigger(_ context.Context, id string, now time.Time) (bool, error) {
+func (store *fakeStore) RemoveTrigger(_ context.Context, id string, now time.Time, event domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	trigger := store.triggers[id]
@@ -285,6 +296,7 @@ func (store *fakeStore) RemoveTrigger(_ context.Context, id string, now time.Tim
 	}
 	trigger.Status, trigger.UpdatedAt = domain.TriggerRemoved, now
 	store.triggers[id] = trigger
+	store.events = append(store.events, event)
 	return true, nil
 }
 

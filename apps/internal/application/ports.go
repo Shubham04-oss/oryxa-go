@@ -15,9 +15,9 @@ import (
 // transaction, so a change and its event cannot disagree.
 type Store interface {
 	// CreateConnection records a pending connection, with the hash of the
-	// state its browser round trip carries. ErrConflict if the account or
-	// the state is already recorded.
-	CreateConnection(ctx context.Context, connection domain.Connection, stateHash string) error
+	// state its browser round trip carries, and writes event. ErrConflict if
+	// the account or the state is already recorded.
+	CreateConnection(ctx context.Context, connection domain.Connection, stateHash string, event domain.Event) error
 	// PendingConnection finds the connection a state hash names while it is
 	// still pending. ErrNotFound otherwise.
 	PendingConnection(ctx context.Context, stateHash string) (domain.Connection, error)
@@ -25,9 +25,10 @@ type Store interface {
 	// and writes event. It answers false, changing nothing, if the
 	// connection is no longer pending.
 	ActivateConnection(ctx context.Context, id, label string, now time.Time, event domain.Event) (domain.Connection, bool, error)
-	// FailConnection marks a pending connection failed and clears its state.
-	// It answers false if the connection is no longer pending.
-	FailConnection(ctx context.Context, id, reason string, now time.Time) (bool, error)
+	// FailConnection marks a pending connection failed, clears its state and
+	// writes event. It answers false, writing nothing, if the connection is
+	// no longer pending.
+	FailConnection(ctx context.Context, id, reason string, now time.Time, event domain.Event) (bool, error)
 	// Connection reads one connection of an organization, whatever its
 	// status. ErrNotFound for another organization's.
 	Connection(ctx context.Context, organizationID, id string) (domain.Connection, error)
@@ -43,8 +44,9 @@ type Store interface {
 	// writing nothing, if the connection was already removed.
 	RemoveConnection(ctx context.Context, id, reason string, now time.Time, events func(domain.Connection, []domain.Trigger) ([]domain.Event, error)) (bool, error)
 	// FailPendingConnectionsBefore fails every pending connection created
-	// before cutoff, whose link has long expired, and answers how many.
-	FailPendingConnectionsBefore(ctx context.Context, cutoff, now time.Time) (int64, error)
+	// before cutoff, whose link has long expired, writing an event for each
+	// from the connections it is failing, and answers how many.
+	FailPendingConnectionsBefore(ctx context.Context, cutoff, now time.Time, events func([]domain.Connection) ([]domain.Event, error)) (int64, error)
 
 	// AuthConfig reads the auth config recorded for a toolkit. ErrNotFound if
 	// none is.
@@ -54,10 +56,11 @@ type Store interface {
 	// app at once agree on one.
 	SaveAuthConfig(ctx context.Context, config AuthConfig) (AuthConfig, error)
 
-	// CreateTrigger records a trigger. If a live one already has the same
-	// Composio trigger id — Composio answers the same instance for the same
-	// account, trigger and config — it answers that one instead, with false.
-	CreateTrigger(ctx context.Context, trigger domain.Trigger) (domain.Trigger, bool, error)
+	// CreateTrigger records a trigger and writes event. If a live one already
+	// has the same Composio trigger id — Composio answers the same instance
+	// for the same account, trigger and config — it answers that one
+	// instead, with false, and writes nothing.
+	CreateTrigger(ctx context.Context, trigger domain.Trigger, event domain.Event) (domain.Trigger, bool, error)
 	// Trigger reads one of an organization's triggers.
 	Trigger(ctx context.Context, organizationID, id string) (domain.Trigger, error)
 	// TriggerByComposioID reads the live trigger a Composio instance backs.
@@ -65,9 +68,9 @@ type Store interface {
 	// Triggers lists an organization's live triggers, optionally one
 	// member's or one connection's, newest first.
 	Triggers(ctx context.Context, organizationID string, query TriggerQuery) ([]domain.Trigger, error)
-	// RemoveTrigger marks a trigger removed. It answers false if it already
-	// was.
-	RemoveTrigger(ctx context.Context, id string, now time.Time) (bool, error)
+	// RemoveTrigger marks a trigger removed and writes event. It answers
+	// false, writing nothing, if it already was.
+	RemoveTrigger(ctx context.Context, id string, now time.Time, event domain.Event) (bool, error)
 	// DisableTrigger marks an active trigger disabled and writes event. It
 	// answers false if it was not active.
 	DisableTrigger(ctx context.Context, id, reason string, now time.Time, event domain.Event) (bool, error)

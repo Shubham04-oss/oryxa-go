@@ -23,7 +23,7 @@ const triggerColumns = `id, organization_id, member_id, connection_id, toolkit, 
 // partial unique index the migration declares, so two callers racing to
 // create the same instance cannot both believe they created it - the loser
 // reads back what the winner inserted, inside the same transaction.
-func (store *Store) CreateTrigger(ctx context.Context, trigger domain.Trigger) (domain.Trigger, bool, error) {
+func (store *Store) CreateTrigger(ctx context.Context, trigger domain.Trigger, event domain.Event) (domain.Trigger, bool, error) {
 	var result domain.Trigger
 	created := false
 	err := store.inTx(ctx, func(tx pgx.Tx) error {
@@ -43,7 +43,9 @@ func (store *Store) CreateTrigger(ctx context.Context, trigger domain.Trigger) (
 		if len(triggers) == 1 {
 			result = triggers[0]
 			created = true
-			return nil
+			// Only a subscription that is new announces one; the loser of a
+			// race reads back the winner's and says nothing.
+			return insertEvents(ctx, tx, event)
 		}
 		existing, err := queryTriggers(ctx, tx, `
 			SELECT `+triggerColumns+`
@@ -113,14 +115,22 @@ func (store *Store) Triggers(ctx context.Context, organizationID string, query a
 
 // RemoveTrigger marks a trigger removed by itself, without touching the
 // connection it is on. It answers false if it already was.
-func (store *Store) RemoveTrigger(ctx context.Context, id string, now time.Time) (bool, error) {
-	tag, err := store.pool.Exec(ctx, `
-		UPDATE apps_triggers SET status = 'removed', updated_at = $2
-		WHERE id = $1 AND status <> 'removed'`, id, now)
-	if err != nil {
-		return false, mapWriteError("remove trigger", err)
-	}
-	return tag.RowsAffected() == 1, nil
+func (store *Store) RemoveTrigger(ctx context.Context, id string, now time.Time, event domain.Event) (bool, error) {
+	removed := false
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE apps_triggers SET status = 'removed', updated_at = $2
+			WHERE id = $1 AND status <> 'removed'`, id, now)
+		if err != nil {
+			return mapWriteError("remove trigger", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return nil
+		}
+		removed = true
+		return insertEvents(ctx, tx, event)
+	})
+	return removed, err
 }
 
 // DisableTrigger marks an active trigger disabled and writes event. It

@@ -99,6 +99,12 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 	if connected.Connection.Status != "pending" || connected.RedirectURL == "" {
 		t.Fatalf("connection = %+v", connected)
 	}
+	// Starting is announced too, so what follows is always the end of
+	// something the bus saw begin.
+	initiated := decodeEvent(t, waitForEvent(t, sink, appsv1.ConnectionInitiatedDetailType))
+	if initiated["connection_id"] != connected.Connection.ID || initiated["toolkit"] != "github" {
+		t.Fatalf("initiated event = %v", initiated)
+	}
 	callback, err := url.Parse(composio.lastCallbackURL())
 	if err != nil {
 		t.Fatal(err)
@@ -191,6 +197,14 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 		http.StatusCreated, &trigger)
 	if trigger.Kind != "webhook" || trigger.DeliveryCount != 0 {
 		t.Fatalf("a new trigger = %+v, want a pushed one that has delivered nothing", trigger)
+	}
+	subscribed := decodeEvent(t, waitForEvent(t, sink, appsv1.TriggerSubscribedDetailType))
+	if subscribed["trigger"] != "GITHUB_COMMIT_EVENT" || subscribed["kind"] != "webhook" {
+		t.Fatalf("subscribed event = %v", subscribed)
+	}
+	// The two refusals above changed nothing, so neither announced anything.
+	if count := sink.count(appsv1.TriggerSubscribedDetailType); count != 1 {
+		t.Fatalf("subscribed events = %d, want 1", count)
 	}
 
 	delivery := fmt.Sprintf(`{"id":"wh_1","type":"composio.trigger.message","timestamp":"2026-09-17T12:00:00Z",
