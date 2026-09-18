@@ -1,5 +1,6 @@
 import {
 	Blocks,
+	BookOpen,
 	Building2,
 	CircleUserRound,
 	CreditCard,
@@ -17,6 +18,7 @@ import {
 export type AppPath =
 	| "/app"
 	| "/app/threads"
+	| "/app/knowledge"
 	| "/app/teams"
 	| "/app/files"
 	| "/app/connections"
@@ -38,6 +40,7 @@ export interface NavigationItem {
 export const workspaceNavigation: NavigationItem[] = [
 	{ href: "/app", icon: House, label: "Home", match: "exact" },
 	{ href: "/app/threads", icon: MessageSquareText, label: "Threads" },
+	{ href: "/app/knowledge", icon: BookOpen, label: "Knowledge" },
 ];
 
 export const organizationNavigation: NavigationItem[] = [

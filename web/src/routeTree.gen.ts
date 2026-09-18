@@ -15,6 +15,7 @@ import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as AppIndexRouteImport } from './routes/app.index'
 import { Route as AppConnectionsRouteImport } from './routes/app.connections'
 import { Route as AppFilesRouteImport } from './routes/app.files'
+import { Route as AppKnowledgeRouteImport } from './routes/app.knowledge'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
 import { Route as AppTeamsRouteImport } from './routes/app.teams'
 import { Route as AppThreadsRouteImport } from './routes/app.threads'
@@ -26,6 +27,8 @@ import { Route as AuthVerifyEmailRouteImport } from './routes/auth.verify-email'
 import { Route as InvitationsIndexRouteImport } from './routes/invitations.index'
 import { Route as InvitationsAcceptRouteImport } from './routes/invitations.accept'
 import { Route as SettingsBillingRouteImport } from './routes/settings.billing'
+import { Route as AppKnowledgeIndexRouteImport } from './routes/app.knowledge.index'
+import { Route as AppKnowledgeCorpusIdRouteImport } from './routes/app.knowledge.$corpusId'
 import { Route as AppSettingsOrganizationRouteImport } from './routes/app.settings.organization'
 import { Route as AppSettingsProfileRouteImport } from './routes/app.settings.profile'
 import { Route as AppThreadsIndexRouteImport } from './routes/app.threads.index'
@@ -65,6 +68,11 @@ const AppConnectionsRoute = AppConnectionsRouteImport.update({
 const AppFilesRoute = AppFilesRouteImport.update({
   id: '/files',
   path: '/files',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppKnowledgeRoute = AppKnowledgeRouteImport.update({
+  id: '/knowledge',
+  path: '/knowledge',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
@@ -121,6 +129,16 @@ const SettingsBillingRoute = SettingsBillingRouteImport.update({
   id: '/settings/billing',
   path: '/settings/billing',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AppKnowledgeIndexRoute = AppKnowledgeIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AppKnowledgeRoute,
+} as any)
+const AppKnowledgeCorpusIdRoute = AppKnowledgeCorpusIdRouteImport.update({
+  id: '/$corpusId',
+  path: '/$corpusId',
+  getParentRoute: () => AppKnowledgeRoute,
 } as any)
 const AppSettingsOrganizationRoute = AppSettingsOrganizationRouteImport.update({
   id: '/organization',
@@ -185,6 +203,7 @@ export interface FileRoutesByFullPath {
   '/onboarding': typeof OnboardingRoute
   '/app/connections': typeof AppConnectionsRoute
   '/app/files': typeof AppFilesRoute
+  '/app/knowledge': typeof AppKnowledgeRouteWithChildren
   '/app/settings': typeof AppSettingsRouteWithChildren
   '/app/teams': typeof AppTeamsRoute
   '/app/threads': typeof AppThreadsRouteWithChildren
@@ -197,9 +216,11 @@ export interface FileRoutesByFullPath {
   '/settings/billing': typeof SettingsBillingRoute
   '/app/': typeof AppIndexRoute
   '/invitations/': typeof InvitationsIndexRoute
+  '/app/knowledge/$corpusId': typeof AppKnowledgeCorpusIdRoute
   '/app/settings/organization': typeof AppSettingsOrganizationRouteWithChildren
   '/app/settings/profile': typeof AppSettingsProfileRoute
   '/app/threads/$threadId': typeof AppThreadsThreadIdRoute
+  '/app/knowledge/': typeof AppKnowledgeIndexRoute
   '/app/threads/': typeof AppThreadsIndexRoute
   '/app/settings/organization/billing': typeof AppSettingsOrganizationBillingRoute
   '/app/settings/organization/email': typeof AppSettingsOrganizationEmailRoute
@@ -224,8 +245,10 @@ export interface FileRoutesByTo {
   '/settings/billing': typeof SettingsBillingRoute
   '/app': typeof AppIndexRoute
   '/invitations': typeof InvitationsIndexRoute
+  '/app/knowledge/$corpusId': typeof AppKnowledgeCorpusIdRoute
   '/app/settings/profile': typeof AppSettingsProfileRoute
   '/app/threads/$threadId': typeof AppThreadsThreadIdRoute
+  '/app/knowledge': typeof AppKnowledgeIndexRoute
   '/app/threads': typeof AppThreadsIndexRoute
   '/app/settings/organization/billing': typeof AppSettingsOrganizationBillingRoute
   '/app/settings/organization/email': typeof AppSettingsOrganizationEmailRoute
@@ -241,6 +264,7 @@ export interface FileRoutesById {
   '/onboarding': typeof OnboardingRoute
   '/app/connections': typeof AppConnectionsRoute
   '/app/files': typeof AppFilesRoute
+  '/app/knowledge': typeof AppKnowledgeRouteWithChildren
   '/app/settings': typeof AppSettingsRouteWithChildren
   '/app/teams': typeof AppTeamsRoute
   '/app/threads': typeof AppThreadsRouteWithChildren
@@ -253,9 +277,11 @@ export interface FileRoutesById {
   '/settings/billing': typeof SettingsBillingRoute
   '/app/': typeof AppIndexRoute
   '/invitations/': typeof InvitationsIndexRoute
+  '/app/knowledge/$corpusId': typeof AppKnowledgeCorpusIdRoute
   '/app/settings/organization': typeof AppSettingsOrganizationRouteWithChildren
   '/app/settings/profile': typeof AppSettingsProfileRoute
   '/app/threads/$threadId': typeof AppThreadsThreadIdRoute
+  '/app/knowledge/': typeof AppKnowledgeIndexRoute
   '/app/threads/': typeof AppThreadsIndexRoute
   '/app/settings/organization/billing': typeof AppSettingsOrganizationBillingRoute
   '/app/settings/organization/email': typeof AppSettingsOrganizationEmailRoute
@@ -272,6 +298,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/app/connections'
     | '/app/files'
+    | '/app/knowledge'
     | '/app/settings'
     | '/app/teams'
     | '/app/threads'
@@ -284,9 +311,11 @@ export interface FileRouteTypes {
     | '/settings/billing'
     | '/app/'
     | '/invitations/'
+    | '/app/knowledge/$corpusId'
     | '/app/settings/organization'
     | '/app/settings/profile'
     | '/app/threads/$threadId'
+    | '/app/knowledge/'
     | '/app/threads/'
     | '/app/settings/organization/billing'
     | '/app/settings/organization/email'
@@ -311,8 +340,10 @@ export interface FileRouteTypes {
     | '/settings/billing'
     | '/app'
     | '/invitations'
+    | '/app/knowledge/$corpusId'
     | '/app/settings/profile'
     | '/app/threads/$threadId'
+    | '/app/knowledge'
     | '/app/threads'
     | '/app/settings/organization/billing'
     | '/app/settings/organization/email'
@@ -327,6 +358,7 @@ export interface FileRouteTypes {
     | '/onboarding'
     | '/app/connections'
     | '/app/files'
+    | '/app/knowledge'
     | '/app/settings'
     | '/app/teams'
     | '/app/threads'
@@ -339,9 +371,11 @@ export interface FileRouteTypes {
     | '/settings/billing'
     | '/app/'
     | '/invitations/'
+    | '/app/knowledge/$corpusId'
     | '/app/settings/organization'
     | '/app/settings/profile'
     | '/app/threads/$threadId'
+    | '/app/knowledge/'
     | '/app/threads/'
     | '/app/settings/organization/billing'
     | '/app/settings/organization/email'
@@ -407,6 +441,13 @@ declare module '@tanstack/react-router' {
       path: '/files'
       fullPath: '/app/files'
       preLoaderRoute: typeof AppFilesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/knowledge': {
+      id: '/app/knowledge'
+      path: '/knowledge'
+      fullPath: '/app/knowledge'
+      preLoaderRoute: typeof AppKnowledgeRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/settings': {
@@ -486,6 +527,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsBillingRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app/knowledge/': {
+      id: '/app/knowledge/'
+      path: '/'
+      fullPath: '/app/knowledge/'
+      preLoaderRoute: typeof AppKnowledgeIndexRouteImport
+      parentRoute: typeof AppKnowledgeRoute
+    }
+    '/app/knowledge/$corpusId': {
+      id: '/app/knowledge/$corpusId'
+      path: '/$corpusId'
+      fullPath: '/app/knowledge/$corpusId'
+      preLoaderRoute: typeof AppKnowledgeCorpusIdRouteImport
+      parentRoute: typeof AppKnowledgeRoute
+    }
     '/app/settings/organization': {
       id: '/app/settings/organization'
       path: '/organization'
@@ -559,6 +614,20 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AppKnowledgeRouteChildren {
+  AppKnowledgeCorpusIdRoute: typeof AppKnowledgeCorpusIdRoute
+  AppKnowledgeIndexRoute: typeof AppKnowledgeIndexRoute
+}
+
+const AppKnowledgeRouteChildren: AppKnowledgeRouteChildren = {
+  AppKnowledgeCorpusIdRoute: AppKnowledgeCorpusIdRoute,
+  AppKnowledgeIndexRoute: AppKnowledgeIndexRoute,
+}
+
+const AppKnowledgeRouteWithChildren = AppKnowledgeRoute._addFileChildren(
+  AppKnowledgeRouteChildren,
+)
+
 interface AppSettingsOrganizationRouteChildren {
   AppSettingsOrganizationBillingRoute: typeof AppSettingsOrganizationBillingRoute
   AppSettingsOrganizationEmailRoute: typeof AppSettingsOrganizationEmailRoute
@@ -614,6 +683,7 @@ const AppThreadsRouteWithChildren = AppThreadsRoute._addFileChildren(
 interface AppRouteChildren {
   AppConnectionsRoute: typeof AppConnectionsRoute
   AppFilesRoute: typeof AppFilesRoute
+  AppKnowledgeRoute: typeof AppKnowledgeRouteWithChildren
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
   AppTeamsRoute: typeof AppTeamsRoute
   AppThreadsRoute: typeof AppThreadsRouteWithChildren
@@ -623,6 +693,7 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppConnectionsRoute: AppConnectionsRoute,
   AppFilesRoute: AppFilesRoute,
+  AppKnowledgeRoute: AppKnowledgeRouteWithChildren,
   AppSettingsRoute: AppSettingsRouteWithChildren,
   AppTeamsRoute: AppTeamsRoute,
   AppThreadsRoute: AppThreadsRouteWithChildren,
