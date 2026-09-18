@@ -15,6 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/s3vectors"
 	"golang.org/x/oauth2/google"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/chunking"
@@ -82,6 +87,8 @@ type modeResult struct {
 }
 
 type report struct {
+	Embedding       string             `json:"embedding"`
+	Backend         domain.Backend     `json:"backend"`
 	Policy          domain.ChunkPolicy `json:"policy"`
 	Documents       int                `json:"documents"`
 	Chunks          int                `json:"chunks"`
@@ -97,8 +104,9 @@ const topK = 8
 
 func TestRetrievalQuality(t *testing.T) {
 	databaseURL, project := os.Getenv("RAG_EVAL_DATABASE_URL"), os.Getenv("GOOGLE_CLOUD_PROJECT")
-	if databaseURL == "" || project == "" {
-		t.Skip("RAG_EVAL_DATABASE_URL and GOOGLE_CLOUD_PROJECT are not set")
+	onBedrock := os.Getenv("RAG_EVAL_EMBEDDING") == "bedrock"
+	if databaseURL == "" || (!onBedrock && project == "") {
+		t.Skip("RAG_EVAL_DATABASE_URL, and GOOGLE_CLOUD_PROJECT for Vertex embeddings, are not set")
 	}
 	location := os.Getenv("GOOGLE_CLOUD_LOCATION")
 	if location == "" {
@@ -120,21 +128,65 @@ func TestRetrievalQuality(t *testing.T) {
 	if err := store.Pool().QueryRow(ctx, `SELECT extversion FROM pg_extension WHERE extname = 'vector'`).Scan(&pgvectorVersion); err != nil {
 		t.Fatalf("pgvector version: %v", err)
 	}
-	vectors := vectorstore.NewRouter(vectorstore.NewPgvector(store.Pool(), pgvectorVersion))
-
-	httpClient, err := google.DefaultClient(ctx, embedding.VertexScope)
-	if err != nil {
-		t.Fatalf("application default credentials: %v", err)
+	// AWS is reached only for what asks for it: Bedrock embeddings or
+	// reranking, or an S3 Vectors bucket. AWS_REGION says where.
+	bucket := os.Getenv("RAG_EVAL_VECTOR_BUCKET")
+	rerankARN := os.Getenv("RAG_EVAL_RERANK_ARN")
+	var (
+		awsConfig aws.Config
+		awsLoaded bool
+	)
+	loadAWS := func() {
+		if awsLoaded {
+			return
+		}
+		loaded, err := awsconfig.LoadDefaultConfig(ctx)
+		if err != nil {
+			t.Fatalf("AWS configuration: %v", err)
+		}
+		awsConfig, awsLoaded = loaded, true
 	}
-	counter := &countingTransport{base: httpClient.Transport}
-	httpClient.Transport = counter
-	httpClient.Timeout = 60 * time.Second
-	embedders := embedding.NewRegistry(embedding.Config{
-		Vertex:  embedding.VertexConfig{Project: project, Location: location, HTTPClient: httpClient},
-		Options: embedding.Options{Logger: logger},
-	})
 
+	stores := []vectorstore.Store{vectorstore.NewPgvector(store.Pool(), pgvectorVersion)}
+	if bucket != "" {
+		loadAWS()
+		s3Store, err := vectorstore.NewS3Vectors(s3vectors.NewFromConfig(awsConfig), bucket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stores = append(stores, s3Store)
+	}
+	vectors := vectorstore.NewRouter(stores...)
+	backend := domain.BackendPgvector
+	if os.Getenv("RAG_EVAL_BACKEND") == string(domain.BackendS3Vectors) {
+		if bucket == "" {
+			t.Fatal("RAG_EVAL_BACKEND=s3vectors needs RAG_EVAL_VECTOR_BUCKET")
+		}
+		backend = domain.BackendS3Vectors
+	}
+
+	// counter counts the calls that reach the embedding provider, whichever
+	// it is.
+	counter := &countingTransport{base: http.DefaultTransport}
+	config := embedding.Config{Options: embedding.Options{Logger: logger}}
 	spec := domain.EmbeddingSpec{Provider: domain.ProviderVertex, Model: "text-embedding-005", Dimensions: 768, Metric: domain.MetricCosine}
+	if onBedrock {
+		loadAWS()
+		config.Bedrock = bedrockruntime.NewFromConfig(awsConfig, func(options *bedrockruntime.Options) {
+			options.HTTPClient = &http.Client{Transport: counter, Timeout: 60 * time.Second}
+		})
+		spec = domain.EmbeddingSpec{Provider: domain.ProviderBedrock, Model: "amazon.titan-embed-text-v2:0", Dimensions: 1024, Metric: domain.MetricCosine}
+	} else {
+		httpClient, err := google.DefaultClient(ctx, embedding.VertexScope)
+		if err != nil {
+			t.Fatalf("application default credentials: %v", err)
+		}
+		counter.base = httpClient.Transport
+		httpClient.Transport = counter
+		httpClient.Timeout = 60 * time.Second
+		config.Vertex = embedding.VertexConfig{Project: project, Location: location, HTTPClient: httpClient}
+	}
+	embedders := embedding.NewRegistry(config)
 	policy := domain.DefaultChunkPolicy(spec)
 	if value, err := strconv.Atoi(os.Getenv("RAG_EVAL_MAX_TOKENS")); err == nil && value > 0 {
 		policy.MaxTokens = value
@@ -146,7 +198,16 @@ func TestRetrievalQuality(t *testing.T) {
 
 	organizationID := "org-eval-" + time.Now().UTC().Format("20060102150405")
 	defer cleanup(t, store, organizationID)
-	corpus := createCorpus(t, ctx, store, organizationID, spec, policy)
+	corpus := createCorpus(t, ctx, store, organizationID, spec, backend, policy)
+	// The rows cascade when the organization goes; an S3 Vectors index does
+	// not, so it is dropped first.
+	defer func() {
+		if vectorStore, err := vectors.For(corpus); err == nil {
+			if err := vectorStore.DropCorpus(context.Background(), corpus); err != nil {
+				t.Errorf("drop the corpus's vectors: %v", err)
+			}
+		}
+	}()
 
 	// Index the corpus the way the service does: store the normalized text,
 	// then run the ingest pipeline over each document.
@@ -155,7 +216,7 @@ func TestRetrievalQuality(t *testing.T) {
 	pipeline := ingest.New(store, vectors, embedders, ingest.Options{}, logger)
 	documentIDs := map[string]string{}
 	bodies := map[string]string{}
-	result := report{Policy: policy, Documents: len(paths)}
+	result := report{Embedding: spec.Model, Backend: backend, Policy: policy, Documents: len(paths)}
 	var chunkTokens, chunkBytes int
 	callsBefore := counter.calls.Load()
 	started := time.Now()
@@ -186,11 +247,15 @@ func TestRetrievalQuality(t *testing.T) {
 
 	questions := loadQuestions(t)
 	var reranker retrieval.Reranker
-	if model := os.Getenv("RAG_EVAL_RERANK_MODEL"); model != "" {
-		reranker, err = retrieval.NewVertexReranker(ctx, retrieval.VertexRerankConfig{Project: project, Model: model})
-		if err != nil {
-			t.Fatalf("reranker: %v", err)
-		}
+	switch {
+	case os.Getenv("RAG_EVAL_RERANK_MODEL") != "":
+		reranker, err = retrieval.NewVertexReranker(ctx, retrieval.VertexRerankConfig{Project: project, Model: os.Getenv("RAG_EVAL_RERANK_MODEL")})
+	case rerankARN != "":
+		loadAWS()
+		reranker, err = retrieval.NewBedrockReranker(bedrockagentruntime.NewFromConfig(awsConfig), rerankARN)
+	}
+	if err != nil {
+		t.Fatalf("reranker: %v", err)
 	}
 	retriever := retrieval.New(store, vectors, embedders, reranker, logger)
 	for _, mode := range []domain.SearchMode{domain.ModeHybrid, domain.ModeDense, domain.ModeLexical} {
@@ -200,8 +265,8 @@ func TestRetrievalQuality(t *testing.T) {
 		result.Modes = append(result.Modes, measure(t, ctx, retriever, counter, corpus, domain.ModeHybrid, true, questions, documentIDs, bodies))
 	}
 
-	t.Logf("policy %+v: %d documents, %d chunks, %.0f estimated tokens and %.0f bytes a chunk",
-		policy, result.Documents, result.Chunks, result.ChunkTokensMean, result.ChunkBytesMean)
+	t.Logf("%s on %s, policy %+v: %d documents, %d chunks, %.0f estimated tokens and %.0f bytes a chunk",
+		result.Embedding, result.Backend, policy, result.Documents, result.Chunks, result.ChunkTokensMean, result.ChunkBytesMean)
 	t.Logf("ingest: %d embedding tokens, %d provider calls, %.1fs", result.EmbeddingTokens, result.IngestCalls, result.IngestSeconds)
 	for _, mode := range result.Modes {
 		t.Logf("%-7s section hit@1 %.2f @3 %.2f @8 %.2f MRR %.3f | document hit@1 %.2f @8 %.2f MRR %.3f | %.0f tokens retrieved | p50 %.0fms p95 %.0fms, %d calls",
@@ -364,7 +429,7 @@ func overlaps(start, end int, spans []span) bool {
 	return slices.ContainsFunc(spans, func(section span) bool { return start < section.end && end > section.start })
 }
 
-func createCorpus(t *testing.T, ctx context.Context, store *postgres.Store, organizationID string, spec domain.EmbeddingSpec, policy domain.ChunkPolicy) domain.Corpus {
+func createCorpus(t *testing.T, ctx context.Context, store *postgres.Store, organizationID string, spec domain.EmbeddingSpec, backend domain.Backend, policy domain.ChunkPolicy) domain.Corpus {
 	t.Helper()
 	id, err := domain.NewID(domain.CorpusIDPrefix)
 	if err != nil {
@@ -373,7 +438,7 @@ func createCorpus(t *testing.T, ctx context.Context, store *postgres.Store, orga
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	corpus := domain.Corpus{
 		ID: id, OrganizationID: organizationID, Slug: "eval", Name: "Retrieval evaluation",
-		Scope: domain.ScopeOrganization, Spec: spec, Backend: domain.BackendPgvector, Chunking: policy,
+		Scope: domain.ScopeOrganization, Spec: spec, Backend: backend, Chunking: policy,
 		CreatedBy: "usr_eval", CreatedAt: now, UpdatedAt: now,
 	}
 	if err := store.CreateCorpus(ctx, corpus, event(t, "rag.corpus.created.v1", organizationID)); err != nil {

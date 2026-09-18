@@ -176,6 +176,24 @@ func TestAWorkableS3VectorsConfiguration(t *testing.T) {
 	}
 }
 
+func TestAVectorBucketMakesS3VectorsTheDefault(t *testing.T) {
+	// A deployment with a vector bucket puts new corpora there without being
+	// told twice; one without — local development — keeps pgvector.
+	config, err := FromEnv(env(minimal(map[string]string{"RAG_VECTOR_BUCKET_NAME": "oryxa-vectors"})))
+	if err != nil || config.DefaultBackend != domain.BackendS3Vectors {
+		t.Fatalf("with a bucket: backend %q, %v", config.DefaultBackend, err)
+	}
+	config, err = FromEnv(env(minimal(nil)))
+	if err != nil || config.DefaultBackend != domain.BackendPgvector {
+		t.Fatalf("without a bucket: backend %q, %v", config.DefaultBackend, err)
+	}
+	// Saying so still wins.
+	config, err = FromEnv(env(minimal(map[string]string{"RAG_VECTOR_BUCKET_NAME": "oryxa-vectors", "RAG_DEFAULT_BACKEND": "pgvector"})))
+	if err != nil || config.DefaultBackend != domain.BackendPgvector {
+		t.Fatalf("pgvector asked for: backend %q, %v", config.DefaultBackend, err)
+	}
+}
+
 func TestTrailingSlashesAreTrimmedFromURLs(t *testing.T) {
 	config, err := FromEnv(env(minimal(map[string]string{
 		"AUTH_URL":  "http://localhost:8080/",
