@@ -331,7 +331,7 @@ function AgentAccessSection() {
 
 	return (
 		<SettingsSection
-			description="When events from your connected apps wake Krude, it acts with your own identity through this grant, and writes still ask you first. You can withdraw it any time."
+			description="When events from your connected apps wake Krude, it reads your apps with your own identity through this grant, and never changes anything while you're away. You can withdraw it any time."
 			id="account-agent-access"
 			title="Let Krude act for you while you're away"
 		>
