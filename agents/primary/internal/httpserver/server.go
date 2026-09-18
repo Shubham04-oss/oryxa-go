@@ -10,9 +10,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
+	"path"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -43,6 +46,7 @@ type Threads interface {
 	Get(ctx context.Context, member threads.Member, threadID string) (threads.Detail, error)
 	Delete(ctx context.Context, member threads.Member, threadID string) error
 	StartRun(ctx context.Context, member threads.Member, threadID string, input threads.RunInput) (Run, error)
+	Artifact(ctx context.Context, member threads.Member, threadID, name string, version int64) (threads.File, error)
 }
 
 // Run is a started run. *threads.Run implements it.
@@ -105,6 +109,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}", server.getThread)
 	server.handle("DELETE /v1/organizations/{organizationID}/threads/{threadID}", server.deleteThread)
 	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/runs", server.run)
+	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name...}", server.artifact)
 	return server
 }
 
@@ -182,6 +187,56 @@ func (server *Server) deleteThread(writer http.ResponseWriter, request *http.Req
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+// shownInline are the kinds of file a browser may show in place. Everything
+// else a run kept — HTML, scripts, anything a page could run — is only ever
+// downloaded, since it is served from the app's own origin.
+var shownInline = map[string]bool{
+	"image/png": true, "image/jpeg": true, "image/gif": true, "image/webp": true,
+	"application/pdf": true, "text/plain": true,
+}
+
+// artifact serves a file a thread's runs kept.
+func (server *Server) artifact(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	var version int64
+	if raw := request.URL.Query().Get("version"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || parsed < 1 {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "version must be a positive whole number")
+			return
+		}
+		version = parsed
+	}
+	file, err := server.threads.Artifact(request.Context(), member, request.PathValue("threadID"), request.PathValue("name"), version)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(file.MIMEType)
+	if err != nil || mediaType == "" {
+		mediaType = "application/octet-stream"
+	}
+	header := writer.Header()
+	header.Set("Content-Type", mediaType)
+	if mediaType == "text/plain" {
+		header.Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	// Nothing a run kept may run as a page of this origin, even if a
+	// browser is talked into rendering it.
+	header.Set("Content-Security-Policy", "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox")
+	disposition := "attachment"
+	if shownInline[mediaType] {
+		disposition = "inline"
+	}
+	header.Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": path.Base(file.Name)}))
+	header.Set("Content-Length", strconv.Itoa(len(file.Data)))
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write(file.Data)
 }
 
 // run starts a run on a thread and streams it. Everything that can refuse the

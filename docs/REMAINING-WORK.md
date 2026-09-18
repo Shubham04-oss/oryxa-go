@@ -151,8 +151,6 @@ What is left:
 - **A run ends with its request.** A closed tab or a deploy stops it; what it
   had stored stays in the thread. A durable run, one that outlives its
   stream, comes with runs that start from triggers.
-- **Artifacts a run keeps are not served by the API**, so a browser
-  screenshot is not reachable from the web app yet.
 
 ### Wake-ups have never run against a real queue
 

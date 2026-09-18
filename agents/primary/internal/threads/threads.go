@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"slices"
 	"strings"
@@ -264,6 +265,45 @@ func (service *Service) Forget(ctx context.Context, organizationID, userID strin
 		removed++
 	}
 	return removed, nil
+}
+
+// File is an artifact's content.
+type File struct {
+	Name     string
+	MIMEType string
+	Data     []byte
+}
+
+// Artifact reads a file one of the member's threads kept: the latest
+// version, or the one named. A "user:" file is the member's own, shared by
+// all their threads, and is read through any of them.
+func (service *Service) Artifact(ctx context.Context, member Member, threadID, name string, version int64) (File, error) {
+	if service.artifacts == nil || strings.TrimSpace(name) == "" || version < 0 {
+		return File{}, ErrNotFound
+	}
+	if _, err := service.thread(ctx, member, threadID); err != nil {
+		return File{}, err
+	}
+	loaded, err := service.artifacts.Load(ctx, &artifact.LoadRequest{
+		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name, Version: version,
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return File{}, ErrNotFound
+	}
+	if err != nil {
+		return File{}, fmt.Errorf("read artifact: %w", err)
+	}
+	part := loaded.Part
+	switch {
+	case part == nil:
+		return File{}, ErrNotFound
+	case part.InlineData != nil:
+		return File{Name: name, MIMEType: part.InlineData.MIMEType, Data: part.InlineData.Data}, nil
+	case part.Text != "":
+		return File{Name: name, MIMEType: "text/plain; charset=utf-8", Data: []byte(part.Text)}, nil
+	default:
+		return File{}, ErrNotFound
+	}
 }
 
 // deleteArtifacts removes the files a thread's runs kept. The thread is

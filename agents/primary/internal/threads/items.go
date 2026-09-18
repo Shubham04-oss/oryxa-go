@@ -2,6 +2,8 @@ package threads
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -31,6 +33,9 @@ const (
 	// ItemConfirmation is a tool waiting for the member to approve or
 	// decline it before it runs.
 	ItemConfirmation = "confirmation"
+	// ItemArtifact is a file a run kept, such as a browser screenshot or a
+	// file the sandbox saved, readable through the thread's artifact route.
+	ItemArtifact = "artifact"
 	// ItemRunStarted, ItemRunCompleted and ItemRunFailed bracket a run.
 	ItemRunStarted   = "run_started"
 	ItemRunCompleted = "run_completed"
@@ -90,6 +95,9 @@ type Item struct {
 	// Hint and Status describe a confirmation.
 	Hint   string `json:"hint,omitempty"`
 	Status string `json:"status,omitempty"`
+	// Artifact and Version name a file a run kept.
+	Artifact string `json:"artifact,omitempty"`
+	Version  int64  `json:"version,omitempty"`
 	// RunID and Usage describe a run.
 	RunID string          `json:"run_id,omitempty"`
 	Usage *agentsv1.Usage `json:"usage,omitempty"`
@@ -180,6 +188,12 @@ func eventItems(event *session.Event, answers map[string]bool) []Item {
 			}
 			items = append(items, item)
 		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(event.Actions.ArtifactDelta)) {
+		items = append(items, Item{
+			Type: ItemArtifact, ID: event.ID, At: event.Timestamp, Author: author,
+			Artifact: name, Version: event.Actions.ArtifactDelta[name],
+		})
 	}
 	// A model that stopped without answering, blocked or cut short, says why
 	// rather than leaving the member with nothing.

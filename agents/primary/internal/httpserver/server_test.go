@@ -77,6 +77,21 @@ func (service *fakeThreads) StartRun(_ context.Context, member threads.Member, _
 	return service.run, nil
 }
 
+func (service *fakeThreads) Artifact(_ context.Context, member threads.Member, threadID, name string, version int64) (threads.File, error) {
+	service.members = append(service.members, member)
+	switch {
+	case threadID != "thread_1":
+		return threads.File{}, threads.ErrNotFound
+	case name == "screenshot.png":
+		return threads.File{Name: name, MIMEType: "image/png", Data: []byte("png-bytes")}, nil
+	case name == "report.html" && version == 2:
+		return threads.File{Name: name, MIMEType: "text/html", Data: []byte("<script>alert(1)</script>")}, nil
+	case name == "user:notes/plan.txt":
+		return threads.File{Name: name, MIMEType: "text/plain; charset=utf-8", Data: []byte("plan")}, nil
+	}
+	return threads.File{}, threads.ErrNotFound
+}
+
 type fakeRun struct {
 	items     []threads.Item
 	executed  bool
@@ -137,7 +152,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 6 {
+	if len(patterns) != 7 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -347,5 +362,33 @@ func TestARunStreamsItsItemsAsServerSentEvents(t *testing.T) {
 	}
 	if messages[2].Text != "Hello" || messages[2].ID != "e1" {
 		t.Fatalf("message item = %+v", messages[2])
+	}
+}
+
+func TestArtifactsAreServedWithoutEverRunningAsAPage(t *testing.T) {
+	server := newTestServer(member(), &fakeThreads{})
+	image := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/screenshot.png", "", bearer)
+	if image.Code != http.StatusOK || image.Body.String() != "png-bytes" || image.Header().Get("Content-Type") != "image/png" ||
+		!strings.HasPrefix(image.Header().Get("Content-Disposition"), "inline") {
+		t.Fatalf("image = %d %v", image.Code, image.Header())
+	}
+	page := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/report.html?version=2", "", bearer)
+	if page.Code != http.StatusOK || !strings.HasPrefix(page.Header().Get("Content-Disposition"), "attachment") ||
+		!strings.Contains(page.Header().Get("Content-Security-Policy"), "sandbox") || page.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Fatalf("an HTML artifact could render as a page: %d %v", page.Code, page.Header())
+	}
+	nested := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/user:notes/plan.txt", "", bearer)
+	if nested.Code != http.StatusOK || nested.Header().Get("Content-Type") != "text/plain; charset=utf-8" ||
+		!strings.Contains(nested.Header().Get("Content-Disposition"), `filename=plan.txt`) {
+		t.Fatalf("nested = %d %v", nested.Code, nested.Header())
+	}
+	if missing := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_2/artifacts/screenshot.png", "", bearer); missing.Code != http.StatusNotFound {
+		t.Fatalf("another thread's artifact = %d, want 404", missing.Code)
+	}
+	if bad := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/screenshot.png?version=0", "", bearer); bad.Code != http.StatusBadRequest {
+		t.Fatalf("version 0 = %d, want 400", bad.Code)
+	}
+	if anonymous := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/screenshot.png", "", nil); anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("without a member = %d, want 401", anonymous.Code)
 	}
 }
