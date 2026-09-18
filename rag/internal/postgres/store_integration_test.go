@@ -132,6 +132,44 @@ func TestCorpusLifecycle(t *testing.T) {
 	}
 }
 
+// TestCorporaCountsWhatEachHolds is the regression for a listing that said
+// every corpus was empty: Krude searches only the corpora a listing says hold
+// documents, so it searched none.
+func TestCorporaCountsWhatEachHolds(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	full := testCorpus(t, store, ctx, organizationID, titanSpec())
+	empty := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	body := "alpha bravo"
+	document, _, err := store.UpsertDocument(ctx, newDocument(full, domain.Source{Kind: domain.SourceInline}, "Doc", body), body, testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+	if _, err := store.SyncChunks(ctx, document, []domain.Chunk{
+		{Ordinal: 0, Text: "alpha", TokenCount: 1, SHA256: domain.Hash("alpha"), StartByte: 0, EndByte: 5},
+		{Ordinal: 1, Text: "bravo", TokenCount: 1, SHA256: domain.Hash("bravo"), StartByte: 6, EndByte: 11},
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("SyncChunks: %v", err)
+	}
+
+	corpora, err := store.Corpora(ctx, organizationID, CorpusQuery{MemberID: "usr_integration"})
+	if err != nil {
+		t.Fatalf("Corpora: %v", err)
+	}
+	counts := map[string][2]int64{}
+	for _, corpus := range corpora {
+		counts[corpus.ID] = [2]int64{corpus.DocumentCount, corpus.ChunkCount}
+	}
+	if counts[full.ID] != [2]int64{1, 2} || counts[empty.ID] != [2]int64{0, 0} || len(counts) != 2 {
+		t.Fatalf("listed counts = %v, want %s holding 1 document of 2 chunks and %s nothing", counts, full.ID, empty.ID)
+	}
+	documents, chunks, err := store.CorpusCounts(ctx, full.ID)
+	if err != nil || [2]int64{documents, chunks} != counts[full.ID] {
+		t.Fatalf("CorpusCounts = (%d, %d, %v), want what the listing said", documents, chunks, err)
+	}
+}
+
 func TestCorpusSlugIsUniquePerOrganization(t *testing.T) {
 	store, ctx := openTestStore(t)
 	organizationID := uniqueOrganization()

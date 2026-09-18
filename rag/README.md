@@ -230,7 +230,7 @@ that path needs no origin check.
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |
 | `GET` | `/v1/capabilities` | Anyone | Which providers, backends and models this deployment serves |
-| `GET` | `/v1/organizations/{org}/corpora` | Members | List. Query `scope`, `team_id`. Default is the caller's own plus the organization's |
+| `GET` | `/v1/organizations/{org}/corpora` | Members | List, each with its document and chunk counts. Query `scope`, `team_id`. Default is the caller's own plus the organization's |
 | `POST` | `/v1/organizations/{org}/corpora` | Per placement | Create. `{name, slug, scope, team_id, embedding_provider, embedding_model, embedding_dimensions, embedding_metric, backend, chunking, metadata}` |
 | `GET` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | One corpus, with its document and chunk counts. `{corpus}` may be an id or the slug |
 | `DELETE` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | Delete the corpus, its documents and its vectors |

@@ -140,10 +140,24 @@ type CorpusQuery struct {
 	Admin    bool
 }
 
-// Corpora lists what the caller can see. With no scope named, that is their
-// own member corpora plus the organization's, which mirrors how files lists.
+// listedCorpusRow is a corpus as a listing reads it: with its counts, taken in
+// the same statement.
+type listedCorpusRow struct {
+	corpusRow
+	DocumentCount int64 `db:"document_count"`
+	ChunkCount    int64 `db:"chunk_count"`
+}
+
+// Corpora lists what the caller can see, each with its document and chunk
+// counts. A listing without them would read as a list of empty corpora, and a
+// caller choosing which to search skips an empty one. With no scope named,
+// that is their own member corpora plus the organization's, which mirrors how
+// files lists.
 func (store *Store) Corpora(ctx context.Context, organizationID string, query CorpusQuery) ([]domain.Corpus, error) {
-	statement := `SELECT ` + corpusColumns + ` FROM rag_corpora WHERE organization_id = $1`
+	statement := `SELECT ` + corpusColumns + `,
+		(SELECT count(*) FROM rag_documents WHERE corpus_id = rag_corpora.id) AS document_count,
+		(SELECT count(*) FROM rag_chunks WHERE corpus_id = rag_corpora.id) AS chunk_count
+		FROM rag_corpora WHERE organization_id = $1`
 	arguments := []any{organizationID}
 	switch query.Scope {
 	case domain.ScopeTeam:
@@ -164,7 +178,7 @@ func (store *Store) Corpora(ctx context.Context, organizationID string, query Co
 	}
 	statement += ` ORDER BY created_at DESC, id`
 
-	var rows []corpusRow
+	var rows []listedCorpusRow
 	if err := store.db.SelectContext(ctx, &rows, statement, arguments...); err != nil {
 		return nil, fmt.Errorf("list corpora: %w", err)
 	}
@@ -174,14 +188,14 @@ func (store *Store) Corpora(ctx context.Context, organizationID string, query Co
 		if err != nil {
 			return nil, err
 		}
+		corpus.DocumentCount, corpus.ChunkCount = row.DocumentCount, row.ChunkCount
 		corpora = append(corpora, corpus)
 	}
 	return corpora, nil
 }
 
-// CorpusCounts reads the document and chunk totals for one corpus. It is a
-// separate read because listing twenty corpora should not mean twenty counting
-// queries; only a single corpus being looked at is worth counting.
+// CorpusCounts reads the document and chunk totals for one corpus, counted as
+// Corpora counts each corpus it lists.
 func (store *Store) CorpusCounts(ctx context.Context, corpusID string) (documents, chunks int64, err error) {
 	row := struct {
 		Documents int64 `db:"documents"`
