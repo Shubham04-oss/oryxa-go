@@ -83,10 +83,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	logger := platform.Logger
 	timeouts := host.Timeouts{
 		Read: 15 * time.Second,
-		// No write deadline: a run streams its answer for as long as it
-		// takes, so the run route sets its own through
-		// http.ResponseController.
-		Write: 0,
+		// Enough for any answer but a run's: a run streams for as long as it
+		// takes, so the run route sets its own deadline through
+		// http.ResponseController, past this one.
+		Write: 2 * time.Minute,
 	}
 	if settings.GoogleCloudProject == "" {
 		logger.Warn("GOOGLE_CLOUD_PROJECT is not set: agents mounts, and answers every conversation with 503, until there is a model to run Krude on")

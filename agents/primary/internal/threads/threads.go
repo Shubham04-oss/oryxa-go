@@ -97,6 +97,7 @@ type RunStore interface {
 	Start(ctx context.Context, run runstore.Run, lease time.Duration) error
 	Renew(ctx context.Context, runID string, lease time.Duration) error
 	Finish(ctx context.Context, runID string, outcome runstore.Outcome, event events.Event) error
+	Cancel(ctx context.Context, runID string) error
 }
 
 // Config is what the service runs with.
@@ -284,9 +285,15 @@ func (service *Service) Artifact(ctx context.Context, member Member, threadID, n
 	if _, err := service.thread(ctx, member, threadID); err != nil {
 		return File{}, err
 	}
-	loaded, err := service.artifacts.Load(ctx, &artifact.LoadRequest{
+	request := &artifact.LoadRequest{
 		AppName: service.appName, UserID: member.UserID, SessionID: threadID, FileName: name, Version: version,
-	})
+	}
+	// A name ADK would refuse, such as one with a path separator, names no
+	// file a run could have kept.
+	if request.Validate() != nil {
+		return File{}, ErrNotFound
+	}
+	loaded, err := service.artifacts.Load(ctx, request)
 	if errors.Is(err, fs.ErrNotExist) {
 		return File{}, ErrNotFound
 	}

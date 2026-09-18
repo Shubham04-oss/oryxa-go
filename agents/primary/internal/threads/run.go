@@ -97,33 +97,13 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 		return nil, fmt.Errorf("%w: a run is started by a member or a trigger", ErrInvalid)
 	}
 
-	stored, err := service.thread(ctx, member, threadID)
-	if err != nil {
+	// The thread must be the member's before this run takes it, even for a
+	// moment, or naming another member's thread could hold it from them.
+	if _, err := service.thread(ctx, member, threadID); err != nil {
 		return nil, err
 	}
-	pending := pendingConfirmations(sessionEvents(stored), service.agent.Name())
-
 	run := &Run{service: service, member: member, threadID: threadID, startedBy: startedBy}
-	if message != "" {
-		if len(pending) > 0 {
-			return nil, ErrConfirmationPending
-		}
-		run.content = genai.NewContentFromText(message, genai.RoleUser)
-		run.stateDelta = map[string]any{}
-		if stateString(stored.State(), stateTitle) == "" {
-			run.stateDelta[stateTitle] = titleFrom(message)
-		}
-		if input.Wakeup != "" {
-			run.stateDelta[stateWakeup] = input.Wakeup
-		}
-	} else {
-		content, err := answerContent(input.Confirmations, pending)
-		if err != nil {
-			return nil, err
-		}
-		run.content = content
-	}
-
+	var err error
 	if run.id, err = newRunID(); err != nil {
 		return nil, err
 	}
@@ -139,8 +119,49 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 		}
 		return nil, fmt.Errorf("start run: %w", err)
 	}
+	// What the thread waits on is read only now that this run holds it: read
+	// before, a run finishing in between could leave an answer applied twice,
+	// or a confirmation it just asked for unanswered.
+	if err := run.prepare(ctx, message, input); err != nil {
+		if cancelErr := service.runs.Cancel(context.WithoutCancel(ctx), run.id); cancelErr != nil {
+			service.logger.WarnContext(ctx, "release a run that never ran", "run_id", run.id, "error", cancelErr)
+		}
+		return nil, err
+	}
 	run.started = time.Now()
 	return run, nil
+}
+
+// prepare reads the thread the run now holds and turns what the member sent
+// into what the agent reads: their message, or their answers to every
+// confirmation the thread waits on.
+func (run *Run) prepare(ctx context.Context, message string, input RunInput) error {
+	service := run.service
+	stored, err := service.thread(ctx, run.member, run.threadID)
+	if err != nil {
+		return err
+	}
+	pending := pendingConfirmations(sessionEvents(stored), service.agent.Name())
+	if message != "" {
+		if len(pending) > 0 {
+			return ErrConfirmationPending
+		}
+		run.content = genai.NewContentFromText(message, genai.RoleUser)
+		run.stateDelta = map[string]any{}
+		if stateString(stored.State(), stateTitle) == "" {
+			run.stateDelta[stateTitle] = titleFrom(message)
+		}
+		if input.Wakeup != "" {
+			run.stateDelta[stateWakeup] = input.Wakeup
+		}
+		return nil
+	}
+	content, err := answerContent(input.Confirmations, pending)
+	if err != nil {
+		return err
+	}
+	run.content = content
+	return nil
 }
 
 // answerContent is the member's answers as ADK reads them: one function
@@ -212,6 +233,7 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	}
 
 	stopLease := run.holdThread(ctx, cancel)
+	defer stopLease()
 	gone := false
 	send := func(item Item) {
 		if gone {
@@ -277,9 +299,13 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 	return failure
 }
 
+// renewTimeout bounds one renewal, so a stalled database cannot hold a run
+// past the lease it thinks it still has.
+const renewTimeout = 10 * time.Second
+
 // holdThread renews the run's hold on its thread until the returned function
-// is called. A run that finds it lost the hold stops, since another run may
-// be answering the thread now.
+// is called. A run that finds it lost the hold, or has gone a whole lease
+// without renewing it, stops: another run may be answering the thread now.
 func (run *Run) holdThread(ctx context.Context, cancel context.CancelCauseFunc) func() {
 	service := run.service
 	holdContext, stop := context.WithCancel(context.WithoutCancel(ctx))
@@ -288,28 +314,41 @@ func (run *Run) holdThread(ctx context.Context, cancel context.CancelCauseFunc) 
 		defer close(done)
 		ticker := time.NewTicker(max(service.lease/3, time.Second))
 		defer ticker.Stop()
+		renewed := time.Now()
 		for {
 			select {
 			case <-holdContext.Done():
 				return
 			case <-ticker.C:
 			}
-			err := service.runs.Renew(holdContext, run.id, service.lease)
+			renewContext, cancelRenew := context.WithTimeout(holdContext, renewTimeout)
+			err := service.runs.Renew(renewContext, run.id, service.lease)
+			cancelRenew()
 			switch {
-			case err == nil, holdContext.Err() != nil:
+			case holdContext.Err() != nil:
+				return
+			case err == nil:
+				renewed = time.Now()
 			case errors.Is(err, runstore.ErrNotRunning):
 				service.logger.WarnContext(holdContext, "a run lost its hold on its thread and stops", "run_id", run.id)
 				cancel(errLeaseLost)
 				return
+			case time.Since(renewed) >= service.lease:
+				service.logger.WarnContext(holdContext, "a run could not renew its hold on its thread for a whole lease and stops", "run_id", run.id, "error", err)
+				cancel(errLeaseLost)
+				return
 			default:
-				// The next renewal tries again; the hold lasts a full lease.
+				// The next renewal tries again, well inside the lease.
 				service.logger.WarnContext(holdContext, "renew a run's hold on its thread", "run_id", run.id, "error", err)
 			}
 		}
 	}()
+	var once sync.Once
 	return func() {
-		stop()
-		<-done
+		once.Do(func() {
+			stop()
+			<-done
+		})
 	}
 }
 

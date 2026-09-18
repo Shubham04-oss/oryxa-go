@@ -218,3 +218,20 @@ func isUniqueViolation(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == constraint
 }
+
+// Cancel forgets a run that never ran, such as one whose request turned out
+// to be invalid once it held its conversation. It records no outcome and no
+// event: nothing happened. It answers ErrNotRunning for a run that is not
+// running.
+func (store *Store) Cancel(ctx context.Context, runID string) error {
+	tag, err := store.database.Pool.Exec(ctx, `
+		DELETE FROM agents_primary.agent_runs
+		WHERE id = $1 AND status = 'running'`, runID)
+	if err != nil {
+		return fmt.Errorf("cancel run: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotRunning
+	}
+	return nil
+}

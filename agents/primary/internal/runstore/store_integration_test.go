@@ -469,3 +469,34 @@ func TestStartConcurrencyAllowsExactlyOneLiveRunPerSession(t *testing.T) {
 		t.Fatalf("successes = %d, inProgress = %d, want 1 and %d", successes, inProgress, attempts-1)
 	}
 }
+
+func TestCancelForgetsARunThatNeverRanAndFreesItsSession(t *testing.T) {
+	database := openTestDatabase(t)
+	store := New(database)
+	ctx := context.Background()
+
+	sessionID := testID("session")
+	cancelled := testRun(sessionID)
+	next := testRun(sessionID)
+	t.Cleanup(func() { deleteRuns(t, database, cancelled.ID, next.ID) })
+
+	if err := store.Start(ctx, cancelled, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Cancel(ctx, cancelled.ID); err != nil {
+		t.Fatalf("Cancel() = %v", err)
+	}
+	var remaining int
+	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.agent_runs WHERE id = $1`, cancelled.ID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("a cancelled run left %d rows (%v)", remaining, err)
+	}
+	if err := store.Cancel(ctx, cancelled.ID); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Cancel() twice = %v, want ErrNotRunning", err)
+	}
+	if err := store.Start(ctx, next, time.Minute); err != nil {
+		t.Fatalf("Start() after a cancel = %v, want the session free", err)
+	}
+	if err := store.Cancel(ctx, "never_started"); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("Cancel() of an unknown run = %v, want ErrNotRunning", err)
+	}
+}

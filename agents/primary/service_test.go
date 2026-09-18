@@ -36,7 +36,7 @@ func TestMountWithoutAModelAnswersEveryConversationWithTheReason(t *testing.T) {
 	if len(service.Workers) != 0 || service.Close != nil {
 		t.Fatalf("an unconfigured service started work: %d workers, close %t", len(service.Workers), service.Close != nil)
 	}
-	if service.Timeouts.Read != 15*time.Second || service.Timeouts.Write != 0 {
+	if service.Timeouts.Read != 15*time.Second || service.Timeouts.Write != 2*time.Minute {
 		t.Fatalf("timeouts = %+v", service.Timeouts)
 	}
 	recorder := httptest.NewRecorder()

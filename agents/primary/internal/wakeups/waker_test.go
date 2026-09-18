@@ -130,6 +130,8 @@ func (runs *recordingRuns) Start(_ context.Context, run runstore.Run, _ time.Dur
 
 func (runs *recordingRuns) Renew(context.Context, string, time.Duration) error { return nil }
 
+func (runs *recordingRuns) Cancel(context.Context, string) error { return nil }
+
 func (runs *recordingRuns) Finish(context.Context, string, runstore.Outcome, events.Event) error {
 	return nil
 }

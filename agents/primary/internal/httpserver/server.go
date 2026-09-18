@@ -109,7 +109,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}", server.getThread)
 	server.handle("DELETE /v1/organizations/{organizationID}/threads/{threadID}", server.deleteThread)
 	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/runs", server.run)
-	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name...}", server.artifact)
+	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}", server.artifact)
 	return server
 }
 
@@ -233,7 +233,11 @@ func (server *Server) artifact(writer http.ResponseWriter, request *http.Request
 	if shownInline[mediaType] {
 		disposition = "inline"
 	}
-	header.Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": path.Base(file.Name)}))
+	// A "user:" file is the member's own; the prefix is how ADK scopes it,
+	// not part of its name, and no file system would take the colon.
+	header.Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{
+		"filename": path.Base(strings.TrimPrefix(file.Name, "user:")),
+	}))
 	header.Set("Content-Length", strconv.Itoa(len(file.Data)))
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(file.Data)
