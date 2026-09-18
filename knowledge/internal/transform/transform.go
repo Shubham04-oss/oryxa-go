@@ -28,6 +28,10 @@ const (
 	MIMEMarkdown = "text/markdown"
 	MIMECSV      = "text/csv"
 	MIMEJSON     = "application/json"
+	// MIMEHTML is read, not stored: its text is taken out and kept as
+	// MIMEPlain, since that is what the body then is.
+	MIMEHTML  = "text/html"
+	MIMEXHTML = "application/xhtml+xml"
 )
 
 // MaxBytes is the most text knowledge keeps for one document. Past it the
@@ -53,6 +57,17 @@ func Normalize(content []byte, declared string) (Text, error) {
 	if err != nil {
 		return Text{}, err
 	}
+	// HTML is the one type whose body is not what arrived: its text is taken
+	// out first, and what is stored is plain text, which is what it then is.
+	// Hashing the text rather than the markup is also what keeps a page
+	// re-serialized by its provider from looking changed.
+	if mediaType == MIMEHTML {
+		text, err := htmlText(content)
+		if err != nil {
+			return Text{}, err
+		}
+		content, mediaType = []byte(text), MIMEPlain
+	}
 	body, truncated := clean(string(content))
 	sum := sha256.Sum256([]byte(body))
 	return Text{
@@ -77,10 +92,12 @@ func CanonicalMIME(declared string) (string, error) {
 		value = strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
 	}
 	switch value {
-	case MIMEPlain, MIMEMarkdown, MIMECSV, MIMEJSON:
+	case MIMEPlain, MIMEMarkdown, MIMECSV, MIMEJSON, MIMEHTML:
 		return value, nil
 	case "text/x-markdown", "text/md":
 		return MIMEMarkdown, nil
+	case MIMEXHTML:
+		return MIMEHTML, nil
 	default:
 		return "", fmt.Errorf("%q holds no text knowledge can read: %w", value, domain.ErrUnsupportedType)
 	}
@@ -97,6 +114,8 @@ func MIMEForFilename(name string) string {
 		return MIMECSV
 	case ".json":
 		return MIMEJSON
+	case ".html", ".htm", ".xhtml":
+		return MIMEHTML
 	case ".txt", ".text", ".log":
 		return MIMEPlain
 	default:

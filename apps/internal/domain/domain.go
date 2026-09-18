@@ -93,11 +93,21 @@ type Connection struct {
 	// github_red-castle.
 	Label string
 	// ReturnTo is where the member's browser goes once they finish.
-	ReturnTo    string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	ConnectedAt *time.Time
-	RemovedAt   *time.Time
+	ReturnTo string
+	// AutoSubscribe says this connection should be subscribed to everything
+	// its app can deliver, once it is active. AutoSubscribedAt is when that
+	// finished; unset on an active connection that wants it means it is
+	// still owed - or that auto-subscribe has given up after
+	// AutoSubscribeAttempts failed passes, which AutoSubscribeAttempts
+	// reaching the service's limit is what says, since a warning was also
+	// logged when it happened.
+	AutoSubscribe         bool
+	AutoSubscribedAt      *time.Time
+	AutoSubscribeAttempts int
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	ConnectedAt           *time.Time
+	RemovedAt             *time.Time
 }
 
 // ConnectionQuery narrows a listing. An org admin may list the organization's
@@ -137,8 +147,18 @@ type Trigger struct {
 	ComposioTriggerID string
 	Status            TriggerStatus
 	StatusReason      string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// Kind is what the catalog said when this was subscribed: webhook, which
+	// the app pushes, or poll, which arrives on Composio's own interval.
+	Kind string
+	// ManualSetup says the app itself still needs a webhook URL registered by
+	// hand, so this subscription delivers nothing until a member does that.
+	ManualSetup bool
+	// DeliveryCount and LastDeliveryAt are how a member, or an operator, can
+	// tell a live trigger from one that has never delivered anything.
+	DeliveryCount  int64
+	LastDeliveryAt *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // ActionStatus is how a tool run went.

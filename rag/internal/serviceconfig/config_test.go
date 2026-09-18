@@ -102,6 +102,18 @@ func TestBadDefaultsFailTheDeploy(t *testing.T) {
 		env:     map[string]string{"RAG_RERANK_MODEL_ARN": "cohere.rerank-v3-5:0"},
 		wantErr: "ARN",
 	}, {
+		name: "two rerankers",
+		env: map[string]string{
+			"RAG_RERANK_MODEL_ARN":    "arn:aws:bedrock:ap-south-1::foundation-model/cohere.rerank-v3-5:0",
+			"RAG_RERANK_VERTEX_MODEL": "semantic-ranker-default@latest",
+			"GOOGLE_CLOUD_PROJECT":    "p",
+		},
+		wantErr: "not both",
+	}, {
+		name:    "a Vertex reranker with no project",
+		env:     map[string]string{"RAG_RERANK_VERTEX_MODEL": "semantic-ranker-default@latest"},
+		wantErr: "GOOGLE_CLOUD_PROJECT",
+	}, {
 		name:    "an auth URL that is not absolute",
 		env:     map[string]string{"AUTH_URL": "localhost:8080"},
 		wantErr: "AUTH_URL",
@@ -161,6 +173,24 @@ func TestAWorkableS3VectorsConfiguration(t *testing.T) {
 	}
 	if config.DefaultBackend != domain.BackendS3Vectors || config.VectorBucket != "oryxa-vectors" {
 		t.Fatalf("config = %+v", config)
+	}
+}
+
+func TestAVectorBucketMakesS3VectorsTheDefault(t *testing.T) {
+	// A deployment with a vector bucket puts new corpora there without being
+	// told twice; one without — local development — keeps pgvector.
+	config, err := FromEnv(env(minimal(map[string]string{"RAG_VECTOR_BUCKET_NAME": "oryxa-vectors"})))
+	if err != nil || config.DefaultBackend != domain.BackendS3Vectors {
+		t.Fatalf("with a bucket: backend %q, %v", config.DefaultBackend, err)
+	}
+	config, err = FromEnv(env(minimal(nil)))
+	if err != nil || config.DefaultBackend != domain.BackendPgvector {
+		t.Fatalf("without a bucket: backend %q, %v", config.DefaultBackend, err)
+	}
+	// Saying so still wins.
+	config, err = FromEnv(env(minimal(map[string]string{"RAG_VECTOR_BUCKET_NAME": "oryxa-vectors", "RAG_DEFAULT_BACKEND": "pgvector"})))
+	if err != nil || config.DefaultBackend != domain.BackendPgvector {
+		t.Fatalf("pgvector asked for: backend %q, %v", config.DefaultBackend, err)
 	}
 }
 

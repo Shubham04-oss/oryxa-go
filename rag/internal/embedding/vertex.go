@@ -165,6 +165,9 @@ func (backend *vertexBackend) embed(ctx context.Context, kind domain.InputKind, 
 		}
 		result.Vectors = append(result.Vectors, prediction.Embeddings.Values)
 		result.Usage.EmbeddingTokens += prediction.Embeddings.Statistics.TokenCount
+		if prediction.Embeddings.Statistics.Truncated {
+			result.Truncated++
+		}
 	}
 	return result, nil
 }
@@ -185,6 +188,13 @@ func vertexError(response *http.Response) error {
 		status = http.StatusText(response.StatusCode)
 	}
 	switch response.StatusCode {
+	case http.StatusBadRequest:
+		// The one refusal a smaller call cures: "the input token count is N but
+		// the model supports up to 20000". Its message quotes counts, not text.
+		if strings.Contains(decoded.Error.Message, "input token count") {
+			return fmt.Errorf("%w: Vertex AI returned %s: the call is over the model's token limit", ErrBatchTooLarge, status)
+		}
+		return fmt.Errorf("Vertex AI returned %d %s", response.StatusCode, status)
 	case http.StatusTooManyRequests:
 		return fmt.Errorf("%w: Vertex AI returned %s", ErrThrottled, status)
 	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:

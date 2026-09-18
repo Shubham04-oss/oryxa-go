@@ -48,6 +48,11 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if config.ComposioWebhookSecret == "" {
 		logger.Warn("COMPOSIO_WEBHOOK_SECRET is not set: every webhook delivery will be refused, so no trigger will fire")
 	}
+	if config.NoAutoSubscribe {
+		logger.Info("apps auto-subscribe is off (APPS_AUTO_SUBSCRIBE=false): a newly connected app is subscribed to nothing until a member asks, whatever the connection itself requested")
+	} else {
+		logger.Info("apps auto-subscribe is on: a newly connected app is subscribed to everything it can deliver unless the connection says otherwise")
+	}
 
 	client, err := composio.New(composio.Config{
 		APIKey:  config.ComposioAPIKey,
@@ -70,9 +75,10 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Sink:      events.NewPublisher(eventClient, platform.EventBusName),
 		Logger:    logger,
 	}, Config{
-		PublicBaseURL:  config.PublicBaseURL,
-		AllowedOrigins: config.AllowedOrigins,
-		WebhookSecret:  config.ComposioWebhookSecret,
+		PublicBaseURL:   config.PublicBaseURL,
+		AllowedOrigins:  config.AllowedOrigins,
+		WebhookSecret:   config.ComposioWebhookSecret,
+		NoAutoSubscribe: config.NoAutoSubscribe,
 	})
 	if err != nil {
 		return host.Service{}, err

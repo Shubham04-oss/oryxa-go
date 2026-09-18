@@ -42,7 +42,7 @@ const (
 // implements it.
 type Knowledge interface {
 	Corpora(ctx context.Context, organizationID, token string) ([]ragclient.Corpus, error)
-	Search(ctx context.Context, organizationID, corpusID, token, query string, topK int) ([]ragclient.Match, error)
+	Search(ctx context.Context, organizationID, corpusID, token, query string, topK int, minScore float64) ([]ragclient.Match, error)
 }
 
 // KnowledgeConfig configures KnowledgeToolbox.
@@ -51,6 +51,19 @@ type KnowledgeConfig struct {
 	// Tokens mints an agent token for a session's user when a run carries no
 	// member access token of its own. See memberauth.TokenSource.
 	Tokens memberauth.TokenSource
+	// MinRelevance leaves out passages rag's reranker scored below it, so a
+	// question the documents cannot answer comes back empty and Krude says so
+	// rather than answering from a near miss. Zero keeps every passage.
+	//
+	// A reranker's scores are on its own model's scale, so this is set for the
+	// reranker rag runs, never carried from one to another. Measured over this
+	// repository's own documentation with Google's semantic-ranker-default,
+	// unanswerable questions topped out at 0.01-0.23 and answerable ones had a
+	// median of 0.68: at 0.2, nine in ten unanswerable questions came back
+	// empty, one answerable question in sixty did too, and Krude read a
+	// quarter of the text. Without a reranker it never bites: fused scores in
+	// the top results sit far above any such floor.
+	MinRelevance float64
 }
 
 // KnowledgeToolbox names the toolbox that searches the organization's own
@@ -61,7 +74,7 @@ func KnowledgeToolbox(config KnowledgeConfig) (Toolbox, error) {
 	if config.Rag == nil {
 		return Toolbox{}, errors.New("agents: KnowledgeToolbox requires rag")
 	}
-	knowledge := knowledgeTools{rag: config.Rag, tokens: config.Tokens}
+	knowledge := knowledgeTools{rag: config.Rag, tokens: config.Tokens, minRelevance: config.MinRelevance}
 	collections, err := functiontool.New(functiontool.Config{
 		Name:        "knowledge_collections",
 		Description: "Lists the collections of documents the member can search: their own and their organization's, with how many documents each holds.",
@@ -85,8 +98,9 @@ func KnowledgeToolbox(config KnowledgeConfig) (Toolbox, error) {
 }
 
 type knowledgeTools struct {
-	rag    Knowledge
-	tokens memberauth.TokenSource
+	rag          Knowledge
+	tokens       memberauth.TokenSource
+	minRelevance float64
 }
 
 type collectionsArgs struct{}
@@ -194,7 +208,7 @@ func (knowledge knowledgeTools) search(ctx agent.Context, args searchArgs) (sear
 	var group sync.WaitGroup
 	for index, collectionID := range collectionIDs {
 		group.Go(func() {
-			matches, err := knowledge.rag.Search(ctx, member.OrganizationID, collectionID, token, query, limit)
+			matches, err := knowledge.rag.Search(ctx, member.OrganizationID, collectionID, token, query, limit, knowledge.minRelevance)
 			results[index] = found{collectionID: collectionID, matches: matches, err: err}
 		})
 	}
@@ -216,8 +230,10 @@ func (knowledge knowledgeTools) search(ctx agent.Context, args searchArgs) (sear
 	if result.Searched == 0 && firstErr != nil {
 		return searchResult{}, explained(firstErr)
 	}
-	// Rag ranks every corpus's matches the same way, so merging them by
-	// score keeps the strongest passages overall.
+	// Reranked, every corpus's scores come from one model reading the same
+	// question, so merging by score keeps the strongest passages overall.
+	// Without a reranker a score is a position within its own corpus, and the
+	// merge interleaves the corpora by rank.
 	slices.SortStableFunc(result.Passages, func(a, b Passage) int { return cmp.Compare(b.Score, a.Score) })
 	if len(result.Passages) > limit {
 		result.Passages = result.Passages[:limit]

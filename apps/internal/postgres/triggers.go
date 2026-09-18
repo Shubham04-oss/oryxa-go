@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,7 +14,8 @@ import (
 )
 
 const triggerColumns = `id, organization_id, member_id, connection_id, toolkit, slug, config,
-	composio_trigger_id, status, status_reason, created_at, updated_at`
+	composio_trigger_id, status, status_reason, kind, manual_setup, delivery_count, last_delivery_at,
+	created_at, updated_at`
 
 // CreateTrigger records a trigger, unless a live one already answers the
 // same Composio instance: Composio hands back the same trigger id for the
@@ -22,27 +24,50 @@ const triggerColumns = `id, organization_id, member_id, connection_id, toolkit, 
 // partial unique index the migration declares, so two callers racing to
 // create the same instance cannot both believe they created it - the loser
 // reads back what the winner inserted, inside the same transaction.
-func (store *Store) CreateTrigger(ctx context.Context, trigger domain.Trigger) (domain.Trigger, bool, error) {
+//
+// It also refuses to insert at all once the connection is no longer active:
+// without that, an auto-subscribe pass racing a disconnect could insert a
+// trigger after RemoveConnection has already committed, leaving a row that
+// looks live but that removal's own cleanup will never see again.
+func (store *Store) CreateTrigger(ctx context.Context, trigger domain.Trigger, event domain.Event) (domain.Trigger, bool, error) {
 	var result domain.Trigger
 	created := false
 	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		// FOR SHARE conflicts with RemoveConnection's UPDATE (which takes an
+		// exclusive row lock to change status), so the two are serialised:
+		// this either runs before that commits, or sees 'removed' here and
+		// refuses - never a trigger inserted after the connection is gone.
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM apps_connections WHERE id = $1 FOR SHARE`,
+			trigger.ConnectionID).Scan(&status); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("create trigger: the connection does not exist: %w", domain.ErrNotConnected)
+			}
+			return fmt.Errorf("create trigger: read the connection: %w", err)
+		}
+		if status != string(domain.ConnectionActive) {
+			return fmt.Errorf("create trigger: the connection is %s: %w", status, domain.ErrNotConnected)
+		}
+
 		triggers, err := queryTriggers(ctx, tx, `
 			INSERT INTO apps_triggers (
 				id, organization_id, member_id, connection_id, toolkit, slug, config,
-				composio_trigger_id, status, status_reason, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+				composio_trigger_id, status, status_reason, kind, manual_setup, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $13)
 			ON CONFLICT (composio_trigger_id) WHERE status <> 'removed' DO NOTHING
 			RETURNING `+triggerColumns,
 			trigger.ID, trigger.OrganizationID, trigger.MemberID, trigger.ConnectionID, trigger.Toolkit,
 			trigger.Slug, []byte(trigger.Config), trigger.ComposioTriggerID, string(trigger.Status),
-			trigger.StatusReason, trigger.CreatedAt)
+			trigger.StatusReason, trigger.Kind, trigger.ManualSetup, trigger.CreatedAt)
 		if err != nil {
 			return mapWriteError("create trigger", err)
 		}
 		if len(triggers) == 1 {
 			result = triggers[0]
 			created = true
-			return nil
+			// Only a subscription that is new announces one; the loser of a
+			// race reads back the winner's and says nothing.
+			return insertEvents(ctx, tx, event)
 		}
 		existing, err := queryTriggers(ctx, tx, `
 			SELECT `+triggerColumns+`
@@ -92,13 +117,19 @@ func (store *Store) TriggerByComposioID(ctx context.Context, composioTriggerID s
 }
 
 // Triggers lists an organization's live triggers, newest first, optionally
-// narrowed to one member's or one connection's.
+// narrowed to one member's or one connection's. IncludeRemoved also lists
+// what was removed, for a caller that needs a connection's whole history -
+// auto-subscribe reads it this way so it can tell a slug already live from
+// one the member took away.
 func (store *Store) Triggers(ctx context.Context, organizationID string, query application.TriggerQuery) ([]domain.Trigger, error) {
-	sql := `SELECT ` + triggerColumns + ` FROM apps_triggers WHERE organization_id = $1 AND status <> 'removed'`
+	sql := `SELECT ` + triggerColumns + ` FROM apps_triggers WHERE organization_id = $1`
 	args := []any{organizationID}
 	bind := func(value any) string {
 		args = append(args, value)
 		return fmt.Sprintf("$%d", len(args))
+	}
+	if !query.IncludeRemoved {
+		sql += ` AND status <> 'removed'`
 	}
 	if query.MemberID != "" {
 		sql += ` AND member_id = ` + bind(query.MemberID)
@@ -112,14 +143,22 @@ func (store *Store) Triggers(ctx context.Context, organizationID string, query a
 
 // RemoveTrigger marks a trigger removed by itself, without touching the
 // connection it is on. It answers false if it already was.
-func (store *Store) RemoveTrigger(ctx context.Context, id string, now time.Time) (bool, error) {
-	tag, err := store.pool.Exec(ctx, `
-		UPDATE apps_triggers SET status = 'removed', updated_at = $2
-		WHERE id = $1 AND status <> 'removed'`, id, now)
-	if err != nil {
-		return false, mapWriteError("remove trigger", err)
-	}
-	return tag.RowsAffected() == 1, nil
+func (store *Store) RemoveTrigger(ctx context.Context, id string, now time.Time, event domain.Event) (bool, error) {
+	removed := false
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			UPDATE apps_triggers SET status = 'removed', updated_at = $2
+			WHERE id = $1 AND status <> 'removed'`, id, now)
+		if err != nil {
+			return mapWriteError("remove trigger", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return nil
+		}
+		removed = true
+		return insertEvents(ctx, tx, event)
+	})
+	return removed, err
 }
 
 // DisableTrigger marks an active trigger disabled and writes event. It
@@ -167,13 +206,19 @@ func scanTrigger(rows pgx.Rows) (domain.Trigger, error) {
 	var trigger domain.Trigger
 	var config []byte
 	var status string
+	var lastDelivery *time.Time
 	if err := rows.Scan(&trigger.ID, &trigger.OrganizationID, &trigger.MemberID, &trigger.ConnectionID,
 		&trigger.Toolkit, &trigger.Slug, &config, &trigger.ComposioTriggerID, &status, &trigger.StatusReason,
+		&trigger.Kind, &trigger.ManualSetup, &trigger.DeliveryCount, &lastDelivery,
 		&trigger.CreatedAt, &trigger.UpdatedAt); err != nil {
 		return domain.Trigger{}, fmt.Errorf("scan trigger: %w", err)
 	}
 	trigger.Config = json.RawMessage(config)
 	trigger.Status = domain.TriggerStatus(status)
+	if lastDelivery != nil {
+		delivered := lastDelivery.UTC()
+		trigger.LastDeliveryAt = &delivered
+	}
 	trigger.CreatedAt = trigger.CreatedAt.UTC()
 	trigger.UpdatedAt = trigger.UpdatedAt.UTC()
 	return trigger, nil

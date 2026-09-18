@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/chunking"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 )
 
@@ -24,21 +25,30 @@ const (
 	DefaultMaxDelay    = 20 * time.Second
 )
 
+// batchTokenHeadroom is the share of a provider's per-call token limit a batch
+// is packed to. Token counts here are estimates, biased high on ordinary prose
+// but not on every script, and a call over the limit is refused whole.
+const batchTokenHeadroom = 0.9
+
 // Options tune batching and retries. Zero values take the defaults above.
 type Options struct {
-	// MaxBatch overrides what the catalog says the model accepts. It is only
-	// useful for a model the catalog does not know.
-	MaxBatch    int
-	Concurrency int
-	MaxAttempts int
-	BaseDelay   time.Duration
-	MaxDelay    time.Duration
-	Logger      *slog.Logger
+	// MaxBatch and MaxBatchTokens override what the catalog says the model
+	// accepts. They are only useful for a model the catalog does not know.
+	MaxBatch       int
+	MaxBatchTokens int
+	Concurrency    int
+	MaxAttempts    int
+	BaseDelay      time.Duration
+	MaxDelay       time.Duration
+	Logger         *slog.Logger
 }
 
 func (options Options) withDefaults(profile domain.ModelProfile) Options {
 	if options.MaxBatch <= 0 {
 		options.MaxBatch = max(profile.MaxBatch, 1)
+	}
+	if options.MaxBatchTokens <= 0 {
+		options.MaxBatchTokens = profile.MaxBatchTokens
 	}
 	if options.Concurrency <= 0 {
 		options.Concurrency = DefaultConcurrency
@@ -140,8 +150,16 @@ func (client *Client) Embed(ctx context.Context, kind domain.InputKind, texts []
 			combined.Vectors = append(combined.Vectors, vector)
 		}
 		combined.Usage.Add(result.Usage)
+		combined.Truncated += result.Truncated
 	}
 	combined.Usage.EmbeddedTexts = len(texts)
+	if combined.Truncated > 0 {
+		// The provider read less than it was sent, so part of each of these
+		// texts is not in its vector. On an ingest it means chunks run longer
+		// than the model reads.
+		client.options.Logger.WarnContext(ctx, "the provider truncated texts to its input limit",
+			"model", client.spec.Model, "kind", kind, "truncated", combined.Truncated, "texts", len(texts))
+	}
 	return combined, nil
 }
 
@@ -149,11 +167,28 @@ type batch struct {
 	texts []string
 }
 
+// split cuts texts into the batches one call carries: at most MaxBatch texts,
+// and, where the model limits a call's tokens too, no more text than that
+// limit less some headroom. A text is never split across batches, and none is
+// over the limit alone, since each was already truncated to MaxInputTokens.
 func (client *Client) split(texts []string) []batch {
 	size := max(client.options.MaxBatch, 1)
-	batches := make([]batch, 0, (len(texts)+size-1)/size)
-	for start := 0; start < len(texts); start += size {
-		batches = append(batches, batch{texts: texts[start:min(start+size, len(texts))]})
+	budget := int(float64(client.options.MaxBatchTokens) * batchTokenHeadroom)
+	var (
+		batches []batch
+		start   int
+		tokens  int
+	)
+	for index, text := range texts {
+		cost := chunking.EstimateTokens(text)
+		if index > start && (index-start >= size || (budget > 0 && tokens+cost > budget)) {
+			batches = append(batches, batch{texts: texts[start:index]})
+			start, tokens = index, 0
+		}
+		tokens += cost
+	}
+	if start < len(texts) {
+		batches = append(batches, batch{texts: texts[start:]})
 	}
 	return batches
 }
@@ -173,6 +208,9 @@ func (client *Client) embedBatch(ctx context.Context, kind domain.InputKind, tex
 		if ctx.Err() != nil {
 			return Result{}, ctx.Err()
 		}
+		if errors.Is(err, ErrBatchTooLarge) && len(texts) > 1 {
+			return client.embedHalves(ctx, kind, texts)
+		}
 		if !retryable(err) || attempt == client.options.MaxAttempts {
 			return Result{}, err
 		}
@@ -184,6 +222,28 @@ func (client *Client) embedBatch(ctx context.Context, kind domain.InputKind, tex
 		}
 	}
 	return Result{}, lastErr
+}
+
+// embedHalves embeds a batch the provider refused as too large in two halves,
+// each of which may be halved again. The batch was sized by an estimate, and
+// no estimate holds for every kind of text: code, and languages the model's
+// vocabulary serves less well, cost more tokens than they look.
+func (client *Client) embedHalves(ctx context.Context, kind domain.InputKind, texts []string) (Result, error) {
+	client.options.Logger.WarnContext(ctx, "an embedding call was over the model's token limit; embedding it in halves",
+		"model", client.spec.Model, "texts", len(texts))
+	middle := len(texts) / 2
+	first, err := client.embedBatch(ctx, kind, texts[:middle])
+	if err != nil {
+		return Result{}, err
+	}
+	second, err := client.embedBatch(ctx, kind, texts[middle:])
+	if err != nil {
+		return Result{}, err
+	}
+	first.Vectors = append(first.Vectors, second.Vectors...)
+	first.Usage.Add(second.Usage)
+	first.Truncated += second.Truncated
+	return first, nil
 }
 
 // backoff is exponential with jitter, and never exceeds MaxDelay: the result

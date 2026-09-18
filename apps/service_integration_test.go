@@ -99,6 +99,12 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 	if connected.Connection.Status != "pending" || connected.RedirectURL == "" {
 		t.Fatalf("connection = %+v", connected)
 	}
+	// Starting is announced too, so what follows is always the end of
+	// something the bus saw begin.
+	initiated := decodeEvent(t, waitForEvent(t, sink, appsv1.ConnectionInitiatedDetailType))
+	if initiated["connection_id"] != connected.Connection.ID || initiated["toolkit"] != "github" {
+		t.Fatalf("initiated event = %v", initiated)
+	}
 	callback, err := url.Parse(composio.lastCallbackURL())
 	if err != nil {
 		t.Fatal(err)
@@ -170,12 +176,36 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 
 	// 5. The member subscribes a trigger, and the app delivers through
 	// Composio's signed webhook.
+
+	// A config missing what the trigger needs is refused here, rather than
+	// subscribed and then delivering nothing for ever.
+	post(t, api.URL+"/v1/organizations/org_1/apps/triggers",
+		fmt.Sprintf(`{"connection_id":%q,"trigger":"GITHUB_COMMIT_EVENT","config":{}}`, connectionID),
+		http.StatusBadRequest, nil)
+	// So is an event this app does not deliver.
+	post(t, api.URL+"/v1/organizations/org_1/apps/triggers",
+		fmt.Sprintf(`{"connection_id":%q,"trigger":"SLACK_RECEIVE_MESSAGE","config":{"channel":"C1"}}`, connectionID),
+		http.StatusNotFound, nil)
+
 	var trigger struct {
-		ID string `json:"id"`
+		ID            string `json:"id"`
+		Kind          string `json:"kind"`
+		DeliveryCount int64  `json:"delivery_count"`
 	}
 	post(t, api.URL+"/v1/organizations/org_1/apps/triggers",
 		fmt.Sprintf(`{"connection_id":%q,"trigger":"GITHUB_COMMIT_EVENT","config":{"repo":"oryxa"}}`, connectionID),
 		http.StatusCreated, &trigger)
+	if trigger.Kind != "webhook" || trigger.DeliveryCount != 0 {
+		t.Fatalf("a new trigger = %+v, want a pushed one that has delivered nothing", trigger)
+	}
+	subscribed := decodeEvent(t, waitForEvent(t, sink, appsv1.TriggerSubscribedDetailType))
+	if subscribed["trigger"] != "GITHUB_COMMIT_EVENT" || subscribed["kind"] != "webhook" {
+		t.Fatalf("subscribed event = %v", subscribed)
+	}
+	// The two refusals above changed nothing, so neither announced anything.
+	if count := sink.count(appsv1.TriggerSubscribedDetailType); count != 1 {
+		t.Fatalf("subscribed events = %d, want 1", count)
+	}
 
 	delivery := fmt.Sprintf(`{"id":"wh_1","type":"composio.trigger.message","timestamp":"2026-09-17T12:00:00Z",
 		"metadata":{"trigger_id":%q,"trigger_slug":"GITHUB_COMMIT_EVENT","connected_account_id":%q},
@@ -198,6 +228,29 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 	// An unsigned delivery is refused outright.
 	if status := deliverUnsigned(t, api.URL, delivery); status != http.StatusUnauthorized {
 		t.Fatalf("unsigned delivery = %d", status)
+	}
+
+	// The trigger now says it is live, counting the delivery once however
+	// many times Composio sent it - the only way to tell a working
+	// subscription from a silent one.
+	var live struct {
+		Triggers []struct {
+			ID             string `json:"id"`
+			Kind           string `json:"kind"`
+			DeliveryCount  int64  `json:"delivery_count"`
+			LastDeliveryAt string `json:"last_delivery_at"`
+		} `json:"triggers"`
+	}
+	if err := json.NewDecoder(get(t, api.URL+"/v1/organizations/org_1/apps/triggers",
+		http.StatusOK).Body).Decode(&live); err != nil {
+		t.Fatalf("read the trigger listing: %v", err)
+	}
+	if len(live.Triggers) != 1 || live.Triggers[0].ID != trigger.ID {
+		t.Fatalf("triggers listed = %+v", live.Triggers)
+	}
+	if live.Triggers[0].DeliveryCount != 1 || live.Triggers[0].LastDeliveryAt == "" {
+		t.Fatalf("the trigger reports %d deliveries, last at %q; want one delivery",
+			live.Triggers[0].DeliveryCount, live.Triggers[0].LastDeliveryAt)
 	}
 
 	// The payload is the app's own data: once published, the outbox forgets
@@ -340,6 +393,24 @@ func newComposioStub(t *testing.T) *composioStub {
 		stub.mu.Unlock()
 		writeJSON(writer, map[string]any{
 			"successful": true, "data": map[string]any{"number": 7}, "log_id": "log_integration",
+		})
+	})
+	// The catalog a subscription is checked against, so a member cannot
+	// subscribe to an event this app does not deliver or leave out a field
+	// it needs.
+	mux.HandleFunc("GET /api/v3.1/triggers_types", func(writer http.ResponseWriter, _ *http.Request) {
+		writeJSON(writer, map[string]any{
+			"items": []map[string]any{{
+				"slug": "GITHUB_COMMIT_EVENT", "name": "New commit", "description": "A commit was pushed",
+				"type": "webhook", "toolkit": map[string]any{"slug": "github"}, "version": "v1",
+				"config": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"repo": map[string]any{"type": "string"}},
+					"required":   []string{"repo"},
+				},
+				"payload": map[string]any{}, "requires_webhook_endpoint_setup": false,
+			}},
+			"next_cursor": nil,
 		})
 	})
 	mux.HandleFunc("POST /api/v3.1/trigger_instances/{slug}/upsert", func(writer http.ResponseWriter, _ *http.Request) {

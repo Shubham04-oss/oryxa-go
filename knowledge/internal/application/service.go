@@ -35,6 +35,13 @@ type Store interface {
 	// RemoveSourcesByConnection retires every source reading through one
 	// connection: apps.connection.removed.v1, which is gone for good.
 	RemoveSourcesByConnection(context.Context, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	// HastenSources brings forward the next sweep of a connection's live
+	// sources, no sooner than floor after their last.
+	HastenSources(ctx context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error)
+	// HastenSource brings forward one source's next sweep, because someone
+	// asked. It answers false for a source that is not active or already due
+	// sooner.
+	HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error)
 	// RemoveSourcesByTeam retires every source a deleted team held, and
 	// retracts what they held in the same transaction.
 	RemoveSourcesByTeam(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
@@ -77,6 +84,9 @@ type Directory interface {
 // usableConnection.
 type Apps interface {
 	Connection(ctx context.Context, organizationID, connectionID string, credentials authclient.Credentials) (domain.AppConnection, error)
+	// Targets is what a connection holds that could be indexed, as apps
+	// discovered it from the app itself.
+	Targets(ctx context.Context, organizationID, connectionID string, credentials authclient.Credentials) ([]domain.AppTarget, error)
 }
 
 // Grants mints a token that acts as a member while they are away.

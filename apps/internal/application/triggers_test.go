@@ -17,7 +17,7 @@ func TestCreateTriggerSubscribesTheCallersConnection(t *testing.T) {
 	connection := h.activeConnection("apc_1", "user-1", "github", "ca_1")
 
 	trigger, err := h.service.CreateTrigger(context.Background(), memberToken, "org_1", TriggerInput{
-		ConnectionID: connection.ID, Trigger: "github_commit_event", Config: json.RawMessage(`{"repo":"oryxa"}`),
+		ConnectionID: connection.ID, Trigger: "github_commit_event", Config: json.RawMessage(`{"owner":"oryxa-labs","repo":"oryxa"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -31,10 +31,16 @@ func TestCreateTriggerSubscribesTheCallersConnection(t *testing.T) {
 	if len(h.composio.upserts) != 1 || h.composio.upserts[0] != "GITHUB_COMMIT_EVENT@ca_1" {
 		t.Fatalf("upserts = %v", h.composio.upserts)
 	}
+	// The account's Composio user goes with it: a project with two-factor
+	// protection refuses a subscription without one, which is every
+	// subscription on such a project.
+	if len(h.composio.upsertUsers) != 1 || h.composio.upsertUsers[0] != connection.ComposioUserID || connection.ComposioUserID == "" {
+		t.Fatalf("upserted as users %v, want %q", h.composio.upsertUsers, connection.ComposioUserID)
+	}
 
 	// Asking again answers the subscription that exists rather than a second.
 	again, err := h.service.CreateTrigger(context.Background(), memberToken, "org_1", TriggerInput{
-		ConnectionID: connection.ID, Trigger: "GITHUB_COMMIT_EVENT", Config: json.RawMessage(`{"repo":"oryxa"}`),
+		ConnectionID: connection.ID, Trigger: "GITHUB_COMMIT_EVENT", Config: json.RawMessage(`{"owner":"oryxa-labs","repo":"oryxa"}`),
 	})
 	if err != nil {
 		t.Fatal(err)

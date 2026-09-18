@@ -323,12 +323,17 @@ func TestTriggersSubscribeListAndManage(t *testing.T) {
 	if err != nil || len(types.Items) != 1 || types.Items[0].Kind != "webhook" || types.Items[0].Toolkit != "github" {
 		t.Fatalf("TriggerTypes() = %+v, %v", types, err)
 	}
-	id, err := client.UpsertTrigger(ctx, "GITHUB_COMMIT_EVENT", "ca_1", json.RawMessage(`{"owner":"acme","repo":"api"}`))
+	id, err := client.UpsertTrigger(ctx, "GITHUB_COMMIT_EVENT", TriggerSubscription{
+		ConnectedAccountID: "ca_1", UserID: "u1", Config: json.RawMessage(`{"owner":"acme","repo":"api"}`),
+	})
 	if err != nil || id != "ti_1" {
 		t.Fatalf("UpsertTrigger() = %q, %v", id, err)
 	}
 	upsert := (*requests)[1].body
-	if upsert["connected_account_id"] != "ca_1" || upsert["trigger_config"].(map[string]any)["repo"] != "api" {
+	// The user goes with the account: a project with two-factor protection
+	// refuses a subscription without it.
+	if upsert["connected_account_id"] != "ca_1" || upsert["user_id"] != "u1" ||
+		upsert["trigger_config"].(map[string]any)["repo"] != "api" {
 		t.Fatalf("upsert body = %v", upsert)
 	}
 	instances, err := client.Triggers(ctx, TriggerQuery{TriggerIDs: []string{"ti_1"}, ShowDisabled: true})

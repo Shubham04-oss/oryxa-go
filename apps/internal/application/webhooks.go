@@ -64,7 +64,20 @@ func (s *Service) ReceiveWebhook(ctx context.Context, header http.Header, body [
 		if err != nil {
 			return err
 		}
-		return s.record(ctx, delivery, event)
+		// The delivery, its event and the trigger's own tally are written
+		// together: a trigger that says it delivered has published what it
+		// delivered, and a redelivery counts once.
+		recorded, err := s.store.RecordTriggerDelivery(ctx, delivery.ID, delivery.Type, trigger.ID, now, event)
+		if err != nil {
+			return err
+		}
+		if !recorded {
+			s.logger.InfoContext(ctx, "webhook already handled", "webhook_id", delivery.ID, "type", delivery.Type)
+			return nil
+		}
+		s.logger.InfoContext(ctx, "app delivered an event", "trigger_id", trigger.ID,
+			"toolkit", trigger.Toolkit, "trigger", trigger.Slug, "data_omitted", received.DataOmitted)
+		return nil
 
 	case composio.EventConnectedAccountExpired:
 		account, err := delivery.ExpiredAccount()
@@ -125,7 +138,13 @@ func (s *Service) ReceiveWebhook(ctx context.Context, header http.Header, body [
 		return err
 
 	default:
-		return s.drop(ctx, delivery, "event type not handled")
+		// Composio delivers only what its subscription enables, so a type
+		// apps never asked for means Composio added one — worth noticing
+		// rather than losing in a debug line, since it may be something a
+		// member's apps now report and nothing here acts on.
+		s.logger.WarnContext(ctx, "composio delivered an event type apps does not handle",
+			"webhook_id", delivery.ID, "type", delivery.Type)
+		return s.record(ctx, delivery)
 	}
 }
 

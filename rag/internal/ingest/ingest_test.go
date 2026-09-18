@@ -153,12 +153,16 @@ type fakeEmbedder struct {
 	texts []string
 	kinds []domain.InputKind
 	err   error
+	// failFrom, when set, holds err back until that call, counted from one.
+	failFrom int
+	calls    int
 }
 
 func (fake *fakeEmbedder) Spec() domain.EmbeddingSpec { return testCorpus().Spec }
 
 func (fake *fakeEmbedder) Embed(_ context.Context, kind domain.InputKind, texts []string) (embedding.Result, error) {
-	if fake.err != nil {
+	fake.calls++
+	if fake.err != nil && fake.calls >= fake.failFrom {
 		return embedding.Result{}, fake.err
 	}
 	fake.kinds = append(fake.kinds, kind)
@@ -210,6 +214,33 @@ func TestIndexChunksEmbedsAndMarksReady(t *testing.T) {
 	}
 	if result.Usage.EmbeddingTokens == 0 {
 		t.Fatal("usage was not accounted for")
+	}
+}
+
+// TestIndexKeepsWhatAFailedAttemptEmbedded: a document too big for one slice
+// fails partway, and what was written before the failure is kept as embedded,
+// so the retry reuses it instead of paying for it again.
+func TestIndexKeepsWhatAFailedAttemptEmbedded(t *testing.T) {
+	t.Parallel()
+	fresh := make([]domain.Chunk, sliceChunks+40)
+	for index := range fresh {
+		fresh[index] = domain.Chunk{ID: fmt.Sprintf("chk_%d", index), Text: fmt.Sprintf("step %d", index)}
+	}
+	store := &fakeStore{corpus: testCorpus(), body: body, sync: domain.ChunkSync{Fresh: fresh}}
+	vectors := &fakeVectorStore{}
+	embedder := &fakeEmbedder{err: errors.New("throttled for good"), failFrom: 2}
+	pipeline := newPipeline(store, vectors, embedder)
+
+	if _, err := pipeline.Index(context.Background(), testDocument()); err == nil {
+		t.Fatal("Index succeeded with an embedder that failed")
+	}
+	if len(store.embedded) != sliceChunks || len(vectors.upserted) != sliceChunks {
+		t.Fatalf("kept %d chunks embedded and %d vectors, want the first slice's %d",
+			len(store.embedded), len(vectors.upserted), sliceChunks)
+	}
+	if len(store.released) != 1 || len(store.ready) != 0 || len(store.failed) != 0 {
+		t.Fatalf("released %v, ready %v, failed %v: want the document back for a retry",
+			store.released, store.ready, store.failed)
 	}
 }
 

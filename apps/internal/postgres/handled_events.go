@@ -33,6 +33,39 @@ func (store *Store) RecordWebhook(ctx context.Context, eventID, eventType string
 	return recorded, err
 }
 
+// RecordTriggerDelivery is RecordWebhook for a delivery a trigger made, and
+// counts it against that trigger in the same transaction. So a trigger's
+// tally and the events published for it can never disagree, and a
+// redelivery - which writes nothing at all - cannot count twice.
+//
+// The trigger is counted only while it is live: one removed between the
+// delivery arriving and this running is no longer anyone's, and the event
+// for it has already been decided against what it was.
+func (store *Store) RecordTriggerDelivery(ctx context.Context, eventID, eventType, triggerID string, now time.Time, event domain.Event) (bool, error) {
+	recorded := false
+	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `
+			INSERT INTO apps_handled_events (event_id, detail_type, handled_at)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (event_id) DO NOTHING`, eventID, eventType, now)
+		if err != nil {
+			return fmt.Errorf("record trigger delivery: %w", err)
+		}
+		if tag.RowsAffected() != 1 {
+			return nil
+		}
+		recorded = true
+		if _, err := tx.Exec(ctx, `
+			UPDATE apps_triggers
+			SET delivery_count = delivery_count + 1, last_delivery_at = $2
+			WHERE id = $1 AND status <> 'removed'`, triggerID, now); err != nil {
+			return fmt.Errorf("count a trigger's delivery: %w", err)
+		}
+		return insertEvents(ctx, tx, event)
+	})
+	return recorded, err
+}
+
 // EventHandled reports whether a bus event has already been recorded as
 // handled, without recording anything itself.
 func (store *Store) EventHandled(ctx context.Context, eventID string) (bool, error) {

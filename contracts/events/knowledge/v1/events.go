@@ -168,6 +168,11 @@ const (
 	// SyncErrorLeaseLost: another replica claimed the source mid-run, so this
 	// run stopped rather than write twice.
 	SyncErrorLeaseLost = "lease_lost"
+	// SyncErrorGrantRequired: the source reads as the member who registered
+	// it, and they have not given auth the standing grant that needs, or it
+	// was dropped. It is tried again, with backoff, so it resumes once they
+	// grant.
+	SyncErrorGrantRequired = "grant_required"
 )
 
 // Removal reasons say why a document is gone.

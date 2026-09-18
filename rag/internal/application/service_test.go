@@ -69,7 +69,7 @@ func TestTeamForbiddenFromTeamsIsConcealedAsNotFound(t *testing.T) {
 
 func TestTeamScopeIsUnavailableWithoutATeamsService(t *testing.T) {
 	store := newFakeStore()
-	service := New(store, fakeDirectory{}, nil, &fakeFiles{}, newFakeVectors(), &fakeRetriever{}, &fakeGenerator{}, Defaults{}, nil)
+	service := New(store, fakeDirectory{}, nil, &fakeFiles{}, nil, newFakeVectors(), &fakeRetriever{}, &fakeGenerator{}, Defaults{}, nil)
 	if _, err := service.CreateCorpus(context.Background(), creds("user-creator"), testOrganization, CreateCorpusInput{
 		Name: "Handbook", Scope: domain.ScopeTeam, TeamID: "team_eng",
 	}); !errors.Is(err, domain.ErrInvalid) {
@@ -195,7 +195,7 @@ func TestSearchAndAnswerHonorTheReadGate(t *testing.T) {
 
 func TestAnswerWithoutAGeneratorConfigured(t *testing.T) {
 	h := newHarness()
-	h.service = New(h.store, fakeDirectory{}, h.teams, h.files, h.vectors, h.retriever, nil, Defaults{}, nil)
+	h.service = New(h.store, fakeDirectory{}, h.teams, h.files, h.documents, h.vectors, h.retriever, nil, Defaults{}, nil)
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})
 
 	// This check runs before the corpus is even looked up: a deployment with
@@ -346,7 +346,7 @@ func TestAddDocumentFetchesFromFilesAsTheCaller(t *testing.T) {
 
 func TestAddDocumentFromAFileNeedsFilesConfigured(t *testing.T) {
 	h := newHarness()
-	h.service = New(h.store, fakeDirectory{}, h.teams, nil, h.vectors, h.retriever, h.generator, Defaults{}, nil)
+	h.service = New(h.store, fakeDirectory{}, h.teams, nil, nil, h.vectors, h.retriever, h.generator, Defaults{}, nil)
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})
 	if _, err := h.service.AddDocument(context.Background(), creds("user-creator"), testOrganization, corpus.ID, AddDocumentInput{
 		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_1"},

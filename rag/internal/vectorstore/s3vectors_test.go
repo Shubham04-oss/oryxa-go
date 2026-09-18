@@ -82,6 +82,24 @@ func s3Vector(id string) domain.Vector {
 	}
 }
 
+func TestS3VectorsAsksForNoMoreThanOneQueryReturns(t *testing.T) {
+	t.Parallel()
+	fake := newFake()
+	store, err := NewS3Vectors(fake, "oryxa-vectors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpus := s3Corpus(domain.MetricCosine)
+	fake.indexes[IndexName(corpus)] = true
+	// Rag over-fetches up to 400 candidates; S3 Vectors refuses more than 100.
+	if _, err := store.Search(context.Background(), corpus, Search{Vector: []float32{1, 0, 0, 0}, TopK: 400}); err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if got := aws.ToInt32(fake.queries[0].TopK); got != 100 {
+		t.Fatalf("asked S3 Vectors for %d results, want at most 100", got)
+	}
+}
+
 func TestS3VectorsCreatesTheIndexOnFirstWrite(t *testing.T) {
 	t.Parallel()
 	fake := newFake()

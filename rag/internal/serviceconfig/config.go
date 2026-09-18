@@ -23,9 +23,14 @@ import (
 // Config is what rag reads for itself. The listener, the database, the AWS
 // region and the event bus are the host's.
 type Config struct {
-	AuthURL        string
-	TeamsURL       string
-	FilesURL       string
+	AuthURL  string
+	TeamsURL string
+	FilesURL string
+	// KnowledgeURL and ServiceKeyID are how a document too large to have
+	// travelled on the bus is read back. Without both, the largest documents
+	// knowledge publishes stay unindexed.
+	KnowledgeURL   string
+	ServiceKeyID   string
 	AllowedOrigins []string
 	EventsQueueURL string
 
@@ -51,9 +56,11 @@ type Config struct {
 	AnswerModel        string
 	AnswerInstructions string
 
-	// RerankModelARN names a Bedrock reranking model. Empty leaves reranking
-	// off, and a query asking for it gets the fused order instead.
-	RerankModelARN string
+	// RerankModelARN names a Bedrock reranking model, and RerankVertexModel a
+	// Vertex ranking model. One of them, or neither: with neither, reranking
+	// is off and a query asking for it gets the fused order instead.
+	RerankModelARN    string
+	RerankVertexModel string
 
 	// GuardrailIdentifier and GuardrailVersion screen answers through Amazon
 	// Bedrock Guardrails, as the agents service does. The version must be a
@@ -101,6 +108,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		AuthURL:        trimURL(getenv("AUTH_URL")),
 		TeamsURL:       trimURL(getenv("TEAMS_URL")),
 		FilesURL:       trimURL(getenv("FILES_URL")),
+		KnowledgeURL:   trimURL(getenv("KNOWLEDGE_URL")),
+		ServiceKeyID:   strings.TrimSpace(getenv("RAG_SERVICE_KEY_ID")),
 		AllowedOrigins: splitList(getenv("RAG_ALLOWED_ORIGINS")),
 		EventsQueueURL: strings.TrimSpace(getenv("RAG_EVENTS_QUEUE_URL")),
 
@@ -113,13 +122,14 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		DefaultProvider: domain.Provider(valueOrDefault(getenv, "RAG_DEFAULT_EMBEDDING_PROVIDER", string(domain.ProviderBedrock))),
 		DefaultModel:    valueOrDefault(getenv, "RAG_DEFAULT_EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0"),
 		DefaultMetric:   domain.Metric(valueOrDefault(getenv, "RAG_DEFAULT_METRIC", string(domain.MetricCosine))),
-		DefaultBackend:  domain.Backend(valueOrDefault(getenv, "RAG_DEFAULT_BACKEND", string(domain.BackendPgvector))),
+		DefaultBackend:  domain.Backend(valueOrDefault(getenv, "RAG_DEFAULT_BACKEND", string(defaultBackend(getenv)))),
 
 		AnswerProvider:     domain.Provider(valueOrDefault(getenv, "RAG_ANSWER_PROVIDER", string(domain.ProviderBedrock))),
 		AnswerModel:        strings.TrimSpace(getenv("RAG_ANSWER_MODEL")),
 		AnswerInstructions: strings.TrimSpace(getenv("RAG_ANSWER_INSTRUCTIONS")),
 
 		RerankModelARN:      strings.TrimSpace(getenv("RAG_RERANK_MODEL_ARN")),
+		RerankVertexModel:   strings.TrimSpace(getenv("RAG_RERANK_VERTEX_MODEL")),
 		GuardrailIdentifier: strings.TrimSpace(getenv("RAG_GUARDRAIL_ID")),
 		GuardrailVersion:    strings.TrimSpace(getenv("RAG_GUARDRAIL_VERSION")),
 
@@ -180,7 +190,25 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if config.RerankModelARN != "" && !strings.HasPrefix(config.RerankModelARN, "arn:") {
 		return Config{}, errors.New("RAG_RERANK_MODEL_ARN must be a model ARN")
 	}
+	if config.RerankModelARN != "" && config.RerankVertexModel != "" {
+		return Config{}, errors.New("set RAG_RERANK_MODEL_ARN or RAG_RERANK_VERTEX_MODEL, not both: rag reranks with one model")
+	}
+	if config.RerankVertexModel != "" && config.GoogleCloudProject == "" {
+		return Config{}, errors.New("RAG_RERANK_VERTEX_MODEL needs GOOGLE_CLOUD_PROJECT: the Ranking API bills a project")
+	}
 	return config, nil
+}
+
+// defaultBackend is where a new corpus's vectors go when nothing says: S3
+// Vectors wherever a vector bucket is configured — serverless, priced by use,
+// and keeping the vectors' bulk out of the shared PostgreSQL — and pgvector
+// where none is, which is local development and tests, since S3 Vectors has
+// no local emulation. A corpus keeps the backend it was created on.
+func defaultBackend(getenv func(string) string) domain.Backend {
+	if strings.TrimSpace(getenv("RAG_VECTOR_BUCKET_NAME")) != "" {
+		return domain.BackendS3Vectors
+	}
+	return domain.BackendPgvector
 }
 
 func valueOrDefault(getenv func(string) string, name, fallback string) string {

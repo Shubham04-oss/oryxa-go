@@ -32,6 +32,14 @@ type S3VectorsAPI interface {
 // stays well inside it.
 const putBatchSize = 200
 
+// queryLimit is the most results one QueryVectors call returns. Rag asks a
+// vector store for more candidates than it will keep — up to 400 — so that
+// fusion and reranking have something to choose between; S3 Vectors refuses
+// a request for more than this rather than returning fewer, so a search
+// asking for over 25 results would have failed outright. Asking for this
+// many instead leaves fusion and reranking fewer candidates, never an error.
+const queryLimit = 100
+
 // nonFilterableKeys are the provenance fields kept with a vector but never
 // filtered on. S3 Vectors budgets filterable metadata far more tightly than
 // the rest, so a heading trail or a title — which are for showing a citation,
@@ -170,7 +178,7 @@ func (store *S3Vectors) Search(ctx context.Context, corpus domain.Corpus, search
 		VectorBucketName: aws.String(store.bucket),
 		IndexName:        aws.String(IndexName(corpus)),
 		QueryVector:      &s3vectorstypes.VectorDataMemberFloat32{Value: search.Vector},
-		TopK:             aws.Int32(int32(search.TopK)),
+		TopK:             aws.Int32(int32(min(search.TopK, queryLimit))),
 		ReturnDistance:   true,
 	}
 	if filter != nil {
