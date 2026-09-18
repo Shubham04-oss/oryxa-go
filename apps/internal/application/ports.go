@@ -72,7 +72,9 @@ type Store interface {
 	// TriggerByComposioID reads the live trigger a Composio instance backs.
 	TriggerByComposioID(ctx context.Context, composioTriggerID string) (domain.Trigger, error)
 	// Triggers lists an organization's live triggers, optionally one
-	// member's or one connection's, newest first.
+	// member's or one connection's, newest first. TriggerQuery.IncludeRemoved
+	// also lists what was removed, for a caller that needs a connection's
+	// whole history rather than what still delivers.
 	Triggers(ctx context.Context, organizationID string, query TriggerQuery) ([]domain.Trigger, error)
 	// RemoveTrigger marks a trigger removed and writes event. It answers
 	// false, writing nothing, if it already was.
@@ -119,6 +121,10 @@ type AuthConfig struct {
 type TriggerQuery struct {
 	MemberID     string
 	ConnectionID string
+	// IncludeRemoved also lists triggers a member has removed. Auto-subscribe
+	// reads a connection's whole history this way, since a removed row is
+	// exactly what says the member opted out and must not be re-added.
+	IncludeRemoved bool
 }
 
 // Directory is auth, which decides who the caller is.

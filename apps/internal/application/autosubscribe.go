@@ -74,11 +74,38 @@ func (s *Service) subscribeEverything(ctx context.Context, connection domain.Con
 		return
 	}
 
-	wanted, skipped := autoSubscribable(definitions)
+	// Composio keys an instance by account, trigger and config, so
+	// subscribing blind risks two mistakes: a second, unfiltered instance
+	// beside one the member already tuned (say, Gmail with query:"from:boss"),
+	// and bringing back a slug the member deliberately removed. Every row
+	// ever on this connection - live or removed - answers both at once, so it
+	// is read before anything is subscribed.
+	onConnection, err := s.store.Triggers(ctx, connection.OrganizationID,
+		TriggerQuery{ConnectionID: connection.ID, IncludeRemoved: true})
+	if err != nil {
+		if ctx.Err() == nil {
+			logger.WarnContext(ctx, "read a connection's own triggers before subscribing it", "error", err)
+		}
+		return
+	}
+	present := make(map[string]bool, len(onConnection))
+	for _, trigger := range onConnection {
+		present[trigger.Slug] = true
+	}
+
+	wanted, needsConfig := autoSubscribable(definitions)
+	var alreadyPresent []string
 	subscribed := 0
 	for _, definition := range wanted {
 		if ctx.Err() != nil {
 			return
+		}
+		if present[definition.Slug] {
+			// Live already means the member has it, maybe filtered, maybe
+			// from an earlier partial pass; removed means they opted out.
+			// Either way, connecting again must leave it exactly as it is.
+			alreadyPresent = append(alreadyPresent, definition.Slug)
+			continue
 		}
 		if _, err := s.subscribe(ctx, connection, definition, json.RawMessage(`{}`)); err != nil {
 			// An app that refuses one of its own events is Composio's
@@ -101,12 +128,20 @@ func (s *Service) subscribeEverything(ctx context.Context, connection domain.Con
 		return
 	}
 	logger.InfoContext(ctx, "subscribed a connection to its app's events",
-		"subscribed", subscribed, "skipped", len(skipped), "available", len(definitions))
-	if len(skipped) > 0 {
+		"subscribed", subscribed, "already_present", len(alreadyPresent),
+		"needs_configuration", len(needsConfig), "available", len(definitions))
+	if len(alreadyPresent) > 0 {
+		// Distinct from needsConfig below: these are not missing anything,
+		// the member already decided them one way or the other.
+		slices.Sort(alreadyPresent)
+		logger.InfoContext(ctx, "events already on this connection were left as they are",
+			"triggers", strings.Join(alreadyPresent, ", "))
+	}
+	if len(needsConfig) > 0 {
 		// Named rather than counted: these are the events a member has to
 		// add themselves, and they cannot ask for what they cannot see.
 		logger.InfoContext(ctx, "events left for the member to set up",
-			"triggers", strings.Join(skipped, ", "))
+			"triggers", strings.Join(needsConfig, ", "))
 	}
 }
 

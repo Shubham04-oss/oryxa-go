@@ -239,6 +239,69 @@ func TestAnAppThatKeepsFailingIsGivenUpOn(t *testing.T) {
 	}
 }
 
+// TestAutoSubscribeSkipsWhatIsAlreadyOnTheConnection covers a slug the member
+// already subscribed - maybe with their own filters, maybe from an earlier
+// partial pass - and one they removed: connecting again must not add a
+// second, unfiltered instance beside the first, and must not bring back what
+// the member took away. It still subscribes everything else.
+func TestAutoSubscribeSkipsWhatIsAlreadyOnTheConnection(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	// Two more configuration-free GitHub events than the harness's default
+	// catalog, so there is something left to subscribe to once X and Y below
+	// are skipped.
+	h.composio.triggerTypes["github"] = append(h.composio.triggerTypes["github"],
+		composio.TriggerType{
+			Slug: "GITHUB_FORK_EVENT", Toolkit: "github", Kind: "webhook",
+			Config: json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+		composio.TriggerType{
+			Slug: "GITHUB_RELEASE_EVENT", Toolkit: "github", Kind: "webhook",
+			Config: json.RawMessage(`{"type":"object","properties":{}}`),
+		},
+	)
+	connection := h.awaiting("apc_1", "github", "ca_1")
+	h.composio.upsertPerSlug = true
+
+	// X: already live, with the member's own filter. A second, unfiltered
+	// subscription beside it would be a bug, not a convenience.
+	h.store.triggers["apt_x"] = domain.Trigger{
+		ID: "apt_x", OrganizationID: "org_1", MemberID: connection.MemberID, ConnectionID: connection.ID,
+		Toolkit: "github", Slug: "GITHUB_STAR_ADDED_EVENT", Config: json.RawMessage(`{"query":"from:boss"}`),
+		ComposioTriggerID: "ti_x", Status: domain.TriggerActive,
+	}
+	// Y: the member removed this. It must never come back on its own.
+	h.store.triggers["apt_y"] = domain.Trigger{
+		ID: "apt_y", OrganizationID: "org_1", MemberID: connection.MemberID, ConnectionID: connection.ID,
+		Toolkit: "github", Slug: "GITHUB_FORK_EVENT", ComposioTriggerID: "ti_y", Status: domain.TriggerRemoved,
+	}
+
+	h.service.maintain(context.Background())
+
+	bySlug := map[string]bool{}
+	for _, trigger := range h.store.triggers {
+		if trigger.ConnectionID == connection.ID {
+			bySlug[trigger.Slug] = true
+		}
+	}
+	for _, upsert := range h.composio.upserts {
+		if strings.HasPrefix(upsert, "GITHUB_STAR_ADDED_EVENT@") || strings.HasPrefix(upsert, "GITHUB_FORK_EVENT@") {
+			t.Fatalf("resubscribed a slug already on the connection: %v", h.composio.upserts)
+		}
+	}
+	if !bySlug["GITHUB_RELEASE_EVENT"] {
+		t.Fatalf("did not subscribe to the other configuration-free event: %v", bySlug)
+	}
+	// X's own row is untouched: still the member's filtered instance, not
+	// replaced by a fresh unfiltered one.
+	if got := h.store.triggers["apt_x"]; got.ComposioTriggerID != "ti_x" || string(got.Config) != `{"query":"from:boss"}` {
+		t.Fatalf("the existing filtered trigger was touched: %+v", got)
+	}
+	if h.store.connections[connection.ID].AutoSubscribedAt == nil {
+		t.Fatal("the connection was not marked subscribed")
+	}
+}
+
 // TestAutoSubscribableOrdersWhatItTakesAndNamesWhatItLeaves keeps two
 // deployments of the same app committing a member to the same events, and
 // keeps what was left out nameable rather than merely counted.

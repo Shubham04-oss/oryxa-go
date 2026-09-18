@@ -95,13 +95,19 @@ func (store *Store) TriggerByComposioID(ctx context.Context, composioTriggerID s
 }
 
 // Triggers lists an organization's live triggers, newest first, optionally
-// narrowed to one member's or one connection's.
+// narrowed to one member's or one connection's. IncludeRemoved also lists
+// what was removed, for a caller that needs a connection's whole history -
+// auto-subscribe reads it this way so it can tell a slug already live from
+// one the member took away.
 func (store *Store) Triggers(ctx context.Context, organizationID string, query application.TriggerQuery) ([]domain.Trigger, error) {
-	sql := `SELECT ` + triggerColumns + ` FROM apps_triggers WHERE organization_id = $1 AND status <> 'removed'`
+	sql := `SELECT ` + triggerColumns + ` FROM apps_triggers WHERE organization_id = $1`
 	args := []any{organizationID}
 	bind := func(value any) string {
 		args = append(args, value)
 		return fmt.Sprintf("$%d", len(args))
+	}
+	if !query.IncludeRemoved {
+		sql += ` AND status <> 'removed'`
 	}
 	if query.MemberID != "" {
 		sql += ` AND member_id = ` + bind(query.MemberID)

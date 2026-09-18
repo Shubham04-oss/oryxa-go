@@ -315,7 +315,8 @@ func (store *fakeStore) Triggers(_ context.Context, organizationID string, query
 	defer store.mu.Unlock()
 	var listed []domain.Trigger
 	for _, trigger := range store.triggers {
-		if trigger.OrganizationID != organizationID || trigger.Status == domain.TriggerRemoved ||
+		if trigger.OrganizationID != organizationID ||
+			(!query.IncludeRemoved && trigger.Status == domain.TriggerRemoved) ||
 			(query.MemberID != "" && trigger.MemberID != query.MemberID) ||
 			(query.ConnectionID != "" && trigger.ConnectionID != query.ConnectionID) {
 			continue
