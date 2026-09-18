@@ -589,3 +589,18 @@ func TestATriggerThatArrivesLateIsDueAtOnce(t *testing.T) {
 		t.Fatalf("claimed = %+v, want the late trigger due at its hard deadline", got)
 	}
 }
+
+// TestTheSchedulersConstraintsAreOnThisTable: 002 looked its constraints up
+// by name alone, and pg_constraint spans every schema, so a batching_triggers
+// elsewhere in the database — public, when tests run in a schema of their
+// own — made it skip adding them here.
+func TestTheSchedulersConstraintsAreOnThisTable(t *testing.T) {
+	store, _ := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	if got := count(t, store, `
+		SELECT count(*) FROM pg_constraint
+		WHERE conrelid = 'batching_triggers'::regclass
+		  AND conname IN ('batching_triggers_target_size_check', 'batching_triggers_pressure_check',
+			'batching_triggers_deadline_order_check')`); got != 3 {
+		t.Fatalf("batching_triggers has %d of the scheduler's three constraints", got)
+	}
+}
