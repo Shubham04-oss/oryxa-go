@@ -5,6 +5,7 @@ import (
 	"errors"
 	"iter"
 	"testing"
+	"time"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
@@ -93,4 +94,36 @@ func TestAccessTokenRoundTrip(t *testing.T) {
 	if got := AccessToken(ctx); got != "token-abc" {
 		t.Fatalf("AccessToken() = %q, want token-abc", got)
 	}
+}
+
+func TestBearerPrefersTheMembersOwnToken(t *testing.T) {
+	state := fakeState{"organization_id": "org-1"}
+	present := &fakeReadonlyContext{
+		StrictContextMock: agent.NewStrictContextMock(WithAccessToken(context.Background(), "own-token")),
+		userID:            "user-1",
+		state:             state,
+	}
+	member, token, err := Bearer(present, nil)
+	if err != nil || token != "own-token" || member.OrganizationID != "org-1" {
+		t.Fatalf("Bearer() = %+v, %q, %v", member, token, err)
+	}
+
+	absent := &fakeReadonlyContext{
+		StrictContextMock: agent.NewStrictContextMock(context.Background()),
+		userID:            "user-1",
+		state:             state,
+	}
+	if _, _, err := Bearer(absent, nil); err == nil {
+		t.Fatal("Bearer() with neither a member token nor a token source = nil error")
+	}
+	_, token, err = Bearer(absent, staticTokens("agent-token"))
+	if err != nil || token != "agent-token" {
+		t.Fatalf("Bearer() for an absent member = %q, %v", token, err)
+	}
+}
+
+type staticTokens string
+
+func (tokens staticTokens) AgentToken(context.Context, string) (string, time.Time, error) {
+	return string(tokens), time.Now().Add(time.Hour), nil
 }

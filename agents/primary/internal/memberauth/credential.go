@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/auth"
 )
 
@@ -54,6 +55,29 @@ func (p *CredentialProvider) Credential(ctx context.Context) (auth.Credential, e
 		return nil, err
 	}
 	return memberCredential{token: token, organizationID: member.OrganizationID}, nil
+}
+
+// Bearer returns the member a tool call acts for and the token it presents
+// as them: the member's own when the run carries it, otherwise an agent
+// token for the session's user, minted from tokens. It is for native tools
+// that make their own HTTP calls: they see the session, so, unlike an MCP
+// toolset's calls, they need no WrapToolset to find the member.
+func Bearer(ctx agent.ReadonlyContext, tokens TokenSource) (Member, string, error) {
+	member, err := MemberFromSession(ctx)
+	if err != nil {
+		return Member{}, "", err
+	}
+	if token := AccessToken(ctx); token != "" {
+		return member, token, nil
+	}
+	if tokens == nil {
+		return Member{}, "", errors.New("this run cannot act for the member: it carries no token of theirs, and none can be minted here")
+	}
+	token, _, err := tokens.AgentToken(ctx, member.UserID)
+	if err != nil {
+		return Member{}, "", err
+	}
+	return member, token, nil
 }
 
 // memberCredential applies the member's bearer token and organization to a

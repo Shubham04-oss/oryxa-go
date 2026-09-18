@@ -66,6 +66,9 @@ type Config struct {
 	// toolbox (agents.AppsToolbox), which reaches every app a member has
 	// connected through Composio; when empty, Krude loads no apps toolbox.
 	AppsURL string
+	// RagURL is rag's own URL. When set, Krude gets the knowledge toolbox,
+	// which searches the member's and their organization's collections.
+	RagURL string
 	// ArtifactBucket is the S3 bucket artifacts are kept in. Without it they
 	// are held in memory and go with the process.
 	ArtifactBucket string
@@ -173,6 +176,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		GuardrailFailClosed:   guardrailFailClosed,
 		ModelPrices:           modelPrices,
 		AppsURL:               strings.TrimSpace(getenv("APPS_URL")),
+		RagURL:                strings.TrimSpace(getenv("RAG_URL")),
 		ArtifactBucket:        strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
 		S3Endpoint:            artifactEndpoint(getenv),
 		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),

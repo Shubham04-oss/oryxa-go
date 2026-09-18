@@ -26,7 +26,7 @@ assembles it:
 krude              chat: the member's assistant
 ├── planner        single-turn sub-agent: turns multi-step work into a plan
 ├── researcher     single-turn sub-agent: answers from the live web with Google Search and URL context
-├── toolboxes      list_tools, load_tools: sandbox and browser tools, loaded on demand
+├── toolboxes      list_tools, load_tools: sandbox, browser, apps and knowledge, loaded on demand
 ├── subagents      create_subagent, list_subagents, remove_subagent: specialists Krude writes and reuses in a session
 └── helpers        list_helpers, spawn_helper: temporary agents for big or separate work
 ```
@@ -193,7 +193,8 @@ gets the reason in plain words, without the request that carried it, and a
 loaded toolbox whose tools cannot be listed is left out of the turn rather
 than failing it, with `load_tools` saying why.
 
-`cmd/devui` builds the apps toolbox when `APPS_URL` is set, signing its agent
+The service and `cmd/devui` build the apps toolbox when `APPS_URL` is set
+(in the binary it defaults to this process when it runs apps), signing agent
 token requests with a KMS `serviceauth.Signer` naming agents as the caller
 (`AUTH_URL` and `AGENTS_PRIMARY_SERVICE_KEY_ID`); when either is missing it
 logs a warning, since a run without the member's own token could then not act
@@ -213,6 +214,30 @@ member's standing grant, since ADK's launcher has no member token to forward.
 
 **Not yet.** No run starts from a trigger, so the member-absent path is
 exercised only by the development UI and tests.
+
+### Knowledge toolbox
+
+`agents.KnowledgeToolbox` builds the `knowledge` toolbox, which searches the
+organization's own documents in rag — what the member and their organization
+indexed, including what knowledge extracts from their connected apps — so
+Krude answers from them and cites them. Its skill is
+`internal/agents/toolboxes/knowledge.md`. It has two native tools:
+
+- `knowledge_collections` lists the corpora rag lets the member read by
+  default: their own and their organization's.
+- `knowledge_search` searches up to eight of them at once — the ones named,
+  or else those holding documents, fullest first — and merges their best
+  passages by score. Each passage carries its document's title, its source
+  (a link when the document has one), the section it sits in, and at most
+  1,500 characters of text; collections that could not be read come back
+  under `unsearched` with the reason.
+
+Both call rag's API (`internal/ragclient`) as the member, with
+`memberauth.Bearer`: the member's own token when the run carries it,
+otherwise an agent token under their grant, so rag decides what they may
+read exactly as it does for them. The service and `cmd/devui` build it when
+`RAG_URL` is set, which in the binary defaults to this process when it runs
+rag. A team's corpus is searched only when named.
 
 ## Run API
 
@@ -567,7 +592,8 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `GOOGLE_CLOUD_PROJECT` | unset | Project whose Vertex AI serves Gemini; the agents require it |
 | `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI location: `global`, or the `us` or `eu` multi-region |
 | `GOOGLE_APPLICATION_CREDENTIALS` | unset | ADC credential file for deployments; locally `gcloud auth application-default login` supplies ADC |
-| `APPS_URL` | unset | The apps service's own URL; when set, `cmd/devui` builds the apps toolbox (see Acting for a member) |
+| `APPS_URL` | unset | The apps service's own URL; when set, Krude gets the apps toolbox (see Acting for a member) |
+| `RAG_URL` | unset | Rag's own URL; when set, Krude gets the knowledge toolbox (see Knowledge toolbox). In the binary it defaults to this process when it runs rag |
 | `AUTH_URL` | unset | Auth's own URL; where a member-absent run exchanges the member's standing grant for an agent token |
 | `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |
 | `AGENTS_ALLOWED_ORIGINS` | unset | Origins, comma-separated, whose cookie-authenticated requests may start runs and change threads; the web app's |
