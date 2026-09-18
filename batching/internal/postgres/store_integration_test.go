@@ -517,13 +517,20 @@ func TestRemovingAConnectionDropsItsWaitingTriggers(t *testing.T) {
 	if err := store.Complete(ctx, completed[0], event); err != nil {
 		t.Fatal(err)
 	}
-	recordTrigger(t, store, fromConnection("waiting", "apc_gone", domain.LaneDigest))
 	recordTrigger(t, store, fromConnection("claimed", "apc_gone", domain.LaneImmediate))
 	if _, err := store.ClaimDue(ctx, rule, time.Minute, 2); err != nil {
 		t.Fatal(err)
 	}
+	recordTrigger(t, store, fromConnection("waiting", "apc_gone", domain.LaneDigest))
 	recordTrigger(t, store, fromConnection("other_app", "apc_kept", domain.LaneDigest))
 	late := fromConnection("late", "apc_gone", domain.LaneDigest)
+	for claimedState, want := range map[string]int{"IS NOT NULL": 1, "IS NULL": 1} {
+		if got := count(t, store, `SELECT count(*) FROM batching_triggers
+			WHERE organization_id = $1 AND connection_id = 'apc_gone' AND batched_at IS NULL AND batch_id `+claimedState,
+			organizationID); got != want {
+			t.Fatalf("%d waiting triggers from the app have batch_id %s before the removal, want %d", got, claimedState, want)
+		}
+	}
 
 	if err := store.Discard(ctx, organizationID, "apc_gone", ""); err != nil {
 		t.Fatal(err)
@@ -594,16 +601,59 @@ func TestATriggerThatArrivesLateIsDueAtOnce(t *testing.T) {
 }
 
 // TestTheSchedulersConstraintsAreOnThisTable: 002 looked its constraints up
-// by name alone, and pg_constraint spans every schema, so a batching_triggers
-// elsewhere in the database — public, when tests run in a schema of their
-// own — made it skip adding them here.
+// by name alone, and pg_constraint spans the whole database, so a same-named
+// constraint on another table made it skip adding them here. This migrates a
+// schema of its own beside another whose table already has the names.
 func TestTheSchedulersConstraintsAreOnThisTable(t *testing.T) {
-	store, _ := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
-	if got := count(t, store, `
+	databaseURL := os.Getenv("BATCHING_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BATCHING_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	admin, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-batching-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	random := make([]byte, 6)
+	_, _ = rand.Read(random)
+	decoy, fresh := "batching_decoy_"+hex.EncodeToString(random), "batching_fresh_"+hex.EncodeToString(random)
+	for _, schema := range []string{decoy, fresh} {
+		if _, err := admin.Pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := admin.Pool.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE"); err != nil {
+				t.Errorf("drop schema %s: %v", schema, err)
+			}
+		})
+	}
+	if _, err := admin.Pool.Exec(ctx, `
+		CREATE TABLE `+decoy+`.batching_triggers (
+			target_size integer CONSTRAINT batching_triggers_target_size_check CHECK (target_size > 0),
+			pressure double precision CONSTRAINT batching_triggers_pressure_check CHECK (pressure >= 1),
+			soft_due_at timestamptz,
+			hard_due_at timestamptz,
+			CONSTRAINT batching_triggers_deadline_order_check CHECK (soft_due_at <= hard_due_at))`); err != nil {
+		t.Fatal(err)
+	}
+	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-batching-test", Schema: fresh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(database.Close)
+	if err := New(database).Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	if err := database.Pool.QueryRow(ctx, `
 		SELECT count(*) FROM pg_constraint
 		WHERE conrelid = 'batching_triggers'::regclass
 		  AND conname IN ('batching_triggers_target_size_check', 'batching_triggers_pressure_check',
-			'batching_triggers_deadline_order_check')`); got != 3 {
+			'batching_triggers_deadline_order_check')`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 3 {
 		t.Fatalf("batching_triggers has %d of the scheduler's three constraints", got)
 	}
 }
