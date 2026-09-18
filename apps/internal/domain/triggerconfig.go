@@ -106,17 +106,44 @@ type configSchema struct {
 	Required   []string                  `json:"required"`
 }
 
-// allowsNull says a required property may be explicitly null, which its
-// declared type says when it carries "null".
+// allowsNull says a required property may be explicitly null: its declared
+// type carries "null", it is marked nullable (OpenAPI's own keyword for it,
+// alongside a type rather than folded into it), or one of an anyOf/oneOf's
+// branches is exactly {"type":"null"} (how Pydantic v2 writes Optional[X]).
+// This is the only place anyOf and oneOf are read at all for a property's
+// type - check below still leaves the rest of their shape unjudged, since
+// the null branch is the one case answerable without modelling the keyword.
 func (schema configSchema) allowsNull(name string) bool {
-	return slices.Contains(schema.Properties[name].types(), "null")
+	property := schema.Properties[name]
+	if slices.Contains(property.types(), "null") || property.Nullable {
+		return true
+	}
+	return slices.ContainsFunc(property.AnyOf, isNullSchema) || slices.ContainsFunc(property.OneOf, isNullSchema)
+}
+
+// isNullSchema says a sub-schema is exactly {"type":"null"}, which is how a
+// nullable union is spelled inside anyOf or oneOf.
+func isNullSchema(raw json.RawMessage) bool {
+	var branch struct {
+		Type json.RawMessage `json:"type"`
+	}
+	if json.Unmarshal(raw, &branch) != nil {
+		return false
+	}
+	var kind string
+	return json.Unmarshal(branch.Type, &kind) == nil && kind == "null"
 }
 
 type propertySchema struct {
 	Type json.RawMessage   `json:"type"`
 	Enum []json.RawMessage `json:"enum"`
+	// Nullable is OpenAPI's pre-3.1 way of saying a value may be null beside
+	// its declared type, rather than folding "null" into the type itself.
+	Nullable bool `json:"nullable"`
 	// AnyOf, OneOf, AllOf and Ref each mean the property's shape is decided
-	// somewhere this does not follow, so its type is not judged at all.
+	// somewhere this does not follow, so its type is not judged at all -
+	// except that allowsNull above also looks inside AnyOf and OneOf for a
+	// {"type":"null"} branch.
 	AnyOf []json.RawMessage `json:"anyOf"`
 	OneOf []json.RawMessage `json:"oneOf"`
 	AllOf []json.RawMessage `json:"allOf"`

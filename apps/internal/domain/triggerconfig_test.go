@@ -50,6 +50,21 @@ func TestCheckTriggerConfigAcceptsWhatEachTriggerTakes(t *testing.T) {
 			schema: `{"type":"object","properties":{"since":{"type":["string","null"]}},"required":["since"]}`,
 			config: `{"since":null}`,
 		},
+		"a nullable field via OpenAPI's own keyword": {
+			// OpenAPI (pre-3.1) writes nullable beside type rather than
+			// folding "null" into it.
+			schema: `{"type":"object","properties":{"since":{"type":"string","nullable":true}},"required":["since"]}`,
+			config: `{"since":null}`,
+		},
+		"a nullable field via anyOf with a null branch": {
+			// Pydantic v2 writes Optional[str] this way.
+			schema: `{"type":"object","properties":{"since":{"anyOf":[{"type":"string"},{"type":"null"}]}},"required":["since"]}`,
+			config: `{"since":null}`,
+		},
+		"a nullable field via oneOf with a null branch": {
+			schema: `{"type":"object","properties":{"since":{"oneOf":[{"type":"string"},{"type":"null"}]}},"required":["since"]}`,
+			config: `{"since":null}`,
+		},
 		"a field whose shape is a reference": {
 			schema: `{"type":"object","properties":{"filter":{"$ref":"#/$defs/Filter"}},"required":["filter"]}`,
 			config: `{"filter":{"any":"shape at all"}}`,
@@ -112,6 +127,13 @@ func TestCheckTriggerConfigRefusesWhatWouldNeverDeliver(t *testing.T) {
 			schema: `{"type":"object","properties":{"channel":{"type":"string"}},"required":["channel"]}`,
 			config: `{"channel":null}`,
 			says:   `"channel"`,
+		},
+		"a required field given as null, anyOf without a null branch": {
+			// Neither branch is {"type":"null"}, so allowsNull must not be
+			// fooled by the mere presence of anyOf into accepting null.
+			schema: `{"type":"object","properties":{"target":{"anyOf":[{"type":"string"},{"type":"integer"}]}},"required":["target"]}`,
+			config: `{"target":null}`,
+			says:   `"target"`,
 		},
 		"a string where a number belongs": {
 			schema: `{"type":"object","properties":{"interval":{"type":"integer"}},"required":["interval"]}`,
