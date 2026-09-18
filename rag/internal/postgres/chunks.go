@@ -241,10 +241,19 @@ func (store *Store) LexicalSearch(ctx context.Context, corpus domain.Corpus, tex
 		return nil, err
 	}
 	arguments := []any{corpus.OrganizationID, corpus.ID, text}
+	// A chunk matches on any of the question's words, and ranks by how many it
+	// holds and how close together. A question worded the way a person asks
+	// it rarely has every one of its words in one passage, and requiring them
+	// all — as a search box does — left the lexical half finding nothing for
+	// most questions. plainto_tsquery quotes each lexeme, so turning its ANDs
+	// into ORs cannot change what the words are.
 	statement := `
-		SELECT id, ts_rank_cd(search_vector, query) AS score
-		FROM rag_chunks, websearch_to_tsquery('english', $3) AS query
-		WHERE organization_id = $1 AND corpus_id = $2 AND search_vector @@ query`
+		WITH asked AS (
+			SELECT replace(plainto_tsquery('english', $3)::text, ' & ', ' | ')::tsquery AS query
+		)
+		SELECT id, ts_rank_cd(search_vector, asked.query) AS score
+		FROM rag_chunks, asked
+		WHERE organization_id = $1 AND corpus_id = $2 AND search_vector @@ asked.query`
 	if len(filter.DocumentIDs) > 0 {
 		arguments = append(arguments, pgTextArray(filter.DocumentIDs))
 		statement += fmt.Sprintf(` AND document_id = ANY($%d)`, len(arguments))

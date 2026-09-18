@@ -536,6 +536,24 @@ func TestJaccard(t *testing.T) {
 	}
 }
 
+func TestFuseTrustsTheDenseRetrieverMoreAtTheTop(t *testing.T) {
+	t.Parallel()
+	// Each retriever loves a different chunk. The dense one is right more
+	// often, so its first place beats the lexical one's.
+	combined := fuse([]ranked{
+		{name: denseRetriever, hits: []domain.ScoredChunk{{ChunkID: "dense-first"}}},
+		{name: lexicalRetriever, hits: []domain.ScoredChunk{{ChunkID: "lexical-first"}}},
+	})
+	if combined[0].chunkID != "dense-first" {
+		t.Fatalf("order = %v, want the dense retriever's first place on top", combined)
+	}
+	// A lexical search alone still scores its first place one.
+	alone := fuse([]ranked{{name: lexicalRetriever, hits: []domain.ScoredChunk{{ChunkID: "only"}}}})
+	if alone[0].score < 0.999 || alone[0].score > 1.001 {
+		t.Fatalf("a lexical search's first place scored %v, want 1", alone[0].score)
+	}
+}
+
 func TestFuseRewardsAgreement(t *testing.T) {
 	t.Parallel()
 	// Fusion's whole purpose: a chunk both retrievers placed respectably
