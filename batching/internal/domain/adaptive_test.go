@@ -180,3 +180,43 @@ func TestTheOrderEventsArriveInDoesNotChangeTheEstimate(t *testing.T) {
 		t.Fatalf("in order %+v, reversed %+v", inOrder, reversed)
 	}
 }
+
+// TestTheTargetStaysWithinTheConfiguredSizes: quiet traffic lowers a target
+// to two at most, or to the cold target when that is one, and a burst raises
+// it to the largest batch at most. A floor of two used to override an
+// accepted cold target of one, and even exceed a largest batch of one.
+func TestTheTargetStaysWithinTheConfiguredSizes(t *testing.T) {
+	for _, rule := range []Rule{
+		{Size: 1, MaxWait: time.Hour, Largest: 1},
+		{Size: 1, MaxWait: time.Hour, Largest: 20},
+		{Size: 2, MaxWait: time.Hour, Largest: 2},
+		{Size: 5, MaxWait: time.Hour, Largest: 20},
+		{Size: 100, MaxWait: time.Minute, Largest: 100},
+	} {
+		scheduler, err := NewAdaptiveScheduler(rule)
+		if err != nil {
+			t.Fatal(err)
+		}
+		floor := min(2, rule.Size)
+		check := func(when string, schedule Schedule) {
+			t.Helper()
+			if schedule.TargetSize < floor || schedule.TargetSize > rule.Largest {
+				t.Fatalf("rule %+v, %s: target %d, want it within [%d, %d]", rule, when, schedule.TargetSize, floor, rule.Largest)
+			}
+		}
+		profile, schedule, err := observe(scheduler, TrafficProfile{}, adaptiveTestTime, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		check("cold", schedule)
+		if schedule.TargetSize != rule.Size {
+			t.Fatalf("rule %+v: cold target %d, want the configured %d", rule, schedule.TargetSize, rule.Size)
+		}
+		for index := range 60 {
+			profile, schedule, _ = observe(scheduler, profile, adaptiveTestTime.Add(time.Duration(index)*time.Second), 0)
+		}
+		check("after a burst", schedule)
+		_, schedule, _ = observe(scheduler, profile, adaptiveTestTime.Add(6*time.Hour), 0)
+		check("after silence", schedule)
+	}
+}

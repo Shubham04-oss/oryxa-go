@@ -13,16 +13,21 @@ const (
 	fastHalfLife          = 15 * time.Minute
 	slowHalfLife          = 90 * time.Minute
 	minimumHistoryEvents  = 5
-	minimumTargetSize     = 2
-	priorityPressure      = 2.0
-	priorityDeadlineLead  = 0.75
+	// minimumTargetSize is as low as quiet traffic can bring a member's
+	// target, unless the configured cold target is lower still: an operator
+	// who asked for batches of one gets them.
+	minimumTargetSize    = 2
+	priorityPressure     = 2.0
+	priorityDeadlineLead = 0.75
 )
 
 // FallbackPriority is what a trigger gets when its classifier could not be
 // asked. It brings the trigger's soft deadline forward, but its pressure,
-// 1 + priorityPressure×FallbackPriority, stays under minimumTargetSize, so one
-// such trigger never makes a group due by itself and a classifier outage is
-// not one agent turn per webhook.
+// 1 + priorityPressure×FallbackPriority, stays under minimumTargetSize. That
+// is the smallest target whenever the cold target is at least two, so one
+// such trigger then never makes a group due by itself and a classifier outage
+// is not one agent turn per webhook. A cold target of one asks for a turn per
+// webhook anyway.
 const FallbackPriority = 0.4
 
 // AdaptiveScheduler combines two exponentially decayed arrival-rate views.
@@ -116,7 +121,10 @@ func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, receivedAt, r
 		effectiveRate := .75*fastRate + .25*slowRate
 		target = int(math.Ceil(effectiveRate * scheduler.rule.MaxWait.Hours()))
 	}
-	target = max(minimumTargetSize, min(target, scheduler.rule.Largest))
+	// The floor never exceeds the configured sizes, so the target stays
+	// within [floor, Largest] for any rule the scheduler accepts.
+	floor := min(minimumTargetSize, scheduler.rule.Size)
+	target = max(floor, min(target, scheduler.rule.Largest))
 
 	hardDue := cadenceBoundary(at, scheduler.rule.MaxWait, key)
 	window := hardDue.Sub(at)

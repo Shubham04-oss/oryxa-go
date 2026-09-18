@@ -73,7 +73,8 @@ projection of the app payload. This projection never replaces or truncates the
 payload stored for the agent. Provider failures become a fallback digest at
 `FallbackPriority` (0.4): the event stays durable and its soft deadline comes
 forward, but its pressure stays under the smallest target, so an outage cannot
-create one agent turn per webhook. After five failures in a row batching stops
+create one agent turn per webhook (unless `BATCHING_BATCH_SIZE=1` asks for
+exactly that). After five failures in a row batching stops
 asking TypeSafe for a minute and takes the fallback at once, so an outage does
 not cost every trigger its timeout; then one trigger asks again, and a success
 resumes classification. Opening and closing are each logged once. With no API
@@ -132,7 +133,9 @@ BATCHING_JEV_IMMEDIATE_PROBABILITY=0.85
 BATCHING_JEV_MIN_CONFIDENCE=0.60
 ```
 
-`BATCHING_BATCH_SIZE` is the cold-start prior. `BATCHING_MAX_WAIT` is the
+`BATCHING_BATCH_SIZE` is the cold-start prior. Traffic moves a member's target
+between two, or the cold-start target when that is one, and
+`BATCHING_LARGEST_BATCH`. `BATCHING_MAX_WAIT` is the
 periodic hard cadence: ordinary traffic may release earlier, but never later.
 The service rejects values over `90m`; the default is `1h`, leaving operational
 headroom beneath the product's absolute delivery ceiling.
