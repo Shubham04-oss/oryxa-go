@@ -189,21 +189,23 @@ prompt attacks — is a decision for whoever owns the account.
 
 ## 2. Web app
 
-The web app is to be refactored, and until then it runs ahead of the backend:
+The web app now reaches what a member needs day to day: conversations with
+Krude, streamed, with confirmations answered in place (PR #29); agent access,
+files and app updates in conversations, and the collections Krude searches
+(PR #31); and connections on the apps service, with triggers that wake Krude
+and knowledge sources that feed its search (PR #32). The screens that called
+the archived connections service are gone. `pnpm check`, `typecheck`, `test`
+and `build` pass on the three together. What is left:
 
-- **Its connection screens call archived APIs.** `/app/connections`, the
-  tools settings page and onboarding's tool step call connections' routes,
-  which the binary no longer serves. Apps serves a different shape —
-  `/v1/organizations/{org}/apps/connections` and a hosted link the browser is
-  sent to ([apps/README.md, API](../apps/README.md#api)).
-- **Agent conversations.** `/app/threads` renders a `ServicePlaceholder`.
-- **Agent grants.** No screen grants or withdraws an agent's access, although
-  auth's API does both
-  ([auth/README.md, Agent grants](../auth/README.md#agent-grants)).
-- **Knowledge sources** and **rag corpora and documents** have APIs and no
-  screens.
-- `pnpm check`, `typecheck`, `test` and `build` have not run since PR #17
-  pointed the development proxy at the one binary.
+- **Nothing has run against the real binary.** Every screen was clicked
+  through against a stand-in for it; signing in to the real one needs Cognito.
+- **Krude's answers are plain text.** Markdown in an answer shows as written.
+- **Collections are read-only.** A member cannot make a rag corpus, add a
+  document or upload a file for Krude to search from the web app, and the
+  files source waits on §3.2.
+- **Trigger settings are simple.** A trigger whose configuration needs more
+  than plain text, number or yes/no fields shows as needing setup.
+- The web app still deploys by hand (§5).
 
 ## 3. Decisions only the owner can make
 

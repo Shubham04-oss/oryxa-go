@@ -1,0 +1,139 @@
+import { describe, expect, it } from "vitest";
+import {
+	availableSourceProviders,
+	defaultSourceIntervalSeconds,
+	intervalLabel,
+	runStatusLabel,
+	sourceStatusLabel,
+	sourceStatusTone,
+	sourceTargetField,
+	sourceTargetLabel,
+	sourceTargetPayload,
+	sourceTargetProblem,
+	supportsSourceProvider,
+} from "./client";
+
+describe("availableSourceProviders / supportsSourceProvider", () => {
+	it("keeps only the connectable providers this build actually mounts", () => {
+		expect(availableSourceProviders(["github", "slack", "files"])).toEqual([
+			"github",
+			"slack",
+		]);
+		expect(availableSourceProviders([])).toEqual([]);
+	});
+
+	it("never offers files, even if the server listed it", () => {
+		expect(supportsSourceProvider(["files"], "files")).toBe(false);
+	});
+
+	it("requires both a known provider and it being mounted", () => {
+		expect(supportsSourceProvider(["github"], "github")).toBe(true);
+		expect(supportsSourceProvider(["slack"], "github")).toBe(false);
+		expect(supportsSourceProvider(["github"], "jira")).toBe(false);
+	});
+});
+
+describe("sourceTargetField", () => {
+	it("labels each provider's target from what knowledge's README documents", () => {
+		expect(sourceTargetField("github")).toMatchObject({
+			label: "Repository",
+			required: true,
+		});
+		expect(sourceTargetField("notion")).toMatchObject({ required: false });
+		expect(sourceTargetField("slack")).toMatchObject({
+			label: "Channel ID",
+			required: true,
+		});
+	});
+});
+
+describe("sourceTargetPayload", () => {
+	it("builds a github target from owner/name", () => {
+		expect(sourceTargetPayload("github", " acme/api ")).toEqual({
+			repository: "acme/api",
+		});
+	});
+
+	it("builds a slack target from a channel id", () => {
+		expect(sourceTargetPayload("slack", "C0123456789")).toEqual({
+			channel: "C0123456789",
+		});
+	});
+
+	it("leaves notion's target empty for every page, or names a database", () => {
+		expect(sourceTargetPayload("notion", "")).toEqual({});
+		expect(sourceTargetPayload("notion", "  ")).toEqual({});
+		expect(sourceTargetPayload("notion", "db-123")).toEqual({
+			database: "db-123",
+		});
+	});
+});
+
+describe("sourceTargetProblem", () => {
+	it("requires owner/name for github", () => {
+		expect(sourceTargetProblem("github", "")).toBeDefined();
+		expect(sourceTargetProblem("github", "acme")).toBeDefined();
+		expect(sourceTargetProblem("github", "acme/api")).toBeUndefined();
+	});
+
+	it("requires a channel id with no spaces for slack", () => {
+		expect(sourceTargetProblem("slack", "")).toBeDefined();
+		expect(sourceTargetProblem("slack", "general channel")).toBeDefined();
+		expect(sourceTargetProblem("slack", "C0123456789")).toBeUndefined();
+	});
+
+	it("never refuses notion's target: it is optional", () => {
+		expect(sourceTargetProblem("notion", "")).toBeUndefined();
+		expect(sourceTargetProblem("notion", "db-123")).toBeUndefined();
+	});
+});
+
+describe("sourceTargetLabel", () => {
+	it("reads github's repository", () => {
+		expect(sourceTargetLabel("github", { repository: "acme/api" })).toBe(
+			"acme/api",
+		);
+	});
+
+	it("reads slack's channel with a leading hash", () => {
+		expect(sourceTargetLabel("slack", { channel: "C0123456789" })).toBe(
+			"#C0123456789",
+		);
+	});
+
+	it("reads notion's database, or names every page when there is none", () => {
+		expect(sourceTargetLabel("notion", { database: "db-123" })).toBe(
+			"Database db-123",
+		);
+		expect(sourceTargetLabel("notion", {})).toBe("All pages");
+	});
+});
+
+describe("intervalLabel", () => {
+	it("names the presets", () => {
+		expect(intervalLabel(defaultSourceIntervalSeconds)).toBe("Every hour");
+		expect(intervalLabel(300)).toBe("Every 5 minutes");
+		expect(intervalLabel(604_800)).toBe("Every week");
+	});
+
+	it("describes an interval outside the presets", () => {
+		expect(intervalLabel(90)).toBe("Every 90 seconds");
+		expect(intervalLabel(120)).toBe("Every 2 minutes");
+		expect(intervalLabel(7200)).toBe("Every 2 hours");
+		expect(intervalLabel(172_800)).toBe("Every 2 days");
+	});
+});
+
+describe("status labels", () => {
+	it("names a source's status", () => {
+		expect(sourceStatusLabel("active")).toBe("Active");
+		expect(sourceStatusLabel("paused")).toBe("Needs reconnecting");
+		expect(sourceStatusTone("paused")).toBe("warning");
+	});
+
+	it("names a run's status", () => {
+		expect(runStatusLabel("running")).toBe("Running");
+		expect(runStatusLabel("completed")).toBe("Completed");
+		expect(runStatusLabel("failed")).toBe("Failed");
+	});
+});
