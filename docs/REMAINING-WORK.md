@@ -382,12 +382,6 @@ Kept short; the pull requests hold the detail.
   sweep; paged rag's document lists and tested its access rules, events and
   clients; and fixed auth's invitation links and agent-grant `return_to`,
   along with three bugs found while proving those.
-- **PR #23**, the run API: the `agents` service serves a
-  member's threads with Krude and streams each run, with the member's own
-  token on it, confirmations answered through the API, one run per thread
-  across replicas, and run events with a per-model cost. Krude's assembly
-  moved out of `cmd/devui` so the service and the development UI run the
-  same agent.
 - **PR #20** built `/apps`: a member's third-party apps on Composio, with the
   safety layer Oryxa keeps — the connection a call uses derived from auth, a
   write needing an idempotency key and the member's confirmation, verified
@@ -395,6 +389,11 @@ Kept short; the pull requests hold the detail.
   sources back on top of it. A first live pass against a real Composio project
   found and fixed two defects
   ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)).
+- **PR #23** gave the `agents` service its run API: a member's threads with
+  Krude, each run streamed with the member's own token on it, confirmations
+  answered through the API, one run per thread across replicas, and run
+  events with a per-model cost. Krude's assembly moved out of `cmd/devui` so
+  the service and the development UI run the same agent.
 - **Housekeeping, 2026-09-18**: the eleven merged branches are off the remote
   (the suspended Linear work is a stash, untouched), and files' check
   constraint no longer accepts the retired `integrations.*` purposes —
