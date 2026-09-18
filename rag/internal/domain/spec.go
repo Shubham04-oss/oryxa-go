@@ -185,6 +185,11 @@ type ModelProfile struct {
 	MaxInputTokens int
 	// MaxBatch is how many texts one call accepts.
 	MaxBatch int
+	// MaxBatchTokens is how much text one call accepts across all its texts,
+	// where the provider limits that separately from MaxBatch; zero means it
+	// does not. Vertex refuses the whole call, not the texts past the limit, so
+	// a batch sized by count alone fails once its chunks are long enough.
+	MaxBatchTokens int
 	// Normalized says the model already returns unit-length vectors, so cosine
 	// and inner product agree and no normalizing pass is needed.
 	Normalized bool
@@ -234,6 +239,9 @@ var catalog = []ModelProfile{{
 	Dimensions:     []int{768, 512, 256},
 	MaxInputTokens: 2048,
 	MaxBatch:       250,
+	// Measured on 2026-09-18: 60 texts of 23,563 tokens came back 400,
+	// "the model supports up to 20000".
+	MaxBatchTokens: 20000,
 	Normalized:     true,
 }, {
 	Provider:       ProviderVertex,
@@ -241,6 +249,7 @@ var catalog = []ModelProfile{{
 	Dimensions:     []int{768, 512, 256},
 	MaxInputTokens: 2048,
 	MaxBatch:       250,
+	MaxBatchTokens: 20000,
 	Normalized:     true,
 }, {
 	Provider:       ProviderVertex,

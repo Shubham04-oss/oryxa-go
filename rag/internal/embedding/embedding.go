@@ -30,6 +30,9 @@ var (
 	// ErrTransient means the call failed for a reason that may not recur,
 	// such as a timeout or a 5xx. It is retried.
 	ErrTransient = errors.New("embedding provider failed transiently")
+	// ErrBatchTooLarge means the provider refused a call for carrying too much
+	// text across its texts. The batch is embedded in halves instead.
+	ErrBatchTooLarge = errors.New("embedding provider refused a batch as too large")
 )
 
 // Result is what one embedding call produced. Vectors are in the same order
@@ -38,6 +41,9 @@ var (
 type Result struct {
 	Vectors [][]float32
 	Usage   domain.Usage
+	// Truncated counts the texts the provider said it cut to its input limit.
+	// Their vectors describe only the start of the text.
+	Truncated int
 }
 
 // Embedder is the boundary the ingest and query paths depend on.
