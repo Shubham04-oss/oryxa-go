@@ -205,3 +205,113 @@ func TestAnIncompleteConnectedEventIsRefused(t *testing.T) {
 		t.Fatalf("error = %v, want invalid", err)
 	}
 }
+
+// A trigger says the app changed something. What it carries is the app's own
+// payload, in a shape that differs per trigger; what it means is the same
+// whatever the shape, so the sources on that connection are swept now rather
+// than at their next hour.
+
+// hastenable is a live source due in an hour, the way an automatically
+// registered one is.
+func (store *fakeStore) hastenable(t *testing.T, id, connectionID string, lastSynced *time.Time) domain.Source {
+	t.Helper()
+	due := testClock.Add(time.Hour)
+	source := domain.Source{
+		ID: id, OrganizationID: "org_1", ConnectionID: connectionID, Provider: "github",
+		Target: map[string]string{"repository": "acme/" + id}, Status: domain.StatusActive,
+		Interval: time.Hour, SyncAt: &due, LastSyncedAt: lastSynced, CreatedBy: "user-1",
+	}
+	store.sources[id] = source
+	return source
+}
+
+func TestATriggerSweepsItsConnectionsSourcesNow(t *testing.T) {
+	store := newFakeStore()
+	store.hastenable(t, "src_1", "apc_1", nil)
+	store.hastenable(t, "src_2", "apc_1", nil)
+	// Another connection's source is not this trigger's business.
+	store.hastenable(t, "src_3", "apc_2", nil)
+	service, _ := connectedService(t, store, &fakeApps{connection: usableConnection()})
+
+	err := service.TriggerReceived(context.Background(), appsv1.TriggerReceived{
+		TriggerID: "apt_1", ConnectionID: "apc_1", OrganizationID: "org_1", MemberID: "user-1",
+		Toolkit: "github", Trigger: "GITHUB_ISSUE_CREATED", ReceivedAt: testClock,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"src_1", "src_2"} {
+		if due := store.sources[id].SyncAt; due == nil || !due.Equal(testClock) {
+			t.Fatalf("%s is due at %v, want now", id, due)
+		}
+	}
+	if due := store.sources["src_3"].SyncAt; due == nil || !due.Equal(testClock.Add(time.Hour)) {
+		t.Fatalf("another connection's source was moved to %v", due)
+	}
+}
+
+// TestABusyAppCannotSweepContinuously is the rail that makes this safe: a
+// channel delivering every few seconds must not mean reading the provider
+// every few seconds.
+func TestABusyAppCannotSweepContinuously(t *testing.T) {
+	store := newFakeStore()
+	justSwept := testClock.Add(-30 * time.Second)
+	store.hastenable(t, "src_1", "apc_1", &justSwept)
+	service, _ := connectedService(t, store, &fakeApps{connection: usableConnection()})
+
+	event := appsv1.TriggerReceived{ConnectionID: "apc_1", OrganizationID: "org_1", Toolkit: "slack"}
+	for range 20 {
+		if err := service.TriggerReceived(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if due := store.sources["src_1"].SyncAt; due == nil || !due.Equal(testClock.Add(time.Hour)) {
+		t.Fatalf("a source swept 30s ago was brought forward to %v", due)
+	}
+
+	// Once the floor has passed, the next delivery does move it.
+	longAgo := testClock.Add(-10 * time.Minute)
+	source := store.sources["src_1"]
+	source.LastSyncedAt = &longAgo
+	store.sources["src_1"] = source
+	if err := service.TriggerReceived(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if due := store.sources["src_1"].SyncAt; due == nil || !due.Equal(testClock) {
+		t.Fatalf("a source last swept 10m ago is due at %v, want now", due)
+	}
+}
+
+// TestATriggerNeverDelaysASourceAlreadyDue keeps this from pushing back a
+// sweep that was about to happen.
+func TestATriggerNeverDelaysASourceAlreadyDue(t *testing.T) {
+	store := newFakeStore()
+	overdue := testClock.Add(-5 * time.Minute)
+	store.sources["src_1"] = domain.Source{
+		ID: "src_1", OrganizationID: "org_1", ConnectionID: "apc_1", Provider: "github",
+		Status: domain.StatusActive, Interval: time.Hour, SyncAt: &overdue, CreatedBy: "user-1",
+	}
+	service, _ := connectedService(t, store, &fakeApps{connection: usableConnection()})
+
+	if err := service.TriggerReceived(context.Background(), appsv1.TriggerReceived{
+		ConnectionID: "apc_1", OrganizationID: "org_1", Toolkit: "github",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if due := store.sources["src_1"].SyncAt; due == nil || !due.Equal(overdue) {
+		t.Fatalf("an overdue source was moved to %v, want it left alone", due)
+	}
+}
+
+// TestATriggerOnAConnectionWithNothingIndexedIsQuiet covers the common case:
+// an app delivering events that nothing is indexed for.
+func TestATriggerOnAConnectionWithNothingIndexedIsQuiet(t *testing.T) {
+	store := newFakeStore()
+	service, _ := connectedService(t, store, &fakeApps{connection: usableConnection()})
+
+	if err := service.TriggerReceived(context.Background(), appsv1.TriggerReceived{
+		ConnectionID: "apc_1", OrganizationID: "org_1", Toolkit: "linear",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

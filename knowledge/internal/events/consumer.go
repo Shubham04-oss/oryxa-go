@@ -35,6 +35,9 @@ func Subscriptions() map[string][]string {
 			appsv1.ConnectionConnectedDetailType,
 			appsv1.ConnectionExpiredDetailType,
 			appsv1.ConnectionRemovedDetailType,
+			// What an app reports is what it has just changed, so its
+			// sources are swept now rather than at their next hour.
+			appsv1.TriggerReceivedDetailType,
 		},
 	}
 }
@@ -45,6 +48,7 @@ type application interface {
 	OrganizationDeleted(context.Context, authv1.OrganizationDeleted) error
 	MemberRemoved(context.Context, authv1.MemberRemoved) error
 	ConnectionConnected(context.Context, appsv1.ConnectionConnected) error
+	TriggerReceived(context.Context, appsv1.TriggerReceived) error
 	ConnectionExpired(context.Context, appsv1.ConnectionExpired) error
 	ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error
 	// AlreadyHandled checks without recording anything; MarkHandled records,
@@ -76,6 +80,7 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 			authv1.OrganizationDeletedDetailType: {source: authv1.Source, handle: decode(app.OrganizationDeleted)},
 			authv1.MemberRemovedDetailType:       {source: authv1.Source, handle: decode(app.MemberRemoved)},
 			appsv1.ConnectionConnectedDetailType: {source: appsv1.Source, handle: decode(app.ConnectionConnected)},
+			appsv1.TriggerReceivedDetailType:     {source: appsv1.Source, handle: decode(app.TriggerReceived)},
 			appsv1.ConnectionExpiredDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionExpired)},
 			appsv1.ConnectionRemovedDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionRemoved)},
 		},

@@ -56,6 +56,10 @@ func (app *fakeApplication) ConnectionConnected(context.Context, appsv1.Connecti
 	return app.act(appsv1.ConnectionConnectedDetailType)
 }
 
+func (app *fakeApplication) TriggerReceived(context.Context, appsv1.TriggerReceived) error {
+	return app.act(appsv1.TriggerReceivedDetailType)
+}
+
 func (app *fakeApplication) ConnectionExpired(context.Context, appsv1.ConnectionExpired) error {
 	return app.act(appsv1.ConnectionExpiredDetailType)
 }

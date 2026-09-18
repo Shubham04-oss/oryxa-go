@@ -781,3 +781,100 @@ func TestRunsRecordWhatEachPassDid(t *testing.T) {
 		t.Fatalf("Runs() = %+v", runs)
 	}
 }
+
+// TestHastenSourcesBringsForwardOnlyWhatItShould pins the three rules that
+// make a trigger safe to act on: it moves this connection's live sources, it
+// never delays one already due, and it never reads a provider again inside
+// the floor.
+func TestHastenSourcesBringsForwardOnlyWhatItShould(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	later := testClock.Add(time.Hour)
+	// Due later, never swept: the one a trigger is for.
+	waiting := testSource(t, store, "org_1")
+	waiting.SyncAt = &later
+	mustSchedule(t, store, waiting)
+
+	// Due sooner already: a trigger must not push it back.
+	sooner := testClock.Add(time.Minute)
+	overdue := testSource(t, store, "org_1")
+	overdue.ConnectionID = waiting.ConnectionID
+	overdue.SyncAt = &sooner
+	mustSchedule(t, store, overdue)
+
+	// Another connection's, which this trigger says nothing about.
+	elsewhere := testSource(t, store, "org_1")
+	elsewhere.SyncAt = &later
+	mustSchedule(t, store, elsewhere)
+
+	moved, err := store.HastenSources(ctx, waiting.ConnectionID, testClock, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("HastenSources() error = %v", err)
+	}
+	if moved != 1 {
+		t.Fatalf("moved %d sources, want only the one due later on this connection", moved)
+	}
+	if due := readSyncAt(t, store, waiting.ID); due == nil || !due.Equal(testClock) {
+		t.Fatalf("the waiting source is due at %v, want now", due)
+	}
+	if due := readSyncAt(t, store, overdue.ID); due == nil || !due.Equal(sooner) {
+		t.Fatalf("a source already due sooner was moved to %v", due)
+	}
+	if due := readSyncAt(t, store, elsewhere.ID); due == nil || !due.Equal(later) {
+		t.Fatalf("another connection's source was moved to %v", due)
+	}
+}
+
+func TestHastenSourcesLeavesOneSweptWithinTheFloor(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	later := testClock.Add(time.Hour)
+	justSwept := testClock.Add(-30 * time.Second)
+	source := testSource(t, store, "org_1")
+	source.SyncAt = &later
+	source.LastSyncedAt = &justSwept
+	mustSchedule(t, store, source)
+
+	moved, err := store.HastenSources(ctx, source.ConnectionID, testClock, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("HastenSources() error = %v", err)
+	}
+	if moved != 0 {
+		t.Fatalf("moved %d sources swept within the floor, want none", moved)
+	}
+
+	// Past the floor, the same delivery does move it.
+	if moved, err = store.HastenSources(ctx, source.ConnectionID, testClock, 10*time.Second); err != nil {
+		t.Fatalf("HastenSources() error = %v", err)
+	}
+	if moved != 1 {
+		t.Fatalf("moved %d sources past the floor, want 1", moved)
+	}
+}
+
+// mustSchedule writes a source's schedule directly, since nothing in the
+// store's own API sets sync_at and last_synced_at together.
+func mustSchedule(t *testing.T, store *Store, source domain.Source) {
+	t.Helper()
+	if _, err := store.pool.Exec(context.Background(),
+		`UPDATE knowledge_sources SET sync_at = $2, last_synced_at = $3 WHERE id = $1`,
+		source.ID, source.SyncAt, source.LastSyncedAt); err != nil {
+		t.Fatalf("schedule %s: %v", source.ID, err)
+	}
+}
+
+func readSyncAt(t *testing.T, store *Store, sourceID string) *time.Time {
+	t.Helper()
+	var due *time.Time
+	if err := store.pool.QueryRow(context.Background(),
+		`SELECT sync_at FROM knowledge_sources WHERE id = $1`, sourceID).Scan(&due); err != nil {
+		t.Fatalf("read sync_at for %s: %v", sourceID, err)
+	}
+	if due != nil {
+		utc := due.UTC()
+		return &utc
+	}
+	return nil
+}

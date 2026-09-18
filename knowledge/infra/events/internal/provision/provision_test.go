@@ -17,7 +17,7 @@ func TestEventPatternMatchesTheEventsKnowledgeActsOn(t *testing.T) {
 		"$or": [
 			{
 				"source": ["oryxa.apps"],
-				"detail-type": ["apps.connection.connected.v1", "apps.connection.expired.v1", "apps.connection.removed.v1"]
+				"detail-type": ["apps.connection.connected.v1", "apps.connection.expired.v1", "apps.connection.removed.v1", "apps.trigger.received.v1"]
 			},
 			{
 				"source": ["oryxa.auth"],

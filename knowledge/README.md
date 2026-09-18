@@ -58,6 +58,24 @@ already usable, so most of what can go wrong is reported and dropped rather
 than retried: apps being briefly unreachable is worth another delivery, a
 refusal that will not change is not.
 
+## What an app reports is swept at once
+
+A trigger carries the app's own payload, in a shape that differs for every one
+of Composio's thousands of triggers. Reading those here would mean a parser
+per trigger, each a place to be wrong about scope, about what counts as the
+same document, and about what is text — all of which the extractor for that
+provider already knows.
+
+So a delivery is not read. `apps.trigger.received.v1` is taken as what it is,
+the app saying something in this connection changed, and the sources on that
+connection become due now rather than at their next hour. What the trigger
+reported is searchable through the same path as everything else, within
+seconds instead of up to an interval.
+
+Two rails: a trigger never delays a source already due sooner, and never
+brings one forward within two minutes of its last sweep — a busy channel
+delivers faster than any provider should be read.
+
 ## Sources are registered, not discovered
 
 A source is one thing to index, such as the organization's own files. A member

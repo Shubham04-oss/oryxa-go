@@ -70,8 +70,6 @@ Then, in order:
   unverified Google app of Oryxa's is capped at 100 new users and, in testing,
   loses refresh tokens after seven days; moving later means members reconnect
   once.
-- **Triggers do not start agent runs** (see below) — a trigger delivers and
-  publishes, and nothing acts on it.
 - **A tool allow-list per organization**, for an admin who wants writes limited
   to certain apps.
 

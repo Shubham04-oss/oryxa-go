@@ -248,6 +248,27 @@ func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID 
 
 // PauseSources stops every live source reading through one connection, and
 // writes one event for each. Running it again pauses nothing and writes
+// HastenSources brings forward the next sweep of every live source on a
+// connection, because the app said something in it changed.
+//
+// It never delays one already due sooner, and never brings a source forward
+// again within floor of its last sweep: a busy channel delivers faster than
+// any provider should be read, and a trigger is a hint that something
+// changed rather than an instruction to read now. Answers how many moved.
+func (store *Store) HastenSources(ctx context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error) {
+	tag, err := store.pool.Exec(ctx, `
+		UPDATE knowledge_sources
+		SET sync_at = $2, updated_at = $2, version = version + 1
+		WHERE connection_id = $1 AND status = 'active'
+		  AND sync_at IS NOT NULL AND sync_at > $2
+		  AND (last_synced_at IS NULL OR last_synced_at <= $2 - make_interval(secs => $3))`,
+		connectionID, at, floor.Seconds())
+	if err != nil {
+		return 0, fmt.Errorf("hasten sources: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 // nothing, so a redelivered event is harmless.
 func (store *Store) PauseSources(ctx context.Context, connectionID, reason string, now time.Time, event func(domain.Source) (domain.Event, error)) ([]domain.Source, error) {
 	var paused []domain.Source

@@ -115,6 +115,40 @@ func (s *Service) ConnectionConnected(ctx context.Context, event appsv1.Connecti
 	return nil
 }
 
+// triggerSweepFloor is how soon after a sweep a trigger may ask for another.
+// A busy channel delivers faster than any provider should be read, and a
+// trigger says something changed rather than read this now.
+const triggerSweepFloor = 2 * time.Minute
+
+// TriggerReceived makes what an app just reported searchable.
+//
+// A trigger carries the app's own payload, in a shape that differs for every
+// one of Composio's thousands of triggers. Reading those shapes here would
+// mean a parser per trigger, each a place to be wrong about scope, about
+// what counts as the same document, and about what is text. The extractor
+// for that provider already knows all of it.
+//
+// So a delivery is not read. It is taken as what it is — the app saying
+// something in this connection changed — and the sources on that connection
+// are swept now rather than at their next hour. What the trigger reported
+// becomes searchable through the path everything else does.
+func (s *Service) TriggerReceived(ctx context.Context, event appsv1.TriggerReceived) error {
+	if event.ConnectionID == "" {
+		// Nothing names what changed, so there is nothing to sweep.
+		return nil
+	}
+	moved, err := s.store.HastenSources(ctx, event.ConnectionID, s.now(), triggerSweepFloor)
+	if err != nil {
+		return fmt.Errorf("bring a connection's sources forward: %w", err)
+	}
+	if moved > 0 {
+		s.logger.InfoContext(ctx, "an app reported a change, so its sources are swept now",
+			"connection_id", event.ConnectionID, "toolkit", event.Toolkit,
+			"trigger", event.Trigger, "sources", moved)
+	}
+	return nil
+}
+
 // providerFor is the knowledge source that reads a Composio toolkit. They
 // are spelled the same today; an app with no source reads as none rather
 // than as a provider that does not exist.
