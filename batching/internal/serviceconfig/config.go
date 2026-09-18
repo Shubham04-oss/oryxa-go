@@ -131,13 +131,22 @@ func decimal(getenv func(string) string, name string, fallback float64) (float64
 	return parsed, nil
 }
 
+// integer reads a whole number, and checks its bounds after defaulting too:
+// a bound can follow another setting, as the largest batch follows the
+// cold-start target, and a default does not.
 func integer(getenv func(string) string, name string, fallback, minimum, maximum int) (int, error) {
 	value := strings.TrimSpace(getenv(name))
-	if value == "" {
-		return fallback, nil
+	parsed := fallback
+	if value != "" {
+		var err error
+		if parsed, err = strconv.Atoi(value); err != nil {
+			return 0, fmt.Errorf("%s must be a whole number between %d and %d", name, minimum, maximum)
+		}
 	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < minimum || parsed > maximum {
+	if parsed < minimum || parsed > maximum {
+		if value == "" {
+			return 0, fmt.Errorf("%s must be set to a whole number between %d and %d; its default, %d, is not", name, minimum, maximum, fallback)
+		}
 		return 0, fmt.Errorf("%s must be a whole number between %d and %d", name, minimum, maximum)
 	}
 	return parsed, nil

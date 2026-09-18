@@ -139,8 +139,8 @@ between two, or the cold-start target when that is one, and
 periodic hard cadence: ordinary traffic may release earlier, but never later.
 The service rejects values over `90m`; the default is `1h`, leaving operational
 headroom beneath the product's absolute delivery ceiling.
-`BATCHING_LARGEST_BATCH` must be at least the cold-start target, and the claim
-lease must exceed the sweep interval. `BATCHING_JEV_TIMEOUT` may be at most
+`BATCHING_LARGEST_BATCH` must be at least the cold-start target, its default of
+20 included, and the claim lease must exceed the sweep interval. `BATCHING_JEV_TIMEOUT` may be at most
 `10s`, so a message is always handled well within the queue's 60-second
 visibility timeout and never handled twice for being slow.
 `BATCHING_GROUPS_PER_SWEEP` is how many groups one claim takes, at least two

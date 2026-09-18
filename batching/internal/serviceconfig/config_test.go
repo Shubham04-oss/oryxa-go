@@ -47,6 +47,7 @@ func TestFromEnvRejectsInvalidPolicy(t *testing.T) {
 	for name, values := range map[string]map[string]string{
 		"zero size":       {"BATCHING_BATCH_SIZE": "0"},
 		"largest smaller": {"BATCHING_BATCH_SIZE": "5", "BATCHING_LARGEST_BATCH": "4"},
+		"default smaller": {"BATCHING_BATCH_SIZE": "30"},
 		"bad duration":    {"BATCHING_MAX_WAIT": "later"},
 		"wait too long":   {"BATCHING_MAX_WAIT": "91m"},
 		"short lease":     {"BATCHING_SWEEP_INTERVAL": "2s", "BATCHING_CLAIM_LEASE": "2s"},
