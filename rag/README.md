@@ -162,6 +162,15 @@ query falls back to the fused order rather than failing. A candidate pool
 larger than the cross-encoder accepts is reranked down to its ceiling and the
 tail keeps its fused order below, rather than the whole rerank failing.
 
+Two cross-encoders are wired, one at a time: a Bedrock reranking model by ARN
+(`RAG_RERANK_MODEL_ARN`), or Google's Ranking API (`RAG_RERANK_VERTEX_MODEL`,
+for example `semantic-ranker-default@latest`), which is serverless — billed per
+call, nothing provisioned — and needs `discoveryengine.googleapis.com` on the
+project. Measured over this repository's own documentation
+(`rag/internal/eval`), the Ranking API put the answer's section first for 75%
+of questions rather than 67%, and in the top three for 93% rather than 87%,
+for about half a second a query.
+
 `diversity` trades relevance for spread by maximal marginal relevance, measured
 on the words chunks share rather than on their vectors: what it suppresses is a
 passage repeated across documents, which word overlap measures directly. `1` is
@@ -483,7 +492,8 @@ because the expensive paths are the ones that talk to a provider.
 pgvector backend run against PostgreSQL 16 with pgvector 0.8: corpus and
 document lifecycles, incremental re-embedding, hybrid search, tenant scoping,
 the `halfvec` path at 3072 dimensions, the unindexed fallback width, and the
-cascade from a deleted document to its vectors. The two pgvector index
+cascade from a deleted document to its vectors. Vertex's Ranking API reranked
+live on 2026-09-18, measured by `rag/internal/eval`. The two pgvector index
 ceilings in the schema — 2000 for `vector`, 4000 for `halfvec` — were measured
 there rather than assumed. Vertex embedding ran on 2026-09-18:
 `text-embedding-005` at 768 dimensions, through Application Default

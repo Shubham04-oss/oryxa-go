@@ -88,12 +88,21 @@ func (client *Client) Corpora(ctx context.Context, organizationID, token string)
 }
 
 // Search finds the passages of one corpus that best match query.
-func (client *Client) Search(ctx context.Context, organizationID, corpusID, token, query string, topK int) ([]Match, error) {
+func (client *Client) Search(ctx context.Context, organizationID, corpusID, token, query string, topK int, minScore float64) ([]Match, error) {
 	var answer struct {
 		Matches []Match `json:"matches"`
 	}
 	path := "/v1/organizations/" + url.PathEscape(organizationID) + "/corpora/" + url.PathEscape(corpusID) + "/search"
-	body := map[string]any{"query": query, "top_k": topK}
+	// Reranking reads the question and each passage together, which put the
+	// answer first far more often when measured, and its scores come from one
+	// model reading one question, so passages from different corpora can be
+	// merged by them. A rag with no reranker answers in fused order instead.
+	// minScore, when set, drops what the reranker judged irrelevant; a fused
+	// score in the top results sits far above any such floor.
+	body := map[string]any{"query": query, "top_k": topK, "rerank": true}
+	if minScore > 0 {
+		body["min_score"] = minScore
+	}
 	if err := client.call(ctx, http.MethodPost, path, token, body, &answer); err != nil {
 		return nil, err
 	}

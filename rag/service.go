@@ -127,13 +127,21 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 
 	var reranker retrieval.Reranker
-	if config.RerankModelARN != "" {
+	switch {
+	case config.RerankModelARN != "":
 		reranker, err = retrieval.NewBedrockReranker(bedrockagentruntime.NewFromConfig(platform.AWS), config.RerankModelARN)
 		if err != nil {
 			return host.Service{}, err
 		}
-	} else {
-		logger.Info("RAG_RERANK_MODEL_ARN is not set: queries asking to rerank get the fused order")
+	case config.RerankVertexModel != "":
+		reranker, err = retrieval.NewVertexReranker(ctx, retrieval.VertexRerankConfig{
+			Project: config.GoogleCloudProject, Model: config.RerankVertexModel,
+		})
+		if err != nil {
+			return host.Service{}, err
+		}
+	default:
+		logger.Info("RAG_RERANK_MODEL_ARN and RAG_RERANK_VERTEX_MODEL are not set: queries asking to rerank get the fused order")
 	}
 
 	// Answering is optional. Without a model, searching still works and

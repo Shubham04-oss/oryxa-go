@@ -232,8 +232,9 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	}
 	if settings.RagURL != "" {
 		knowledgeToolbox, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
-			Rag:    ragclient.New(settings.RagURL, nil),
-			Tokens: tokens,
+			Rag:          ragclient.New(settings.RagURL, nil),
+			Tokens:       tokens,
+			MinRelevance: settings.KnowledgeMinRelevance,
 		})
 		if err != nil {
 			logger.WarnContext(ctx, "knowledge toolbox unavailable, running without it", "error", err)

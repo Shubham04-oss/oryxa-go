@@ -51,9 +51,11 @@ type Config struct {
 	AnswerModel        string
 	AnswerInstructions string
 
-	// RerankModelARN names a Bedrock reranking model. Empty leaves reranking
-	// off, and a query asking for it gets the fused order instead.
-	RerankModelARN string
+	// RerankModelARN names a Bedrock reranking model, and RerankVertexModel a
+	// Vertex ranking model. One of them, or neither: with neither, reranking
+	// is off and a query asking for it gets the fused order instead.
+	RerankModelARN    string
+	RerankVertexModel string
 
 	// GuardrailIdentifier and GuardrailVersion screen answers through Amazon
 	// Bedrock Guardrails, as the agents service does. The version must be a
@@ -120,6 +122,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		AnswerInstructions: strings.TrimSpace(getenv("RAG_ANSWER_INSTRUCTIONS")),
 
 		RerankModelARN:      strings.TrimSpace(getenv("RAG_RERANK_MODEL_ARN")),
+		RerankVertexModel:   strings.TrimSpace(getenv("RAG_RERANK_VERTEX_MODEL")),
 		GuardrailIdentifier: strings.TrimSpace(getenv("RAG_GUARDRAIL_ID")),
 		GuardrailVersion:    strings.TrimSpace(getenv("RAG_GUARDRAIL_VERSION")),
 
@@ -179,6 +182,12 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	if config.RerankModelARN != "" && !strings.HasPrefix(config.RerankModelARN, "arn:") {
 		return Config{}, errors.New("RAG_RERANK_MODEL_ARN must be a model ARN")
+	}
+	if config.RerankModelARN != "" && config.RerankVertexModel != "" {
+		return Config{}, errors.New("set RAG_RERANK_MODEL_ARN or RAG_RERANK_VERTEX_MODEL, not both: rag reranks with one model")
+	}
+	if config.RerankVertexModel != "" && config.GoogleCloudProject == "" {
+		return Config{}, errors.New("RAG_RERANK_VERTEX_MODEL needs GOOGLE_CLOUD_PROJECT: the Ranking API bills a project")
 	}
 	return config, nil
 }
