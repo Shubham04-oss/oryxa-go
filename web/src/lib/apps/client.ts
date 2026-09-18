@@ -299,12 +299,12 @@ export interface ConnectionTarget {
 	target: Record<string, string>;
 }
 
-async function listConnectionTargets(
+export async function listConnectionTargets(
 	organizationId: string,
 	connectionId: string,
 ): Promise<ConnectionTarget[]> {
 	const answer = await apiRequest<{ targets: ConnectionTarget[] }>(
-		apiPath`${connectionsPath(organizationId)}/${connectionId}/targets`,
+		`${connectionsPath(organizationId)}${apiPath`/${connectionId}/targets`}`,
 	);
 	return answer.targets ?? [];
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../api/client";
 import {
 	appsErrorMessage,
@@ -9,11 +9,23 @@ import {
 	connectReturnNotice,
 	connectReturnTo,
 	groupConnectionsByToolkit,
+	listConnectionTargets,
 	nonConnectableReason,
 	parseConnectReturn,
 	type Toolkit,
 	triggerConfigCapability,
 } from "./client";
+
+function json(status: number, body: unknown): Response {
+	return new Response(JSON.stringify(body), {
+		headers: { "Content-Type": "application/json" },
+		status,
+	});
+}
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
 
 function connection(overrides: Partial<Connection>): Connection {
 	return {
@@ -147,6 +159,20 @@ describe("groupConnectionsByToolkit", () => {
 			connection({ id: "1", status: "removed", toolkit: "github" }),
 		]);
 		expect(groups).toEqual([]);
+	});
+});
+
+describe("listConnectionTargets", () => {
+	it("asks the connection's own targets path, not an encoded copy of it", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(json(200, { targets: [] }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await listConnectionTargets("org_1", "apc_1");
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/organizations/org_1/apps/connections/apc_1/targets",
+			expect.objectContaining({ method: "GET" }),
+		);
 	});
 });
 
