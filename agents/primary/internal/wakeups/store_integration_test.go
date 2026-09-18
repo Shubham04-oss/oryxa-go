@@ -268,3 +268,72 @@ func TestForgettingRemovesAMembersOrAnOrganizationsWakeUps(t *testing.T) {
 		t.Fatal("Forget with no organization would forget everyone's wake-ups")
 	}
 }
+
+func TestDroppedUnclaimedAndStaleEvents(t *testing.T) {
+	store, organizationID := testStore(t)
+	ctx := context.Background()
+	rule := Rule{Size: 1, MaxWait: time.Hour, Largest: 20}
+	record(t, store, organizationID, "user_a", "1")
+	record(t, store, organizationID, "user_a", "2")
+
+	claimed, err := store.Claim(ctx, rule, time.Minute, 100)
+	if err != nil || len(ours(claimed, organizationID)) != 1 {
+		t.Fatalf("claim = %+v, %v", claimed, err)
+	}
+	batch := ours(claimed, organizationID)[0]
+	// One event gives way to the next batch at once; the other is dropped.
+	if err := store.Unclaim(ctx, []string{batch.Events[1].ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Drop(ctx, batch.ID); err != nil {
+		t.Fatal(err)
+	}
+	again, err := store.Claim(ctx, rule, time.Minute, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batches := ours(again, organizationID); len(batches) != 1 || len(batches[0].Events) != 1 || batches[0].Events[0].ID != batch.Events[1].ID {
+		t.Fatalf("after unclaim and drop = %+v, want only the unclaimed event", batches)
+	}
+
+	record(t, store, organizationID, "user_b", "1")
+	if _, err := store.database.Pool.Exec(ctx, `UPDATE agents_primary.wakeup_events SET recorded_at = now() - interval '4 days' WHERE organization_id = $1 AND member_id = 'user_b'`, organizationID); err != nil {
+		t.Fatal(err)
+	}
+	dropped, err := store.DropStale(ctx, 72*time.Hour)
+	if err != nil || dropped < 1 {
+		t.Fatalf("DropStale() = %d, %v", dropped, err)
+	}
+	stale, err := store.Claim(ctx, rule, time.Minute, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, batch := range ours(stale, organizationID) {
+		if batch.MemberID == "user_b" {
+			t.Fatalf("a stale event was claimed: %+v", batch)
+		}
+	}
+}
+
+func TestReplaceThreadSettlesOnTheFirstRecorded(t *testing.T) {
+	store, organizationID := testStore(t)
+	ctx := context.Background()
+	first, err := store.ReplaceThread(ctx, organizationID, "user_a", "", "thread_1")
+	if err != nil || first != "thread_1" {
+		t.Fatalf("first = %q, %v", first, err)
+	}
+	// A second wake-up that also saw none gets the first one's.
+	second, err := store.ReplaceThread(ctx, organizationID, "user_a", "", "thread_2")
+	if err != nil || second != "thread_1" {
+		t.Fatalf("second = %q, %v, want thread_1", second, err)
+	}
+	// Replacing a thread the member deleted works only from the one expected.
+	replaced, err := store.ReplaceThread(ctx, organizationID, "user_a", "thread_1", "thread_3")
+	if err != nil || replaced != "thread_3" {
+		t.Fatalf("replaced = %q, %v", replaced, err)
+	}
+	stale, err := store.ReplaceThread(ctx, organizationID, "user_a", "thread_1", "thread_4")
+	if err != nil || stale != "thread_3" {
+		t.Fatalf("a stale replacement = %q, %v, want thread_3 to stand", stale, err)
+	}
+}

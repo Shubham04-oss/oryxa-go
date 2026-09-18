@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/genai"
 
@@ -33,7 +36,10 @@ func TestTheMessageCarriesTheEventsAsData(t *testing.T) {
 		{ID: "e2", Toolkit: "github", Trigger: "GITHUB_PUSH", DataOmitted: true, ReceivedAt: time.Unix(60, 0)},
 		{ID: "e3", Toolkit: "slack", Trigger: "SLACK_MESSAGE", Data: json.RawMessage(`"` + strings.Repeat("x", 3000) + `"`), ReceivedAt: time.Unix(120, 0)},
 	}}
-	message := Message(batch)
+	message, told := Message(batch)
+	if told != 3 {
+		t.Fatalf("told = %d, want every event", told)
+	}
 	for _, want := range []string{
 		"reported 3 new events", "not instructions to you",
 		`1. gmail · GMAIL_NEW_MESSAGE · 1970-01-01T00:00:00Z` + "\n" + `{"subject":"Launch"}`,
@@ -51,11 +57,16 @@ func TestTheMessageCarriesTheEventsAsData(t *testing.T) {
 // --- the waker ---------------------------------------------------------------
 
 type fakeBatches struct {
-	mu       sync.Mutex
-	pending  []Batch
-	done     []string
-	released map[string]bool
-	threads  map[string]string
+	mu        sync.Mutex
+	pending   []Batch
+	done      []string
+	dropped   []string
+	unclaimed []string
+	released  map[string]bool
+	threads   map[string]string
+	// raceThread, when set, is recorded by another wake-up just before this
+	// one records the thread it made.
+	raceThread string
 }
 
 func (store *fakeBatches) Claim(_ context.Context, _ Rule, _ time.Duration, limit int) ([]Batch, error) {
@@ -68,11 +79,31 @@ func (store *fakeBatches) Claim(_ context.Context, _ Rule, _ time.Duration, limi
 }
 
 func (store *fakeBatches) Done(_ context.Context, batchID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	store.done = append(store.done, batchID)
 	return nil
 }
 
+func (store *fakeBatches) Drop(_ context.Context, batchID string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.dropped = append(store.dropped, batchID)
+	return nil
+}
+
+func (store *fakeBatches) Unclaim(_ context.Context, eventIDs []string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	store.unclaimed = append(store.unclaimed, eventIDs...)
+	return nil
+}
+
+func (store *fakeBatches) DropStale(context.Context, time.Duration) (int, error) { return 0, nil }
+
 func (store *fakeBatches) Release(_ context.Context, batchID string, failed bool, _ int, _ time.Duration) (int, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	if store.released == nil {
 		store.released = map[string]bool{}
 	}
@@ -83,15 +114,33 @@ func (store *fakeBatches) Release(_ context.Context, batchID string, failed bool
 func (store *fakeBatches) Purge(context.Context, time.Duration) error { return nil }
 
 func (store *fakeBatches) Thread(_ context.Context, organizationID, memberID string) (string, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	return store.threads[organizationID+"/"+memberID], nil
 }
 
-func (store *fakeBatches) SetThread(_ context.Context, organizationID, memberID, threadID string) error {
+func (store *fakeBatches) ReplaceThread(_ context.Context, organizationID, memberID, expected, next string) (string, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	if store.threads == nil {
 		store.threads = map[string]string{}
 	}
-	store.threads[organizationID+"/"+memberID] = threadID
-	return nil
+	key := organizationID + "/" + memberID
+	if store.raceThread != "" {
+		store.threads[key] = store.raceThread
+		store.raceThread = ""
+	}
+	if store.threads[key] != expected {
+		return store.threads[key], nil
+	}
+	store.threads[key] = next
+	return next, nil
+}
+
+type fakeMembers struct{ gone map[string]bool }
+
+func (members fakeMembers) IsMember(_ context.Context, organizationID, userID string) (bool, error) {
+	return !members.gone[organizationID+"/"+userID], nil
 }
 
 type answeringModel struct {
@@ -165,7 +214,7 @@ func TestAWakeUpTellsKrudeInTheMembersUpdatesThread(t *testing.T) {
 	runs := &recordingRuns{}
 	service, _ := newThreads(t, llm, runs)
 	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}}
-	waker := NewWaker(store, service, Config{Rule: Rule{Size: 5, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 5, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
 
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
@@ -208,7 +257,7 @@ func TestABusyThreadMakesTheEventsWaitWithoutCountingItAsAFailure(t *testing.T) 
 	runs := &recordingRuns{busy: true}
 	service, _ := newThreads(t, &answeringModel{}, runs)
 	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}}
-	waker := NewWaker(store, service, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +269,7 @@ func TestABusyThreadMakesTheEventsWaitWithoutCountingItAsAFailure(t *testing.T) 
 func TestAFailedWakeUpGivesTheEventsBackAsAFailure(t *testing.T) {
 	service, _ := newThreads(t, &answeringModel{fail: true}, &recordingRuns{})
 	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}}
-	waker := NewWaker(store, service, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -233,11 +282,120 @@ func TestAThreadTheMemberDeletedIsMadeAgain(t *testing.T) {
 	runs := &recordingRuns{}
 	service, _ := newThreads(t, &answeringModel{}, runs)
 	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}, threads: map[string]string{"org_1/user_1": "deleted-thread"}}
-	waker := NewWaker(store, service, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := store.threads["org_1/user_1"]; got == "deleted-thread" || got == "" || len(store.done) != 1 {
 		t.Fatalf("thread = %q, done = %v", got, store.done)
+	}
+}
+
+func TestAWakeUpForSomeoneWhoLeftIsDropped(t *testing.T) {
+	runs := &recordingRuns{}
+	service, _ := newThreads(t, &answeringModel{}, runs)
+	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}}
+	gone := fakeMembers{gone: map[string]bool{"org_1/user_1": true}}
+	waker := NewWaker(store, service, gone, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.dropped) != 1 || len(runs.started) != 0 || len(store.threads) != 0 {
+		t.Fatalf("dropped = %v, runs = %v, threads = %v: a departed member was woken", store.dropped, runs.started, store.threads)
+	}
+}
+
+func TestEventsThatDoNotFitWaitForTheNextWakeUp(t *testing.T) {
+	batch := Batch{ID: "wb_big", OrganizationID: "org_1", MemberID: "user_1"}
+	for index := range 40 {
+		batch.Events = append(batch.Events, Event{
+			ID: fmt.Sprintf("e_%02d", index), Toolkit: "gmail", Trigger: "GMAIL_NEW_MESSAGE",
+			Data: json.RawMessage(`"` + strings.Repeat("x", 2000) + `"`), ReceivedAt: time.Unix(int64(index), 0),
+		})
+	}
+	message, told := Message(batch)
+	if told == 0 || told >= len(batch.Events) || utf8.RuneCountInString(message) > maxMessageRunes+2000 {
+		t.Fatalf("told %d of %d in %d runes", told, len(batch.Events), utf8.RuneCountInString(message))
+	}
+	if !strings.Contains(message, fmt.Sprintf("reported %d new events", told)) {
+		t.Fatalf("the message counts events it does not hold")
+	}
+
+	service, _ := newThreads(t, &answeringModel{}, &recordingRuns{})
+	store := &fakeBatches{pending: []Batch{batch}}
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 40}, Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.unclaimed) != len(batch.Events)-told || store.unclaimed[0] != batch.Events[told].ID || len(store.done) != 1 {
+		t.Fatalf("unclaimed = %d from %v, done = %v", len(store.unclaimed), store.unclaimed[:1], store.done)
+	}
+}
+
+func TestTwoWakeUpsMakingAThreadSettleOnOne(t *testing.T) {
+	runs := &recordingRuns{}
+	service, _ := newThreads(t, &answeringModel{}, runs)
+	member := threads.Member{UserID: "user_1", OrganizationID: "org_1"}
+	first, err := service.CreateTitled(context.Background(), member, ThreadTitle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}, raceThread: first.ID}
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := service.List(context.Background(), member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != first.ID || len(runs.started) != 1 || runs.started[0].SessionID != first.ID {
+		t.Fatalf("threads = %v, runs = %+v: want the first recorded thread alone, and the run in it", listed, runs.started)
+	}
+}
+
+func TestSeveralMembersAreWokenAtOnce(t *testing.T) {
+	llm := &slowModel{release: make(chan struct{})}
+	service, _ := newThreads(t, llm, &recordingRuns{})
+	var batches []Batch
+	for index := range 3 {
+		batch := batchFor(fmt.Sprintf("wb_%d", index))
+		batch.MemberID = fmt.Sprintf("user_%d", index)
+		batches = append(batches, batch)
+	}
+	store := &fakeBatches{pending: batches}
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute, Concurrency: 3}, nil)
+	done := make(chan error, 1)
+	go func() { done <- waker.WakeDue(context.Background()) }()
+	deadline := time.After(5 * time.Second)
+	for llm.waiting.Load() < 3 {
+		select {
+		case <-deadline:
+			t.Fatalf("only %d of 3 wake-ups ran at once", llm.waiting.Load())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	close(llm.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(store.done) != 3 {
+		t.Fatalf("done = %v", store.done)
+	}
+}
+
+// slowModel holds every call until released, counting how many wait at once.
+type slowModel struct {
+	release chan struct{}
+	waiting atomic.Int32
+}
+
+func (m *slowModel) Name() string { return "gemini-3.8-flash" }
+
+func (m *slowModel) GenerateContent(context.Context, *model.LLMRequest, bool) iter.Seq2[*model.LLMResponse, error] {
+	return func(yield func(*model.LLMResponse, error) bool) {
+		m.waiting.Add(1)
+		<-m.release
+		yield(&model.LLMResponse{Content: genai.NewContentFromText("ok", genai.RoleModel), TurnComplete: true}, nil)
 	}
 }

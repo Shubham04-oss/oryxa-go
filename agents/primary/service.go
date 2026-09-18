@@ -40,11 +40,13 @@ const schema = "agents_primary"
 // on the way down.
 const closeTimeout = 10 * time.Second
 
-// How app events wake Krude: how often due batches are looked for, and the
-// most events one wake-up hands over; the rest wait for the next.
+// How app events wake Krude: how often due batches are looked for, the most
+// events one wake-up hands over (the rest wait for the next), and how many
+// members are woken at once.
 const (
 	wakeupInterval     = 15 * time.Second
 	wakeupLargestBatch = 20
+	wakeupConcurrency  = 4
 )
 
 // Definition is how a host builds agents primary.
@@ -189,12 +191,13 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 				options.BaseEndpoint = aws.String(settings.SQSEndpoint)
 			}
 		})
-		waker := wakeups.NewWaker(store, service, wakeups.Config{
+		waker := wakeups.NewWaker(store, service, sessionStore, wakeups.Config{
 			Rule:     wakeups.Rule{Size: settings.WakeupBatchSize, MaxWait: settings.WakeupMaxWait, Largest: wakeupLargestBatch},
 			Interval: wakeupInterval,
 			// A claimed batch is held for as long as its run may take, and a
 			// little more, so a slow run is not woken twice.
-			Lease: settings.RunTimeout + time.Minute,
+			Lease:       settings.RunTimeout + time.Minute,
+			Concurrency: wakeupConcurrency,
 		}, logger)
 		workers = append(workers,
 			func(ctx context.Context) { consumer.Poll(ctx, queue, settings.EventsQueueURL) },

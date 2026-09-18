@@ -272,3 +272,82 @@ func (store *Store) Forget(ctx context.Context, organizationID, memberID string)
 		return nil
 	})
 }
+
+// Drop marks a batch's events handled without waking anyone, for events
+// that must not be told to anybody, such as a departed member's.
+func (store *Store) Drop(ctx context.Context, batchID string) error {
+	_, err := store.database.Pool.Exec(ctx, `
+		UPDATE agents_primary.wakeup_events
+		SET handled_at = now(), data = NULL, dropped = true, claimed_until = NULL
+		WHERE batch_id = $1 AND handled_at IS NULL`, batchID)
+	if err != nil {
+		return fmt.Errorf("drop wake-up batch: %w", err)
+	}
+	return nil
+}
+
+// Unclaim gives events back to wait for the next batch at once, such as
+// those a wake-up had no room to tell.
+func (store *Store) Unclaim(ctx context.Context, eventIDs []string) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+	_, err := store.database.Pool.Exec(ctx, `
+		UPDATE agents_primary.wakeup_events
+		SET batch_id = NULL, claimed_until = NULL
+		WHERE id = ANY($1) AND handled_at IS NULL`, eventIDs)
+	if err != nil {
+		return fmt.Errorf("unclaim wake-up events: %w", err)
+	}
+	return nil
+}
+
+// DropStale drops events that have waited longer than age, such as behind a
+// confirmation the member never answered, so a thread that stays busy does
+// not hold its member's events for ever. It reports how many it dropped.
+func (store *Store) DropStale(ctx context.Context, age time.Duration) (int, error) {
+	tag, err := store.database.Pool.Exec(ctx, `
+		UPDATE agents_primary.wakeup_events
+		SET handled_at = now(), data = NULL, dropped = true, batch_id = NULL, claimed_until = NULL
+		WHERE handled_at IS NULL AND recorded_at < now() - make_interval(secs => $1)
+			AND (batch_id IS NULL OR claimed_until < now())`, age.Seconds())
+	if err != nil {
+		return 0, fmt.Errorf("drop stale wake-ups: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
+// ReplaceThread records next as the thread a member's wake-ups go to, if the
+// one recorded is still expected ("" for none), and answers whichever thread
+// won: two wake-ups making a thread at once must settle on one.
+func (store *Store) ReplaceThread(ctx context.Context, organizationID, memberID, expected, next string) (string, error) {
+	var winner string
+	var err error
+	if expected == "" {
+		err = store.database.Pool.QueryRow(ctx, `
+			INSERT INTO agents_primary.wakeup_threads (organization_id, member_id, thread_id)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (organization_id, member_id) DO NOTHING
+			RETURNING thread_id`, organizationID, memberID, next).Scan(&winner)
+	} else {
+		err = store.database.Pool.QueryRow(ctx, `
+			UPDATE agents_primary.wakeup_threads SET thread_id = $4
+			WHERE organization_id = $1 AND member_id = $2 AND thread_id = $3
+			RETURNING thread_id`, organizationID, memberID, expected, next).Scan(&winner)
+	}
+	if err == nil {
+		return winner, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", fmt.Errorf("record wake-up thread: %w", err)
+	}
+	// Another wake-up recorded its own first; that one stands.
+	current, err := store.Thread(ctx, organizationID, memberID)
+	if err != nil {
+		return "", err
+	}
+	if current == "" {
+		return "", errors.New("record wake-up thread: it changed while being recorded; try again")
+	}
+	return current, nil
+}

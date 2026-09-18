@@ -299,6 +299,12 @@ proxy does not close a run while Krude works:
 | `run_completed` | `run_id`, `usage` |
 | `run_failed` | `run_id`, and `error` in words the member can act on |
 
+A run takes its thread before it reads what the thread waits on, and gives
+it back without a trace when the request turns out to be invalid: read first,
+a run finishing in between could have an answer applied twice, or leave a
+confirmation it had just asked for unanswered. It renews its hold within ten
+seconds a time, and stops when it cannot for a whole lease.
+
 A thread's history is the same items, without deltas or the run's own, each
 with the stored event's `id` so a client can match what it streamed; a
 confirmation there says whether it was `approved` or `declined`. A tool's
@@ -349,11 +355,18 @@ fills it (`internal/inbound`):
 | `auth.organization.deleted.v1` | The same for everyone in the organization |
 
 A conversation should not outlive the place it was held in, so both of auth's
-remove every thread there, the member's own `user:` artifacts aside, which
-belong to them rather than to the organization. Runs' records stay, for
-billing. Every handler is safe to repeat, since the bus delivers at least
-once. Without a queue, nothing wakes Krude and a member's threads outlive
-their place in an organization; the service says so at startup.
+remove every thread there. Runs' records stay, for billing. Every handler is
+safe to repeat, since the bus delivers at least once. Without a queue, nothing
+wakes Krude and a member's threads outlive their place in an organization; the
+service says so at startup.
+
+Known limits: ADK files a member's `user:` artifacts under the member alone,
+not the organization, so one saved while working in one organization reads
+through their threads in another and outlives their place in both. And
+finding an organization's threads means listing every thread ADK holds and
+filtering by organization, since ADK keeps no index by it: fine at today's
+size, slow for a large deployment, where a deletion could outlast the queue's
+visibility timeout and run twice (harmlessly, since forgetting is repeatable).
 
 ## Wake-ups
 
@@ -375,17 +388,30 @@ they belong to (`internal/wakeups`):
   what happened and what needs the member's attention, reading more from
   their apps when that helps, and changing nothing. A write would still stop
   at a confirmation the member finds in the thread.
-- **As the member, with the member away.** The run carries no token of
-  theirs, so tools act under the standing grant they gave auth, or say they
-  cannot (see [Acting for a member](#acting-for-a-member)). The run is
-  recorded with `started_by: trigger`.
+- **As the member, with the member away, and reaching nothing outside.** The
+  run carries no token of theirs, so tools act under the standing grant they
+  gave auth, or say they cannot (see [Acting for a member](#acting-for-a-member)).
+  It is answered by `agents.UnattendedRoot`: Krude under the same name, told
+  it works for someone who is away, with only the organization's knowledge and
+  a read-only apps toolbox — no web research, sandbox, browser, sub-agents,
+  helpers or saved files. The events are other people's words with nobody
+  watching, so nothing in such a run can carry what it reads anywhere they
+  could name, or ask for a confirmation that would sit in the thread. The run
+  is recorded with `started_by: trigger`.
+- **Only for someone still there.** Each batch checks, in auth's tables, that
+  its member still belongs to the organization before anything runs; one for
+  someone who left is dropped, since the bus can deliver their last events
+  after the news that they left.
 - **At least once, and never for ever.** A delivery the bus repeats is kept
   once, by the event's own ID. A batch is claimed with a lease just before its
-  run; a thread that is busy — the member is in it, or it waits for their
-  answer to a tool — puts the batch back for a minute without counting it
-  against the events, and a failed run counts against each; an event that has
-  failed three times is dropped and logged. A handled event keeps its ID for a
-  week, to recognise a late repeat, and loses the app's data at once.
+  run, four members' at once; a thread that is busy — the member is in it, or
+  it waits for their answer to a tool — puts the batch back for a minute
+  without counting it against the events, and a failed run counts against
+  each; an event that has failed three times, or waited three days, is dropped
+  and logged. Events a wake-up has no room to tell wait for the next rather
+  than counting as told. Two wake-ups making a member's thread at once settle
+  on whichever was recorded first. A handled event keeps its ID for a week, to
+  recognise a late repeat, and loses the app's data at once.
 
 Not yet: nothing skips the wait for something urgent, such as a direct
 mention, since that means reading each app's payload; and Krude is only ever
