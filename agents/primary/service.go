@@ -142,6 +142,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	service, err := threads.New(threads.Config{
 		AppName:    agents.RootName,
 		Agent:      krude.Root,
+		Unattended: krude.Unattended,
 		Sessions:   sessions,
 		Artifacts:  krude.Artifacts,
 		Runs:       runstore.New(platform.Database),

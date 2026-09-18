@@ -700,3 +700,49 @@ func TestTitleFrom(t *testing.T) {
 		}
 	}
 }
+
+func TestATriggerRunIsAnsweredByTheUnattendedAgent(t *testing.T) {
+	answering := func(answer string) *scriptedModel {
+		return &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+			return genai.NewContentFromText(answer, genai.RoleModel), nil
+		}}
+	}
+	attended, err := llmagent.New(llmagent.Config{Name: "krude", Model: answering("attended"), Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unattended, err := llmagent.New(llmagent.Config{Name: "krude", Model: answering("unattended"), Instruction: "You are Krude, alone."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(Config{AppName: "krude", Agent: attended, Unattended: unattended, Sessions: session.InMemoryService(), Runs: newFakeRuns(), Prices: prices})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service}
+	created, err := service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	away := Member{UserID: asha.UserID, OrganizationID: asha.OrganizationID}
+	items, _ := h.run(away, created.ID, RunInput{Message: "events", StartedBy: agentsv1.StartedByTrigger, Wakeup: "wb_1"})
+	if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "unattended" {
+		t.Fatalf("a trigger run was answered by %q", answers[len(answers)-1].Text)
+	}
+	items, _ = h.run(asha, created.ID, RunInput{Message: "hi"})
+	if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "attended" {
+		t.Fatalf("a member's run was answered by %q", answers[len(answers)-1].Text)
+	}
+
+	other, err := llmagent.New(llmagent.Config{Name: "someone_else", Model: answering("x"), Instruction: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(Config{AppName: "krude", Agent: attended, Unattended: other, Sessions: session.InMemoryService(), Runs: newFakeRuns(), Prices: prices}); err == nil {
+		t.Fatal("New() accepted an unattended agent answering to another name")
+	}
+}

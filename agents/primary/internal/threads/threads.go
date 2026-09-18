@@ -104,8 +104,11 @@ type RunStore interface {
 type Config struct {
 	// AppName is the ADK app threads belong to: Krude's name.
 	AppName string
-	// Agent answers every run.
-	Agent agent.Agent
+	// Agent answers every run a member starts, and Unattended every run a
+	// trigger starts, with nobody watching; it defaults to Agent. Both must
+	// answer to the same name, since they take turns in one thread.
+	Agent      agent.Agent
+	Unattended agent.Agent
 	// Sessions stores threads. It should seed a member's state when a thread
 	// is created, as adksession's does.
 	Sessions session.Service
@@ -125,6 +128,7 @@ type Config struct {
 type Service struct {
 	appName    string
 	agent      agent.Agent
+	unattended agent.Agent
 	sessions   session.Service
 	artifacts  artifact.Service
 	runs       RunStore
@@ -147,14 +151,21 @@ func New(config Config) (*Service, error) {
 		return nil, errors.New("threads: a run store is required")
 	case config.Prices == nil:
 		return nil, errors.New("threads: a price table is required")
+	case config.Unattended != nil && config.Unattended.Name() != config.Agent.Name():
+		return nil, errors.New("threads: the unattended agent must answer to the agent's own name")
 	}
 	logger := config.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	unattended := config.Unattended
+	if unattended == nil {
+		unattended = config.Agent
+	}
 	return &Service{
 		appName:    config.AppName,
 		agent:      config.Agent,
+		unattended: unattended,
 		sessions:   config.Sessions,
 		artifacts:  config.Artifacts,
 		runs:       config.Runs,

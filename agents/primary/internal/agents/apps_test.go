@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -379,5 +381,35 @@ func TestAppsToolboxWritesAndUnknownToolsRequireConfirmationReadsDoNot(t *testin
 	}
 	if got := recorder.count("tools/call"); got != beforeCalls+3 {
 		t.Fatalf("the three reads made %d tools/call requests, want %d", got-beforeCalls, 3)
+	}
+}
+
+func TestAReadOnlyAppsToolboxOffersOnlyTheReads(t *testing.T) {
+	url, httpClient, _ := newFakeApps(t, "apps_future_tool")
+	box, err := AppsToolbox(AppsConfig{URL: url, HTTP: httpClient, Tokens: &fakeAppsTokens{token: "agent-token"}, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("AppsToolbox() error = %v", err)
+	}
+	sessions := session.InMemoryService()
+	created, err := sessions.Create(context.Background(), &session.CreateRequest{
+		AppName: "test", UserID: "user-1", State: map[string]any{OrganizationIDKey: "org-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools, err := box.Toolset.Tools(agent.NewContext(&fakeInvocationContext{base: context.Background(), session: created.Session}))
+	if err != nil {
+		t.Fatalf("Tools() error = %v", err)
+	}
+	var names []string
+	for _, offered := range tools {
+		names = append(names, offered.Name())
+	}
+	slices.Sort(names)
+	if want := []string{"apps_connections", "apps_run_read_tool", "apps_search_tools"}; !slices.Equal(names, want) {
+		t.Fatalf("tools = %v, want only %v", names, want)
+	}
+	if !strings.Contains(box.Description, "Nothing can be changed") {
+		t.Fatalf("description = %q", box.Description)
 	}
 }

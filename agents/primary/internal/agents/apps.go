@@ -3,7 +3,9 @@ package agents
 import (
 	_ "embed"
 	"fmt"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 
@@ -34,6 +36,10 @@ type AppsConfig struct {
 	// Tokens mints an agent token for a session's user when a run carries no
 	// member access token of its own. See memberauth.TokenSource.
 	Tokens memberauth.TokenSource
+	// ReadOnly leaves only the three reads, for a run nobody is watching:
+	// there, nothing may change the member's apps, and no write could be
+	// confirmed anyway.
+	ReadOnly bool
 }
 
 // AppsToolbox names the one toolbox that reaches every app a member has
@@ -80,11 +86,17 @@ func AppsToolbox(config AppsConfig) (Toolbox, error) {
 		return Toolbox{}, fmt.Errorf("apps toolbox: %w", err)
 	}
 
+	var toolset tool.Toolset = &listedOnce{Toolset: memberauth.WrapToolset(inner)}
+	description := "Every app the member has connected through Composio — their real GitHub repos, files, email, calendars, CRMs and the rest — reached through their own connection: search a toolkit's tools, read data, and make changes with confirmation."
+	if config.ReadOnly {
+		toolset = tool.FilterToolset(toolset, tool.AllowedToolsPredicate(slices.Sorted(maps.Keys(reads))))
+		description = "Every app the member has connected through Composio — their real GitHub repos, files, email, calendars, CRMs and the rest — read through their own connection. Nothing can be changed from here."
+	}
 	return Toolbox{
 		Name:         "apps",
-		Description:  "Every app the member has connected through Composio — their real GitHub repos, files, email, calendars, CRMs and the rest — reached through their own connection: search a toolkit's tools, read data, and make changes with confirmation.",
+		Description:  description,
 		Instructions: appsInstructions,
-		Toolset:      &listedOnce{Toolset: memberauth.WrapToolset(inner)},
+		Toolset:      toolset,
 	}, nil
 }
 

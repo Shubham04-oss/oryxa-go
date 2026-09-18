@@ -265,9 +265,15 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 // run ended with, if any.
 func (run *Run) drive(ctx context.Context, send func(Item)) error {
 	service := run.service
+	answering := service.agent
+	if run.startedBy == agentsv1.StartedByTrigger {
+		// Nobody is watching this run, and text from the member's apps
+		// steers it: only the agent that can reach nothing outside runs it.
+		answering = service.unattended
+	}
 	adkRunner, err := runner.New(runner.Config{
 		AppName:         service.appName,
-		Agent:           service.agent,
+		Agent:           answering,
 		SessionService:  service.sessions,
 		ArtifactService: service.artifacts,
 	})
