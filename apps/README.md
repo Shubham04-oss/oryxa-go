@@ -593,10 +593,11 @@ stand-in, the database a throwaway schema, no tunnel):
 | A tool | `GITHUB_GET_A_REPOSITORY` read a private repository through the account |
 | Knowledge reading through it | A GitHub source registered by hand read 41 pull requests in one pass, all published |
 | Disconnecting | The account deleted at Composio, every trigger recorded removed, `removed` written once |
+| A real delivery | The project's webhook re-pointed (a new secret) at a tunnel that forwarded the webhook route alone. A member starring the repository reached apps as `GITHUB_STAR_ADDED_EVENT` about 20 seconds after subscribing, verified and answered 204 in about 100 ms. Composio sent the same message three times in seven seconds; it was recorded once, `delivery_count` 1, one `apps.trigger.received.v1` |
+| A connection abandoned before activation | Its link expired unused; removing it ended it as `removed`, the ending the contract names for one removed while pending |
 
 Not yet run, and not to be described as working:
 
-- **A real delivery from a real trigger.** The verified deliveries above were signed with the real subscription secret but sent by hand. The project's webhook still points at the 2026-09-18 tunnel, and re-pointing it mints a new secret.
 - **Slack and Notion accounts.** Their targets (a member's own channels; parent databases) are proven only against a stand-in.
 - **The outbox reaching the bus.** EventBridge pointed at a dead local endpoint for both runs; events were written and held, never published.
 - **Auth.** A stand-in answered membership; Cognito was not wired in, so indexing on connect, which redeems a member's grant, has not run.
