@@ -14,8 +14,9 @@ that connection at registration. Every call is proxied through Composio's own
 API, never made directly, so this process never sees a token. These three are
 mounted only when `COMPOSIO_API_KEY` is set; without it the binary mounts no
 extractor for them, and `apps` need not even be running. The files source
-remains built but unmounted: it reads as the member who registered it and
-needs a grant to do that, which is not built yet — see [Later](#later).
+reads the organization's own storage as the member who registered it, and
+mounts once it has a way to act as one — see
+[Sources](#sources).
 
 Knowledge owns what has been extracted and when. Auth remains the identity and
 membership boundary; apps owns a member's connections to third-party apps.
@@ -332,7 +333,8 @@ docker compose up -d
 Without `KNOWLEDGE_EVENTS_QUEUE_URL` knowledge still starts, but it will not
 pause or retire a source when its connection, member or organization goes
 away. Without `COMPOSIO_API_KEY` it starts with `github`, `notion` and `slack`
-unmounted, same as `files` without a grant.
+unmounted; without `FILES_URL` and `KNOWLEDGE_SERVICE_KEY_ID`, without
+`files`.
 
 ## Deploy
 
@@ -354,10 +356,6 @@ KNOWLEDGE_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/
 
 ## Later
 
-- **The grant.** `Grants` is an interface with no implementation yet; minting
-  a member-scoped token is auth's job, and `agents/primary`'s `memberauth` is
-  the working precedent. Until one is supplied, the files source cannot be
-  mounted.
 - **HTML.** Only plain text, Markdown, CSV and JSON are read. HTML would mean
   promoting `golang.org/x/net` from an indirect dependency, which is a
   deliberate choice rather than an oversight.

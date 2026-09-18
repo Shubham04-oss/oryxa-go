@@ -127,12 +127,11 @@ What it does not close:
   back — knowledge's body endpoint answers only the source's creator or an
   org admin, never a service. The fix is an internal, service-authenticated
   body route in knowledge; not built.
-- **Only member-scoped documents flow today.** Knowledge only ever sets a
-  connection-based source (`github`, `notion`, `slack`) to member scope, and
-  its one organization-scoped source, `files`, is still unmounted (see
-  above). So this bridge's team and organization branches are proven by unit
-  tests against a synthetic event, not by anything real knowledge code has
-  ever emitted, and team scope is not producible by any source at all yet.
+- **Team scope is produced by nothing.** A connection-based source
+  (`github`, `notion`, `slack`) is always member-scoped, and `files`, now
+  mounted, is organization-scoped. So the bridge's team branch is proven by
+  unit tests against a synthetic event rather than by anything knowledge has
+  ever emitted, and no source produces one at all.
 
 ### Krude searches corpora, but not a team's by default
 
