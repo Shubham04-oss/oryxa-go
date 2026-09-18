@@ -113,13 +113,22 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 func TestEveryEventConsumerDeclaresItsQueue(t *testing.T) {
 	want := map[string]string{
 		"agents": "AGENTS_EVENTS_QUEUE_URL", "apps": "APPS_EVENTS_QUEUE_URL", "auth": "AUTH_EVENTS_QUEUE_URL",
-		"billing": "BILLING_EVENTS_QUEUE_URL", "email": "EMAIL_QUEUE_URL", "files": "FILES_EVENTS_QUEUE_URL",
-		"knowledge": "KNOWLEDGE_EVENTS_QUEUE_URL", "rag": "RAG_EVENTS_QUEUE_URL", "teams": "TEAMS_EVENTS_QUEUE_URL",
+		"batching": "BATCHING_EVENTS_QUEUE_URL", "billing": "BILLING_EVENTS_QUEUE_URL", "email": "EMAIL_QUEUE_URL",
+		"files": "FILES_EVENTS_QUEUE_URL", "knowledge": "KNOWLEDGE_EVENTS_QUEUE_URL", "rag": "RAG_EVENTS_QUEUE_URL",
+		"teams": "TEAMS_EVENTS_QUEUE_URL",
 	}
+	// consumesNothing names the services that read no events at all. A new
+	// service is in neither list until someone decides which it is: a
+	// consumer that forgot to declare its queue would otherwise pass here
+	// and start in production without it, never hearing what others deleted.
+	consumesNothing := map[string]bool{}
 	got := map[string]string{}
 	for _, definition := range definitions {
-		if definition.EventsQueueVariable != "" {
+		switch {
+		case definition.EventsQueueVariable != "":
 			got[definition.Name] = definition.EventsQueueVariable
+		case !consumesNothing[definition.Name]:
+			t.Errorf("%s declares no events queue: declare EventsQueueVariable, or list it in consumesNothing if it reads no events", definition.Name)
 		}
 	}
 	if !maps.Equal(got, want) {

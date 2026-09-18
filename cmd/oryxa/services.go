@@ -4,6 +4,7 @@ import (
 	primary "github.com/Shubham04-oss/oryxa-go/agents/primary"
 	"github.com/Shubham04-oss/oryxa-go/apps"
 	"github.com/Shubham04-oss/oryxa-go/auth"
+	"github.com/Shubham04-oss/oryxa-go/batching"
 	"github.com/Shubham04-oss/oryxa-go/billing"
 	"github.com/Shubham04-oss/oryxa-go/email"
 	"github.com/Shubham04-oss/oryxa-go/files"
@@ -24,6 +25,7 @@ var definitions = []host.Definition{
 	knowledge.Definition,
 	rag.Definition,
 	apps.Definition,
+	batching.Definition,
 	email.Definition,
 	primary.Definition,
 }
