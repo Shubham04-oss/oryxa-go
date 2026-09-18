@@ -1,0 +1,254 @@
+package postgres
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/batching/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+)
+
+// These tests use the shared development PostgreSQL:
+//
+//	BATCHING_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/oryxa?sslmode=disable' \
+//	  go test ./batching/internal/postgres
+//
+// Every test owns a random organization and removes its rows.
+func testStore(t *testing.T, rule domain.Rule) (*Store, string) {
+	t.Helper()
+	databaseURL := os.Getenv("BATCHING_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BATCHING_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-batching-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := domain.NewAdaptiveScheduler(rule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := New(database, scheduler)
+	for range 2 {
+		if err := store.Migrate(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	random := make([]byte, 6)
+	_, _ = rand.Read(random)
+	organizationID := "batching_test_" + hex.EncodeToString(random)
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_triggers WHERE organization_id = $1`, organizationID)
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_traffic_profiles WHERE organization_id = $1`, organizationID)
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_outbox WHERE id LIKE $1`, organizationID+"%")
+		database.Close()
+	})
+	return store, organizationID
+}
+
+func testTrigger(organizationID, memberID, id string, lane domain.Lane) domain.Trigger {
+	return domain.Trigger{
+		ID: organizationID + "_" + id, TriggerID: "apt_" + id, ConnectionID: "apc_1",
+		OrganizationID: organizationID, MemberID: memberID, Toolkit: "gmail", Trigger: "new_message",
+		Data: json.RawMessage(`{"id":"` + id + `"}`), ReceivedAt: time.Now().UTC(),
+		Classification: domain.Classification{Lane: lane, Priority: 0, Classifier: "test"},
+	}
+}
+
+func recordTrigger(t *testing.T, store *Store, trigger domain.Trigger) {
+	t.Helper()
+	recorded, err := store.Record(context.Background(), trigger)
+	if err != nil || !recorded {
+		t.Fatalf("Record(%s) = %t, %v", trigger.ID, recorded, err)
+	}
+}
+
+func ownBatches(batches []domain.Batch, organizationID string) []domain.Batch {
+	var own []domain.Batch
+	for _, batch := range batches {
+		if batch.OrganizationID == organizationID {
+			own = append(own, batch)
+		}
+	}
+	return own
+}
+
+func waitForDatabaseDeadline(t *testing.T, store *Store, deadline time.Time) {
+	t.Helper()
+	var databaseNow time.Time
+	if err := store.database.Pool.QueryRow(context.Background(), `SELECT clock_timestamp()`).Scan(&databaseNow); err != nil {
+		t.Fatal(err)
+	}
+	if wait := deadline.Sub(databaseNow) + 20*time.Millisecond; wait > 0 {
+		time.Sleep(wait)
+	}
+}
+
+func earliestSoftDeadline(t *testing.T, store *Store, organizationID, memberID string) time.Time {
+	t.Helper()
+	var deadline time.Time
+	if err := store.database.Pool.QueryRow(context.Background(), `
+		SELECT min(soft_due_at) FROM batching_triggers
+		WHERE organization_id = $1 AND member_id = $2 AND batched_at IS NULL`,
+		organizationID, memberID).Scan(&deadline); err != nil {
+		t.Fatal(err)
+	}
+	return deadline
+}
+
+func TestDigestWaitsForItsSizeAndInputDeliveryIsIdempotent(t *testing.T) {
+	rule := domain.Rule{Size: 3, MaxWait: time.Hour, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+
+	first := testTrigger(organizationID, "user_1", "1", domain.LaneDigest)
+	recordTrigger(t, store, first)
+	recordTrigger(t, store, testTrigger(organizationID, "user_1", "2", domain.LaneDigest))
+	if recorded, err := store.Record(ctx, first); err != nil || recorded {
+		t.Fatalf("duplicate Record() = %t, %v", recorded, err)
+	}
+	var observations int
+	if err := store.database.Pool.QueryRow(ctx, `
+		SELECT total_events FROM batching_traffic_profiles
+		WHERE organization_id = $1 AND member_id = 'user_1'`, organizationID).Scan(&observations); err != nil {
+		t.Fatal(err)
+	}
+	if observations != 2 {
+		t.Fatalf("traffic observations after duplicate = %d", observations)
+	}
+	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ownBatches(claimed, organizationID); len(got) != 0 {
+		t.Fatalf("two of three triggers made a batch: %+v", got)
+	}
+
+	recordTrigger(t, store, testTrigger(organizationID, "user_1", "3", domain.LaneDigest))
+	claimed, err = store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ownBatches(claimed, organizationID)
+	if len(got) != 1 || len(got[0].Triggers) != 3 {
+		t.Fatalf("claimed = %+v", got)
+	}
+}
+
+func TestImmediateTrafficLeavesCapacityForADueDigest(t *testing.T) {
+	rule := domain.Rule{Size: 10, MaxWait: time.Millisecond, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+	for index := range 3 {
+		recordTrigger(t, store, testTrigger(organizationID, "urgent", string(rune('a'+index)), domain.LaneImmediate))
+	}
+	recordTrigger(t, store, testTrigger(organizationID, "digest", "ordinary", domain.LaneDigest))
+	waitForDatabaseDeadline(t, store, earliestSoftDeadline(t, store, organizationID, "digest"))
+
+	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ownBatches(claimed, organizationID)
+	if len(got) != 2 {
+		t.Fatalf("claimed = %+v", got)
+	}
+	lanes := map[domain.Lane]int{}
+	for _, batch := range got {
+		lanes[batch.Lane]++
+	}
+	if lanes[domain.LaneImmediate] != 1 || lanes[domain.LaneDigest] != 1 {
+		t.Fatalf("lanes = %v", lanes)
+	}
+}
+
+func TestCompletingAClaimAtomicallyWritesTheOutbox(t *testing.T) {
+	rule := domain.Rule{Size: 1, MaxWait: time.Millisecond, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+	recordTrigger(t, store, testTrigger(organizationID, "user_1", "1", domain.LaneDigest))
+	waitForDatabaseDeadline(t, store, earliestSoftDeadline(t, store, organizationID, "user_1"))
+	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ownBatches(claimed, organizationID)
+	if len(got) != 1 {
+		t.Fatalf("claimed = %+v", got)
+	}
+	event := domain.Event{
+		ID: organizationID + "_event", DetailType: "batching.trigger-batch.ready.v1",
+		Data: json.RawMessage(`{"batch_id":"test"}`), OccurredAt: time.Now().UTC(),
+	}
+	if err := store.Complete(ctx, got[0], event); err != nil {
+		t.Fatal(err)
+	}
+	var outboxRows, settledRows int
+	if err := store.database.Pool.QueryRow(ctx, `SELECT count(*) FROM batching_outbox WHERE id = $1`, event.ID).Scan(&outboxRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.database.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM batching_triggers
+		WHERE organization_id = $1 AND batched_at IS NOT NULL AND data IS NULL`, organizationID).Scan(&settledRows); err != nil {
+		t.Fatal(err)
+	}
+	if outboxRows != 1 || settledRows != 1 {
+		t.Fatalf("outbox rows = %d, settled rows = %d", outboxRows, settledRows)
+	}
+	if err := store.Complete(ctx, got[0], event); !errors.Is(err, ErrClaimLost) {
+		t.Fatalf("second Complete() error = %v", err)
+	}
+}
+
+func TestAQuietPeriodFlushesItsPartialBatchAtThePersistedDeadline(t *testing.T) {
+	rule := domain.Rule{Size: 5, MaxWait: 250 * time.Millisecond, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+	for index := range 5 {
+		recordTrigger(t, store, testTrigger(organizationID, "user_1", "warm_"+string(rune('a'+index)), domain.LaneDigest))
+	}
+	warm, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warm = ownBatches(warm, organizationID)
+	if len(warm) != 1 || len(warm[0].Triggers) != 5 {
+		t.Fatalf("warm batch = %+v", warm)
+	}
+	if err := store.Complete(ctx, warm[0], domain.Event{
+		ID: organizationID + "_warm", DetailType: "batching.trigger-batch.ready.v1",
+		Data: json.RawMessage(`{"batch":"warm"}`), OccurredAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	recordTrigger(t, store, testTrigger(organizationID, "user_1", "quiet_1", domain.LaneDigest))
+	recordTrigger(t, store, testTrigger(organizationID, "user_1", "quiet_2", domain.LaneDigest))
+	var target int
+	var hardDue time.Time
+	if err := store.database.Pool.QueryRow(ctx, `
+		SELECT min(target_size), min(hard_due_at)
+		FROM batching_triggers
+		WHERE organization_id = $1 AND batched_at IS NULL`, organizationID).Scan(&target, &hardDue); err != nil {
+		t.Fatal(err)
+	}
+	if target <= 2 {
+		t.Fatalf("quiet period unexpectedly reached its target %d", target)
+	}
+	waitForDatabaseDeadline(t, store, hardDue)
+	quiet, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quiet = ownBatches(quiet, organizationID)
+	if len(quiet) != 1 || len(quiet[0].Triggers) != 2 || quiet[0].FlushReason != "hard_deadline" {
+		t.Fatalf("quiet batch = %+v", quiet)
+	}
+}

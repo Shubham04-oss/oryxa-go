@@ -51,13 +51,14 @@ docker compose -f compose.oryxa.yaml up -d --build
 
 ## Service layout
 
-Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/apps`, `/auth`, `/billing`, `/email`, `/files`, `/knowledge`, `/rag` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
+Each service owns a lowercase, hyphen-free directory at the repository root. The services so far are `/agents`, `/apps`, `/auth`, `/batching`, `/billing`, `/email`, `/files`, `/knowledge`, `/rag` and `/teams`; create additional service directories only when their domain and deployment boundary are clear.
 
 ```text
 /
 ├── agents/                # Agent system; primary is its adk-go engine
 ├── apps/                  # A member's third-party apps, through Composio
 ├── auth/                  # Identity and access service
+├── batching/              # Coalesces app triggers before agent wakeups
 ├── billing/               # Subscriptions and entitlements
 ├── email/                 # Email delivery service
 ├── files/                 # Organization object storage on S3
@@ -135,6 +136,15 @@ offers agents four MCP tools rather than the catalog's thousands, verifies every
 Composio webhook before reading it, and publishes `oryxa.apps`. Its contract
 lives in `apps/README.md`.
 
+`/batching` consumes those app-trigger events and converts them into bounded,
+durable `oryxa.batching` batches. Its default policy coalesces five events or
+reaches a persisted per-member cadence deadline, adaptively changes the target
+from rolling traffic, caps a batch at twenty, preserves every trigger payload,
+and exposes a Jev-backed immediate lane. It does not yet replace
+the agents service's existing in-process app batching; that cutover happens
+after the ready-event consumer is integrated into the agent wakeup path. Its contract lives in
+`batching/README.md`.
+
 `/agents` holds the agent system. `/agents/primary` is its adk-go engine,
 where Krude works as the member it assists. It runs in the binary as the
 `agents` service, and its
@@ -171,7 +181,7 @@ Not yet:
 
 ## Shared PostgreSQL and observability
 
-Apps, auth, billing, files, knowledge, rag, teams and the ADK session runtime use
+Apps, auth, batching, billing, files, knowledge, rag, teams and the ADK session runtime use
 `/internal/postgreskit`. The binary opens one native
 `pgxpool` that every service shares, sized by `ORYXA_DATABASE_MAX_CONNS`; `sqlx`
 wraps that same pool through pgx's `database/sql` adapter, so it does not create
