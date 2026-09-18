@@ -18,6 +18,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/filesclient"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
@@ -90,6 +91,22 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		extractors[files.Provider()] = files
 	}
 
+	// A retrieval pipeline reads back a body too large to have travelled on
+	// the bus through the internal API. Without named callers there is no
+	// internal API, and the largest documents stay unindexed.
+	var serviceVerifier httpserver.ServiceVerifier
+	if len(config.ServiceCallers) > 0 {
+		verifier, err := serviceauth.NewVerifier(serviceauth.VerifierConfig{
+			Keys: kms.NewFromConfig(platform.AWS), Audience: Name, Callers: config.ServiceCallers,
+		})
+		if err != nil {
+			return host.Service{}, err
+		}
+		serviceVerifier = verifier
+	} else {
+		logger.Warn("KNOWLEDGE_SERVICE_CALLERS is not set: a document too large to carry on the bus cannot be read back, so the largest documents are not indexed")
+	}
+
 	eventClient := eventbridge.NewFromConfig(platform.AWS, func(options *eventbridge.Options) {
 		if config.EventBridgeEndpoint != "" {
 			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
@@ -103,7 +120,10 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Sink:       events.NewPublisher(eventClient, platform.EventBusName),
 		Extractors: extractors,
 		Logger:     logger,
-	}, Config{AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval})
+	}, Config{
+		AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval,
+		Services: serviceVerifier,
+	})
 	if err != nil {
 		return host.Service{}, err
 	}

@@ -23,6 +23,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/chunking"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/generation"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgeclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/retrieval"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/vectorstore"
@@ -84,11 +85,19 @@ type Retriever interface {
 // MaxDocumentsPerPage bounds a listing.
 const MaxDocumentsPerPage = 200
 
+// Documents reads back a knowledge document whose body was too large to
+// travel on the bus. Nil where a deployment cannot reach knowledge's
+// internal API, in which case the largest documents stay unindexed.
+type Documents interface {
+	Body(ctx context.Context, organizationID, documentID string) (knowledgeclient.Document, error)
+}
+
 type Service struct {
 	store     Store
 	directory Directory
 	teams     Teams
 	files     Files
+	documents Documents
 	vectors   Vectors
 	retriever Retriever
 	generator generation.Generator
@@ -108,7 +117,7 @@ type Defaults struct {
 	AnswerInstructions string
 }
 
-func New(store Store, directory Directory, teams Teams, files Files, vectors Vectors,
+func New(store Store, directory Directory, teams Teams, files Files, documents Documents, vectors Vectors,
 	retriever Retriever, generator generation.Generator, defaults Defaults, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -126,7 +135,7 @@ func New(store Store, directory Directory, teams Teams, files Files, vectors Vec
 		defaults.Backend = domain.BackendPgvector
 	}
 	return &Service{
-		store: store, directory: directory, teams: teams, files: files, vectors: vectors,
+		store: store, directory: directory, teams: teams, files: files, documents: documents, vectors: vectors,
 		retriever: retriever, generator: generator, defaults: defaults, logger: logger, now: time.Now,
 	}
 }

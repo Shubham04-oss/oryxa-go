@@ -122,11 +122,6 @@ live knowledge pass publishing onto a real queue rag consumes from.
 
 What it does not close:
 
-- **Omitted bodies stay unindexed.** A document over knowledge's 128 KiB
-  event budget cannot be indexed at all, because rag has no way to fetch it
-  back — knowledge's body endpoint answers only the source's creator or an
-  org admin, never a service. The fix is an internal, service-authenticated
-  body route in knowledge; not built.
 - **Team scope is produced by nothing.** A connection-based source
   (`github`, `notion`, `slack`) is always member-scoped, and `files`, now
   mounted, is organization-scoped. So the bridge's team branch is proven by

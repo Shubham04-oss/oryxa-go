@@ -23,9 +23,14 @@ import (
 // Config is what rag reads for itself. The listener, the database, the AWS
 // region and the event bus are the host's.
 type Config struct {
-	AuthURL        string
-	TeamsURL       string
-	FilesURL       string
+	AuthURL  string
+	TeamsURL string
+	FilesURL string
+	// KnowledgeURL and ServiceKeyID are how a document too large to have
+	// travelled on the bus is read back. Without both, the largest documents
+	// knowledge publishes stay unindexed.
+	KnowledgeURL   string
+	ServiceKeyID   string
 	AllowedOrigins []string
 	EventsQueueURL string
 
@@ -101,6 +106,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		AuthURL:        trimURL(getenv("AUTH_URL")),
 		TeamsURL:       trimURL(getenv("TEAMS_URL")),
 		FilesURL:       trimURL(getenv("FILES_URL")),
+		KnowledgeURL:   trimURL(getenv("KNOWLEDGE_URL")),
+		ServiceKeyID:   strings.TrimSpace(getenv("RAG_SERVICE_KEY_ID")),
 		AllowedOrigins: splitList(getenv("RAG_ALLOWED_ORIGINS")),
 		EventsQueueURL: strings.TrimSpace(getenv("RAG_EVENTS_QUEUE_URL")),
 

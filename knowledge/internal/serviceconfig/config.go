@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
 // defaultFullSweepInterval is how often a source already indexed is read
@@ -31,6 +33,11 @@ type Config struct {
 	// has no other way in.
 	FilesURL     string
 	ServiceKeyID string
+	// ServiceCallers are the services allowed to read a document's body
+	// through the internal API, which is how a retrieval pipeline reads back
+	// what an event was too large to carry. Empty means the internal API
+	// refuses every call.
+	ServiceCallers []serviceauth.Caller
 	// ComposioAPIKey turns on GitHub, Notion and Slack: without it knowledge
 	// mounts no extractor for them, only files. ComposioBaseURL overrides
 	// Composio's own API, for a test double.
@@ -71,6 +78,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		SQSEndpoint:         endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
 		EventsQueueURL:      strings.TrimSpace(getenv("KNOWLEDGE_EVENTS_QUEUE_URL")),
 		FullSweepInterval:   fullSweepInterval,
+	}
+	if config.ServiceCallers, err = serviceauth.ParseCallers(getenv("KNOWLEDGE_SERVICE_CALLERS")); err != nil {
+		return Config{}, fmt.Errorf("KNOWLEDGE_SERVICE_CALLERS: %w", err)
 	}
 	if config.AuthURL == "" {
 		return Config{}, errors.New("AUTH_URL is required")

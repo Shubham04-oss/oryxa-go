@@ -12,6 +12,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/chunking"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgeclient"
 )
 
 // Knowledge extracts documents from an organization's connected apps and
@@ -88,23 +89,32 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 		}
 	}
 
+	body := event.Body
 	if event.BodyOmitted {
-		// Rag cannot fetch the body itself: knowledge's body endpoint answers
-		// only the source's creator or an org admin, never a service. A
-		// version already indexed no longer matches what the source holds, so
-		// it is removed rather than left to answer from stale text; see
-		// rag/README.md.
-		if !found {
-			service.logger.InfoContext(ctx, "a knowledge document's body was too large to carry and nothing was indexed for it yet; skipping",
-				"document_id", event.DocumentID, "source_id", event.SourceID)
-			return nil
+		// The largest documents an organization has are the ones it most
+		// wants to search, so a body that could not travel is read back
+		// rather than lost.
+		fetched, err := service.fetchKnowledgeBody(ctx, event)
+		if err != nil {
+			return err
 		}
-		service.logger.InfoContext(ctx, "a knowledge document's body was too large to carry; removing the version already indexed",
-			"document_id", event.DocumentID, "source_id", event.SourceID)
-		return service.removeKnowledgeDocument(ctx, event.OrganizationID, mapping)
+		if fetched == "" {
+			// Nothing can be indexed for it. A version already held no
+			// longer matches what the source has, so it is removed rather
+			// than left answering from stale text.
+			if !found {
+				service.logger.InfoContext(ctx, "a knowledge document's body was too large to carry and could not be read back; skipping",
+					"document_id", event.DocumentID, "source_id", event.SourceID)
+				return nil
+			}
+			service.logger.InfoContext(ctx, "a knowledge document's body was too large to carry and could not be read back; removing the version already indexed",
+				"document_id", event.DocumentID, "source_id", event.SourceID)
+			return service.removeKnowledgeDocument(ctx, event.OrganizationID, mapping)
+		}
+		body = fetched
 	}
 
-	text, err := domain.Text(event.Body)
+	text, err := domain.Text(body)
 	if err != nil {
 		return service.dropUnindexable(ctx, event.OrganizationID, found, mapping, event.DocumentID, "had no usable text")
 	}
@@ -112,8 +122,8 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 	if err != nil {
 		contentType = "text/plain"
 	}
-	body := chunking.Normalize(text, contentType)
-	if strings.TrimSpace(body) == "" {
+	normalized := chunking.Normalize(text, contentType)
+	if strings.TrimSpace(normalized) == "" {
 		return service.dropUnindexable(ctx, event.OrganizationID, found, mapping, event.DocumentID, "had no text once normalized")
 	}
 
@@ -166,7 +176,7 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 	document := domain.Document{
 		ID: id, CorpusID: corpus.ID, OrganizationID: event.OrganizationID,
 		Source: domain.Source{Kind: domain.SourceExternal, Ref: ref},
-		Title:  title, ContentType: contentType, ContentSHA256: domain.Hash(body), ByteSize: int64(len(body)),
+		Title:  title, ContentType: contentType, ContentSHA256: domain.Hash(normalized), ByteSize: int64(len(normalized)),
 		Metadata: metadata, Status: domain.StatusPending,
 		CreatedBy: creator, CreatedAt: now, UpdatedAt: now,
 	}
@@ -179,7 +189,7 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 	if err != nil {
 		return err
 	}
-	stored, _, err := service.store.UpsertDocument(ctx, document, body, received)
+	stored, _, err := service.store.UpsertDocument(ctx, document, normalized, received)
 	if err != nil {
 		return err
 	}
@@ -478,4 +488,42 @@ func boundedTitle(raw string) string {
 		trimmed = string(runes[:200])
 	}
 	return trimmed
+}
+
+// fetchKnowledgeBody reads back a body that was too large to travel on the
+// bus. An empty answer means there is nothing to index and the caller
+// decides what to do about a version already held.
+//
+// Only an outage is returned as an error, so the bus redelivers it. A
+// deployment that cannot reach knowledge's internal API, or a document it no
+// longer holds, is reported once and dropped: redelivering forever would not
+// make either true.
+func (service *Service) fetchKnowledgeBody(ctx context.Context, event knowledgeeventsv1.DocumentPublished) (string, error) {
+	if service.documents == nil {
+		return "", nil
+	}
+	document, err := service.documents.Body(ctx, event.OrganizationID, event.DocumentID)
+	switch {
+	case err == nil:
+	case errors.Is(err, knowledgeclient.ErrNotFound), errors.Is(err, knowledgeclient.ErrNotConfigured):
+		service.logger.InfoContext(ctx, "a knowledge document's body could not be read back",
+			"document_id", event.DocumentID, "error", err)
+		return "", nil
+	default:
+		return "", fmt.Errorf("read back a knowledge document's body: %w", err)
+	}
+	if document.Body == "" {
+		return "", nil
+	}
+	// Knowledge may have read the document again between publishing this
+	// event and answering, and what came back would then be a different
+	// version than the one this event describes. Indexing it under this
+	// event's hash would leave the two disagreeing about what is stored, and
+	// the next publish for it would look like no change at all.
+	if document.ContentHash != "" && event.ContentHash != "" && document.ContentHash != event.ContentHash {
+		service.logger.InfoContext(ctx, "a knowledge document changed while its body was being read back; waiting for the event that describes it",
+			"document_id", event.DocumentID)
+		return "", nil
+	}
+	return document.Body, nil
 }

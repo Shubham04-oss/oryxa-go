@@ -204,6 +204,22 @@ source never shows its lease, version or attempt count.
 | `DELETE` | `/v1/organizations/{organizationID}/sources/{sourceID}` | Its creator or an org admin | Stop indexing it and retract what it held → `204` |
 | `GET` | `/v1/organizations/{organizationID}/sources/{sourceID}/runs` | Its creator or an org admin | How recent passes went |
 | `GET` | `/v1/organizations/{organizationID}/documents/{documentID}` | Its source's creator or an org admin | A document's body, for what an event was too small to carry |
+| `GET` | `/v1/internal/organizations/{organizationID}/documents/{documentID}/body` | A named service | The same body, for a retrieval pipeline that has no member to be |
+
+The internal route is how the largest documents get indexed at all. An event
+carries a body up to 128 KiB and flags the rest as omitted, which left a
+retrieval pipeline two bad choices: index nothing, or drop the version it
+held because that version no longer matches. Both mean the handbook, the
+specification and the long thread are the documents an organization cannot
+search.
+
+It is deliberately narrow: one document's body, named by an id nothing
+guesses, to a caller that proved which service it is with a signed token
+whose purpose is `documents`. It answers no listing, no search and nothing
+about who may read the document — a service asking has no member to be, and a
+route that answered more would be a way around the rules that decide what a
+member sees. Without `KNOWLEDGE_SERVICE_CALLERS` there is no internal API at
+all, and it answers 404 like any route that is not there.
 
 | Code | Status | Means |
 | --- | --- | --- |
