@@ -19,7 +19,7 @@ func TestCorporaAndSearchCallRagAsTheMember(t *testing.T) {
 			_, _ = writer.Write([]byte(`{"corpora":[{"id":"c1","name":"Mine","slug":"mine","scope":"member","document_count":3}]}`))
 		case request.Method == http.MethodPost && strings.HasSuffix(request.URL.Path, "/search"):
 			var body map[string]any
-			if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body["query"] != "launch" || body["top_k"] != float64(5) {
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body["query"] != "launch" || body["top_k"] != float64(5) || body["rerank"] != true {
 				t.Errorf("search body = %v (%v)", body, err)
 			}
 			_, _ = writer.Write([]byte(`{"matches":[{"chunk":{"text":"Launch is on the 3rd.","heading_path":["Plan"]},"document":{"id":"d1","title":"Launch plan","source":{"kind":"external","ref":"https://notion.so/x"}},"score":0.8}],"reranked":false}`))

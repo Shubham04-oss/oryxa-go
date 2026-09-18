@@ -216,8 +216,10 @@ func (knowledge knowledgeTools) search(ctx agent.Context, args searchArgs) (sear
 	if result.Searched == 0 && firstErr != nil {
 		return searchResult{}, explained(firstErr)
 	}
-	// Rag ranks every corpus's matches the same way, so merging them by
-	// score keeps the strongest passages overall.
+	// Reranked, every corpus's scores come from one model reading the same
+	// question, so merging by score keeps the strongest passages overall.
+	// Without a reranker a score is a position within its own corpus, and the
+	// merge interleaves the corpora by rank.
 	slices.SortStableFunc(result.Passages, func(a, b Passage) int { return cmp.Compare(b.Score, a.Score) })
 	if len(result.Passages) > limit {
 		result.Passages = result.Passages[:limit]
