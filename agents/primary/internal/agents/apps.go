@@ -82,7 +82,7 @@ func AppsToolbox(config AppsConfig) (Toolbox, error) {
 
 	return Toolbox{
 		Name:         "apps",
-		Description:  "Every app the member has connected through Composio, reached through their own connection: search a toolkit's tools, read data, and make changes with confirmation.",
+		Description:  "Every app the member has connected through Composio — their real GitHub repos, files, email, calendars, CRMs and the rest — reached through their own connection: search a toolkit's tools, read data, and make changes with confirmation.",
 		Instructions: appsInstructions,
 		Toolset:      &listedOnce{Toolset: memberauth.WrapToolset(inner)},
 	}, nil
