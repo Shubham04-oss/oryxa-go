@@ -452,9 +452,10 @@ These need a person, not a commit.
 
 ## Not yet
 
-- The `agents/primary` toolbox: nothing lets Krude search a corpus or cite from
-  one, so an agent cannot yet answer from an organization's own documents. This
-  is the obvious next piece.
+- Team corpora in Krude's searches: its `knowledge` toolbox searches what
+  `GET …/corpora` lists by default, the member's own and the organization's,
+  and reaches a team's corpus only when Krude names it
+  ([agents/primary/README.md](../agents/primary/README.md#knowledge-toolbox)).
 - A web screen: corpora, documents and their ingest status have an API and no
   interface.
 - Extraction, as above.

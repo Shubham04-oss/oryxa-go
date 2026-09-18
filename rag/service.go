@@ -44,9 +44,12 @@ import (
 // Name is how ORYXA_SERVICES selects rag.
 const Name = "rag"
 
-// Definition is how a host builds rag. Nothing calls rag over HTTP yet, so it
-// publishes no URL variable of its own.
-var Definition = host.Definition{Name: Name, Migrate: Migrate, Mount: Mount}
+// URLVariable is how another service reaches rag, such as agents searching
+// a member's corpora.
+const URLVariable = "RAG_URL"
+
+// Definition is how a host builds rag.
+var Definition = host.Definition{Name: Name, URLVariable: URLVariable, Migrate: Migrate, Mount: Mount}
 
 // Migrate installs the rag schema.
 //

@@ -122,11 +122,15 @@ bridge, not a new kind of document. Building it has to settle:
   it caused, so the mapping between the two has to be kept.
 - **Where extraction lives**, which is a decision (§3.3).
 
-### Agents cannot search a corpus
+### Krude searches corpora, but not a team's by default
 
-No toolbox in `agents/primary` searches rag or cites from it, so Krude cannot
-answer from an organization's own documents
-([rag/README.md, Not yet](../rag/README.md#not-yet)).
+Krude's `knowledge` toolbox searches rag as the member and cites what it finds
+([agents/primary/README.md, Knowledge toolbox](../agents/primary/README.md#knowledge-toolbox)).
+Left out on purpose: it searches the corpora rag lists by default — the
+member's own and the organization's — and a team's only when named, since
+listing a member's teams means asking teams first. Nothing has searched a real
+corpus through it yet: rag needs Bedrock or Vertex to embed, and the only
+proof is against a stand-in for rag.
 
 ### A run is not durable, and not yet run against Gemini
 

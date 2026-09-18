@@ -23,6 +23,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/ragclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
@@ -162,18 +163,21 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		agents.SandboxToolbox(sandboxTools),
 		agents.BrowserToolbox(browserTools),
 	}
-	if settings.AppsURL != "" {
-		tokens := options.Tokens
-		if tokens == nil {
-			if settings.AuthURL != "" && settings.ServiceKeyID != "" {
-				tokens = memberauth.NewAuthClient(memberauth.AuthClientConfig{
-					BaseURL: settings.AuthURL,
-					Signer:  serviceauth.Signer{Client: kms.NewFromConfig(options.AWS), KeyID: settings.ServiceKeyID, Service: "agents"},
-				})
-			} else {
-				logger.WarnContext(ctx, "member token: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
-			}
+	// The apps and knowledge toolboxes act as the session's member: with the
+	// member's own token when the run carries it, otherwise with an agent
+	// token minted under the member's standing grant.
+	tokens := options.Tokens
+	if tokens == nil && (settings.AppsURL != "" || settings.RagURL != "") {
+		if settings.AuthURL != "" && settings.ServiceKeyID != "" {
+			tokens = memberauth.NewAuthClient(memberauth.AuthClientConfig{
+				BaseURL: settings.AuthURL,
+				Signer:  serviceauth.Signer{Client: kms.NewFromConfig(options.AWS), KeyID: settings.ServiceKeyID, Service: "agents"},
+			})
+		} else {
+			logger.WarnContext(ctx, "member token: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
 		}
+	}
+	if settings.AppsURL != "" {
 		httpClient := options.HTTP
 		if httpClient == nil {
 			httpClient = &http.Client{}
@@ -191,6 +195,18 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		} else {
 			toolboxes = append(toolboxes, appsToolbox)
 			logger.InfoContext(ctx, "apps toolbox", "url", settings.AppsURL)
+		}
+	}
+	if settings.RagURL != "" {
+		knowledgeToolbox, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
+			Rag:    ragclient.New(settings.RagURL, nil),
+			Tokens: tokens,
+		})
+		if err != nil {
+			logger.WarnContext(ctx, "knowledge toolbox unavailable, running without it", "error", err)
+		} else {
+			toolboxes = append(toolboxes, knowledgeToolbox)
+			logger.InfoContext(ctx, "knowledge toolbox", "url", settings.RagURL)
 		}
 	}
 
