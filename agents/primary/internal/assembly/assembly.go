@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
@@ -20,6 +21,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcorebrowser"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcoresandbox"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardrail"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
@@ -149,8 +151,24 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		})
 	}
 	cacheConfig := modelcache.Config{TTL: settings.CacheTTL, MinTokens: settings.CacheMinTokens}
+	// Usage is counted inside the guardrail: an answer it blocks was still
+	// generated, and billed.
+	conversation := usage.Counted(modelcache.Cached(mainModel, promptCache, cacheConfig))
+	if settings.GuardrailIdentifier != "" {
+		// The main model carries the member's conversation and everything
+		// that reaches it: their messages, and every tool result, the lite
+		// model's work included. Screening it screens all the member sees.
+		conversation = guardrail.Model(conversation, bedrockruntime.NewFromConfig(options.AWS), guardrail.Config{
+			Identifier: settings.GuardrailIdentifier,
+			Version:    settings.GuardrailVersion,
+			FailClosed: settings.GuardrailFailClosed,
+			Logger:     logger,
+		})
+		logger.InfoContext(ctx, "guardrail screens the member's conversation; its answers do not stream",
+			"guardrail", settings.GuardrailIdentifier, "version", settings.GuardrailVersion, "fail_closed", settings.GuardrailFailClosed)
+	}
 	router, err := modelrouter.New(
-		usage.Counted(modelcache.Cached(mainModel, promptCache, cacheConfig)),
+		conversation,
 		usage.Counted(modelcache.Cached(liteModel, promptCache, cacheConfig)),
 	)
 	if err != nil {
