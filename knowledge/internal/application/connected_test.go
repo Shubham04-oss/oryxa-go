@@ -7,6 +7,7 @@ import (
 	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
+	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
@@ -313,5 +314,136 @@ func TestATriggerOnAConnectionWithNothingIndexedIsQuiet(t *testing.T) {
 		ConnectionID: "apc_1", OrganizationID: "org_1", Toolkit: "linear",
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The organization's own files have no connection to announce them, so the
+// first shared file is what starts indexing them.
+
+func storedFile(scope string) filesv1.ObjectCreated {
+	return filesv1.ObjectCreated{
+		FileID: "fil_1", OrganizationID: "org_1", Scope: scope,
+		Filename: "handbook.md", ContentType: "text/markdown", CreatedBy: "user-1", CreatedAt: testClock,
+	}
+}
+
+// filesService is knowledge with the files extractor mounted, which is what
+// a deployment that can read them looks like.
+func filesService(t *testing.T, store *fakeStore) (*Service, *fakeGrants) {
+	t.Helper()
+	grants := &fakeGrants{token: "member-token"}
+	service := New(Dependencies{
+		Store:      store,
+		Directory:  &fakeDirectory{membership: member()},
+		Grants:     grants,
+		Extractors: sources.Registry{"files": &fakeExtractor{provider: "files"}},
+		Clock:      func() time.Time { return testClock },
+	}, Config{})
+	return service, grants
+}
+
+func TestTheFirstSharedFileIndexesTheOrganizationsOwn(t *testing.T) {
+	store := newFakeStore()
+	service, grants := filesService(t, store)
+
+	if err := service.FileStored(context.Background(), storedFile("organization")); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 1 {
+		t.Fatalf("sources = %d, want the organization's files", len(store.sources))
+	}
+	for _, source := range store.sources {
+		if source.Provider != "files" || source.ConnectionID != "" {
+			t.Fatalf("source = %+v, want a files source with no connection", source)
+		}
+		if source.Scope != domain.ScopeOrganization {
+			t.Fatalf("scope = %q, want the organization's", source.Scope)
+		}
+	}
+	// Read as whoever stored the file, not as an admin: an admin also sees
+	// billing attachments.
+	if len(grants.members) != 1 || grants.members[0] != "org_1/user-1" {
+		t.Fatalf("minted tokens for %v", grants.members)
+	}
+}
+
+// TestOnlyASharedFileStartsIndexing is the privacy rule at the other end: a
+// member's private upload must not make the organization's files searchable
+// on their behalf, and a team's is a scope nothing produces yet.
+func TestOnlyASharedFileStartsIndexing(t *testing.T) {
+	for _, scope := range []string{"member", "team", ""} {
+		t.Run("scope "+scope, func(t *testing.T) {
+			store := newFakeStore()
+			service, grants := filesService(t, store)
+
+			if err := service.FileStored(context.Background(), storedFile(scope)); err != nil {
+				t.Fatal(err)
+			}
+			if len(store.sources) != 0 {
+				t.Fatalf("sources = %d, want none", len(store.sources))
+			}
+			if len(grants.members) != 0 {
+				t.Fatalf("minted a token for %v", grants.members)
+			}
+		})
+	}
+}
+
+// TestEveryUploadAfterTheFirstCostsOneLookup keeps a busy organization from
+// minting a token on every upload.
+func TestEveryUploadAfterTheFirstCostsOneLookup(t *testing.T) {
+	store := newFakeStore()
+	service, grants := filesService(t, store)
+
+	for range 5 {
+		if err := service.FileStored(context.Background(), storedFile("organization")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(store.sources) != 1 {
+		t.Fatalf("sources = %d, want one", len(store.sources))
+	}
+	if len(grants.members) != 1 {
+		t.Fatalf("minted %d tokens, want one: the rest found the source already there", len(grants.members))
+	}
+}
+
+// TestASourceAMemberRemovedDoesNotComeBack covers someone deciding their
+// organization's files should not be indexed.
+func TestASourceAMemberRemovedDoesNotComeBack(t *testing.T) {
+	store := newFakeStore()
+	service, _ := filesService(t, store)
+	store.sources["src_removed"] = domain.Source{
+		ID: "src_removed", OrganizationID: "org_1", Provider: "files",
+		Scope: domain.ScopeOrganization, Status: domain.StatusRemoved, CreatedBy: "user-1",
+	}
+
+	if err := service.FileStored(context.Background(), storedFile("organization")); err != nil {
+		t.Fatal(err)
+	}
+	// A removed source leaves the name free, so one is registered again only
+	// because nothing live answers for it — which is the behaviour a member
+	// who removed it would not want. It stays removed.
+	if len(store.sources) != 1 {
+		t.Fatalf("sources = %d, want the removed one left alone", len(store.sources))
+	}
+}
+
+// TestFilesAreNotIndexedWhereNothingCanReadThem covers a deployment with the
+// files extractor unmounted.
+func TestFilesAreNotIndexedWhereNothingCanReadThem(t *testing.T) {
+	store := newFakeStore()
+	grants := &fakeGrants{token: "member-token"}
+	service := New(Dependencies{
+		Store: store, Directory: &fakeDirectory{membership: member()}, Grants: grants,
+		Extractors: sources.Registry{"github": &fakeExtractor{provider: "github"}},
+		Clock:      func() time.Time { return testClock },
+	}, Config{})
+
+	if err := service.FileStored(context.Background(), storedFile("organization")); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 0 || len(grants.members) != 0 {
+		t.Fatalf("sources = %d, tokens = %v", len(store.sources), grants.members)
 	}
 }

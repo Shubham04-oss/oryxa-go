@@ -15,6 +15,7 @@ import (
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
 )
 
 // Subscriptions are the detail types knowledge consumes, by source.
@@ -39,6 +40,11 @@ func Subscriptions() map[string][]string {
 			// sources are swept now rather than at their next hour.
 			appsv1.TriggerReceivedDetailType,
 		},
+		filesv1.Source: {
+			// The organization's own files have no connection to announce
+			// them, so the first shared one is what starts indexing them.
+			filesv1.ObjectCreatedDetailType,
+		},
 	}
 }
 
@@ -49,6 +55,7 @@ type application interface {
 	MemberRemoved(context.Context, authv1.MemberRemoved) error
 	ConnectionConnected(context.Context, appsv1.ConnectionConnected) error
 	TriggerReceived(context.Context, appsv1.TriggerReceived) error
+	FileStored(context.Context, filesv1.ObjectCreated) error
 	ConnectionExpired(context.Context, appsv1.ConnectionExpired) error
 	ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error
 	// AlreadyHandled checks without recording anything; MarkHandled records,
@@ -81,6 +88,7 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 			authv1.MemberRemovedDetailType:       {source: authv1.Source, handle: decode(app.MemberRemoved)},
 			appsv1.ConnectionConnectedDetailType: {source: appsv1.Source, handle: decode(app.ConnectionConnected)},
 			appsv1.TriggerReceivedDetailType:     {source: appsv1.Source, handle: decode(app.TriggerReceived)},
+			filesv1.ObjectCreatedDetailType:      {source: filesv1.Source, handle: decode(app.FileStored)},
 			appsv1.ConnectionExpiredDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionExpired)},
 			appsv1.ConnectionRemovedDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionRemoved)},
 		},

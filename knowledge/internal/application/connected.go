@@ -7,6 +7,7 @@ import (
 	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
+	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -158,5 +159,78 @@ func providerFor(toolkit string) string {
 		return toolkit
 	default:
 		return ""
+	}
+}
+
+// The organization's own files are the obvious thing to index and the one
+// thing with nothing to announce it: there is no connection to make, so
+// nothing said "start indexing these". The first shared file does.
+
+// FileStored indexes the organization's own files, once it has any.
+//
+// Only an organization-scoped upload counts. A member's private file and a
+// team's are not what this source reads — it asks files for the
+// organization's own, precisely so that what it publishes, which the whole
+// organization can search, is what the whole organization could already see.
+//
+// Every upload after the first finds the source already registered, so this
+// costs one cheap lookup per upload and mints no token.
+func (s *Service) FileStored(ctx context.Context, event filesv1.ObjectCreated) error {
+	if s.grants == nil {
+		return nil
+	}
+	if event.OrganizationID == "" || event.Scope != string(domain.ScopeOrganization) {
+		return nil
+	}
+	if _, mounted := s.extractors[filesProvider]; !mounted {
+		// This deployment does not read files at all.
+		return nil
+	}
+	existing, err := s.store.Sources(ctx, event.OrganizationID,
+		domain.SourceQuery{Provider: filesProvider, Admin: true})
+	if err != nil {
+		return fmt.Errorf("look for the organization's files source: %w", err)
+	}
+	if len(existing) > 0 {
+		// Already indexed — or removed, which is a member saying their
+		// organization's files should not be. Neither is undone by someone
+		// uploading another file, so registering again is only ever the
+		// member's own doing.
+		return nil
+	}
+
+	member := event.CreatedBy
+	if member == "" {
+		member = event.MemberID
+	}
+	if member == "" {
+		return nil
+	}
+	token, err := s.grants.MemberToken(ctx, event.OrganizationID, member)
+	if err != nil {
+		s.logger.InfoContext(ctx, "the organization's files are not indexed: no standing grant",
+			"organization_id", event.OrganizationID, "error", err)
+		return nil
+	}
+	// Read as whoever stored the file rather than as an admin: an admin also
+	// sees billing attachments, which are nobody's idea of knowledge.
+	credentials := authclient.Credentials{Authorization: "Bearer " + token}
+	source, err := s.RegisterSource(ctx, credentials, event.OrganizationID, RegisterInput{
+		Provider: filesProvider, Interval: autoRegisterInterval,
+	})
+	switch {
+	case err == nil:
+		s.logger.InfoContext(ctx, "the organization's own files are now indexed",
+			"organization_id", event.OrganizationID, "source_id", source.ID)
+		return nil
+	case errors.Is(err, domain.ErrConflict):
+		// Two uploads at once, and the other won.
+		return nil
+	case errors.Is(err, domain.ErrProviderUnavailable), errors.Is(err, domain.ErrRateLimited):
+		return fmt.Errorf("index the organization's files: %w", err)
+	default:
+		s.logger.InfoContext(ctx, "the organization's files could not be indexed",
+			"organization_id", event.OrganizationID, "error", err)
+		return nil
 	}
 }

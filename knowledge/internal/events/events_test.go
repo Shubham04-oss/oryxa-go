@@ -15,6 +15,7 @@ import (
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
 )
 
 var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
@@ -58,6 +59,10 @@ func (app *fakeApplication) ConnectionConnected(context.Context, appsv1.Connecti
 
 func (app *fakeApplication) TriggerReceived(context.Context, appsv1.TriggerReceived) error {
 	return app.act(appsv1.TriggerReceivedDetailType)
+}
+
+func (app *fakeApplication) FileStored(context.Context, filesv1.ObjectCreated) error {
+	return app.act(filesv1.ObjectCreatedDetailType)
 }
 
 func (app *fakeApplication) ConnectionExpired(context.Context, appsv1.ConnectionExpired) error {

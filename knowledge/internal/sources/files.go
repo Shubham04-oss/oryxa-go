@@ -42,8 +42,8 @@ func NewFiles(client objectLister) *Files { return &Files{client: client} }
 func (source *Files) Provider() string { return "files" }
 
 // Target accepts {"team": "<id>"} to index one team's files, {"purpose":
-// "<purpose>"} to narrow to a kind, or nothing to index what the member can
-// see across the organization.
+// "<purpose>"} to narrow to a kind, or nothing to index the organization's
+// own shared files.
 func (source *Files) Target(target map[string]string) error {
 	if team, named := target["team"]; named && strings.TrimSpace(team) == "" {
 		return MissingTarget("a team id")
@@ -66,6 +66,16 @@ func (source *Files) Fetch(ctx context.Context, request Request) (Page, error) {
 		TeamID:  strings.TrimSpace(request.Source.Target["team"]),
 		Purpose: strings.TrimSpace(request.Source.Target["purpose"]),
 	}
+	// The scope is always named, and that matters more than it looks.
+	//
+	// A source here is organization-scoped, so everything it publishes is
+	// searchable by the whole organization. Files, asked with no scope at
+	// all, answers the caller's own private files alongside the shared ones
+	// — which would put the registering member's private files into an
+	// organization-wide index. So this asks for exactly the scope the
+	// documents will carry, and a member's own files are simply not what
+	// this source is for.
+	query.Scope = string(domain.ScopeOrganization)
 	if query.TeamID != "" {
 		query.Scope = string(domain.ScopeTeam)
 	}

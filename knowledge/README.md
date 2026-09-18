@@ -36,6 +36,27 @@ auth ── organization deleted, member removed ──▶ knowledge-events queu
 apps ── connection expired, connection removed ──▶ knowledge-events queue
 ```
 
+## The organization's own files index themselves
+
+Files has no connection to announce it, so nothing ever said "start indexing
+these". The first **organization-scoped** upload does: knowledge hears
+`files.object.created.v1`, and registers the organization's files source once.
+Every upload after that finds it already there, so the cost is one lookup and
+no token.
+
+Only a shared upload counts. A member's private file and a team's do not start
+it, and the source itself asks files for the organization's own scope alone —
+which matters more than it looks. A source here is organization-scoped, so
+everything it publishes is searchable by the whole organization; files asked
+with no scope answers the caller's own private files alongside the shared
+ones, which would put one member's private files in front of everybody. It is
+read as whoever stored the file rather than as an admin, since an admin also
+sees billing attachments.
+
+A source a member removed is not registered again. Removing it is them saying
+their organization's files should not be indexed, and someone uploading
+another file does not undo that.
+
 ## Connecting an app indexes what it holds
 
 A member who connects GitHub means Krude to know about their repositories.

@@ -179,6 +179,31 @@ func TestFilesNarrowsToATeamWhenOneIsNamed(t *testing.T) {
 	}
 }
 
+// TestFilesAsksForOrganizationFilesAndNeverTheMembersOwn is a privacy rule,
+// not a filter. A source here is organization-scoped, so everything it
+// publishes is searchable by the whole organization; files asked with no
+// scope at all answers the caller's own private files alongside the shared
+// ones, which would put one member's private files in front of everybody.
+func TestFilesAsksForOrganizationFilesAndNeverTheMembersOwn(t *testing.T) {
+	for name, target := range map[string]map[string]string{
+		"no target":          nil,
+		"narrowed by a kind": {"purpose": "knowledge.document"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			files := &fakeFiles{}
+			request := filesRequest()
+			request.Source.Target = target
+
+			if _, err := NewFiles(files).Fetch(context.Background(), request); err != nil {
+				t.Fatalf("Fetch() error = %v", err)
+			}
+			if files.listedAs.Scope != string(domain.ScopeOrganization) {
+				t.Fatalf("listed as scope %q, want the organization's own files alone", files.listedAs.Scope)
+			}
+		})
+	}
+}
+
 func TestFilesTargetRefusesAFieldNamedButLeftEmpty(t *testing.T) {
 	source := NewFiles(&fakeFiles{})
 	if err := source.Target(map[string]string{"team": "  "}); !errors.Is(err, domain.ErrInvalid) {
