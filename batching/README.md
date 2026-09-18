@@ -49,13 +49,14 @@ waiting on the classifier holds up none of the others, removals included.
 
 Deadlines count from the trigger's `received_at`, when apps received it, not
 from when a replica records it: a trigger that took a while to arrive has
-waited that long already. A receipt time ahead of batching's clock counts as
-now, so a skewed clock cannot postpone a deadline. One more than 90 minutes
-old counts as 90 minutes old; that is past every cadence, so the trigger is
-due as soon as it is recorded, and its deadlines stay within reach of the
-cadence arithmetic whatever a broken clock said. The traffic estimate takes
-each event at that time too, and gives the same answer whatever order the bus
-delivers events in.
+waited that long already. No deadline is set before the trigger is recorded,
+so one whose cadence passed on its way is due as it is recorded rather than a
+cadence later. A receipt time ahead of batching's clock counts as now, so a
+skewed clock cannot postpone a deadline; one more than 90 minutes old counts
+as 90 minutes old, which keeps the cadence arithmetic in range whatever a
+broken clock said. The traffic estimate takes each event at its receipt too;
+past a member's first event, the order the bus delivers them in does not
+change it.
 
 With `TYPESAFE_API_KEY` set, the classifier calls TypeSafe's System One API once
 per trigger. A trigger already recorded, or from something removed since, is
@@ -160,9 +161,16 @@ re-provisioning agents' rule.
 
 ## Known gaps
 
-Found in review before the first merge, and not yet addressed:
+Found in review, and not yet addressed:
 
 - **Setting `TYPESAFE_API_KEY` is a data decision.** It sends up to 48 KiB of
   every app payload — mail bodies, direct messages — to TypeSafe, for every
   organization, with no per-organization opt-in. Leave it unset until that
   sharing is approved.
+- **A backlog older than its cadence goes out in small batches.** After the
+  consumer has been down for longer than `BATCHING_MAX_WAIT`, every queued
+  trigger is already due as it is recorded, so each sweep releases whatever
+  of a member's backlog was recorded since the last one: up to one agent turn
+  per member per sweep until the queue drains, rather than grouped batches.
+  Counting such late triggers from their recording again, or giving them a
+  short grace, would trade that for lateness.

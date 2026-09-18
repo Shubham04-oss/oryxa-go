@@ -145,8 +145,9 @@ func screen(ctx context.Context, database querier, trigger domain.Trigger) (doma
 }
 
 func (store *Store) recordImmediate(ctx context.Context, tx pgx.Tx, trigger domain.Trigger) (domain.Admission, error) {
-	// Due at once: its deadlines are its receipt, counted as a digest's are.
-	due := domain.CountFrom(trigger.ReceivedAt, store.now())
+	// Due at once: its deadlines are its recording, since no deadline is set
+	// before that.
+	due := store.now().UTC()
 	var data any
 	if len(trigger.Data) > 0 {
 		data = trigger.Data

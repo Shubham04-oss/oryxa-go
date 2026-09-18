@@ -113,20 +113,41 @@ func TestCadenceOffsetIsStablePerMember(t *testing.T) {
 
 // TestDeadlinesCountFromWhenAppsReceivedTheTrigger: a trigger that took a
 // while to reach batching has waited that long already, so its deadlines
-// count from its receipt, not from whenever a replica recorded it.
+// count from its receipt, not from whenever a replica recorded it; one whose
+// cadence passed on the way is due as it is recorded, not a cadence later,
+// and never before.
 func TestDeadlinesCountFromWhenAppsReceivedTheTrigger(t *testing.T) {
 	scheduler := testScheduler(t)
-	received, recorded := adaptiveTestTime, adaptiveTestTime.Add(40*time.Minute)
-	want := cadenceBoundary(received, time.Hour, "org_1/user_1")
-	if cadenceBoundary(recorded, time.Hour, "org_1/user_1").Equal(want) {
-		t.Fatal("receipt and recording fall in one cadence, so this test cannot tell them apart")
+	received := adaptiveTestTime
+	boundary := cadenceBoundary(received, time.Hour, "org_1/user_1")
+
+	// Recorded before its cadence ends, a prioritized trigger's soft
+	// deadline leads over the whole window since receipt.
+	recorded := received.Add(10 * time.Minute)
+	if !recorded.Before(boundary) {
+		t.Fatal("the recording falls after the boundary, so this case cannot show the soft deadline's window")
 	}
-	_, schedule, err := scheduler.Observe(TrafficProfile{}, received, recorded, "org_1/user_1", 0)
+	_, timely, err := scheduler.Observe(TrafficProfile{}, received, recorded, "org_1/user_1", .5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !schedule.HardDueAt.Equal(want) {
-		t.Fatalf("hard deadline = %s, want the cadence boundary after receipt, %s", schedule.HardDueAt, want)
+	wantSoft := boundary.Add(-time.Duration(float64(boundary.Sub(received)) * priorityDeadlineLead * .5))
+	if !timely.HardDueAt.Equal(boundary) || !timely.SoftDueAt.Equal(wantSoft) {
+		t.Fatalf("deadlines = %s / %s, want %s / %s", timely.SoftDueAt, timely.HardDueAt, wantSoft, boundary)
+	}
+
+	// Recorded after its cadence ended, it is due as it is recorded rather
+	// than at the member's next boundary.
+	late := boundary.Add(19 * time.Minute)
+	if next := cadenceBoundary(late, time.Hour, "org_1/user_1"); !next.After(late) || next.Equal(boundary) {
+		t.Fatal("the late recording has no later boundary to tell apart")
+	}
+	_, overdue, err := scheduler.Observe(TrafficProfile{}, received, late, "org_1/user_1", .5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !overdue.HardDueAt.Equal(late) || !overdue.SoftDueAt.Equal(late) {
+		t.Fatalf("a late trigger's deadlines = %s / %s, want both its recording, %s", overdue.SoftDueAt, overdue.HardDueAt, late)
 	}
 }
 
@@ -141,16 +162,15 @@ func TestAReceiptTimeOutsideReasonCountsFromTheNearestSaneOne(t *testing.T) {
 	if want := cadenceBoundary(recorded, time.Hour, "org_1/user_1"); !ahead.HardDueAt.Equal(want) {
 		t.Fatalf("a future receipt's hard deadline = %s, want %s", ahead.HardDueAt, want)
 	}
-	// A receipt far in the past is due as soon as it is recorded, with its
-	// deadlines no further back than one longest cadence.
+	// A receipt far in the past, even one a broken clock made up, is due as
+	// the trigger is recorded.
 	for _, received := range []time.Time{recorded.Add(-72 * time.Hour), time.Date(1000, time.January, 1, 0, 0, 0, 0, time.UTC)} {
 		_, old, err := scheduler.Observe(TrafficProfile{}, received, recorded, "org_1/user_1", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if old.HardDueAt.After(recorded) || old.HardDueAt.Before(recorded.Add(-MaximumDeliveryDelay)) || old.SoftDueAt.After(old.HardDueAt) {
-			t.Fatalf("received %s: deadlines = %s / %s, want both due by %s and none before %s",
-				received, old.SoftDueAt, old.HardDueAt, recorded, recorded.Add(-MaximumDeliveryDelay))
+		if !old.HardDueAt.Equal(recorded) || !old.SoftDueAt.Equal(recorded) {
+			t.Fatalf("received %s: deadlines = %s / %s, want both %s", received, old.SoftDueAt, old.HardDueAt, recorded)
 		}
 	}
 }

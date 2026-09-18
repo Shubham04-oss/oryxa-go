@@ -55,11 +55,9 @@ func (scheduler AdaptiveScheduler) Valid() bool {
 // waits, not about when a replica happened to record it. A receipt ahead of
 // the recording clock counts as the recording time, so a skewed clock cannot
 // postpone a deadline. A receipt more than MaximumDeliveryDelay before
-// recording counts as exactly that long before. Every cadence boundary after
-// it has passed either way, so the trigger is due as soon as it is recorded,
-// but its deadlines stay within a cadence of that rather than wherever a
-// broken clock or a long redelivery put them, and within the range the
-// cadence arithmetic can represent.
+// recording counts as exactly that long before: every cadence boundary after
+// it has passed either way, and whatever a broken clock said, the cadence
+// arithmetic stays in range and the traffic estimate's observation recent.
 func CountFrom(receivedAt, recordedAt time.Time) time.Time {
 	receivedAt, recordedAt = receivedAt.UTC(), recordedAt.UTC()
 	if receivedAt.After(recordedAt) {
@@ -72,9 +70,11 @@ func CountFrom(receivedAt, recordedAt time.Time) time.Time {
 }
 
 // Observe advances the time-decayed profile and assigns this trigger its
-// schedule, counted from CountFrom(receivedAt, recordedAt). The returned
-// deadlines depend only on this observation and are persisted with it; a
-// later observation cannot postpone them.
+// schedule, counted from CountFrom(receivedAt, recordedAt) but never set
+// before recordedAt: a trigger whose cadence passed on its way here is due
+// as it is recorded, not before. The returned deadlines depend only on this
+// observation and are persisted with it; a later observation cannot
+// postpone them.
 func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, receivedAt, recordedAt time.Time, key string, priority float64) (TrafficProfile, Schedule, error) {
 	if !scheduler.Valid() {
 		return profile, Schedule{}, errors.New("adaptive scheduler is not configured")
@@ -98,7 +98,8 @@ func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, receivedAt, r
 		// The bus orders nothing, so an event can be older than one already
 		// observed. It adds its weight as of when it happened, and the
 		// profile's clock stays put: turning it back would decay the time in
-		// between twice. Either order gives the same estimate.
+		// between twice. Past the first event, the order events arrive in
+		// does not change the estimate.
 		age := profile.ObservedAt.Sub(at).Hours()
 		profile.FastMass += math.Exp(-fastDecay * age)
 		profile.SlowMass += math.Exp(-slowDecay * age)
@@ -130,6 +131,15 @@ func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, receivedAt, r
 	window := hardDue.Sub(at)
 	lead := time.Duration(float64(window) * priorityDeadlineLead * priority)
 	softDue := hardDue.Add(-lead)
+	// Raising both to the recording keeps the soft deadline at or before
+	// the hard one.
+	recorded := recordedAt.UTC()
+	if hardDue.Before(recorded) {
+		hardDue = recorded
+	}
+	if softDue.Before(recorded) {
+		softDue = recorded
+	}
 	return profile, Schedule{
 		TargetSize: target, Pressure: 1 + priorityPressure*priority,
 		SoftDueAt: softDue, HardDueAt: hardDue, PolicyVersion: AdaptivePolicyVersion,

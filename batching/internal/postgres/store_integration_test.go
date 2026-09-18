@@ -572,21 +572,24 @@ func TestRemovingATriggerDropsOnlyWhatItReported(t *testing.T) {
 
 // TestATriggerThatArrivesLateIsDueAtOnce: deadlines count from when apps
 // received a trigger, so one that reaches batching after its whole cadence
-// has passed goes in the next sweep instead of waiting another cadence.
+// has passed goes in the next sweep instead of waiting another cadence. It
+// is due as it is recorded, not before.
 func TestATriggerThatArrivesLateIsDueAtOnce(t *testing.T) {
 	rule := domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20}
 	store, organizationID := testStore(t, rule)
 	ctx := context.Background()
 	late := testTrigger(organizationID, "user_1", "late", domain.LaneDigest)
 	late.ReceivedAt = time.Now().UTC().Add(-2 * time.Hour)
+	recording := time.Now().Add(-time.Millisecond)
 	recordTrigger(t, store, late)
 	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := ownBatches(claimed, organizationID)
-	if len(got) != 1 || got[0].FlushReason != "hard_deadline" || got[0].HardDueAt.After(time.Now()) {
-		t.Fatalf("claimed = %+v, want the late trigger due at its hard deadline", got)
+	if len(got) != 1 || got[0].FlushReason != "hard_deadline" ||
+		got[0].HardDueAt.After(time.Now()) || got[0].HardDueAt.Before(recording) {
+		t.Fatalf("claimed = %+v, want the late trigger due at its hard deadline, its recording", got)
 	}
 }
 
