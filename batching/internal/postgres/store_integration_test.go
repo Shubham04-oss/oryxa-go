@@ -480,3 +480,83 @@ func TestExpiredRemovalsAreSwept(t *testing.T) {
 		t.Fatalf("removals left = %v, want only the recent one", left)
 	}
 }
+
+// TestRemovingAConnectionDropsItsWaitingTriggers: when a member disconnects
+// an app, what it reported that is still waiting goes, claimed or not, and a
+// trigger from it the bus delivers late is refused. Their other apps'
+// triggers stay, and a batch already completed is left alone.
+func TestRemovingAConnectionDropsItsWaitingTriggers(t *testing.T) {
+	rule := domain.Rule{Size: 1, MaxWait: time.Millisecond, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+	fromConnection := func(id, connectionID string, lane domain.Lane) domain.Trigger {
+		trigger := testTrigger(organizationID, "user_1", id, lane)
+		trigger.ConnectionID = connectionID
+		return trigger
+	}
+	recordTrigger(t, store, fromConnection("completed", "apc_gone", domain.LaneImmediate))
+	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := ownBatches(claimed, organizationID)
+	if len(completed) != 1 {
+		t.Fatalf("claimed = %+v", completed)
+	}
+	event := domain.Event{ID: organizationID + "_completed", DetailType: "batching.trigger-batch.ready.v1",
+		Data: json.RawMessage(`{"batch_id":"completed"}`), OccurredAt: time.Now().UTC()}
+	if err := store.Complete(ctx, completed[0], event); err != nil {
+		t.Fatal(err)
+	}
+	recordTrigger(t, store, fromConnection("waiting", "apc_gone", domain.LaneDigest))
+	recordTrigger(t, store, fromConnection("claimed", "apc_gone", domain.LaneImmediate))
+	if _, err := store.ClaimDue(ctx, rule, time.Minute, 2); err != nil {
+		t.Fatal(err)
+	}
+	recordTrigger(t, store, fromConnection("other_app", "apc_kept", domain.LaneDigest))
+	late := fromConnection("late", "apc_gone", domain.LaneDigest)
+
+	if err := store.Discard(ctx, organizationID, "apc_gone", ""); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, store, late)
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND connection_id = 'apc_gone' AND batched_at IS NULL`, organizationID); got != 0 {
+		t.Fatalf("%d triggers from the removed app still wait, want none", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND connection_id = 'apc_gone' AND batched_at IS NOT NULL`, organizationID); got != 1 {
+		t.Fatalf("%d completed triggers from the removed app are kept, want the one", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_outbox WHERE id = $1`, event.ID); got != 1 {
+		t.Fatalf("the completed batch was taken from the outbox")
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND connection_id = 'apc_kept'`, organizationID); got != 1 {
+		t.Fatalf("the member's other app lost its trigger")
+	}
+}
+
+func TestRemovingATriggerDropsOnlyWhatItReported(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	gone := testTrigger(organizationID, "user_1", "gone", domain.LaneDigest)
+	gone.TriggerID = "apt_gone"
+	kept := testTrigger(organizationID, "user_1", "kept", domain.LaneDigest)
+	kept.TriggerID = "apt_kept"
+	recordTrigger(t, store, gone)
+	recordTrigger(t, store, kept)
+	late := testTrigger(organizationID, "user_1", "late", domain.LaneDigest)
+	late.TriggerID = "apt_gone"
+
+	if err := store.Discard(ctx, organizationID, "", "apt_gone"); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, store, late)
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND trigger_id = 'apt_gone'`, organizationID); got != 0 {
+		t.Fatalf("%d triggers from the removed trigger remain, want none", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND trigger_id = 'apt_kept'`, organizationID); got != 1 {
+		t.Fatalf("the member's other trigger lost its event")
+	}
+	sibling := testTrigger(organizationID, "user_1", "sibling", domain.LaneDigest)
+	sibling.TriggerID = "apt_kept"
+	recordTrigger(t, store, sibling)
+}

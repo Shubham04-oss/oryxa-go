@@ -77,7 +77,7 @@ func Run(ctx context.Context, eventClient *eventbridge.Client, queueClient *sqs.
 		return Output{}, err
 	}
 	rule, err := eventClient.PutRule(ctx, &eventbridge.PutRuleInput{
-		Name: aws.String(ruleName), Description: aws.String("App triggers batching groups and auth removals that discard pending work"),
+		Name: aws.String(ruleName), Description: aws.String("App triggers batching groups, and the app and auth removals that discard pending work"),
 		EventBusName: aws.String(config.EventBusName), EventPattern: aws.String(pattern),
 		State: eventbridgetypes.RuleStateEnabled, Tags: ruleTags(),
 	})

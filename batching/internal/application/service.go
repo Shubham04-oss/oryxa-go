@@ -84,6 +84,7 @@ type store interface {
 	Unclaim(context.Context, string, []string) error
 	Complete(context.Context, domain.Batch, domain.Event) error
 	Forget(context.Context, string, string) error
+	Discard(context.Context, string, string, string) error
 	DeleteBatched(context.Context, time.Time, int) (int, error)
 	DeleteForgotten(context.Context, time.Time) (int, error)
 }
@@ -145,7 +146,7 @@ func (service *Service) report(ctx context.Context, eventID string, admission do
 	case domain.AlreadyRecorded:
 		service.logger.InfoContext(ctx, "trigger already recorded", "event_id", eventID)
 	case domain.Forgotten:
-		service.logger.InfoContext(ctx, "trigger refused: its member or organization was removed after apps received it",
+		service.logger.InfoContext(ctx, "trigger refused: its member, organization, app connection or trigger was removed after apps received it",
 			"event_id", eventID)
 	}
 }
@@ -162,6 +163,25 @@ func (service *Service) OrganizationDeleted(ctx context.Context, event authv1.Or
 		return errors.New("a deleted organization needs its id")
 	}
 	return service.store.Forget(ctx, event.OrganizationID, "")
+}
+
+// ConnectionRemoved drops what a member's app reported that is still
+// waiting, once they disconnect it, rather than wake their agent for an app
+// they have taken away.
+func (service *Service) ConnectionRemoved(ctx context.Context, event appsv1.ConnectionRemoved) error {
+	if event.OrganizationID == "" || event.ConnectionID == "" {
+		return errors.New("a removed connection needs an organization and its id")
+	}
+	return service.store.Discard(ctx, event.OrganizationID, event.ConnectionID, "")
+}
+
+// TriggerUnsubscribed drops what a trigger reported that is still waiting,
+// once the member or an admin removes it.
+func (service *Service) TriggerUnsubscribed(ctx context.Context, event appsv1.TriggerUnsubscribed) error {
+	if event.OrganizationID == "" || event.TriggerID == "" {
+		return errors.New("a removed trigger needs an organization and its id")
+	}
+	return service.store.Discard(ctx, event.OrganizationID, "", event.TriggerID)
 }
 
 func (service *Service) Run(ctx context.Context) {

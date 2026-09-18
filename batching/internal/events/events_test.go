@@ -17,10 +17,19 @@ import (
 type fakeApplication struct {
 	triggerID string
 	forgot    string
+	discarded string
 }
 
 func (app *fakeApplication) TriggerReceived(_ context.Context, eventID string, _ appsv1.TriggerReceived) error {
 	app.triggerID = eventID
+	return nil
+}
+func (app *fakeApplication) ConnectionRemoved(_ context.Context, event appsv1.ConnectionRemoved) error {
+	app.discarded = "connection " + event.ConnectionID
+	return nil
+}
+func (app *fakeApplication) TriggerUnsubscribed(_ context.Context, event appsv1.TriggerUnsubscribed) error {
+	app.discarded = "trigger " + event.TriggerID
 	return nil
 }
 func (app *fakeApplication) MemberRemoved(_ context.Context, event authv1.MemberRemoved) error {
@@ -69,6 +78,45 @@ func TestConsumerHandlesAuthRemoval(t *testing.T) {
 	}
 	if app.forgot != "org_1/user_1" {
 		t.Fatalf("forgot = %q", app.forgot)
+	}
+}
+
+func TestConsumerHandlesAppRemovals(t *testing.T) {
+	app := &fakeApplication{}
+	consumer := NewConsumer(app, nil)
+	for _, test := range []struct {
+		detailType string
+		data       any
+		want       string
+	}{
+		{appsv1.ConnectionRemovedDetailType, appsv1.ConnectionRemoved{ConnectionID: "apc_1", OrganizationID: "org_1"}, "connection apc_1"},
+		{appsv1.TriggerUnsubscribedDetailType, appsv1.TriggerUnsubscribed{TriggerID: "apt_1", OrganizationID: "org_1"}, "trigger apt_1"},
+	} {
+		if err := consumer.Handle(context.Background(), delivery(t, appsv1.Source, test.detailType, "evt_apps_1", test.data)); err != nil {
+			t.Fatal(err)
+		}
+		if app.discarded != test.want {
+			t.Fatalf("%s discarded %q, want %q", test.detailType, app.discarded, test.want)
+		}
+	}
+}
+
+// TestEverySubscribedEventHasAHandler: the provisioner builds the rule from
+// Subscriptions, so an event subscribed but not handled fails on the queue
+// for ever, and one handled but not subscribed never arrives.
+func TestEverySubscribedEventHasAHandler(t *testing.T) {
+	consumer := NewConsumer(&fakeApplication{}, nil)
+	subscribed := 0
+	for source, detailTypes := range Subscriptions() {
+		for _, detailType := range detailTypes {
+			subscribed++
+			if handler, ok := consumer.handlers[detailType]; !ok || handler.source != source {
+				t.Fatalf("%s from %s is subscribed but not handled from there", detailType, source)
+			}
+		}
+	}
+	if subscribed != len(consumer.handlers) {
+		t.Fatalf("%d events subscribed, %d handled", subscribed, len(consumer.handlers))
 	}
 }
 

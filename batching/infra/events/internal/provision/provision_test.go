@@ -12,6 +12,7 @@ func TestEventPatternMatchesAppsAndAuthEvents(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"source":["oryxa.apps"]`, `"apps.trigger.received.v1"`,
+		`"apps.connection.removed.v1"`, `"apps.trigger.unsubscribed.v1"`,
 		`"source":["oryxa.auth"]`, `"auth.member.removed.v1"`, `"auth.organization.deleted.v1"`,
 	} {
 		if !strings.Contains(pattern, want) {

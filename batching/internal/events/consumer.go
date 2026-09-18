@@ -17,17 +17,20 @@ import (
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 )
 
-// Subscriptions are the raw app triggers batching groups and the auth events
-// that remove work nobody may receive any more.
+// Subscriptions are the raw app triggers batching groups, and the app and
+// auth events that remove work nobody should receive any more: a member's
+// app disconnected or trigger removed, a member gone, an organization gone.
 func Subscriptions() map[string][]string {
 	return map[string][]string{
-		appsv1.Source: {appsv1.TriggerReceivedDetailType},
+		appsv1.Source: {appsv1.TriggerReceivedDetailType, appsv1.ConnectionRemovedDetailType, appsv1.TriggerUnsubscribedDetailType},
 		authv1.Source: {authv1.MemberRemovedDetailType, authv1.OrganizationDeletedDetailType},
 	}
 }
 
 type application interface {
 	TriggerReceived(context.Context, string, appsv1.TriggerReceived) error
+	ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error
+	TriggerUnsubscribed(context.Context, appsv1.TriggerUnsubscribed) error
 	MemberRemoved(context.Context, authv1.MemberRemoved) error
 	OrganizationDeleted(context.Context, authv1.OrganizationDeleted) error
 }
@@ -51,6 +54,8 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 	return &Consumer{
 		handlers: map[string]subscription{
 			appsv1.TriggerReceivedDetailType:     {source: appsv1.Source, handle: decodeWithID(app.TriggerReceived)},
+			appsv1.ConnectionRemovedDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionRemoved)},
+			appsv1.TriggerUnsubscribedDetailType: {source: appsv1.Source, handle: decode(app.TriggerUnsubscribed)},
 			authv1.MemberRemovedDetailType:       {source: authv1.Source, handle: decode(app.MemberRemoved)},
 			authv1.OrganizationDeletedDetailType: {source: authv1.Source, handle: decode(app.OrganizationDeleted)},
 		},

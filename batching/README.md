@@ -27,6 +27,10 @@ deterministic scheduler:
   a month, so a trigger apps received before the removal that the bus
   delivers after it is refused instead of starting a new group; a member
   added back later is not held up by what was forgotten;
+- a member disconnecting an app (`apps.connection.removed.v1`) or removing a
+  trigger (`apps.trigger.unsubscribed.v1`) drops what it reported that is
+  still waiting, and is remembered the same way, so it no longer wakes the
+  agent; batches already completed are left alone;
 - a published batch's payloads are blanked from the outbox once it is on the
   bus, as apps does with its own trigger events.
 
@@ -88,8 +92,10 @@ go run ./batching/infra/events/cmd/provision
 ```
 
 Set `BATCHING_EVENTS_QUEUE_URL` to the printed queue URL. The provisioner
-subscribes to app triggers plus auth member/organization deletion events and
-configures a target DLQ for EventBridge delivery failures.
+subscribes to app triggers, app connection and trigger removals, and auth
+member/organization deletion events, and configures a target DLQ for
+EventBridge delivery failures. Re-run it after upgrading so the rule carries
+the app removals.
 
 Useful controls are:
 

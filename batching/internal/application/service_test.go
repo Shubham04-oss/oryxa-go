@@ -23,6 +23,7 @@ type fakeStore struct {
 	batches   []domain.Batch
 	completed []domain.Event
 	forgot    []string
+	discarded []string
 	unclaimed []string
 	claimErr  error
 	// swept is the cutoff each sweep asked tombstones to be deleted before.
@@ -49,6 +50,10 @@ func (store *fakeStore) Complete(_ context.Context, _ domain.Batch, event domain
 }
 func (store *fakeStore) Forget(_ context.Context, organizationID, memberID string) error {
 	store.forgot = append(store.forgot, organizationID+"/"+memberID)
+	return nil
+}
+func (store *fakeStore) Discard(_ context.Context, organizationID, connectionID, triggerID string) error {
+	store.discarded = append(store.discarded, organizationID+"/"+connectionID+"/"+triggerID)
 	return nil
 }
 func (*fakeStore) DeleteBatched(context.Context, time.Time, int) (int, error) { return 0, nil }
@@ -243,5 +248,33 @@ func TestTheSweepForgetsRemovalsOnlyAfterAMonth(t *testing.T) {
 	service.sweep(context.Background())
 	if len(store.swept) != 1 || !store.swept[0].Equal(testClock.Add(-30*24*time.Hour)) {
 		t.Fatalf("swept removals before %v, want %v", store.swept, testClock.Add(-30*24*time.Hour))
+	}
+}
+
+// TestAppRemovalsDiscardTheirWaitingTriggers: a disconnected app, or a
+// removed trigger, should not still wake the member's agent for what it
+// reported before it went.
+func TestAppRemovalsDiscardTheirWaitingTriggers(t *testing.T) {
+	store := &fakeStore{}
+	service := New(store, nil, Config{}, nil)
+	ctx := context.Background()
+	if err := service.ConnectionRemoved(ctx, appsv1.ConnectionRemoved{
+		ConnectionID: "apc_1", OrganizationID: "org_1", MemberID: "user_1", Reason: appsv1.RemovedByMember,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.TriggerUnsubscribed(ctx, appsv1.TriggerUnsubscribed{
+		TriggerID: "apt_1", ConnectionID: "apc_2", OrganizationID: "org_1", MemberID: "user_1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(store.discarded, ",") != "org_1/apc_1/,org_1//apt_1" {
+		t.Fatalf("discarded = %v", store.discarded)
+	}
+	if err := service.ConnectionRemoved(ctx, appsv1.ConnectionRemoved{OrganizationID: "org_1"}); err == nil {
+		t.Fatal("ConnectionRemoved() without a connection error = nil")
+	}
+	if err := service.TriggerUnsubscribed(ctx, appsv1.TriggerUnsubscribed{TriggerID: "apt_1"}); err == nil {
+		t.Fatal("TriggerUnsubscribed() without an organization error = nil")
 	}
 }

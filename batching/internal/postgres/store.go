@@ -510,6 +510,33 @@ func (store *Store) Forget(ctx context.Context, organizationID, memberID string)
 	})
 }
 
+// Discard drops the triggers still waiting from a connection its member
+// removed, or from one trigger when triggerID is set, and remembers the
+// removal like Forget does, so one the bus delivers late is refused too.
+// Waiting includes claimed and not yet completed: a claim that loses a
+// trigger here can no longer complete, and the rest of its group is claimed
+// again when its lease runs out. Completed batches are left alone; each is
+// one event, carrying the member's other apps' triggers too, and may already
+// be on the bus.
+func (store *Store) Discard(ctx context.Context, organizationID, connectionID, triggerID string) error {
+	if organizationID == "" || (connectionID == "" && triggerID == "") {
+		return errors.New("discarding triggers needs an organization and a connection or trigger")
+	}
+	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, organizationLock(organizationID)); err != nil {
+			return fmt.Errorf("lock organization: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM batching_triggers
+			WHERE organization_id = $1 AND batched_at IS NULL
+			  AND ($2 = '' OR connection_id = $2) AND ($3 = '' OR trigger_id = $3)`,
+			organizationID, connectionID, triggerID); err != nil {
+			return fmt.Errorf("discard waiting triggers: %w", err)
+		}
+		return remember(ctx, tx, organizationID, "", connectionID, triggerID, store.now().UTC())
+	})
+}
+
 // remember records a removal's tombstone, timed once the organization's lock
 // is held: every trigger apps received before then is either deleted with
 // the removal or refused by Record. Removing the same thing again moves the
