@@ -29,6 +29,7 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { apiErrorMessage } from "@/lib/api/client";
+import { connectionTargetsQueryOptions } from "@/lib/apps/client";
 import { relativeTime } from "@/lib/format";
 import {
 	defaultSourceIntervalSeconds,
@@ -252,6 +253,13 @@ function IndexSourceDialog({
 	const intervalId = useId();
 	const [open, setOpen] = useState(false);
 	const [target, setTarget] = useState("");
+	const [typeItOut, setTypeItOut] = useState(false);
+	const targets = useQuery({
+		...connectionTargetsQueryOptions(organizationId, connectionId),
+		enabled: open,
+	});
+	const discovered = targets.data ?? [];
+	const offerPicker = !typeItOut && discovered.length > 0;
 	const [intervalSeconds, setIntervalSeconds] = useState(
 		defaultSourceIntervalSeconds,
 	);
@@ -277,6 +285,7 @@ function IndexSourceDialog({
 		setOpen(next);
 		if (next) {
 			setTarget("");
+			setTypeItOut(false);
 			setIntervalSeconds(defaultSourceIntervalSeconds);
 			setProblem("");
 			index.reset();
@@ -308,13 +317,58 @@ function IndexSourceDialog({
 							{field.label}
 							{field.required ? " *" : " (optional)"}
 						</Label>
-						<Input
-							id={targetId}
-							onChange={(event) => setTarget(event.target.value)}
-							placeholder={field.placeholder}
-							required={field.required}
-							value={target}
-						/>
+						{/*
+						 * The app is asked what it holds, so nobody has to know a
+						 * channel's id. Typing one stays possible: discovery can
+						 * be refused a scope, or simply find nothing, and neither
+						 * should stop a member indexing something they can name.
+						 */}
+						{offerPicker ? (
+							<Select onValueChange={setTarget} value={target}>
+								<SelectTrigger className="w-full" id={targetId}>
+									<SelectValue
+										placeholder={`Choose a ${field.label.toLowerCase()}…`}
+									/>
+								</SelectTrigger>
+								<SelectContent>
+									{targets.data?.map((choice) => (
+										<SelectItem key={choice.id} value={choice.id}>
+											{choice.name}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+						) : (
+							<Input
+								id={targetId}
+								onChange={(event) => {
+									setTarget(event.target.value);
+									// Typing here is the same choice as "Enter one by
+									// hand instead": once made, the list loading in
+									// should not swap away what is already on screen
+									// and about to be sent.
+									setTypeItOut(true);
+								}}
+								placeholder={field.placeholder}
+								required={field.required}
+								value={target}
+							/>
+						)}
+						{targets.isPending ? (
+							<p className="dialog-field-hint">Reading what this app holds…</p>
+						) : null}
+						{offerPicker ? (
+							<button
+								className="dialog-field-link"
+								onClick={() => {
+									setTypeItOut(true);
+									setTarget("");
+								}}
+								type="button"
+							>
+								Enter one by hand instead
+							</button>
+						) : null}
 					</div>
 					<div className="dialog-field">
 						<Label htmlFor={intervalId}>How often</Label>

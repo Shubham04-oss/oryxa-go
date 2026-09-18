@@ -9,6 +9,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/generation"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgeclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/retrieval"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/vectorstore"
@@ -521,11 +522,30 @@ func (fake *fakeGenerator) Model() string { return fake.model }
 // harness bundles a Service with the concrete fakes behind it, so a test can
 // both call the service and configure or inspect what it did to its
 // dependencies.
+// fakeDocuments answers a body knowledge could not carry on the bus.
+type fakeDocuments struct {
+	body string
+	// hash, when set, is what knowledge says the body is now — which differs
+	// from the event's when the document changed while it was being read.
+	hash  string
+	err   error
+	calls []string
+}
+
+func (documents *fakeDocuments) Body(_ context.Context, organizationID, documentID string) (knowledgeclient.Document, error) {
+	documents.calls = append(documents.calls, organizationID+"/"+documentID)
+	if documents.err != nil {
+		return knowledgeclient.Document{}, documents.err
+	}
+	return knowledgeclient.Document{ID: documentID, Body: documents.body, ContentHash: documents.hash}, nil
+}
+
 type harness struct {
 	service   *Service
 	store     *fakeStore
 	teams     *fakeTeams
 	files     *fakeFiles
+	documents *fakeDocuments
 	vectors   *fakeVectors
 	retriever *fakeRetriever
 	generator *fakeGenerator
@@ -537,10 +557,12 @@ func newHarness() *harness {
 	store := newFakeStore()
 	teams := newFakeTeams()
 	files := &fakeFiles{}
+	documents := &fakeDocuments{}
 	vectors := newFakeVectors()
 	retriever := &fakeRetriever{}
 	generator := &fakeGenerator{model: "test-model"}
-	service := New(store, fakeDirectory{}, teams, files, vectors, retriever, generator, Defaults{}, nil)
+	service := New(store, fakeDirectory{}, teams, files, documents, vectors, retriever, generator, Defaults{}, nil)
 	service.now = func() time.Time { return testClock }
-	return &harness{service: service, store: store, teams: teams, files: files, vectors: vectors, retriever: retriever, generator: generator}
+	return &harness{service: service, store: store, teams: teams, files: files, documents: documents,
+		vectors: vectors, retriever: retriever, generator: generator}
 }

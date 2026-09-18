@@ -563,6 +563,129 @@ func TestVertexBatchesToWhatTheModelAccepts(t *testing.T) {
 	}
 }
 
+// TestVertexBatchesStayUnderTheRequestTokenLimit is the regression for a
+// document that could never be indexed: text-embedding-005 takes 250 texts a
+// call but refuses a call of more than 20,000 tokens, so a batch sized by count
+// alone failed on every attempt once a document's chunks were long enough.
+func TestVertexBatchesStayUnderTheRequestTokenLimit(t *testing.T) {
+	t.Parallel()
+	var mutex sync.Mutex
+	var requestTokens []int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body vertexRequest
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		tokens := 0
+		predictions := make([]string, 0, len(body.Instances))
+		for _, instance := range body.Instances {
+			tokens += chunkingEstimate(instance.Content)
+			predictions = append(predictions, `{"embeddings":{"values":[1,0,0,0]}}`)
+		}
+		mutex.Lock()
+		requestTokens = append(requestTokens, tokens)
+		mutex.Unlock()
+		_, _ = writer.Write([]byte(`{"predictions":[` + strings.Join(predictions, ",") + `]}`))
+	}))
+	defer server.Close()
+	spec := domain.EmbeddingSpec{Provider: domain.ProviderVertex, Model: "text-embedding-005", Dimensions: 4, Metric: domain.MetricCosine}
+	client, err := NewVertex(context.Background(), spec, VertexConfig{
+		Project: "p", Location: "global", HTTPClient: server.Client(), Endpoint: server.URL,
+	}, Options{})
+	if err != nil {
+		t.Fatalf("NewVertex: %v", err)
+	}
+	// 120 chunks of about 600 tokens: far under 250 texts, far over 20,000
+	// tokens in one call.
+	texts := make([]string, 120)
+	for index := range texts {
+		texts[index] = fmt.Sprintf("chunk %d ", index) + strings.Repeat("retrieval keeps passages whole ", 80)
+	}
+	result, err := client.Embed(context.Background(), domain.InputDocument, texts)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	if len(result.Vectors) != len(texts) {
+		t.Fatalf("got %d vectors for %d texts", len(result.Vectors), len(texts))
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if len(requestTokens) < 4 {
+		t.Fatalf("made %d calls for about 72,000 tokens, want at least 4", len(requestTokens))
+	}
+	for _, tokens := range requestTokens {
+		if tokens > 20000 {
+			t.Fatalf("a call carried about %d tokens, over Vertex's 20,000", tokens)
+		}
+	}
+}
+
+// TestVertexHalvesABatchItRefusesAsTooLarge: a batch is sized by an estimate,
+// and code or a language the model's vocabulary serves less well can run
+// denser than it expects. Vertex's refusal names the token limit, and the
+// batch is embedded in halves instead, in order.
+func TestVertexHalvesABatchItRefusesAsTooLarge(t *testing.T) {
+	t.Parallel()
+	var mutex sync.Mutex
+	var sizes []int
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body vertexRequest
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		mutex.Lock()
+		sizes = append(sizes, len(body.Instances))
+		mutex.Unlock()
+		if len(body.Instances) > 8 {
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"Unable to submit request because the input token count is 23563 but the model supports up to 20000."}}`))
+			return
+		}
+		predictions := make([]string, 0, len(body.Instances))
+		for _, instance := range body.Instances {
+			var index int
+			_, _ = fmt.Sscanf(instance.Content, "t%d", &index)
+			predictions = append(predictions, fmt.Sprintf(`{"embeddings":{"values":[%d,0,0,1]}}`, index))
+		}
+		_, _ = writer.Write([]byte(`{"predictions":[` + strings.Join(predictions, ",") + `]}`))
+	}))
+	defer server.Close()
+	spec := domain.EmbeddingSpec{Provider: domain.ProviderVertex, Model: "text-embedding-005", Dimensions: 4, Metric: domain.MetricCosine}
+	client, err := NewVertex(context.Background(), spec, VertexConfig{
+		Project: "p", Location: "global", HTTPClient: server.Client(), Endpoint: server.URL,
+	}, Options{})
+	if err != nil {
+		t.Fatalf("NewVertex: %v", err)
+	}
+	texts := make([]string, 40)
+	for index := range texts {
+		texts[index] = fmt.Sprintf("t%d", index)
+	}
+	result, err := noSleep(client).Embed(context.Background(), domain.InputDocument, texts)
+	if err != nil {
+		t.Fatalf("Embed: %v", err)
+	}
+	for index, vector := range result.Vectors {
+		if int(vector[0]) != index {
+			t.Fatalf("vector %d belongs to text %d: halving lost the order", index, int(vector[0]))
+		}
+	}
+	if len(result.Vectors) != len(texts) {
+		t.Fatalf("got %d vectors for %d texts", len(result.Vectors), len(texts))
+	}
+
+	// A single text refused as too large has nowhere smaller to go.
+	one, err := NewVertex(context.Background(), spec, VertexConfig{
+		Project: "p", Location: "global", HTTPClient: server.Client(), Endpoint: server.URL,
+	}, Options{MaxBatch: 1})
+	if err != nil {
+		t.Fatalf("NewVertex: %v", err)
+	}
+	server.Config.Handler = http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(`{"error":{"status":"INVALID_ARGUMENT","message":"the input token count is 30000 but the model supports up to 20000"}}`))
+	})
+	if _, err := noSleep(one).Embed(context.Background(), domain.InputDocument, []string{"t0"}); !errors.Is(err, ErrBatchTooLarge) {
+		t.Fatalf("Embed of one refused text = %v, want ErrBatchTooLarge", err)
+	}
+}
+
 func TestTruncateRespectsTheModelLimit(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("word ", 1000)

@@ -306,8 +306,10 @@ func (s *Service) runFailed(ctx context.Context, source domain.Source, run domai
 	if _, err := s.store.FailSource(ctx, source.ID, lease, reason, now, retryAt, nil); err != nil {
 		return err
 	}
+	// The reason is what the event and the API say; the cause is what an
+	// operator needs, and nothing else records it.
 	s.logger.WarnContext(ctx, "source could not be read",
-		"source_id", source.ID, "reason", reason, "retry_at", retryAt)
+		"source_id", source.ID, "reason", reason, "retry_at", retryAt, "error", cause)
 	return nil
 }
 
@@ -355,6 +357,8 @@ func syncError(err error) (string, bool) {
 		return knowledgev1.SyncErrorProviderUnavailable, true
 	case errors.Is(err, domain.ErrLeaseLost):
 		return knowledgev1.SyncErrorLeaseLost, true
+	case errors.Is(err, domain.ErrGrantRequired):
+		return knowledgev1.SyncErrorGrantRequired, false
 	default:
 		return knowledgev1.SyncErrorProviderError, true
 	}

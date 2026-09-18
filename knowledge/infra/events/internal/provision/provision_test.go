@@ -6,7 +6,9 @@ import (
 	"testing"
 )
 
-func TestEventPatternMatchesTheEventsThatEndSubscriptions(t *testing.T) {
+// Knowledge hears about a connection's whole life now, not only its end: one
+// made is what makes an app's contents searchable.
+func TestEventPatternMatchesTheEventsKnowledgeActsOn(t *testing.T) {
 	pattern, err := EventPattern()
 	if err != nil {
 		t.Fatalf("EventPattern() error = %v", err)
@@ -15,11 +17,19 @@ func TestEventPatternMatchesTheEventsThatEndSubscriptions(t *testing.T) {
 		"$or": [
 			{
 				"source": ["oryxa.apps"],
-				"detail-type": ["apps.connection.expired.v1", "apps.connection.removed.v1"]
+				"detail-type": ["apps.connection.connected.v1", "apps.connection.expired.v1", "apps.connection.removed.v1", "apps.trigger.received.v1"]
 			},
 			{
 				"source": ["oryxa.auth"],
 				"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
+			},
+			{
+				"source": ["oryxa.files"],
+				"detail-type": ["files.object.created.v1"]
+			},
+			{
+				"source": ["oryxa.teams"],
+				"detail-type": ["teams.team.deleted.v1"]
 			}
 		]
 	}`)

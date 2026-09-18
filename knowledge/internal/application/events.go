@@ -6,6 +6,7 @@ import (
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
+	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 )
@@ -39,6 +40,22 @@ func (s *Service) OrganizationDeleted(ctx context.Context, event authv1.Organiza
 // reads as them, so nothing they set up can keep running once they are gone.
 func (s *Service) MemberRemoved(ctx context.Context, event authv1.MemberRemoved) error {
 	return s.retire(ctx, event.OrganizationID, event.UserID, knowledgev1.RemovedReasonMemberLeft)
+}
+
+// TeamDeleted retires what a deleted team held. Rag removes the team's
+// corpora when it hears the same event; left running, the team's sources
+// would publish their documents again and rag would build the deleted team a
+// new corpus from them.
+func (s *Service) TeamDeleted(ctx context.Context, event teamsv1.TeamDeleted) error {
+	removed, err := s.store.RemoveSourcesByTeam(ctx, event.OrganizationID, event.TeamID, s.now(),
+		s.retractions(knowledgev1.RemovedReasonTeamDeleted))
+	if err != nil {
+		return err
+	}
+	if len(removed) > 0 {
+		s.logger.InfoContext(ctx, "sources retired", "count", len(removed), "reason", knowledgev1.RemovedReasonTeamDeleted)
+	}
+	return nil
 }
 
 func (s *Service) pause(ctx context.Context, connectionID, reason string) error {

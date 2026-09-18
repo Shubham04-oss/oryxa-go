@@ -57,6 +57,9 @@ type Config struct {
 	// WebhookSecret verifies Composio's deliveries. Without it, every
 	// delivery is refused.
 	WebhookSecret string
+	// NoAutoSubscribe stops a newly connected app from being subscribed to
+	// everything it can deliver.
+	NoAutoSubscribe bool
 }
 
 // Service is apps, ready to mount.
@@ -82,9 +85,10 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Composio:  dependencies.Composio,
 		Logger:    logger,
 	}, application.Config{
-		PublicBaseURL: config.PublicBaseURL,
-		ReturnOrigins: config.AllowedOrigins,
-		WebhookSecret: config.WebhookSecret,
+		PublicBaseURL:   config.PublicBaseURL,
+		ReturnOrigins:   config.AllowedOrigins,
+		WebhookSecret:   config.WebhookSecret,
+		NoAutoSubscribe: config.NoAutoSubscribe,
 	})
 	if err != nil {
 		return nil, err

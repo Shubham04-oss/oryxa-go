@@ -100,10 +100,24 @@ func testConnection(t *testing.T, store *Store, organizationID, memberID string)
 		ComposioAccountID: "acc_" + randomHex(8), Status: domain.ConnectionPending,
 		ReturnTo: "https://example.test/return", CreatedAt: testClock, UpdatedAt: testClock,
 	}
-	if err := store.CreateConnection(context.Background(), connection, stateHash); err != nil {
+	if err := store.CreateConnection(context.Background(), connection, stateHash,
+		testEvent(t, "apps.connection.initiated.v1")); err != nil {
 		t.Fatalf("CreateConnection() error = %v", err)
 	}
 	return connection, stateHash
+}
+
+// activate makes a connection testConnection created active, the way a
+// completed callback would. CreateTrigger now refuses anything else, so
+// every test that puts a trigger on a connection needs this first.
+func activate(t *testing.T, store *Store, connection domain.Connection) domain.Connection {
+	t.Helper()
+	activated, changed, err := store.ActivateConnection(context.Background(), connection.ID, "label",
+		testClock.Add(time.Minute), testEvent(t, "apps.connection.connected.v1"))
+	if err != nil || !changed {
+		t.Fatalf("ActivateConnection() = %+v, %v, %v, want changed", activated, changed, err)
+	}
+	return activated
 }
 
 // testTrigger creates a live trigger on connection, backed by
@@ -116,7 +130,7 @@ func testTrigger(t *testing.T, store *Store, connection domain.Connection, compo
 		Config: json.RawMessage(`{"repo":"acme/api"}`), ComposioTriggerID: composioTriggerID,
 		Status: domain.TriggerActive, CreatedAt: testClock, UpdatedAt: testClock,
 	}
-	created, ok, err := store.CreateTrigger(context.Background(), trigger)
+	created, ok, err := store.CreateTrigger(context.Background(), trigger, testEvent(t, "apps.trigger.subscribed.v1"))
 	if err != nil || !ok {
 		t.Fatalf("CreateTrigger() = %+v, %v, %v, want created", created, ok, err)
 	}
@@ -161,7 +175,7 @@ func TestConnectionPendingActivateWritesEventOnceAndClearsTheStateHash(t *testin
 		t.Fatalf("ActivateConnection(again) = %v, %v, want unchanged", changed, err)
 	}
 	var totalEvents int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox`).Scan(&totalEvents); err != nil || totalEvents != 1 {
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.connection.connected.v1'`).Scan(&totalEvents); err != nil || totalEvents != 1 {
 		t.Fatalf("outbox events = %d, error = %v, want still 1", totalEvents, err)
 	}
 
@@ -176,7 +190,7 @@ func TestFailConnectionOnlyChangesAPendingOne(t *testing.T) {
 	ctx := context.Background()
 	connection, _ := testConnection(t, store, "org_1", "member_1")
 
-	failed, err := store.FailConnection(ctx, connection.ID, "denied_by_provider", testClock.Add(time.Minute))
+	failed, err := store.FailConnection(ctx, connection.ID, "denied_by_provider", testClock.Add(time.Minute), testEvent(t, "apps.connection.failed.v1"))
 	if err != nil || !failed {
 		t.Fatalf("FailConnection() = %v, %v, want changed", failed, err)
 	}
@@ -188,7 +202,7 @@ func TestFailConnectionOnlyChangesAPendingOne(t *testing.T) {
 		t.Fatalf("Connection() after failing = %+v", read)
 	}
 
-	failed, err = store.FailConnection(ctx, connection.ID, "denied_by_provider", testClock.Add(2*time.Minute))
+	failed, err = store.FailConnection(ctx, connection.ID, "denied_by_provider", testClock.Add(2*time.Minute), testEvent(t, "apps.connection.failed.v1"))
 	if err != nil || failed {
 		t.Fatalf("FailConnection(again) = %v, %v, want unchanged", failed, err)
 	}
@@ -221,7 +235,8 @@ func TestConnectionsListsNewestFirstAndFilters(t *testing.T) {
 	newer.ComposioAccountID = "acc_" + randomHex(8)
 	newer.CreatedAt = testClock.Add(time.Minute)
 	newer.UpdatedAt = newer.CreatedAt
-	if err := store.CreateConnection(ctx, newer, "state_"+randomHex(8)); err != nil {
+	if err := store.CreateConnection(ctx, newer, "state_"+randomHex(8),
+		testEvent(t, "apps.connection.initiated.v1")); err != nil {
 		t.Fatalf("CreateConnection() error = %v", err)
 	}
 
@@ -230,7 +245,8 @@ func TestConnectionsListsNewestFirstAndFilters(t *testing.T) {
 	removed.ComposioAccountID = "acc_" + randomHex(8)
 	removed.CreatedAt = testClock.Add(2 * time.Minute)
 	removed.UpdatedAt = removed.CreatedAt
-	if err := store.CreateConnection(ctx, removed, "state_"+randomHex(8)); err != nil {
+	if err := store.CreateConnection(ctx, removed, "state_"+randomHex(8),
+		testEvent(t, "apps.connection.initiated.v1")); err != nil {
 		t.Fatalf("CreateConnection() error = %v", err)
 	}
 	if _, err := store.RemoveConnection(ctx, removed.ID, "removed_by_member", removed.CreatedAt, nil); err != nil {
@@ -312,7 +328,7 @@ func TestRemoveConnectionRemovesItsTriggersAndAnswersFalseTheSecondTime(t *testi
 
 	live := testTrigger(t, store, connection, "ct_"+randomHex(8))
 	alreadyRemoved := testTrigger(t, store, connection, "ct_"+randomHex(8))
-	if _, err := store.RemoveTrigger(ctx, alreadyRemoved.ID, testClock.Add(time.Minute)); err != nil {
+	if _, err := store.RemoveTrigger(ctx, alreadyRemoved.ID, testClock.Add(time.Minute), testEvent(t, "apps.trigger.unsubscribed.v1")); err != nil {
 		t.Fatalf("RemoveTrigger() error = %v", err)
 	}
 
@@ -343,13 +359,91 @@ func TestRemoveConnectionRemovesItsTriggersAndAnswersFalseTheSecondTime(t *testi
 	}
 
 	var outboxCount int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox`).Scan(&outboxCount); err != nil || outboxCount != 2 {
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.connection.connected.v1' OR detail_type = 'apps.connection.removed.v1'`).Scan(&outboxCount); err != nil || outboxCount != 2 {
 		t.Fatalf("outbox events = %d, error = %v, want 2 (connected + removed)", outboxCount, err)
 	}
 
 	removed, err = store.RemoveConnection(ctx, connection.ID, "removed_by_member", testClock.Add(3*time.Minute), nil)
 	if err != nil || removed {
 		t.Fatalf("RemoveConnection(again) = %v, %v, want unchanged", removed, err)
+	}
+}
+
+// activateForAutoSubscribe records and activates a connection that wants
+// auto-subscribing, the way a completed callback leaves one. testConnection
+// does not set AutoSubscribe, since most of its callers do not care about it.
+func activateForAutoSubscribe(t *testing.T, store *Store, organizationID, memberID string) domain.Connection {
+	t.Helper()
+	ctx := context.Background()
+	connection := domain.Connection{
+		ID: "con_" + randomHex(8), OrganizationID: organizationID, MemberID: memberID, Toolkit: "github",
+		AuthConfigID: "ac_1", ComposioUserID: domain.ComposioUserID(organizationID, memberID),
+		ComposioAccountID: "acc_" + randomHex(8), Status: domain.ConnectionPending, AutoSubscribe: true,
+		CreatedAt: testClock, UpdatedAt: testClock,
+	}
+	if err := store.CreateConnection(ctx, connection, "state_"+randomHex(8),
+		testEvent(t, "apps.connection.initiated.v1")); err != nil {
+		t.Fatalf("CreateConnection() error = %v", err)
+	}
+	activated, _, err := store.ActivateConnection(ctx, connection.ID, "label", testClock.Add(time.Minute),
+		testEvent(t, "apps.connection.connected.v1"))
+	if err != nil {
+		t.Fatalf("ActivateConnection() error = %v", err)
+	}
+	return activated
+}
+
+// TestConnectionsAwaitingSubscribeLeasesWhatItClaims proves the lease closes
+// the window FOR UPDATE SKIP LOCKED leaves open: that lock protects only the
+// claiming statement itself, so without a lease a second pass ticking right
+// after the first commits would see the same connection as unclaimed and
+// take it again - doubling the Composio calls the real bug spent.
+func TestConnectionsAwaitingSubscribeLeasesWhatItClaims(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	connection := activateForAutoSubscribe(t, store, "org_1", "member_1")
+
+	now := testClock.Add(time.Minute)
+	leaseUntil := now.Add(10 * time.Minute)
+	first, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, now, leaseUntil)
+	if err != nil {
+		t.Fatalf("ConnectionsAwaitingSubscribe() error = %v", err)
+	}
+	if len(first) != 1 || first[0].ID != connection.ID {
+		t.Fatalf("first claim = %+v, want just the one connection", first)
+	}
+
+	// A second pass at the same instant - the same race the bug allowed -
+	// gets nothing: the lease this claim just took still holds.
+	again, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, now, leaseUntil)
+	if err != nil {
+		t.Fatalf("ConnectionsAwaitingSubscribe(same instant) error = %v", err)
+	}
+	if len(again) != 0 {
+		t.Fatalf("a second claim under the first's lease = %+v, want none", again)
+	}
+
+	// Once the lease has passed, and the connection is still unmarked and
+	// under its attempt limit, it is fair game again.
+	afterLease := leaseUntil.Add(time.Second)
+	retried, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, afterLease, afterLease.Add(10*time.Minute))
+	if err != nil {
+		t.Fatalf("ConnectionsAwaitingSubscribe(after lease) error = %v", err)
+	}
+	if len(retried) != 1 || retried[0].ID != connection.ID {
+		t.Fatalf("claim after the lease = %+v, want the connection back", retried)
+	}
+
+	// A connection already marked subscribed is never claimed, leased or not.
+	if err := store.MarkSubscribed(ctx, connection.ID, afterLease); err != nil {
+		t.Fatalf("MarkSubscribed() error = %v", err)
+	}
+	done, err := store.ConnectionsAwaitingSubscribe(ctx, 3, 10, afterLease.Add(time.Hour), afterLease.Add(time.Hour+10*time.Minute))
+	if err != nil {
+		t.Fatalf("ConnectionsAwaitingSubscribe(marked) error = %v", err)
+	}
+	if len(done) != 0 {
+		t.Fatalf("claimed a connection already marked subscribed: %+v", done)
 	}
 }
 
@@ -392,6 +486,7 @@ func TestCreateTriggerDedupesByComposioIDAndAllowsRecreateAfterRemoval(t *testin
 	store := openTestStore(t)
 	ctx := context.Background()
 	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
 	composioTriggerID := "ct_" + randomHex(8)
 
 	first := testTrigger(t, store, connection, composioTriggerID)
@@ -402,7 +497,7 @@ func TestCreateTriggerDedupesByComposioIDAndAllowsRecreateAfterRemoval(t *testin
 		Config: json.RawMessage(`{"repo":"acme/api"}`), ComposioTriggerID: composioTriggerID,
 		Status: domain.TriggerActive, CreatedAt: testClock.Add(time.Minute), UpdatedAt: testClock.Add(time.Minute),
 	}
-	same, created, err := store.CreateTrigger(ctx, again)
+	same, created, err := store.CreateTrigger(ctx, again, testEvent(t, "apps.trigger.subscribed.v1"))
 	if err != nil || created {
 		t.Fatalf("CreateTrigger(same instance) = %+v, %v, %v, want the existing one and false", same, created, err)
 	}
@@ -410,11 +505,11 @@ func TestCreateTriggerDedupesByComposioIDAndAllowsRecreateAfterRemoval(t *testin
 		t.Fatalf("CreateTrigger(same instance) = %s, want the original %s", same.ID, first.ID)
 	}
 
-	if _, err := store.RemoveTrigger(ctx, first.ID, testClock.Add(2*time.Minute)); err != nil {
+	if _, err := store.RemoveTrigger(ctx, first.ID, testClock.Add(2*time.Minute), testEvent(t, "apps.trigger.unsubscribed.v1")); err != nil {
 		t.Fatalf("RemoveTrigger() error = %v", err)
 	}
 
-	reborn, created, err := store.CreateTrigger(ctx, again)
+	reborn, created, err := store.CreateTrigger(ctx, again, testEvent(t, "apps.trigger.subscribed.v1"))
 	if err != nil || !created {
 		t.Fatalf("CreateTrigger(after removal) = %+v, %v, %v, want a fresh row", reborn, created, err)
 	}
@@ -423,10 +518,50 @@ func TestCreateTriggerDedupesByComposioIDAndAllowsRecreateAfterRemoval(t *testin
 	}
 }
 
+// TestCreateTriggerRefusesARemovedConnection covers a pass racing a
+// disconnect: once RemoveConnection has committed, nothing may attach a new
+// trigger to that connection - it would sit there looking live, listed to
+// the member forever, since removal's own cleanup has already run and will
+// not run again.
+func TestCreateTriggerRefusesARemovedConnection(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
+	if _, err := store.RemoveConnection(ctx, connection.ID, "removed_by_member", testClock.Add(2*time.Minute), nil); err != nil {
+		t.Fatalf("RemoveConnection() error = %v", err)
+	}
+
+	trigger := domain.Trigger{
+		ID: "trg_" + randomHex(8), OrganizationID: connection.OrganizationID, MemberID: connection.MemberID,
+		ConnectionID: connection.ID, Toolkit: connection.Toolkit, Slug: "GITHUB_ISSUE_CREATED",
+		Config: json.RawMessage(`{"repo":"acme/api"}`), ComposioTriggerID: "ct_" + randomHex(8),
+		Status: domain.TriggerActive, CreatedAt: testClock.Add(3 * time.Minute), UpdatedAt: testClock.Add(3 * time.Minute),
+	}
+	if _, _, err := store.CreateTrigger(ctx, trigger, testEvent(t, "apps.trigger.subscribed.v1")); !errors.Is(err, domain.ErrNotConnected) {
+		t.Fatalf("CreateTrigger(removed connection) error = %v, want ErrNotConnected", err)
+	}
+
+	var triggerCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_triggers WHERE connection_id = $1`, connection.ID).Scan(&triggerCount); err != nil {
+		t.Fatalf("count triggers: %v", err)
+	}
+	if triggerCount != 0 {
+		t.Fatalf("triggers on a removed connection = %d, want 0", triggerCount)
+	}
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx,
+		`SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.trigger.subscribed.v1'`,
+	).Scan(&outboxCount); err != nil || outboxCount != 0 {
+		t.Fatalf("outbox events = %d, error = %v, want 0", outboxCount, err)
+	}
+}
+
 func TestDisableTriggerOnlyChangesAnActiveOne(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
 	trigger := testTrigger(t, store, connection, "ct_"+randomHex(8))
 
 	event := testEvent(t, "apps.trigger.disabled.v1")
@@ -459,12 +594,14 @@ func TestTriggersListsLiveOnesFilteredByMemberOrConnection(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	connectionA, _ := testConnection(t, store, "org_1", "member_1")
+	connectionA = activate(t, store, connectionA)
 	connectionB, _ := testConnection(t, store, "org_1", "member_2")
+	connectionB = activate(t, store, connectionB)
 
 	onA := testTrigger(t, store, connectionA, "ct_"+randomHex(8))
 	onB := testTrigger(t, store, connectionB, "ct_"+randomHex(8))
 	removedOnA := testTrigger(t, store, connectionA, "ct_"+randomHex(8))
-	if _, err := store.RemoveTrigger(ctx, removedOnA.ID, testClock.Add(time.Minute)); err != nil {
+	if _, err := store.RemoveTrigger(ctx, removedOnA.ID, testClock.Add(time.Minute), testEvent(t, "apps.trigger.unsubscribed.v1")); err != nil {
 		t.Fatalf("RemoveTrigger() error = %v", err)
 	}
 
@@ -586,7 +723,7 @@ func TestFinishActionRefusesAnActionThatIsNotRunning(t *testing.T) {
 		t.Fatalf("FinishAction(again) error = %v, want ErrConflict", err)
 	}
 	var outboxCount int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox`).Scan(&outboxCount); err != nil || outboxCount != 1 {
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.action.completed.v1'`).Scan(&outboxCount); err != nil || outboxCount != 1 {
 		t.Fatalf("outbox events = %d, error = %v, want still 1", outboxCount, err)
 	}
 }
@@ -601,7 +738,7 @@ func TestRecordWebhookDedupesByDeliveryID(t *testing.T) {
 		t.Fatalf("RecordWebhook() = %v, %v, want recorded", recorded, err)
 	}
 	var outboxCount int
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox`).Scan(&outboxCount); err != nil || outboxCount != 1 {
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.trigger.received.v1'`).Scan(&outboxCount); err != nil || outboxCount != 1 {
 		t.Fatalf("outbox events = %d, error = %v, want 1", outboxCount, err)
 	}
 
@@ -609,8 +746,108 @@ func TestRecordWebhookDedupesByDeliveryID(t *testing.T) {
 	if err != nil || recorded {
 		t.Fatalf("RecordWebhook(redelivered) = %v, %v, want not recorded", recorded, err)
 	}
-	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox`).Scan(&outboxCount); err != nil || outboxCount != 1 {
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.trigger.received.v1'`).Scan(&outboxCount); err != nil || outboxCount != 1 {
 		t.Fatalf("outbox events after a redelivery = %d, error = %v, want still 1", outboxCount, err)
+	}
+}
+
+// TestRecordTriggerDeliveryCountsOnceAndOnlyWithItsEvent proves the one
+// thing a trigger's tally is for: it counts exactly the deliveries whose
+// events were published, so "this trigger has delivered n times" and the
+// bus cannot disagree - not on a redelivery, and not on a trigger that has
+// since been removed.
+func TestRecordTriggerDeliveryCountsOnceAndOnlyWithItsEvent(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
+	trigger := testTrigger(t, store, connection, "ct_"+randomHex(8))
+
+	if trigger.DeliveryCount != 0 || trigger.LastDeliveryAt != nil {
+		t.Fatalf("a new trigger has already delivered: %d, %v", trigger.DeliveryCount, trigger.LastDeliveryAt)
+	}
+
+	eventID := "whd_" + randomHex(8)
+	recorded, err := store.RecordTriggerDelivery(ctx, eventID, "composio.trigger.message", trigger.ID,
+		testClock, testEvent(t, "apps.trigger.received.v1"))
+	if err != nil || !recorded {
+		t.Fatalf("RecordTriggerDelivery() = %v, %v, want recorded", recorded, err)
+	}
+	delivered, err := store.Trigger(ctx, "org_1", trigger.ID)
+	if err != nil {
+		t.Fatalf("Trigger() error = %v", err)
+	}
+	if delivered.DeliveryCount != 1 || delivered.LastDeliveryAt == nil || !delivered.LastDeliveryAt.Equal(testClock) {
+		t.Fatalf("after one delivery: count = %d, last = %v", delivered.DeliveryCount, delivered.LastDeliveryAt)
+	}
+
+	// Composio redelivers what it is unsure reached us. Nothing is written
+	// twice: not the event, not the count.
+	recorded, err = store.RecordTriggerDelivery(ctx, eventID, "composio.trigger.message", trigger.ID,
+		testClock.Add(time.Minute), testEvent(t, "apps.trigger.received.v1"))
+	if err != nil || recorded {
+		t.Fatalf("RecordTriggerDelivery(redelivered) = %v, %v, want not recorded", recorded, err)
+	}
+	again, err := store.Trigger(ctx, "org_1", trigger.ID)
+	if err != nil {
+		t.Fatalf("Trigger() error = %v", err)
+	}
+	if again.DeliveryCount != 1 || !again.LastDeliveryAt.Equal(testClock) {
+		t.Fatalf("a redelivery counted again: count = %d, last = %v", again.DeliveryCount, again.LastDeliveryAt)
+	}
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.trigger.received.v1'`).Scan(&outboxCount); err != nil || outboxCount != 1 {
+		t.Fatalf("outbox events = %d, error = %v, want still 1", outboxCount, err)
+	}
+
+	// A delivery about a trigger removed in the meantime is still recorded
+	// and still published - it describes something that happened - but
+	// counts against nothing.
+	if _, err := store.RemoveTrigger(ctx, trigger.ID, testClock.Add(time.Hour), testEvent(t, "apps.trigger.unsubscribed.v1")); err != nil {
+		t.Fatalf("RemoveTrigger() error = %v", err)
+	}
+	recorded, err = store.RecordTriggerDelivery(ctx, "whd_"+randomHex(8), "composio.trigger.message", trigger.ID,
+		testClock.Add(2*time.Hour), testEvent(t, "apps.trigger.received.v1"))
+	if err != nil || !recorded {
+		t.Fatalf("RecordTriggerDelivery(removed trigger) = %v, %v, want recorded", recorded, err)
+	}
+	removed, err := store.Trigger(ctx, "org_1", trigger.ID)
+	if err != nil {
+		t.Fatalf("Trigger() error = %v", err)
+	}
+	if removed.DeliveryCount != 1 {
+		t.Fatalf("a removed trigger counted a delivery: %d", removed.DeliveryCount)
+	}
+}
+
+// TestCreateTriggerKeepsHowItDelivers proves the fields a member is told
+// about survive the round trip, since they are the whole reason the catalog
+// is read at subscribe time.
+func TestCreateTriggerKeepsHowItDelivers(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
+
+	created, ok, err := store.CreateTrigger(ctx, domain.Trigger{
+		ID: "trg_" + randomHex(8), OrganizationID: "org_1", MemberID: "member_1",
+		ConnectionID: connection.ID, Toolkit: connection.Toolkit, Slug: "SLACK_RECEIVE_MESSAGE",
+		Config: json.RawMessage(`{"channel":"C1"}`), ComposioTriggerID: "ct_" + randomHex(8),
+		Status: domain.TriggerActive, Kind: domain.TriggerKindWebhook, ManualSetup: true,
+		CreatedAt: testClock, UpdatedAt: testClock,
+	}, testEvent(t, "apps.trigger.subscribed.v1"))
+	if err != nil || !ok {
+		t.Fatalf("CreateTrigger() = %+v, %v, %v, want created", created, ok, err)
+	}
+	if created.Kind != domain.TriggerKindWebhook || !created.ManualSetup {
+		t.Fatalf("kind = %q, manual setup = %v", created.Kind, created.ManualSetup)
+	}
+	read, err := store.Trigger(ctx, "org_1", created.ID)
+	if err != nil {
+		t.Fatalf("Trigger() error = %v", err)
+	}
+	if read.Kind != domain.TriggerKindWebhook || !read.ManualSetup {
+		t.Fatalf("read back: kind = %q, manual setup = %v", read.Kind, read.ManualSetup)
 	}
 }
 
@@ -624,15 +861,36 @@ func TestFailPendingConnectionsBeforeFailsOnlyOldPendingOnes(t *testing.T) {
 	fresh.ComposioAccountID = "acc_" + randomHex(8)
 	fresh.CreatedAt = testClock.Add(time.Hour)
 	fresh.UpdatedAt = fresh.CreatedAt
-	if err := store.CreateConnection(ctx, fresh, "state_"+randomHex(8)); err != nil {
+	if err := store.CreateConnection(ctx, fresh, "state_"+randomHex(8),
+		testEvent(t, "apps.connection.initiated.v1")); err != nil {
 		t.Fatalf("CreateConnection() error = %v", err)
 	}
 
 	cutoff := testClock.Add(30 * time.Minute)
 	now := testClock.Add(2 * time.Hour)
-	count, err := store.FailPendingConnectionsBefore(ctx, cutoff, now)
+	// The events are built from the rows the sweep actually changed, so it
+	// announces the abandoned connection and only that one.
+	var announced []domain.Connection
+	abandoned := func(swept []domain.Connection) ([]domain.Event, error) {
+		announced = swept
+		events := make([]domain.Event, 0, len(swept))
+		for range swept {
+			events = append(events, testEvent(t, "apps.connection.failed.v1"))
+		}
+		return events, nil
+	}
+	count, err := store.FailPendingConnectionsBefore(ctx, cutoff, now, abandoned)
 	if err != nil || count != 1 {
 		t.Fatalf("FailPendingConnectionsBefore() = %d, %v, want 1", count, err)
+	}
+	if len(announced) != 1 || announced[0].ID != old.ID {
+		t.Fatalf("announced = %+v, want just the abandoned connection", announced)
+	}
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx,
+		`SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.connection.failed.v1'`,
+	).Scan(&outboxCount); err != nil || outboxCount != 1 {
+		t.Fatalf("failure events in the outbox = %d, error = %v, want 1", outboxCount, err)
 	}
 
 	readOld, err := store.Connection(ctx, "org_1", old.ID)
@@ -651,9 +909,15 @@ func TestFailPendingConnectionsBeforeFailsOnlyOldPendingOnes(t *testing.T) {
 		t.Fatalf("Connection(fresh) = %+v, want still pending", readFresh)
 	}
 
-	count, err = store.FailPendingConnectionsBefore(ctx, cutoff, now)
+	// Nothing is left to sweep, so nothing more is announced.
+	count, err = store.FailPendingConnectionsBefore(ctx, cutoff, now, abandoned)
 	if err != nil || count != 0 {
 		t.Fatalf("FailPendingConnectionsBefore(again) = %d, %v, want 0", count, err)
+	}
+	if err := store.pool.QueryRow(ctx,
+		`SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.connection.failed.v1'`,
+	).Scan(&outboxCount); err != nil || outboxCount != 1 {
+		t.Fatalf("failure events after a second sweep = %d, error = %v, want still 1", outboxCount, err)
 	}
 }
 

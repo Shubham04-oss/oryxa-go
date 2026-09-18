@@ -42,6 +42,7 @@ type appsService interface {
 	RemoveConnection(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
 	RunTool(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.RunToolInput) (application.ToolRun, error)
 	Proxy(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.ProxyInput) (application.ProxyResult, error)
+	ConnectionTargets(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]application.Target, error)
 	CreateTrigger(ctx context.Context, credentials authclient.Credentials, organizationID string, input application.TriggerInput) (domain.Trigger, error)
 	Triggers(ctx context.Context, credentials authclient.Credentials, organizationID, connectionID string) ([]domain.Trigger, error)
 	RemoveTrigger(ctx context.Context, credentials authclient.Credentials, organizationID, id string) error
@@ -86,6 +87,7 @@ func New(service appsService, config Config, logger *slog.Logger) *Server {
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/connections/{connectionID}", server.removeConnection)
 	server.handle("POST /v1/organizations/{organizationID}/apps/tools/{tool}/run", server.runTool)
 	server.handle("POST /v1/organizations/{organizationID}/apps/read", server.proxy)
+	server.handle("GET /v1/organizations/{organizationID}/apps/connections/{connectionID}/targets", server.connectionTargets)
 	server.handle("GET /v1/organizations/{organizationID}/apps/triggers", server.listTriggers)
 	server.handle("POST /v1/organizations/{organizationID}/apps/triggers", server.createTrigger)
 	server.handle("DELETE /v1/organizations/{organizationID}/apps/triggers/{triggerID}", server.removeTrigger)
@@ -164,24 +166,35 @@ func (server *Server) catalogTriggers(writer http.ResponseWriter, request *http.
 // connectionView is what a connection looks like over the wire. The state
 // that names its browser round trip is nobody's business once issued.
 type connectionView struct {
-	ID                string     `json:"id"`
-	Toolkit           string     `json:"toolkit"`
-	Status            string     `json:"status"`
-	StatusReason      string     `json:"status_reason,omitempty"`
-	Label             string     `json:"label,omitempty"`
-	MemberID          string     `json:"member_id"`
-	ComposioAccountID string     `json:"composio_account_id,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	ConnectedAt       *time.Time `json:"connected_at,omitempty"`
-	RemovedAt         *time.Time `json:"removed_at,omitempty"`
+	ID                string `json:"id"`
+	Toolkit           string `json:"toolkit"`
+	Status            string `json:"status"`
+	StatusReason      string `json:"status_reason,omitempty"`
+	Label             string `json:"label,omitempty"`
+	MemberID          string `json:"member_id"`
+	ComposioAccountID string `json:"composio_account_id,omitempty"`
+	// AutoSubscribe says this connection is subscribed to everything its app
+	// delivers; AutoSubscribedAt when that finished. Unset does not mean
+	// still in progress forever - auto-subscribe gives up after a few failed
+	// attempts, logging a warning when it does, and the member can always
+	// subscribe by hand. AutoSubscribeAttempts is how a caller tells the two
+	// apart: at the limit with AutoSubscribedAt unset, it has given up.
+	AutoSubscribe         bool       `json:"auto_subscribe"`
+	AutoSubscribedAt      *time.Time `json:"auto_subscribed_at,omitempty"`
+	AutoSubscribeAttempts int        `json:"auto_subscribe_attempts,omitempty"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
+	ConnectedAt           *time.Time `json:"connected_at,omitempty"`
+	RemovedAt             *time.Time `json:"removed_at,omitempty"`
 }
 
 func viewConnection(connection domain.Connection) connectionView {
 	return connectionView{
 		ID: connection.ID, Toolkit: connection.Toolkit, Status: string(connection.Status),
 		StatusReason: connection.StatusReason, Label: connection.Label, MemberID: connection.MemberID,
-		ComposioAccountID: connection.ComposioAccountID, CreatedAt: connection.CreatedAt,
+		ComposioAccountID: connection.ComposioAccountID, AutoSubscribe: connection.AutoSubscribe,
+		AutoSubscribedAt: connection.AutoSubscribedAt, AutoSubscribeAttempts: connection.AutoSubscribeAttempts,
+		CreatedAt: connection.CreatedAt,
 		UpdatedAt: connection.UpdatedAt, ConnectedAt: connection.ConnectedAt, RemovedAt: connection.RemovedAt,
 	}
 }
@@ -195,12 +208,18 @@ func (server *Server) connect(writer http.ResponseWriter, request *http.Request)
 		Toolkit  string `json:"toolkit"`
 		ReturnTo string `json:"return_to"`
 		Alias    string `json:"alias"`
+		// AutoSubscribe left out means the deployment's default, which is to
+		// subscribe to everything the app can deliver.
+		AutoSubscribe *bool `json:"auto_subscribe"`
 	}
 	if !server.decode(writer, request, &body) {
 		return
 	}
 	connection, redirectURL, err := server.service.Connect(request.Context(), credentials, request.PathValue("organizationID"),
-		application.ConnectInput{Toolkit: body.Toolkit, ReturnTo: body.ReturnTo, Alias: body.Alias})
+		application.ConnectInput{
+			Toolkit: body.Toolkit, ReturnTo: body.ReturnTo, Alias: body.Alias,
+			AutoSubscribe: body.AutoSubscribe,
+		})
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -355,16 +374,48 @@ type triggerView struct {
 	Status       string          `json:"status"`
 	StatusReason string          `json:"status_reason,omitempty"`
 	MemberID     string          `json:"member_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// Kind is webhook when the app pushes its events and poll when Composio
+	// polls for them, which is the difference between an event arriving at
+	// once and arriving on an interval.
+	Kind string `json:"kind,omitempty"`
+	// ManualSetup says this subscription delivers nothing until the app's own
+	// webhook is registered by hand.
+	ManualSetup bool `json:"manual_setup,omitempty"`
+	// Setup is what is left to do, or to expect, in a member's terms. Empty
+	// for a trigger that needs nothing.
+	Setup string `json:"setup,omitempty"`
+	// DeliveryCount and LastDeliveryAt tell a live trigger from one that has
+	// never delivered anything.
+	DeliveryCount  int64      `json:"delivery_count"`
+	LastDeliveryAt *time.Time `json:"last_delivery_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 func viewTrigger(trigger domain.Trigger) triggerView {
 	return triggerView{
 		ID: trigger.ID, ConnectionID: trigger.ConnectionID, Toolkit: trigger.Toolkit, Trigger: trigger.Slug,
 		Config: trigger.Config, Status: string(trigger.Status), StatusReason: trigger.StatusReason,
-		MemberID: trigger.MemberID, CreatedAt: trigger.CreatedAt, UpdatedAt: trigger.UpdatedAt,
+		MemberID: trigger.MemberID, Kind: trigger.Kind, ManualSetup: trigger.ManualSetup,
+		Setup: application.TriggerSetup(trigger), DeliveryCount: trigger.DeliveryCount,
+		LastDeliveryAt: trigger.LastDeliveryAt, CreatedAt: trigger.CreatedAt, UpdatedAt: trigger.UpdatedAt,
 	}
+}
+
+// connectionTargets answers what a member could index through a connection,
+// read from the app itself, so nobody has to know a channel's id.
+func (server *Server) connectionTargets(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	targets, err := server.service.ConnectionTargets(request.Context(), credentials,
+		request.PathValue("organizationID"), request.PathValue("connectionID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"targets": targets})
 }
 
 func (server *Server) listTriggers(writer http.ResponseWriter, request *http.Request) {

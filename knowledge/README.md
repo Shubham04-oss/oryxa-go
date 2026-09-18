@@ -14,8 +14,9 @@ that connection at registration. Every call is proxied through Composio's own
 API, never made directly, so this process never sees a token. These three are
 mounted only when `COMPOSIO_API_KEY` is set; without it the binary mounts no
 extractor for them, and `apps` need not even be running. The files source
-remains built but unmounted: it reads as the member who registered it and
-needs a grant to do that, which is not built yet — see [Later](#later).
+reads the organization's own storage as the member who registered it, and
+mounts once it has a way to act as one — see
+[Sources](#sources).
 
 Knowledge owns what has been extracted and when. Auth remains the identity and
 membership boundary; apps owns a member's connections to third-party apps.
@@ -33,7 +34,101 @@ member ── registers a source, naming a connection ──▶ knowledge
 
 auth ── organization deleted, member removed ──▶ knowledge-events queue
 apps ── connection expired, connection removed ──▶ knowledge-events queue
+teams ── team deleted ──▶ knowledge-events queue
 ```
+
+## The organization's own files index themselves
+
+Files has no connection to announce it, so nothing ever said "start indexing
+these". The first **organization-scoped** upload does: knowledge hears
+`files.object.created.v1`, and registers the organization's files source once.
+Every upload after that finds it already there, so the cost is one lookup and
+no token.
+
+Only a shared upload counts. A member's private file and a team's do not start
+it, and the source itself asks files for the organization's own scope alone —
+which matters more than it looks. A source here is organization-scoped, so
+everything it publishes is searchable by the whole organization; files asked
+with no scope answers the caller's own private files alongside the shared
+ones, which would put one member's private files in front of everybody. It is
+read as whoever stored the file, and only an admin can share a file with the
+whole organization, so that view is an admin's: it carries the organization's
+billing attachments, which files shows admins alone. The source never
+publishes those, and refuses a target that asks for them.
+
+A files source registered for a team (`{"team": "<id>"}`) is the team's: what
+it reads is searchable by that team, not by the whole organization.
+
+A source a member removed is not registered again. Removing it is them saying
+their organization's files should not be indexed, and someone uploading
+another file does not undo that.
+
+## Connecting an app indexes what it holds
+
+A member who connects GitHub means Krude to know about their repositories.
+They used to have to come back afterwards, find the indexing panel and type a
+repository name into a box — and until they did, connecting an app made
+nothing searchable at all.
+
+Knowledge hears `apps.connection.connected.v1`, asks apps what the connection
+holds, and registers a source for each. It is the member's own work done while
+they are away: the sources are theirs, read as them, under the standing grant
+they gave auth. A member who never granted gets nothing registered and is no
+worse off than before — they can still register a source by hand.
+
+Auth answers every token a grant redeems to as an agent's, and an agent may
+not choose what gets indexed. Nothing here is an agent choosing — knowledge
+decided, on an event apps published — so that one rule is not applied to it;
+every other check is, as the member, and a token acting as anyone else
+registers nothing.
+
+Bounded at ten, counting what the connection already has. Every source is a
+scheduled pass against the provider for as long as it lives, so a member with
+four hundred repositories is choosing which matter rather than having all of
+them indexed on their behalf. The rest are left for them, at the same hourly
+interval an automatic one takes. A target whose source a member removed is not
+registered again: removing it was them saying no.
+
+Nothing about it is essential to the connection, which is already made and
+already usable, so most of what can go wrong is reported and dropped rather
+than retried: apps or auth being briefly unreachable is worth another
+delivery; a member who has not granted, or a refusal that will not change, is
+not.
+
+## Reading a source now
+
+A schedule cannot know that a member just fixed a permission, or just changed
+something at the provider and wants to see it indexed. `POST .../sync` is them
+saying so: it moves the next sweep forward and answers, and the pass itself
+runs on the worker that was going to run it anyway, so nothing waits on a
+provider.
+
+Unlike a trigger it does not care when the source was last read — a person
+asking has a reason the schedule does not know, and refusing them because a
+pass ran a minute ago would make the button a lie. A source already due sooner
+is left alone rather than pushed back, and a paused one answers
+`needs_reconnect`: what is wrong with it is not something hurrying fixes.
+
+## What an app reports is swept at once
+
+A trigger carries the app's own payload, in a shape that differs for every one
+of Composio's thousands of triggers. Reading those here would mean a parser
+per trigger, each a place to be wrong about scope, about what counts as the
+same document, and about what is text — all of which the extractor for that
+provider already knows.
+
+So a delivery is not read. `apps.trigger.received.v1` is taken as what it is,
+the app saying something in this connection changed, and the sources on that
+connection become due now rather than at their next hour. What the trigger
+reported is searchable through the same path as everything else, within
+seconds instead of up to an interval.
+
+Three rails. A trigger never delays a source already due sooner. A source
+swept within the last two minutes is brought forward to two minutes after
+that sweep rather than to now — a busy channel delivers faster than any
+provider should be read, but what it reported should not then wait a whole
+interval. And a source that is failing keeps its backoff: a provider refusing
+it is not asked again on every delivery.
 
 ## Sources are registered, not discovered
 
@@ -101,12 +196,35 @@ the source failing, so nothing is recorded against it.
 `github`, `notion` and `slack` take a `connection_id`, naming a connection a
 member made through `apps`; every call is proxied through Composio's API on
 the connected account behind it, never made directly. They mount only when
-`COMPOSIO_API_KEY` is set. `files` reads as the member who registered it, has
-no connection, and is built and tested but not mounted, because it has no
-grant to read as — see [Later](#later).
+`COMPOSIO_API_KEY` is set.
+
+`files` reads the organization's own storage as the member who registered it,
+and takes no connection. A scheduled pass has no member at a browser, so it
+redeems the standing agent grant they gave auth: `/internal/membertoken`
+exchanges it for a short-lived token at auth's `/v1/internal/agent-tokens`,
+holding each until shortly before it expires. It mounts once `FILES_URL` and
+`KNOWLEDGE_SERVICE_KEY_ID` are set and auth lists knowledge in
+`AUTH_SERVICE_CALLERS` with the `agent` purpose. Without either setting it
+says which is missing at start and stays off; auth not listing knowledge shows
+on first use, as a warning and a `forbidden` pass. A member who never granted
+fails their own source with `grant_required` rather than the pass falling back
+to anything wider, and it is tried again, with backoff, so it resumes once
+they grant.
+
+A files source reads the organization's files, or one team's when its target
+names one, and publishes under that same scope. Billing attachments are never
+read, whoever the source reads as.
 
 Only text is indexed. A media type holding none is refused rather than stored
-as though bytes were words; HTML is not read yet (see [Later](#later)).
+as though bytes were words.
+
+HTML is read by taking its text out: the title, then the prose, with a line
+wherever a block element begins or ends so a list does not run together into
+one word nobody will search for. Script, style and comments are not prose and
+do not survive; neither do attributes. What is stored is `text/plain`, because
+that is what the body then is, and the hash is over those words rather than
+the markup — so a provider that re-serializes the same page has not changed
+it.
 
 ## API
 
@@ -122,8 +240,25 @@ source never shows its lease, version or attempt count.
 | `POST` | `/v1/organizations/{organizationID}/sources` | Members | Register one: `{connection_id, provider, target, interval_seconds}` → `201`. `connection_id` names an `apps` connection for `github`, `notion` or `slack`; `files` takes none |
 | `GET` | `/v1/organizations/{organizationID}/sources/{sourceID}` | Its creator or an org admin | One source, including its `connection_id` |
 | `DELETE` | `/v1/organizations/{organizationID}/sources/{sourceID}` | Its creator or an org admin | Stop indexing it and retract what it held → `204` |
+| `POST` | `/v1/organizations/{organizationID}/sources/{sourceID}/sync` | Its creator or an org admin | Read it now rather than at its next interval |
 | `GET` | `/v1/organizations/{organizationID}/sources/{sourceID}/runs` | Its creator or an org admin | How recent passes went |
 | `GET` | `/v1/organizations/{organizationID}/documents/{documentID}` | Its source's creator or an org admin | A document's body, for what an event was too small to carry |
+| `GET` | `/v1/internal/organizations/{organizationID}/documents/{documentID}/body` | A named service | The same body, for a retrieval pipeline that has no member to be |
+
+The internal route is how the largest documents get indexed at all. An event
+carries a body up to 128 KiB and flags the rest as omitted, which left a
+retrieval pipeline two bad choices: index nothing, or drop the version it
+held because that version no longer matches. Both mean the handbook, the
+specification and the long thread are the documents an organization cannot
+search.
+
+It is deliberately narrow: one document's body, named by an id nothing
+guesses, to a caller that proved which service it is with a signed token
+whose purpose is `documents`. It answers no listing, no search and nothing
+about who may read the document — a service asking has no member to be, and a
+route that answered more would be a way around the rules that decide what a
+member sees. Without `KNOWLEDGE_SERVICE_CALLERS` there is no internal API at
+all, and it answers 404 like any route that is not there.
 
 | Code | Status | Means |
 | --- | --- | --- |
@@ -165,17 +300,17 @@ Knowledge consumes:
 | `auth.member.removed.v1` | Retires the sources that member registered, since extraction reads as them |
 | `apps.connection.expired.v1` | Pauses every source reading through that connection; reconnecting is what resumes them |
 | `apps.connection.removed.v1` | Retires every source reading through that connection and retracts what they held, since it is not coming back |
+| `teams.team.deleted.v1` | Retires the deleted team's sources and retracts what they held. Rag removes the team's corpora on the same event; left running, the team's sources would publish into a new one |
 
 Unlike the lifecycle handlers elsewhere in this repo, these are not naturally
 idempotent — pausing a source and retracting documents both publish events a
 retrieval pipeline acts on — so the envelope's `event_id` is checked before
 anything is done and recorded once it succeeds.
 
-`apps.connection.removed.v1` carries no reason `contracts/events/knowledge/v1`
-already names for a document's removal, so it is retracted with
-`RemovedReasonConnectionLost` (`"connection_lost"`), the closest existing one,
-rather than a new `"connection_removed"` this package cannot add to a contract
-it does not own.
+Each retraction says why: `"connection_removed"` for a connection
+disconnected on purpose, as against `"connection_lost"` for one whose
+credential could not be renewed, and `"team_deleted"` for a deleted team, so a
+consumer can tell a member why their documents went.
 
 Rag is the one subscriber today: it indexes what `knowledge.document.published.v1`
 publishes into a corpus per owner and retracts what `knowledge.document.removed.v1`
@@ -282,7 +417,8 @@ docker compose up -d
 Without `KNOWLEDGE_EVENTS_QUEUE_URL` knowledge still starts, but it will not
 pause or retire a source when its connection, member or organization goes
 away. Without `COMPOSIO_API_KEY` it starts with `github`, `notion` and `slack`
-unmounted, same as `files` without a grant.
+unmounted; without `FILES_URL` and `KNOWLEDGE_SERVICE_KEY_ID`, without
+`files`.
 
 ## Deploy
 
@@ -290,6 +426,16 @@ Knowledge deploys as part of the single `oryxa` image, behind the same public
 edge as every service it runs alongside. Its runtime identity needs
 `events:PutEvents` on the event bus, and `sqs:ReceiveMessage` and
 `sqs:DeleteMessage` on `knowledge-events`.
+
+Deploy the binary before running the events provisioner again. The rule is
+generated from what this build consumes, and a build that does not yet
+handle an event type the rule already routes refuses it until it lands in
+the dead-letter queue.
+
+`apps.trigger.received.v1` carries the app's whole payload — a mail body, a
+message — and knowledge reads only which connection it came from. It is
+deleted from the queue once handled, but one that keeps failing sits in the
+dead-letter queue for its retention; see TODO.md.
 
 ## Tests
 
@@ -304,10 +450,3 @@ KNOWLEDGE_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/
 
 ## Later
 
-- **The grant.** `Grants` is an interface with no implementation yet; minting
-  a member-scoped token is auth's job, and `agents/primary`'s `memberauth` is
-  the working precedent. Until one is supplied, the files source cannot be
-  mounted.
-- **HTML.** Only plain text, Markdown, CSV and JSON are read. HTML would mean
-  promoting `golang.org/x/net` from an indirect dependency, which is a
-  deliberate choice rather than an oversight.

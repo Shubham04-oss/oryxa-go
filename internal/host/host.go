@@ -65,6 +65,10 @@ type Definition struct {
 	// URLVariable names the variable other services read this service's base
 	// URL from, such as AUTH_URL. Empty when nothing calls it.
 	URLVariable string
+	// EventsQueueVariable names the variable holding the SQS queue the
+	// service consumes its events from, such as RAG_EVENTS_QUEUE_URL. Empty
+	// when it consumes none. See Config.RequireEventQueues.
+	EventsQueueVariable string
 	// Migrate installs the service's schema. It needs nothing but the
 	// database, so migrating never waits on the rest of a service's
 	// configuration. Nil when the service keeps nothing in PostgreSQL.
@@ -111,6 +115,13 @@ type Config struct {
 	AutoMigrate      bool
 	AWSRegion        string
 	EventBusName     string
+	// RequireEventQueues refuses to start while a selected service's events
+	// queue is unset. A service without its queue does not fail: it warns
+	// once and then never hears the events that remove what people deleted,
+	// which in a deployment is a quiet data-retention gap. It is on where the
+	// deployment environment (DEPLOYMENT_ENVIRONMENT, else ENVIRONMENT) is
+	// production, and ORYXA_REQUIRE_EVENT_QUEUES sets it either way.
+	RequireEventQueues bool
 	// ShutdownTimeout bounds each stage of the way down: draining requests,
 	// then waiting for workers.
 	ShutdownTimeout time.Duration
@@ -133,6 +144,14 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	if config.AutoMigrate, err = boolValue(getenv, "ORYXA_AUTO_MIGRATE", true); err != nil {
 		return Config{}, err
 	}
+	environment := strings.ToLower(strings.TrimSpace(getenv("DEPLOYMENT_ENVIRONMENT")))
+	if environment == "" {
+		environment = strings.ToLower(strings.TrimSpace(getenv("ENVIRONMENT")))
+	}
+	production := environment == "production" || environment == "prod"
+	if config.RequireEventQueues, err = boolValue(getenv, "ORYXA_REQUIRE_EVENT_QUEUES", production); err != nil {
+		return Config{}, err
+	}
 	maxConns, err := intValue(getenv, "ORYXA_DATABASE_MAX_CONNS", 32)
 	if err != nil {
 		return Config{}, err
@@ -142,6 +161,24 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return config, nil
+}
+
+// CheckEventQueues refuses selected services whose events queue is unset,
+// naming every one, so a deployment finds them all at once rather than one
+// start at a time.
+func CheckEventQueues(selected []Definition, getenv func(string) string) error {
+	var missing []string
+	for _, definition := range selected {
+		if definition.EventsQueueVariable != "" && strings.TrimSpace(getenv(definition.EventsQueueVariable)) == "" {
+			missing = append(missing, definition.EventsQueueVariable+" ("+definition.Name+")")
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("these services consume events but their queues are not set: %s; "+
+			"without them they never hear what others deleted. Set them, or ORYXA_REQUIRE_EVENT_QUEUES=false to start anyway",
+			strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // Select returns the definitions config.Services names, in the order they

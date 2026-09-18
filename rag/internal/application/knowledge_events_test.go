@@ -9,6 +9,7 @@ import (
 	knowledgeeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgeclient"
 )
 
 // testDocumentPublished is a document a knowledge source has just extracted:
@@ -241,8 +242,10 @@ func TestDocumentPublishedMovesToANewDocumentWhenTheReferenceChanges(t *testing.
 	}
 }
 
-func TestDocumentPublishedWithAnOmittedBodyIsNotIndexed(t *testing.T) {
+func TestAnOmittedBodyThatCannotBeReadBackIsNotIndexed(t *testing.T) {
 	h := newHarness()
+	// Nothing to read back: a deployment with no way into knowledge's
+	// internal API, which is what an empty fake stands for.
 	event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
 		event.BodyOmitted = true
 		event.Body = ""
@@ -258,7 +261,7 @@ func TestDocumentPublishedWithAnOmittedBodyIsNotIndexed(t *testing.T) {
 	}
 }
 
-func TestDocumentPublishedWithAnOmittedBodyRemovesAPreviouslyIndexedVersion(t *testing.T) {
+func TestAnOmittedBodyThatCannotBeReadBackRemovesAPreviouslyIndexedVersion(t *testing.T) {
 	h := newHarness()
 	first := testDocumentPublished(nil)
 	if err := h.service.DocumentPublished(context.Background(), first); err != nil {
@@ -280,8 +283,8 @@ func TestDocumentPublishedWithAnOmittedBodyRemovesAPreviouslyIndexedVersion(t *t
 		t.Fatalf("DocumentPublished(body omitted) error = %v", err)
 	}
 
-	// Rag cannot fetch the body itself, so the stale text is removed rather
-	// than left to answer questions the source no longer backs.
+	// With no way to read it back, the stale text is removed rather than
+	// left to answer questions the source no longer backs.
 	if _, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("the previously indexed document survived an omitted-body republish: %v", err)
 	}
@@ -470,5 +473,87 @@ func TestDocumentRemovedForADocumentNeverIndexedIsANoOp(t *testing.T) {
 	}
 	if len(h.store.corpora) != 0 || len(h.store.documents) != 0 {
 		t.Fatal("DocumentRemoved for an unknown document touched the store")
+	}
+}
+
+// A document over knowledge's event budget travels without its body. Reading
+// it back is what keeps the largest documents an organization has — the
+// handbook, the specification, the long thread — from being the ones it
+// cannot search.
+
+func TestABodyTooLargeToCarryIsReadBackAndIndexed(t *testing.T) {
+	h := newHarness()
+	h.documents.body = "# The handbook\n\nEverything about how we work."
+	event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.BodyOmitted = true
+		event.Body = ""
+	})
+
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatalf("DocumentPublished() error = %v", err)
+	}
+	if len(h.documents.calls) != 1 || h.documents.calls[0] != testOrganization+"/doc_1" {
+		t.Fatalf("read back %v, want this document in this organization", h.documents.calls)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, "doc_1")
+	if err != nil {
+		t.Fatalf("nothing was indexed for a body that could be read back: %v", err)
+	}
+	stored, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID)
+	if err != nil {
+		t.Fatalf("Document() error = %v", err)
+	}
+	if stored.ByteSize == 0 {
+		t.Fatal("the document was indexed with no text")
+	}
+}
+
+// TestADocumentThatChangedWhileBeingReadBackWaits covers the race the fetch
+// opens: knowledge may read the document again between publishing an event
+// and answering for it, and indexing that under this event's hash would
+// leave the two disagreeing about what is stored.
+func TestADocumentThatChangedWhileBeingReadBackWaits(t *testing.T) {
+	h := newHarness()
+	h.documents.body = "a newer version"
+	h.documents.hash = "hash-2"
+	event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.BodyOmitted = true
+		event.Body = ""
+		event.ContentHash = "hash-1"
+	})
+
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatalf("DocumentPublished() error = %v", err)
+	}
+	if len(h.store.documents) != 0 {
+		t.Fatalf("indexed a version the event did not describe: %d documents", len(h.store.documents))
+	}
+}
+
+// TestKnowledgeBeingUnreachableIsWorthAnotherDelivery separates what a retry
+// may fix from what it cannot, since the bus redelivers what is returned as
+// an error.
+func TestKnowledgeBeingUnreachableIsWorthAnotherDelivery(t *testing.T) {
+	h := newHarness()
+	h.documents.err = knowledgeclient.ErrUnavailable
+	event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.BodyOmitted = true
+		event.Body = ""
+	})
+
+	if err := h.service.DocumentPublished(context.Background(), event); !errors.Is(err, knowledgeclient.ErrUnavailable) {
+		t.Fatalf("error = %v, want it reported so the bus redelivers", err)
+	}
+
+	// A document knowledge no longer holds will not appear on a retry.
+	h.documents.err = knowledgeclient.ErrNotFound
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatalf("a document knowledge no longer holds was reported as a failure: %v", err)
+	}
+
+	// Nor will a deployment knowledge does not admit.
+	h.documents.err = knowledgeclient.ErrNotConfigured
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatalf("a deployment knowledge does not admit was reported as a failure: %v", err)
 	}
 }

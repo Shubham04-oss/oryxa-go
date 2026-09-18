@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -21,6 +22,7 @@ var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
 // input it was called with.
 type fakeService struct {
 	source     domain.Source
+	document   domain.Document
 	err        error
 	seen       authclient.Credentials
 	registered application.RegisterInput
@@ -305,4 +307,114 @@ func TestRemovingASourceAnswersWithNothing(t *testing.T) {
 	if recorder.Code != http.StatusNoContent {
 		t.Fatalf("DELETE source = %d, want 204", recorder.Code)
 	}
+}
+
+// fakeVerifier stands in for the service-token check, answering whatever
+// claims a test needs.
+type fakeVerifier struct {
+	claims serviceauth.Claims
+	err    error
+	tokens []string
+}
+
+func (verifier *fakeVerifier) Verify(_ context.Context, token string) (serviceauth.Claims, error) {
+	verifier.tokens = append(verifier.tokens, token)
+	if verifier.err != nil {
+		return serviceauth.Claims{}, verifier.err
+	}
+	return verifier.claims, nil
+}
+
+const bodyPath = "/v1/internal/organizations/org_1/documents/doc_1/body"
+
+// The internal route is how a retrieval pipeline reads back a body too large
+// to have travelled on the bus. It identifies the caller and nothing else: a
+// service has no member to be, which is why it answers one document by id
+// and never a listing.
+
+func TestTheInternalBodyRouteAnswersAnAdmittedService(t *testing.T) {
+	service := &fakeService{document: domain.Document{ID: "doc_1", Body: "the handbook: a < b && c > d", ContentHash: "hash-1"}}
+	verifier := &fakeVerifier{claims: serviceauth.Claims{Service: "rag", Purpose: "documents"}}
+	server := New(service, Config{Services: verifier}, nil)
+
+	recorder := send(server, http.MethodGet, bodyPath, "",
+		map[string]string{serviceauth.Header: "service-token"})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", recorder.Code, recorder.Body)
+	}
+	// Written as it is, not HTML-escaped at six bytes a character, so a body
+	// near the ceiling still fits what the caller reads.
+	if !strings.Contains(recorder.Body.String(), "the handbook: a < b && c > d") {
+		t.Fatalf("body = %s", recorder.Body)
+	}
+	if len(verifier.tokens) != 1 || verifier.tokens[0] != "service-token" {
+		t.Fatalf("verified %v", verifier.tokens)
+	}
+}
+
+func TestTheInternalBodyRouteRefusesEverythingElse(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		verifier *fakeVerifier
+		// services nil means the deployment named no callers at all.
+		noVerifier bool
+		headers    map[string]string
+		want       int
+	}{
+		"a deployment that named no callers": {
+			noVerifier: true, headers: map[string]string{serviceauth.Header: "service-token"},
+			want: http.StatusNotFound,
+		},
+		"no service token": {
+			verifier: &fakeVerifier{claims: serviceauth.Claims{Purpose: "documents"}},
+			headers:  map[string]string{}, want: http.StatusUnauthorized,
+		},
+		"a member's own token is not a service token": {
+			verifier: &fakeVerifier{claims: serviceauth.Claims{Purpose: "documents"}},
+			headers:  bearer(), want: http.StatusUnauthorized,
+		},
+		"a token that does not verify": {
+			verifier: &fakeVerifier{err: serviceauth.ErrInvalidToken},
+			headers:  map[string]string{serviceauth.Header: "forged"}, want: http.StatusUnauthorized,
+		},
+		"a service using a purpose it may not": {
+			verifier: &fakeVerifier{err: serviceauth.ErrPurposeNotAllowed},
+			headers:  map[string]string{serviceauth.Header: "service-token"}, want: http.StatusForbidden,
+		},
+		"a service whose purpose is another one": {
+			verifier: &fakeVerifier{claims: serviceauth.Claims{Service: "agents", Purpose: "agent"}},
+			headers:  map[string]string{serviceauth.Header: "service-token"}, want: http.StatusForbidden,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := Config{}
+			if !testCase.noVerifier {
+				config.Services = testCase.verifier
+			}
+			service := &fakeService{document: domain.Document{ID: "doc_1", Body: "the handbook"}}
+			server := New(service, config, nil)
+
+			recorder := send(server, http.MethodGet, bodyPath, "", testCase.headers)
+			if recorder.Code != testCase.want {
+				t.Fatalf("status = %d, want %d: %s", recorder.Code, testCase.want, recorder.Body)
+			}
+			if strings.Contains(recorder.Body.String(), "the handbook") {
+				t.Fatalf("a refused call was answered the body anyway: %s", recorder.Body)
+			}
+		})
+	}
+}
+
+func (service *fakeService) DocumentBody(_ context.Context, _, _ string) (domain.Document, error) {
+	if service.err != nil {
+		return domain.Document{}, service.err
+	}
+	return service.document, nil
+}
+
+func (service *fakeService) SyncSource(_ context.Context, credentials authclient.Credentials, _, _ string) (domain.Source, error) {
+	service.seen = credentials
+	if service.err != nil {
+		return domain.Source{}, service.err
+	}
+	return service.source, nil
 }

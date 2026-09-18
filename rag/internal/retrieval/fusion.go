@@ -18,6 +18,16 @@ import (
 // respectably above one that a single retriever loved.
 const RRFConstant = 60.0
 
+// lexicalWeight is what a lexical rank counts for against a dense one.
+//
+// Measured over this repository's own documentation (rag/internal/eval), the
+// lexical retriever puts the answer's section first for 45% of questions and
+// the dense one for 68%. Counted equally, a lexical near-miss took first place
+// from a dense hit often enough to cost a tenth of the top results; at half
+// weight the lexical list still lifts what reaches the top eight — the phrase
+// or identifier dense missed — without deciding first place alone.
+const lexicalWeight = 0.5
+
 // ranked is one retriever's output, in its own order.
 type ranked struct {
 	name string
@@ -54,10 +64,14 @@ func fuse(lists []ranked) []fused {
 	// Only the retrievers that returned something take part in the scale. A
 	// lexical index that matched nothing must not halve every score, or
 	// min_score would reject results that the same query in dense mode passes.
-	answered := 0
+	answered := 0.0
 	for _, list := range lists {
+		weight := 1.0
+		if list.name == lexicalRetriever {
+			weight = lexicalWeight
+		}
 		if len(list.hits) > 0 {
-			answered++
+			answered += weight
 		}
 		for position, hit := range list.hits {
 			entry, seen := byChunk[hit.ChunkID]
@@ -67,7 +81,7 @@ func fuse(lists []ranked) []fused {
 				order = append(order, hit.ChunkID)
 			}
 			rank := position + 1
-			entry.score += 1 / (RRFConstant + float64(rank))
+			entry.score += weight / (RRFConstant + float64(rank))
 			score := hit.Score
 			switch list.name {
 			case denseRetriever:
@@ -77,7 +91,7 @@ func fuse(lists []ranked) []fused {
 			}
 		}
 	}
-	best := float64(max(answered, 1)) / (RRFConstant + 1)
+	best := answered / (RRFConstant + 1)
 	results := make([]fused, 0, len(order))
 	for _, chunkID := range order {
 		entry := byChunk[chunkID]

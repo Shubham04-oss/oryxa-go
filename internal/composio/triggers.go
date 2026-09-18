@@ -71,14 +71,30 @@ func (client *Client) TriggerTypes(ctx context.Context, query TriggerTypeQuery) 
 	return page, nil
 }
 
+// TriggerSubscription is what UpsertTrigger subscribes to a trigger type.
+type TriggerSubscription struct {
+	// ConnectedAccountID is the account whose events the trigger watches.
+	ConnectedAccountID string
+	// UserID is the Composio user that account belongs to. A project with
+	// two-factor protection refuses a subscription that names an account
+	// without its user, and checks the user owns it; every project accepts
+	// it, so it is always sent when known.
+	UserID string
+	Config json.RawMessage
+}
+
 // UpsertTrigger subscribes a connected account to a trigger type, or
 // re-enables the matching subscription it already has, and answers the
 // trigger instance's id.
-func (client *Client) UpsertTrigger(ctx context.Context, slug, connectedAccountID string, config json.RawMessage) (string, error) {
+func (client *Client) UpsertTrigger(ctx context.Context, slug string, subscription TriggerSubscription) (string, error) {
+	config := subscription.Config
 	if len(config) == 0 {
 		config = json.RawMessage(`{}`)
 	}
-	body := map[string]any{"connected_account_id": connectedAccountID, "trigger_config": config}
+	body := map[string]any{"connected_account_id": subscription.ConnectedAccountID, "trigger_config": config}
+	if subscription.UserID != "" {
+		body["user_id"] = subscription.UserID
+	}
 	var answer struct {
 		TriggerID string `json:"trigger_id"`
 	}

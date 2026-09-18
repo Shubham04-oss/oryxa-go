@@ -11,6 +11,8 @@ read.
 - Write the query in the words the documents would use, not as a question to
   you. When a first search finds little, search again with other words
   before saying nothing was found.
+- Only passages that bear on the query come back. An empty result means the
+  documents hold nothing relevant to it, not that the search failed.
 - Leave `collection_ids` empty to search the member's own and their
   organization's collections. Name collections, from
   `knowledge_collections`, only when the member points at one.

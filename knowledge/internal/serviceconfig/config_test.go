@@ -58,6 +58,36 @@ func TestFromEnvRequiresAppsURLOnlyWithAComposioKey(t *testing.T) {
 	}
 }
 
+// The files source reads as the member who registered it, so it needs both
+// halves of that: somewhere to read files from, and a key to sign this
+// service's own identity with when asking auth for the member's token.
+// Neither is required — the source simply stays off — but a URL that is not
+// one is still refused rather than failing on the first pass.
+func TestFromEnvReadsWhatTheFilesSourceNeeds(t *testing.T) {
+	values := required()
+	config, err := FromEnv(env(values))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.FilesURL != "" || config.ServiceKeyID != "" {
+		t.Fatalf("config = %+v, want both unset by default", config)
+	}
+
+	values["FILES_URL"] = "http://localhost:8085"
+	values["KNOWLEDGE_SERVICE_KEY_ID"] = "alias/oryxa-knowledge"
+	if config, err = FromEnv(env(values)); err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.FilesURL != "http://localhost:8085" || config.ServiceKeyID != "alias/oryxa-knowledge" {
+		t.Fatalf("config = %+v", config)
+	}
+
+	values["FILES_URL"] = "not-a-url"
+	if _, err := FromEnv(env(values)); err == nil {
+		t.Fatal("FromEnv() error = nil, want FILES_URL checked as a URL")
+	}
+}
+
 func TestFromEnvReadsTheComposioBaseURLOverride(t *testing.T) {
 	values := required()
 	values["COMPOSIO_API_KEY"] = "sk_live_1"

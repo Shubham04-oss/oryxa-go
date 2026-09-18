@@ -133,3 +133,47 @@ func TestFromEnvWithoutAWebhookSecretStillStarts(t *testing.T) {
 		t.Fatalf("config = %+v", config)
 	}
 }
+
+// TestFromEnvParsesAutoSubscribeAsABoolean covers APPS_AUTO_SUBSCRIBE being
+// read with the same boolean semantics as everywhere else in the repo
+// (strconv.ParseBool), rather than only the exact string "false" turning it
+// off - which left "0", "FALSE" and a typo like "flase" all silently on.
+func TestFromEnvParsesAutoSubscribeAsABoolean(t *testing.T) {
+	t.Parallel()
+	for name, testCase := range map[string]struct {
+		set     bool
+		value   string
+		wantOff bool
+		wantErr bool
+	}{
+		"unset defaults to on":      {set: false, wantOff: false},
+		"false turns it off":        {set: true, value: "false", wantOff: true},
+		"FALSE, any case":           {set: true, value: "FALSE", wantOff: true},
+		"0 turns it off":            {set: true, value: "0", wantOff: true},
+		"true stays on":             {set: true, value: "true", wantOff: false},
+		"1 stays on":                {set: true, value: "1", wantOff: false},
+		"padded with whitespace":    {set: true, value: "  false  ", wantOff: true},
+		"not a boolean is an error": {set: true, value: "please", wantErr: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			values := required()
+			if testCase.set {
+				values["APPS_AUTO_SUBSCRIBE"] = testCase.value
+			}
+			config, err := FromEnv(environment(values))
+			if testCase.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "APPS_AUTO_SUBSCRIBE") {
+					t.Fatalf("error = %v, want it to name APPS_AUTO_SUBSCRIBE", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if config.NoAutoSubscribe != testCase.wantOff {
+				t.Fatalf("NoAutoSubscribe = %v, want %v", config.NoAutoSubscribe, testCase.wantOff)
+			}
+		})
+	}
+}

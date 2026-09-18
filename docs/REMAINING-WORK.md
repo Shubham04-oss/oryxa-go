@@ -70,8 +70,6 @@ Then, in order:
   unverified Google app of Oryxa's is capped at 100 new users and, in testing,
   loses refresh tokens after seven days; moving later means members reconnect
   once.
-- **Triggers do not start agent runs** (see below) — a trigger delivers and
-  publishes, and nothing acts on it.
 - **A tool allow-list per organization**, for an admin who wants writes limited
   to certain apps.
 
@@ -88,11 +86,15 @@ connection a member made in apps, so knowledge holds no credential of its own
 `COMPOSIO_API_KEY` is set, which is also why the project key is in two services
 (see above).
 
-The files source is still built and unmounted: it reads as the member who
-registered it and needs a grant to do that
-([knowledge/TODO.md §1](../knowledge/TODO.md#1-what-still-blocks-every-pass)).
-So an organization's own documents — the obvious first thing anyone would
-index — are the one thing knowledge cannot read. That waits on §3.2.
+The files source is mounted again. It reads as the member who registered it,
+and a scheduled pass has no member at a browser, so it redeems the standing
+agent grant they gave auth: `/internal/membertoken` exchanges one for a
+short-lived token at auth's `/v1/internal/agent-tokens`, the route agents has
+always used. It mounts once `FILES_URL` and `KNOWLEDGE_SERVICE_KEY_ID` are
+set and auth lists knowledge in `AUTH_SERVICE_CALLERS` with the `agent`
+purpose; short of any of those it says which is missing and stays off. So an
+organization's own documents can finally be indexed — against a stand-in
+auth, not yet against Cognito.
 
 Nothing has run a pass against a real app, either: it needs a connected
 account, which needs a member at a browser.
@@ -120,17 +122,11 @@ live knowledge pass publishing onto a real queue rag consumes from.
 
 What it does not close:
 
-- **Omitted bodies stay unindexed.** A document over knowledge's 128 KiB
-  event budget cannot be indexed at all, because rag has no way to fetch it
-  back — knowledge's body endpoint answers only the source's creator or an
-  org admin, never a service. The fix is an internal, service-authenticated
-  body route in knowledge; not built.
-- **Only member-scoped documents flow today.** Knowledge only ever sets a
-  connection-based source (`github`, `notion`, `slack`) to member scope, and
-  its one organization-scoped source, `files`, is still unmounted (see
-  above). So this bridge's team and organization branches are proven by unit
-  tests against a synthetic event, not by anything real knowledge code has
-  ever emitted, and team scope is not producible by any source at all yet.
+- **Team scope is produced by nothing.** A connection-based source
+  (`github`, `notion`, `slack`) is always member-scoped, and `files`, now
+  mounted, is organization-scoped. So the bridge's team branch is proven by
+  unit tests against a synthetic event rather than by anything knowledge has
+  ever emitted, and no source produces one at all.
 
 ### Krude searches corpora, but not a team's by default
 

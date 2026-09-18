@@ -49,11 +49,77 @@ func newFakeStore() *fakeStore {
 func (store *fakeStore) CreateSource(_ context.Context, source domain.Source, event *domain.Event) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	// The same thing is indexed once, which the schema enforces with a
+	// unique index over the live sources. Modelled here so a test cannot
+	// pass against a fake that permits what PostgreSQL refuses.
+	for _, existing := range store.sources {
+		if existing.Status == domain.StatusRemoved {
+			continue
+		}
+		if existing.OrganizationID == source.OrganizationID && existing.Provider == source.Provider &&
+			existing.ConnectionID == source.ConnectionID && sameTarget(existing.Target, source.Target) {
+			return domain.ErrConflict
+		}
+	}
 	store.sources[source.ID] = source
 	if event != nil {
 		store.events = append(store.events, *event)
 	}
 	return nil
+}
+
+// HastenSource moves one source, whatever its last sweep: a person asking
+// has a reason the schedule does not know.
+func (store *fakeStore) HastenSource(_ context.Context, organizationID, sourceID string, at time.Time) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	source, ok := store.sources[sourceID]
+	if !ok || source.OrganizationID != organizationID || source.Status != domain.StatusActive {
+		return false, nil
+	}
+	if source.SyncAt == nil || !source.SyncAt.After(at) {
+		return false, nil
+	}
+	hastened := at
+	source.SyncAt = &hastened
+	store.sources[sourceID] = source
+	return true, nil
+}
+
+// HastenSources models the real one: only live sources whose next sweep is
+// later than now, and only outside the floor since their last.
+func (store *fakeStore) HastenSources(_ context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var moved int64
+	for id, source := range store.sources {
+		if source.ConnectionID != connectionID || source.Status != domain.StatusActive || source.Attempts > 0 {
+			continue
+		}
+		hastened := at
+		if source.LastSyncedAt != nil && source.LastSyncedAt.Add(floor).After(hastened) {
+			hastened = source.LastSyncedAt.Add(floor)
+		}
+		if source.SyncAt == nil || !source.SyncAt.After(hastened) {
+			continue
+		}
+		source.SyncAt = &hastened
+		store.sources[id] = source
+		moved++
+	}
+	return moved, nil
+}
+
+func sameTarget(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (store *fakeStore) Source(_ context.Context, _, sourceID string) (domain.Source, error) {
@@ -69,9 +135,15 @@ func (store *fakeStore) Source(_ context.Context, _, sourceID string) (domain.So
 func (store *fakeStore) Sources(_ context.Context, _ string, query domain.SourceQuery) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	// It answers what the real query does, filters and all: a fake that
+	// answered more once let a test pass that the database would have failed.
 	listed := []domain.Source{}
 	for _, source := range store.sources {
-		if !query.Admin && source.CreatedBy != query.CreatedBy {
+		switch {
+		case source.Status == domain.StatusRemoved && !query.IncludeRemoved,
+			!query.Admin && source.CreatedBy != query.CreatedBy,
+			query.ConnectionID != "" && source.ConnectionID != query.ConnectionID,
+			query.Provider != "" && source.Provider != query.Provider:
 			continue
 		}
 		listed = append(listed, source)
@@ -141,6 +213,24 @@ func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionI
 	removed := []domain.Source{}
 	for id, source := range store.sources {
 		if source.ConnectionID != connectionID || source.Status == domain.StatusRemoved {
+			continue
+		}
+		source.Status = domain.StatusRemoved
+		store.sources[id] = source
+		removed = append(removed, source)
+		if err := store.retractAll(source, events); err != nil {
+			return nil, err
+		}
+	}
+	return removed, nil
+}
+
+func (store *fakeStore) RemoveSourcesByTeam(_ context.Context, organizationID, teamID string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	removed := []domain.Source{}
+	for id, source := range store.sources {
+		if source.OrganizationID != organizationID || source.Scope != domain.ScopeTeam || source.TeamID != teamID || source.Status == domain.StatusRemoved {
 			continue
 		}
 		source.Status = domain.StatusRemoved
@@ -414,23 +504,42 @@ func (store *fakeStore) published(detailType string) int {
 // often it was asked.
 type fakeDirectory struct {
 	membership domain.OrgMembership
+	// agentToken is a token auth would answer as an agent's, the way it
+	// answers every token a standing grant redeems to.
+	agentToken string
 	err        error
 	calls      int
 }
 
-func (directory *fakeDirectory) Membership(context.Context, string, authclient.Credentials) (domain.OrgMembership, error) {
+func (directory *fakeDirectory) Membership(_ context.Context, _ string, credentials authclient.Credentials) (domain.OrgMembership, error) {
 	directory.calls++
 	if directory.err != nil {
 		return domain.OrgMembership{}, directory.err
 	}
-	return directory.membership, nil
+	membership := directory.membership
+	if directory.agentToken != "" && credentials.Authorization == "Bearer "+directory.agentToken {
+		membership.Agent = true
+	}
+	return membership, nil
 }
 
 // fakeApps answers what apps would about one of a member's connections.
 type fakeApps struct {
 	connection domain.AppConnection
+	// targets is what a connection holds, and targetsErr what asking for it
+	// answers instead.
+	targets    []domain.AppTarget
+	targetsErr error
 	err        error
 	calls      []string
+}
+
+func (apps *fakeApps) Targets(_ context.Context, _, connectionID string, _ authclient.Credentials) ([]domain.AppTarget, error) {
+	apps.calls = append(apps.calls, "targets:"+connectionID)
+	if apps.targetsErr != nil {
+		return nil, apps.targetsErr
+	}
+	return apps.targets, nil
 }
 
 func (apps *fakeApps) Connection(_ context.Context, _, connectionID string, _ authclient.Credentials) (domain.AppConnection, error) {

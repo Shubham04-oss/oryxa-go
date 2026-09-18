@@ -556,6 +556,35 @@ func TestSourcesFiltersByConnection(t *testing.T) {
 	}
 }
 
+// TestSourcesAnswersRemovedOnesOnlyWhenAsked: a listing never shows a source
+// a member removed, but deciding whether to register one on their behalf
+// has to see it, since removing it was them saying no.
+func TestSourcesAnswersRemovedOnesOnlyWhenAsked(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock, nil); err != nil {
+		t.Fatalf("RemoveSource() error = %v", err)
+	}
+
+	listed, err := store.Sources(ctx, "org_1", domain.SourceQuery{Admin: true, ConnectionID: source.ConnectionID})
+	if err != nil {
+		t.Fatalf("Sources() error = %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("Sources() = %d sources, want the removed one left out", len(listed))
+	}
+	listed, err = store.Sources(ctx, "org_1", domain.SourceQuery{
+		Admin: true, ConnectionID: source.ConnectionID, IncludeRemoved: true,
+	})
+	if err != nil {
+		t.Fatalf("Sources(include removed) error = %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != source.ID || listed[0].Status != domain.StatusRemoved {
+		t.Fatalf("Sources(include removed) = %+v, want the removed source", listed)
+	}
+}
+
 func TestPauseSourcesStopsWhatReadsThroughAConnection(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -669,6 +698,60 @@ func TestRemoveSourcesByConnectionRetractsWhatItHeld(t *testing.T) {
 	}
 }
 
+// TestRemoveSourcesByTeamRetiresOnlyThatTeam is the regression for a deleted
+// team's documents coming back: rag drops the team's corpora when the team is
+// deleted, and a team source left running would publish into a new one.
+func TestRemoveSourcesByTeamRetiresOnlyThatTeam(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	team := func(teamID, repository string) domain.Source {
+		source := domain.Source{
+			ID: "src_" + randomHex(8), OrganizationID: "org_1", ConnectionID: "con_" + randomHex(4),
+			AppID: "app_1", Provider: "github", Target: map[string]string{"repository": repository},
+			Scope: domain.ScopeTeam, TeamID: teamID, CreatedBy: "user-1", Status: domain.StatusActive,
+			Interval: time.Hour, SyncAt: &testClock, CreatedAt: testClock,
+		}
+		if err := store.CreateSource(ctx, source, nil); err != nil {
+			t.Fatalf("CreateSource() error = %v", err)
+		}
+		return source
+	}
+	gone := team("team_gone", "acme/gone")
+	kept := team("team_kept", "acme/kept")
+	organization := testSource(t, store, "org_1")
+	if _, err := store.UpsertDocument(ctx, testDocument(gone, "issue-1", strings.Repeat("b", 64)), nil); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+
+	var retracted int
+	removed, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", testClock,
+		func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
+			retracted = len(documents)
+			events := make([]domain.Event, 0, len(documents))
+			for range documents {
+				events = append(events, testEvent(t, "knowledge.document.removed.v1"))
+			}
+			return events, nil
+		})
+	if err != nil {
+		t.Fatalf("RemoveSourcesByTeam() error = %v", err)
+	}
+	if len(removed) != 1 || removed[0].ID != gone.ID || retracted != 1 {
+		t.Fatalf("RemoveSourcesByTeam() = %d sources, %d documents retracted; want %s and its one document", len(removed), retracted, gone.ID)
+	}
+	for _, untouched := range []domain.Source{kept, organization} {
+		read, err := store.Source(ctx, "org_1", untouched.ID)
+		if err != nil || read.Status != domain.StatusActive {
+			t.Fatalf("source %s outside the deleted team = %s, %v; want it active", untouched.ID, read.Status, err)
+		}
+	}
+
+	// A redelivered event finds nothing further.
+	if again, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", testClock, nil); err != nil || len(again) != 0 {
+		t.Fatalf("RemoveSourcesByTeam(again) = %d, %v, want none", len(again), err)
+	}
+}
+
 func TestEventHandledIsTrueOnlyAfterMarkEventHandled(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -779,5 +862,204 @@ func TestRunsRecordWhatEachPassDid(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].Status != domain.RunCompleted || runs[0].DocumentsPublished != 3 {
 		t.Fatalf("Runs() = %+v", runs)
+	}
+}
+
+// TestHastenSourcesBringsForwardOnlyWhatItShould pins the three rules that
+// make a trigger safe to act on: it moves this connection's live sources, it
+// never delays one already due, and it never reads a provider again inside
+// the floor.
+func TestHastenSourcesBringsForwardOnlyWhatItShould(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	later := testClock.Add(time.Hour)
+	// Due later, never swept: the one a trigger is for.
+	waiting := testSource(t, store, "org_1")
+	waiting.SyncAt = &later
+	mustSchedule(t, store, waiting)
+
+	// Due sooner already: a trigger must not push it back.
+	sooner := testClock.Add(time.Minute)
+	overdue := testSource(t, store, "org_1")
+	overdue.ConnectionID = waiting.ConnectionID
+	overdue.SyncAt = &sooner
+	mustSchedule(t, store, overdue)
+
+	// Another connection's, which this trigger says nothing about.
+	elsewhere := testSource(t, store, "org_1")
+	elsewhere.SyncAt = &later
+	mustSchedule(t, store, elsewhere)
+
+	moved, err := store.HastenSources(ctx, waiting.ConnectionID, testClock, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("HastenSources() error = %v", err)
+	}
+	if moved != 1 {
+		t.Fatalf("moved %d sources, want only the one due later on this connection", moved)
+	}
+	if due := readSyncAt(t, store, waiting.ID); due == nil || !due.Equal(testClock) {
+		t.Fatalf("the waiting source is due at %v, want now", due)
+	}
+	if due := readSyncAt(t, store, overdue.ID); due == nil || !due.Equal(sooner) {
+		t.Fatalf("a source already due sooner was moved to %v", due)
+	}
+	if due := readSyncAt(t, store, elsewhere.ID); due == nil || !due.Equal(later) {
+		t.Fatalf("another connection's source was moved to %v", due)
+	}
+}
+
+// TestHastenSourcesDefersOneSweptWithinTheFloor: inside the floor a source
+// is brought forward to the floor, not to now and not left an interval away.
+func TestHastenSourcesDefersOneSweptWithinTheFloor(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	later := testClock.Add(time.Hour)
+	justSwept := testClock.Add(-30 * time.Second)
+	source := testSource(t, store, "org_1")
+	source.SyncAt = &later
+	source.LastSyncedAt = &justSwept
+	mustSchedule(t, store, source)
+
+	moved, err := store.HastenSources(ctx, source.ConnectionID, testClock, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("HastenSources() error = %v", err)
+	}
+	if moved != 1 {
+		t.Fatalf("moved %d sources swept within the floor, want 1", moved)
+	}
+	if due := readSyncAt(t, store, source.ID); due == nil || !due.Equal(justSwept.Add(2*time.Minute)) {
+		t.Fatalf("due at %v, want the floor after the last sweep", due)
+	}
+
+	// The same delivery again changes nothing: it is already that soon.
+	if moved, err = store.HastenSources(ctx, source.ConnectionID, testClock, 2*time.Minute); err != nil || moved != 0 {
+		t.Fatalf("HastenSources(again) = %d, %v; want nothing moved", moved, err)
+	}
+
+	// Past the floor, a delivery brings it to now.
+	if moved, err = store.HastenSources(ctx, source.ConnectionID, testClock, 10*time.Second); err != nil || moved != 1 {
+		t.Fatalf("HastenSources(past the floor) = %d, %v; want 1", moved, err)
+	}
+	if due := readSyncAt(t, store, source.ID); due == nil || !due.Equal(testClock) {
+		t.Fatalf("due at %v, want now", due)
+	}
+}
+
+// TestHastenSourcesLeavesAFailingSourceToItsBackoff: last_synced_at is a
+// failing source's last success, however long ago, so the floor alone would
+// let every delivery pull it forward into another refused read.
+func TestHastenSourcesLeavesAFailingSourceToItsBackoff(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	backedOff := testClock.Add(5 * time.Hour)
+	longAgo := testClock.Add(-10 * time.Hour)
+	source := testSource(t, store, "org_1")
+	source.SyncAt = &backedOff
+	source.LastSyncedAt = &longAgo
+	mustSchedule(t, store, source)
+	if _, err := store.pool.Exec(ctx, `UPDATE knowledge_sources SET attempts = 3 WHERE id = $1`, source.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	moved, err := store.HastenSources(ctx, source.ConnectionID, testClock, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("HastenSources() error = %v", err)
+	}
+	if moved != 0 {
+		t.Fatalf("moved %d failing sources, want none", moved)
+	}
+	if due := readSyncAt(t, store, source.ID); due == nil || !due.Equal(backedOff) {
+		t.Fatalf("a failing source is due at %v, want its backoff kept", due)
+	}
+}
+
+// mustSchedule writes a source's schedule directly, since nothing in the
+// store's own API sets sync_at and last_synced_at together.
+func mustSchedule(t *testing.T, store *Store, source domain.Source) {
+	t.Helper()
+	if _, err := store.pool.Exec(context.Background(),
+		`UPDATE knowledge_sources SET sync_at = $2, last_synced_at = $3 WHERE id = $1`,
+		source.ID, source.SyncAt, source.LastSyncedAt); err != nil {
+		t.Fatalf("schedule %s: %v", source.ID, err)
+	}
+}
+
+func readSyncAt(t *testing.T, store *Store, sourceID string) *time.Time {
+	t.Helper()
+	var due *time.Time
+	if err := store.pool.QueryRow(context.Background(),
+		`SELECT sync_at FROM knowledge_sources WHERE id = $1`, sourceID).Scan(&due); err != nil {
+		t.Fatalf("read sync_at for %s: %v", sourceID, err)
+	}
+	if due != nil {
+		utc := due.UTC()
+		return &utc
+	}
+	return nil
+}
+
+// TestHastenSourceMovesOneSourceWhoeverAsks is the member-facing half: a
+// person has a reason the schedule does not know, so unlike a trigger this
+// does not care when the source was last read.
+func TestHastenSourceMovesOneSourceWhoeverAsks(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	later := testClock.Add(time.Hour)
+	justSwept := testClock.Add(-10 * time.Second)
+	asked := testSource(t, store, "org_1")
+	asked.SyncAt = &later
+	asked.LastSyncedAt = &justSwept
+	mustSchedule(t, store, asked)
+
+	other := testSource(t, store, "org_1")
+	other.SyncAt = &later
+	mustSchedule(t, store, other)
+
+	moved, err := store.HastenSource(ctx, "org_1", asked.ID, testClock)
+	if err != nil || !moved {
+		t.Fatalf("HastenSource() = %v, %v, want moved", moved, err)
+	}
+	if due := readSyncAt(t, store, asked.ID); due == nil || !due.Equal(testClock) {
+		t.Fatalf("the asked source is due at %v, want now", due)
+	}
+	if due := readSyncAt(t, store, other.ID); due == nil || !due.Equal(later) {
+		t.Fatalf("another source was moved to %v", due)
+	}
+
+	// Asking again changes nothing: it is already due.
+	if moved, err = store.HastenSource(ctx, "org_1", asked.ID, testClock); err != nil || moved {
+		t.Fatalf("HastenSource(already due) = %v, %v, want unmoved", moved, err)
+	}
+}
+
+func TestHastenSourceLeavesWhatIsNotItsToMove(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	later := testClock.Add(time.Hour)
+	source := testSource(t, store, "org_1")
+	source.SyncAt = &later
+	mustSchedule(t, store, source)
+
+	// Another organization's, which is not this caller's to hurry.
+	if moved, err := store.HastenSource(ctx, "org_2", source.ID, testClock); err != nil || moved {
+		t.Fatalf("HastenSource(wrong organization) = %v, %v, want unmoved", moved, err)
+	}
+	if due := readSyncAt(t, store, source.ID); due == nil || !due.Equal(later) {
+		t.Fatalf("another organization moved a source to %v", due)
+	}
+
+	// One that is not active has something wrong with it that hurrying does
+	// not fix.
+	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock,
+		func(domain.Source, []domain.Document) ([]domain.Event, error) { return nil, nil }); err != nil {
+		t.Fatalf("RemoveSource() error = %v", err)
+	}
+	if moved, err := store.HastenSource(ctx, "org_1", source.ID, testClock); err != nil || moved {
+		t.Fatalf("HastenSource(removed) = %v, %v, want unmoved", moved, err)
 	}
 }

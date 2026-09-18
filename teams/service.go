@@ -24,7 +24,7 @@ import (
 const Name = "teams"
 
 // Definition is how a host builds teams.
-var Definition = host.Definition{Name: Name, URLVariable: "TEAMS_URL", Migrate: Migrate, Mount: Mount}
+var Definition = host.Definition{Name: Name, URLVariable: "TEAMS_URL", EventsQueueVariable: "TEAMS_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs the teams schema.
 func Migrate(ctx context.Context, platform host.Platform) error {

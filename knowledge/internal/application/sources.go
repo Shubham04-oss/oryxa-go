@@ -40,7 +40,32 @@ func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Cre
 	if caller.Agent {
 		return domain.Source{}, fmt.Errorf("an agent cannot register a source: %w", domain.ErrForbidden)
 	}
+	return s.register(ctx, credentials, caller, organizationID, input)
+}
 
+// registerFor registers a source knowledge chose to index for a member —
+// what their newly connected app holds, or their organization's files —
+// with the token their standing grant redeems to.
+//
+// That token is an agent's: auth answers every grant-redeemed token as one.
+// The rule RegisterSource keeps, that an agent may not choose what gets
+// indexed, is about an agent choosing; nothing here was chosen by one. So it
+// is the one rule not applied. The source is still registered as that
+// member and checked as them, and a token that turns out to act as anyone
+// else registers nothing.
+func (s *Service) registerFor(ctx context.Context, credentials authclient.Credentials, organizationID, memberID string, input RegisterInput) (domain.Source, error) {
+	caller, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if caller.UserID != memberID {
+		return domain.Source{}, fmt.Errorf("the grant redeemed for a member acts as someone else: %w", domain.ErrForbidden)
+	}
+	return s.register(ctx, credentials, caller, organizationID, input)
+}
+
+// register records a source for a caller whose right to it has been decided.
+func (s *Service) register(ctx context.Context, credentials authclient.Credentials, caller domain.OrgMembership, organizationID string, input RegisterInput) (domain.Source, error) {
 	provider := strings.TrimSpace(input.Provider)
 	extractor, err := s.extractors.Extractor(provider)
 	if err != nil {
@@ -72,6 +97,15 @@ func (s *Service) RegisterSource(ctx context.Context, credentials authclient.Cre
 		if connectionID != "" {
 			return domain.Source{}, fmt.Errorf(
 				"files is the organization's own storage and takes no connection: %w", domain.ErrInvalid)
+		}
+		// What the source publishes carries the scope of what it reads. A
+		// team's files are searchable by that team, never by the whole
+		// organization, whoever registered the source: files would answer a
+		// team member their team's files, and publishing those organization-
+		// wide would share them further than anyone who stored them chose.
+		if team := strings.TrimSpace(target["team"]); team != "" {
+			source.Scope = domain.ScopeTeam
+			source.TeamID = team
 		}
 	} else {
 		connection, err := s.usableConnection(ctx, credentials, organizationID, connectionID, provider, caller.UserID)
@@ -201,6 +235,47 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 		return domain.ErrNotFound
 	}
 	return s.store.RemoveSource(ctx, organizationID, sourceID, s.now(), s.retractions(knowledgev1.RemovedReasonSourceRemoved))
+}
+
+// SyncSource reads a source now rather than at its next interval.
+//
+// A schedule cannot know that a member just fixed a permission, or just
+// changed something at the provider and wants to see it indexed. This is
+// them saying so. It moves the next sweep forward and answers; the pass
+// itself runs on the worker that was going to run it anyway, so nothing here
+// waits on a provider.
+//
+// A source already due sooner is left alone rather than pushed back, and one
+// that is not active answers what is wrong with it: a paused source needs
+// reconnecting, not hurrying.
+func (s *Service) SyncSource(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.Source, error) {
+	caller, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	source, err := s.store.Source(ctx, organizationID, sourceID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
+		// Answering not-found tells the caller nothing they did not know.
+		return domain.Source{}, domain.ErrNotFound
+	}
+	switch source.Status {
+	case domain.StatusActive:
+	case domain.StatusPaused:
+		return domain.Source{}, fmt.Errorf("this source is paused and will not read until its connection is reconnected: %w",
+			domain.ErrNeedsReconnect)
+	default:
+		return domain.Source{}, fmt.Errorf("this source is %s: %w", source.Status, domain.ErrConflict)
+	}
+	if _, err := s.store.HastenSource(ctx, organizationID, sourceID, s.now()); err != nil {
+		return domain.Source{}, err
+	}
+	// Read back rather than answering what was passed in, so a caller sees
+	// when the sweep will now be — which is now for a source that was
+	// waiting, and unchanged for one already due.
+	return s.store.Source(ctx, organizationID, sourceID)
 }
 
 // Document reads one document's body, for the caller fetching what an event

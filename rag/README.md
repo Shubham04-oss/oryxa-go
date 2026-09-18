@@ -50,10 +50,13 @@ asks again. The chunk text stays in PostgreSQL either way, so there is one
 answer to what a chunk says and a citation addresses a byte range of a document
 still on disk.
 
-| Backend | Where | Suits |
+| Backend | Where | Default |
 | --- | --- | --- |
-| `pgvector` (default) | The shared PostgreSQL, beside the chunk text | Anything searched interactively |
-| `s3vectors` | Amazon S3 Vectors, one index per corpus | Large, cold or archival corpora |
+| `s3vectors` | Amazon S3 Vectors, one index per corpus | Wherever `RAG_VECTOR_BUCKET_NAME` names a bucket: serverless, priced by use, about 100 ms a query when warm and under a second cold |
+| `pgvector` | The shared PostgreSQL, beside the chunk text | Where no bucket is named — local development and tests, since S3 Vectors has no local emulation — and the fastest to query |
+
+`RAG_DEFAULT_BACKEND` overrides either default, and a corpus keeps the backend
+it was created on, so changing the default moves only corpora made after it.
 
 pgvector needs a declared width before it can index a column, so there is one
 table per width — 256, 384, 512, 768, 1024, 1536 and 3072 — and
@@ -63,7 +66,11 @@ dimensions and `halfvec` past 4000, so 3072 (what `gemini-embedding-001`
 emits) is stored as `halfvec`, which is the only way to index it at all.
 
 S3 Vectors indexes on cosine or euclidean only, so an inner-product corpus on
-it is refused by the domain and by a database constraint. Its index name is a
+it is refused by the domain and by a database constraint. One query returns at
+most 100 results, so the candidates rag over-fetches for fusion and reranking
+are capped there, and a bucket holds at most 10,000 indexes: with one per
+corpus — and the knowledge bridge makes one per member whose apps it indexes —
+a deployment nearing that needs a second bucket or shared indexes. Its index name is a
 hash of the organization and corpus ids rather than the corpus id lower-cased,
 because index names allow only lowercase letters, digits and hyphens and a
 collision there would silently mix two organizations' documents.
@@ -83,6 +90,13 @@ needs configuration rather than a deploy.
 | Vertex | `text-embedding-005` | 768, 512, 256 | 2048 | 250 |
 | Vertex | `text-multilingual-embedding-002` | 768, 512, 256 | 2048 | 250 |
 | Vertex | `gemini-embedding-001` | 3072, 1536, 768 | 2048 | 1 |
+
+Vertex's text models also refuse a call carrying more than 20,000 tokens across
+its texts, whatever their count, so a batch closes at whichever limit it
+reaches first, packed to 90% of the token limit because a count here is an
+estimate. No estimate holds for every kind of text, so a call Vertex still
+refuses as too large is embedded in halves, and a text the provider says it
+truncated is logged: part of it is missing from its vector.
 
 Every call says whether it is embedding a document or a query. These models are
 trained asymmetrically — Cohere takes `input_type`, Vertex takes `task_type` —
@@ -155,11 +169,28 @@ query falls back to the fused order rather than failing. A candidate pool
 larger than the cross-encoder accepts is reranked down to its ceiling and the
 tail keeps its fused order below, rather than the whole rerank failing.
 
+Two cross-encoders are wired, one at a time: a Bedrock reranking model by ARN
+(`RAG_RERANK_MODEL_ARN`), or Google's Ranking API (`RAG_RERANK_VERTEX_MODEL`,
+for example `semantic-ranker-default@latest`), which is serverless — billed per
+call, nothing provisioned — and needs `discoveryengine.googleapis.com` on the
+project. Measured over this repository's own documentation
+(`rag/internal/eval`), the Ranking API put the answer's section first for 75%
+of questions rather than 67%, and in the top three for 93% rather than 87%,
+for about half a second a query.
+
 `diversity` trades relevance for spread by maximal marginal relevance, measured
 on the words chunks share rather than on their vectors: what it suppresses is a
 passage repeated across documents, which word overlap measures directly. `1` is
 pure relevance and `0` is maximum spread; omitting it means `1`, and sending
 `0` means `0`.
+
+The lexical side matches a chunk holding **any** of the question's words and
+ranks it by how many it holds and how close together (`ts_rank_cd`).
+Requiring every word, as a search box does, found nothing for most questions
+worded the way a person asks them: measured over this repository's own
+documentation, it put the answer's section in the top eight for 8% of
+questions, and matching any word for 85%. In the fusion a lexical rank counts
+half a dense one, since the dense retriever is right at the top more often.
 
 The full-text index uses the `english` configuration, which stems and drops
 stopwords. A corpus that is mostly another language wants a different
@@ -182,6 +213,9 @@ Most of the work is about not doing the expensive part:
   that only moved keeps its vector.
 - `rag.document.indexed.v1` reports `embedded_chunks` against `reused_chunks`,
   which is the number worth watching on the bill.
+- A large document is embedded 256 chunks at a time, and each slice is kept as
+  its vectors land, so an attempt that fails near the end costs only the slice
+  that failed.
 
 A chunk counts as reusable only once its vector has actually been written, not
 merely because its text hash matches. Otherwise an attempt that wrote the chunk
@@ -465,7 +499,8 @@ because the expensive paths are the ones that talk to a provider.
 pgvector backend run against PostgreSQL 16 with pgvector 0.8: corpus and
 document lifecycles, incremental re-embedding, hybrid search, tenant scoping,
 the `halfvec` path at 3072 dimensions, the unindexed fallback width, and the
-cascade from a deleted document to its vectors. The two pgvector index
+cascade from a deleted document to its vectors. Vertex's Ranking API reranked
+live on 2026-09-18, measured by `rag/internal/eval`. The two pgvector index
 ceilings in the schema — 2000 for `vector`, 4000 for `halfvec` — were measured
 there rather than assumed. Vertex embedding ran on 2026-09-18:
 `text-embedding-005` at 768 dimensions, through Application Default
