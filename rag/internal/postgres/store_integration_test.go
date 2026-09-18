@@ -434,8 +434,19 @@ func TestLexicalSearchFindsExactTerms(t *testing.T) {
 		}
 	}
 
+	// A question worded as a person asks it carries words no passage holds.
+	// Requiring every word found nothing; the passage with the most of them
+	// is what the lexical half should return.
+	hits, err = store.LexicalSearch(ctx, corpus, "When does the rotation happen, and is it automatic?", 10, domain.Filter{})
+	if err != nil {
+		t.Fatalf("LexicalSearch: %v", err)
+	}
+	if len(hits) == 0 || hits[0].ChunkID != chunks[2].ID {
+		t.Fatalf("a natural question found %v, want the rotation schedule first", hits)
+	}
+
 	// Punctuation must not blow up the query parser.
-	for _, query := range []string{"what's the (rotation) policy?", `"ninety days"`, "rotation -holidays", "!!!"} {
+	for _, query := range []string{"what's the (rotation) policy?", `"ninety days"`, "rotation -holidays", "!!!", "a & b | c", "'quoted' :*"} {
 		if _, err := store.LexicalSearch(ctx, corpus, query, 5, domain.Filter{}); err != nil {
 			t.Fatalf("LexicalSearch(%q): %v", query, err)
 		}

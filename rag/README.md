@@ -168,6 +168,14 @@ passage repeated across documents, which word overlap measures directly. `1` is
 pure relevance and `0` is maximum spread; omitting it means `1`, and sending
 `0` means `0`.
 
+The lexical side matches a chunk holding **any** of the question's words and
+ranks it by how many it holds and how close together (`ts_rank_cd`).
+Requiring every word, as a search box does, found nothing for most questions
+worded the way a person asks them: measured over this repository's own
+documentation, it put the answer's section in the top eight for 8% of
+questions, and matching any word for 85%. In the fusion a lexical rank counts
+half a dense one, since the dense retriever is right at the top more often.
+
 The full-text index uses the `english` configuration, which stems and drops
 stopwords. A corpus that is mostly another language wants a different
 configuration; that is a migration, because the column is stored.
