@@ -97,7 +97,7 @@ function AdminAppsSummary({ organizationId }: AdminAppsSummaryProps) {
 
 	return (
 		<SettingsSection
-			description="There is no organization-wide switch any more: each member connects and disconnects their own apps from Connections."
+			description="Each member connects and disconnects their own apps from Connections; Krude only ever uses a member's apps as that member."
 			footer={
 				<Button asChild variant="ghost">
 					<Link to="/app/connections">
