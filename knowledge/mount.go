@@ -22,7 +22,7 @@ import (
 // Definition is how a host builds knowledge. Nothing calls knowledge over
 // HTTP, so it names no URL variable of its own for other services to reach it
 // by.
-var Definition = host.Definition{Name: Name, Migrate: Migrate, Mount: Mount}
+var Definition = host.Definition{Name: Name, EventsQueueVariable: "KNOWLEDGE_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs knowledge's schema.
 func Migrate(ctx context.Context, platform host.Platform) error {

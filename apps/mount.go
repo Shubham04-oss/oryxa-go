@@ -22,7 +22,7 @@ import (
 const URLVariable = "APPS_URL"
 
 // Definition is how a host builds apps.
-var Definition = host.Definition{Name: Name, URLVariable: URLVariable, Migrate: Migrate, Mount: Mount}
+var Definition = host.Definition{Name: Name, URLVariable: URLVariable, EventsQueueVariable: "APPS_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs apps' schema.
 func Migrate(ctx context.Context, platform host.Platform) error {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -102,6 +103,27 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 			t.Errorf("GET %s (%s) = %d %s, want %d containing %s", probe.path, probe.service,
 				recorder.Code, strings.TrimSpace(recorder.Body.String()), probe.status, probe.mark)
 		}
+	}
+}
+
+// TestEveryEventConsumerDeclaresItsQueue pins which services consume events.
+// A production start refuses one whose queue is unset (host.CheckEventQueues);
+// a consumer that stopped declaring its queue would start without it and
+// never hear what others deleted.
+func TestEveryEventConsumerDeclaresItsQueue(t *testing.T) {
+	want := map[string]string{
+		"agents": "AGENTS_EVENTS_QUEUE_URL", "apps": "APPS_EVENTS_QUEUE_URL", "auth": "AUTH_EVENTS_QUEUE_URL",
+		"billing": "BILLING_EVENTS_QUEUE_URL", "email": "EMAIL_QUEUE_URL", "files": "FILES_EVENTS_QUEUE_URL",
+		"knowledge": "KNOWLEDGE_EVENTS_QUEUE_URL", "rag": "RAG_EVENTS_QUEUE_URL", "teams": "TEAMS_EVENTS_QUEUE_URL",
+	}
+	got := map[string]string{}
+	for _, definition := range definitions {
+		if definition.EventsQueueVariable != "" {
+			got[definition.Name] = definition.EventsQueueVariable
+		}
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("event queues = %v, want %v", got, want)
 	}
 }
 

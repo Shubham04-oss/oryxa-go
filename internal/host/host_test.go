@@ -55,11 +55,50 @@ func TestConfigFromEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestProductionRequiresEventQueues(t *testing.T) {
+	for _, testCase := range []struct {
+		env  map[string]string
+		want bool
+	}{
+		{map[string]string{}, false},
+		{map[string]string{"DEPLOYMENT_ENVIRONMENT": "Production"}, true},
+		{map[string]string{"ENVIRONMENT": "prod"}, true},
+		{map[string]string{"DEPLOYMENT_ENVIRONMENT": "staging", "ENVIRONMENT": "production"}, false},
+		{map[string]string{"DEPLOYMENT_ENVIRONMENT": "production", "ORYXA_REQUIRE_EVENT_QUEUES": "false"}, false},
+		{map[string]string{"ORYXA_REQUIRE_EVENT_QUEUES": "true"}, true},
+	} {
+		config, err := ConfigFromEnv(env(testCase.env))
+		if err != nil || config.RequireEventQueues != testCase.want {
+			t.Errorf("%v: RequireEventQueues = %v, %v; want %v", testCase.env, config.RequireEventQueues, err, testCase.want)
+		}
+	}
+}
+
+func TestCheckEventQueuesNamesEveryMissingQueue(t *testing.T) {
+	selected := []Definition{
+		{Name: "rag", EventsQueueVariable: "RAG_EVENTS_QUEUE_URL"},
+		{Name: "teams", EventsQueueVariable: "TEAMS_EVENTS_QUEUE_URL"},
+		{Name: "agents", EventsQueueVariable: "AGENTS_EVENTS_QUEUE_URL"},
+		{Name: "web-only"},
+	}
+	err := CheckEventQueues(selected, env(map[string]string{"TEAMS_EVENTS_QUEUE_URL": "https://sqs/teams"}))
+	if err == nil || !strings.Contains(err.Error(), "RAG_EVENTS_QUEUE_URL (rag)") ||
+		!strings.Contains(err.Error(), "AGENTS_EVENTS_QUEUE_URL (agents)") || strings.Contains(err.Error(), "TEAMS") {
+		t.Fatalf("CheckEventQueues() = %v, want rag's and agents' queues named and nothing else", err)
+	}
+	if err := CheckEventQueues(selected, env(map[string]string{
+		"RAG_EVENTS_QUEUE_URL": "q", "TEAMS_EVENTS_QUEUE_URL": "q", "AGENTS_EVENTS_QUEUE_URL": "q",
+	})); err != nil {
+		t.Fatalf("CheckEventQueues() with every queue set = %v", err)
+	}
+}
+
 func TestConfigFromEnvRefusesMalformedValues(t *testing.T) {
 	for name, value := range map[string]string{
-		"ORYXA_AUTO_MIGRATE":       "sometimes",
-		"ORYXA_DATABASE_MAX_CONNS": "0",
-		"ORYXA_SHUTDOWN_TIMEOUT":   "soon",
+		"ORYXA_REQUIRE_EVENT_QUEUES": "maybe",
+		"ORYXA_AUTO_MIGRATE":         "sometimes",
+		"ORYXA_DATABASE_MAX_CONNS":   "0",
+		"ORYXA_SHUTDOWN_TIMEOUT":     "soon",
 	} {
 		if _, err := ConfigFromEnv(env(map[string]string{name: value})); err == nil || !strings.Contains(err.Error(), name) {
 			t.Errorf("%s=%q: error = %v", name, value, err)

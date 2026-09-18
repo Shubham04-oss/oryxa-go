@@ -30,6 +30,11 @@ func Run(ctx context.Context, config Config, definitions []Definition, logger *s
 	if err != nil {
 		return err
 	}
+	if config.RequireEventQueues {
+		if err := CheckEventQueues(selected, os.Getenv); err != nil {
+			return err
+		}
+	}
 	// Listening first tells the services where this process is, which a
 	// service calling another one in the same process needs before it is
 	// mounted, and lets ORYXA_ADDRESS pick a free port.
