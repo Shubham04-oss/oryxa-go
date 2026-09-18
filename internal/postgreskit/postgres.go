@@ -137,6 +137,43 @@ func Detached(extensions map[string]string) *Database {
 	return &Database{Pool: pool, extensions: maps.Clone(extensions)}
 }
 
+// WithSchema returns a second pool on the same database, with the same
+// connection settings, whose search_path leads with schema. It is for code a
+// service does not own that names its tables without a schema, such as
+// ADK's session tables, which would otherwise land in public. The pool
+// connects only when first used, so a service can assemble itself over it
+// without contacting the database. maxConns sizes it apart from the pool it
+// was made from; zero keeps that pool's size. The caller closes it.
+func (database *Database) WithSchema(ctx context.Context, schema, applicationName string, maxConns int32) (*Database, error) {
+	if database == nil || database.Pool == nil {
+		return nil, errors.New("a postgres pool is required")
+	}
+	if !postgresIdentifier.MatchString(schema) {
+		return nil, errors.New("postgres schema must be a lowercase SQL identifier")
+	}
+	// Config returns a copy, its runtime parameters included.
+	poolConfig := database.Pool.Config()
+	poolConfig.ConnConfig.RuntimeParams["search_path"] = schema + ",public"
+	if applicationName != "" {
+		poolConfig.ConnConfig.RuntimeParams["application_name"] = applicationName
+	}
+	if maxConns > 0 {
+		poolConfig.MaxConns = maxConns
+	}
+	// Kept connections would dial as soon as the pool exists.
+	poolConfig.MinConns = 0
+	poolConfig.MinIdleConns = 0
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+	if err != nil {
+		return nil, fmt.Errorf("configure postgres pool for schema %s: %w", schema, err)
+	}
+	return &Database{
+		Pool:       pool,
+		SQLX:       sqlx.NewDb(stdlib.OpenDBFromPool(pool), "pgx"),
+		extensions: maps.Clone(database.extensions),
+	}, nil
+}
+
 var postgresIdentifier = regexp.MustCompile(`^[a-z_][a-z0-9_]{0,62}$`)
 
 func (database *Database) Close() {
