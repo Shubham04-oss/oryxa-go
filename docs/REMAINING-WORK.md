@@ -167,12 +167,15 @@ batch — a count, a maximum wait, or both, so that a lone event is not held
 indefinitely — whether batches are per member or per subscription, and
 whether anything, such as a direct mention, should skip the wait.
 
-### Guardrails are off
+### Guardrails have never screened a real conversation
 
-`agents/primary/internal/guardrail` screens input and output through Bedrock's
-`ApplyGuardrail` and is tested, but nothing wires it in
+`agents/primary/internal/guardrail` screens the member's conversation through
+Bedrock's `ApplyGuardrail` once `AGENTS_PRIMARY_GUARDRAIL_ID` and its version
+are set, turning streaming off for the answers it screens
 ([agents/primary/README.md, Guardrails](../agents/primary/README.md#guardrails)).
-Wiring it turns streaming off for the model calls it screens.
+It is proven against a stand-in for Bedrock only: no guardrail has been
+created in an AWS account, and which policies it holds — topics, words, PII,
+prompt attacks — is a decision for whoever owns the account.
 
 ## 2. Web app
 

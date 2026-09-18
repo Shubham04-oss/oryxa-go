@@ -323,7 +323,7 @@ is the request's.
 
 **Not yet.** A run is not durable: a closed tab or a deploy ends it, and what
 it had stored stays in the thread. Artifacts a run keeps are not served by
-this API. Guardrails are not wired (see [Guardrails](#guardrails)).
+this API.
 
 ## Models and routing
 
@@ -364,11 +364,18 @@ shutdown.
 The models run on Vertex, not through Bedrock's Converse API, so the
 Converse-time `guardrailConfig` and `guardContent` modes cannot apply; the
 wrapper uses the standalone `ApplyGuardrail` API, evaluating the newest content
-of every request (a member message or a tool result) and every answer. It is
-built and tested but not wired yet, and therefore off; when wired, it turns
-streaming off for the model call (a partial answer that the completed one would
-block cannot be unsent) and `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` decides
-what a failed screen does.
+of every request (a member message or a tool result) and every answer.
+
+It is on when `AGENTS_PRIMARY_GUARDRAIL_ID` and a numbered
+`AGENTS_PRIMARY_GUARDRAIL_VERSION` are set, and screens the main model: the
+member's conversation, where their messages and every tool result — the lite
+model's work included — arrive, and where every answer they see comes from.
+While it is on, those answers do not stream (a partial answer that the
+completed one would block cannot be unsent), so a run's stream carries
+Krude's whole message without deltas, and a blocked answer arrives as
+"I can't help with that." `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` decides what
+a failed screen does. Usage is counted inside the guardrail, so an answer it
+blocks still costs what it spent.
 
 ## Measure it
 
@@ -598,6 +605,9 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |
 | `AGENTS_ALLOWED_ORIGINS` | unset | Origins, comma-separated, whose cookie-authenticated requests may start runs and change threads; the web app's |
 | `AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS` | `600` | Longest one run may take; 60–3600 seconds |
+| `AGENTS_PRIMARY_GUARDRAIL_ID` | unset | Bedrock guardrail that screens the member's conversation; unset turns screening off |
+| `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
+| `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
 
 The host sets no write timeout for this service: a run's stream outlives any
