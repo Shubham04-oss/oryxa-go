@@ -199,9 +199,12 @@ func (s *Service) slackTargets(ctx context.Context, connection domain.Connection
 // knowledge's own Notion source reads with.
 const notionAPIVersion = "2025-09-03"
 
-// notionTargets lists the data sources the connection can see. Notion split
-// a database into data sources in 2025-09-03, and a data source is what a
-// query reads, so that is what a member picks.
+// notionTargets lists the databases behind the data sources the connection
+// can see. Notion split a database into data sources in 2025-09-03, and a
+// data source is what a query reads - but knowledge's extractor still takes
+// a DATABASE id and calls Notion's database endpoint with it, and the two
+// ids are not interchangeable, so the target is the parent database, not the
+// data source itself.
 func (s *Service) notionTargets(ctx context.Context, connection domain.Connection) ([]Target, error) {
 	body, err := json.Marshal(map[string]any{
 		"filter":    map[string]string{"property": "object", "value": "data_source"},
@@ -221,16 +224,33 @@ func (s *Service) notionTargets(ctx context.Context, connection domain.Connectio
 			Title []struct {
 				PlainText string `json:"plain_text"`
 			} `json:"title"`
+			// Parent names the database this data source belongs to. An
+			// ordinary data source carries {"type":"database_id",
+			// "database_id":"…"}; an externally synced one carries
+			// {"type":"data_source_id","data_source_id":"…","database_id":"…"}
+			// - both carry database_id, which is all this needs.
+			Parent struct {
+				DatabaseID string `json:"database_id"`
+			} `json:"parent"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(data, &answer); err != nil {
 		return nil, fmt.Errorf("notion's search could not be read: %w", domain.ErrUnavailable)
 	}
+	// A database can have several data sources, and Notion's search answers
+	// each one; knowledge indexes all of them once it has the database id, so
+	// they collapse to the one target here, named after the first seen.
+	seen := map[string]bool{}
 	targets := make([]Target, 0, len(answer.Results))
 	for _, result := range answer.Results {
-		if result.ID == "" {
+		databaseID := result.Parent.DatabaseID
+		if databaseID == "" || seen[databaseID] {
+			// No parent database - nothing knowledge's extractor can read
+			// through the database endpoint - or one already picked up from
+			// an earlier data source of the same database.
 			continue
 		}
+		seen[databaseID] = true
 		name := ""
 		for _, part := range result.Title {
 			name += part.PlainText
@@ -239,7 +259,7 @@ func (s *Service) notionTargets(ctx context.Context, connection domain.Connectio
 			name = "Untitled"
 		}
 		targets = append(targets, Target{
-			Kind: "database", ID: result.ID, Name: name, Target: sourceTarget("database", result.ID),
+			Kind: "database", ID: databaseID, Name: name, Target: sourceTarget("database", databaseID),
 		})
 		if len(targets) == maxTargets {
 			break

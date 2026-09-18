@@ -166,7 +166,7 @@ a source with — so a caller passes it on rather than assembling it.
 | --- | --- | --- |
 | `github` | Repositories, most recently pushed first, archived ones left out | `GET /user/repos` |
 | `slack` | Channels it is in, by name rather than id | `GET /api/conversations.list` |
-| `notion` | Data sources, which is what a query reads since the 2025-09-03 split | `POST /v1/search` |
+| `notion` | Databases, one per data source found and de-duplicated by parent database (a query reads a data source since the 2025-09-03 split, but a database id is what knowledge's extractor takes) | `POST /v1/search` |
 
 An app nothing can be indexed for answers an empty list rather than an error:
 that is a fact about the app, not a failure, and a picker wants to say

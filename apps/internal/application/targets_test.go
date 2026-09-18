@@ -91,28 +91,44 @@ func TestSlackSayingNoIsNotSilence(t *testing.T) {
 	}
 }
 
-func TestNotionTargetsAreItsDataSources(t *testing.T) {
+// TestNotionTargetsAreTheParentDatabasesOfItsDataSources covers the
+// 2025-09-03 split: a query reads a data source, but knowledge's extractor
+// takes a DATABASE id and calls Notion's database endpoint with it, and a
+// data source id is not interchangeable - so what a member picks, and what
+// gets registered, is the parent database.
+func TestNotionTargetsAreTheParentDatabasesOfItsDataSources(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
 	connection := h.activeConnection("apc_1", "user-1", "notion", "ca_1")
 	h.answers(200, `{"results":[
-		{"id":"ds_1","title":[{"plain_text":"Engineering "},{"plain_text":"notes"}]},
-		{"id":"ds_2","title":[]}
+		{"id":"ds_1","title":[{"plain_text":"Engineering "},{"plain_text":"notes"}],
+			"parent":{"type":"database_id","database_id":"db_1"}},
+		{"id":"ds_2","title":[],"parent":{"type":"database_id","database_id":"db_2"}},
+		{"id":"ds_3","title":[{"plain_text":"A second data source of db_1"}],
+			"parent":{"type":"data_source_id","data_source_id":"ds_x","database_id":"db_1"}},
+		{"id":"ds_4","title":[{"plain_text":"No parent database at all"}],"parent":{"type":"workspace"}}
 	]}`)
 
 	targets, err := h.service.ConnectionTargets(context.Background(), memberToken, "org_1", connection.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	// ds_3 shares db_1 with ds_1, so it is the same target rather than a
+	// second one; ds_4 has no parent database and is left out entirely.
 	if len(targets) != 2 {
 		t.Fatalf("targets = %+v", targets)
 	}
+	if targets[0].Kind != "database" || targets[0].ID != "db_1" || targets[0].Name != "Engineering notes" {
+		t.Fatalf("first target = %+v", targets[0])
+	}
 	// Notion writes a title in pieces, and one with none is still something
 	// a member can pick.
-	if targets[0].Name != "Engineering notes" || targets[1].Name != "Untitled" {
-		t.Fatalf("names = %q, %q", targets[0].Name, targets[1].Name)
+	if targets[1].ID != "db_2" || targets[1].Name != "Untitled" {
+		t.Fatalf("second target = %+v", targets[1])
 	}
-	if string(targets[0].Target) != `{"database":"ds_1"}` {
+	// The target is the DATABASE id, not the data source id: knowledge's
+	// extractor calls Notion's database endpoint with it.
+	if string(targets[0].Target) != `{"database":"db_1"}` {
 		t.Fatalf("target payload = %s", targets[0].Target)
 	}
 	// Notion's search is a POST, which the read rules allow for exactly this.
