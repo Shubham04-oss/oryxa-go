@@ -26,6 +26,11 @@ func TestHTMLIsReadAsTheWordsSomebodyWrote(t *testing.T) {
 			holds: []string{"Readable."},
 			lacks: []string{"secret", "token", "color:red"},
 		},
+		"fallback markup no browser shows is not prose": {
+			html:  `<body><iframe><p>frame fallback</p></iframe><noembed>plugin fallback</noembed><p>Shown.</p></body>`,
+			holds: []string{"Shown."},
+			lacks: []string{"fallback", "<p>"},
+		},
 		"a comment is not what the page says": {
 			html:  `<body><!-- an internal note --><p>Published.</p></body>`,
 			holds: []string{"Published."},

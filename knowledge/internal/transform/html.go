@@ -36,9 +36,13 @@ var blockElements = map[atom.Atom]bool{
 
 // silentElements hold no prose. Script and style are code; their contents
 // would otherwise be indexed as though someone had written them to be read.
+// An iframe's, noembed's and noframes' contents are what a browser without
+// frames or plugins would show instead, which no browser today does, and
+// the parser hands them over as raw markup.
 var silentElements = map[atom.Atom]bool{
 	atom.Script: true, atom.Style: true, atom.Noscript: true,
 	atom.Template: true, atom.Svg: true, atom.Head: true,
+	atom.Iframe: true, atom.Noembed: true, atom.Noframes: true,
 }
 
 // htmlText reads the words out of an HTML document.

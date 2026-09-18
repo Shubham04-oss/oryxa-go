@@ -387,7 +387,14 @@ func (server *Server) documentBody(writer http.ResponseWriter, request *http.Req
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	// Written without HTML escaping: the default turns every <, > and & into
+	// six bytes, and a body near knowledge's 4 MiB ceiling that is mostly
+	// markup-like text could otherwise outgrow what the caller will read.
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(http.StatusOK)
+	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(map[string]any{
 		"id": document.ID, "source_id": document.SourceID, "external_id": document.ExternalID,
 		"mime": document.MIME, "content_hash": document.ContentHash, "body": document.Body,
 		"byte_size": document.ByteSize,

@@ -333,7 +333,7 @@ const bodyPath = "/v1/internal/organizations/org_1/documents/doc_1/body"
 // and never a listing.
 
 func TestTheInternalBodyRouteAnswersAnAdmittedService(t *testing.T) {
-	service := &fakeService{document: domain.Document{ID: "doc_1", Body: "the handbook", ContentHash: "hash-1"}}
+	service := &fakeService{document: domain.Document{ID: "doc_1", Body: "the handbook: a < b && c > d", ContentHash: "hash-1"}}
 	verifier := &fakeVerifier{claims: serviceauth.Claims{Service: "rag", Purpose: "documents"}}
 	server := New(service, Config{Services: verifier}, nil)
 
@@ -342,7 +342,9 @@ func TestTheInternalBodyRouteAnswersAnAdmittedService(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", recorder.Code, recorder.Body)
 	}
-	if !strings.Contains(recorder.Body.String(), "the handbook") {
+	// Written as it is, not HTML-escaped at six bytes a character, so a body
+	// near the ceiling still fits what the caller reads.
+	if !strings.Contains(recorder.Body.String(), "the handbook: a < b && c > d") {
 		t.Fatalf("body = %s", recorder.Body)
 	}
 	if len(verifier.tokens) != 1 || verifier.tokens[0] != "service-token" {
