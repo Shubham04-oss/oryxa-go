@@ -116,6 +116,14 @@ func (s *Service) subscribeEverything(ctx context.Context, connection domain.Con
 			continue
 		}
 		if _, err := s.subscribe(ctx, connection, definition, json.RawMessage(`{}`)); err != nil {
+			if errors.Is(err, domain.ErrNotConnected) {
+				// A disconnect raced this pass and won: the store refused to
+				// insert a trigger on a connection that is no longer active.
+				// Nothing left on it will succeed, and marking it subscribed
+				// would say otherwise.
+				logger.InfoContext(ctx, "the connection was removed while subscribing it", "trigger", definition.Slug)
+				return
+			}
 			// An app that refuses one of its own events is Composio's
 			// business, not the member's: it is recorded and the rest go on.
 			if errors.Is(err, domain.ErrUnavailable) || errors.Is(err, domain.ErrRateLimited) {

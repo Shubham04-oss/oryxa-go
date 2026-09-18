@@ -107,6 +107,19 @@ func testConnection(t *testing.T, store *Store, organizationID, memberID string)
 	return connection, stateHash
 }
 
+// activate makes a connection testConnection created active, the way a
+// completed callback would. CreateTrigger now refuses anything else, so
+// every test that puts a trigger on a connection needs this first.
+func activate(t *testing.T, store *Store, connection domain.Connection) domain.Connection {
+	t.Helper()
+	activated, changed, err := store.ActivateConnection(context.Background(), connection.ID, "label",
+		testClock.Add(time.Minute), testEvent(t, "apps.connection.connected.v1"))
+	if err != nil || !changed {
+		t.Fatalf("ActivateConnection() = %+v, %v, %v, want changed", activated, changed, err)
+	}
+	return activated
+}
+
 // testTrigger creates a live trigger on connection, backed by
 // composioTriggerID.
 func testTrigger(t *testing.T, store *Store, connection domain.Connection, composioTriggerID string) domain.Trigger {
@@ -473,6 +486,7 @@ func TestCreateTriggerDedupesByComposioIDAndAllowsRecreateAfterRemoval(t *testin
 	store := openTestStore(t)
 	ctx := context.Background()
 	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
 	composioTriggerID := "ct_" + randomHex(8)
 
 	first := testTrigger(t, store, connection, composioTriggerID)
@@ -504,10 +518,50 @@ func TestCreateTriggerDedupesByComposioIDAndAllowsRecreateAfterRemoval(t *testin
 	}
 }
 
+// TestCreateTriggerRefusesARemovedConnection covers a pass racing a
+// disconnect: once RemoveConnection has committed, nothing may attach a new
+// trigger to that connection - it would sit there looking live, listed to
+// the member forever, since removal's own cleanup has already run and will
+// not run again.
+func TestCreateTriggerRefusesARemovedConnection(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
+	if _, err := store.RemoveConnection(ctx, connection.ID, "removed_by_member", testClock.Add(2*time.Minute), nil); err != nil {
+		t.Fatalf("RemoveConnection() error = %v", err)
+	}
+
+	trigger := domain.Trigger{
+		ID: "trg_" + randomHex(8), OrganizationID: connection.OrganizationID, MemberID: connection.MemberID,
+		ConnectionID: connection.ID, Toolkit: connection.Toolkit, Slug: "GITHUB_ISSUE_CREATED",
+		Config: json.RawMessage(`{"repo":"acme/api"}`), ComposioTriggerID: "ct_" + randomHex(8),
+		Status: domain.TriggerActive, CreatedAt: testClock.Add(3 * time.Minute), UpdatedAt: testClock.Add(3 * time.Minute),
+	}
+	if _, _, err := store.CreateTrigger(ctx, trigger, testEvent(t, "apps.trigger.subscribed.v1")); !errors.Is(err, domain.ErrNotConnected) {
+		t.Fatalf("CreateTrigger(removed connection) error = %v, want ErrNotConnected", err)
+	}
+
+	var triggerCount int
+	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM apps_triggers WHERE connection_id = $1`, connection.ID).Scan(&triggerCount); err != nil {
+		t.Fatalf("count triggers: %v", err)
+	}
+	if triggerCount != 0 {
+		t.Fatalf("triggers on a removed connection = %d, want 0", triggerCount)
+	}
+	var outboxCount int
+	if err := store.pool.QueryRow(ctx,
+		`SELECT count(*) FROM apps_outbox WHERE detail_type = 'apps.trigger.subscribed.v1'`,
+	).Scan(&outboxCount); err != nil || outboxCount != 0 {
+		t.Fatalf("outbox events = %d, error = %v, want 0", outboxCount, err)
+	}
+}
+
 func TestDisableTriggerOnlyChangesAnActiveOne(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
 	trigger := testTrigger(t, store, connection, "ct_"+randomHex(8))
 
 	event := testEvent(t, "apps.trigger.disabled.v1")
@@ -540,7 +594,9 @@ func TestTriggersListsLiveOnesFilteredByMemberOrConnection(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	connectionA, _ := testConnection(t, store, "org_1", "member_1")
+	connectionA = activate(t, store, connectionA)
 	connectionB, _ := testConnection(t, store, "org_1", "member_2")
+	connectionB = activate(t, store, connectionB)
 
 	onA := testTrigger(t, store, connectionA, "ct_"+randomHex(8))
 	onB := testTrigger(t, store, connectionB, "ct_"+randomHex(8))
@@ -704,6 +760,7 @@ func TestRecordTriggerDeliveryCountsOnceAndOnlyWithItsEvent(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
 	trigger := testTrigger(t, store, connection, "ct_"+randomHex(8))
 
 	if trigger.DeliveryCount != 0 || trigger.LastDeliveryAt != nil {
@@ -770,6 +827,7 @@ func TestCreateTriggerKeepsHowItDelivers(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	connection, _ := testConnection(t, store, "org_1", "member_1")
+	connection = activate(t, store, connection)
 
 	created, ok, err := store.CreateTrigger(ctx, domain.Trigger{
 		ID: "trg_" + randomHex(8), OrganizationID: "org_1", MemberID: "member_1",

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -23,10 +24,31 @@ const triggerColumns = `id, organization_id, member_id, connection_id, toolkit, 
 // partial unique index the migration declares, so two callers racing to
 // create the same instance cannot both believe they created it - the loser
 // reads back what the winner inserted, inside the same transaction.
+//
+// It also refuses to insert at all once the connection is no longer active:
+// without that, an auto-subscribe pass racing a disconnect could insert a
+// trigger after RemoveConnection has already committed, leaving a row that
+// looks live but that removal's own cleanup will never see again.
 func (store *Store) CreateTrigger(ctx context.Context, trigger domain.Trigger, event domain.Event) (domain.Trigger, bool, error) {
 	var result domain.Trigger
 	created := false
 	err := store.inTx(ctx, func(tx pgx.Tx) error {
+		// FOR SHARE conflicts with RemoveConnection's UPDATE (which takes an
+		// exclusive row lock to change status), so the two are serialised:
+		// this either runs before that commits, or sees 'removed' here and
+		// refuses - never a trigger inserted after the connection is gone.
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status FROM apps_connections WHERE id = $1 FOR SHARE`,
+			trigger.ConnectionID).Scan(&status); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return fmt.Errorf("create trigger: the connection does not exist: %w", domain.ErrNotConnected)
+			}
+			return fmt.Errorf("create trigger: read the connection: %w", err)
+		}
+		if status != string(domain.ConnectionActive) {
+			return fmt.Errorf("create trigger: the connection is %s: %w", status, domain.ErrNotConnected)
+		}
+
 		triggers, err := queryTriggers(ctx, tx, `
 			INSERT INTO apps_triggers (
 				id, organization_id, member_id, connection_id, toolkit, slug, config,
