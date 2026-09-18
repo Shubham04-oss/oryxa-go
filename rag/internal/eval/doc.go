@@ -10,6 +10,7 @@
 //	  go test ./rag/internal/eval -run TestRetrievalQuality -v -timeout 30m
 //
 // RAG_EVAL_MAX_TOKENS and RAG_EVAL_OVERLAP_TOKENS override the chunk policy,
+// RAG_EVAL_RERANK_MODEL adds a pass reranked by that Vertex ranking model,
 // and RAG_EVAL_OUT names a file for the results as JSON. The corpus is indexed
 // into an organization of its own, which is deleted when the run ends.
 package eval

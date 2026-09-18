@@ -180,9 +180,19 @@ func TestRetrievalQuality(t *testing.T) {
 	result.ChunkBytesMean = float64(chunkBytes) / float64(max(result.Chunks, 1))
 
 	questions := loadQuestions(t)
-	retriever := retrieval.New(store, vectors, embedders, nil, logger)
+	var reranker retrieval.Reranker
+	if model := os.Getenv("RAG_EVAL_RERANK_MODEL"); model != "" {
+		reranker, err = retrieval.NewVertexReranker(ctx, retrieval.VertexRerankConfig{Project: project, Model: model})
+		if err != nil {
+			t.Fatalf("reranker: %v", err)
+		}
+	}
+	retriever := retrieval.New(store, vectors, embedders, reranker, logger)
 	for _, mode := range []domain.SearchMode{domain.ModeHybrid, domain.ModeDense, domain.ModeLexical} {
-		result.Modes = append(result.Modes, measure(t, ctx, retriever, counter, corpus, mode, questions, documentIDs, bodies))
+		result.Modes = append(result.Modes, measure(t, ctx, retriever, counter, corpus, mode, false, questions, documentIDs, bodies))
+	}
+	if reranker != nil {
+		result.Modes = append(result.Modes, measure(t, ctx, retriever, counter, corpus, domain.ModeHybrid, true, questions, documentIDs, bodies))
 	}
 
 	t.Logf("policy %+v: %d documents, %d chunks, %.0f estimated tokens and %.0f bytes a chunk",
@@ -209,16 +219,23 @@ func TestRetrievalQuality(t *testing.T) {
 // overlaps the section the answer sits in, which credits a chunk for holding
 // the answer however the document was cut.
 func measure(t *testing.T, ctx context.Context, retriever *retrieval.Retriever, counter *countingTransport, corpus domain.Corpus,
-	mode domain.SearchMode, questions []question, documentIDs, bodies map[string]string) modeResult {
+	mode domain.SearchMode, rerank bool, questions []question, documentIDs, bodies map[string]string) modeResult {
 	t.Helper()
-	result := modeResult{Mode: string(mode), DocumentHit: map[string]float64{}, SectionHit: map[string]float64{}}
+	label := string(mode)
+	if rerank {
+		label += "+rerank"
+	}
+	result := modeResult{Mode: label, DocumentHit: map[string]float64{}, SectionHit: map[string]float64{}}
 	var latencies []float64
 	callsBefore := counter.calls.Load()
 	for _, entry := range questions {
 		started := time.Now()
-		found, err := retriever.Search(ctx, corpus, domain.Query{Text: entry.Question, TopK: topK, Mode: mode})
+		found, err := retriever.Search(ctx, corpus, domain.Query{Text: entry.Question, TopK: topK, Mode: mode, Rerank: rerank})
 		if err != nil {
-			t.Fatalf("%s %s: %v", mode, entry.ID, err)
+			t.Fatalf("%s %s: %v", label, entry.ID, err)
+		}
+		if rerank && !found.Reranked {
+			t.Fatalf("%s %s: the reranker did not run", label, entry.ID)
 		}
 		latencies = append(latencies, float64(time.Since(started).Milliseconds()))
 		for _, match := range found.Matches {

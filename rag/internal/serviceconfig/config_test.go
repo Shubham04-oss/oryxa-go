@@ -102,6 +102,18 @@ func TestBadDefaultsFailTheDeploy(t *testing.T) {
 		env:     map[string]string{"RAG_RERANK_MODEL_ARN": "cohere.rerank-v3-5:0"},
 		wantErr: "ARN",
 	}, {
+		name: "two rerankers",
+		env: map[string]string{
+			"RAG_RERANK_MODEL_ARN":    "arn:aws:bedrock:ap-south-1::foundation-model/cohere.rerank-v3-5:0",
+			"RAG_RERANK_VERTEX_MODEL": "semantic-ranker-default@latest",
+			"GOOGLE_CLOUD_PROJECT":    "p",
+		},
+		wantErr: "not both",
+	}, {
+		name:    "a Vertex reranker with no project",
+		env:     map[string]string{"RAG_RERANK_VERTEX_MODEL": "semantic-ranker-default@latest"},
+		wantErr: "GOOGLE_CLOUD_PROJECT",
+	}, {
 		name:    "an auth URL that is not absolute",
 		env:     map[string]string{"AUTH_URL": "localhost:8080"},
 		wantErr: "AUTH_URL",
