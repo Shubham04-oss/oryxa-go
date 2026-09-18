@@ -84,6 +84,11 @@ needs configuration rather than a deploy.
 | Vertex | `text-multilingual-embedding-002` | 768, 512, 256 | 2048 | 250 |
 | Vertex | `gemini-embedding-001` | 3072, 1536, 768 | 2048 | 1 |
 
+Vertex's text models also refuse a call carrying more than 20,000 tokens across
+its texts, whatever their count, so a batch closes at whichever limit it
+reaches first, packed to 90% of the token limit because a count here is an
+estimate.
+
 Every call says whether it is embedding a document or a query. These models are
 trained asymmetrically — Cohere takes `input_type`, Vertex takes `task_type` —
 and embedding a question as though it were a passage is the quietest way to
@@ -182,6 +187,9 @@ Most of the work is about not doing the expensive part:
   that only moved keeps its vector.
 - `rag.document.indexed.v1` reports `embedded_chunks` against `reused_chunks`,
   which is the number worth watching on the bill.
+- A large document is embedded 256 chunks at a time, and each slice is kept as
+  its vectors land, so an attempt that fails near the end costs only the slice
+  that failed.
 
 A chunk counts as reusable only once its vector has actually been written, not
 merely because its text hash matches. Otherwise an attempt that wrote the chunk

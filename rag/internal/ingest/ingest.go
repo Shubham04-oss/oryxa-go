@@ -251,21 +251,11 @@ func (pipeline *Pipeline) index(ctx context.Context, document domain.Document) (
 
 	result := Result{Sync: sync}
 	if len(sync.Fresh) > 0 {
-		usage, err := pipeline.embed(ctx, corpus, document, vectors, sync.Fresh)
+		usage, err := pipeline.embed(ctx, corpus, document, vectors, sync.Fresh, at)
 		if err != nil {
 			return Result{}, err
 		}
 		result.Usage = usage
-		// Only now are these chunks reusable. Recording it before the vectors
-		// landed would let a retry after a failed embed skip them and mark
-		// the document searchable holding nothing.
-		fresh := make([]string, 0, len(sync.Fresh))
-		for _, chunk := range sync.Fresh {
-			fresh = append(fresh, chunk.ID)
-		}
-		if err := pipeline.store.MarkChunksEmbedded(ctx, fresh, at); err != nil {
-			return Result{}, err
-		}
 	}
 
 	indexed, err := pipeline.event(rageventsv1.DocumentIndexedDetailType, rageventsv1.DocumentIndexed{
@@ -286,12 +276,35 @@ func (pipeline *Pipeline) index(ctx context.Context, document domain.Document) (
 	return result, nil
 }
 
-// embed turns the changed chunks into vectors and writes them.
-func (pipeline *Pipeline) embed(ctx context.Context, corpus domain.Corpus, document domain.Document, store vectorstore.Store, chunks []domain.Chunk) (domain.Usage, error) {
+// sliceChunks is how many changed chunks are embedded and written at a time. A
+// document of thousands of chunks takes many embedding calls, and one that
+// fails near the end should not cost the rest: each slice is kept as soon as
+// its vectors are written, so the retry reuses it rather than paying again.
+const sliceChunks = 256
+
+// embed turns the changed chunks into vectors and writes them, a slice at a
+// time.
+func (pipeline *Pipeline) embed(ctx context.Context, corpus domain.Corpus, document domain.Document, store vectorstore.Store, chunks []domain.Chunk, at time.Time) (domain.Usage, error) {
 	embedder, err := pipeline.embedders.For(ctx, corpus.Spec)
 	if err != nil {
 		return domain.Usage{}, err
 	}
+	var usage domain.Usage
+	for start := 0; start < len(chunks); start += sliceChunks {
+		sliceUsage, err := pipeline.embedSlice(ctx, embedder, corpus, document, store, chunks[start:min(start+sliceChunks, len(chunks))], at)
+		usage.Add(sliceUsage)
+		if err != nil {
+			return usage, err
+		}
+	}
+	return usage, nil
+}
+
+// embedSlice embeds one slice of chunks, writes their vectors, and only then
+// marks them embedded. Recording it before the vectors landed would let a
+// retry after a failed embed skip them and mark the document searchable
+// holding nothing.
+func (pipeline *Pipeline) embedSlice(ctx context.Context, embedder embedding.Embedder, corpus domain.Corpus, document domain.Document, store vectorstore.Store, chunks []domain.Chunk, at time.Time) (domain.Usage, error) {
 	texts := make([]string, 0, len(chunks))
 	for _, chunk := range chunks {
 		// The heading trail is embedded with the text: a passage read alone is
@@ -318,6 +331,13 @@ func (pipeline *Pipeline) embed(ctx context.Context, corpus domain.Corpus, docum
 		})
 	}
 	if err := store.Upsert(ctx, corpus, vectors); err != nil {
+		return embedded.Usage, err
+	}
+	ids := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		ids = append(ids, chunk.ID)
+	}
+	if err := pipeline.store.MarkChunksEmbedded(ctx, ids, at); err != nil {
 		return embedded.Usage, err
 	}
 	return embedded.Usage, nil
