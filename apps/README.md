@@ -242,6 +242,16 @@ It only reads the catalog — nothing is subscribed and no account is touched �
 and exits non-zero if it finds a trigger that would be refused, so it can run
 as a check rather than only be read.
 
+The report also counts how much of an app a member gets for nothing:
+`auto_subscribable`, the triggers connecting subscribes to unasked, and
+`form_fillable`, those whose configuration the web app can put a form to.
+What is neither is named in `needs_setup` — triggers a member can subscribe
+to only through the API, because a field they require is an object or a list
+of objects. `formfill.go` mirrors the web app's own rule
+(`web/src/lib/apps/client.ts`, `triggerConfigCapability`) so the measurement
+is of what members actually face; the two are meant to agree, and their test
+cases are deliberately the same.
+
 ```text
 POST /v1/apps/webhooks/composio
 ```

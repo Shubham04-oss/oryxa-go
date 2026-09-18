@@ -21,6 +21,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
+} from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import {
 	appsErrorMessage,
 	catalogTriggerTypesQueryOptions,
 	createTrigger,
@@ -299,6 +307,17 @@ function AddTriggerRow({
 			if (typeof raw !== "string" || raw.trim() === "") {
 				continue;
 			}
+			if (field.type === "strings") {
+				// A line each, so an empty one is not sent as an empty value.
+				const entries = raw
+					.split("\n")
+					.map((line) => line.trim())
+					.filter((line) => line !== "");
+				if (entries.length > 0) {
+					config[field.name] = entries;
+				}
+				continue;
+			}
 			config[field.name] = field.type === "number" ? Number(raw) : raw;
 		}
 		add.mutate(config);
@@ -390,12 +409,66 @@ function TriggerConfigInput({
 		);
 	}
 
+	const label = (
+		<Label htmlFor={id}>
+			{field.title}
+			{field.required ? " *" : ""}
+		</Label>
+	);
+	const hint = field.description ? (
+		<p className="dialog-field-hint">{field.description}</p>
+	) : null;
+
+	// An enum is the values the app itself named, so it is chosen rather than
+	// typed: nothing else would be accepted anyway.
+	if (field.type === "select" && field.options !== undefined) {
+		return (
+			<div className="dialog-field">
+				{label}
+				<Select
+					onValueChange={(chosen) => onChange(chosen)}
+					value={
+						typeof value === "string" ? value : String(field.default ?? "")
+					}
+				>
+					<SelectTrigger id={id}>
+						<SelectValue placeholder="Choose…" />
+					</SelectTrigger>
+					<SelectContent>
+						{field.options.map((option) => (
+							<SelectItem key={option} value={option}>
+								{option}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+				{hint}
+			</div>
+		);
+	}
+
+	// A list is typed one per line, which needs no tag widget and no parsing
+	// a member has to guess at.
+	if (field.type === "strings") {
+		return (
+			<div className="dialog-field">
+				{label}
+				<Textarea
+					id={id}
+					onChange={(event) => onChange(event.target.value)}
+					placeholder="One per line"
+					required={field.required}
+					rows={3}
+					value={typeof value === "string" ? value : ""}
+				/>
+				{hint}
+			</div>
+		);
+	}
+
 	return (
 		<div className="dialog-field">
-			<Label htmlFor={id}>
-				{field.title}
-				{field.required ? " *" : ""}
-			</Label>
+			{label}
 			<Input
 				id={id}
 				onChange={(event) => onChange(event.target.value)}
@@ -403,9 +476,7 @@ function TriggerConfigInput({
 				type={field.type === "number" ? "number" : "text"}
 				value={typeof value === "string" ? value : ""}
 			/>
-			{field.description ? (
-				<p className="dialog-field-hint">{field.description}</p>
-			) : null}
+			{hint}
 		</div>
 	);
 }

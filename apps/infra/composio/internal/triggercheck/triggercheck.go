@@ -85,8 +85,22 @@ type Report struct {
 	Configured int `json:"with_required_config"`
 	// Checked counts triggers proven subscribable: their slug is one apps
 	// accepts and a config meeting their own schema passes its check.
-	Checked  int       `json:"checked"`
-	Findings []Finding `json:"findings,omitempty"`
+	Checked int `json:"checked"`
+	// AutoSubscribable counts triggers connecting an app subscribes to
+	// unasked, because they need no configuration at all. The rest are what
+	// a member has to add, so this is how much of the catalog works without
+	// anyone doing anything.
+	AutoSubscribable int `json:"auto_subscribable"`
+	// FormFillable counts triggers whose configuration the web app can put a
+	// form to. The difference between this and Triggers is what a member can
+	// only subscribe to through the API — see NeedsSetup.
+	FormFillable int `json:"form_fillable"`
+	// NeedsSetup names the triggers the web app shows as needing setup it
+	// cannot collect, since a required field of theirs is an object or a
+	// list of objects. Named rather than counted: this is the list to work
+	// from if the form is to grow.
+	NeedsSetup []Finding `json:"needs_setup,omitempty"`
+	Findings   []Finding `json:"findings,omitempty"`
 	// Skipped counts apps whose triggers could not be read at all.
 	Skipped []Finding `json:"skipped,omitempty"`
 }
@@ -125,6 +139,9 @@ func Run(ctx context.Context, client Client, config Config) (Report, error) {
 			report.Findings = append(report.Findings, check(trigger)...)
 		}
 	}
+	sort.Slice(report.NeedsSetup, func(i, j int) bool {
+		return report.NeedsSetup[i].Trigger < report.NeedsSetup[j].Trigger
+	})
 	sort.Slice(report.Findings, func(i, j int) bool {
 		if report.Findings[i].Problem != report.Findings[j].Problem {
 			return report.Findings[i].Problem < report.Findings[j].Problem
@@ -153,6 +170,19 @@ func (report *Report) count(trigger composio.TriggerType) {
 	if len(check(trigger)) == 0 {
 		report.Checked++
 	}
+	if len(required(trigger.Config)) == 0 {
+		// Nothing to supply, so connecting the app subscribes to it.
+		report.AutoSubscribable++
+	}
+	if formFillable(trigger.Config) {
+		report.FormFillable++
+		return
+	}
+	report.NeedsSetup = append(report.NeedsSetup, Finding{
+		Toolkit: trigger.Toolkit, Trigger: trigger.Slug,
+		Problem: "the web app cannot put a form to its configuration",
+		Detail:  truncate(string(trigger.Config)),
+	})
 }
 
 // check runs one trigger through the same two gates a subscription passes,

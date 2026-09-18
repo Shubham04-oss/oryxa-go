@@ -202,20 +202,113 @@ describe("triggerConfigCapability", () => {
 		});
 	});
 
-	it("is unsupported when a required property is not a flat type", () => {
+	// Composio's catalog is written by as many teams as it has apps, so a
+	// property arrives in every shape JSON Schema allows. Each of these used
+	// to make the whole trigger unaddable.
+
+	it("collects a list of scalars a line at a time", () => {
+		const capability = triggerConfigCapability({
+			properties: { labels: { items: { type: "string" }, type: "array" } },
+			required: ["labels"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({
+			name: "labels",
+			required: true,
+			type: "strings",
+		});
+	});
+
+	it("collects a list whose items the schema does not describe", () => {
+		const capability = triggerConfigCapability({
+			properties: { labels: { type: "array" } },
+			required: ["labels"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({ type: "strings" });
+	});
+
+	it("offers an enum as a choice rather than free text", () => {
+		const capability = triggerConfigCapability({
+			properties: { state: { enum: ["open", "closed", "all"], type: "string" } },
+			required: ["state"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({
+			options: ["open", "closed", "all"],
+			type: "select",
+		});
+	});
+
+	it("offers a list of enum values as a choice too", () => {
+		const capability = triggerConfigCapability({
+			properties: {
+				states: { items: { enum: ["open", "closed"] }, type: "array" },
+			},
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({
+			options: ["open", "closed"],
+			type: "strings",
+		});
+	});
+
+	it("treats a nullable property as the type it can hold", () => {
+		const capability = triggerConfigCapability({
+			properties: { since: { type: ["string", "null"] } },
+			required: ["since"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({ type: "string" });
+	});
+
+	it("collects a property written as one of several shapes", () => {
+		const capability = triggerConfigCapability({
+			properties: {
+				target: { anyOf: [{ type: "string" }, { type: "integer" }] },
+			},
+			required: ["target"],
+			type: "object",
+		});
+		expect(capability.kind).toBe("form");
+		if (capability.kind !== "form") throw new Error("expected a form");
+		expect(capability.fields[0]).toMatchObject({ type: "string" });
+	});
+
+	it("is unsupported when a required property is an object nothing can type", () => {
 		expect(
 			triggerConfigCapability({
-				properties: { labels: { type: "array" } },
-				required: ["labels"],
+				properties: { filter: { type: "object" } },
+				required: ["filter"],
 				type: "object",
 			}),
 		).toEqual({ kind: "unsupported" });
 	});
 
-	it("skips an unsupported optional property rather than failing the whole form", () => {
+	it("is unsupported when a required property is a list of objects", () => {
+		expect(
+			triggerConfigCapability({
+				properties: { rules: { items: { type: "object" }, type: "array" } },
+				required: ["rules"],
+				type: "object",
+			}),
+		).toEqual({ kind: "unsupported" });
+	});
+
+	it("skips an uncollectable optional property rather than failing the whole form", () => {
 		const capability = triggerConfigCapability({
 			properties: {
-				labels: { type: "array" },
+				filter: { type: "object" },
 				repo: { type: "string" },
 			},
 			required: ["repo"],

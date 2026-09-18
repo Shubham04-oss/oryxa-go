@@ -453,9 +453,12 @@ export interface TriggerConfigField {
 	default?: boolean | number | string;
 	description?: string;
 	name: string;
+	/** The values a "select" field takes, in the order the catalog listed them. */
+	options?: string[];
 	required: boolean;
 	title: string;
-	type: "boolean" | "number" | "string";
+	/** "select" is an enum; "strings" is a list the member types one per line. */
+	type: "boolean" | "number" | "select" | "string" | "strings";
 }
 
 export type TriggerConfigCapability =
@@ -464,10 +467,16 @@ export type TriggerConfigCapability =
 	| { kind: "unsupported" };
 
 interface JsonSchemaProperty {
+	allOf?: JsonSchemaProperty[];
+	anyOf?: JsonSchemaProperty[];
 	default?: boolean | number | string;
 	description?: string;
+	enum?: unknown[];
+	items?: JsonSchemaProperty;
+	oneOf?: JsonSchemaProperty[];
 	title?: string;
-	type?: string;
+	/** JSON Schema writes one name, or a list of them for a nullable field. */
+	type?: string | string[];
 }
 
 interface JsonSchemaObject {
@@ -475,15 +484,107 @@ interface JsonSchemaObject {
 	required?: string[];
 }
 
-function normalizedFieldType(
-	type: string | undefined,
+/**
+ * The type names a property declares, with "null" dropped: a nullable string
+ * is still a string to type into.
+ */
+function declaredTypes(type: string | string[] | undefined): string[] {
+	if (typeof type === "string") {
+		return [type];
+	}
+	if (Array.isArray(type)) {
+		return type.filter((name) => name !== "null");
+	}
+	return [];
+}
+
+/**
+ * How a property is collected, or undefined when it honestly cannot be.
+ *
+ * Composio's catalog is written by as many teams as it has apps, so a
+ * property arrives as a plain type, an enum, a list, a nullable pair, or one
+ * of several shapes. Everything that can be turned into a field a member
+ * fills in is; what is left — an object, a list of objects, a reference this
+ * does not follow — is what "unsupported" honestly means.
+ */
+function fieldShape(
+	property: JsonSchemaProperty | undefined,
+): Pick<TriggerConfigField, "options" | "type"> | undefined {
+	if (property === undefined) {
+		return undefined;
+	}
+	// An enum is a choice, whatever its declared type says.
+	const options = enumOptions(property.enum);
+	if (options !== undefined) {
+		return { options, type: "select" };
+	}
+	const types = declaredTypes(property.type);
+	if (types.includes("array")) {
+		// A list of scalars is typed one per line; a list of objects is not
+		// something a form can collect.
+		const itemTypes = declaredTypes(property.items?.type);
+		const itemOptions = enumOptions(property.items?.enum);
+		if (itemOptions !== undefined) {
+			return { options: itemOptions, type: "strings" };
+		}
+		if (itemTypes.length === 0 || itemTypes.some(isScalarType)) {
+			return { type: "strings" };
+		}
+		return undefined;
+	}
+	for (const name of types) {
+		const scalar = scalarField(name);
+		if (scalar !== undefined) {
+			return { type: scalar };
+		}
+	}
+	// A property written as one of several shapes is collected as the first
+	// of them anything can be typed into.
+	for (const branch of [
+		...(property.anyOf ?? []),
+		...(property.oneOf ?? []),
+		...(property.allOf ?? []),
+	]) {
+		const shape = fieldShape(branch);
+		if (shape !== undefined) {
+			return shape;
+		}
+	}
+	return undefined;
+}
+
+function isScalarType(name: string): boolean {
+	return scalarField(name) !== undefined;
+}
+
+function scalarField(
+	name: string,
 ): "boolean" | "number" | "string" | undefined {
-	if (type === "integer") {
+	if (name === "integer") {
 		return "number";
 	}
-	return type === "boolean" || type === "number" || type === "string"
-		? type
+	return name === "boolean" || name === "number" || name === "string"
+		? name
 		: undefined;
+}
+
+/** An enum's values as strings, when every one of them is a scalar. */
+function enumOptions(values: unknown[] | undefined): string[] | undefined {
+	if (!Array.isArray(values) || values.length === 0) {
+		return undefined;
+	}
+	const options: string[] = [];
+	for (const value of values) {
+		if (
+			typeof value !== "string" &&
+			typeof value !== "number" &&
+			typeof value !== "boolean"
+		) {
+			return undefined;
+		}
+		options.push(String(value));
+	}
+	return options;
 }
 
 function titleCase(name: string): string {
@@ -519,25 +620,30 @@ export function triggerConfigCapability(
 		return { kind: "none" };
 	}
 	const required = new Set(schema.required ?? []);
+	// A required field nothing can be typed into is the whole trigger: there
+	// is no subscribing to it without one.
 	for (const name of required) {
-		if (normalizedFieldType(properties[name]?.type) === undefined) {
+		if (fieldShape(properties[name]) === undefined) {
 			return { kind: "unsupported" };
 		}
 	}
 	const fields: TriggerConfigField[] = [];
 	for (const name of names) {
 		const property = properties[name];
-		const type = normalizedFieldType(property?.type);
-		if (type === undefined) {
+		const shape = fieldShape(property);
+		if (shape === undefined) {
+			// Optional and uncollectable: left out rather than refusing the
+			// trigger, since Composio takes the subscription without it.
 			continue;
 		}
 		fields.push({
 			default: property?.default,
 			description: property?.description,
 			name,
+			options: shape.options,
 			required: required.has(name),
 			title: property?.title ?? titleCase(name),
-			type,
+			type: shape.type,
 		});
 	}
 	if (fields.length === 0) {
