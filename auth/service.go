@@ -41,7 +41,7 @@ const Name = "auth"
 const serviceAudience = "auth"
 
 // Definition is how a host builds auth.
-var Definition = host.Definition{Name: Name, URLVariable: "AUTH_URL", Migrate: Migrate, Mount: Mount}
+var Definition = host.Definition{Name: Name, URLVariable: "AUTH_URL", EventsQueueVariable: "AUTH_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs the auth schema.
 func Migrate(ctx context.Context, platform host.Platform) error {

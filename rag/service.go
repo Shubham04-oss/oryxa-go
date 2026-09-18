@@ -52,7 +52,7 @@ const Name = "rag"
 const URLVariable = "RAG_URL"
 
 // Definition is how a host builds rag.
-var Definition = host.Definition{Name: Name, URLVariable: URLVariable, Migrate: Migrate, Mount: Mount}
+var Definition = host.Definition{Name: Name, URLVariable: URLVariable, EventsQueueVariable: "RAG_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs the rag schema.
 //

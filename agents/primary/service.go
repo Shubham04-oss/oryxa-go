@@ -50,7 +50,7 @@ const (
 )
 
 // Definition is how a host builds agents primary.
-var Definition = host.Definition{Name: Name, Migrate: Migrate, Mount: Mount}
+var Definition = host.Definition{Name: Name, EventsQueueVariable: "AGENTS_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs agents' tables: the runs and the outbox, named with their
 // schema, on the host's pool; then ADK's, which ADK names without one, over

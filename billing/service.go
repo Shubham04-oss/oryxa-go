@@ -30,7 +30,7 @@ const Name = "billing"
 
 // Definition is how a host builds billing. Nothing calls billing over HTTP,
 // so it names no URL variable.
-var Definition = host.Definition{Name: Name, Migrate: Migrate, Mount: Mount}
+var Definition = host.Definition{Name: Name, EventsQueueVariable: "BILLING_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs the billing schema.
 func Migrate(ctx context.Context, platform host.Platform) error {

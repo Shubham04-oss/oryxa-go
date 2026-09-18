@@ -26,6 +26,10 @@ func TestEventPatternMatchesTheEventsKnowledgeActsOn(t *testing.T) {
 			{
 				"source": ["oryxa.files"],
 				"detail-type": ["files.object.created.v1"]
+			},
+			{
+				"source": ["oryxa.teams"],
+				"detail-type": ["teams.team.deleted.v1"]
 			}
 		]
 	}`)

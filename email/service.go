@@ -25,7 +25,7 @@ const Name = "email"
 
 // Definition is how a host builds email. Email keeps nothing in PostgreSQL,
 // so it has no Migrate.
-var Definition = host.Definition{Name: Name, Mount: Mount}
+var Definition = host.Definition{Name: Name, EventsQueueVariable: "EMAIL_QUEUE_URL", Mount: Mount}
 
 // Mount assembles email on what the host shares. Polling EMAIL_QUEUE_URL is
 // all this service does, so Mount refuses to start without one.

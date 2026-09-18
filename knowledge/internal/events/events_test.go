@@ -16,6 +16,7 @@ import (
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
+	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 )
 
 var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
@@ -71,6 +72,10 @@ func (app *fakeApplication) ConnectionExpired(context.Context, appsv1.Connection
 
 func (app *fakeApplication) ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error {
 	return app.act(appsv1.ConnectionRemovedDetailType)
+}
+
+func (app *fakeApplication) TeamDeleted(context.Context, teamsv1.TeamDeleted) error {
+	return app.act(teamsv1.TeamDeletedDetailType)
 }
 
 func (app *fakeApplication) AlreadyHandled(_ context.Context, eventID string) (bool, error) {

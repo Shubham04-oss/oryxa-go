@@ -42,6 +42,9 @@ type Store interface {
 	// asked. It answers false for a source that is not active or already due
 	// sooner.
 	HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error)
+	// RemoveSourcesByTeam retires every source a deleted team held, and
+	// retracts what they held in the same transaction.
+	RemoveSourcesByTeam(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
 	// PauseSources stops every live source reading through one connection:
 	// apps.connection.expired.v1, or a run that just discovered the same
 	// thing the hard way.

@@ -30,7 +30,7 @@ import (
 // Definition is how a host builds knowledge. Rag reads back a document too
 // large to have travelled on the bus from knowledge's internal API, at
 // KNOWLEDGE_URL, which defaults to this process when it runs knowledge.
-var Definition = host.Definition{Name: Name, URLVariable: "KNOWLEDGE_URL", Migrate: Migrate, Mount: Mount}
+var Definition = host.Definition{Name: Name, URLVariable: "KNOWLEDGE_URL", EventsQueueVariable: "KNOWLEDGE_EVENTS_QUEUE_URL", Migrate: Migrate, Mount: Mount}
 
 // Migrate installs knowledge's schema.
 func Migrate(ctx context.Context, platform host.Platform) error {
