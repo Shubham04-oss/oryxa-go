@@ -9,6 +9,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 type queueAPI interface {
@@ -21,6 +23,10 @@ type queueAPI interface {
 // failed ones stay on the queue until the redrive policy moves them aside.
 // It returns when ctx is cancelled.
 func (c *Consumer) Poll(ctx context.Context, client queueAPI, queueURL string) {
+	// Poll runs as this consumer's only goroutine for its whole life, calling
+	// HandleSQS sequentially, so setting this once up front and never
+	// touching it again needs no lock.
+	c.queueName = observability.QueueName(queueURL)
 	for {
 		output, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(queueURL),

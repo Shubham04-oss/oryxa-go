@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	lambdaevents "github.com/aws/aws-lambda-go/events"
 
@@ -13,7 +14,12 @@ import (
 	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
+
+// component identifies this consumer in its metrics and logs, low-cardinality
+// and fixed regardless of which detail type it is handling.
+const component = "email"
 
 // Subscription is one EventBridge event the email service consumes.
 type Subscription struct {
@@ -88,9 +94,17 @@ type handler func(context.Context, eventBridgeEvent) error
 type Consumer struct {
 	handlers map[Subscription]handler
 	logger   *slog.Logger
+	metrics  observability.ConsumerMetrics
+	// queueName is set once, at the top of Poll, before Poll's single
+	// goroutine starts calling handle; it is not touched concurrently.
+	queueName string
 }
 
 func NewConsumer(app application, logger *slog.Logger) *Consumer {
+	metrics, err := observability.NewConsumerMetrics()
+	if err != nil {
+		logger.Warn("consumer metrics unavailable; handling continues without them", "error", err)
+	}
 	handlers := map[Subscription]handler{
 		userRegistered:              domainEvent(app.UserRegistered),
 		emailVerificationRequested:  domainEvent(app.EmailVerificationRequested),
@@ -107,7 +121,7 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 	for _, detailType := range SESFeedbackDetailTypes() {
 		handlers[Subscription{Source: SESSource, DetailType: detailType}] = sesFeedback(app.SESFeedback)
 	}
-	return &Consumer{handlers: handlers, logger: logger}
+	return &Consumer{handlers: handlers, logger: logger, metrics: metrics}
 }
 
 // eventBridgeEvent is the body of each message an EventBridge rule delivers to SQS.
@@ -124,14 +138,26 @@ type envelope struct {
 	Version    int             `json:"version"`
 	OccurredAt string          `json:"occurred_at"`
 	Data       json.RawMessage `json:"data"`
+	// TraceCarrier decodes the envelope's optional traceparent/tracestate
+	// fields; a message published before this rollout, or one that never
+	// carried one, decodes to the zero TraceCarrier, and handling continues
+	// under a fresh span rather than failing.
+	observability.TraceCarrier
 }
 
 // HandleSQS processes a batch from Lambda's SQS event source. Failed records
 // are reported individually so only they return to the queue for a retry.
+//
+// Its signature mirrors what an AWS Lambda SQS event source mapping calls
+// directly, so it takes no receivedAt of its own the way other services'
+// per-message handlers do for their Poll: "now, at the top of this batch" is
+// what receipt means whether this runs under Poll's long poll or under an
+// actual Lambda invocation.
 func (c *Consumer) HandleSQS(ctx context.Context, batch lambdaevents.SQSEvent) (lambdaevents.SQSEventResponse, error) {
+	receivedAt := time.Now()
 	var response lambdaevents.SQSEventResponse
 	for _, record := range batch.Records {
-		if err := c.handle(ctx, record.Body); err != nil {
+		if err := c.handle(ctx, record.Body, receivedAt); err != nil {
 			level := slog.LevelError
 			if errors.Is(err, delivery.ErrInProgress) {
 				level = slog.LevelWarn
@@ -145,16 +171,35 @@ func (c *Consumer) HandleSQS(ctx context.Context, batch lambdaevents.SQSEvent) (
 	return response, nil
 }
 
-func (c *Consumer) handle(ctx context.Context, body string) error {
+func (c *Consumer) handle(ctx context.Context, body string, receivedAt time.Time) error {
 	var event eventBridgeEvent
 	if err := json.Unmarshal([]byte(body), &event); err != nil {
 		return fmt.Errorf("decode EventBridge event: %w", err)
 	}
-	handle, ok := c.handlers[Subscription{Source: event.Source, DetailType: event.DetailType}]
+	dispatch, ok := c.handlers[Subscription{Source: event.Source, DetailType: event.DetailType}]
 	if !ok {
 		return fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
 	}
-	if err := handle(ctx, event); err != nil {
+
+	// Best-effort: a domain event's detail is our own envelope, decoded again
+	// (and this time checked) inside domainEvent's handler below; an SES
+	// feedback notification's detail is shaped nothing like it and simply
+	// decodes to the zero envelope, which is handled exactly like a message
+	// with none of this rollout's fields at all.
+	var detail envelope
+	_ = json.Unmarshal(event.Detail, &detail)
+	occurredAt, _ := time.Parse(time.RFC3339Nano, detail.OccurredAt)
+	eventID := detail.EventID
+	if eventID == "" {
+		eventID = event.ID
+	}
+
+	ctx, span := observability.StartConsumerSpan(ctx, detail.TraceCarrier, c.queueName, event.DetailType, eventID)
+	started := time.Now()
+	err := dispatch(ctx, event)
+	observability.EndSpan(span, err)
+	c.metrics.Record(ctx, component, event.DetailType, occurredAt, receivedAt, started, err)
+	if err != nil {
 		return fmt.Errorf("event %s: %s: %w", event.ID, event.DetailType, err)
 	}
 	return nil
