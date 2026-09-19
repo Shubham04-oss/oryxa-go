@@ -2,8 +2,6 @@ package application
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -12,7 +10,6 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
-	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/transform"
 )
 
 const (
@@ -30,6 +27,8 @@ type outcome struct {
 	seen      int
 	published int
 	removed   int
+	// excluded is what the pass judged not worth indexing.
+	excluded int
 	// watermark is the newest change the whole pass saw. It is held here
 	// rather than persisted per page, because a provider that answers newest
 	// first would otherwise have the next run skip everything this one had
@@ -103,6 +102,7 @@ func (s *Service) Sync(ctx context.Context, source domain.Source, lease string) 
 
 	result, err := s.walk(ctx, extractor, source, cursor, full, lease)
 	run.DocumentsSeen, run.DocumentsPublished, run.DocumentsRemoved = result.seen, result.published, result.removed
+	run.DocumentsExcluded = result.excluded
 	if err != nil {
 		return s.runFailed(ctx, source, run, result, lease, err)
 	}
@@ -132,14 +132,30 @@ func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source 
 			return result, err
 		}
 
+		entries := make([]*entry, 0, len(page.Items))
 		for _, item := range page.Items {
 			result.seen++
-			published, err := s.keep(ctx, source, item)
+			prepared, err := s.prepare(ctx, source, item)
+			if err != nil {
+				return result, err
+			}
+			entries = append(entries, prepared)
+		}
+		// Judged before anything of the page is written: a page the judge
+		// cannot finish is read again whole, by the run that retries it.
+		if err := s.judgeAll(ctx, source, lease, entries); err != nil {
+			return result, err
+		}
+		for _, prepared := range entries {
+			published, excluded, err := s.write(ctx, source, prepared)
 			if err != nil {
 				return result, err
 			}
 			if published {
 				result.published++
+			}
+			if excluded {
+				result.excluded++
 			}
 		}
 		// A page's own feed — Drive's changes, Gmail's history — sometimes
@@ -195,87 +211,39 @@ func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source 
 	return result, nil
 }
 
-// keep normalizes one item and writes it, publishing only what changed. An
-// item whose MIME is a PDF or an Office type is routed to keepOriginal
-// instead, when there is somewhere to keep such a file's bytes: nothing in
-// transform reads text out of one, so Normalize would only ever refuse it.
-func (s *Service) keep(ctx context.Context, source domain.Source, item sources.Item) (bool, error) {
-	if s.originals != nil && transform.IsPassthroughMIME(item.MIME) {
-		return s.keepOriginal(ctx, source, item)
-	}
-	text, err := transform.Normalize(item.Content, item.MIME)
-	if err != nil {
-		if errors.Is(err, domain.ErrUnsupportedType) {
-			// A provider holds things that are not text. Skipping one is not a
-			// failure of the run.
-			return false, nil
-		}
-		return false, err
-	}
-
-	document := domain.Document{
-		OrganizationID: source.OrganizationID, SourceID: source.ID, ExternalID: item.ExternalID,
-		Kind: item.Kind, Title: item.Title, URL: item.URL, MIME: text.MIME,
-		ContentHash: text.Hash, Body: text.Body, ByteSize: text.Bytes,
-		Metadata: item.Metadata, SourceUpdatedAt: item.UpdatedAt, ExtractedAt: s.now(),
-	}
-	if document.ID, err = newID("doc"); err != nil {
-		return false, err
-	}
-	return s.store.UpsertDocument(ctx, document, func(written domain.Document) (domain.Event, error) {
-		return s.documentPublished(source, written)
-	})
-}
-
 // keepOriginal stores a document whose bytes knowledge does not read itself
 // in the configured bucket, and publishes it with an Original rather than a
 // Body: empty Body, MIME the real type, ContentHash the sha256 of its bytes
-// hex encoded — which is also what makes the object's key content addressed,
+// hex encoded, which is also what makes the object's key content addressed,
 // so a changed document is a new object and a reader never sees one half
 // written.
 //
-// DocumentByExternalID is read first for two reasons: it gives the object's
-// key the document's own stable id rather than one that would be thrown away
-// the moment this turns out to be an update, and it says whether the bytes
-// have actually changed at all — a weekly full sweep over an unchanged file
-// must not re-upload it just because it read the file again.
-func (s *Service) keepOriginal(ctx context.Context, source domain.Source, item sources.Item) (bool, error) {
-	if len(item.Content) > sources.MaxOriginalBytes {
-		// Too large to keep; the extractor already counts this as skipped.
-		return false, nil
+// The object's key uses the document's own stable id when it has one, rather
+// than one thrown away the moment this turns out to be an update. The bytes
+// are written only when the object is not already there: a live document
+// judged again under a new policy, but unchanged, keeps the one it has.
+func (s *Service) keepOriginal(ctx context.Context, source domain.Source, e *entry) (bool, error) {
+	existing := domain.Document{}
+	if e.existing != nil {
+		existing = *e.existing
 	}
-	sum := sha256.Sum256(item.Content)
-	hash := hex.EncodeToString(sum[:])
-
-	existing, err := s.store.DocumentByExternalID(ctx, source.ID, item.ExternalID)
-	switch {
-	case err == nil:
-		if existing.RemovedAt == nil && existing.ContentHash == hash {
-			return false, nil
-		}
-	case errors.Is(err, domain.ErrNotFound):
-		existing = domain.Document{}
-	default:
-		return false, err
-	}
-
-	documentID := existing.ID
-	if documentID == "" {
-		if documentID, err = newID("doc"); err != nil {
+	document := e.document
+	document.JudgedPolicy = e.policy()
+	document.ID = existing.ID
+	if document.ID == "" {
+		var err error
+		if document.ID, err = newID("doc"); err != nil {
 			return false, err
 		}
 	}
-	key := originalKey(source.OrganizationID, source.ID, documentID, hash)
-	if err := s.originals.Put(ctx, key, item.Content, item.MIME); err != nil {
-		return false, fmt.Errorf("store the document's original bytes: %w", err)
+	key := originalKey(source.OrganizationID, source.ID, document.ID, document.ContentHash)
+	if existing.RemovedAt != nil || existing.Original == nil || existing.Original.Key != key {
+		if err := s.originals.Put(ctx, key, e.item.Content, e.item.MIME); err != nil {
+			return false, fmt.Errorf("store the document's original bytes: %w", err)
+		}
 	}
-
-	document := domain.Document{
-		ID: documentID, OrganizationID: source.OrganizationID, SourceID: source.ID, ExternalID: item.ExternalID,
-		Kind: item.Kind, Title: item.Title, URL: item.URL, MIME: item.MIME,
-		ContentHash: hash, ByteSize: len(item.Content),
-		Original: &domain.Original{Bucket: s.originalsBucket, Key: key, Size: int64(len(item.Content)), SHA256: hash},
-		Metadata: item.Metadata, SourceUpdatedAt: item.UpdatedAt, ExtractedAt: s.now(),
+	document.Original = &domain.Original{
+		Bucket: s.originalsBucket, Key: key, Size: int64(document.ByteSize), SHA256: document.ContentHash,
 	}
 	published, err := s.store.UpsertDocument(ctx, document, func(written domain.Document) (domain.Event, error) {
 		return s.documentPublished(source, written)
@@ -384,7 +352,7 @@ func (s *Service) runCompleted(ctx context.Context, source domain.Source, run do
 		RunID: run.ID, OrganizationID: source.OrganizationID, SourceID: source.ID,
 		Provider: source.Provider, Kind: run.Kind,
 		DocumentsSeen: result.seen, DocumentsPublished: result.published, DocumentsRemoved: result.removed,
-		StartedAt: run.StartedAt, CompletedAt: now,
+		DocumentsExcluded: result.excluded, StartedAt: run.StartedAt, CompletedAt: now,
 	})
 	if err != nil {
 		return err
@@ -404,7 +372,8 @@ func (s *Service) runCompleted(ctx context.Context, source domain.Source, run do
 	}
 	s.logger.InfoContext(ctx, "source read",
 		"source_id", source.ID, "kind", run.Kind, "seen", result.seen,
-		"published", result.published, "removed", result.removed, "drained", result.drained)
+		"published", result.published, "removed", result.removed, "excluded", result.excluded,
+		"drained", result.drained)
 	return nil
 }
 
@@ -512,6 +481,8 @@ func syncError(err error) (string, bool) {
 		return knowledgev1.SyncErrorLeaseLost, true
 	case errors.Is(err, domain.ErrGrantRequired):
 		return knowledgev1.SyncErrorGrantRequired, false
+	case errors.Is(err, domain.ErrQualityCheckUnavailable):
+		return knowledgev1.SyncErrorQualityCheckUnavailable, true
 	default:
 		return knowledgev1.SyncErrorProviderError, true
 	}

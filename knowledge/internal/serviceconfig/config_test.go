@@ -148,6 +148,31 @@ func TestFromEnvAWSEndpointURL(t *testing.T) {
 // keeping a PDF or an Office file's own bytes instead of skipping them:
 // unset by default, so nothing about this changes a deployment that has not
 // opted in.
+func TestFromEnvReadsTheJudge(t *testing.T) {
+	config, err := FromEnv(env(required()))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.JudgeModel != "" || config.GoogleCloudLocation != "global" {
+		t.Fatalf("judge = %q at %q, want none, and Gemini's global endpoint by default", config.JudgeModel, config.GoogleCloudLocation)
+	}
+
+	values := required()
+	values["KNOWLEDGE_JUDGE_MODEL"] = " gemini-3.5-flash-lite "
+	if _, err := FromEnv(env(values)); err == nil {
+		t.Fatal("FromEnv() error = nil for a judge with no Google Cloud project to run it in")
+	}
+	values["GOOGLE_CLOUD_PROJECT"] = "internalbeta"
+	values["GOOGLE_CLOUD_LOCATION"] = "us-central1"
+	config, err = FromEnv(env(values))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.JudgeModel != "gemini-3.5-flash-lite" || config.GoogleCloudProject != "internalbeta" || config.GoogleCloudLocation != "us-central1" {
+		t.Fatalf("config = %+v", config)
+	}
+}
+
 func TestFromEnvReadsTheOriginalsBucket(t *testing.T) {
 	config, err := FromEnv(env(required()))
 	if err != nil {

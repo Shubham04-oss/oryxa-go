@@ -69,6 +69,13 @@ type Store interface {
 	// sweep to notice the same thing the slow way. Answers the document
 	// retracted and whether there was a live one to.
 	RetractDocument(context.Context, string, string, time.Time, func(domain.Document) (domain.Event, error)) (domain.Document, bool, error)
+	// TouchDocument records that a run saw a document it did not need to
+	// write, so a full sweep does not retract it as gone.
+	TouchDocument(context.Context, string, string, time.Time) error
+	// ExcludeDocument records a document judged not worth indexing, removed
+	// with its reason, retracting it with event's removal if it was live.
+	// Answers whether it was.
+	ExcludeDocument(context.Context, domain.Document, time.Time, func(domain.Document) (domain.Event, error)) (bool, error)
 
 	Cursor(context.Context, string) (domain.Cursor, error)
 	SaveCursor(context.Context, domain.Cursor) error
@@ -136,8 +143,11 @@ type Dependencies struct {
 	Extractors sources.Registry
 	// Originals is nil unless KNOWLEDGE_ORIGINALS_BUCKET is configured.
 	Originals Originals
-	Logger    *slog.Logger
-	Clock     func() time.Time
+	// Judge decides whether a connected app's document is worth indexing. Nil
+	// indexes what the rules alone do not exclude, unjudged.
+	Judge  Judge
+	Logger *slog.Logger
+	Clock  func() time.Time
 }
 
 type Config struct {
@@ -162,6 +172,7 @@ type Service struct {
 	extractors      sources.Registry
 	originals       Originals
 	originalsBucket string
+	judge           Judge
 	logger          *slog.Logger
 	now             func() time.Time
 	config          Config
@@ -176,6 +187,7 @@ func New(dependencies Dependencies, config Config) *Service {
 		extractors:      dependencies.Extractors,
 		originals:       dependencies.Originals,
 		originalsBucket: config.OriginalsBucket,
+		judge:           dependencies.Judge,
 		logger:          dependencies.Logger,
 		now:             dependencies.Clock,
 		config:          config,

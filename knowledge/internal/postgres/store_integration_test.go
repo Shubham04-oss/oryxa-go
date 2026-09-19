@@ -987,7 +987,7 @@ func TestRunsRecordWhatEachPassDid(t *testing.T) {
 	}
 	finished := testClock.Add(time.Minute)
 	run.Status = domain.RunCompleted
-	run.DocumentsSeen, run.DocumentsPublished, run.DocumentsRemoved = 10, 3, 1
+	run.DocumentsSeen, run.DocumentsPublished, run.DocumentsRemoved, run.DocumentsExcluded = 10, 3, 1, 4
 	run.FinishedAt = &finished
 	if err := store.FinishRun(ctx, run, nil); err != nil {
 		t.Fatalf("FinishRun() error = %v", err)
@@ -997,8 +997,154 @@ func TestRunsRecordWhatEachPassDid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Runs() error = %v", err)
 	}
-	if len(runs) != 1 || runs[0].Status != domain.RunCompleted || runs[0].DocumentsPublished != 3 {
+	if len(runs) != 1 || runs[0].Status != domain.RunCompleted || runs[0].DocumentsPublished != 3 || runs[0].DocumentsExcluded != 4 {
 		t.Fatalf("Runs() = %+v", runs)
+	}
+}
+
+func outboxCount(t *testing.T, store *Store) int {
+	t.Helper()
+	var count int
+	if err := store.pool.QueryRow(context.Background(), `SELECT count(*) FROM knowledge_outbox`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func TestExcludeDocumentRetractsALiveDocumentOnceAndKeepsTheVerdict(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "m-1", strings.Repeat("a", 64))
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+
+	excluded := document
+	excluded.ID = "doc_ignored"
+	excluded.Body = ""
+	excluded.Excluded = "promotional mail"
+	excluded.JudgedPolicy = 1
+	later := testClock.Add(time.Hour)
+	retracted, err := store.ExcludeDocument(ctx, excluded, later, func(domain.Document) (domain.Event, error) {
+		return testEvent(t, "knowledge.document.removed.v1"), nil
+	})
+	if err != nil || !retracted {
+		t.Fatalf("ExcludeDocument(live) = %v, %v, want it retracted", retracted, err)
+	}
+	if got := outboxCount(t, store); got != 1 {
+		t.Fatalf("outbox events = %d, want the one removal", got)
+	}
+	read, err := store.DocumentByExternalID(ctx, source.ID, "m-1")
+	if err != nil {
+		t.Fatalf("DocumentByExternalID() error = %v", err)
+	}
+	if read.ID != document.ID || read.RemovedAt == nil || read.Excluded != "promotional mail" || read.JudgedPolicy != 1 {
+		t.Fatalf("read = %+v, want the same row removed with its verdict", read)
+	}
+	full, err := store.Document(ctx, "org_1", document.ID)
+	if err != nil || full.Body != "" {
+		t.Fatalf("Document() = body %q, %v, want no text kept for an excluded document", full.Body, err)
+	}
+
+	// Excluded again, as a later pass would: nothing more to retract.
+	retracted, err = store.ExcludeDocument(ctx, excluded, later.Add(time.Hour), func(domain.Document) (domain.Event, error) {
+		return testEvent(t, "knowledge.document.removed.v1"), nil
+	})
+	if err != nil || retracted {
+		t.Fatalf("ExcludeDocument(again) = %v, %v, want nothing retracted", retracted, err)
+	}
+	if got := outboxCount(t, store); got != 1 {
+		t.Fatalf("outbox events = %d, want still the one removal", got)
+	}
+	again, _ := store.DocumentByExternalID(ctx, source.ID, "m-1")
+	if !again.RemovedAt.Equal(*read.RemovedAt) {
+		t.Fatalf("removed_at moved from %v to %v, want when it was first removed", read.RemovedAt, again.RemovedAt)
+	}
+}
+
+func TestExcludeDocumentRecordsANewDocumentWithoutAnEvent(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "m-2", strings.Repeat("c", 64))
+	document.Excluded = "empty: nothing in it to read"
+	document.JudgedPolicy = 1
+
+	retracted, err := store.ExcludeDocument(ctx, document, testClock, func(domain.Document) (domain.Event, error) {
+		return testEvent(t, "knowledge.document.removed.v1"), nil
+	})
+	if err != nil || retracted {
+		t.Fatalf("ExcludeDocument(new) = %v, %v, want recorded, nothing to retract", retracted, err)
+	}
+	if got := outboxCount(t, store); got != 0 {
+		t.Fatalf("outbox events = %d, want none: nobody was ever told about it", got)
+	}
+	read, err := store.DocumentByExternalID(ctx, source.ID, "m-2")
+	if err != nil || read.RemovedAt == nil || read.Excluded == "" {
+		t.Fatalf("read = %+v, %v, want the row kept, removed, with its reason", read, err)
+	}
+}
+
+// A document excluded under an older policy and judged worth keeping under a
+// newer one comes back: it is published, and its exclusion cleared.
+func TestUpsertDocumentPublishesAnExcludedDocumentJudgedWorthKeeping(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "m-3", strings.Repeat("d", 64))
+	excluded := document
+	excluded.Excluded, excluded.JudgedPolicy = "looked like a newsletter", 1
+	if _, err := store.ExcludeDocument(ctx, excluded, testClock, nil); err != nil {
+		t.Fatalf("ExcludeDocument() error = %v", err)
+	}
+
+	document.JudgedPolicy = 2
+	published, err := store.UpsertDocument(ctx, document, func(domain.Document) (domain.Event, error) {
+		return testEvent(t, "knowledge.document.published.v1"), nil
+	})
+	if err != nil || !published {
+		t.Fatalf("UpsertDocument() = %v, %v, want it published again", published, err)
+	}
+	read, _ := store.DocumentByExternalID(ctx, source.ID, "m-3")
+	if read.RemovedAt != nil || read.Excluded != "" || read.JudgedPolicy != 2 {
+		t.Fatalf("read = %+v, want it live, no longer excluded, under the newer policy", read)
+	}
+}
+
+func TestRetractUnseenLeavesExcludedDocumentsAlone(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	excluded := testDocument(source, "m-4", strings.Repeat("e", 64))
+	excluded.Excluded, excluded.JudgedPolicy = "promotional mail", 1
+	if _, err := store.ExcludeDocument(ctx, excluded, testClock, nil); err != nil {
+		t.Fatalf("ExcludeDocument() error = %v", err)
+	}
+	later := testClock.Add(time.Hour)
+	retracted, err := store.RetractUnseen(ctx, source.ID, later, later, func(domain.Document) (domain.Event, error) {
+		return testEvent(t, "knowledge.document.removed.v1"), nil
+	})
+	if err != nil || retracted != 0 {
+		t.Fatalf("RetractUnseen() = %d, %v, want nothing: an excluded document is already out", retracted, err)
+	}
+}
+
+func TestTouchDocumentKeepsADocumentSeenThroughAFullPass(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "pdf-1", strings.Repeat("f", 64))
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+	walkStarted := testClock.Add(24 * time.Hour)
+	if err := store.TouchDocument(ctx, source.ID, "pdf-1", walkStarted.Add(time.Minute)); err != nil {
+		t.Fatalf("TouchDocument() error = %v", err)
+	}
+	retracted, err := store.RetractUnseen(ctx, source.ID, walkStarted, walkStarted.Add(time.Hour), nil)
+	if err != nil || retracted != 0 {
+		t.Fatalf("RetractUnseen() = %d, %v, want nothing: the pass saw it", retracted, err)
 	}
 }
 

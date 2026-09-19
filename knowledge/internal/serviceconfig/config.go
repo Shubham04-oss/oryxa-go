@@ -48,6 +48,13 @@ type Config struct {
 	// organization's own files. Empty means such a document is skipped
 	// instead, the same as before this existed.
 	OriginalsBucket string
+	// JudgeModel is the Gemini model that judges whether a document from a
+	// connected app is worth indexing, on Vertex AI in GoogleCloudProject at
+	// GoogleCloudLocation. Empty indexes what the rules alone do not exclude,
+	// unjudged.
+	JudgeModel          string
+	GoogleCloudProject  string
+	GoogleCloudLocation string
 	// AllowedOrigins may send cookie-authenticated mutations.
 	AllowedOrigins []string
 	// EventBridgeEndpoint, SQSEndpoint and S3Endpoint override where those AWS
@@ -80,6 +87,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		ComposioAPIKey:      strings.TrimSpace(getenv("COMPOSIO_API_KEY")),
 		ComposioBaseURL:     endpoint(getenv, "COMPOSIO_BASE_URL"),
 		OriginalsBucket:     strings.TrimSpace(getenv("KNOWLEDGE_ORIGINALS_BUCKET")),
+		JudgeModel:          strings.TrimSpace(getenv("KNOWLEDGE_JUDGE_MODEL")),
+		GoogleCloudProject:  strings.TrimSpace(getenv("GOOGLE_CLOUD_PROJECT")),
+		GoogleCloudLocation: strings.TrimSpace(getenv("GOOGLE_CLOUD_LOCATION")),
 		AllowedOrigins:      splitList(getenv("KNOWLEDGE_ALLOWED_ORIGINS")),
 		EventBridgeEndpoint: endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
 		SQSEndpoint:         endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
@@ -95,6 +105,13 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	}
 	if config.ComposioAPIKey != "" && config.AppsURL == "" {
 		return Config{}, errors.New("APPS_URL is required when COMPOSIO_API_KEY is set")
+	}
+	if config.GoogleCloudLocation == "" {
+		// Gemini 3 is served from the global endpoint only.
+		config.GoogleCloudLocation = "global"
+	}
+	if config.JudgeModel != "" && config.GoogleCloudProject == "" {
+		return Config{}, errors.New("GOOGLE_CLOUD_PROJECT is required when KNOWLEDGE_JUDGE_MODEL is set: Vertex AI serves the judge")
 	}
 	for _, check := range []struct{ name, value string }{
 		{"AUTH_URL", config.AuthURL},

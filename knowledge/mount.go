@@ -22,6 +22,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/filesclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/judge"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/originals"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/serviceconfig"
@@ -47,7 +48,7 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 // and KNOWLEDGE_SERVICE_KEY_ID give it a way to act as one; and a PDF or an
 // Office file is kept rather than skipped once KNOWLEDGE_ORIGINALS_BUCKET
 // names somewhere to keep it.
-func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
+func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if platform.Database == nil {
 		return host.Service{}, host.ErrDatabaseRequired
 	}
@@ -101,6 +102,23 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("KNOWLEDGE_ORIGINALS_BUCKET is not set: a PDF or an Office file is skipped rather than kept")
 	}
 
+	// What a connected app yields is judged before it is published, once
+	// there is a model to judge with.
+	var documentJudge application.Judge
+	if config.JudgeModel != "" {
+		gemini, err := judge.New(ctx, judge.Config{
+			Project: config.GoogleCloudProject, Location: config.GoogleCloudLocation,
+			Model: config.JudgeModel, Credentials: platform.Google,
+		})
+		if err != nil {
+			return host.Service{}, err
+		}
+		documentJudge = gemini
+	} else {
+		logger.Warn("KNOWLEDGE_JUDGE_MODEL is not set: documents from connected apps are indexed without judging whether they are worth it, " +
+			"so only Gmail's own Promotions and Social categories and empty documents are kept out")
+	}
+
 	// Files is the one source with nobody to act as: every route there wants
 	// a member's own credentials, and a scheduled pass has none.
 	switch {
@@ -144,6 +162,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Sink:       events.NewPublisher(eventClient, platform.EventBusName),
 		Extractors: extractors,
 		Originals:  documentOriginals,
+		Judge:      documentJudge,
 		Logger:     logger,
 	}, Config{
 		AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval,

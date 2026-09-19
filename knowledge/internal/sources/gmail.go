@@ -25,6 +25,17 @@ const gmailAPI = "https://gmail.googleapis.com/gmail/v1"
 // at once.
 const gmailMaxPage = 100
 
+// gmailNoise is what Gmail itself files away from the inbox proper: its
+// Promotions and Social categories, and what it holds as spam or has thrown
+// away. None of it is read, on a full pass or an incremental one. Everything
+// else is left for knowledge's judge, which sees its labels too.
+var gmailNoise = []string{"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL", "SPAM", "TRASH"}
+
+// gmailNoiseQuery keeps the categories out of a full pass's listing, so they
+// are not even fetched; gmailNoise catches them again one message at a time,
+// for the incremental feed, which has no such query.
+const gmailNoiseQuery = "-category:promotions -category:social"
+
 // gmailFullPassLookback bounds a source's very first full pass to recent
 // mail rather than a member's entire history. Answering from the newest
 // ninety days is useful the moment a connection is made; reading years of
@@ -92,9 +103,11 @@ func (source *Gmail) Fetch(ctx context.Context, request Request) (Page, error) {
 // mailbox is not gone.
 func (source *Gmail) full(ctx context.Context, request Request, label string) (Page, error) {
 	query := url.Values{"labelIds": {label}, "maxResults": {strconv.Itoa(Limit(request.Limit, gmailMaxPage))}}
+	search := gmailNoiseQuery
 	if request.Source.FullSweepAt == nil {
-		query.Set("q", fmt.Sprintf("newer_than:%dd", int(gmailFullPassLookback/(24*time.Hour))))
+		search = fmt.Sprintf("newer_than:%dd %s", int(gmailFullPassLookback/(24*time.Hour)), gmailNoiseQuery)
 	}
+	query.Set("q", search)
 	if cursor := request.Cursor.Value; cursor != "" {
 		query.Set("pageToken", cursor)
 	}
@@ -257,6 +270,11 @@ func (source *Gmail) readMessage(ctx context.Context, credential domain.Credenti
 	if err := json.Unmarshal(response.Body, &message); err != nil {
 		return Item{}, false, fmt.Errorf("%w: Gmail's message could not be read", domain.ErrProviderUnavailable)
 	}
+	for _, noise := range gmailNoise {
+		if containsString(message.LabelIDs, noise) {
+			return Item{}, false, nil
+		}
+	}
 	return gmailItem(message), true, nil
 }
 
@@ -279,6 +297,7 @@ type gmailPart struct {
 type gmailMessage struct {
 	ID           string    `json:"id"`
 	ThreadID     string    `json:"threadId"`
+	LabelIDs     []string  `json:"labelIds"`
 	InternalDate string    `json:"internalDate"`
 	Payload      gmailPart `json:"payload"`
 }
@@ -293,6 +312,19 @@ func gmailHeader(part gmailPart, name string) string {
 		}
 	}
 	return ""
+}
+
+// gmailBulk says whether a message was sent to a list: it carries an
+// unsubscribe link, or says outright that it is bulk mail.
+func gmailBulk(payload gmailPart) bool {
+	if gmailHeader(payload, "List-Unsubscribe") != "" || gmailHeader(payload, "List-Id") != "" {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(gmailHeader(payload, "Precedence"))) {
+	case "bulk", "list", "junk":
+		return true
+	}
+	return false
 }
 
 // gmailFindPart walks a message's MIME tree for the first part of the given
@@ -353,6 +385,12 @@ func gmailItem(message gmailMessage) Item {
 		"to":        gmailHeader(message.Payload, "To"),
 		"date":      gmailHeader(message.Payload, "Date"),
 		"thread_id": message.ThreadID,
+		"labels":    strings.Join(message.LabelIDs, ", "),
+	}
+	if gmailBulk(message.Payload) {
+		// Sent to a list rather than to the member: a strong hint, for the
+		// judge, of a newsletter or an announcement.
+		metadata["bulk"] = "yes"
 	}
 	var updated *time.Time
 	if millis, err := strconv.ParseInt(message.InternalDate, 10, 64); err == nil {

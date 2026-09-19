@@ -11,7 +11,7 @@ import (
 )
 
 const runColumns = `id, organization_id, source_id, kind, status, documents_seen, documents_published,
-	documents_removed, error, retryable, started_at, finished_at`
+	documents_removed, documents_excluded, error, retryable, started_at, finished_at`
 
 func (store *Store) StartRun(ctx context.Context, run domain.SyncRun) error {
 	if _, err := store.pool.Exec(ctx, `
@@ -30,10 +30,10 @@ func (store *Store) FinishRun(ctx context.Context, run domain.SyncRun, event *do
 		if _, err := tx.Exec(ctx, `
 			UPDATE knowledge_sync_runs
 			SET status = $2, documents_seen = $3, documents_published = $4, documents_removed = $5,
-			    error = left($6, 200), retryable = $7, finished_at = $8
+			    documents_excluded = $9, error = left($6, 200), retryable = $7, finished_at = $8
 			WHERE id = $1`,
 			run.ID, string(run.Status), run.DocumentsSeen, run.DocumentsPublished, run.DocumentsRemoved,
-			run.Error, run.Retryable, run.FinishedAt); err != nil {
+			run.Error, run.Retryable, run.FinishedAt, run.DocumentsExcluded); err != nil {
 			return mapWriteError("finish run", err)
 		}
 		if event != nil {
@@ -59,7 +59,7 @@ func (store *Store) Runs(ctx context.Context, organizationID, sourceID string, l
 		var run domain.SyncRun
 		var status string
 		if err := rows.Scan(&run.ID, &run.OrganizationID, &run.SourceID, &run.Kind, &status,
-			&run.DocumentsSeen, &run.DocumentsPublished, &run.DocumentsRemoved, &run.Error,
+			&run.DocumentsSeen, &run.DocumentsPublished, &run.DocumentsRemoved, &run.DocumentsExcluded, &run.Error,
 			&run.Retryable, &run.StartedAt, &run.FinishedAt); err != nil {
 			return nil, fmt.Errorf("scan run: %w", err)
 		}

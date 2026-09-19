@@ -4,6 +4,7 @@ import {
 	defaultSourceIntervalSeconds,
 	intervalLabel,
 	runStatusLabel,
+	runSummary,
 	sourceStatusLabel,
 	sourceStatusTone,
 	sourceTargetField,
@@ -187,5 +188,30 @@ describe("status labels", () => {
 		expect(runStatusLabel("running")).toBe("Running");
 		expect(runStatusLabel("completed")).toBe("Completed");
 		expect(runStatusLabel("failed")).toBe("Failed");
+	});
+});
+
+describe("runSummary", () => {
+	it("names what a run skipped as noise, when it skipped any", () => {
+		expect(
+			runSummary({
+				documents_excluded: 212,
+				documents_published: 40,
+				documents_removed: 3,
+				documents_seen: 255,
+			}),
+		).toBe("40 published · 212 skipped as noise · 3 removed of 255 seen");
+	});
+
+	it("reads as before for a run that skipped nothing, or predates skipping", () => {
+		const run = {
+			documents_published: 2,
+			documents_removed: 0,
+			documents_seen: 2,
+		};
+		expect(runSummary(run)).toBe("2 published · 0 removed of 2 seen");
+		expect(runSummary({ ...run, documents_excluded: 0 })).toBe(
+			"2 published · 0 removed of 2 seen",
+		);
 	});
 });

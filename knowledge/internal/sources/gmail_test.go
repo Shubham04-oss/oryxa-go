@@ -171,6 +171,65 @@ func TestGmailReadsPaddedBodiesAndPassesOverOneItCannotDecode(t *testing.T) {
 	}
 }
 
+// withLabels gives a message built by gmailMessageJSON the labels Gmail filed
+// it under.
+func withLabels(message string, labels ...string) string {
+	quoted := make([]string, 0, len(labels))
+	for _, label := range labels {
+		quoted = append(quoted, `"`+label+`"`)
+	}
+	return strings.Replace(message, `"threadId":`, `"labelIds":[`+strings.Join(quoted, ",")+`],"threadId":`, 1)
+}
+
+// Promotions and Social are what Gmail itself files away from the inbox
+// proper. A full pass does not list them, and a message filed there is left
+// out even when a feed hands it over anyway.
+func TestGmailLeavesPromotionsAndSocialOut(t *testing.T) {
+	newsletter := strings.Replace(gmailMessageJSON("m3", "This week in tools", "news@list.example", "Ten links.", ""),
+		`{"name":"Subject"`, `{"name":"List-Unsubscribe","value":"<mailto:leave@list.example>"},{"name":"Subject"`, 1)
+	proxy := &fakeProxier{responses: []composio.ProxyResponse{
+		jsonResponse(`{"messages":[{"id":"m1"},{"id":"m2"},{"id":"m3"}],"nextPageToken":""}`),
+		jsonResponse(withLabels(gmailMessageJSON("m1", "Contract draft", "priya@example.test", "Draft attached, comments by Friday.", ""), "INBOX", "IMPORTANT")),
+		jsonResponse(withLabels(gmailMessageJSON("m2", "Flash sale", "deals@shop.example", "40% off.", ""), "INBOX", "CATEGORY_PROMOTIONS")),
+		jsonResponse(withLabels(newsletter, "INBOX", "CATEGORY_UPDATES")),
+		jsonResponse(`{"historyId":"h1"}`),
+	}}
+	client, _ := testClient(t, &composioDoer{proxy: proxy})
+
+	page, err := NewGmail(client).Fetch(context.Background(), gmailRequest(nil, true, domain.Cursor{}, false))
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if got := proxy.calls[0].Endpoint; !containsAll(got, "q=newer_than", "-category%3Apromotions", "-category%3Asocial") {
+		t.Fatalf("messages.list endpoint = %s, want Promotions and Social left out of the listing", got)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("Fetch() = %d items, want the promotion left out", len(page.Items))
+	}
+	contract, newsletterItem := page.Items[0], page.Items[1]
+	if contract.Title != "Contract draft" || contract.Metadata["labels"] != "INBOX, IMPORTANT" || contract.Metadata["bulk"] != "" {
+		t.Fatalf("contract = %q, labels %q, bulk %q", contract.Title, contract.Metadata["labels"], contract.Metadata["bulk"])
+	}
+	if newsletterItem.Metadata["bulk"] != "yes" {
+		t.Fatalf("a message with an unsubscribe link was not marked bulk: %v", newsletterItem.Metadata)
+	}
+}
+
+// A periodic sweep, unbounded by age, still leaves the categories out.
+func TestGmailPeriodicSweepLeavesPromotionsOutToo(t *testing.T) {
+	proxy := &fakeProxier{responses: []composio.ProxyResponse{
+		jsonResponse(`{"messages":[],"nextPageToken":""}`),
+		jsonResponse(`{"historyId":"h1"}`),
+	}}
+	client, _ := testClient(t, &composioDoer{proxy: proxy})
+	if _, err := NewGmail(client).Fetch(context.Background(), gmailRequest(nil, true, domain.Cursor{}, true)); err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if got := proxy.calls[0].Endpoint; !containsAll(got, "-category%3Apromotions") || containsAll(got, "newer_than") {
+		t.Fatalf("messages.list endpoint = %s, want the categories left out and no age bound", got)
+	}
+}
+
 // TestGmailIncrementalReadsAddedAndReportsDeletedAndUnlabeled covers the
 // three history types this reads: a message added to the label is fetched
 // in full, one deleted outright is retracted, and one that merely left this

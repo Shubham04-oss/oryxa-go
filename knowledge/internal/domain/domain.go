@@ -36,6 +36,10 @@ var (
 	// give auth, and they have not given it or auth has dropped it. Only the
 	// member can fix that, so asking again changes nothing until they do.
 	ErrGrantRequired = errors.New("the member has not granted standing access")
+	// ErrQualityCheckUnavailable means the model that judges whether a
+	// document is worth indexing could not be reached. Nothing is published
+	// unjudged, so the run stops and is tried again.
+	ErrQualityCheckUnavailable = errors.New("the quality check is unavailable")
 )
 
 type OrgRole string
@@ -222,6 +226,13 @@ type Document struct {
 	// document a full pass did not see is one the source no longer holds.
 	LastSeenAt time.Time  `json:"last_seen_at"`
 	RemovedAt  *time.Time `json:"removed_at,omitempty"`
+	// Excluded says why this document was judged not worth indexing; empty
+	// for one that was not. An excluded document is removed like any other,
+	// but its row stays, so the same content is not judged twice.
+	Excluded string `json:"excluded,omitempty"`
+	// JudgedPolicy is the quality policy this document's content was last
+	// judged under; zero when it never was. A newer policy judges it again.
+	JudgedPolicy int `json:"-"`
 }
 
 // Original names the object that holds a document's bytes as its provider
@@ -285,6 +296,7 @@ type SyncRun struct {
 	DocumentsSeen      int        `json:"documents_seen"`
 	DocumentsPublished int        `json:"documents_published"`
 	DocumentsRemoved   int        `json:"documents_removed"`
+	DocumentsExcluded  int        `json:"documents_excluded"`
 	Error              string     `json:"error,omitempty"`
 	Retryable          bool       `json:"retryable,omitempty"`
 	StartedAt          time.Time  `json:"started_at"`

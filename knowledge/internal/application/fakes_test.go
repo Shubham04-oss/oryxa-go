@@ -388,6 +388,74 @@ func (store *fakeStore) Document(_ context.Context, _, documentID string) (domai
 // DocumentByExternalID mirrors the real store: it answers a document
 // whatever its removed_at, the same lookup UpsertDocument's own internal
 // query makes.
+func (store *fakeStore) TouchDocument(_ context.Context, sourceID, externalID string, seenAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := sourceID + "\x00" + externalID
+	if document, ok := store.documents[key]; ok {
+		document.LastSeenAt = seenAt
+		store.documents[key] = document
+	}
+	return nil
+}
+
+func (store *fakeStore) ExcludeDocument(_ context.Context, document domain.Document, now time.Time, event func(domain.Document) (domain.Event, error)) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := document.SourceID + "\x00" + document.ExternalID
+	existing, found := store.documents[key]
+	live := found && existing.RemovedAt == nil
+	removedAt := now
+	if found {
+		document.ID = existing.ID
+		if existing.RemovedAt != nil {
+			removedAt = *existing.RemovedAt
+		}
+	}
+	document.Body = ""
+	document.Original = nil
+	document.LastSeenAt = now
+	document.RemovedAt = &removedAt
+	store.documents[key] = document
+	if !live || event == nil {
+		return false, nil
+	}
+	recorded, err := event(document)
+	if err != nil {
+		return false, err
+	}
+	store.events = append(store.events, recorded)
+	return true, nil
+}
+
+// fakeJudge answers a verdict per title, keeping anything it was not told
+// about, and records every candidate it was shown.
+type fakeJudge struct {
+	mu       sync.Mutex
+	verdicts map[string]domain.Verdict
+	err      error
+	calls    []domain.Candidate
+}
+
+func (judge *fakeJudge) Judge(_ context.Context, candidate domain.Candidate) (domain.Verdict, error) {
+	judge.mu.Lock()
+	defer judge.mu.Unlock()
+	judge.calls = append(judge.calls, candidate)
+	if judge.err != nil {
+		return domain.Verdict{}, judge.err
+	}
+	if verdict, ok := judge.verdicts[candidate.Title]; ok {
+		return verdict, nil
+	}
+	return domain.Verdict{Keep: true, Reason: "worth keeping"}, nil
+}
+
+func (judge *fakeJudge) called() int {
+	judge.mu.Lock()
+	defer judge.mu.Unlock()
+	return len(judge.calls)
+}
+
 func (store *fakeStore) DocumentByExternalID(_ context.Context, sourceID, externalID string) (domain.Document, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

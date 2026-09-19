@@ -26,6 +26,8 @@ export interface Source {
 export type RunStatus = "completed" | "failed" | "running";
 
 export interface SyncRun {
+	/** What the run judged not worth indexing: promotions, notifications, empty files. */
+	documents_excluded?: number;
 	documents_published: number;
 	documents_removed: number;
 	documents_seen: number;
@@ -389,6 +391,24 @@ export function sourceStatusTone(
 		default:
 			return "neutral";
 	}
+}
+
+/** What one pass did, as the runs list reads it. */
+export function runSummary(
+	run: Pick<
+		SyncRun,
+		| "documents_excluded"
+		| "documents_published"
+		| "documents_removed"
+		| "documents_seen"
+	>,
+): string {
+	const parts = [`${run.documents_published} published`];
+	if (run.documents_excluded) {
+		parts.push(`${run.documents_excluded} skipped as noise`);
+	}
+	parts.push(`${run.documents_removed} removed of ${run.documents_seen} seen`);
+	return parts.join(" · ");
 }
 
 export function runStatusLabel(status: RunStatus): string {

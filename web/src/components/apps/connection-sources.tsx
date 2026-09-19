@@ -38,6 +38,7 @@ import {
 	registerSource,
 	removeSource,
 	runStatusLabel,
+	runSummary,
 	type Source,
 	type SourceProvider,
 	sourceIntervalChoices,
@@ -216,10 +217,7 @@ function RunsDialog({ organizationId, sourceId, trigger }: RunsDialogProps) {
 										{runStatusLabel(run.status)} ·{" "}
 										{relativeTime(run.started_at)}
 									</strong>
-									<small>
-										{run.documents_published} published ·{" "}
-										{run.documents_removed} removed of {run.documents_seen} seen
-									</small>
+									<small>{runSummary(run)}</small>
 									{run.error ? (
 										<small className="settings-list-error">{run.error}</small>
 									) : null}
