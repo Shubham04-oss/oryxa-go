@@ -45,6 +45,11 @@ these". The first **organization-scoped** upload does: knowledge hears
 Every upload after that finds it already there, so the cost is one lookup and
 no token.
 
+A deletion is heard the same way: `files.object.deleted.v1` retracts the
+file's document from every files source in the organization at once, and
+deletes its original, instead of leaving it searchable until the next full
+sweep notices it missing, up to a week later.
+
 Only a shared upload counts. A member's private file and a team's do not start
 it, and the source itself asks files for the organization's own scope alone —
 which matters more than it looks. A source here is organization-scoped, so

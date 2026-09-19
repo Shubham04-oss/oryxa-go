@@ -10,6 +10,7 @@ import (
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
+	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -223,6 +224,39 @@ func providerFor(toolkit string) string {
 // The organization's own files are the obvious thing to index and the one
 // thing with nothing to announce it: there is no connection to make, so
 // nothing said "start indexing these". The first shared file does.
+
+// FileDeleted forgets a file the moment it is deleted. The files source reads
+// objects by id, so the document whose external id is the file's is that
+// file, in whichever of the organization's files sources held it. Without
+// this it stayed searchable until the next full sweep noticed it missing,
+// up to a week later.
+func (s *Service) FileDeleted(ctx context.Context, event filesv1.ObjectDeleted) error {
+	if event.OrganizationID == "" || event.FileID == "" {
+		return fmt.Errorf("a deleted file needs an organization and an id: %w", domain.ErrInvalid)
+	}
+	sources, err := s.store.Sources(ctx, event.OrganizationID, domain.SourceQuery{Provider: filesProvider, Admin: true})
+	if err != nil {
+		return fmt.Errorf("find the organization's files sources: %w", err)
+	}
+	for _, source := range sources {
+		if source.Status == domain.StatusRemoved {
+			continue
+		}
+		removed, found, err := s.store.RetractDocument(ctx, source.ID, event.FileID, s.now(),
+			func(document domain.Document) (domain.Event, error) {
+				return s.documentRemoved(source, document, knowledgev1.RemovedReasonDeleted)
+			})
+		if err != nil {
+			return fmt.Errorf("forget a deleted file: %w", err)
+		}
+		if found {
+			s.deleteOriginal(ctx, removed.Original)
+			s.logger.InfoContext(ctx, "a deleted file is no longer searchable",
+				"organization_id", event.OrganizationID, "source_id", source.ID, "file_id", event.FileID)
+		}
+	}
+	return nil
+}
 
 // FileStored indexes the organization's own files, once it has any.
 //

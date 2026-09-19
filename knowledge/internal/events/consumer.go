@@ -51,6 +51,9 @@ func Subscriptions() map[string][]string {
 			// The organization's own files have no connection to announce
 			// them, so the first shared one is what starts indexing them.
 			filesv1.ObjectCreatedDetailType,
+			// And a deleted one is forgotten at once, rather than at the
+			// next full sweep, up to a week later.
+			filesv1.ObjectDeletedDetailType,
 		},
 		teamsv1.Source: {
 			teamsv1.TeamDeletedDetailType,
@@ -66,6 +69,7 @@ type application interface {
 	ConnectionConnected(context.Context, appsv1.ConnectionConnected) error
 	TriggerReceived(context.Context, appsv1.TriggerReceived) error
 	FileStored(context.Context, filesv1.ObjectCreated) error
+	FileDeleted(context.Context, filesv1.ObjectDeleted) error
 	ConnectionExpired(context.Context, appsv1.ConnectionExpired) error
 	ConnectionRemoved(context.Context, appsv1.ConnectionRemoved) error
 	TeamDeleted(context.Context, teamsv1.TeamDeleted) error
@@ -108,6 +112,7 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 			appsv1.ConnectionConnectedDetailType: {source: appsv1.Source, handle: decode(app.ConnectionConnected)},
 			appsv1.TriggerReceivedDetailType:     {source: appsv1.Source, handle: decode(app.TriggerReceived)},
 			filesv1.ObjectCreatedDetailType:      {source: filesv1.Source, handle: decode(app.FileStored)},
+			filesv1.ObjectDeletedDetailType:      {source: filesv1.Source, handle: decode(app.FileDeleted)},
 			appsv1.ConnectionExpiredDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionExpired)},
 			appsv1.ConnectionRemovedDetailType:   {source: appsv1.Source, handle: decode(app.ConnectionRemoved)},
 			teamsv1.TeamDeletedDetailType:        {source: teamsv1.Source, handle: decode(app.TeamDeleted)},
