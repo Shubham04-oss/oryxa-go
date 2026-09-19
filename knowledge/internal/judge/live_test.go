@@ -136,14 +136,14 @@ func TestLiveJevDecidesTheObviousCases(t *testing.T) {
 		if len(c.candidate.Original) > 0 {
 			continue
 		}
-		kind, keepProbability, model, err := jev.classify(context.Background(), c.candidate)
+		result, err := jev.Classify(context.Background(), c.candidate)
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
 			continue
 		}
-		t.Logf("%-28s %-14s keep=%.2f (%s)", c.name, kind, keepProbability, model)
-		if (keepProbability >= 0.5) != c.keep {
-			t.Errorf("%s: keep probability %.2f as %s, want keep=%t", c.name, keepProbability, kind, c.keep)
+		t.Logf("%-28s %-14s keep=%.2f (%s, %d tokens)", c.name, result.Kind, result.KeepProbability, result.Model, result.InputTokens)
+		if (result.KeepProbability >= 0.5) != c.keep {
+			t.Errorf("%s: keep probability %.2f as %s, want keep=%t", c.name, result.KeepProbability, result.Kind, c.keep)
 		}
 	}
 }

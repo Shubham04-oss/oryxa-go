@@ -59,12 +59,12 @@ var kinds = []struct {
 	criteria string
 	keep     bool
 }{
-	{"conversation", "Messages exchanged with specific people, or written by the member: questions, replies, requests, plans, decisions, introductions, feedback.", true},
+	{"conversation", "Messages exchanged with specific people, or written by the member: questions, replies, requests, introductions, advice, feedback.", true},
 	{"work_material", "A substantive document or note: plans, specifications, meeting notes, reports, proposals, contracts, research, or project, product or technical discussion.", true},
-	{"record", "A record with specific details the member may need later: an invoice, receipt, order, booking, ticket, statement, payment, or an account or delivery confirmation with its details.", true},
-	{"promotion", "Marketing or advertising: a sale, discount, offer, product launch, or sales outreach.", false},
-	{"newsletter", "A newsletter, digest or announcement written for many recipients rather than for the member.", false},
-	{"notification", "An automated notice with nothing lasting in it: a sign-in or security alert, a verification code, a like, follow, view or other social update, or a reminder to upgrade, renew or finish setting something up.", false},
+	{"record", "A message that records something specific to the member which they may need to look up later: a payment made or failed, a bank transaction, an invoice, receipt, order, booking, ticket or itinerary; the status of an application, registration or support case they filed; a tax, legal, compliance or account change; a subscription started, renewed, cancelled or expired; a billing or budget alert with its figures.", true},
+	{"promotion", "Marketing or advertising: a sale, discount, offer, product launch, event promotion or sales outreach.", false},
+	{"newsletter", "A newsletter, digest, announcement or product update written for many recipients rather than about the member's own account, application or activity.", false},
+	{"notification", "A generic automated notice with nothing specific to look up later: a one-time or verification code, a sign-in or security alert, a like, follow, view or other social update, a welcome or sign-up confirmation, or a reminder that an event starts soon, or to log in, finish setting up or upgrade.", false},
 	{"spam", "Spam, phishing or a scam.", false},
 	{"empty", "An empty, untitled, placeholder, test or scratch document, or an automatic copy with no real content of its own.", false},
 }
@@ -157,12 +157,12 @@ func (jev *Jev) Judge(ctx context.Context, candidate domain.Candidate) (domain.V
 		// Jev reads text only; the judge it escalates to reads the file.
 		return jev.escalate.Judge(ctx, candidate)
 	}
-	kind, keepProbability, model, err := jev.classify(ctx, candidate)
+	result, err := jev.Classify(ctx, candidate)
 	if err != nil {
 		return domain.Verdict{}, err
 	}
-	keep := keepProbability >= 0.5
-	certainty := max(keepProbability, 1-keepProbability)
+	keep := result.KeepProbability >= 0.5
+	certainty := max(result.KeepProbability, 1-result.KeepProbability)
 	if certainty < jev.escalateBelow {
 		if jev.escalate != nil {
 			return jev.escalate.Judge(ctx, candidate)
@@ -171,7 +171,19 @@ func (jev *Jev) Judge(ctx context.Context, candidate domain.Candidate) (domain.V
 		// than keeping something that does not.
 		keep = true
 	}
-	return domain.Verdict{Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", strings.ReplaceAll(kind, "_", " "), model, certainty*100)}, nil
+	return domain.Verdict{Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", strings.ReplaceAll(result.Kind, "_", " "), result.Model, certainty*100)}, nil
+}
+
+// Classification is what Jev made of one document, before any verdict is
+// drawn from it: what a caller logging or evaluating Jev wants to see.
+type Classification struct {
+	// Kind is the kind of document Jev chose.
+	Kind string
+	// KeepProbability is the probability that it is a kind worth keeping.
+	KeepProbability float64
+	// Model is the model that answered, and InputTokens what it read.
+	Model       string
+	InputTokens int
 }
 
 type jevQuestion struct {
@@ -199,7 +211,10 @@ type jevState struct {
 }
 
 type jevResponse struct {
-	Model   string `json:"model"`
+	Model string `json:"model"`
+	Usage struct {
+		InputTokens int `json:"input_tokens"`
+	} `json:"usage"`
 	Answers map[string]struct {
 		Type          string             `json:"type"`
 		Choice        string             `json:"choice"`
@@ -207,10 +222,9 @@ type jevResponse struct {
 	} `json:"answers"`
 }
 
-// classify asks Jev what kind of document candidate is. It answers the kind
-// Jev chose, the probability that the document is a kind worth keeping, and
-// the model that answered.
-func (jev *Jev) classify(ctx context.Context, candidate domain.Candidate) (string, float64, string, error) {
+// Classify asks Jev what kind of document candidate is. Judge draws its
+// verdict from this; it is exported for a caller that wants Jev's own answer.
+func (jev *Jev) Classify(ctx context.Context, candidate domain.Candidate) (Classification, error) {
 	criteria := make(map[string]string, len(kinds))
 	for _, kind := range kinds {
 		criteria[kind.name] = kind.criteria
@@ -223,24 +237,24 @@ func (jev *Jev) classify(ctx context.Context, candidate domain.Candidate) (strin
 		},
 	})
 	if err != nil {
-		return "", 0, "", fmt.Errorf("encode the Jev request: %w", err)
+		return Classification{}, fmt.Errorf("encode the Jev request: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, jevCallTimeout)
 	defer cancel()
 	answer, err := jev.post(ctx, body)
 	if err != nil {
-		return "", 0, "", err
+		return Classification{}, err
 	}
 	kind, ok := answer.Answers[kindQuestion]
 	if !ok || kind.Type != "choice" || kind.Probabilities == nil {
-		return "", 0, "", fmt.Errorf("%w: Jev's answer did not choose a kind of document", domain.ErrQualityCheckUnavailable)
+		return Classification{}, fmt.Errorf("%w: Jev's answer did not choose a kind of document", domain.ErrQualityCheckUnavailable)
 	}
 	keepProbability := 0.0
 	known := false
 	for _, option := range kinds {
 		probability := kind.Probabilities[option.name]
 		if probability < 0 || probability > 1 {
-			return "", 0, "", fmt.Errorf("%w: Jev answered a probability outside 0 to 1", domain.ErrQualityCheckUnavailable)
+			return Classification{}, fmt.Errorf("%w: Jev answered a probability outside 0 to 1", domain.ErrQualityCheckUnavailable)
 		}
 		if option.name == kind.Choice {
 			known = true
@@ -250,9 +264,12 @@ func (jev *Jev) classify(ctx context.Context, candidate domain.Candidate) (strin
 		}
 	}
 	if !known {
-		return "", 0, "", fmt.Errorf("%w: Jev chose %q, which is not one of the kinds it was given", domain.ErrQualityCheckUnavailable, kind.Choice)
+		return Classification{}, fmt.Errorf("%w: Jev chose %q, which is not one of the kinds it was given", domain.ErrQualityCheckUnavailable, kind.Choice)
 	}
-	return kind.Choice, min(keepProbability, 1), strings.TrimSpace(answer.Model), nil
+	return Classification{
+		Kind: kind.Choice, KeepProbability: min(keepProbability, 1),
+		Model: strings.TrimSpace(answer.Model), InputTokens: answer.Usage.InputTokens,
+	}, nil
 }
 
 // post makes one call to Jev, trying again when TypeSafe says it is throttled
