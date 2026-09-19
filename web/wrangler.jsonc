@@ -7,5 +7,16 @@
   "observability": {
     "enabled": true
   },
-  "upload_source_maps": true
+  "upload_source_maps": true,
+  // The production deployment, which deploy/scripts/web.sh builds with
+  // CLOUDFLARE_ENV=production. OpenTofu routes app.oryxa.in/* to it, except
+  // /v1/*, which Cloudflare sends through a tunnel to the API; it is reached
+  // nowhere else.
+  "env": {
+    "production": {
+      "name": "oryxa-production-web",
+      "workers_dev": false,
+      "preview_urls": false
+    }
+  }
 }
