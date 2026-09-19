@@ -24,6 +24,21 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 )
 
+// histogramView makes every histogram instrument, ours and any library's
+// (otelhttp's http.server/client.request.duration, otelpgx's, the Go runtime
+// collector's), aggregate as a base-2 exponential histogram instead of the
+// SDK's default fixed buckets. The collector's awsemf exporter turns a
+// fixed-bucket histogram into a CloudWatch statistic set, which is min, max,
+// sum and count with no percentiles; it turns an exponential one into a
+// value/count array, which CloudWatch can compute p50/p90/p99 from. MaxScale
+// 20 is the highest resolution the SDK allows, and MaxSize 160 is enough
+// buckets to hold that resolution across a wide latency range without
+// rescaling away useful precision.
+var histogramView = metric.NewView(
+	metric.Instrument{Kind: metric.InstrumentKindHistogram},
+	metric.Stream{Aggregation: metric.AggregationBase2ExponentialHistogram{MaxSize: 160, MaxScale: 20}},
+)
+
 type Config struct {
 	ServiceName string
 	Version     string
@@ -65,6 +80,7 @@ func Setup(ctx context.Context, config Config) (Shutdown, error) {
 		tracerProvider = sdktrace.NewTracerProvider(
 			sdktrace.WithBatcher(exporter),
 			sdktrace.WithResource(serviceResource),
+			sdktrace.WithSampler(Sampler()),
 		)
 		otel.SetTracerProvider(tracerProvider)
 	}
@@ -81,6 +97,7 @@ func Setup(ctx context.Context, config Config) (Shutdown, error) {
 		meterProvider = metric.NewMeterProvider(
 			metric.WithReader(metric.NewPeriodicReader(exporter)),
 			metric.WithResource(serviceResource),
+			metric.WithView(histogramView),
 		)
 		otel.SetMeterProvider(meterProvider)
 		if err := otelruntime.Start(otelruntime.WithMeterProvider(meterProvider)); err != nil {
@@ -132,12 +149,19 @@ func configureLogging(config Config) {
 		slog.String("service_version", config.Version),
 		slog.String("environment", config.Environment),
 	})
-	logger := slog.New(handler)
+	// tracingHandler stamps trace_id, span_id and xray_trace_id onto every
+	// record logged with a context that carries a span, so any log call
+	// using the *Context slog variants - the request path, a consumer, a
+	// publisher - links back to its trace without repeating that by hand at
+	// each call site.
+	logger := slog.New(tracingHandler{next: handler})
 	slog.SetDefault(logger)
 	// Preserve existing package-level log calls while emitting the same JSON
 	// envelope. New code should use slog with typed attributes.
 	// Remaining legacy calls are failure paths in background consumers and
 	// fatal startup paths. Informational lifecycle logs use slog directly.
+	// These never carry a request's context, so they are built on the plain
+	// handler rather than tracingHandler: there would never be a span to add.
 	legacy := slog.NewLogLogger(handler, slog.LevelError)
 	log.SetFlags(0)
 	log.SetOutput(legacy.Writer())

@@ -57,7 +57,8 @@ func testTable(t *testing.T, options ...Option) (*Table, *pgxpool.Pool) {
 			locked_until timestamptz,
 			published_at timestamptz,
 			last_error text,
-			claim_token text
+			claim_token text,
+			trace_context text
 		)`); err != nil {
 		t.Fatal(err)
 	}
@@ -277,6 +278,34 @@ func TestTableDeletesOnlyEventsPublishedBeforeTheCutoff(t *testing.T) {
 	}
 	if !slices.Equal(left, []string{"pending", "recent"}) {
 		t.Fatalf("left = %v, want the unpublished and recently published events", left)
+	}
+}
+
+func TestTableClaimReadsTraceContext(t *testing.T) {
+	table, pool := testTable(t)
+	ctx := context.Background()
+	const traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO `+table.Name()+` (id, detail_type, detail, occurred_at, trace_context)
+		VALUES ($1, $2, '{}', $3, $4)`,
+		"evt_traced", "test.v1", time.Now().Add(-time.Minute), traceparent); err != nil {
+		t.Fatal(err)
+	}
+	insert(t, pool, table, "evt_untraced", "test.v1", time.Now().Add(-time.Minute))
+
+	claimed, err := table.Claim(ctx, 2, time.Minute, "token-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]Event{}
+	for _, event := range claimed {
+		byID[event.ID] = event
+	}
+	if got := byID["evt_traced"].TraceContext; got != traceparent {
+		t.Fatalf("traced event trace_context = %q, want %q", got, traceparent)
+	}
+	if got := byID["evt_untraced"].TraceContext; got != "" {
+		t.Fatalf("untraced event trace_context = %q, want empty", got)
 	}
 }
 

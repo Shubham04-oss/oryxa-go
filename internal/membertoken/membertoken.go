@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -106,7 +107,7 @@ type request struct {
 func New(config Config) *Client {
 	client := config.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: requestTimeout}
+		client = &http.Client{Timeout: requestTimeout, Transport: observability.Transport(nil)}
 	}
 	now := config.Now
 	if now == nil {

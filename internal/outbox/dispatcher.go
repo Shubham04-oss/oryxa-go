@@ -9,6 +9,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 // Store is what a Dispatcher needs from an outbox table. *Table is one.
@@ -40,6 +42,7 @@ type Dispatcher struct {
 	store     Store
 	publisher Publisher
 	logger    *slog.Logger
+	metrics   observability.OutboxMetrics
 	now       func() time.Time
 
 	interval time.Duration
@@ -66,10 +69,20 @@ func NewDispatcher(store Store, publisher Publisher, logger *slog.Logger) *Dispa
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	logger = logger.With("table", store.Name())
+	metrics, err := observability.NewOutboxMetrics()
+	if err != nil {
+		// The zero OutboxMetrics is a safe, silent no-op (see its Record
+		// doc): publishing must not fail just because its own metrics could
+		// not be created, which in practice only a broken instrument name
+		// could cause.
+		logger.Warn("outbox metrics unavailable; publishing continues without them", "error", err)
+	}
 	return &Dispatcher{
 		store:     store,
 		publisher: publisher,
-		logger:    logger.With("table", store.Name()),
+		logger:    logger,
+		metrics:   metrics,
 		now:       time.Now,
 		interval:  time.Second,
 		batch:     20,
@@ -158,7 +171,16 @@ func (dispatcher *Dispatcher) flush(ctx context.Context) {
 }
 
 func (dispatcher *Dispatcher) publish(ctx context.Context, event Event, token string) {
-	if err := dispatcher.publisher.Publish(ctx, event); err != nil {
+	started := dispatcher.now()
+	// The trace context travelling with the event, if there is one, is
+	// carried in event.TraceContext for the publisher itself to decode and
+	// link its producer span to: internal/outbox stays agnostic of what
+	// "publish" means for any given service (EventBridge here, potentially
+	// something else for a service that has not adopted it yet), so it is
+	// not this package's place to start that span.
+	err := dispatcher.publisher.Publish(ctx, event)
+	dispatcher.metrics.Record(ctx, dispatcher.store.Name(), event.DetailType, event.OccurredAt, started, err)
+	if err != nil {
 		dispatcher.logger.ErrorContext(ctx, "publish outbox event failed", "event_id", event.ID, "detail_type", event.DetailType, "error", err)
 		marked, markErr := dispatcher.store.MarkFailed(ctx, event.ID, token, retryDelay(event.Attempts), err.Error())
 		dispatcher.reportMark(ctx, event, marked, markErr, "mark outbox event for retry failed")

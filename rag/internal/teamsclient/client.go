@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 )
@@ -25,7 +26,7 @@ type Client struct {
 func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: 10 * time.Second},
+		http:    &http.Client{Timeout: 10 * time.Second, Transport: observability.Transport(nil)},
 	}
 }
 

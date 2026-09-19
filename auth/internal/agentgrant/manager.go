@@ -27,7 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -36,6 +36,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/returnurl"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/secrets"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 // Scope is the fixed OAuth scope an agent grant's refresh token is issued
@@ -99,7 +100,7 @@ func New(config Config, store Store, verifier identityVerifier, sealer Sealer) (
 		store:      store,
 		verifier:   verifier,
 		sealer:     sealer,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{Timeout: 10 * time.Second, Transport: observability.Transport(nil)},
 		now:        time.Now,
 	}, nil
 }
@@ -226,10 +227,10 @@ func (m *Manager) Revoke(ctx context.Context, userID string) error {
 		return err
 	}
 	if plaintext, openErr := m.open(ctx, userID, grant.EncryptedRefreshToken); openErr != nil {
-		log.Printf("open agent refresh token for revocation: %v", openErr)
+		slog.ErrorContext(ctx, "open agent refresh token for revocation", "error", openErr)
 	} else {
 		if revokeErr := m.revokeAtCognito(ctx, string(plaintext)); revokeErr != nil {
-			log.Printf("revoke agent refresh token at Cognito: %v", revokeErr)
+			slog.ErrorContext(ctx, "revoke agent refresh token at Cognito", "error", revokeErr)
 		}
 		secrets.Wipe(plaintext)
 	}

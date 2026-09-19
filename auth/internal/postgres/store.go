@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
@@ -154,10 +155,14 @@ func (store *Store) UserByID(ctx context.Context, userID string) (domain.User, e
 }
 
 func insertEvents(ctx context.Context, tx pgx.Tx, events []domain.Event) error {
+	// The writing transaction's trace, if it has one, travels with the event
+	// from here on: the dispatcher's publisher links its producer span back
+	// to it, and a consumer becomes that producer span's child.
+	traceContext := observability.CaptureTraceCarrier(ctx).Encode()
 	for _, event := range events {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO auth_outbox (id, detail_type, detail, occurred_at)
-			VALUES ($1, $2, $3, $4)`, event.ID, event.DetailType, event.Data, event.OccurredAt)
+			INSERT INTO auth_outbox (id, detail_type, detail, occurred_at, trace_context)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''))`, event.ID, event.DetailType, event.Data, event.OccurredAt, traceContext)
 		if err != nil {
 			return fmt.Errorf("insert outbox event: %w", err)
 		}

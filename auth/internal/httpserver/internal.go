@@ -3,7 +3,7 @@ package httpserver
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -49,7 +49,7 @@ func (server *Server) mintAgentToken(writer http.ResponseWriter, request *http.R
 		writeError(writer, http.StatusUnauthorized, "service token is invalid")
 		return
 	case err != nil:
-		log.Printf("verify agent token service caller: %v", err)
+		slog.ErrorContext(request.Context(), "verify agent token service caller", "error", err)
 		writeError(writer, http.StatusServiceUnavailable, "service identity could not be checked; retry")
 		return
 	}

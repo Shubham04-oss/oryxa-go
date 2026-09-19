@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
@@ -468,9 +469,13 @@ func (store *Store) Complete(ctx context.Context, batch domain.Batch, event doma
 		if !slices.Equal(owned, expected) {
 			return ErrClaimLost
 		}
+		// The writing transaction's trace, if it has one, travels with the
+		// event from here on: the dispatcher's publisher links its producer
+		// span back to it, and a consumer becomes that producer span's child.
+		traceContext := observability.CaptureTraceCarrier(ctx).Encode()
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO batching_outbox (id, detail_type, detail, occurred_at)
-			VALUES ($1, $2, $3, $4)`, event.ID, event.DetailType, event.Data, event.OccurredAt); err != nil {
+			INSERT INTO batching_outbox (id, detail_type, detail, occurred_at, trace_context)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''))`, event.ID, event.DetailType, event.Data, event.OccurredAt, traceContext); err != nil {
 			return fmt.Errorf("record batch-ready event: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `

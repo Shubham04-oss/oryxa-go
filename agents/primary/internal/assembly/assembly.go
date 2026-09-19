@@ -31,6 +31,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -213,7 +214,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	if settings.AppsURL != "" {
 		httpClient := options.HTTP
 		if httpClient == nil {
-			httpClient = &http.Client{}
+			httpClient = &http.Client{Transport: observability.Transport(nil)}
 		}
 		appsToolbox, err := agents.AppsToolbox(agents.AppsConfig{
 			URL:    settings.AppsURL,

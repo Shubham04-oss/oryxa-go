@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 // DefaultBaseURL is Composio's current REST API.
@@ -118,7 +120,7 @@ func New(config Config) (*Client, error) {
 	}
 	httpClient := config.HTTP
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: requestTimeout}
+		httpClient = &http.Client{Timeout: requestTimeout, Transport: observability.Transport(nil)}
 	}
 	return &Client{apiKey: strings.TrimSpace(config.APIKey), baseURL: baseURL, http: httpClient}, nil
 }

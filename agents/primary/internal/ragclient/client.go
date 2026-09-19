@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 const requestTimeout = 30 * time.Second
@@ -69,7 +71,7 @@ type Client struct {
 // New returns a client for rag at baseURL. httpClient may be nil.
 func New(baseURL string, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: requestTimeout}
+		httpClient = &http.Client{Timeout: requestTimeout, Transport: observability.Transport(nil)}
 	}
 	return &Client{baseURL: strings.TrimRight(baseURL, "/"), http: httpClient}
 }

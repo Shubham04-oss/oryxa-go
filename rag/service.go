@@ -218,7 +218,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
-		return publisher.PublishEvent(ctx, domain.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+		return publisher.PublishEvent(ctx, domain.Event{
+			ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data,
+			TraceContext: event.TraceContext,
+		})
 	}), logger)
 	pipeline := ingest.New(store, vectors, embedders, ingest.Options{
 		Batch: config.IngestBatch, Lease: config.IngestLease, Interval: config.IngestInterval,

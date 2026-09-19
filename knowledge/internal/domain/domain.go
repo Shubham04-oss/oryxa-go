@@ -270,6 +270,12 @@ type Event struct {
 	DetailType string
 	OccurredAt time.Time
 	Data       json.RawMessage
+	// TraceContext is the outbox row's stored trace, carried through from
+	// outbox.Event so Publisher can link its producer span to the write that
+	// created this event. Code building an Event to record leaves it unset:
+	// the write path captures the current trace itself (see insertEvents),
+	// rather than trusting a caller to have filled this in.
+	TraceContext string
 }
 
 const (

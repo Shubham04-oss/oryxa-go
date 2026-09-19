@@ -15,6 +15,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/files/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 type Client struct {
@@ -25,7 +26,7 @@ type Client struct {
 func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: 10 * time.Second},
+		http:    &http.Client{Timeout: 10 * time.Second, Transport: observability.Transport(nil)},
 	}
 }
 

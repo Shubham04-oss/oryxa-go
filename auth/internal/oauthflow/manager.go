@@ -20,6 +20,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/authn"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/returnurl"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 type identityVerifier interface {
@@ -84,7 +85,7 @@ func New(config Config, service loginService, verifier identityVerifier) (*Manag
 		allowed:    allowed,
 		service:    service,
 		verifier:   verifier,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{Timeout: 10 * time.Second, Transport: observability.Transport(nil)},
 		now:        time.Now,
 	}, nil
 }

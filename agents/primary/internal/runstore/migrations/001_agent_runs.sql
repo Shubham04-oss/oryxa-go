@@ -61,3 +61,11 @@ CREATE INDEX IF NOT EXISTS agents_outbox_pending_idx
 -- a token, and marking published or failed only touches a row that still
 -- carries that same token. See events.Outbox.Ensure for the full reasoning.
 ALTER TABLE agents_primary.agents_outbox ADD COLUMN IF NOT EXISTS claim_token text;
+
+-- The event pipeline now carries a W3C trace context end to end: an outbox
+-- row records the trace of the transaction that wrote it, so the
+-- dispatcher's publisher can link its producer span back to that write, and
+-- a consumer can become its child. NULL means the write carried no span,
+-- which is ordinary for anything that runs unsampled or outside a traced
+-- request. See events.Outbox.Ensure for the full reasoning.
+ALTER TABLE agents_primary.agents_outbox ADD COLUMN IF NOT EXISTS trace_context text;

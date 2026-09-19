@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
@@ -46,6 +47,13 @@ func (outbox *Outbox) Ensure(ctx context.Context) error {
 		// expired mid-batch could mark a row another replica had since
 		// re-claimed, clearing that claim's lock while it was still publishing.
 		`ALTER TABLE ` + schema + `.agents_outbox ADD COLUMN IF NOT EXISTS claim_token text`,
+		// The event pipeline now carries a W3C trace context end to end: an
+		// outbox row records the trace of the transaction that wrote it, so the
+		// dispatcher's publisher can link its producer span back to that write,
+		// and a consumer can become its child. NULL means the write carried no
+		// span, which is ordinary for anything that runs unsampled or outside a
+		// traced request.
+		`ALTER TABLE ` + schema + `.agents_outbox ADD COLUMN IF NOT EXISTS trace_context text`,
 	}
 	for _, statement := range statements {
 		if _, err := outbox.database.SQLX.ExecContext(ctx, statement); err != nil {
@@ -67,13 +75,17 @@ func (outbox *Outbox) RecordEvents(ctx context.Context, events []Event) error {
 	defer func() {
 		_ = tx.Rollback()
 	}()
+	// The writing transaction's trace, if it has one, travels with the event
+	// from here on: the dispatcher's publisher links its producer span back
+	// to it, and a consumer becomes that producer span's child.
+	traceContext := observability.CaptureTraceCarrier(ctx).Encode()
 	for _, event := range events {
 		if event.ID == "" || event.DetailType == "" || event.OccurredAt.IsZero() {
 			return fmt.Errorf("outbox event %q needs an id, detail type and occurrence time", event.DetailType)
 		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO `+schema+`.agents_outbox (id, detail_type, detail, occurred_at)
-			VALUES ($1, $2, $3, $4)`, event.ID, event.DetailType, event.Data, event.OccurredAt); err != nil {
+			INSERT INTO `+schema+`.agents_outbox (id, detail_type, detail, occurred_at, trace_context)
+			VALUES ($1, $2, $3, $4, NULLIF($5, ''))`, event.ID, event.DetailType, event.Data, event.OccurredAt, traceContext); err != nil {
 			return fmt.Errorf("insert outbox event: %w", err)
 		}
 	}

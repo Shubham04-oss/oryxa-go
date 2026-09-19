@@ -19,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/serviceconfig"
 	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
 
@@ -44,7 +45,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	logger := platform.Logger
 	var classifier application.Classifier = application.DigestClassifier{}
 	if config.TypeSafeAPIKey != "" {
-		jevClassifier, err := jev.New(&http.Client{Timeout: config.JevTimeout}, jev.Config{
+		jevClassifier, err := jev.New(&http.Client{Timeout: config.JevTimeout, Transport: observability.Transport(nil)}, jev.Config{
 			APIKey: config.TypeSafeAPIKey, BaseURL: config.TypeSafeBaseURL, Model: config.JevModel,
 			ImmediateProbability: config.JevImmediate, MinimumConfidence: config.JevMinConfidence,
 		})
@@ -83,6 +84,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
 		return publisher.PublishEvent(ctx, domain.Event{
 			ID: event.ID, DetailType: event.DetailType, Data: event.Data, OccurredAt: event.OccurredAt,
+			TraceContext: event.TraceContext,
 		})
 	}), logger)
 	workers := []host.Worker{dispatcher.Run, service.Run}

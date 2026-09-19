@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
 )
 
@@ -64,7 +65,7 @@ type Client struct {
 func New(config Config) *Client {
 	client := config.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: requestTimeout}
+		client = &http.Client{Timeout: requestTimeout, Transport: observability.Transport(nil)}
 	}
 	return &Client{
 		baseURL: strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"),

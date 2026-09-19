@@ -174,7 +174,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	})
 	publisher := events.NewPublisher(eventClient, platform.EventBusName)
 	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
-		return publisher.PublishEvent(ctx, events.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+		return publisher.PublishEvent(ctx, events.Event{
+			ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data,
+			TraceContext: event.TraceContext,
+		})
 	}), logger)
 
 	workers := []host.Worker{dispatcher.Run}

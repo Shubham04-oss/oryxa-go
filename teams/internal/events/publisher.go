@@ -13,6 +13,7 @@ import (
 
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/domain"
 )
 
@@ -32,25 +33,35 @@ type envelope struct {
 	Version    int             `json:"version"`
 	OccurredAt string          `json:"occurred_at"`
 	Data       json.RawMessage `json:"data"`
+	// TraceCarrier adds this envelope's optional traceparent/tracestate
+	// fields: the producer span's context, for a consumer to become a child
+	// of. Additive and backward compatible - a consumer built before this
+	// rollout simply never looks for them.
+	observability.TraceCarrier
 }
 
 func NewPublisher(client putEventsAPI, busName string) *Publisher {
 	return &Publisher{client: client, busName: busName}
 }
 
-func (publisher *Publisher) PublishEvent(ctx context.Context, event domain.Event) error {
+func (publisher *Publisher) PublishEvent(ctx context.Context, event domain.Event) (resultErr error) {
 	if event.ID == "" || event.DetailType == "" || event.OccurredAt.IsZero() {
 		return errors.New("event id, detail type, and occurrence time are required")
 	}
+	ctx, span := observability.StartProducerSpan(ctx, observability.DecodeTraceCarrier(event.TraceContext), publisher.busName, event.DetailType, event.ID)
+	defer func() { observability.EndSpan(span, resultErr) }()
+
 	occurredAt := event.OccurredAt.UTC()
 	detail, err := json.Marshal(envelope{
-		EventID:    event.ID,
-		Version:    1,
-		OccurredAt: occurredAt.Format(time.RFC3339Nano),
-		Data:       event.Data,
+		EventID:      event.ID,
+		Version:      1,
+		OccurredAt:   occurredAt.Format(time.RFC3339Nano),
+		Data:         event.Data,
+		TraceCarrier: observability.CaptureTraceCarrier(ctx),
 	})
 	if err != nil {
-		return fmt.Errorf("encode event detail: %w", err)
+		resultErr = fmt.Errorf("encode event detail: %w", err)
+		return resultErr
 	}
 
 	output, err := publisher.client.PutEvents(ctx, &eventbridge.PutEventsInput{
@@ -63,17 +74,21 @@ func (publisher *Publisher) PublishEvent(ctx context.Context, event domain.Event
 		}},
 	})
 	if err != nil {
-		return fmt.Errorf("put event: %w", err)
+		resultErr = fmt.Errorf("put event: %w", err)
+		return resultErr
 	}
 	if output == nil {
-		return errors.New("put event returned no result")
+		resultErr = errors.New("put event returned no result")
+		return resultErr
 	}
 	if output.FailedEntryCount > 0 {
 		if len(output.Entries) == 0 {
-			return errors.New("put event failed without an entry result")
+			resultErr = errors.New("put event failed without an entry result")
+			return resultErr
 		}
 		entry := output.Entries[0]
-		return fmt.Errorf("put event failed: %s: %s", aws.ToString(entry.ErrorCode), aws.ToString(entry.ErrorMessage))
+		resultErr = fmt.Errorf("put event failed: %s: %s", aws.ToString(entry.ErrorCode), aws.ToString(entry.ErrorMessage))
+		return resultErr
 	}
 	return nil
 }

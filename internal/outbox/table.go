@@ -28,12 +28,18 @@ type Event struct {
 	Data       json.RawMessage
 	OccurredAt time.Time
 	Attempts   int
+	// TraceContext is the W3C trace context of the transaction that wrote
+	// this event, encoded by observability.CaptureTraceCarrier; "" when that
+	// transaction carried no valid span. A publisher decodes it with
+	// observability.DecodeTraceCarrier to link its producer span back to the
+	// write.
+	TraceContext string
 }
 
 // Table claims, marks and forgets the events in one outbox table. The table
 // has the columns every service's outbox shares: id, detail_type, detail,
-// occurred_at, attempts, available_at, locked_until, published_at, last_error
-// and claim_token.
+// occurred_at, attempts, available_at, locked_until, published_at, last_error,
+// claim_token and trace_context.
 type Table struct {
 	pool   *pgxpool.Pool
 	name   string
@@ -89,7 +95,7 @@ func (table *Table) Claim(ctx context.Context, limit int, ttl time.Duration, tok
 		SET locked_until = now() + ($2 * interval '1 millisecond'), claim_token = $3
 		FROM picked
 		WHERE event.id = picked.id
-		RETURNING event.id, event.detail_type, event.detail, event.occurred_at, event.attempts`,
+		RETURNING event.id, event.detail_type, event.detail, event.occurred_at, event.attempts, event.trace_context`,
 		limit, ttl.Milliseconds(), token)
 	if err != nil {
 		return nil, fmt.Errorf("claim %s: %w", table.name, err)
@@ -99,10 +105,14 @@ func (table *Table) Claim(ctx context.Context, limit int, ttl time.Duration, tok
 	for rows.Next() {
 		var event Event
 		var detail []byte
-		if err := rows.Scan(&event.ID, &event.DetailType, &detail, &event.OccurredAt, &event.Attempts); err != nil {
+		var traceContext *string
+		if err := rows.Scan(&event.ID, &event.DetailType, &detail, &event.OccurredAt, &event.Attempts, &traceContext); err != nil {
 			return nil, fmt.Errorf("scan %s event: %w", table.name, err)
 		}
 		event.Data = json.RawMessage(detail)
+		if traceContext != nil {
+			event.TraceContext = *traceContext
+		}
 		events = append(events, event)
 	}
 	if err := rows.Err(); err != nil {

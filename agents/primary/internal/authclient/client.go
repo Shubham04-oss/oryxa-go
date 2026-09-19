@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 const requestTimeout = 15 * time.Second
@@ -79,7 +81,7 @@ type Client struct {
 
 // New returns a client for auth at baseURL.
 func New(baseURL string) *Client {
-	return &Client{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: requestTimeout}}
+	return &Client{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: requestTimeout, Transport: observability.Transport(nil)}}
 }
 
 type organizationResponse struct {
