@@ -572,8 +572,10 @@ func TestWebhookRouteAnswersComposio(t *testing.T) {
 
 	recorder := call(server, http.MethodPost, "/v1/apps/webhooks/composio", body,
 		"webhook-id", "wh_1", "webhook-signature", "v1,signature")
-	if recorder.Code != http.StatusNoContent {
-		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
+	// 200 exactly: Composio treats a 204 as a failed delivery and sends it
+	// again.
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body)
 	}
 	// The body reaches the application byte for byte: its signature is over
 	// exactly these bytes.
