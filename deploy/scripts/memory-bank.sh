@@ -37,7 +37,7 @@ if [[ -z $engine ]]; then
   operation=$(call -X POST "$api/projects/$project/locations/$region/reasoningEngines" -d "$(jq -n \
     --arg name "$name" --arg generation "$generation" --arg embedding "$embedding" '{
       displayName: $name,
-      description: "What Krude remembers across a member'"'"'s threads",
+      description: "What Krude remembers about members across their threads",
       contextSpec: {memoryBankConfig: {
         generationConfig: {model: $generation},
         similaritySearchConfig: {embeddingModel: $embedding}
