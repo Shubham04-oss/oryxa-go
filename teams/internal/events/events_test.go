@@ -15,11 +15,37 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/domain"
 )
+
+// withTracing registers a real TracerProvider (recorded by the returned
+// SpanRecorder) and the W3C propagator as the global ones, mirroring what
+// observability.Setup does in production, and restores whatever was global
+// before so this test cannot leak state into another one.
+func withTracing(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	previousTracer := otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+	recorder := tracetest.NewSpanRecorder()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()), sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(tracerProvider)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	t.Cleanup(func() {
+		_ = tracerProvider.Shutdown(context.Background())
+		otel.SetTracerProvider(previousTracer)
+		otel.SetTextMapPropagator(previousPropagator)
+	})
+	return recorder
+}
 
 type fakeEventBridge struct {
 	input  *eventbridge.PutEventsInput
@@ -79,6 +105,60 @@ func TestPublisherRejectsIncompleteEvents(t *testing.T) {
 	if err := NewPublisher(client, "default").PublishEvent(context.Background(), domain.Event{}); err == nil {
 		t.Fatal("PublishEvent() error = nil for an empty event")
 	}
+}
+
+func TestPublisherAddsTraceparentToTheEnvelopeAndEndsAProducerSpan(t *testing.T) {
+	recorder := withTracing(t)
+	ctx, writeSpan := observability.Tracer().Start(context.Background(), "write")
+	writtenTraceID := writeSpan.SpanContext().TraceID()
+
+	client := &fakeEventBridge{output: &eventbridge.PutEventsOutput{}}
+	err := NewPublisher(client, "oryxa").PublishEvent(ctx, domain.Event{
+		ID: "evt_1", DetailType: "teams.x.v1", OccurredAt: time.Now(), Data: json.RawMessage(`{}`),
+		// TraceContext round-trips what Table.Claim would have read back from
+		// the outbox row; observability.CaptureTraceCarrier(ctx).Encode() is
+		// the production caller (see insertEvents), exercised in the postgres
+		// package's own tests.
+		TraceContext: observability.CaptureTraceCarrier(ctx).Encode(),
+	})
+	writeSpan.End()
+	if err != nil {
+		t.Fatalf("PublishEvent() error = %v", err)
+	}
+
+	var detail struct {
+		observability.TraceCarrier
+	}
+	if err := json.Unmarshal([]byte(aws.ToString(client.input.Entries[0].Detail)), &detail); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if detail.TraceParent == "" {
+		t.Fatal("published envelope has no traceparent")
+	}
+
+	producer := findSpanNamed(t, recorder, "publish oryxa")
+	if len(producer.Links()) != 1 || producer.Links()[0].SpanContext.TraceID() != writtenTraceID {
+		t.Fatalf("producer span links = %+v, want a link to the write's trace %s", producer.Links(), writtenTraceID)
+	}
+}
+
+// findSpanNamed fails the test unless recorder recorded exactly one ended
+// span with this name. The helper spans these tests create to stand in for a
+// caller's own span (named "write" or "publish", never "publish <bus>" or
+// "process <queue>") are recorded on the same global provider, so a test
+// cannot just assert on the total count.
+func findSpanNamed(t *testing.T, recorder *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
+	t.Helper()
+	var matches []sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.Name() == name {
+			matches = append(matches, span)
+		}
+	}
+	if len(matches) != 1 {
+		t.Fatalf("spans named %q = %d, want 1 (all ended spans: %+v)", name, len(matches), recorder.Ended())
+	}
+	return matches[0]
 }
 
 type fakeApplication struct {
@@ -147,6 +227,46 @@ func TestConsumerRejectsWhatItCannotHandle(t *testing.T) {
 				t.Fatal("Handle() error = nil")
 			}
 		})
+	}
+}
+
+func TestConsumerBecomesAChildOfThePublishedTrace(t *testing.T) {
+	recorder := withTracing(t)
+	ctx, producerSpan := observability.Tracer().Start(context.Background(), "publish")
+	producerSpanContext := producerSpan.SpanContext()
+	carrier := observability.CaptureTraceCarrier(ctx)
+	producerSpan.End()
+
+	body := fmt.Sprintf(
+		`{"id":"eb-1","detail-type":%q,"source":"oryxa.auth","detail":{"event_id":"evt_auth_1","version":1,"occurred_at":"2026-09-13T12:00:00Z","data":{"organization_id":"org_1","name":"Acme","slug":"acme","created_by":"user-1","created_at":"2026-09-13T12:00:00Z"},"traceparent":%q}}`,
+		autheventsv1.OrganizationCreatedDetailType, carrier.TraceParent)
+
+	consumer := NewConsumer(&fakeApplication{}, slog.New(slog.DiscardHandler))
+	if err := consumer.Handle(context.Background(), body); err != nil {
+		t.Fatal(err)
+	}
+
+	got := findSpanNamed(t, recorder, "process ")
+	if got.Parent().TraceID() != producerSpanContext.TraceID() || got.Parent().SpanID() != producerSpanContext.SpanID() {
+		t.Fatalf("consumer span parent = %+v, want the producer's span %+v", got.Parent(), producerSpanContext)
+	}
+}
+
+func TestConsumerProcessesAMessageWithNoCarrierUnderAFreshSpan(t *testing.T) {
+	recorder := withTracing(t)
+	consumer := NewConsumer(&fakeApplication{}, slog.New(slog.DiscardHandler))
+	// authEvent (defined above) carries no traceparent: this is the ordinary
+	// shape for a message published before this rollout, or from an
+	// AWS-native source.
+	if err := consumer.Handle(context.Background(), authEvent(autheventsv1.OrganizationCreatedDetailType, 1, `{"organization_id":"org_1","name":"Acme","slug":"acme","created_by":"user-1","created_at":"2026-09-13T12:00:00Z"}`)); err != nil {
+		t.Fatal(err)
+	}
+	spans := recorder.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want 1", len(spans))
+	}
+	if spans[0].Parent().IsValid() {
+		t.Fatalf("parent = %+v, want an invalid (root) parent for a message with no carrier", spans[0].Parent())
 	}
 }
 

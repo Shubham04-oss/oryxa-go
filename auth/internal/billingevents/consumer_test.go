@@ -32,7 +32,7 @@ const entitlementsData = `{"organization_id":"org_1","revision":3,"plan":"team",
 
 func TestHandleAppliesEntitlements(t *testing.T) {
 	app := &fakeApplication{}
-	err := NewConsumer(app).Handle(context.Background(), billingEvent(billingeventsv1.Source, billingeventsv1.EntitlementsChangedDetailType, 1, entitlementsData))
+	err := NewConsumer(app, nil).Handle(context.Background(), billingEvent(billingeventsv1.Source, billingeventsv1.EntitlementsChangedDetailType, 1, entitlementsData))
 	if err != nil {
 		t.Fatalf("Handle() error = %v", err)
 	}
@@ -45,7 +45,7 @@ func TestHandleAppliesEntitlements(t *testing.T) {
 	}
 
 	unlimited := `{"organization_id":"org_1","revision":4,"status":"unpaid","member_limit":null,"changed_at":"2026-09-13T12:00:00Z"}`
-	if err := NewConsumer(app).Handle(context.Background(), billingEvent(billingeventsv1.Source, billingeventsv1.EntitlementsChangedDetailType, 1, unlimited)); err != nil {
+	if err := NewConsumer(app, nil).Handle(context.Background(), billingEvent(billingeventsv1.Source, billingeventsv1.EntitlementsChangedDetailType, 1, unlimited)); err != nil {
 		t.Fatalf("Handle() error = %v", err)
 	}
 	if app.applied[1].MemberLimit != nil {
@@ -67,7 +67,7 @@ func TestHandleRejectsWhatItCannotApply(t *testing.T) {
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			if err := NewConsumer(&fakeApplication{err: test.err}).Handle(context.Background(), test.body); err == nil {
+			if err := NewConsumer(&fakeApplication{err: test.err}, nil).Handle(context.Background(), test.body); err == nil {
 				t.Fatal("Handle() error = nil")
 			}
 		})
@@ -103,7 +103,7 @@ func TestPollDeletesOnlyAppliedMessages(t *testing.T) {
 		{MessageId: aws.String("failed"), ReceiptHandle: aws.String("receipt-failed"), Body: aws.String("{")},
 	}}}
 
-	NewConsumer(&fakeApplication{}).Poll(ctx, queue, "http://localhost:4566/000000000000/auth-events")
+	NewConsumer(&fakeApplication{}, nil).Poll(ctx, queue, "http://localhost:4566/000000000000/auth-events")
 
 	if len(queue.deleted) != 1 || aws.ToString(queue.deleted[0].ReceiptHandle) != "receipt-applied" {
 		t.Fatalf("deleted = %+v, want only receipt-applied", queue.deleted)

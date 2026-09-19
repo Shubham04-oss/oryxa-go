@@ -112,7 +112,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
-		return publisher.PublishEvent(ctx, domain.Event{ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data})
+		return publisher.PublishEvent(ctx, domain.Event{
+			ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data,
+			TraceContext: event.TraceContext,
+		})
 	}), logger)
 	workers := []host.Worker{dispatcher.Run}
 
@@ -126,7 +129,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 				options.BaseEndpoint = aws.String(config.SQSEndpoint)
 			}
 		})
-		consumer := billingevents.NewConsumer(service)
+		consumer := billingevents.NewConsumer(service, logger)
 		workers = append(workers, func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) })
 	} else {
 		logger.Warn("billing entitlement events are disabled", "reason", "AUTH_EVENTS_QUEUE_URL is not set")
