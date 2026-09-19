@@ -52,6 +52,27 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 }
 
+// TestFromEnvSendsFromItsOwnSESRegion: SES production access belongs to one
+// region, and a deployment elsewhere still sends through it.
+func TestFromEnvSendsFromItsOwnSESRegion(t *testing.T) {
+	env := map[string]string{
+		"EMAIL_FROM_ADDRESS": "no-reply@oryxa.in",
+		"EMAIL_QUEUE_URL":    "https://sqs.us-west-2.amazonaws.com/123456789012/email-events",
+		"SES_REGION":         " ap-south-1 ",
+	}
+	config, err := FromEnv(func(name string) string { return env[name] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.SESRegion != "ap-south-1" {
+		t.Fatalf("SESRegion = %q, want ap-south-1", config.SESRegion)
+	}
+	delete(env, "SES_REGION")
+	if config, err = FromEnv(func(name string) string { return env[name] }); err != nil || config.SESRegion != "" {
+		t.Fatalf("unset SES_REGION = %q, %v; want empty, meaning the deployment's region", config.SESRegion, err)
+	}
+}
+
 func TestFromEnvRejectsInvalidSender(t *testing.T) {
 	tests := []struct {
 		name    string

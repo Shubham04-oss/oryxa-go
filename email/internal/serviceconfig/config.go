@@ -20,6 +20,11 @@ type Config struct {
 	// SMTPAddr, when set, sends through SMTP instead of SES. Local runs
 	// point this at Mailpit.
 	SMTPAddr string
+	// SESRegion is where mail is sent from, when that is not where the rest
+	// of the deployment runs: SES production access and a verified domain
+	// belong to one region, and a deployment elsewhere still sends through
+	// it. Empty means the deployment's own region.
+	SESRegion string
 }
 
 // FromEnv reads email's configuration through getenv, which a host layers its
@@ -47,6 +52,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		SuppressionsTable: valueOrDefault(getenv, "EMAIL_SUPPRESSIONS_TABLE", "email-suppressions"),
 		QueueURL:          queueURL,
 		SMTPAddr:          strings.TrimSpace(getenv("EMAIL_SMTP_ADDR")),
+		SESRegion:         strings.TrimSpace(getenv("SES_REGION")),
 	}, nil
 }
 

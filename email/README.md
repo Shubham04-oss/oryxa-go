@@ -166,3 +166,14 @@ Email deploys as part of the single `oryxa` image, polling `email-events` rather
 
 - `EMAIL_FROM_ADDRESS` (and optionally `EMAIL_FROM_NAME`); the table, configuration set and region settings default to what the provisioner creates;
 - permission to receive and delete messages from `email-events`, to `GetItem`, `PutItem` and `UpdateItem` on both tables, and to `ses:SendEmail` for the identity and the `oryxa-email` configuration set.
+
+SES production access and a verified domain belong to one AWS region. When
+that is not the region the deployment runs in, `SES_REGION` names it: mail is
+sent from there, and everything else — the queue, the tables — stays in
+`AWS_REGION`. The configuration set's delivery events are then published in
+the SES region, and forwarding them to the deployment's event bus is the
+deployment's job. The provisioner takes `SES_REGION` too: it checks the
+identity and sets up the configuration set and its event destination there,
+and everything else in `AWS_REGION`; a rule forwarding the SES region's
+default-bus feedback events to `AWS_REGION`'s default bus is the one piece it
+leaves to the deployment.

@@ -10,7 +10,12 @@ import (
 )
 
 type Config struct {
-	Region              string
+	Region string
+	// SESRegion is where the SES identity, configuration set and event
+	// destination live, when that is not Region: SES production access
+	// belongs to one region. Everything else stays in Region, and SES's
+	// events land on SESRegion's default bus, which the deployment forwards.
+	SESRegion           string
 	EventBusName        string
 	QueueName           string
 	DeadLetterQueueName string
@@ -35,8 +40,10 @@ func FromEnv() (Config, error) {
 	}
 	queueName := envOrDefault("EMAIL_QUEUE_NAME", "email-events")
 
+	region := envOrDefault("AWS_REGION", "ap-south-1")
 	return Config{
-		Region:              envOrDefault("AWS_REGION", "ap-south-1"),
+		Region:              region,
+		SESRegion:           envOrDefault("SES_REGION", region),
 		EventBusName:        envOrDefault("EVENT_BUS_NAME", defaultBus),
 		QueueName:           queueName,
 		DeadLetterQueueName: queueName + "-dlq",
