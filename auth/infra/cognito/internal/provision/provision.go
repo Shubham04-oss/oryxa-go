@@ -196,19 +196,28 @@ func ensureDomain(ctx context.Context, client *cognitoidentityprovider.Client, p
 	return nil
 }
 
+// googleAttributeMapping copies Google's claims onto the Cognito user at every
+// sign-in. email_verified is among them because auth admits a member only by a
+// verified email: unmapped, Cognito marks every Google user's email
+// unverified, and every Google sign-in is refused.
+func googleAttributeMapping() map[string]string {
+	return map[string]string{
+		"email":          "email",
+		"email_verified": "email_verified",
+		"family_name":    "family_name",
+		"given_name":     "given_name",
+		"name":           "name",
+		"picture":        "picture",
+	}
+}
+
 func ensureGoogleProvider(ctx context.Context, client *cognitoidentityprovider.Client, poolID string, config Config) error {
 	details := map[string]string{
 		"authorize_scopes": "email profile openid",
 		"client_id":        config.GoogleClientID,
 		"client_secret":    config.GoogleClientSecret,
 	}
-	attributes := map[string]string{
-		"email":       "email",
-		"family_name": "family_name",
-		"given_name":  "given_name",
-		"name":        "name",
-		"picture":     "picture",
-	}
+	attributes := googleAttributeMapping()
 
 	_, err := client.DescribeIdentityProvider(ctx, &cognitoidentityprovider.DescribeIdentityProviderInput{
 		ProviderName: aws.String(googleProviderName),
@@ -285,7 +294,7 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 			LogoutURLs:                      config.LogoutURLs,
 			PreventUserExistenceErrors:      types.PreventUserExistenceErrorTypesEnabled,
 			ExplicitAuthFlows:               base.explicitAuthFlows,
-			ReadAttributes:                  base.attributes,
+			ReadAttributes:                  base.readAttributes,
 			RefreshTokenRotation:            base.refreshTokenRotation,
 			RefreshTokenValidity:            30,
 			TokenValidityUnits: &types.TokenValidityUnitsType{
@@ -294,7 +303,7 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 				RefreshToken: types.TimeUnitsTypeDays,
 			},
 			SupportedIdentityProviders: []string{"COGNITO", googleProviderName},
-			WriteAttributes:            base.attributes,
+			WriteAttributes:            base.writeAttributes,
 		})
 		if err != nil {
 			return "", fmt.Errorf("create Cognito app client: %w", err)
@@ -317,7 +326,7 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 		LogoutURLs:                      config.LogoutURLs,
 		PreventUserExistenceErrors:      types.PreventUserExistenceErrorTypesEnabled,
 		ExplicitAuthFlows:               base.explicitAuthFlows,
-		ReadAttributes:                  base.attributes,
+		ReadAttributes:                  base.readAttributes,
 		RefreshTokenRotation:            base.refreshTokenRotation,
 		RefreshTokenValidity:            30,
 		TokenValidityUnits: &types.TokenValidityUnitsType{
@@ -326,7 +335,7 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 			RefreshToken: types.TimeUnitsTypeDays,
 		},
 		SupportedIdentityProviders: []string{"COGNITO", googleProviderName},
-		WriteAttributes:            base.attributes,
+		WriteAttributes:            base.writeAttributes,
 	})
 	if err != nil {
 		return "", fmt.Errorf("update Cognito app client: %w", err)
@@ -337,7 +346,8 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 type clientSettings struct {
 	allowedFlows         []types.OAuthFlowType
 	allowedScopes        []string
-	attributes           []string
+	readAttributes       []string
+	writeAttributes      []string
 	explicitAuthFlows    []types.ExplicitAuthFlowsType
 	refreshTokenRotation *types.RefreshTokenRotationType
 }
@@ -346,7 +356,11 @@ func appClientSettings(_ Config) clientSettings {
 	return clientSettings{
 		allowedFlows:  []types.OAuthFlowType{types.OAuthFlowTypeCode},
 		allowedScopes: []string{"openid", "email", "profile"},
-		attributes:    []string{"email", "family_name", "given_name", "name", "picture"},
+		// email_verified is readable, so it reaches the identity token that
+		// auth admits a member by, and not writable: whether an address is
+		// verified is for Cognito and Google to say, never the member.
+		readAttributes:  []string{"email", "email_verified", "family_name", "given_name", "name", "picture"},
+		writeAttributes: []string{"email", "family_name", "given_name", "name", "picture"},
 		explicitAuthFlows: []types.ExplicitAuthFlowsType{
 			types.ExplicitAuthFlowsTypeAllowUserPasswordAuth,
 		},

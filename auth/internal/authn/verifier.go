@@ -2,8 +2,10 @@ package authn
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -17,12 +19,35 @@ type Claims struct {
 }
 
 type IdentityClaims struct {
-	Subject       string `json:"sub"`
-	Email         string `json:"email"`
-	EmailVerified bool   `json:"email_verified"`
-	Name          string `json:"name"`
-	Picture       string `json:"picture"`
-	Nonce         string `json:"nonce"`
+	Subject       string    `json:"sub"`
+	Email         string    `json:"email"`
+	EmailVerified claimBool `json:"email_verified"`
+	Name          string    `json:"name"`
+	Picture       string    `json:"picture"`
+	Nonce         string    `json:"nonce"`
+}
+
+// claimBool is a boolean claim that may arrive spelled as a string. Cognito
+// keeps user attributes as strings, and an attribute mapped from a federated
+// identity provider, such as Google's email_verified, can be issued as "true".
+type claimBool bool
+
+func (value *claimBool) UnmarshalJSON(data []byte) error {
+	var boolean bool
+	if err := json.Unmarshal(data, &boolean); err == nil {
+		*value = claimBool(boolean)
+		return nil
+	}
+	var text string
+	if err := json.Unmarshal(data, &text); err != nil {
+		return fmt.Errorf("claim is neither a boolean nor a string: %s", data)
+	}
+	parsed, err := strconv.ParseBool(text)
+	if err != nil {
+		return fmt.Errorf("claim %q is not a boolean", text)
+	}
+	*value = claimBool(parsed)
+	return nil
 }
 
 type Verifier struct {

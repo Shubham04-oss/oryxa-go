@@ -156,7 +156,7 @@ func (manager *Manager) Complete(ctx context.Context, state, stateCookie, code s
 	}
 	claims, err := manager.verifier.VerifyIdentityToken(ctx, tokens.IDToken, flow.Nonce)
 	if err != nil {
-		return Session{}, fmt.Errorf("identity token rejected: %w", domain.ErrUnauthorized)
+		return Session{}, fmt.Errorf("identity token rejected (%v): %w", err, domain.ErrUnauthorized)
 	}
 	user, _, err := manager.service.CompleteLogin(ctx, application.FederatedIdentity{
 		Subject:     claims.Subject,
@@ -240,7 +240,7 @@ func (manager *Manager) exchange(ctx context.Context, form url.Values) (tokenRes
 		return tokenResponse{}, fmt.Errorf("decode Cognito token response: %w", err)
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 || tokens.Error != "" {
-		return tokenResponse{}, fmt.Errorf("Cognito token exchange rejected: %w", domain.ErrUnauthorized)
+		return tokenResponse{}, fmt.Errorf("Cognito token exchange rejected (%d %s): %w", response.StatusCode, tokens.Error, domain.ErrUnauthorized)
 	}
 	if tokens.AccessToken == "" || tokens.ExpiresIn <= 0 {
 		return tokenResponse{}, fmt.Errorf("Cognito token response is incomplete: %w", domain.ErrUnauthorized)
