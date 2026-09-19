@@ -5,6 +5,7 @@
 package email
 
 import (
+	"cmp"
 	"context"
 
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -47,7 +48,15 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		logger.Info("sending mail over SMTP", "addr", config.SMTPAddr)
 		deliveries = delivery.New(storeClient, mail.NewSMTPSender(config.SMTPAddr, config.From), logger)
 	} else {
-		deliveries = delivery.New(storeClient, mail.NewSESSender(sesv2.NewFromConfig(platform.AWS), config.From, config.ConfigurationSet), logger)
+		// SES answers only in the region that holds the verified domain and
+		// production access, which need not be the deployment's own.
+		sesClient := sesv2.NewFromConfig(platform.AWS, func(options *sesv2.Options) {
+			if config.SESRegion != "" {
+				options.Region = config.SESRegion
+			}
+		})
+		logger.Info("sending mail through SES", "region", cmp.Or(config.SESRegion, platform.AWS.Region))
+		deliveries = delivery.New(storeClient, mail.NewSESSender(sesClient, config.From, config.ConfigurationSet), logger)
 	}
 	consumer := events.NewConsumer(application.New(templates, deliveries), logger)
 
