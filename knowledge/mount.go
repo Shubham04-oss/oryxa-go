@@ -104,18 +104,12 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 
 	// What a connected app yields is judged before it is published, once
 	// there is a model to judge with.
-	var documentJudge application.Judge
-	if config.JudgeModel != "" {
-		gemini, err := judge.New(ctx, judge.Config{
-			Project: config.GoogleCloudProject, Location: config.GoogleCloudLocation,
-			Model: config.JudgeModel, Credentials: platform.Google,
-		})
-		if err != nil {
-			return host.Service{}, err
-		}
-		documentJudge = gemini
-	} else {
-		logger.Warn("KNOWLEDGE_JUDGE_MODEL is not set: documents from connected apps are indexed without judging whether they are worth it, " +
+	documentJudge, err := judgeFor(ctx, config, platform)
+	if err != nil {
+		return host.Service{}, err
+	}
+	if documentJudge == nil {
+		logger.Warn("KNOWLEDGE_JUDGE is off: documents from connected apps are indexed without judging whether they are worth it, " +
 			"so only Gmail's own Promotions and Social categories and empty documents are kept out")
 	}
 
@@ -220,5 +214,44 @@ func (grants memberGrants) MemberToken(ctx context.Context, organizationID, memb
 		return "", err
 	default:
 		return "", fmt.Errorf("%w: %w", domain.ErrProviderUnavailable, err)
+	}
+}
+
+// judgeFor builds the judge KNOWLEDGE_JUDGE names: Jev, with the Gemini model,
+// when there is one, deciding what Jev is unsure of and what it cannot read;
+// or the Gemini model alone. Nil when judging is off.
+func judgeFor(ctx context.Context, config serviceconfig.Config, platform host.Platform) (application.Judge, error) {
+	var gemini *judge.Gemini
+	if config.Judge != serviceconfig.JudgeOff && config.JudgeModel != "" {
+		var err error
+		gemini, err = judge.New(ctx, judge.Config{
+			Project: config.GoogleCloudProject, Location: config.GoogleCloudLocation,
+			Model: config.JudgeModel, Credentials: platform.Google,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	switch config.Judge {
+	case serviceconfig.JudgeJev:
+		jevConfig := judge.JevConfig{
+			APIKey: config.TypeSafeAPIKey, BaseURL: config.TypeSafeBaseURL, Model: config.JudgeJevModel,
+			EscalateBelow: config.JudgeEscalateBelow,
+		}
+		if gemini != nil {
+			jevConfig.Escalate = gemini
+		}
+		jev, err := judge.NewJev(jevConfig)
+		if err != nil {
+			return nil, err
+		}
+		return jev, nil
+	case serviceconfig.JudgeGemini:
+		if gemini == nil {
+			return nil, nil
+		}
+		return gemini, nil
+	default:
+		return nil, nil
 	}
 }

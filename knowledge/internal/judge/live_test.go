@@ -120,3 +120,30 @@ func TestLiveJudgeDecidesTheObviousCases(t *testing.T) {
 		}
 	}
 }
+
+// TestLiveJevDecidesTheObviousCases asks Jev itself, when TYPESAFE_API_KEY is
+// set, about the same documents: those it can read, since it reads text only.
+func TestLiveJevDecidesTheObviousCases(t *testing.T) {
+	key := os.Getenv("TYPESAFE_API_KEY")
+	if key == "" {
+		t.Skip("TYPESAFE_API_KEY names the account to check Jev with")
+	}
+	jev, err := NewJev(JevConfig{APIKey: key, BaseURL: os.Getenv("TYPESAFE_BASE_URL")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range liveCases {
+		if len(c.candidate.Original) > 0 {
+			continue
+		}
+		kind, keepProbability, model, err := jev.classify(context.Background(), c.candidate)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		t.Logf("%-28s %-14s keep=%.2f (%s)", c.name, kind, keepProbability, model)
+		if (keepProbability >= 0.5) != c.keep {
+			t.Errorf("%s: keep probability %.2f as %s, want keep=%t", c.name, keepProbability, kind, c.keep)
+		}
+	}
+}

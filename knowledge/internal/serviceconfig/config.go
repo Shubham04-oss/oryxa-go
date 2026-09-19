@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,13 +49,22 @@ type Config struct {
 	// organization's own files. Empty means such a document is skipped
 	// instead, the same as before this existed.
 	OriginalsBucket string
-	// JudgeModel is the Gemini model that judges whether a document from a
-	// connected app is worth indexing, on Vertex AI in GoogleCloudProject at
-	// GoogleCloudLocation. Empty indexes what the rules alone do not exclude,
-	// unjudged.
+	// Judge is what judges whether a document from a connected app is worth
+	// indexing: JudgeJev, JudgeGemini, or JudgeOff for the rules alone.
+	Judge string
+	// JudgeModel is the Gemini model on Vertex AI, in GoogleCloudProject at
+	// GoogleCloudLocation: the judge itself, or with Jev the one Jev hands
+	// what it is unsure of and what it cannot read.
 	JudgeModel          string
 	GoogleCloudProject  string
 	GoogleCloudLocation string
+	// TypeSafeAPIKey and TypeSafeBaseURL reach TypeSafe, which serves Jev,
+	// the model JudgeJevModel names. JudgeEscalateBelow is how sure Jev must
+	// be for its own verdict to stand; zero is the judge's default.
+	TypeSafeAPIKey     string
+	TypeSafeBaseURL    string
+	JudgeJevModel      string
+	JudgeEscalateBelow float64
 	// AllowedOrigins may send cookie-authenticated mutations.
 	AllowedOrigins []string
 	// EventBridgeEndpoint, SQSEndpoint and S3Endpoint override where those AWS
@@ -87,7 +97,11 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		ComposioAPIKey:      strings.TrimSpace(getenv("COMPOSIO_API_KEY")),
 		ComposioBaseURL:     endpoint(getenv, "COMPOSIO_BASE_URL"),
 		OriginalsBucket:     strings.TrimSpace(getenv("KNOWLEDGE_ORIGINALS_BUCKET")),
+		Judge:               strings.ToLower(strings.TrimSpace(getenv("KNOWLEDGE_JUDGE"))),
 		JudgeModel:          strings.TrimSpace(getenv("KNOWLEDGE_JUDGE_MODEL")),
+		TypeSafeAPIKey:      strings.TrimSpace(getenv("TYPESAFE_API_KEY")),
+		TypeSafeBaseURL:     endpoint(getenv, "TYPESAFE_BASE_URL"),
+		JudgeJevModel:       strings.TrimSpace(getenv("KNOWLEDGE_JUDGE_JEV_MODEL")),
 		GoogleCloudProject:  strings.TrimSpace(getenv("GOOGLE_CLOUD_PROJECT")),
 		GoogleCloudLocation: strings.TrimSpace(getenv("GOOGLE_CLOUD_LOCATION")),
 		AllowedOrigins:      splitList(getenv("KNOWLEDGE_ALLOWED_ORIGINS")),
@@ -110,14 +124,37 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		// Gemini 3 is served from the global endpoint only.
 		config.GoogleCloudLocation = "global"
 	}
-	if config.JudgeModel != "" && config.GoogleCloudProject == "" {
-		return Config{}, errors.New("GOOGLE_CLOUD_PROJECT is required when KNOWLEDGE_JUDGE_MODEL is set: Vertex AI serves the judge")
+	if config.JudgeEscalateBelow, err = certainty(getenv, "KNOWLEDGE_JUDGE_ESCALATE_BELOW"); err != nil {
+		return Config{}, err
+	}
+	switch config.Judge {
+	case "":
+		// Unnamed, a Gemini model alone is judged with, as it always was.
+		config.Judge = JudgeOff
+		if config.JudgeModel != "" {
+			config.Judge = JudgeGemini
+		}
+	case JudgeOff, JudgeGemini, JudgeJev:
+	default:
+		return Config{}, fmt.Errorf("KNOWLEDGE_JUDGE must be %s, %s or %s", JudgeJev, JudgeGemini, JudgeOff)
+	}
+	if config.Judge == JudgeGemini && config.JudgeModel == "" {
+		return Config{}, errors.New("KNOWLEDGE_JUDGE_MODEL is required when KNOWLEDGE_JUDGE is gemini")
+	}
+	if config.Judge == JudgeJev && config.TypeSafeAPIKey == "" {
+		// Sending what members connect to TypeSafe is a decision made by
+		// naming it, never by a key merely being present.
+		return Config{}, errors.New("TYPESAFE_API_KEY is required when KNOWLEDGE_JUDGE is jev")
+	}
+	if config.Judge != JudgeOff && config.JudgeModel != "" && config.GoogleCloudProject == "" {
+		return Config{}, errors.New("GOOGLE_CLOUD_PROJECT is required when KNOWLEDGE_JUDGE_MODEL is set: Vertex AI serves the model")
 	}
 	for _, check := range []struct{ name, value string }{
 		{"AUTH_URL", config.AuthURL},
 		{"APPS_URL", config.AppsURL},
 		{"FILES_URL", config.FilesURL},
 		{"COMPOSIO_BASE_URL", config.ComposioBaseURL},
+		{"TYPESAFE_BASE_URL", config.TypeSafeBaseURL},
 		{"EVENTBRIDGE_ENDPOINT", config.EventBridgeEndpoint},
 		{"AWS_ENDPOINT_URL_SQS", config.SQSEndpoint},
 		{"AWS_ENDPOINT_URL_S3", config.S3Endpoint},
@@ -138,6 +175,27 @@ func FromEnv(getenv func(string) string) (Config, error) {
 // be positive: zero or negative says nothing about how often, and a sweep
 // interval that is never due, or always due, is a config mistake worth
 // refusing rather than running with.
+// The judges KNOWLEDGE_JUDGE names.
+const (
+	JudgeJev    = "jev"
+	JudgeGemini = "gemini"
+	JudgeOff    = "off"
+)
+
+// certainty reads a probability a verdict must reach, from 0.5 to 1; zero
+// when unset.
+func certainty(getenv func(string) string, name string) (float64, error) {
+	value := strings.TrimSpace(getenv(name))
+	if value == "" {
+		return 0, nil
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil || parsed < 0.5 || parsed > 1 {
+		return 0, fmt.Errorf("%s must be a probability from 0.5 to 1", name)
+	}
+	return parsed, nil
+}
+
 func duration(getenv func(string) string, name string, fallback time.Duration) (time.Duration, error) {
 	value := strings.TrimSpace(getenv(name))
 	if value == "" {

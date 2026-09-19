@@ -153,8 +153,8 @@ func TestFromEnvReadsTheJudge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.JudgeModel != "" || config.GoogleCloudLocation != "global" {
-		t.Fatalf("judge = %q at %q, want none, and Gemini's global endpoint by default", config.JudgeModel, config.GoogleCloudLocation)
+	if config.Judge != JudgeOff || config.JudgeModel != "" || config.GoogleCloudLocation != "global" {
+		t.Fatalf("judge = %q (%q) at %q, want off, and Gemini's global endpoint by default", config.Judge, config.JudgeModel, config.GoogleCloudLocation)
 	}
 
 	values := required()
@@ -168,8 +168,67 @@ func TestFromEnvReadsTheJudge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.JudgeModel != "gemini-3.5-flash-lite" || config.GoogleCloudProject != "internalbeta" || config.GoogleCloudLocation != "us-central1" {
-		t.Fatalf("config = %+v", config)
+	if config.Judge != JudgeGemini || config.JudgeModel != "gemini-3.5-flash-lite" || config.GoogleCloudProject != "internalbeta" || config.GoogleCloudLocation != "us-central1" {
+		t.Fatalf("config = %+v, want the Gemini model alone to judge", config)
+	}
+}
+
+func TestFromEnvReadsJev(t *testing.T) {
+	values := required()
+	values["KNOWLEDGE_JUDGE"] = " Jev "
+	if _, err := FromEnv(env(values)); err == nil {
+		t.Fatal("FromEnv() error = nil for Jev without TypeSafe's key")
+	}
+	values["TYPESAFE_API_KEY"] = " ts_live_1 "
+	config, err := FromEnv(env(values))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.Judge != JudgeJev || config.TypeSafeAPIKey != "ts_live_1" || config.TypeSafeBaseURL != "" ||
+		config.JudgeJevModel != "" || config.JudgeEscalateBelow != 0 || config.JudgeModel != "" {
+		t.Fatalf("config = %+v, want Jev on TypeSafe's defaults, escalating to nobody", config)
+	}
+
+	values["KNOWLEDGE_JUDGE_MODEL"] = "gemini-3.5-flash-lite"
+	values["GOOGLE_CLOUD_PROJECT"] = "internalbeta"
+	values["TYPESAFE_BASE_URL"] = "https://api.typesafe.test/"
+	values["KNOWLEDGE_JUDGE_JEV_MODEL"] = "jev-1.13.0"
+	values["KNOWLEDGE_JUDGE_ESCALATE_BELOW"] = "0.9"
+	config, err = FromEnv(env(values))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.Judge != JudgeJev || config.JudgeModel != "gemini-3.5-flash-lite" || config.TypeSafeBaseURL != "https://api.typesafe.test" ||
+		config.JudgeJevModel != "jev-1.13.0" || config.JudgeEscalateBelow != 0.9 {
+		t.Fatalf("config = %+v, want Jev escalating to Gemini below 0.9", config)
+	}
+
+	// A key alone turns nothing on: sending members' documents to TypeSafe
+	// is a decision made by naming Jev.
+	keyOnly := required()
+	keyOnly["TYPESAFE_API_KEY"] = "ts_live_1"
+	if config, err := FromEnv(env(keyOnly)); err != nil || config.Judge != JudgeOff {
+		t.Fatalf("FromEnv() = %q, %v, want judging off", config.Judge, err)
+	}
+}
+
+func TestFromEnvRejectsAJudgeItCannotBuild(t *testing.T) {
+	for name, overrides := range map[string]map[string]string{
+		"unknown judge":          {"KNOWLEDGE_JUDGE": "oracle"},
+		"gemini without a model": {"KNOWLEDGE_JUDGE": "gemini"},
+		"certainty below a coin": {"KNOWLEDGE_JUDGE_ESCALATE_BELOW": "0.3"},
+		"certainty not a number": {"KNOWLEDGE_JUDGE_ESCALATE_BELOW": "sure"},
+		"TypeSafe URL not a URL": {"TYPESAFE_BASE_URL": "api.typesafe.ai"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			values := required()
+			for key, value := range overrides {
+				values[key] = value
+			}
+			if _, err := FromEnv(env(values)); err == nil {
+				t.Fatal("FromEnv() error = nil")
+			}
+		})
 	}
 }
 
