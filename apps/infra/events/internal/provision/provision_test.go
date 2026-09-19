@@ -11,13 +11,10 @@ func TestEventPatternMatchesTheEventsThatEndConnections(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EventPattern() error = %v", err)
 	}
+	// One source, so no $or: EventBridge refuses an $or of one branch.
 	assertJSONEqual(t, pattern, `{
-		"$or": [
-			{
-				"source": ["oryxa.auth"],
-				"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
-			}
-		]
+		"source": ["oryxa.auth"],
+		"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
 	}`)
 }
 
