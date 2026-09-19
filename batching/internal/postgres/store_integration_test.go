@@ -577,16 +577,14 @@ func TestRemovingATriggerDropsOnlyWhatItReported(t *testing.T) {
 	recordTrigger(t, store, sibling)
 }
 
-// TestATriggerThatArrivesLateIsDueAtOnce: deadlines count from when apps
-// received a trigger, so one that reaches batching after its whole cadence
-// has passed goes in the next sweep instead of waiting another cadence. It
-// is due as it is recorded, not before.
-func TestATriggerThatArrivesLateIsDueAtOnce(t *testing.T) {
-	rule := domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20}
+// TestATriggerPastItsCadenceIsDueAtOnce: received a couple of minutes ago,
+// its one-minute cadence already ended, so it is due as it is recorded.
+func TestATriggerPastItsCadenceIsDueAtOnce(t *testing.T) {
+	rule := domain.Rule{Size: 5, MaxWait: time.Minute, Largest: 20}
 	store, organizationID := testStore(t, rule)
 	ctx := context.Background()
 	late := testTrigger(organizationID, "user_1", "late", domain.LaneDigest)
-	late.ReceivedAt = time.Now().UTC().Add(-2 * time.Hour)
+	late.ReceivedAt = time.Now().UTC().Add(-2 * time.Minute)
 	recording := time.Now().Add(-time.Millisecond)
 	recordTrigger(t, store, late)
 	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
@@ -597,6 +595,34 @@ func TestATriggerThatArrivesLateIsDueAtOnce(t *testing.T) {
 	if len(got) != 1 || got[0].FlushReason != "hard_deadline" ||
 		got[0].HardDueAt.After(time.Now()) || got[0].HardDueAt.Before(recording) {
 		t.Fatalf("claimed = %+v, want the late trigger due at its hard deadline, its recording", got)
+	}
+}
+
+// TestABackloggedTriggerWaitsTheCatchUpWindow: received two hours before it
+// is recorded, it is part of a backlog, and waits a minute for the rest of
+// it rather than going out alone.
+func TestABackloggedTriggerWaitsTheCatchUpWindow(t *testing.T) {
+	rule := domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+	backlogged := testTrigger(organizationID, "user_1", "backlogged", domain.LaneDigest)
+	backlogged.ReceivedAt = time.Now().UTC().Add(-2 * time.Hour)
+	recording := time.Now()
+	recordTrigger(t, store, backlogged)
+	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ownBatches(claimed, organizationID); len(got) != 0 {
+		t.Fatalf("claimed = %+v, want the backlogged trigger held for the catch-up window", got)
+	}
+	var hardDue time.Time
+	if err := store.database.Pool.QueryRow(ctx,
+		`SELECT hard_due_at FROM batching_triggers WHERE id = $1`, backlogged.ID).Scan(&hardDue); err != nil {
+		t.Fatal(err)
+	}
+	if hardDue.Before(recording.Add(59*time.Second)) || hardDue.After(time.Now().Add(61*time.Second)) {
+		t.Fatalf("hard deadline = %s, want about a minute after its recording at %s", hardDue, recording)
 	}
 }
 
