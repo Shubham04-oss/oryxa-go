@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -200,6 +201,119 @@ func TestCorpusRefusesAnUnsearchableCombination(t *testing.T) {
 	bad.Spec.Metric = domain.MetricInnerProduct
 	if err := store.CreateCorpus(ctx, bad, testEvent(t, "rag.corpus.created.v1")); err == nil {
 		t.Fatal("an inner-product corpus on S3 Vectors was recorded")
+	}
+}
+
+// TestCorpusRefusesAWrongEmbeddingSpecOnBedrockKB: a Bedrock knowledge base
+// embeds with whatever model it was created with, not with whatever a
+// corpus asks for, so the database refuses one that disagrees with it
+// exactly as it refuses an unsearchable S3 Vectors combination above — and
+// accepts the one spec a knowledge base corpus can actually have.
+func TestCorpusRefusesAWrongEmbeddingSpecOnBedrockKB(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	wrongID, _ := domain.NewID(domain.CorpusIDPrefix)
+	wrong := corpus
+	wrong.ID = wrongID
+	wrong.Slug = corpus.Slug + "-kb-wrong"
+	wrong.Backend = domain.BackendBedrockKB
+	wrong.Spec = domain.EmbeddingSpec{Provider: domain.ProviderBedrock, Model: "amazon.titan-embed-text-v2:0", Dimensions: 512, Metric: domain.MetricCosine}
+	if err := store.CreateCorpus(ctx, wrong, testEvent(t, "rag.corpus.created.v1")); err == nil {
+		t.Fatal("a bedrock-kb corpus pinning a spec other than the knowledge base's own was recorded")
+	}
+
+	rightID, _ := domain.NewID(domain.CorpusIDPrefix)
+	right := corpus
+	right.ID = rightID
+	right.Slug = corpus.Slug + "-kb-right"
+	right.Backend = domain.BackendBedrockKB
+	right.Spec = domain.BedrockKnowledgeBaseEmbeddingSpec
+	if err := store.CreateCorpus(ctx, right, testEvent(t, "rag.corpus.created.v1")); err != nil {
+		t.Fatalf("a bedrock-kb corpus pinning the knowledge base's own spec was refused: %v", err)
+	}
+}
+
+// TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip covers what migration
+// 007 added to rag_documents: a document indexed from an original object
+// rather than text, the constraint that a document must carry one or the
+// other, and kb_synced_hash surviving a claim untouched — which is what lets
+// the ingest worker tell "never submitted" from "submission outcome still
+// unknown" across many claims of the same document.
+func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+
+	document := newDocument(corpus, domain.Source{Kind: domain.SourceExternal, Ref: "https://example.com/handbook.pdf"}, "Handbook", "")
+	document.ContentSHA256 = "original-sha-1"
+	document.ByteSize = 4096
+	document.OriginalBucket = "oryxa-knowledge-originals"
+	document.OriginalKey = "org/doc/original-sha-1.pdf"
+	stored, outcome, err := store.UpsertDocument(ctx, document, "", testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("UpsertDocument with an original and no body: %v", err)
+	}
+	if outcome != UpsertCreated {
+		t.Fatalf("outcome = %v, want UpsertCreated", outcome)
+	}
+	if stored.OriginalBucket != document.OriginalBucket || stored.OriginalKey != document.OriginalKey {
+		t.Fatalf("original location did not round-trip: %+v", stored)
+	}
+	if !stored.HasOriginal() {
+		t.Fatal("HasOriginal() is false for a document with an original bucket and key")
+	}
+	if stored.KBSyncedHash != "" {
+		t.Fatalf("kb_synced_hash = %q on a document never submitted, want empty", stored.KBSyncedHash)
+	}
+
+	// Neither text nor an original: the database refuses it rather than
+	// recording a document nothing could ever index.
+	empty := newDocument(corpus, domain.Source{Kind: domain.SourceExternal, Ref: "https://example.com/empty"}, "Empty", "")
+	if _, _, err := store.UpsertDocument(ctx, empty, "", testEvent(t, "rag.document.received.v1")); err == nil {
+		t.Fatal("a document with neither body nor an original was recorded")
+	}
+
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, stored.ContentSHA256, at); err != nil {
+		t.Fatalf("MarkKnowledgeBaseSubmitted: %v", err)
+	}
+	afterSubmit, err := store.Document(ctx, organizationID, stored.ID)
+	if err != nil {
+		t.Fatalf("Document: %v", err)
+	}
+	if afterSubmit.KBSyncedHash != stored.ContentSHA256 {
+		t.Fatalf("kb_synced_hash = %q after submission, want %q", afterSubmit.KBSyncedHash, stored.ContentSHA256)
+	}
+
+	// A claim is how the ingest worker later polls this document's outcome;
+	// it must not disturb kb_synced_hash, which is the only thing telling
+	// the next claim that this content was already submitted.
+	claimed, err := store.ClaimDocuments(ctx, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimDocuments: %v", err)
+	}
+	var found bool
+	for _, candidate := range claimed {
+		if candidate.ID != stored.ID {
+			continue
+		}
+		found = true
+		if candidate.KBSyncedHash != stored.ContentSHA256 {
+			t.Fatalf("claiming the document changed kb_synced_hash to %q, want %q", candidate.KBSyncedHash, stored.ContentSHA256)
+		}
+	}
+	if !found {
+		t.Fatal("ClaimDocuments did not claim the pending document")
+	}
+
+	ids, err := store.DocumentIDsForCorpus(ctx, corpus.ID)
+	if err != nil {
+		t.Fatalf("DocumentIDsForCorpus: %v", err)
+	}
+	if !slices.Contains(ids, stored.ID) {
+		t.Fatalf("DocumentIDsForCorpus = %v, want it to include %s", ids, stored.ID)
 	}
 }
 
