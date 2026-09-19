@@ -43,6 +43,12 @@ variable "model" {
   default     = "gemini-3.5-flash-lite"
 }
 
+variable "rag_default_backend" {
+  description = "Where rag puts a new corpus: bedrock-kb for the knowledge base. Empty keeps rag's own default; set it only with an image that knows the backend."
+  type        = string
+  default     = ""
+}
+
 variable "rerank_model" {
   description = "The Bedrock model rag reranks with, in-region. Amazon Rerank needs no Marketplace subscription."
   type        = string

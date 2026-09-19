@@ -105,6 +105,13 @@ locals {
       RAG_ANSWER_PROVIDER    = "vertex"
       RAG_ANSWER_MODEL       = var.model
       RAG_RERANK_MODEL_ARN   = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.rerank_model}"
+      # The Bedrock knowledge base new corpora are indexed in, once the image
+      # knows it (rag_default_backend).
+      RAG_KNOWLEDGE_BASE_ID             = aws_bedrockagent_knowledge_base.main.id
+      RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID = aws_bedrockagent_data_source.main.data_source_id
+      RAG_KNOWLEDGE_BASE_BUCKET         = aws_s3_bucket.knowledge_base_documents.bucket
+      RAG_DEFAULT_BACKEND               = var.rag_default_backend
+      KNOWLEDGE_ORIGINALS_BUCKET        = aws_s3_bucket.knowledge_base_documents.bucket
 
       GOOGLE_CLOUD_PROJECT              = var.gcp_project
       GOOGLE_CLOUD_LOCATION             = "global"
@@ -224,6 +231,23 @@ resource "aws_iam_role_policy" "task" {
         Effect   = "Allow"
         Action   = "s3vectors:*"
         Resource = ["arn:aws:s3vectors:${var.aws_region}:${local.account_id}:bucket/${local.vectors_bucket}", "arn:aws:s3vectors:${var.aws_region}:${local.account_id}:bucket/${local.vectors_bucket}/*"]
+      },
+      {
+        Sid    = "KnowledgeBase"
+        Effect = "Allow"
+        Action = [
+          "bedrock:Retrieve", "bedrock:IngestKnowledgeBaseDocuments", "bedrock:GetKnowledgeBaseDocuments",
+          "bedrock:DeleteKnowledgeBaseDocuments", "bedrock:ListKnowledgeBaseDocuments",
+        ]
+        Resource = aws_bedrockagent_knowledge_base.main.arn
+      },
+      {
+        # Originals knowledge stores and text rag stages, for the knowledge
+        # base to read.
+        Sid      = "KnowledgeBaseDocuments"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
+        Resource = [aws_s3_bucket.knowledge_base_documents.arn, "${aws_s3_bucket.knowledge_base_documents.arn}/*"]
       },
       {
         Sid      = "Bedrock"
