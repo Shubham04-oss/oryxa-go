@@ -188,11 +188,10 @@ func TestForgettingNeedsAnOrganization(t *testing.T) {
 
 func TestScopeNeedsBothHalves(t *testing.T) {
 	for name, scope := range map[string]Scope{
-		"no organization":     {UserID: "user-1"},
-		"no member":           {OrganizationID: "org-acme"},
-		"blank organization":  {OrganizationID: "  ", UserID: "user-1"},
-		"separator in org":    {OrganizationID: "org/acme", UserID: "user-1"},
-		"separator in member": {OrganizationID: "org-acme", UserID: "user/1"},
+		"no organization":    {UserID: "user-1"},
+		"no member":          {OrganizationID: "org-acme"},
+		"blank organization": {OrganizationID: "  ", UserID: "user-1"},
+		"blank member":       {OrganizationID: "org-acme", UserID: "\t"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if err := scope.Validate(); err == nil {
@@ -206,17 +205,13 @@ func TestScopeNeedsBothHalves(t *testing.T) {
 	}
 }
 
-// TestScopeKeysAreDistinct checks that two scopes cannot share a key, which
-// is what keeps a backend addressed by one string from merging them.
-func TestScopeKeysAreDistinct(t *testing.T) {
-	first := Scope{OrganizationID: "a", UserID: "bc"}
-	second := Scope{OrganizationID: "ab", UserID: "c"}
-	for _, scope := range []Scope{first, second} {
-		if err := scope.Validate(); err != nil {
-			t.Fatalf("Validate(%+v): %v", scope, err)
-		}
-	}
-	if first.Key() == second.Key() {
-		t.Fatalf("two scopes share the key %q", first.Key())
+// TestScopeFieldsCarryBothHalves checks that neither dimension is dropped on
+// the way to a backend: an organization missing from the map is a scope that
+// matches every organization's memories.
+func TestScopeFieldsCarryBothHalves(t *testing.T) {
+	fields := Scope{OrganizationID: "org-acme", UserID: "user-1"}.Fields()
+	if len(fields) != 2 ||
+		fields[FieldOrganizationID] != "org-acme" || fields[FieldUserID] != "user-1" {
+		t.Fatalf("Fields() = %v", fields)
 	}
 }

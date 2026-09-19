@@ -28,7 +28,8 @@ krude              chat: the member's assistant
 ├── researcher     single-turn sub-agent: answers from the live web with Google Search and URL context
 ├── toolboxes      list_tools, load_tools: sandbox, browser, apps and knowledge, loaded on demand
 ├── subagents      create_subagent, list_subagents, remove_subagent: specialists Krude writes and reuses in a session
-└── helpers        list_helpers, spawn_helper: temporary agents for big or separate work
+├── helpers        list_helpers, spawn_helper: temporary agents for big or separate work
+└── memory         load_memory: what Krude learned about the member in earlier threads, where a memory bank is configured
 ```
 
 **Sub-agents.** Krude calls a sub-agent the way it calls a tool, and the result
@@ -553,6 +554,12 @@ Krude knows, where they would outlive the run and steer later ones; reading
 would hand that text what Krude already knows. The member's own runs in the
 same thread are remembered as usual.
 
+That boundary is not airtight, and it cannot be: a member's own run on a
+thread a wake-up already wrote to answers with that text still in context, so
+Krude's own answer can carry a claim the apps made, and the answer is
+remembered. What this rules out is app text becoming a memory on its own,
+with nobody reading it.
+
 Vertex AI Memory Bank keeps the memories, behind the seam every backend comes
 through, `internal/adkmemory`. Without `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE`
 there is no backend, the runner is built without a memory service, and Krude
@@ -573,7 +580,7 @@ is invalid without both:
 
 | Type | What it is |
 | --- | --- |
-| `Scope` | Whose memory a read or write addresses. `Key` renders it as the single string a backend such as Memory Bank or mem0 addresses memory by, and no two scopes share a key |
+| `Scope` | Whose memory a read or write addresses. `Fields` renders it as the key-value map a backend partitions by; a backend addressed by a single string instead, as mem0 is, needs both halves in it and no two scopes rendering the same |
 | `Backend` | Where memories are kept. Every call names the scope it acts in, so an implementation cannot answer outside one |
 | `Service.For` | The `memory.Service` one run is given. It holds its scope from the moment it is built |
 
@@ -602,11 +609,10 @@ preference stated once and contradicted later ends up as one fact rather than
 two. That extraction is the part worth buying rather than building: retrieval
 over an organization's own vectors is what `rag` already does.
 
-`MemoryBank` scopes by Memory Bank's own scope map, `Scope.Fields`, rather
-than by `Scope.Key`. The service returns a memory only to a request whose
-scope has the same keys and values, so the organization is a dimension
-matched where the memories are kept, not a convention this service encodes
-into a user string.
+`MemoryBank` scopes by Memory Bank's own scope map, `Scope.Fields`. The
+service returns a memory only to a request whose scope has the same keys and
+values, so the organization is a dimension matched where the memories are
+kept, not a convention this service encodes into a user string.
 
 Agent engines are regional, so `GOOGLE_CLOUD_LOCATION` has to name the region
 the engine is in rather than the global endpoint the models are served from,

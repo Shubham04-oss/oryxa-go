@@ -24,11 +24,6 @@ import (
 	"google.golang.org/adk/v2/session"
 )
 
-// scopeSeparator joins a scope's halves into the one key backends that
-// address memory by a single string are given. Neither half may contain it,
-// so two different scopes can never produce the same key.
-const scopeSeparator = "/"
-
 // Scope is whose memory a read or write addresses: one member, in one
 // organization. Both halves are required, because either alone names more
 // than one member's memory.
@@ -37,26 +32,17 @@ type Scope struct {
 	UserID         string
 }
 
-// Validate reports whether the scope names exactly one member's memory.
+// Validate reports whether the scope names exactly one member's memory. What
+// a scope value may contain is the backend's own rule, since it is the one
+// that has to store and match it, and [MemoryBank] applies Memory Bank's.
 func (scope Scope) Validate() error {
 	switch {
 	case strings.TrimSpace(scope.OrganizationID) == "":
 		return errors.New("adkmemory: a scope needs an organization")
 	case strings.TrimSpace(scope.UserID) == "":
 		return errors.New("adkmemory: a scope needs a member")
-	case strings.Contains(scope.OrganizationID, scopeSeparator),
-		strings.Contains(scope.UserID, scopeSeparator):
-		return fmt.Errorf("adkmemory: a scope cannot contain %q", scopeSeparator)
 	}
 	return nil
-}
-
-// Key is the scope as one string, for a backend that addresses memory by a
-// single identifier, as mem0 does. It is stable and distinct per scope: what
-// one organization wrote is never what another reads. Callers validate the
-// scope first; an invalid one has no key.
-func (scope Scope) Key() string {
-	return scope.OrganizationID + scopeSeparator + scope.UserID
 }
 
 // The keys [Scope.Fields] partitions memory by.
@@ -65,12 +51,14 @@ const (
 	FieldUserID         = "user_id"
 )
 
-// Fields is the scope as the key-value map a backend that partitions along
-// several dimensions of its own is given, as Vertex AI Memory Bank does.
-// There the organization is a dimension the service itself matches on rather
-// than a convention this package encodes into a string, which is the
-// stronger of the two: Memory Bank returns a memory only when its scope has
-// the same keys and values as the one asked for.
+// Fields is the scope as a key-value map, for a backend that partitions
+// along several dimensions of its own, as Vertex AI Memory Bank does. There
+// the organization is a dimension the service itself matches on rather than
+// one this package encodes into an identifier: Memory Bank returns a memory
+// only when its scope has the same keys and values as the one asked for.
+//
+// A backend that addresses memory by a single string instead — mem0 does —
+// needs both halves in that string, and no two scopes may render the same.
 func (scope Scope) Fields() map[string]string {
 	return map[string]string{
 		FieldOrganizationID: scope.OrganizationID,
