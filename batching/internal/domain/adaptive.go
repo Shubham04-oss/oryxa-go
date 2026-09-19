@@ -19,6 +19,13 @@ const (
 	minimumTargetSize    = 2
 	priorityPressure     = 2.0
 	priorityDeadlineLead = 0.75
+	// backlogAge is how long before its recording a trigger must have been
+	// received to count as part of a backlog, well past ordinary delivery.
+	backlogAge = 5 * time.Minute
+	// catchUpWindow is how long a backlogged trigger waits past its
+	// recording, so a member's backlog goes out in batches rather than a
+	// trigger or two per sweep.
+	catchUpWindow = time.Minute
 )
 
 // FallbackPriority is what a trigger gets when its classifier could not be
@@ -72,7 +79,8 @@ func CountFrom(receivedAt, recordedAt time.Time) time.Time {
 // Observe advances the time-decayed profile and assigns this trigger its
 // schedule, counted from CountFrom(receivedAt, recordedAt) but never set
 // before recordedAt: a trigger whose cadence passed on its way here is due
-// as it is recorded, not before. The returned deadlines depend only on this
+// as it is recorded, not before — or, when it is part of a backlog, a short
+// catch-up window after, so the backlog goes out together. The returned deadlines depend only on this
 // observation and are persisted with it; a later observation cannot
 // postpone them.
 func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, receivedAt, recordedAt time.Time, key string, priority float64) (TrafficProfile, Schedule, error) {
@@ -134,11 +142,21 @@ func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, receivedAt, r
 	// Raising both to the recording keeps the soft deadline at or before
 	// the hard one.
 	recorded := recordedAt.UTC()
-	if hardDue.Before(recorded) {
-		hardDue = recorded
+	floorAt := recorded
+	if recorded.Sub(receivedAt.UTC()) > backlogAge {
+		// Arriving this late, it is part of a backlog — the consumer was
+		// down, or the queue behind — and the rest of the member's backlog
+		// is arriving with it. Due the moment each is recorded, the sweep
+		// would release it a few triggers at a time, one agent turn each;
+		// a short window lets what arrives together go together. It only
+		// ever delays what is already late, and by no more than the window.
+		floorAt = recorded.Add(catchUpWindow)
 	}
-	if softDue.Before(recorded) {
-		softDue = recorded
+	if hardDue.Before(floorAt) {
+		hardDue = floorAt
+	}
+	if softDue.Before(floorAt) {
+		softDue = floorAt
 	}
 	return profile, Schedule{
 		TargetSize: target, Pressure: 1 + priorityPressure*priority,

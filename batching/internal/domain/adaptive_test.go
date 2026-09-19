@@ -136,8 +136,9 @@ func TestDeadlinesCountFromWhenAppsReceivedTheTrigger(t *testing.T) {
 		t.Fatalf("deadlines = %s / %s, want %s / %s", timely.SoftDueAt, timely.HardDueAt, wantSoft, boundary)
 	}
 
-	// Recorded after its cadence ended, it is due as it is recorded rather
-	// than at the member's next boundary.
+	// Recorded after its cadence ended, it is due soon after it is recorded
+	// rather than at the member's next boundary. This late, it is part of a
+	// backlog, so it waits the catch-up window for the rest of it.
 	late := boundary.Add(19 * time.Minute)
 	if next := cadenceBoundary(late, time.Hour, "org_1/user_1"); !next.After(late) || next.Equal(boundary) {
 		t.Fatal("the late recording has no later boundary to tell apart")
@@ -146,8 +147,22 @@ func TestDeadlinesCountFromWhenAppsReceivedTheTrigger(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !overdue.HardDueAt.Equal(late) || !overdue.SoftDueAt.Equal(late) {
-		t.Fatalf("a late trigger's deadlines = %s / %s, want both its recording, %s", overdue.SoftDueAt, overdue.HardDueAt, late)
+	if want := late.Add(catchUpWindow); !overdue.HardDueAt.Equal(want) || !overdue.SoftDueAt.Equal(want) {
+		t.Fatalf("a backlogged trigger's deadlines = %s / %s, want both the catch-up window after its recording, %s",
+			overdue.SoftDueAt, overdue.HardDueAt, want)
+	}
+
+	// Only just late — received a minute before its boundary, recorded just
+	// after — is ordinary delivery, not a backlog: due as it is recorded.
+	justBefore := boundary.Add(-time.Minute)
+	justAfter := boundary.Add(30 * time.Second)
+	_, crossed, err := scheduler.Observe(TrafficProfile{}, justBefore, justAfter, "org_1/user_1", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !crossed.HardDueAt.Equal(justAfter) || !crossed.SoftDueAt.Equal(justAfter) {
+		t.Fatalf("a trigger just past its boundary = %s / %s, want both its recording, %s",
+			crossed.SoftDueAt, crossed.HardDueAt, justAfter)
 	}
 }
 
@@ -162,15 +177,15 @@ func TestAReceiptTimeOutsideReasonCountsFromTheNearestSaneOne(t *testing.T) {
 	if want := cadenceBoundary(recorded, time.Hour, "org_1/user_1"); !ahead.HardDueAt.Equal(want) {
 		t.Fatalf("a future receipt's hard deadline = %s, want %s", ahead.HardDueAt, want)
 	}
-	// A receipt far in the past, even one a broken clock made up, is due as
-	// the trigger is recorded.
+	// A receipt far in the past, even one a broken clock made up, is due the
+	// catch-up window after the trigger is recorded, like any backlog.
 	for _, received := range []time.Time{recorded.Add(-72 * time.Hour), time.Date(1000, time.January, 1, 0, 0, 0, 0, time.UTC)} {
 		_, old, err := scheduler.Observe(TrafficProfile{}, received, recorded, "org_1/user_1", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !old.HardDueAt.Equal(recorded) || !old.SoftDueAt.Equal(recorded) {
-			t.Fatalf("received %s: deadlines = %s / %s, want both %s", received, old.SoftDueAt, old.HardDueAt, recorded)
+		if want := recorded.Add(catchUpWindow); !old.HardDueAt.Equal(want) || !old.SoftDueAt.Equal(want) {
+			t.Fatalf("received %s: deadlines = %s / %s, want both %s", received, old.SoftDueAt, old.HardDueAt, want)
 		}
 	}
 }

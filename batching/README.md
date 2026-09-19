@@ -159,6 +159,14 @@ already decided when a member's triggers make a turn, so agents keeps no rule
 of its own. So the switch loses nothing, deploy batching with its queue before
 re-provisioning agents' rule.
 
+A trigger that reaches batching more than five minutes after apps received
+it is part of a backlog: the consumer was down, or the queue fell behind.
+Its deadlines have usually passed, so it would be due the moment it is
+recorded and go out a trigger or two per sweep, one agent turn each. It waits
+a one-minute catch-up window after its recording instead, so a member's
+backlog goes out in batches. Only what is already late waits, and by no more
+than the window.
+
 ## Known gaps
 
 Found in review, and not yet addressed:
@@ -167,10 +175,3 @@ Found in review, and not yet addressed:
   every app payload — mail bodies, direct messages — to TypeSafe, for every
   organization, with no per-organization opt-in. Leave it unset until that
   sharing is approved.
-- **A backlog older than its cadence goes out in small batches.** After the
-  consumer has been down for longer than `BATCHING_MAX_WAIT`, every queued
-  trigger is already due as it is recorded, so each sweep releases whatever
-  of a member's backlog was recorded since the last one: up to one agent turn
-  per member per sweep until the queue drains, rather than grouped batches.
-  Counting such late triggers from their recording again, or giving them a
-  short grace, would trade that for lateness.
