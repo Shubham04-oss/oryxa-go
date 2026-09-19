@@ -9,6 +9,29 @@ import (
 	"testing"
 )
 
+// Export is configured only in a deployment, so this is where the resource
+// the exporters carry is built before one starts.
+func TestServiceResourceMergesWithTheSDKDefault(t *testing.T) {
+	serviceResource, err := newServiceResource(Config{ServiceName: "oryxa", Version: "v1.2.3", Environment: "production"})
+	if err != nil {
+		t.Fatalf("newServiceResource() error = %v", err)
+	}
+	attributes := map[string]string{}
+	for _, attribute := range serviceResource.Attributes() {
+		attributes[string(attribute.Key)] = attribute.Value.Emit()
+	}
+	for key, want := range map[string]string{
+		"service.name":                "oryxa",
+		"service.version":             "v1.2.3",
+		"deployment.environment.name": "production",
+		"telemetry.sdk.language":      "go",
+	} {
+		if attributes[key] != want {
+			t.Errorf("%s = %q, want %q", key, attributes[key], want)
+		}
+	}
+}
+
 func TestLogLevel(t *testing.T) {
 	if logLevel("debug") != slog.LevelDebug || logLevel("warning") != slog.LevelWarn ||
 		logLevel("ERROR") != slog.LevelError || logLevel("unknown") != slog.LevelInfo {
