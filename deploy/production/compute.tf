@@ -113,7 +113,6 @@ locals {
 
       AGENTS_PRIMARY_MODEL               = var.model
       AGENTS_PRIMARY_MODEL_LITE          = var.model
-      AGENTS_PRIMARY_MODEL_PRICES        = jsonencode({ (var.model) = var.model_price })
       AGENTS_PRIMARY_SERVICE_KEY_ID      = aws_kms_alias.service["agents-primary"].name
       AGENTS_PRIMARY_ARTIFACT_BUCKET     = local.artifacts_bucket
       AGENTS_PRIMARY_MEMORY_AGENT_ENGINE = var.memory_agent_engine

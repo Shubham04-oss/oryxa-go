@@ -43,17 +43,6 @@ variable "model" {
   default     = "gemini-3.5-flash-lite"
 }
 
-variable "model_price" {
-  description = "What var.model costs in US dollars per million tokens, at Vertex AI's global price, for the agents' usage accounting."
-  type = object({
-    input  = number
-    output = number
-    cached = number
-  })
-  # Gemini 3.5 Flash-Lite, global, from cloud.google.com/vertex-ai/generative-ai/pricing on 2026-09-19.
-  default = { input = 0.30, output = 2.50, cached = 0.03 }
-}
-
 variable "rerank_model" {
   description = "The Bedrock model rag reranks with, in-region. Amazon Rerank needs no Marketplace subscription."
   type        = string
