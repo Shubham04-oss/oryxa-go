@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"cloud.google.com/go/aiplatform/apiv1beta1/aiplatformpb"
+	"cloud.google.com/go/auth"
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/v2/session"
@@ -311,6 +313,33 @@ func TestMemoryBankNeedsAProjectAndAnEngine(t *testing.T) {
 				t.Fatalf("NewMemoryBank(%+v) allowed it", options)
 			}
 		})
+	}
+}
+
+// fixedToken is credentials that always hold the same token.
+type fixedToken string
+
+func (token fixedToken) Token(context.Context) (*auth.Token, error) {
+	return &auth.Token{Value: string(token), Type: "Bearer"}, nil
+}
+
+// On Fargate there are no Application Default Credentials to find: the
+// credentials internal/gcpauth federates from AWS stand in for them.
+func TestMemoryBankUsesTheCredentialsItIsGiven(t *testing.T) {
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", filepath.Join(t.TempDir(), "missing.json"))
+	options := MemoryBankOptions{ProjectID: "oryxa", AgentEngine: "1234", Location: "us-west1"}
+	if bank, err := NewMemoryBank(context.Background(), options); err == nil {
+		_ = bank.Close()
+		t.Fatal("NewMemoryBank() found Application Default Credentials without a credentials file, so this test proves nothing")
+	}
+
+	options.Credentials = auth.NewCredentials(&auth.CredentialsOptions{TokenProvider: fixedToken("service-account-token")})
+	bank, err := NewMemoryBank(context.Background(), options)
+	if err != nil {
+		t.Fatalf("NewMemoryBank() with credentials = %v, want it built on them", err)
+	}
+	if err := bank.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

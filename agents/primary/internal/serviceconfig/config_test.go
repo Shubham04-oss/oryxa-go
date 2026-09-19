@@ -101,6 +101,26 @@ func TestFromEnvReadsWakeups(t *testing.T) {
 	}
 }
 
+// Agent engines are regional, while the models are served from the global
+// endpoint, so the engine's region is a setting of its own; a deployment that
+// runs both in one region names it once.
+func TestFromEnvPutsMemoryInItsEnginesRegion(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{"GOOGLE_CLOUD_LOCATION": "us-central1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.MemoryLocation != "us-central1" {
+		t.Fatalf("MemoryLocation = %q, want GOOGLE_CLOUD_LOCATION's us-central1", config.MemoryLocation)
+	}
+	config, err = FromEnv(env(map[string]string{"AGENTS_PRIMARY_MEMORY_LOCATION": " us-west1 "}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.GoogleCloudLocation != "global" || config.MemoryLocation != "us-west1" {
+		t.Fatalf("locations = %q for the models and %q for memory, want global and us-west1", config.GoogleCloudLocation, config.MemoryLocation)
+	}
+}
+
 func TestFromEnvOverrides(t *testing.T) {
 	config, err := FromEnv(env(map[string]string{
 		"AGENTS_PRIMARY_MODEL":                           " gemini-3.5-flash ",

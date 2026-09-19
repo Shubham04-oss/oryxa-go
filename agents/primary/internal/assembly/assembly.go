@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"cloud.google.com/go/auth"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -38,7 +39,10 @@ type Options struct {
 	Settings serviceconfig.Config
 	// AWS carries the region and middleware; the sandbox, browser, artifact
 	// store and agent-token signer are built from it.
-	AWS    aws.Config
+	AWS aws.Config
+	// Google reaches Vertex AI for the models and Memory Bank. Nil means
+	// Application Default Credentials.
+	Google *auth.Credentials
 	Logger *slog.Logger
 	// Tokens mints an agent token for a run that carries no member access
 	// token of its own. When nil, Build uses auth's agent-token exchange if
@@ -129,11 +133,11 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	}
 	logger.InfoContext(ctx, "AWS AgentCore sandbox and browser configured", "region", settings.AWSRegion)
 
-	mainModel, err := agents.Gemini(ctx, settings.Model, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+	mainModel, err := agents.Gemini(ctx, settings.Model, settings.GoogleCloudProject, settings.GoogleCloudLocation, options.Google)
 	if err != nil {
 		return fail("main model", err)
 	}
-	liteModel, err := agents.Gemini(ctx, settings.ModelLite, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+	liteModel, err := agents.Gemini(ctx, settings.ModelLite, settings.GoogleCloudProject, settings.GoogleCloudLocation, options.Google)
 	if err != nil {
 		return fail("lite model", err)
 	}
@@ -145,7 +149,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	// that nil.
 	var promptCache modelcache.Store
 	if settings.Cache {
-		client, err := agents.GeminiClient(ctx, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+		client, err := agents.GeminiClient(ctx, settings.GoogleCloudProject, settings.GoogleCloudLocation, options.Google)
 		if err != nil {
 			return fail("prompt cache client", err)
 		}
@@ -255,9 +259,10 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	if settings.MemoryAgentEngine != "" {
 		bank, err := adkmemory.NewMemoryBank(ctx, adkmemory.MemoryBankOptions{
 			ProjectID:   settings.GoogleCloudProject,
-			Location:    settings.GoogleCloudLocation,
+			Location:    settings.MemoryLocation,
 			AgentEngine: settings.MemoryAgentEngine,
 			Recalled:    settings.MemoryRecalled,
+			Credentials: options.Google,
 		})
 		if err != nil {
 			return fail("memory bank", err)
@@ -273,7 +278,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			return fail("memory", err)
 		}
 		krude.Memory = remembering
-		logger.InfoContext(ctx, "memories kept in Vertex AI Memory Bank", "agent_engine", settings.MemoryAgentEngine)
+		logger.InfoContext(ctx, "memories kept in Vertex AI Memory Bank", "agent_engine", settings.MemoryAgentEngine, "location", settings.MemoryLocation)
 	} else {
 		logger.InfoContext(ctx, "Krude remembers nothing between threads; set AGENTS_PRIMARY_MEMORY_AGENT_ENGINE to give it memory")
 	}

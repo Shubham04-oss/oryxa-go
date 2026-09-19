@@ -116,8 +116,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	embedders := embedding.NewRegistry(embedding.Config{
 		Bedrock: bedrockClient,
 		Vertex: embedding.VertexConfig{
-			Project:  config.GoogleCloudProject,
-			Location: config.GoogleCloudLocation,
+			Project:     config.GoogleCloudProject,
+			Location:    config.GoogleCloudLocation,
+			Credentials: platform.Google,
 		},
 		Options: embedding.Options{
 			Concurrency: config.EmbedConcurrency,
@@ -138,7 +139,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 	case config.RerankVertexModel != "":
 		reranker, err = retrieval.NewVertexReranker(ctx, retrieval.VertexRerankConfig{
-			Project: config.GoogleCloudProject, Model: config.RerankVertexModel,
+			Project: config.GoogleCloudProject, Model: config.RerankVertexModel, Credentials: platform.Google,
 		})
 		if err != nil {
 			return host.Service{}, err
@@ -156,6 +157,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	case config.AnswerProvider == domain.ProviderVertex:
 		generator, err = generation.NewVertex(ctx, generation.VertexConfig{
 			Project: config.GoogleCloudProject, Location: config.GoogleCloudLocation, Model: config.AnswerModel,
+			Credentials: platform.Google,
 		})
 	default:
 		generator, err = generation.NewBedrock(bedrockClient, config.AnswerModel, generation.BedrockOptions{

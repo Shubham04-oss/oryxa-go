@@ -10,6 +10,7 @@ import (
 
 	aiplatform "cloud.google.com/go/aiplatform/apiv1beta1"
 	"cloud.google.com/go/aiplatform/apiv1beta1/aiplatformpb"
+	"cloud.google.com/go/auth"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 	"google.golang.org/genai"
@@ -51,6 +52,9 @@ type MemoryBankOptions struct {
 	// accepted. Extraction runs a model and takes seconds, so a run should
 	// not wait for it; tests that read back what they wrote must.
 	WaitForWrites bool
+	// Credentials reach Vertex AI, such as those internal/gcpauth federates
+	// from AWS. Nil means Application Default Credentials.
+	Credentials *auth.Credentials
 }
 
 // memoryBankAPI is the part of Vertex AI's memory bank this backend uses,
@@ -84,7 +88,7 @@ var _ Backend = (*MemoryBank)(nil)
 
 // NewMemoryBank connects to the memory bank of the agent engine named in
 // options. It contacts nothing: the connection is made on first use, with
-// the credentials Google's own discovery finds.
+// options' credentials or, without any, those Google's own discovery finds.
 func NewMemoryBank(ctx context.Context, options MemoryBankOptions) (*MemoryBank, error) {
 	location := strings.TrimSpace(options.Location)
 	switch {
@@ -101,8 +105,11 @@ func NewMemoryBank(ctx context.Context, options MemoryBankOptions) (*MemoryBank,
 	case options.Recalled < 0:
 		return nil, errors.New("adkmemory: a memory bank cannot recall fewer than no memories")
 	}
-	client, err := aiplatform.NewMemoryBankClient(ctx,
-		option.WithEndpoint(adkaiplatform.HostPortURL(location)))
+	clientOptions := []option.ClientOption{option.WithEndpoint(adkaiplatform.HostPortURL(location))}
+	if options.Credentials != nil {
+		clientOptions = append(clientOptions, option.WithAuthCredentials(options.Credentials))
+	}
+	client, err := aiplatform.NewMemoryBankClient(ctx, clientOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("open memory bank client: %w", err)
 	}

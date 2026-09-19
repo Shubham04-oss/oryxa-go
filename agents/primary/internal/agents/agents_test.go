@@ -13,6 +13,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"cloud.google.com/go/auth"
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/v2/agent"
@@ -695,7 +696,7 @@ func TestKrudeRunsSingleTurnSubAgentsTogether(t *testing.T) {
 }
 
 func TestGeminiRequiresAProject(t *testing.T) {
-	if _, err := Gemini(context.Background(), "gemini-3.8-flash", "", "global"); err == nil {
+	if _, err := Gemini(context.Background(), "gemini-3.8-flash", "", "global", nil); err == nil {
 		t.Fatal("Gemini() error = nil without a project")
 	}
 }
@@ -712,12 +713,39 @@ func TestGeminiUsesApplicationDefaultCredentials(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "")
 
-	llm, err := Gemini(context.Background(), "gemini-3.8-flash", "oryxa-test", "global")
+	llm, err := Gemini(context.Background(), "gemini-3.8-flash", "oryxa-test", "global", nil)
 	if err != nil {
 		t.Fatalf("Gemini() error = %v", err)
 	}
 	if llm.Name() != "gemini-3.8-flash" {
 		t.Fatalf("Name() = %q", llm.Name())
+	}
+}
+
+// fixedToken is credentials that always hold the same token.
+type fixedToken string
+
+func (token fixedToken) Token(context.Context) (*auth.Token, error) {
+	return &auth.Token{Value: string(token), Type: "Bearer"}, nil
+}
+
+// On Fargate there are no Application Default Credentials to find: the
+// credentials internal/gcpauth federates from AWS stand in for them, and with
+// them nothing looks for a credentials file at all.
+func TestGeminiUsesTheCredentialsItIsGiven(t *testing.T) {
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", filepath.Join(t.TempDir(), "missing.json"))
+	t.Setenv("GOOGLE_API_KEY", "")
+	t.Setenv("GEMINI_API_KEY", "")
+	if _, err := Gemini(context.Background(), "gemini-3.5-flash-lite", "oryxa-test", "global", nil); err == nil {
+		t.Fatal("Gemini() found Application Default Credentials without a credentials file, so this test proves nothing")
+	}
+
+	credentials := auth.NewCredentials(&auth.CredentialsOptions{TokenProvider: fixedToken("service-account-token")})
+	if _, err := Gemini(context.Background(), "gemini-3.5-flash-lite", "oryxa-test", "global", credentials); err != nil {
+		t.Fatalf("Gemini() with credentials = %v, want it built on them", err)
+	}
+	if _, err := GeminiClient(context.Background(), "oryxa-test", "global", credentials); err != nil {
+		t.Fatalf("GeminiClient() with credentials = %v, want it built on them", err)
 	}
 }
 

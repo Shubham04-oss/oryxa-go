@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"cloud.google.com/go/auth"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	bedrocktypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
@@ -377,6 +378,41 @@ func TestVertexGenerate(t *testing.T) {
 	}
 	if gotBody.GenerationConfig.Temperature != 0 {
 		t.Fatalf("temperature = %v, want 0", gotBody.GenerationConfig.Temperature)
+	}
+}
+
+// fixedToken is credentials that always hold the same token.
+type fixedToken string
+
+func (token fixedToken) Token(context.Context) (*auth.Token, error) {
+	return &auth.Token{Value: string(token), Type: "Bearer"}, nil
+}
+
+// Without a client of its own, a request carries the token of the credentials
+// it was given, such as those internal/gcpauth federates from AWS.
+func TestVertexSendsTheCredentialsToken(t *testing.T) {
+	t.Parallel()
+	authorization := make(chan string, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		authorization <- request.Header.Get("Authorization")
+		_, _ = writer.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"Ninety days [1]."}]},"finishReason":"STOP"}]}`))
+	}))
+	defer server.Close()
+
+	generator, err := NewVertex(context.Background(), VertexConfig{
+		Project: "oryxa-dev", Model: "gemini-3.5-flash-lite", Endpoint: server.URL,
+		Credentials: auth.NewCredentials(&auth.CredentialsOptions{TokenProvider: fixedToken("service-account-token")}),
+	})
+	if err != nil {
+		t.Fatalf("NewVertex: %v", err)
+	}
+	if _, err := generator.Generate(context.Background(), Request{
+		Question: "how often?", Passages: PassagesFrom(testMatches(2)),
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if got := <-authorization; got != "Bearer service-account-token" {
+		t.Fatalf("Authorization = %q, want the credentials' token", got)
 	}
 }
 
