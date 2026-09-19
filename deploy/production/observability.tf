@@ -26,9 +26,30 @@ locals {
       metric_name_selectors = ["^http\\.client\\.request\\.duration$"]
     },
     {
-      # The Go runtime and the database pool.
+      # The Go runtime, and database calls that failed.
       dimensions            = [["service.name"]]
-      metric_name_selectors = ["^go\\.", "^db\\.client\\.connection"]
+      metric_name_selectors = ["^go\\.", "^db\\.client\\.operation\\.errors$"]
+    },
+    {
+      # The PostgreSQL pools: the shared one and ADK's sessions'.
+      dimensions            = [["service.name", "db.client.connection.pool.name"]]
+      metric_name_selectors = ["^pgxpool\\.(acquired_connections|idle_connections|total_connections|max_connections|acquire_duration|empty_acquire|canceled_acquires)$"]
+    },
+    {
+      # The outbox: how long a publish takes, and how long after the write.
+      dimensions            = [["service.name"], ["service.name", "component"]]
+      metric_name_selectors = ["^oryxa\\.outbox\\."]
+    },
+    {
+      # The consumers: how long an event took to arrive and to handle, per
+      # service, and whether handling worked.
+      dimensions            = [["service.name"], ["service.name", "component"], ["service.name", "component", "outcome"]]
+      metric_name_selectors = ["^oryxa\\.consumer\\."]
+    },
+    {
+      # Gemini: how long a call takes and the tokens it used.
+      dimensions            = [["service.name", "model"], ["service.name", "model", "type"]]
+      metric_name_selectors = ["^oryxa\\.model\\."]
     },
     {
       # cloudflared, the tunnel sidecar, scraped from its metrics endpoint.

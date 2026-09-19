@@ -214,9 +214,84 @@ locals {
       }
     },
 
+    # Behind the events: how long after the write an event was published,
+    # how long it took to reach its consumer, and how long handling took.
+    {
+      type = "metric", x = 0, y = 32, width = 8, height = 6
+      properties = {
+        title  = "Write to published, p99 by service (seconds)"
+        region = local.dashboard_region
+        period = 60
+        metrics = [
+          [{ expression = "SEARCH('{Oryxa,service.name,component} MetricName=\"oryxa.outbox.publish.lag\"', 'p99', 60)", id = "lag" }],
+        ]
+      }
+    },
+    {
+      type = "metric", x = 8, y = 32, width = 8, height = 6
+      properties = {
+        title  = "Published to received, p99 by service (seconds)"
+        region = local.dashboard_region
+        period = 60
+        metrics = [
+          [{ expression = "SEARCH('{Oryxa,service.name,component} MetricName=\"oryxa.consumer.delivery.lag\"', 'p99', 60)", id = "delivery" }],
+        ]
+      }
+    },
+    {
+      type = "metric", x = 16, y = 32, width = 8, height = 6
+      properties = {
+        title  = "Handling an event, p99 (seconds), and failures"
+        region = local.dashboard_region
+        period = 60
+        metrics = [
+          [{ expression = "SEARCH('{Oryxa,service.name,component} MetricName=\"oryxa.consumer.process.duration\"', 'p99', 60)", id = "handling" }],
+          [{ expression = "SEARCH('{Oryxa,service.name,component} MetricName=\"oryxa.consumer.process.failures\"', 'Sum', 60)", id = "failures", yAxis = "right" }],
+        ]
+      }
+    },
+
+    # The model, and the database pools behind every request.
+    {
+      type = "metric", x = 0, y = 38, width = 8, height = 6
+      properties = {
+        title  = "Gemini call latency (seconds)"
+        region = local.dashboard_region
+        period = 60
+        metrics = [
+          ["Oryxa", "oryxa.model.call.duration", "service.name", "oryxa", "model", var.model, { stat = "p50", label = "p50" }],
+          ["...", { stat = "p90", label = "p90" }],
+          ["...", { stat = "p99", label = "p99" }],
+        ]
+      }
+    },
+    {
+      type = "metric", x = 8, y = 38, width = 8, height = 6
+      properties = {
+        title  = "Tokens per minute"
+        region = local.dashboard_region
+        period = 60
+        metrics = [
+          [{ expression = "SEARCH('{Oryxa,service.name,model,type} MetricName=\"oryxa.model.tokens\"', 'Sum', 60)", id = "tokens" }],
+        ]
+      }
+    },
+    {
+      type = "metric", x = 16, y = 38, width = 8, height = 6
+      properties = {
+        title  = "Database connections in use, by pool"
+        region = local.dashboard_region
+        period = 60
+        metrics = [
+          [{ expression = "SEARCH('{Oryxa,service.name,db.client.connection.pool.name} MetricName=\"pgxpool.acquired_connections\"', 'Maximum', 60)", id = "acquired" }],
+          [{ expression = "SEARCH('{Oryxa,service.name,db.client.connection.pool.name} MetricName=\"pgxpool.max_connections\"', 'Maximum', 60)", id = "max" }],
+        ]
+      }
+    },
+
     # Bedrock, which embeds and reranks for rag.
     {
-      type = "metric", x = 0, y = 32, width = 12, height = 6
+      type = "metric", x = 0, y = 44, width = 12, height = 6
       properties = {
         title  = "Bedrock latency by model (milliseconds)"
         region = local.dashboard_region
@@ -227,7 +302,7 @@ locals {
       }
     },
     {
-      type = "metric", x = 12, y = 32, width = 12, height = 6
+      type = "metric", x = 12, y = 44, width = 12, height = 6
       properties = {
         title  = "Bedrock calls, throttles and errors"
         region = local.dashboard_region
@@ -242,7 +317,7 @@ locals {
 
     # Mail, from the SES region.
     {
-      type = "metric", x = 0, y = 38, width = 12, height = 6
+      type = "metric", x = 0, y = 50, width = 12, height = 6
       properties = {
         title  = "Mail (${var.ses_region})"
         region = var.ses_region
@@ -257,7 +332,7 @@ locals {
       }
     },
     {
-      type = "metric", x = 12, y = 38, width = 12, height = 6
+      type = "metric", x = 12, y = 50, width = 12, height = 6
       properties = {
         title  = "Hyperdrive connector"
         region = local.dashboard_region
@@ -271,7 +346,7 @@ locals {
 
     # What went wrong, newest first, with the trace to open in X-Ray.
     {
-      type = "log", x = 0, y = 44, width = 24, height = 8
+      type = "log", x = 0, y = 56, width = 24, height = 8
       properties = {
         title  = "Errors"
         region = local.dashboard_region
