@@ -350,7 +350,7 @@ fills it (`internal/inbound`):
 
 | Detail type | What agents does |
 | --- | --- |
-| `apps.trigger.received.v1` | Keeps it to wake Krude for its member (see [Wake-ups](#wake-ups)) |
+| `batching.trigger-batch.ready.v1` | Keeps the batch's triggers, all at once, to wake Krude for its member (see [Wake-ups](#wake-ups)) |
 | `auth.member.removed.v1` | Removes the member's threads in that organization, with what their runs kept, and their waiting wake-ups |
 | `auth.organization.deleted.v1` | The same for everyone in the organization |
 
@@ -371,14 +371,19 @@ visibility timeout and run twice (harmlessly, since forgetting is repeatable).
 ## Wake-ups
 
 A member's connected apps report things — an email arrives, a pull request
-opens — as `apps.trigger.received.v1`, and agents wakes Krude for the member
-they belong to (`internal/wakeups`):
+opens — as `apps.trigger.received.v1`. Batching holds them per member and
+decides when they make one agent turn (see `batching/README.md`), and agents
+wakes Krude for each batch it hands over, as `batching.trigger-batch.ready.v1`
+(`internal/wakeups`):
 
-- **Batched per member.** Events wait in `agents_primary.wakeup_events` until
-  `AGENTS_WAKEUP_BATCH_SIZE` of that member's have come (5), or the oldest has
-  waited `AGENTS_WAKEUP_MAX_WAIT_SECONDS` (120), whichever is first, so a lone
-  event is never held for long. One wake-up hands over at most 20, oldest
-  first; the rest wait for the next.
+- **Batched per member, by batching.** A batch's triggers are kept in
+  `agents_primary.wakeup_events` all at once, by their own app events' ids, so
+  a wake-up never hands over part of one and a trigger delivered twice is told
+  once. Agents' own rule — `AGENTS_WAKEUP_BATCH_SIZE` (1) or
+  `AGENTS_WAKEUP_MAX_WAIT_SECONDS` (120) — therefore wakes Krude as soon as a
+  batch arrives. One wake-up hands over at most 20, oldest first; the rest
+  wait for the next. A trigger that still comes straight from apps, from
+  before agents read batches, is acknowledged and left to batching.
 - **In one thread of theirs.** Each member has an "Updates from your apps"
   thread per organization, made the first time and made again if they delete
   it. The events arrive there as a message from their apps (`author: apps`),
@@ -703,9 +708,9 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
 | `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
-| `AGENTS_EVENTS_QUEUE_URL` | unset | Queue app trigger events arrive on; without it nothing wakes Krude for a member's apps (see [Wake-ups](#wake-ups)) |
+| `AGENTS_EVENTS_QUEUE_URL` | unset | Queue batching's trigger batches arrive on; without it nothing wakes Krude for a member's apps (see [Wake-ups](#wake-ups)) |
 | `AWS_ENDPOINT_URL_SQS` | unset | SQS endpoint override for the LocalStack emulator |
-| `AGENTS_WAKEUP_BATCH_SIZE` | `5` | How many of a member's waiting events wake Krude at once; 1–100 |
+| `AGENTS_WAKEUP_BATCH_SIZE` | `1` | How many of a member's waiting events wake Krude at once; 1–100. Batching already decided when they make a batch, so one wakes Krude as it arrives |
 | `AGENTS_WAKEUP_MAX_WAIT_SECONDS` | `120` | Longest a member's oldest waiting event waits before waking Krude anyway; 10–86400 |
 
 The host sets no write timeout for this service: a run's stream outlives any

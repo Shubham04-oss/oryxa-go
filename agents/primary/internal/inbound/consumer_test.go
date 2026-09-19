@@ -10,25 +10,32 @@ import (
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
 )
 
 type fakeRecorder struct {
-	events []wakeups.Event
-	seen   map[string]bool
+	events  []wakeups.Event
+	seen    map[string]bool
+	batches int
 }
 
-func (recorder *fakeRecorder) Record(_ context.Context, event wakeups.Event) (bool, error) {
+func (recorder *fakeRecorder) RecordBatch(_ context.Context, events []wakeups.Event) (int, error) {
 	if recorder.seen == nil {
 		recorder.seen = map[string]bool{}
 	}
-	if recorder.seen[event.ID] {
-		return false, nil
+	recorder.batches++
+	recorded := 0
+	for _, event := range events {
+		if recorder.seen[event.ID] {
+			continue
+		}
+		recorder.seen[event.ID] = true
+		recorder.events = append(recorder.events, event)
+		recorded++
 	}
-	recorder.seen[event.ID] = true
-	recorder.events = append(recorder.events, event)
-	return true, nil
+	return recorded, nil
 }
 
 func delivery(t *testing.T, source, detailType, eventID string, data any) string {
@@ -50,40 +57,85 @@ func delivery(t *testing.T, source, detailType, eventID string, data any) string
 
 func TestSubscriptionsCoverEveryHandledEvent(t *testing.T) {
 	subscriptions := Subscriptions()
-	if strings.Join(subscriptions[appsv1.Source], ",") != appsv1.TriggerReceivedDetailType {
-		t.Fatalf("apps subscriptions = %v", subscriptions[appsv1.Source])
+	if strings.Join(subscriptions[batchingv1.Source], ",") != batchingv1.TriggerBatchReadyDetailType {
+		t.Fatalf("batching subscriptions = %v", subscriptions[batchingv1.Source])
+	}
+	// Batching decides when triggers wake Krude; hearing them straight from
+	// apps as well would wake Krude for each on its own.
+	if _, ok := subscriptions[appsv1.Source]; ok {
+		t.Fatalf("agents still subscribes to apps' triggers: %v", subscriptions[appsv1.Source])
 	}
 	if strings.Join(subscriptions[authv1.Source], ",") != authv1.MemberRemovedDetailType+","+authv1.OrganizationDeletedDetailType {
 		t.Fatalf("auth subscriptions = %v", subscriptions[authv1.Source])
 	}
 }
 
-func TestATriggerIsRecordedOnce(t *testing.T) {
+func readyBatch(memberID string, triggers ...batchingv1.Trigger) batchingv1.TriggerBatchReady {
+	return batchingv1.TriggerBatchReady{
+		BatchID: "tbatch_1", OrganizationID: "org_1", MemberID: memberID, Lane: batchingv1.LaneDigest,
+		EventCount: len(triggers), FlushReason: "target", ReadyAt: time.Unix(200, 0).UTC(), Triggers: triggers,
+	}
+}
+
+func gmailTrigger(eventID, subject string) batchingv1.Trigger {
+	return batchingv1.Trigger{
+		EventID: eventID, TriggerID: "tr_1", ConnectionID: "apc_1", Toolkit: "gmail", Trigger: "GMAIL_NEW_MESSAGE",
+		Data: json.RawMessage(`{"subject":"` + subject + `"}`), ReceivedAt: time.Unix(100, 0).UTC(),
+	}
+}
+
+// TestABatchIsRecordedWholeAndOnce: a batch's triggers are kept together, by
+// their own app events' ids, and the bus delivering the batch again adds
+// nothing.
+func TestABatchIsRecordedWholeAndOnce(t *testing.T) {
+	recorder := &fakeRecorder{}
+	consumer := NewConsumer(recorder, nil, nil)
+	batch := readyBatch("user_1", gmailTrigger("evt_apps_1", "Launch"), gmailTrigger("evt_apps_2", "Review"))
+	body := delivery(t, batchingv1.Source, batchingv1.TriggerBatchReadyDetailType, "evt_batch_1", batch)
+	for range 2 {
+		if err := consumer.Handle(context.Background(), body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(recorder.events) != 2 {
+		t.Fatalf("recorded %d events, want the batch's two once", len(recorder.events))
+	}
+	if got := recorder.events[0]; got.ID != "evt_apps_1" || got.OrganizationID != "org_1" || got.MemberID != "user_1" ||
+		got.Toolkit != "gmail" || string(got.Data) != `{"subject":"Launch"}` || !got.ReceivedAt.Equal(time.Unix(100, 0)) {
+		t.Fatalf("recorded = %+v", got)
+	}
+	// Recorded as one, never trigger by trigger.
+	if recorder.batches != 2 {
+		t.Fatalf("recorded in %d calls, want one per delivery", recorder.batches)
+	}
+
+	if err := consumer.Handle(context.Background(), delivery(t, batchingv1.Source, batchingv1.TriggerBatchReadyDetailType, "evt_batch_2",
+		readyBatch("", gmailTrigger("evt_apps_3", "Nobody")))); err != nil {
+		t.Fatalf("a batch for nobody = %v, want it dropped without a retry", err)
+	}
+	if err := consumer.Handle(context.Background(), delivery(t, "oryxa.elsewhere", batchingv1.TriggerBatchReadyDetailType, "evt_batch_3", batch)); err == nil {
+		t.Fatal("a batch from another source was accepted")
+	}
+	if len(recorder.events) != 2 {
+		t.Fatalf("recorded %d events, want nothing more", len(recorder.events))
+	}
+}
+
+// TestATriggerStraightFromAppsIsLeftToBatching covers the changeover: one
+// still on the queue from before agents consumed batches is acknowledged and
+// left alone, since batching hands it over in a batch.
+func TestATriggerStraightFromAppsIsLeftToBatching(t *testing.T) {
 	recorder := &fakeRecorder{}
 	consumer := NewConsumer(recorder, nil, nil)
 	trigger := appsv1.TriggerReceived{
 		TriggerID: "tr_1", OrganizationID: "org_1", MemberID: "user_1", Toolkit: "gmail", Trigger: "GMAIL_NEW_MESSAGE",
 		Data: json.RawMessage(`{"subject":"Launch"}`), ReceivedAt: time.Unix(100, 0).UTC(),
 	}
-	body := delivery(t, appsv1.Source, appsv1.TriggerReceivedDetailType, "evt_1", trigger)
-	for range 2 {
-		if err := consumer.Handle(context.Background(), body); err != nil {
-			t.Fatal(err)
-		}
+	if err := consumer.Handle(context.Background(), delivery(t, appsv1.Source, appsv1.TriggerReceivedDetailType, "evt_1", trigger)); err != nil {
+		t.Fatalf("a direct trigger = %v, want it acknowledged", err)
 	}
-	if len(recorder.events) != 1 {
-		t.Fatalf("recorded %d events, want one", len(recorder.events))
-	}
-	if got := recorder.events[0]; got.ID != "evt_1" || got.MemberID != "user_1" || got.Toolkit != "gmail" || string(got.Data) != `{"subject":"Launch"}` {
-		t.Fatalf("recorded = %+v", got)
-	}
-	nobody := trigger
-	nobody.MemberID = ""
-	if err := consumer.Handle(context.Background(), delivery(t, appsv1.Source, appsv1.TriggerReceivedDetailType, "evt_2", nobody)); err != nil {
-		t.Fatalf("an event for nobody = %v, want it dropped without a retry", err)
-	}
-	if err := consumer.Handle(context.Background(), delivery(t, "oryxa.elsewhere", appsv1.TriggerReceivedDetailType, "evt_3", trigger)); err == nil {
-		t.Fatal("an event from another source was accepted")
+	if len(recorder.events) != 0 {
+		t.Fatalf("recorded %d events from a direct trigger, want none", len(recorder.events))
 	}
 }
 

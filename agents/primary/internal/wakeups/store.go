@@ -91,6 +91,42 @@ func (store *Store) Record(ctx context.Context, event Event) (bool, error) {
 	return tag.RowsAffected() == 1, nil
 }
 
+// RecordBatch keeps a batch's events, all of them or none, in one
+// transaction: a wake-up claiming between two of them would otherwise hand
+// Krude part of the batch now and the rest later. It answers how many were
+// new; the bus may deliver a batch, or a trigger in it, more than once.
+func (store *Store) RecordBatch(ctx context.Context, events []Event) (int, error) {
+	for _, event := range events {
+		if event.ID == "" || event.OrganizationID == "" || event.MemberID == "" {
+			return 0, errors.New("a wake-up event needs its id, organization and member")
+		}
+	}
+	recorded := 0
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		for _, event := range events {
+			var data any
+			if len(event.Data) > 0 {
+				data = event.Data
+			}
+			tag, err := tx.Exec(ctx, `
+				INSERT INTO agents_primary.wakeup_events
+					(id, organization_id, member_id, toolkit, trigger, data, data_omitted, received_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				ON CONFLICT (id) DO NOTHING`,
+				event.ID, event.OrganizationID, event.MemberID, event.Toolkit, event.Trigger, data, event.DataOmitted, event.ReceivedAt)
+			if err != nil {
+				return fmt.Errorf("record wake-up event: %w", err)
+			}
+			recorded += int(tag.RowsAffected())
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return recorded, nil
+}
+
 // Claim takes the batches that are due, at most limit members' worth, and
 // holds them for lease: long enough for a run to hand them to Krude. A batch
 // whose lease runs out, because its replica died, is due again.

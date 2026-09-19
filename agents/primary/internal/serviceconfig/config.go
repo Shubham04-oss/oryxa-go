@@ -93,14 +93,15 @@ type Config struct {
 	// DatabaseMaxConns sizes the pool the service keeps for ADK's tables,
 	// apart from the pool the other services share.
 	DatabaseMaxConns int
-	// EventsQueueURL is the queue app trigger events arrive on, and
+	// EventsQueueURL is the queue batching's trigger batches arrive on, and
 	// SQSEndpoint overrides where it is read from, for the emulator. Without
 	// a queue, nothing wakes Krude for a member's apps.
 	EventsQueueURL string
 	SQSEndpoint    string
 	// WakeupBatchSize and WakeupMaxWait decide when a member's waiting app
 	// events wake Krude: once this many wait, or the oldest has waited this
-	// long, whichever comes first.
+	// long, whichever comes first. Batching already decided when they make a
+	// batch, so the size defaults to one: a batch wakes Krude as it arrives.
 	WakeupBatchSize int
 	WakeupMaxWait   time.Duration
 }
@@ -158,7 +159,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	wakeupBatchSize, err := intValue(getenv, "AGENTS_WAKEUP_BATCH_SIZE", 5, 1, 100)
+	// Batching decides when a member's triggers make a batch, so by default
+	// one that arrives wakes Krude at once rather than waiting on a second
+	// rule of agents' own.
+	wakeupBatchSize, err := intValue(getenv, "AGENTS_WAKEUP_BATCH_SIZE", 1, 1, 100)
 	if err != nil {
 		return Config{}, err
 	}
