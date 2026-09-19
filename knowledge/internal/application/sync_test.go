@@ -741,6 +741,16 @@ func TestSyncStoresAPassthroughDocumentAsAnOriginalRatherThanNormalizingIt(t *te
 	if want := sha256Hex(content); document.ContentHash != want {
 		t.Fatalf("ContentHash = %q, want sha256 of the bytes (%q)", document.ContentHash, want)
 	}
+	// What a consumer is told, not only what the row holds: the event is the
+	// only place rag learns where the bytes are.
+	events := store.publishedDocuments(t)
+	if len(events) != 1 || events[0].Original == nil {
+		t.Fatalf("published events = %+v, want one carrying the Original", events)
+	}
+	want := knowledgev1.Original{Bucket: "test-bucket", Key: document.Original.Key, Size: int64(len(content)), SHA256: sha256Hex(content)}
+	if got := *events[0].Original; got != want {
+		t.Fatalf("published Original = %+v, want %+v", got, want)
+	}
 }
 
 func TestSyncSkipsAPassthroughDocumentWithoutABucketConfigured(t *testing.T) {

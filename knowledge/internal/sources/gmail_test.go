@@ -140,6 +140,37 @@ func TestGmailBodyFallsBackToHTMLWhenThereIsNoPlainPart(t *testing.T) {
 	}
 }
 
+// Gmail sends a body padded or not from one message to the next. A padded one
+// must read the same, and one that cannot be read at all must cost only its
+// own text, never the rest of the mailbox.
+func TestGmailReadsPaddedBodiesAndPassesOverOneItCannotDecode(t *testing.T) {
+	padded := strings.Replace(gmailMessageJSON("m1", "Padded", "a@example.test", "Hi", ""),
+		`"data":"`+b64("Hi")+`"`, `"data":"`+base64.URLEncoding.EncodeToString([]byte("Hi"))+`"`, 1)
+	broken := strings.Replace(gmailMessageJSON("m2", "Broken", "b@example.test", "x", ""),
+		`"data":"`+b64("x")+`"`, `"data":"not*base64!"`, 1)
+	proxy := &fakeProxier{responses: []composio.ProxyResponse{
+		jsonResponse(`{"messages":[{"id":"m1"},{"id":"m2"}],"nextPageToken":""}`),
+		jsonResponse(padded),
+		jsonResponse(broken),
+		jsonResponse(`{"historyId":"h1"}`),
+	}}
+	client, _ := testClient(t, &composioDoer{proxy: proxy})
+
+	page, err := NewGmail(client).Fetch(context.Background(), gmailRequest(nil, true, domain.Cursor{}, false))
+	if err != nil {
+		t.Fatalf("Fetch() error = %v, want the pass to go on past a body it cannot decode", err)
+	}
+	if len(page.Items) != 2 {
+		t.Fatalf("Fetch() = %d items, want 2", len(page.Items))
+	}
+	if got := string(page.Items[0].Content); got != "Hi" {
+		t.Fatalf("padded body = %q, want %q", got, "Hi")
+	}
+	if got := page.Items[1]; len(got.Content) != 0 || got.Title != "Broken" {
+		t.Fatalf("undecodable message = %+v, want it kept by its subject with no body", got)
+	}
+}
+
 // TestGmailIncrementalReadsAddedAndReportsDeletedAndUnlabeled covers the
 // three history types this reads: a message added to the label is fetched
 // in full, one deleted outright is retracted, and one that merely left this

@@ -254,6 +254,13 @@ func (s *Service) documentPublished(source domain.Source, document domain.Docume
 	} else {
 		published.Body = document.Body
 	}
+	if original := document.Original; original != nil {
+		// A document kept as its own bytes has no body at all; this is the
+		// only way a consumer learns where to read it from.
+		published.Original = &knowledgev1.Original{
+			Bucket: original.Bucket, Key: original.Key, Size: original.Size, SHA256: original.SHA256,
+		}
+	}
 	return s.event(knowledgev1.DocumentPublishedDetailType, published)
 }
 

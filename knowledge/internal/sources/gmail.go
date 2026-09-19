@@ -257,11 +257,7 @@ func (source *Gmail) readMessage(ctx context.Context, credential domain.Credenti
 	if err := json.Unmarshal(response.Body, &message); err != nil {
 		return Item{}, false, fmt.Errorf("%w: Gmail's message could not be read", domain.ErrProviderUnavailable)
 	}
-	item, err := gmailItem(message)
-	if err != nil {
-		return Item{}, false, err
-	}
-	return item, true, nil
+	return gmailItem(message), true, nil
 }
 
 // gmailPart is one MIME part of a message, which nests: a multipart message's
@@ -317,45 +313,41 @@ func gmailFindPart(part gmailPart, mimeType string) (string, bool) {
 // gmailBody reads a message's text: its text/plain part if it has one, else
 // its text/html part with the markup stripped out through the same transform
 // an HTML page from any other source reads through.
-func gmailBody(payload gmailPart) (string, error) {
+//
+// A part that cannot be read is passed over like a missing one. It is one
+// message's problem, and failing the pass over it would stop the whole
+// mailbox being read, on every retry, for as long as the message is there.
+func gmailBody(payload gmailPart) string {
 	if data, ok := gmailFindPart(payload, transform.MIMEPlain); ok {
-		text, err := gmailDecode(data)
-		if err != nil {
-			return "", err
+		if text, ok := gmailDecode(data); ok {
+			return text
 		}
-		return text, nil
 	}
 	if data, ok := gmailFindPart(payload, transform.MIMEHTML); ok {
-		html, err := gmailDecode(data)
-		if err != nil {
-			return "", err
+		if html, ok := gmailDecode(data); ok {
+			if stripped, err := transform.Normalize([]byte(html), transform.MIMEHTML); err == nil {
+				return stripped.Body
+			}
 		}
-		stripped, err := transform.Normalize([]byte(html), transform.MIMEHTML)
-		if err != nil {
-			return "", err
-		}
-		return stripped.Body, nil
 	}
 	// No readable part at all — an attachment-only message, say. Still worth
 	// indexing by its subject and metadata alone rather than skipped outright.
-	return "", nil
+	return ""
 }
 
-// gmailDecode reads one part's body: base64url, as Gmail always encodes it,
-// without padding.
-func gmailDecode(data string) (string, error) {
-	decoded, err := base64.RawURLEncoding.DecodeString(data)
+// gmailDecode reads one part's body: base64url, which Gmail sends padded or
+// not from one message to the next, so padding is dropped rather than
+// expected either way.
+func gmailDecode(data string) (string, bool) {
+	decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimRight(data, "="))
 	if err != nil {
-		return "", fmt.Errorf("%w: a Gmail message body could not be decoded", domain.ErrProviderUnavailable)
+		return "", false
 	}
-	return string(decoded), nil
+	return string(decoded), true
 }
 
-func gmailItem(message gmailMessage) (Item, error) {
-	text, err := gmailBody(message.Payload)
-	if err != nil {
-		return Item{}, err
-	}
+func gmailItem(message gmailMessage) Item {
+	text := gmailBody(message.Payload)
 	metadata := map[string]string{
 		"from":      gmailHeader(message.Payload, "From"),
 		"to":        gmailHeader(message.Payload, "To"),
@@ -379,7 +371,7 @@ func gmailItem(message gmailMessage) (Item, error) {
 		Content:   []byte(text),
 		Metadata:  metadata,
 		UpdatedAt: updated,
-	}, nil
+	}
 }
 
 // gmailMessageList is what messages.list answers.

@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"testing"
 	"time"
+
+	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -524,6 +527,26 @@ func (store *fakeStore) publishedReasons(detailType string) []string {
 		reasons = append(reasons, carried.Reason)
 	}
 	return reasons
+}
+
+// publishedDocuments decodes every DocumentPublished the store was given, so a
+// test can check what a consumer is actually told.
+func (store *fakeStore) publishedDocuments(t *testing.T) []knowledgev1.DocumentPublished {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var documents []knowledgev1.DocumentPublished
+	for _, event := range store.events {
+		if event.DetailType != knowledgev1.DocumentPublishedDetailType {
+			continue
+		}
+		var document knowledgev1.DocumentPublished
+		if err := json.Unmarshal(event.Data, &document); err != nil {
+			t.Fatalf("decode a published document: %v", err)
+		}
+		documents = append(documents, document)
+	}
+	return documents
 }
 
 func (store *fakeStore) published(detailType string) int {
