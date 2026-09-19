@@ -44,9 +44,9 @@ variable "model" {
 }
 
 variable "rag_default_backend" {
-  description = "Where rag puts a new corpus: bedrock-kb for the knowledge base. Empty keeps rag's own default; set it only with an image that knows the backend."
+  description = "Where rag puts a new corpus: bedrock-kb for the knowledge base. Empty keeps rag's own default."
   type        = string
-  default     = ""
+  default     = "bedrock-kb"
 }
 
 variable "rerank_model" {
