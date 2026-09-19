@@ -84,6 +84,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
 		return publisher.PublishEvent(ctx, domain.Event{
 			ID: event.ID, DetailType: event.DetailType, Data: event.Data, OccurredAt: event.OccurredAt,
+			TraceContext: event.TraceContext,
 		})
 	}), logger)
 	workers := []host.Worker{dispatcher.Run, service.Run}
