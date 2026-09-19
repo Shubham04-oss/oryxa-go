@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -372,6 +373,8 @@ func (server *Server) callback(writer http.ResponseWriter, request *http.Request
 		request.URL.Query().Get("code"),
 	)
 	if err != nil {
+		// The member sees only that sign-in failed; why is for the operator.
+		slog.WarnContext(request.Context(), "sign-in refused", "component", "auth", "error", err)
 		server.handleError(writer, err)
 		return
 	}
