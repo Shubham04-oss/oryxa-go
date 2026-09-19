@@ -435,6 +435,20 @@ func (store *Store) MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, 
 	return nil
 }
 
+// RecheckDocumentAt leaves a document ingesting but claimable again at at:
+// how a bedrock-kb document waits on the knowledge base, which indexes in
+// seconds, rather than holding a whole lease. The claim that polled it did
+// not count as an attempt, so polling cannot use a document's attempts up.
+func (store *Store) RecheckDocumentAt(ctx context.Context, documentID string, at time.Time) error {
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE rag_documents
+		SET locked_until = $2, attempts = GREATEST(attempts - 1, 0), updated_at = now()
+		WHERE id = $1 AND status = 'ingesting'`, documentID, at); err != nil {
+		return fmt.Errorf("recheck document: %w", err)
+	}
+	return nil
+}
+
 // ReleaseDocument puts a document back for another attempt without counting it
 // as a failure, for a worker shutting down mid-ingest.
 func (store *Store) ReleaseDocument(ctx context.Context, documentID string) error {

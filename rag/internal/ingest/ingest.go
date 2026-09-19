@@ -43,7 +43,15 @@ type Store interface {
 	// MarkKnowledgeBaseSubmitted is used only for a bedrock-kb corpus's
 	// documents; see indexKnowledgeBase.
 	MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, contentSHA256 string, at time.Time) error
+	// RecheckDocumentAt leaves a document ingesting, claimable again at at,
+	// without counting the claim as an attempt.
+	RecheckDocumentAt(ctx context.Context, documentID string, at time.Time) error
 }
+
+// knowledgeBaseRecheck is how soon a document handed to the knowledge base is
+// asked about again. Bedrock indexes a document in seconds; holding the whole
+// lease would leave one waiting five minutes to be called ready.
+const knowledgeBaseRecheck = 10 * time.Second
 
 // Vectors routes a corpus to the store holding its vectors.
 type Vectors interface {
@@ -341,7 +349,7 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 		}
 		pipeline.logger.InfoContext(ctx, "submitted a document to the knowledge base",
 			"document_id", document.ID, "corpus_id", corpus.ID)
-		return Result{}, nil
+		return Result{}, pipeline.store.RecheckDocumentAt(ctx, document.ID, at.Add(knowledgeBaseRecheck))
 	}
 
 	statuses, err := pipeline.knowledgeBase.Statuses(ctx, []string{document.ID})
@@ -381,9 +389,9 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 		return Result{}, fmt.Errorf("the knowledge base reported %s for this document; resubmitting", status.Code)
 	default:
 		// STARTING, PENDING, IN_PROGRESS and PARTIALLY_INDEXED all mean
-		// "still working": leave the document ingesting and let the next
-		// claim, once this one's lease passes, poll again.
-		return Result{}, nil
+		// "still working": leave the document ingesting and ask again
+		// shortly.
+		return Result{}, pipeline.store.RecheckDocumentAt(ctx, document.ID, at.Add(knowledgeBaseRecheck))
 	}
 }
 

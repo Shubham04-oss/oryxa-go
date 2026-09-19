@@ -72,6 +72,7 @@ type fakeStore struct {
 	released   []string
 	embedded   []string
 	kbSynced   []string
+	rechecks   map[string]time.Time
 }
 
 func (fake *fakeStore) Corpus(context.Context, string, string) (domain.Corpus, error) {
@@ -140,6 +141,16 @@ func (fake *fakeStore) ReleaseDocument(_ context.Context, documentID string) err
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
 	fake.released = append(fake.released, documentID)
+	return nil
+}
+
+func (fake *fakeStore) RecheckDocumentAt(_ context.Context, documentID string, at time.Time) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	if fake.rechecks == nil {
+		fake.rechecks = map[string]time.Time{}
+	}
+	fake.rechecks[documentID] = at
 	return nil
 }
 
@@ -574,6 +585,11 @@ func TestIndexKnowledgeBaseSubmitsUnsyncedContent(t *testing.T) {
 		t.Fatalf("a freshly submitted document was not left waiting: ready=%v failed=%v released=%v",
 			store.ready, store.failed, store.released)
 	}
+	// Asked about again in seconds, the time Bedrock takes, not once the
+	// whole lease has passed.
+	if at, ok := store.rechecks["doc_1"]; !ok || at.Sub(pipeline.now()) > knowledgeBaseRecheck {
+		t.Fatalf("recheck = %v (%v), want within %s", at, ok, knowledgeBaseRecheck)
+	}
 }
 
 // TestIndexKnowledgeBaseSubmitsAnOriginalDocumentWithNoBody: a document with
@@ -725,6 +741,9 @@ func TestIndexKnowledgeBaseWaitsOnStillWorkingStatuses(t *testing.T) {
 			if len(store.ready) != 0 || len(store.failed) != 0 || len(store.released) != 0 || len(store.kbSynced) != 0 {
 				t.Fatalf("a still-working status changed something: ready=%v failed=%v released=%v kbSynced=%v",
 					store.ready, store.failed, store.released, store.kbSynced)
+			}
+			if _, ok := store.rechecks["doc_1"]; !ok {
+				t.Fatal("a still-working document was not scheduled to be asked about again")
 			}
 		})
 	}

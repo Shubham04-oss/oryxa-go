@@ -48,8 +48,11 @@ ALTER TABLE rag_documents ADD CONSTRAINT rag_documents_original_pair
     CHECK ((original_bucket = '') = (original_key = ''));
 
 ALTER TABLE rag_documents DROP CONSTRAINT IF EXISTS rag_documents_body_or_original;
+-- NOT VALID: it holds for every row written from here on without asking
+-- the rows already there to prove it, so a deployment holding an empty body
+-- from before this migration still starts instead of refusing to.
 ALTER TABLE rag_documents ADD CONSTRAINT rag_documents_body_or_original
-    CHECK (body <> '' OR original_bucket <> '');
+    CHECK (body <> '' OR original_bucket <> '') NOT VALID;
 
 -- kb_synced_hash is the content_sha256 that was last handed to the knowledge
 -- base for this document. Ingestion there is asynchronous — the knowledge
