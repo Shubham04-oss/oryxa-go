@@ -336,3 +336,56 @@ func pausedBy(err error) (string, bool) {
 		return "", false
 	}
 }
+
+// SetSourceKinds records what kinds of document a source indexes, for its
+// creator or an org admin: include names kinds from domain.Kinds, nil
+// returns it to the default. What the source already holds is decided again
+// on its next pass, which is brought forward, from what the judge answered
+// before rather than by asking it again.
+func (s *Service) SetSourceKinds(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string, include []string) (domain.Source, error) {
+	caller, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if caller.Agent {
+		return domain.Source{}, fmt.Errorf("an agent cannot change what a source indexes: %w", domain.ErrForbidden)
+	}
+	source, err := s.store.Source(ctx, organizationID, sourceID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
+		// Answering not-found tells the caller nothing they did not know.
+		return domain.Source{}, domain.ErrNotFound
+	}
+	if s.judge == nil || !gated(source) {
+		return domain.Source{}, fmt.Errorf("this source's documents are not judged, so there are no kinds to choose: %w", domain.ErrConflict)
+	}
+	if include != nil {
+		if err := domain.ValidateKinds(include); err != nil {
+			return domain.Source{}, err
+		}
+		chosen := map[string]bool{}
+		for _, name := range include {
+			chosen[name] = true
+		}
+		// Kept in the order kinds are shown, once each.
+		include = include[:0:0]
+		for _, kind := range domain.Kinds {
+			if chosen[kind.Name] {
+				include = append(include, kind.Name)
+			}
+		}
+		if len(include) == 0 {
+			return domain.Source{}, fmt.Errorf("choose at least one kind of document; to index nothing, remove the source: %w", domain.ErrInvalid)
+		}
+	}
+	changed, err := s.store.SetSourceKinds(ctx, organizationID, sourceID, include, s.now())
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if !changed {
+		return domain.Source{}, domain.ErrNotFound
+	}
+	return s.store.Source(ctx, organizationID, sourceID)
+}

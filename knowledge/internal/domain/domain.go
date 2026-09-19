@@ -139,6 +139,9 @@ type Source struct {
 	// IncludeKinds is what the source indexes, by kind of document (see
 	// Kinds); nil is DefaultKinds.
 	IncludeKinds []string `json:"include_kinds,omitempty"`
+	// KindsPending says IncludeKinds changed since the source's documents
+	// were last decided, so its next pass decides them again.
+	KindsPending bool `json:"-"`
 	// FullSweepAt is when a pass last read this source from the beginning and
 	// retracted what it did not see. Nil means never: the source is due for
 	// one now, the same as if it had just been registered.

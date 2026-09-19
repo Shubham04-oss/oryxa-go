@@ -76,6 +76,12 @@ type Store interface {
 	// with its reason, retracting it with event's removal if it was live.
 	// Answers whether it was.
 	ExcludeDocument(context.Context, domain.Document, time.Time, func(domain.Document) (domain.Event, error)) (bool, error)
+	// SetSourceKinds records what kinds of document a source indexes and
+	// marks its documents to be decided again; ClearKindsPending records that
+	// they were. DocumentsToRedecide pages through what a judge decided.
+	SetSourceKinds(ctx context.Context, organizationID, sourceID string, include []string, at time.Time) (bool, error)
+	ClearKindsPending(ctx context.Context, sourceID, lease string) error
+	DocumentsToRedecide(ctx context.Context, sourceID, after string, limit int) ([]domain.Document, error)
 
 	Cursor(context.Context, string) (domain.Cursor, error)
 	SaveCursor(context.Context, domain.Cursor) error

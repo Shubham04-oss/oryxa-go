@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1360,5 +1361,99 @@ func TestHastenSourceLeavesWhatIsNotItsToMove(t *testing.T) {
 	}
 	if moved, err := store.HastenSource(ctx, "org_1", source.ID, testClock); err != nil || moved {
 		t.Fatalf("HastenSource(removed) = %v, %v, want unmoved", moved, err)
+	}
+}
+
+func TestSetSourceKindsMarksTheSourceToDecideAgain(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	now := testClock.Add(-time.Minute)
+
+	changed, err := store.SetSourceKinds(ctx, "org_1", source.ID, []string{"conversation", "event_update"}, now)
+	if err != nil || !changed {
+		t.Fatalf("SetSourceKinds() = %t, %v", changed, err)
+	}
+	read, err := store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(read.IncludeKinds, []string{"conversation", "event_update"}) || !read.KindsPending ||
+		read.SyncAt == nil || read.SyncAt.After(now) {
+		t.Fatalf("source = kinds %v, pending %t, sync at %v", read.IncludeKinds, read.KindsPending, read.SyncAt)
+	}
+	if changed, err := store.SetSourceKinds(ctx, "org_2", source.ID, nil, now); err != nil || changed {
+		t.Fatalf("SetSourceKinds(another organization) = %t, %v; want nothing changed", changed, err)
+	}
+	if _, err := store.SetSourceKinds(ctx, "org_1", source.ID, nil, now); err != nil {
+		t.Fatal(err)
+	}
+	if read, _ := store.Source(ctx, "org_1", source.ID); read.IncludeKinds != nil {
+		t.Fatalf("IncludeKinds = %v, want NULL: the default", read.IncludeKinds)
+	}
+
+	due := testClock.Add(time.Hour)
+	if _, err := store.ClaimDueSources(ctx, due, 10, "lease-a", due.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClearKindsPending(ctx, source.ID, "lease-b"); err != nil {
+		t.Fatal(err)
+	}
+	if read, _ := store.Source(ctx, "org_1", source.ID); !read.KindsPending {
+		t.Fatal("a run not holding the lease cleared the pending choice")
+	}
+	if err := store.ClearKindsPending(ctx, source.ID, "lease-a"); err != nil {
+		t.Fatal(err)
+	}
+	if read, _ := store.Source(ctx, "org_1", source.ID); read.KindsPending {
+		t.Fatal("the run holding the lease did not clear the pending choice")
+	}
+}
+
+func TestDocumentsToRedecideFindsWhatAJudgeDecided(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+
+	live := testDocument(source, "live", strings.Repeat("1", 64))
+	live.Judgment = []byte(`{"jev":{"kind":"conversation"}}`)
+	excluded := testDocument(source, "excluded", strings.Repeat("2", 64))
+	excluded.Judgment, excluded.Excluded, excluded.Body = []byte(`{"jev":{"kind":"newsletter"}}`), "newsletter", "ten links"
+	unjudged := testDocument(source, "unjudged", strings.Repeat("3", 64))
+	gone := testDocument(source, "gone", strings.Repeat("4", 64))
+	gone.Judgment = []byte(`{"jev":{"kind":"conversation"}}`)
+	for _, document := range []domain.Document{live, unjudged, gone} {
+		if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.ExcludeDocument(ctx, excluded, testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Retracted because its source no longer holds it: nothing to decide.
+	if _, _, err := store.RetractDocument(ctx, source.ID, "gone", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var found []domain.Document
+	after := ""
+	for {
+		page, err := store.DocumentsToRedecide(ctx, source.ID, after, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page) == 0 {
+			break
+		}
+		found = append(found, page...)
+		after = page[len(page)-1].ID
+	}
+	if len(found) != 2 {
+		t.Fatalf("found %d documents, want the judged live one and the excluded one", len(found))
+	}
+	for _, document := range found {
+		if document.Judgment == nil || document.Body == "" {
+			t.Fatalf("document %s = judgment %s, body %q; want both, to decide it again", document.ExternalID, document.Judgment, document.Body)
+		}
 	}
 }

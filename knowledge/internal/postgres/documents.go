@@ -421,3 +421,32 @@ func judgmentColumn(judgment []byte) any {
 	}
 	return string(judgment)
 }
+
+// DocumentsToRedecide pages through a source's documents that a judge
+// decided, live or excluded, with their text and judgments, after the one
+// named after.
+func (store *Store) DocumentsToRedecide(ctx context.Context, sourceID, after string, limit int) ([]domain.Document, error) {
+	rows, err := store.pool.Query(ctx, `
+		SELECT `+documentColumns+`, body
+		FROM knowledge_documents
+		WHERE source_id = $1 AND id > $2 AND judgment IS NOT NULL
+		  AND (removed_at IS NULL OR excluded_reason <> '')
+		ORDER BY id
+		LIMIT $3`, sourceID, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read documents to decide again: %w", err)
+	}
+	defer rows.Close()
+	documents := []domain.Document{}
+	for rows.Next() {
+		document, err := scanDocument(rows, true)
+		if err != nil {
+			return nil, err
+		}
+		documents = append(documents, document)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read documents to decide again: %w", err)
+	}
+	return documents, nil
+}

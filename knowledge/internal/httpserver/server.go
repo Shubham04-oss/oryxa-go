@@ -35,6 +35,7 @@ type knowledgeService interface {
 	Source(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.Source, error)
 	RemoveSource(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) error
 	SyncSource(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string) (domain.Source, error)
+	SetSourceKinds(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string, include []string) (domain.Source, error)
 	Runs(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string, limit int) ([]domain.SyncRun, error)
 	Document(ctx context.Context, credentials authclient.Credentials, organizationID, documentID string) (domain.Document, error)
 	DocumentBody(ctx context.Context, organizationID, documentID string) (domain.Document, error)
@@ -83,12 +84,14 @@ func New(service knowledgeService, config Config, logger *slog.Logger) *Server {
 		writer.WriteHeader(http.StatusNoContent)
 	})
 	server.handle("GET /v1/sources/providers", server.providers)
+	server.handle("GET /v1/sources/kinds", server.kinds)
 	server.handle("GET /v1/internal/organizations/{organizationID}/documents/{documentID}/body", server.documentBody)
 	server.handle("GET /v1/organizations/{organizationID}/sources", server.listSources)
 	server.handle("POST /v1/organizations/{organizationID}/sources", server.registerSource)
 	server.handle("GET /v1/organizations/{organizationID}/sources/{sourceID}", server.getSource)
 	server.handle("DELETE /v1/organizations/{organizationID}/sources/{sourceID}", server.removeSource)
 	server.handle("POST /v1/organizations/{organizationID}/sources/{sourceID}/sync", server.syncSource)
+	server.handle("PUT /v1/organizations/{organizationID}/sources/{sourceID}/kinds", server.setSourceKinds)
 	server.handle("GET /v1/organizations/{organizationID}/sources/{sourceID}/runs", server.listRuns)
 	server.handle("GET /v1/organizations/{organizationID}/documents/{documentID}", server.getDocument)
 	return server
@@ -119,6 +122,35 @@ func (server *Server) providers(writer http.ResponseWriter, _ *http.Request) {
 	writeJSON(writer, http.StatusOK, map[string][]string{"providers": server.service.Extractors()})
 }
 
+// kinds reads aloud what kinds of document a member can choose to index, and
+// which a source indexes by default. Like providers, it holds nothing of any
+// organization.
+func (server *Server) kinds(writer http.ResponseWriter, _ *http.Request) {
+	writeJSON(writer, http.StatusOK, map[string][]domain.KindInfo{"kinds": domain.Kinds})
+}
+
+// setSourceKinds records what kinds of document a source indexes; a null
+// include_kinds returns it to the default.
+func (server *Server) setSourceKinds(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	var body struct {
+		IncludeKinds []string `json:"include_kinds"`
+	}
+	if !server.decode(writer, request, &body) {
+		return
+	}
+	source, err := server.service.SetSourceKinds(request.Context(), credentials,
+		request.PathValue("organizationID"), request.PathValue("sourceID"), body.IncludeKinds)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, view(source))
+}
+
 type sourceView struct {
 	ID           string            `json:"id"`
 	Provider     string            `json:"provider"`
@@ -131,10 +163,13 @@ type sourceView struct {
 	Status       string            `json:"status"`
 	Reason       string            `json:"reason,omitempty"`
 	IntervalSecs int               `json:"interval_seconds"`
-	SyncAt       *time.Time        `json:"sync_at,omitempty"`
-	LastSyncedAt *time.Time        `json:"last_synced_at,omitempty"`
-	CreatedAt    time.Time         `json:"created_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	// IncludeKinds is the member's choice of kinds to index; absent when the
+	// source indexes the default.
+	IncludeKinds []string   `json:"include_kinds,omitempty"`
+	SyncAt       *time.Time `json:"sync_at,omitempty"`
+	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 // view is what a source looks like over the wire. The lease and version a
@@ -145,7 +180,7 @@ func view(source domain.Source) sourceView {
 		ID: source.ID, Provider: source.Provider, ConnectionID: source.ConnectionID,
 		Target: source.Target, Scope: string(source.Scope), TeamID: source.TeamID,
 		MemberID: source.MemberID, CreatedBy: source.CreatedBy, Status: string(source.Status),
-		Reason: source.Reason, IntervalSecs: int(source.Interval / time.Second),
+		Reason: source.Reason, IntervalSecs: int(source.Interval / time.Second), IncludeKinds: source.IncludeKinds,
 		SyncAt: source.SyncAt, LastSyncedAt: source.LastSyncedAt,
 		CreatedAt: source.CreatedAt, UpdatedAt: source.UpdatedAt,
 	}

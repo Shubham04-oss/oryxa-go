@@ -32,6 +32,10 @@ import (
 // nothing is published unjudged.
 type Judge interface {
 	Judge(ctx context.Context, candidate domain.Candidate) (domain.Verdict, error)
+	// Redecide draws a verdict again from a kept judgment for a source's
+	// choice of kinds, without asking the judge. False: it cannot, and the
+	// document must be judged again.
+	Redecide(judgment []byte, include []string) (domain.Verdict, bool)
 }
 
 // qualityPolicy is the version of what "worth indexing" means: the judge's
@@ -295,4 +299,89 @@ func excludedReason(reason string) string {
 		return string(runes[:maxExcludedReason])
 	}
 	return reason
+}
+
+// redecidePage is how many of a source's documents are decided again at once.
+const redecidePage = 100
+
+// redecide decides a source's judged documents again for its member's new
+// choice of kinds: from their kept judgments where those settle it, from their
+// kept text otherwise. A document now of a kind the source indexes is
+// published from its kept text; one no longer is, retracted.
+func (s *Service) redecide(ctx context.Context, source domain.Source, lease string) (outcome, error) {
+	var result outcome
+	if s.judge == nil || !gated(source) {
+		return result, s.store.ClearKindsPending(ctx, source.ID, lease)
+	}
+	after := ""
+	for {
+		documents, err := s.store.DocumentsToRedecide(ctx, source.ID, after, redecidePage)
+		if err != nil {
+			return result, err
+		}
+		if len(documents) == 0 {
+			break
+		}
+		for _, document := range documents {
+			after = document.ID
+			verdict, ok := s.judge.Redecide(document.Judgment, source.IncludeKinds)
+			if !ok {
+				if document.Body == "" {
+					// Nothing kept to judge it by: its next full sweep does.
+					continue
+				}
+				if verdict, err = s.judge.Judge(ctx, candidateOfDocument(source, document)); err != nil {
+					return result, err
+				}
+			}
+			live := document.RemovedAt == nil
+			switch {
+			case verdict.Keep && !live:
+				if document.Body == "" {
+					// Only its original's bytes were ever read, and they were not
+					// kept: its next full sweep reads them again.
+					continue
+				}
+				document.Judgment = verdict.Judgment
+				published, err := s.store.UpsertDocument(ctx, document, func(written domain.Document) (domain.Event, error) {
+					return s.documentPublished(source, written)
+				})
+				if err != nil {
+					return result, err
+				}
+				if published {
+					result.published++
+				}
+			case !verdict.Keep && live:
+				document.Excluded, document.Judgment = excludedReason(verdict.Reason), verdict.Judgment
+				retracted, err := s.store.ExcludeDocument(ctx, document, s.now(), func(written domain.Document) (domain.Event, error) {
+					return s.documentRemoved(source, written, knowledgev1.RemovedReasonExcluded)
+				})
+				if err != nil {
+					return result, err
+				}
+				if retracted {
+					s.deleteOriginal(ctx, document.Original)
+				}
+				result.excluded++
+			}
+		}
+		held, err := s.store.RenewLease(ctx, source.ID, lease, s.now().Add(LeaseWindow))
+		if err != nil {
+			return result, err
+		}
+		if !held {
+			return result, domain.ErrLeaseLost
+		}
+	}
+	return result, s.store.ClearKindsPending(ctx, source.ID, lease)
+}
+
+// candidateOfDocument is what the judge is shown of a kept document: its
+// kept text, for a source's current choice of kinds.
+func candidateOfDocument(source domain.Source, document domain.Document) domain.Candidate {
+	return domain.Candidate{
+		Provider: source.Provider, Kind: document.Kind, Title: document.Title, MIME: document.MIME,
+		Metadata: document.Metadata, Text: document.Body, Size: document.ByteSize, Include: source.IncludeKinds,
+	}
 }

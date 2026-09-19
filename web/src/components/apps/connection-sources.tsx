@@ -9,6 +9,7 @@ import {
 	StatusBadge,
 } from "@/components/app/organization-settings";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
 	Dialog,
 	DialogClose,
@@ -33,14 +34,19 @@ import { connectionTargetsQueryOptions } from "@/lib/apps/client";
 import { relativeTime } from "@/lib/format";
 import {
 	defaultSourceIntervalSeconds,
+	effectiveKinds,
 	intervalLabel,
+	kindsQueryOptions,
+	kindsSummary,
 	knowledgeQueryKey,
 	registerSource,
 	removeSource,
 	runStatusLabel,
 	runSummary,
 	type Source,
+	type SourceKind,
 	type SourceProvider,
+	setSourceKinds,
 	sourceIntervalChoices,
 	sourceRunsQueryOptions,
 	sourceStatusLabel,
@@ -125,6 +131,7 @@ interface SourceRowProps {
 
 function SourceRow({ onRemoved, organizationId, source }: SourceRowProps) {
 	const label = sourceTargetLabel(source.provider, source.target);
+	const kinds = useQuery(kindsQueryOptions());
 
 	return (
 		<li className="settings-list-row">
@@ -137,6 +144,9 @@ function SourceRow({ onRemoved, organizationId, source }: SourceRowProps) {
 						? `last run ${relativeTime(source.last_synced_at)}`
 						: "not run yet"}
 				</small>
+				{kinds.data && source.provider !== "files" ? (
+					<small>{kindsSummary(kinds.data, source.include_kinds)}</small>
+				) : null}
 				{source.reason ? (
 					<small className="settings-list-error">{source.reason}</small>
 				) : null}
@@ -144,6 +154,18 @@ function SourceRow({ onRemoved, organizationId, source }: SourceRowProps) {
 			<StatusBadge tone={sourceStatusTone(source.status)}>
 				{sourceStatusLabel(source.status)}
 			</StatusBadge>
+			{source.provider !== "files" ? (
+				<KindsDialog
+					onSaved={onRemoved}
+					organizationId={organizationId}
+					source={source}
+					trigger={
+						<Button size="sm" type="button" variant="ghost">
+							Kinds
+						</Button>
+					}
+				/>
+			) : null}
 			<RunsDialog
 				organizationId={organizationId}
 				sourceId={source.id}
@@ -173,6 +195,159 @@ function SourceRow({ onRemoved, organizationId, source }: SourceRowProps) {
 				}
 			/>
 		</li>
+	);
+}
+
+interface KindsDialogProps {
+	onSaved: () => void;
+	organizationId: string;
+	source: Source;
+	trigger: ReactElement;
+}
+
+/**
+ * What kinds of document a source indexes. Krude sorts each document into a
+ * kind as it is read; changing the choice decides again what is already
+ * indexed, from how each was sorted, without reading the app again.
+ */
+export function KindsDialog({
+	onSaved,
+	organizationId,
+	source,
+	trigger,
+}: KindsDialogProps) {
+	const [open, setOpen] = useState(false);
+	const kinds = useQuery({ ...kindsQueryOptions(), enabled: open });
+	const [chosen, setChosen] = useState<Set<string> | null>(null);
+	const save = useMutation({
+		mutationFn: (include: string[] | null) =>
+			setSourceKinds(organizationId, source.id, include),
+		onSuccess: () => {
+			onSaved();
+			setOpen(false);
+		},
+	});
+	const selected =
+		chosen ??
+		new Set(kinds.data ? effectiveKinds(kinds.data, source.include_kinds) : []);
+
+	function changeOpen(next: boolean) {
+		if (save.isPending) {
+			return;
+		}
+		setOpen(next);
+		if (next) {
+			setChosen(null);
+			save.reset();
+		}
+	}
+
+	function toggle(name: string, checked: boolean) {
+		const next = new Set(selected);
+		if (checked) {
+			next.add(name);
+		} else {
+			next.delete(name);
+		}
+		setChosen(next);
+	}
+
+	function submit(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		// Kept in the order kinds are shown, as knowledge keeps them.
+		save.mutate(
+			(kinds.data ?? [])
+				.filter((kind) => selected.has(kind.name))
+				.map((kind) => kind.name),
+		);
+	}
+
+	return (
+		<Dialog onOpenChange={changeOpen} open={open}>
+			<DialogTrigger asChild>{trigger}</DialogTrigger>
+			<DialogContent>
+				<DialogHeader>
+					<DialogTitle>What Krude indexes</DialogTitle>
+					<DialogDescription>
+						Krude sorts everything it reads here into a kind. Choose which kinds
+						it can search; what is already indexed follows your choice on the
+						next pass.
+					</DialogDescription>
+				</DialogHeader>
+				{kinds.isPending ? <p className="dialog-note">Loading…</p> : null}
+				{kinds.isError ? (
+					<AppAlert>
+						{apiErrorMessage(kinds.error, "Could not load the kinds")}
+					</AppAlert>
+				) : null}
+				{kinds.data ? (
+					<form className="dialog-form" onSubmit={submit}>
+						<div className="dialog-field">
+							{kinds.data.map((kind) => (
+								<KindOption
+									checked={selected.has(kind.name)}
+									key={kind.name}
+									kind={kind}
+									onChange={(checked) => toggle(kind.name, checked)}
+								/>
+							))}
+						</div>
+						{selected.size === 0 ? (
+							<AppAlert>
+								Choose at least one kind. To index nothing, remove the source.
+							</AppAlert>
+						) : null}
+						{save.isError ? (
+							<AppAlert>
+								{apiErrorMessage(save.error, "Could not save the choice")}
+							</AppAlert>
+						) : null}
+						<DialogFooter>
+							<Button
+								disabled={save.isPending}
+								onClick={() => save.mutate(null)}
+								type="button"
+								variant="ghost"
+							>
+								Use defaults
+							</Button>
+							<Button
+								disabled={save.isPending || selected.size === 0}
+								type="submit"
+							>
+								{save.isPending ? "Saving…" : "Save"}
+							</Button>
+						</DialogFooter>
+					</form>
+				) : null}
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+interface KindOptionProps {
+	checked: boolean;
+	kind: SourceKind;
+	onChange: (checked: boolean) => void;
+}
+
+function KindOption({ checked, kind, onChange }: KindOptionProps) {
+	const id = useId();
+	return (
+		<label className="apps-trigger-field-checkbox" htmlFor={id}>
+			<Checkbox
+				checked={checked}
+				id={id}
+				onCheckedChange={(value) => onChange(value === true)}
+			/>
+			<span>
+				{kind.label}
+				<small className="dialog-field-hint">
+					{kind.hint}
+					{kind.default ? "" : " · off by default"}
+				</small>
+			</span>
+		</label>
 	);
 }
 

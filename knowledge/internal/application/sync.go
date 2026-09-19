@@ -100,7 +100,17 @@ func (s *Service) Sync(ctx context.Context, source domain.Source, lease string) 
 		return err
 	}
 
+	// A member who changed what kinds the source indexes has what it already
+	// holds decided again first, from what the judge answered before.
+	var redecided outcome
+	if source.KindsPending {
+		if redecided, err = s.redecide(ctx, source, lease); err != nil {
+			return s.runFailed(ctx, source, run, redecided, lease, err)
+		}
+	}
 	result, err := s.walk(ctx, extractor, source, cursor, full, lease)
+	result.published += redecided.published
+	result.excluded += redecided.excluded
 	run.DocumentsSeen, run.DocumentsPublished, run.DocumentsRemoved = result.seen, result.published, result.removed
 	run.DocumentsExcluded = result.excluded
 	if err != nil {

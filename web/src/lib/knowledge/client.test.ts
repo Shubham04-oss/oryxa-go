@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
 	availableSourceProviders,
 	defaultSourceIntervalSeconds,
+	effectiveKinds,
 	intervalLabel,
+	kindsSummary,
 	runStatusLabel,
 	runSummary,
 	sourceStatusLabel,
@@ -212,6 +214,39 @@ describe("runSummary", () => {
 		expect(runSummary(run)).toBe("2 published · 0 removed of 2 seen");
 		expect(runSummary({ ...run, documents_excluded: 0 })).toBe(
 			"2 published · 0 removed of 2 seen",
+		);
+	});
+});
+
+describe("effectiveKinds / kindsSummary", () => {
+	const kinds = [
+		{ default: true, hint: "", label: "Conversations", name: "conversation" },
+		{ default: true, hint: "", label: "Support cases", name: "support_case" },
+		{ default: false, hint: "", label: "Event updates", name: "event_update" },
+		{ default: false, hint: "", label: "Promotions", name: "promotion" },
+	];
+
+	it("is the default kinds until a member chooses", () => {
+		expect(effectiveKinds(kinds, undefined)).toEqual([
+			"conversation",
+			"support_case",
+		]);
+		expect(kindsSummary(kinds, undefined)).toBe("Default kinds");
+	});
+
+	it("is the member's choice once they make one", () => {
+		expect(effectiveKinds(kinds, ["conversation", "event_update"])).toEqual([
+			"conversation",
+			"event_update",
+		]);
+	});
+
+	it("names what a choice adds to and takes from the default", () => {
+		expect(kindsSummary(kinds, ["conversation", "event_update"])).toBe(
+			"+ Event updates, − Support cases",
+		);
+		expect(kindsSummary(kinds, ["conversation", "support_case"])).toBe(
+			"Default kinds",
 		);
 	});
 });
