@@ -12,7 +12,7 @@ import (
 
 const sourceColumns = `id, organization_id, connection_id, app_id, composio_account_id, provider, target, scope, team_id, member_id,
 	created_by, status, reason, interval_seconds, sync_at, last_synced_at, attempts,
-	lease_token, lease_until, version, created_at, updated_at, full_sweep_at`
+	lease_token, lease_until, version, created_at, updated_at, full_sweep_at, include_kinds`
 
 func (store *Store) CreateSource(ctx context.Context, source domain.Source, event *domain.Event) error {
 	target, err := encodeMap(source.Target)
@@ -386,7 +386,7 @@ func scanSource(rows pgx.Rows) (domain.Source, error) {
 	if err := rows.Scan(&source.ID, &source.OrganizationID, &source.ConnectionID, &source.AppID, &source.ComposioAccountID,
 		&source.Provider, &target, &scope, &teamID, &memberID, &source.CreatedBy, &status, &source.Reason, &intervalSeconds,
 		&source.SyncAt, &source.LastSyncedAt, &source.Attempts, &leaseToken, &source.LeaseUntil,
-		&source.Version, &source.CreatedAt, &source.UpdatedAt, &source.FullSweepAt); err != nil {
+		&source.Version, &source.CreatedAt, &source.UpdatedAt, &source.FullSweepAt, &source.IncludeKinds); err != nil {
 		return domain.Source{}, fmt.Errorf("scan source: %w", err)
 	}
 	decoded, err := decodeMap(target)

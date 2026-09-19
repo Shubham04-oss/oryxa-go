@@ -311,3 +311,31 @@ func TestFullSweepDoesNotRetractAnUnchangedOriginal(t *testing.T) {
 		t.Fatalf("uploaded %d times, want 1: the same bytes are not written again", len(fakeBucket.puts))
 	}
 }
+
+// What the judge answered is kept with the document, kept or excluded, and an
+// excluded document keeps its text: a member who later chooses to index its
+// kind can have it without anything being read or judged again.
+func TestSyncKeepsTheJudgmentAndAnExcludedDocumentsText(t *testing.T) {
+	store := newFakeStore()
+	judge := &fakeJudge{verdicts: map[string]domain.Verdict{
+		"Workshop update": {Keep: false, Reason: "event update", Judgment: []byte(`{"jev":{"kind":"event_update"}}`)},
+		"Launch plan":     {Keep: true, Reason: "conversation", Judgment: []byte(`{"jev":{"kind":"conversation"}}`)},
+	}}
+	extractor := onePage("gmail",
+		titled("m1", "Workshop update", "The venue moved to Hall B."),
+		titled("m2", "Launch plan", "We ship the beta on the 3rd."),
+	)
+	service := judgedService(t, store, extractor, judge, nil, nil)
+	source := activeSource(store, "gmail")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	update := documentNamed(t, store, "m1")
+	if string(update.Judgment) != `{"jev":{"kind":"event_update"}}` || update.Body == "" || update.RemovedAt == nil {
+		t.Fatalf("excluded = judgment %s, body %q; want both kept with it removed", update.Judgment, update.Body)
+	}
+	if plan := documentNamed(t, store, "m2"); string(plan.Judgment) != `{"jev":{"kind":"conversation"}}` {
+		t.Fatalf("kept judgment = %s", plan.Judgment)
+	}
+}

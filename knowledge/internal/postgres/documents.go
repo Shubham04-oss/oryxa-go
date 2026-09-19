@@ -13,7 +13,7 @@ import (
 
 const documentColumns = `id, organization_id, source_id, external_id, kind, title, url, mime,
 	content_hash, byte_size, original_bucket, original_key, original_size, metadata,
-	source_updated_at, extracted_at, last_seen_at, removed_at, excluded_reason, judged_policy`
+	source_updated_at, extracted_at, last_seen_at, removed_at, excluded_reason, judged_policy, judgment`
 
 // UpsertDocument writes what a run read, and the event saying so only when the
 // content actually changed. It answers whether anything was published, so a
@@ -47,8 +47,8 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 			INSERT INTO knowledge_documents (
 				id, organization_id, source_id, external_id, kind, title, url, mime,
 				content_hash, body, byte_size, original_bucket, original_key, original_size,
-				metadata, source_updated_at, extracted_at, last_seen_at, excluded_reason, judged_policy
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17, '', $18)
+				metadata, source_updated_at, extracted_at, last_seen_at, excluded_reason, judged_policy, judgment
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17, '', $18, $19)
 			ON CONFLICT (source_id, external_id) DO UPDATE SET
 				kind = excluded.kind,
 				title = excluded.title,
@@ -66,11 +66,12 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 				last_seen_at = excluded.last_seen_at,
 				removed_at = NULL,
 				excluded_reason = '',
-				judged_policy = excluded.judged_policy`,
+				judged_policy = excluded.judged_policy,
+				judgment = excluded.judgment`,
 			document.ID, document.OrganizationID, document.SourceID, document.ExternalID, document.Kind,
 			document.Title, document.URL, document.MIME, document.ContentHash, document.Body,
 			document.ByteSize, originalBucket, originalKey, originalSize, metadata,
-			document.SourceUpdatedAt, document.ExtractedAt, document.JudgedPolicy); err != nil {
+			document.SourceUpdatedAt, document.ExtractedAt, document.JudgedPolicy, judgmentColumn(document.Judgment)); err != nil {
 			return mapWriteError("upsert document", err)
 		}
 		if !changed || event == nil {
@@ -156,8 +157,10 @@ func originalColumns(original *domain.Original) (bucket, key *string, size *int6
 }
 
 // ExcludeDocument records a document judged not worth indexing. Its row is
-// written, so the same content is not judged again, but without its text or
-// original, and removed with document.Excluded as the reason. One that was
+// written, text and judgment included, so the same content is not judged
+// again and a member who later chooses to index its kind can have it without
+// reading it from the source again; but without its original, and removed
+// with document.Excluded as the reason. One that was
 // live until now is retracted: event's removal is written in the same
 // transaction, and ExcludeDocument answers true so the caller can delete the
 // original it held once this commits.
@@ -187,15 +190,15 @@ func (store *Store) ExcludeDocument(ctx context.Context, document domain.Documen
 			INSERT INTO knowledge_documents (
 				id, organization_id, source_id, external_id, kind, title, url, mime,
 				content_hash, body, byte_size, metadata, source_updated_at, extracted_at,
-				last_seen_at, removed_at, excluded_reason, judged_policy
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10, $11, $12, $13, $14, $14, $15, $16)
+				last_seen_at, removed_at, excluded_reason, judged_policy, judgment
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $17, $10, $11, $12, $13, $14, $14, $15, $16, $18)
 			ON CONFLICT (source_id, external_id) DO UPDATE SET
 				kind = excluded.kind,
 				title = excluded.title,
 				url = excluded.url,
 				mime = excluded.mime,
 				content_hash = excluded.content_hash,
-				body = '',
+				body = excluded.body,
 				byte_size = excluded.byte_size,
 				original_bucket = NULL,
 				original_key = NULL,
@@ -206,10 +209,12 @@ func (store *Store) ExcludeDocument(ctx context.Context, document domain.Documen
 				last_seen_at = excluded.last_seen_at,
 				removed_at = coalesce(knowledge_documents.removed_at, excluded.removed_at),
 				excluded_reason = excluded.excluded_reason,
-				judged_policy = excluded.judged_policy`,
+				judged_policy = excluded.judged_policy,
+				judgment = excluded.judgment`,
 			document.ID, document.OrganizationID, document.SourceID, document.ExternalID, document.Kind,
 			document.Title, document.URL, document.MIME, document.ContentHash, document.ByteSize, metadata,
-			document.SourceUpdatedAt, document.ExtractedAt, now, document.Excluded, document.JudgedPolicy); err != nil {
+			document.SourceUpdatedAt, document.ExtractedAt, now, document.Excluded, document.JudgedPolicy,
+			document.Body, judgmentColumn(document.Judgment)); err != nil {
 			return mapWriteError("exclude document", err)
 		}
 		if !live || event == nil {
@@ -384,7 +389,8 @@ func scanDocument(rows pgx.Rows, withBody bool) (domain.Document, error) {
 	targets := []any{&document.ID, &document.OrganizationID, &document.SourceID, &document.ExternalID,
 		&document.Kind, &document.Title, &document.URL, &document.MIME, &document.ContentHash,
 		&document.ByteSize, &originalBucket, &originalKey, &originalSize, &metadata, &document.SourceUpdatedAt,
-		&document.ExtractedAt, &document.LastSeenAt, &document.RemovedAt, &document.Excluded, &document.JudgedPolicy}
+		&document.ExtractedAt, &document.LastSeenAt, &document.RemovedAt, &document.Excluded, &document.JudgedPolicy,
+		&document.Judgment}
 	if withBody {
 		targets = append(targets, &document.Body)
 	}
@@ -406,4 +412,12 @@ func scanDocument(rows pgx.Rows, withBody bool) (domain.Document, error) {
 		document.Original = &domain.Original{Bucket: *originalBucket, Key: *originalKey, Size: size, SHA256: document.ContentHash}
 	}
 	return document, nil
+}
+
+// judgmentColumn is a judgment as the jsonb column takes it: NULL for none.
+func judgmentColumn(judgment []byte) any {
+	if len(judgment) == 0 {
+		return nil
+	}
+	return string(judgment)
 }

@@ -228,7 +228,7 @@ func (s *Service) keepOriginal(ctx context.Context, source domain.Source, e *ent
 		existing = *e.existing
 	}
 	document := e.document
-	document.JudgedPolicy = e.policy()
+	document.JudgedPolicy, document.Judgment = e.policy(), e.judgment()
 	document.ID = existing.ID
 	if document.ID == "" {
 		var err error

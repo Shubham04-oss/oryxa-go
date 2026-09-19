@@ -38,7 +38,7 @@ type Judge interface {
 // instructions and the rules below. A document judged under an older policy
 // is judged again the next time a pass reads it, so raising this re-judges
 // every source over its next full sweep.
-const qualityPolicy = 1
+const qualityPolicy = 2
 
 const (
 	// judgeConcurrency is how many documents of a page are judged at once.
@@ -79,6 +79,15 @@ func (e *entry) policy() int {
 		return qualityPolicy
 	}
 	return 0
+}
+
+// judgment is the judge's answer the entry was decided by, to keep with it;
+// nil when a rule decided it, or nothing did.
+func (e *entry) judgment() []byte {
+	if e.verdict == nil {
+		return nil
+	}
+	return e.verdict.Judgment
 }
 
 // gated says whether a source's documents are judged at all.
@@ -204,7 +213,7 @@ func (s *Service) judgeAll(ctx context.Context, source domain.Source, lease stri
 func candidate(source domain.Source, e *entry) domain.Candidate {
 	c := domain.Candidate{
 		Provider: source.Provider, Kind: e.document.Kind, Title: e.document.Title, MIME: e.document.MIME,
-		Metadata: e.document.Metadata, Size: e.document.ByteSize,
+		Metadata: e.document.Metadata, Size: e.document.ByteSize, Include: source.IncludeKinds,
 	}
 	if e.original {
 		c.Original = e.item.Content
@@ -243,7 +252,7 @@ func (s *Service) write(ctx context.Context, source domain.Source, e *entry) (bo
 // changed or had been removed.
 func (s *Service) keepText(ctx context.Context, source domain.Source, e *entry) (bool, error) {
 	document := e.document
-	document.JudgedPolicy = e.policy()
+	document.JudgedPolicy, document.Judgment = e.policy(), e.judgment()
 	var err error
 	if document.ID, err = newID("doc"); err != nil {
 		return false, err
@@ -257,8 +266,7 @@ func (s *Service) keepText(ctx context.Context, source domain.Source, e *entry) 
 // was live until now.
 func (s *Service) exclude(ctx context.Context, source domain.Source, e *entry) error {
 	document := e.document
-	document.Body = ""
-	document.JudgedPolicy = qualityPolicy
+	document.JudgedPolicy, document.Judgment = qualityPolicy, e.judgment()
 	document.Excluded = excludedReason(e.verdict.Reason)
 	var err error
 	if document.ID, err = newID("doc"); err != nil {

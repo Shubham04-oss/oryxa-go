@@ -412,7 +412,6 @@ func (store *fakeStore) ExcludeDocument(_ context.Context, document domain.Docum
 			removedAt = *existing.RemovedAt
 		}
 	}
-	document.Body = ""
 	document.Original = nil
 	document.LastSeenAt = now
 	document.RemovedAt = &removedAt

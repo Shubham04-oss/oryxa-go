@@ -141,9 +141,10 @@ func TestLiveJevDecidesTheObviousCases(t *testing.T) {
 			t.Errorf("%s: %v", c.name, err)
 			continue
 		}
-		t.Logf("%-28s %-14s keep=%.2f (%s, %d tokens)", c.name, result.Kind, result.KeepProbability, result.Model, result.InputTokens)
-		if (result.KeepProbability >= 0.5) != c.keep {
-			t.Errorf("%s: keep probability %.2f as %s, want keep=%t", c.name, result.KeepProbability, result.Kind, c.keep)
+		keep, certainty, _ := Decide(result, domain.IncludedKinds(nil))
+		t.Logf("%-28s %-20s keep=%-5t %.2f (%s, %d tokens)", c.name, result.Kind, keep, certainty, result.Model, result.InputTokens)
+		if keep != c.keep {
+			t.Errorf("%s: kept=%t as %s (%.2f), want keep=%t", c.name, keep, result.Kind, certainty, c.keep)
 		}
 	}
 }

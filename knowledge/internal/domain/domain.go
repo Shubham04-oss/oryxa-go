@@ -136,6 +136,9 @@ type Source struct {
 	// finished.
 	SyncAt       *time.Time `json:"sync_at,omitempty"`
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
+	// IncludeKinds is what the source indexes, by kind of document (see
+	// Kinds); nil is DefaultKinds.
+	IncludeKinds []string `json:"include_kinds,omitempty"`
 	// FullSweepAt is when a pass last read this source from the beginning and
 	// retracted what it did not see. Nil means never: the source is due for
 	// one now, the same as if it had just been registered.
@@ -233,6 +236,10 @@ type Document struct {
 	// JudgedPolicy is the quality policy this document's content was last
 	// judged under; zero when it never was. A newer policy judges it again.
 	JudgedPolicy int `json:"-"`
+	// Judgment is the judge's own answer about this content, as JSON: what
+	// its verdict can be drawn from again when the source's choice of kinds
+	// changes. Nil for a document no judge was asked about.
+	Judgment []byte `json:"-"`
 }
 
 // Original names the object that holds a document's bytes as its provider

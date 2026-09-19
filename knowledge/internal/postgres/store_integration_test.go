@@ -1022,9 +1022,9 @@ func TestExcludeDocumentRetractsALiveDocumentOnceAndKeepsTheVerdict(t *testing.T
 
 	excluded := document
 	excluded.ID = "doc_ignored"
-	excluded.Body = ""
 	excluded.Excluded = "promotional mail"
 	excluded.JudgedPolicy = 1
+	excluded.Judgment = []byte(`{"jev": {"kind": "promotion"}}`)
 	later := testClock.Add(time.Hour)
 	retracted, err := store.ExcludeDocument(ctx, excluded, later, func(domain.Document) (domain.Event, error) {
 		return testEvent(t, "knowledge.document.removed.v1"), nil
@@ -1042,9 +1042,13 @@ func TestExcludeDocumentRetractsALiveDocumentOnceAndKeepsTheVerdict(t *testing.T
 	if read.ID != document.ID || read.RemovedAt == nil || read.Excluded != "promotional mail" || read.JudgedPolicy != 1 {
 		t.Fatalf("read = %+v, want the same row removed with its verdict", read)
 	}
+	var judged map[string]map[string]string
+	if err := json.Unmarshal(read.Judgment, &judged); err != nil || judged["jev"]["kind"] != "promotion" {
+		t.Fatalf("judgment = %s, %v; want the judge's answer kept", read.Judgment, err)
+	}
 	full, err := store.Document(ctx, "org_1", document.ID)
-	if err != nil || full.Body != "" {
-		t.Fatalf("Document() = body %q, %v, want no text kept for an excluded document", full.Body, err)
+	if err != nil || full.Body != "the body" {
+		t.Fatalf("Document() = body %q, %v, want the text kept, for a member who later chooses its kind", full.Body, err)
 	}
 
 	// Excluded again, as a later pass would: nothing more to retract.
@@ -1088,6 +1092,18 @@ func TestExcludeDocumentRecordsANewDocumentWithoutAnEvent(t *testing.T) {
 
 // A document excluded under an older policy and judged worth keeping under a
 // newer one comes back: it is published, and its exclusion cleared.
+func TestSourceHasNoChoiceOfKindsUntilItsMemberMakesOne(t *testing.T) {
+	store := openTestStore(t)
+	source := testSource(t, store, "org_1")
+	read, err := store.Source(context.Background(), "org_1", source.ID)
+	if err != nil {
+		t.Fatalf("Source() error = %v", err)
+	}
+	if read.IncludeKinds != nil {
+		t.Fatalf("IncludeKinds = %v, want nil: the default choice", read.IncludeKinds)
+	}
+}
+
 func TestUpsertDocumentPublishesAnExcludedDocumentJudgedWorthKeeping(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()

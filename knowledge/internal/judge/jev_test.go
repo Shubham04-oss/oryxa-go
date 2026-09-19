@@ -260,9 +260,100 @@ func TestNewJevRefusesToSendTheKeyInTheClear(t *testing.T) {
 }
 
 func TestDecideCountsOtherAsNeitherKeepNorExclude(t *testing.T) {
-	unsure := Classification{Kind: "other", KeepProbability: 0.3, ExcludeProbability: 0.2}
-	keep, certainty, _ := Decide(unsure)
+	unsure := Classification{Kind: "other", Probabilities: map[string]float64{"other": 0.5, "conversation": 0.3, "promotion": 0.2}}
+	keep, certainty, _ := Decide(unsure, domain.IncludedKinds(nil))
 	if !keep || certainty != 0.3 {
 		t.Fatalf("Decide() = %t, %.2f; want the larger side with its own low certainty", keep, certainty)
+	}
+}
+
+func TestDecideIndexesWhatTheSourceChose(t *testing.T) {
+	update := Classification{Kind: "event_update", Probabilities: map[string]float64{"event_update": 0.95, "promotion": 0.05}}
+	if keep, _, _ := Decide(update, domain.IncludedKinds(nil)); keep {
+		t.Fatal("Decide() kept an event update, which a source does not index by default")
+	}
+	if keep, certainty, _ := Decide(update, domain.IncludedKinds([]string{"event_update"})); !keep || certainty != 0.95 {
+		t.Fatalf("Decide() = %t, %.2f; want an event update kept where the member chose them", keep, certainty)
+	}
+}
+
+func TestJevKeepsItsAnswerAsTheJudgment(t *testing.T) {
+	fake := &fakeTypeSafe{answers: []string{kindAnswer("promotion", 0.96, "conversation")}}
+	jev := testJev(t, fake, nil)
+	verdict, err := jev.Judge(context.Background(), promotion())
+	if err != nil {
+		t.Fatalf("Judge() error = %v", err)
+	}
+	kept := decodeJudgment(verdict.Judgment)
+	if kept.Jev == nil || kept.Jev.Kind != "promotion" || kept.Jev.Probabilities["promotion"] != 0.96 || kept.Gemini != nil {
+		t.Fatalf("judgment = %s, want Jev's classification alone", verdict.Judgment)
+	}
+}
+
+func TestJevKeepsBothAnswersWhenItEscalates(t *testing.T) {
+	fake := &fakeTypeSafe{answers: []string{kindAnswer("routine_notification", 0.6, "booking")}}
+	escalate := &recordingJudge{verdict: domain.Verdict{
+		Keep: true, Reason: "an order with its details",
+		Judgment: judgment{Gemini: &geminiVerdict{Keep: true, Reason: "an order with its details"}}.encode(),
+	}}
+	jev := testJev(t, fake, escalate)
+	verdict, err := jev.Judge(context.Background(), promotion())
+	if err != nil {
+		t.Fatalf("Judge() error = %v", err)
+	}
+	kept := decodeJudgment(verdict.Judgment)
+	if kept.Jev == nil || kept.Gemini == nil || !kept.Gemini.Keep {
+		t.Fatalf("judgment = %s, want both answers", verdict.Judgment)
+	}
+}
+
+func TestJevDecidesForTheKindsTheSourceIndexes(t *testing.T) {
+	fake := &fakeTypeSafe{answers: []string{kindAnswer("event_update", 0.97, "promotion")}}
+	jev := testJev(t, fake, nil)
+	update := promotion()
+	update.Include = []string{"conversation", "event_update"}
+	verdict, err := jev.Judge(context.Background(), update)
+	if err != nil {
+		t.Fatalf("Judge() error = %v", err)
+	}
+	if !verdict.Keep {
+		t.Fatalf("verdict = %+v, want an event update kept where the member chose them", verdict)
+	}
+}
+
+func TestRedecideDrawsTheVerdictAgainForAChangedChoice(t *testing.T) {
+	jev, err := NewJev(JevConfig{APIKey: "ts_test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sure := judgment{Jev: &Classification{Kind: "event_update", Probabilities: map[string]float64{"event_update": 0.95, "promotion": 0.05}, Model: "jev-1.13.0"}}.encode()
+	if verdict, ok := jev.Redecide(sure, nil); !ok || verdict.Keep {
+		t.Fatalf("Redecide(default) = %+v, %t; want excluded without asking", verdict, ok)
+	}
+	if verdict, ok := jev.Redecide(sure, []string{"event_update"}); !ok || !verdict.Keep {
+		t.Fatalf("Redecide(event updates) = %+v, %t; want kept without asking", verdict, ok)
+	}
+
+	// Unsure under the choice, with the escalation's own answer kept: that
+	// answer stands.
+	unsure := judgment{
+		Jev:    &Classification{Kind: "routine_notification", Probabilities: map[string]float64{"routine_notification": 0.6, "booking": 0.4}},
+		Gemini: &geminiVerdict{Keep: true, Reason: "an order"},
+	}.encode()
+	if verdict, ok := jev.Redecide(unsure, nil); !ok || !verdict.Keep || verdict.Reason != "an order" {
+		t.Fatalf("Redecide(unsure, escalated) = %+v, %t; want the escalation's verdict", verdict, ok)
+	}
+
+	// Unsure, nothing else kept, and a judge to ask: it must be asked.
+	withEscalation, err := NewJev(JevConfig{APIKey: "ts_test", Escalate: &recordingJudge{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jevOnly := judgment{Jev: &Classification{Kind: "routine_notification", Probabilities: map[string]float64{"routine_notification": 0.6, "booking": 0.4}}}.encode()
+	if _, ok := withEscalation.Redecide(jevOnly, nil); ok {
+		t.Fatal("Redecide() decided a document Jev was unsure of, with a judge there to ask")
+	}
+	if _, ok := jev.Redecide(nil, nil); ok {
+		t.Fatal("Redecide() decided from no judgment at all")
 	}
 }

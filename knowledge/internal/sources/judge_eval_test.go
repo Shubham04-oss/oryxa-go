@@ -43,9 +43,7 @@ type judgeEvalResult struct {
 	ProductionKeep   bool   `json:"production_keep"`
 	ProductionReason string `json:"production_reason,omitempty"`
 
-	JevKind    string  `json:"jev_kind,omitempty"`
-	JevKeep    float64 `json:"jev_keep"`
-	JevExclude float64 `json:"jev_exclude"`
+	JevKind string `json:"jev_kind,omitempty"`
 	// JevDecision is what judge.Decide makes of Jev's answer, as production
 	// would, before any escalation.
 	JevDecision  bool    `json:"jev_decision"`
@@ -180,9 +178,8 @@ func TestEvalJevAgainstProductionVerdicts(t *testing.T) {
 			return
 		}
 		result := results[index]
-		result.JevKind, result.JevKeep, result.JevExclude = answer.Kind, answer.KeepProbability, answer.ExcludeProbability
-		result.JevTokens = answer.InputTokens
-		result.JevDecision, result.JevCertainty, result.JevReason = judge.Decide(answer)
+		result.JevKind, result.JevTokens = answer.Kind, answer.InputTokens
+		result.JevDecision, result.JevCertainty, result.JevReason = judge.Decide(answer, domain.IncludedKinds(nil))
 	})
 	t.Logf("Jev judged %d documents in %s", len(results), time.Since(started).Round(time.Second))
 

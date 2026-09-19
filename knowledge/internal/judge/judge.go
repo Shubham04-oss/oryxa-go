@@ -153,7 +153,15 @@ func (judge *Gemini) ask(ctx context.Context, candidate domain.Candidate, withPD
 	if err != nil {
 		return domain.Verdict{}, fmt.Errorf("%w: %w", domain.ErrQualityCheckUnavailable, err)
 	}
-	return verdictOf(response), nil
+	verdict := verdictOf(response)
+	verdict.Judgment = judgment{Gemini: &geminiVerdict{Keep: verdict.Keep, Reason: verdict.Reason, Model: judge.model}}.encode()
+	return verdict, nil
+}
+
+// Redecide gives the verdict kept with a document again: the Gemini judge's
+// answer does not depend on which kinds a source indexes.
+func (judge *Gemini) Redecide(kept []byte, _ []string) (domain.Verdict, bool) {
+	return decodeJudgment(kept).gemini(kept)
 }
 
 // verdictOf reads the model's answer. One it would not give because of what
