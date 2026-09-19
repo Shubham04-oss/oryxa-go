@@ -260,6 +260,12 @@ function IndexSourceDialog({
 	});
 	const discovered = targets.data ?? [];
 	const offerPicker = !typeItOut && discovered.length > 0;
+	// A choice from the list is registered with the target the app listed it
+	// with, not one rebuilt from its id: "My Drive" is Drive's whole account
+	// rather than a folder called "root".
+	const picked = offerPicker
+		? discovered.find((choice) => choice.id === target)
+		: undefined;
 	const [intervalSeconds, setIntervalSeconds] = useState(
 		defaultSourceIntervalSeconds,
 	);
@@ -270,7 +276,7 @@ function IndexSourceDialog({
 				connectionId,
 				intervalSeconds,
 				provider,
-				target: sourceTargetPayload(provider, target),
+				target: picked?.target ?? sourceTargetPayload(provider, target),
 			}),
 		onSuccess: () => {
 			onIndexed();

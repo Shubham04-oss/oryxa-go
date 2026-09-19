@@ -181,6 +181,8 @@ export const connectableSourceProviders = [
 	"github",
 	"notion",
 	"slack",
+	"googledrive",
+	"gmail",
 ] as const;
 
 export type SourceProvider = (typeof connectableSourceProviders)[number];
@@ -231,6 +233,18 @@ const targetFields: Record<SourceProvider, SourceTargetField> = {
 		placeholder: "C0123456789",
 		required: true,
 	},
+	googledrive: {
+		help: "Docs, Sheets, Slides, PDFs and Office files: the whole Drive, or one folder and everything under it.",
+		label: "Drive or folder",
+		placeholder: "A folder's ID; leave blank for the whole Drive",
+		required: false,
+	},
+	gmail: {
+		help: "One label's mail, the Inbox unless you choose another. The first pass reads the last ninety days; attachments are left out.",
+		label: "Label",
+		placeholder: "INBOX, SENT, or a label's ID",
+		required: false,
+	},
 };
 
 export function sourceTargetField(provider: SourceProvider): SourceTargetField {
@@ -250,6 +264,10 @@ export function sourceTargetPayload(
 			return { channel: value };
 		case "notion":
 			return value === "" ? {} : { database: value };
+		case "googledrive":
+			return value === "" ? {} : { folder: value };
+		case "gmail":
+			return value === "" ? {} : { label: value };
 		default:
 			return {};
 	}
@@ -267,6 +285,12 @@ export function sourceTargetProblem(
 	if (provider === "slack" && (value === "" || /\s/.test(value))) {
 		return "Enter the channel's ID, such as C0123456789.";
 	}
+	if (provider === "googledrive" && /\s/.test(value)) {
+		return "Enter the folder's ID from its link, or leave this blank for the whole Drive.";
+	}
+	if (provider === "gmail" && /\s/.test(value)) {
+		return "Enter the label's ID, such as INBOX or SENT, not its name.";
+	}
 	return undefined;
 }
 
@@ -282,10 +306,26 @@ export function sourceTargetLabel(
 			return target.channel ? `#${target.channel}` : "Channel";
 		case "notion":
 			return target.database ? `Database ${target.database}` : "All pages";
+		case "googledrive":
+			return target.folder ? `Folder ${target.folder}` : "My Drive";
+		case "gmail":
+			return gmailLabelName(target.label ?? "INBOX");
 		default: {
 			const values = Object.values(target);
 			return values.length > 0 ? values.join(", ") : "—";
 		}
+	}
+}
+
+/** Gmail's own names for the labels it is most often indexed by. */
+function gmailLabelName(label: string): string {
+	switch (label) {
+		case "INBOX":
+			return "Inbox";
+		case "SENT":
+			return "Sent";
+		default:
+			return `Label ${label}`;
 	}
 }
 
