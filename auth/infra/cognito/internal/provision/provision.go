@@ -196,19 +196,28 @@ func ensureDomain(ctx context.Context, client *cognitoidentityprovider.Client, p
 	return nil
 }
 
+// googleAttributeMapping copies Google's claims onto the Cognito user at every
+// sign-in. email_verified is among them because auth admits a member only by a
+// verified email: unmapped, Cognito marks every Google user's email
+// unverified, and every Google sign-in is refused.
+func googleAttributeMapping() map[string]string {
+	return map[string]string{
+		"email":          "email",
+		"email_verified": "email_verified",
+		"family_name":    "family_name",
+		"given_name":     "given_name",
+		"name":           "name",
+		"picture":        "picture",
+	}
+}
+
 func ensureGoogleProvider(ctx context.Context, client *cognitoidentityprovider.Client, poolID string, config Config) error {
 	details := map[string]string{
 		"authorize_scopes": "email profile openid",
 		"client_id":        config.GoogleClientID,
 		"client_secret":    config.GoogleClientSecret,
 	}
-	attributes := map[string]string{
-		"email":       "email",
-		"family_name": "family_name",
-		"given_name":  "given_name",
-		"name":        "name",
-		"picture":     "picture",
-	}
+	attributes := googleAttributeMapping()
 
 	_, err := client.DescribeIdentityProvider(ctx, &cognitoidentityprovider.DescribeIdentityProviderInput{
 		ProviderName: aws.String(googleProviderName),
