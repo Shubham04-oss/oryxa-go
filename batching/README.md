@@ -155,9 +155,11 @@ rather than that many groups per sweep interval.
 
 Agents consumes `batching.trigger-batch.ready.v1` in place of the app triggers
 themselves, and wakes Krude for each batch as soon as it arrives: batching has
-already decided when a member's triggers make a turn, so agents keeps no rule
-of its own. So the switch loses nothing, deploy batching with its queue before
-re-provisioning agents' rule.
+already decided when a member's triggers make a turn, so agents' own rule
+(`AGENTS_WAKEUP_BATCH_SIZE`) defaults to one. It records each batch's triggers
+by their original event ids, so a trigger it took straight from apps before
+the switch is not told twice. So the switch loses nothing, deploy batching with
+its queue before re-provisioning agents' rule.
 
 A trigger that reaches batching more than five minutes after apps received
 it is part of a backlog: the consumer was down, or the queue fell behind.
