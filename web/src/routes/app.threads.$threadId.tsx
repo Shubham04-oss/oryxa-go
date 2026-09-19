@@ -1,20 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import {
-	Ban,
-	CircleAlert,
-	CircleCheck,
-	FileDown,
-	Inbox,
-	Loader2,
-	ShieldQuestion,
-	Trash2,
-} from "lucide-react";
+import { FileDown, Inbox, ShieldQuestion, Trash2 } from "lucide-react";
 import { type UIEvent, useEffect, useRef, useState } from "react";
 import { AppAlert, QueryError } from "@/components/app/app-alert";
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import { ThreadComposer } from "@/components/app/thread-composer";
 import { MessageMarkdown } from "@/components/threads/message-markdown";
+import {
+	groupToolActivity,
+	ToolActivity,
+} from "@/components/threads/tool-activity";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError, apiErrorMessage } from "@/lib/api/client";
@@ -41,7 +36,6 @@ import {
 	isImageArtifact,
 	type MessageEntry,
 	type TimelineEntry,
-	type ToolEntry,
 	unseenLiveItems,
 } from "@/lib/threads/timeline";
 
@@ -224,6 +218,7 @@ function ThreadConversationPage() {
 					} satisfies MessageEntry,
 				]
 			: timeline;
+	const displayEntries = groupToolActivity(entries);
 
 	const pendingIds = new Set(thread.data?.pending_confirmations ?? []);
 	for (const entry of timeline) {
@@ -286,7 +281,7 @@ function ThreadConversationPage() {
 							Send a message to get started.
 						</p>
 					) : null}
-					{entries.map((entry) => {
+					{displayEntries.map((entry) => {
 						if (entry.kind === "message") {
 							return entry.author === "apps" ? (
 								<AppsUpdateBlock entry={entry} key={entry.id} />
@@ -294,8 +289,8 @@ function ThreadConversationPage() {
 								<MessageBlock entry={entry} key={entry.id} />
 							);
 						}
-						if (entry.kind === "tool") {
-							return <ToolBlock entry={entry} key={entry.callId} />;
+						if (entry.kind === "tool_activity") {
+							return <ToolActivity key={entry.id} tools={entry.tools} />;
 						}
 						if (entry.kind === "artifact") {
 							return (
@@ -448,55 +443,6 @@ function AppsUpdateBlock({ entry }: { entry: MessageEntry }) {
 				</Button>
 			) : null}
 		</div>
-	);
-}
-
-function toolStateLabel(state: ToolEntry["state"]): string {
-	switch (state) {
-		case "running":
-			return "Running…";
-		case "waiting_approval":
-			return "Waiting for your approval";
-		case "declined":
-			return "Declined";
-		case "failed":
-			return "Failed";
-		default:
-			return "Done";
-	}
-}
-
-function ToolStateIcon({ state }: { state: ToolEntry["state"] }) {
-	switch (state) {
-		case "running":
-			return (
-				<Loader2 aria-hidden="true" className="thread-tool-icon animate-spin" />
-			);
-		case "waiting_approval":
-			return <ShieldQuestion aria-hidden="true" className="thread-tool-icon" />;
-		case "failed":
-			return <CircleAlert aria-hidden="true" className="thread-tool-icon" />;
-		case "declined":
-			return <Ban aria-hidden="true" className="thread-tool-icon" />;
-		default:
-			return <CircleCheck aria-hidden="true" className="thread-tool-icon" />;
-	}
-}
-
-function ToolBlock({ entry }: { entry: ToolEntry }) {
-	const detail = entry.state === "failed" ? entry.errorText : entry.resultText;
-	return (
-		<details className="thread-tool" data-state={entry.state}>
-			<summary className="thread-tool-summary">
-				<ToolStateIcon state={entry.state} />
-				<span>{humanizeToolName(entry.tool)}</span>
-				<em>{toolStateLabel(entry.state)}</em>
-			</summary>
-			{entry.arguments ? (
-				<pre className="thread-tool-detail">{formatJson(entry.arguments)}</pre>
-			) : null}
-			{detail ? <pre className="thread-tool-detail">{detail}</pre> : null}
-		</details>
 	);
 }
 
