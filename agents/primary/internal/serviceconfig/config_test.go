@@ -3,6 +3,8 @@ package serviceconfig
 import (
 	"testing"
 	"time"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 )
 
 func env(values map[string]string) func(string) string {
@@ -14,7 +16,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
 	}
-	if config.Model != "gemini-3.8-flash" || config.ModelLite != "gemini-3.8-flash-lite" || config.GoogleCloudProject != "" || config.GoogleCloudLocation != "global" || config.DatabaseURL != "" || !config.AutoMigrate {
+	if config.Model != "gemini-3.5-flash-lite" || config.ModelLite != "gemini-3.5-flash-lite" || config.GoogleCloudProject != "" || config.GoogleCloudLocation != "global" || config.DatabaseURL != "" || !config.AutoMigrate {
 		t.Fatalf("config = %+v", config)
 	}
 	if !config.Cache || config.CacheTTL != time.Hour || config.CacheMinTokens != 4096 {
@@ -45,6 +47,24 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if config.KnowledgeMinRelevance != 0 {
 		t.Fatalf("knowledge min relevance = %v, want off", config.KnowledgeMinRelevance)
+	}
+}
+
+// A run on a model the price table does not know reports no cost, so the
+// models a deployment gets without configuring any have to be priced.
+func TestTheDefaultModelsArePriced(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{config.Model, config.ModelLite} {
+		if _, priced := table.Rates(model); !priced {
+			t.Errorf("the default model %q has no price", model)
+		}
 	}
 }
 

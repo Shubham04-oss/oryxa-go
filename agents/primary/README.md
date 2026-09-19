@@ -434,9 +434,9 @@ wherever it can carry the work:
 
 | Role | Runs on | Default |
 | --- | --- | --- |
-| `chat` — the member's conversation | main | `gemini-3.8-flash` |
+| `chat` — the member's conversation | main | `gemini-3.5-flash-lite` |
 | `research` — grounded web research | main | same; Google Search grounding is not on every lite model |
-| `plan` — structured planning | lite | `gemini-3.8-flash-lite` |
+| `plan` — structured planning | lite | `gemini-3.5-flash-lite` |
 | `work` — helpers and dynamic sub-agents | lite | same |
 
 Set `AGENTS_PRIMARY_MODEL` and `AGENTS_PRIMARY_MODEL_LITE` to change the two
@@ -837,8 +837,8 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AGENTS_PRIMARY_MODEL` | `gemini-3.8-flash` | Main model: conversation and grounded research |
-| `AGENTS_PRIMARY_MODEL_LITE` | `gemini-3.8-flash-lite` | Lite model: planning and bulk single-turn work |
+| `AGENTS_PRIMARY_MODEL` | `gemini-3.5-flash-lite` | Main model: conversation and grounded research |
+| `AGENTS_PRIMARY_MODEL_LITE` | `gemini-3.5-flash-lite` | Lite model: planning and bulk single-turn work |
 | `AGENTS_PRIMARY_PROMPT_CACHE` | `true` | Use explicit Vertex cached contents for large stable prefixes |
 | `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |
 | `AGENTS_PRIMARY_CACHE_MIN_TOKENS` | `4096` | Smallest prefix worth an explicit cache; Vertex's floor for these models. Below it, implicit caching applies |

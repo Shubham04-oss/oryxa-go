@@ -192,8 +192,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return Config{
-		Model:               valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL", "gemini-3.8-flash"),
-		ModelLite:           valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL_LITE", "gemini-3.8-flash-lite"),
+		Model:               valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL", "gemini-3.5-flash-lite"),
+		ModelLite:           valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL_LITE", "gemini-3.5-flash-lite"),
 		GoogleCloudProject:  strings.TrimSpace(getenv("GOOGLE_CLOUD_PROJECT")),
 		GoogleCloudLocation: valueOrDefault(getenv, "GOOGLE_CLOUD_LOCATION", "global"),
 		DatabaseURL:         strings.TrimSpace(getenv("DATABASE_URL")),
