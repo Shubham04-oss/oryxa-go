@@ -171,6 +171,8 @@ resource "cloudflare_hyperdrive_config" "main" {
     access_client_id     = cloudflare_zero_trust_access_service_token.hyperdrive.client_id
     access_client_secret = cloudflare_zero_trust_access_service_token.hyperdrive.client_secret
   }
+  # Hyperdrive's default, said here because the API reports it back.
+  caching = { disabled = false }
 
   depends_on = [cloudflare_zero_trust_access_application.hyperdrive, cloudflare_zero_trust_tunnel_cloudflared_config.db, terraform_data.db_tunnel_connected]
 }
