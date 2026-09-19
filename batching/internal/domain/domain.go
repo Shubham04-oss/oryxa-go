@@ -39,6 +39,21 @@ func (classification Classification) Validate() error {
 	return nil
 }
 
+// Admission is what batching does with a trigger event it receives.
+type Admission int
+
+const (
+	// Admitted is a trigger batching keeps: new, and from nothing removed
+	// since apps received it.
+	Admitted Admission = iota
+	// AlreadyRecorded is an event batching kept before and the bus, which
+	// delivers at least once, delivered again.
+	AlreadyRecorded
+	// Forgotten is a trigger from a member, organization, connection or
+	// trigger that was removed after apps received it. Nothing of it is kept.
+	Forgotten
+)
+
 // Trigger is one app event waiting to be released.
 type Trigger struct {
 	ID             string

@@ -7,6 +7,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"slices"
 	"time"
 
@@ -45,30 +46,113 @@ func (store *Store) Migrate(ctx context.Context) error {
 }
 
 // Record keeps a classified trigger exactly once. EventBridge and SQS are
-// both at-least-once, so the original Oryxa event id is the primary key.
-func (store *Store) Record(ctx context.Context, trigger domain.Trigger) (bool, error) {
+// both at-least-once, so the original Oryxa event id is the primary key. A
+// trigger within a removal made after apps received it is refused, and
+// nothing of it is kept: not the trigger, and not a traffic profile.
+func (store *Store) Record(ctx context.Context, trigger domain.Trigger) (domain.Admission, error) {
 	if trigger.ID == "" || trigger.OrganizationID == "" || trigger.MemberID == "" || trigger.ReceivedAt.IsZero() {
-		return false, errors.New("a trigger needs its event id, organization, member, and received time")
+		return 0, errors.New("a trigger needs its event id, organization, member, and received time")
 	}
 	if err := trigger.Classification.Validate(); err != nil {
-		return false, err
+		return 0, err
 	}
-	if trigger.Classification.Lane == domain.LaneImmediate {
-		return store.recordImmediate(ctx, trigger)
+	if trigger.Classification.Lane == domain.LaneDigest && !store.scheduler.Valid() {
+		return 0, errors.New("record digest trigger: adaptive scheduler is not configured")
 	}
-	if !store.scheduler.Valid() {
-		return false, errors.New("record digest trigger: adaptive scheduler is not configured")
+	var admission domain.Admission
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		var err error
+		admission, err = store.record(ctx, tx, trigger)
+		return err
+	})
+	if err != nil {
+		return 0, err
 	}
-	return store.recordDigest(ctx, trigger)
+	return admission, nil
 }
 
-func (store *Store) recordImmediate(ctx context.Context, trigger domain.Trigger) (bool, error) {
-	at := store.now().UTC()
+// Screen says what Record would do with a trigger, without recording it.
+// The service asks before classifying, so neither a redelivery nor a trigger
+// from something since removed costs a classification, or sends its payload
+// to the classifier's provider again. Record still decides, under the
+// organization's lock.
+func (store *Store) Screen(ctx context.Context, trigger domain.Trigger) (domain.Admission, error) {
+	if trigger.ID == "" || trigger.OrganizationID == "" || trigger.MemberID == "" || trigger.ReceivedAt.IsZero() {
+		return 0, errors.New("a trigger needs its event id, organization, member, and received time")
+	}
+	return screen(ctx, store.database.Pool, trigger)
+}
+
+// record does Record's work in tx. It holds the organization's lock shared,
+// so triggers are recorded side by side while Forget, which holds it
+// exclusively, waits for those under way and they for it: a trigger is
+// either committed before a removal, which then deletes it, or screened
+// against the removal's tombstone after it.
+func (store *Store) record(ctx context.Context, tx pgx.Tx, trigger domain.Trigger) (domain.Admission, error) {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock_shared($1)`, organizationLock(trigger.OrganizationID)); err != nil {
+		return 0, fmt.Errorf("lock organization: %w", err)
+	}
+	admission, err := screen(ctx, tx, trigger)
+	if err != nil || admission != domain.Admitted {
+		return admission, err
+	}
+	if trigger.Classification.Lane == domain.LaneImmediate {
+		return store.recordImmediate(ctx, tx, trigger)
+	}
+	return store.recordDigest(ctx, tx, trigger)
+}
+
+// organizationLock is the advisory lock key that serialises recording an
+// organization's triggers against forgetting them. A key is a number, so the
+// organization's id is hashed; two organizations that share one only wait
+// for each other.
+func organizationLock(organizationID string) int64 {
+	key := fnv.New64a()
+	_, _ = key.Write([]byte("batching/organization/" + organizationID))
+	return int64(key.Sum64())
+}
+
+// querier is the pool, or a transaction on it.
+type querier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+// screen says what Record would do with a trigger, from what is committed:
+// nothing when its event is recorded already or it falls within a removal
+// made after apps received it. A tombstone covers a trigger when every field
+// it sets names the trigger.
+func screen(ctx context.Context, database querier, trigger domain.Trigger) (domain.Admission, error) {
+	var recorded, forgotten bool
+	if err := database.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM batching_triggers WHERE id = $1),
+			EXISTS (
+				SELECT 1 FROM batching_forgotten
+				WHERE organization_id = $2 AND member_id IN ('', $3)
+				  AND connection_id IN ('', $4) AND trigger_id IN ('', $5)
+				  AND forgotten_at >= $6)`,
+		trigger.ID, trigger.OrganizationID, trigger.MemberID, trigger.ConnectionID, trigger.TriggerID,
+		trigger.ReceivedAt).Scan(&recorded, &forgotten); err != nil {
+		return 0, fmt.Errorf("screen trigger: %w", err)
+	}
+	switch {
+	case recorded:
+		return domain.AlreadyRecorded, nil
+	case forgotten:
+		return domain.Forgotten, nil
+	default:
+		return domain.Admitted, nil
+	}
+}
+
+func (store *Store) recordImmediate(ctx context.Context, tx pgx.Tx, trigger domain.Trigger) (domain.Admission, error) {
+	// Due at once: its deadlines are its recording, since no deadline is set
+	// before that.
+	due := store.now().UTC()
 	var data any
 	if len(trigger.Data) > 0 {
 		data = trigger.Data
 	}
-	tag, err := store.database.Pool.Exec(ctx, `
+	tag, err := tx.Exec(ctx, `
 		INSERT INTO batching_triggers
 			(id, trigger_id, connection_id, organization_id, member_id, toolkit, trigger,
 			 data, data_omitted, received_at, lane, priority, classifier, decision_reason,
@@ -79,81 +163,78 @@ func (store *Store) recordImmediate(ctx context.Context, trigger domain.Trigger)
 		trigger.ID, trigger.TriggerID, trigger.ConnectionID, trigger.OrganizationID, trigger.MemberID,
 		trigger.Toolkit, trigger.Trigger, data, trigger.DataOmitted, trigger.ReceivedAt,
 		trigger.Classification.Lane, trigger.Classification.Priority,
-		trigger.Classification.Classifier, trigger.Classification.Reason, at,
+		trigger.Classification.Classifier, trigger.Classification.Reason, due,
 		1+2*trigger.Classification.Priority)
 	if err != nil {
-		return false, fmt.Errorf("record immediate trigger: %w", err)
+		return 0, fmt.Errorf("record immediate trigger: %w", err)
 	}
-	return tag.RowsAffected() == 1, nil
+	if tag.RowsAffected() == 0 {
+		return domain.AlreadyRecorded, nil
+	}
+	return domain.Admitted, nil
 }
 
-func (store *Store) recordDigest(ctx context.Context, trigger domain.Trigger) (bool, error) {
+func (store *Store) recordDigest(ctx context.Context, tx pgx.Tx, trigger domain.Trigger) (domain.Admission, error) {
 	at := store.now().UTC()
-	var recorded bool
-	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO batching_traffic_profiles
-				(organization_id, member_id, fast_mass, slow_mass, observed_at, last_event_at, total_events)
-			VALUES ($1, $2, 0, 0, $3, $3, 0)
-			ON CONFLICT (organization_id, member_id) DO NOTHING`,
-			trigger.OrganizationID, trigger.MemberID, at); err != nil {
-			return fmt.Errorf("ensure traffic profile: %w", err)
-		}
-		var profile domain.TrafficProfile
-		if err := tx.QueryRow(ctx, `
-			SELECT fast_mass, slow_mass, observed_at, last_event_at, total_events
-			FROM batching_traffic_profiles
-			WHERE organization_id = $1 AND member_id = $2
-			FOR UPDATE`, trigger.OrganizationID, trigger.MemberID).Scan(
-			&profile.FastMass, &profile.SlowMass, &profile.ObservedAt, &profile.LastEventAt, &profile.TotalEvents); err != nil {
-			return fmt.Errorf("lock traffic profile: %w", err)
-		}
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM batching_triggers WHERE id = $1)`, trigger.ID).Scan(&exists); err != nil {
-			return fmt.Errorf("check trigger delivery: %w", err)
-		}
-		if exists {
-			return nil
-		}
-		profile, schedule, err := store.scheduler.Observe(profile, at,
-			trigger.OrganizationID+"/"+trigger.MemberID, trigger.Classification.Priority)
-		if err != nil {
-			return fmt.Errorf("schedule digest trigger: %w", err)
-		}
-		var data any
-		if len(trigger.Data) > 0 {
-			data = trigger.Data
-		}
-		if _, err := tx.Exec(ctx, `
-			INSERT INTO batching_triggers
-				(id, trigger_id, connection_id, organization_id, member_id, toolkit, trigger,
-				 data, data_omitted, received_at, lane, priority, classifier, decision_reason,
-				 target_size, pressure, soft_due_at, hard_due_at, policy_version)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-				$15, $16, $17, $18, $19)`,
-			trigger.ID, trigger.TriggerID, trigger.ConnectionID, trigger.OrganizationID, trigger.MemberID,
-			trigger.Toolkit, trigger.Trigger, data, trigger.DataOmitted, trigger.ReceivedAt,
-			trigger.Classification.Lane, trigger.Classification.Priority,
-			trigger.Classification.Classifier, trigger.Classification.Reason,
-			schedule.TargetSize, schedule.Pressure, schedule.SoftDueAt, schedule.HardDueAt, schedule.PolicyVersion); err != nil {
-			return fmt.Errorf("record digest trigger: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE batching_traffic_profiles
-			SET fast_mass = $3, slow_mass = $4, observed_at = $5, last_event_at = $6,
-				total_events = $7, updated_at = now()
-			WHERE organization_id = $1 AND member_id = $2`,
-			trigger.OrganizationID, trigger.MemberID, profile.FastMass, profile.SlowMass,
-			profile.ObservedAt, profile.LastEventAt, profile.TotalEvents); err != nil {
-			return fmt.Errorf("update traffic profile: %w", err)
-		}
-		recorded = true
-		return nil
-	})
-	if err != nil {
-		return false, err
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO batching_traffic_profiles
+			(organization_id, member_id, fast_mass, slow_mass, observed_at, last_event_at, total_events)
+		VALUES ($1, $2, 0, 0, $3, $3, 0)
+		ON CONFLICT (organization_id, member_id) DO NOTHING`,
+		trigger.OrganizationID, trigger.MemberID, at); err != nil {
+		return 0, fmt.Errorf("ensure traffic profile: %w", err)
 	}
-	return recorded, nil
+	var profile domain.TrafficProfile
+	if err := tx.QueryRow(ctx, `
+		SELECT fast_mass, slow_mass, observed_at, last_event_at, total_events
+		FROM batching_traffic_profiles
+		WHERE organization_id = $1 AND member_id = $2
+		FOR UPDATE`, trigger.OrganizationID, trigger.MemberID).Scan(
+		&profile.FastMass, &profile.SlowMass, &profile.ObservedAt, &profile.LastEventAt, &profile.TotalEvents); err != nil {
+		return 0, fmt.Errorf("lock traffic profile: %w", err)
+	}
+	// Screened again under the profile's lock: the same event delivered
+	// twice at once waits here for the first, and sees it.
+	var exists bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM batching_triggers WHERE id = $1)`, trigger.ID).Scan(&exists); err != nil {
+		return 0, fmt.Errorf("check trigger delivery: %w", err)
+	}
+	if exists {
+		return domain.AlreadyRecorded, nil
+	}
+	profile, schedule, err := store.scheduler.Observe(profile, trigger.ReceivedAt, at,
+		trigger.OrganizationID+"/"+trigger.MemberID, trigger.Classification.Priority)
+	if err != nil {
+		return 0, fmt.Errorf("schedule digest trigger: %w", err)
+	}
+	var data any
+	if len(trigger.Data) > 0 {
+		data = trigger.Data
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO batching_triggers
+			(id, trigger_id, connection_id, organization_id, member_id, toolkit, trigger,
+			 data, data_omitted, received_at, lane, priority, classifier, decision_reason,
+			 target_size, pressure, soft_due_at, hard_due_at, policy_version)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+			$15, $16, $17, $18, $19)`,
+		trigger.ID, trigger.TriggerID, trigger.ConnectionID, trigger.OrganizationID, trigger.MemberID,
+		trigger.Toolkit, trigger.Trigger, data, trigger.DataOmitted, trigger.ReceivedAt,
+		trigger.Classification.Lane, trigger.Classification.Priority,
+		trigger.Classification.Classifier, trigger.Classification.Reason,
+		schedule.TargetSize, schedule.Pressure, schedule.SoftDueAt, schedule.HardDueAt, schedule.PolicyVersion); err != nil {
+		return 0, fmt.Errorf("record digest trigger: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE batching_traffic_profiles
+		SET fast_mass = $3, slow_mass = $4, observed_at = $5, last_event_at = $6,
+			total_events = $7, updated_at = now()
+		WHERE organization_id = $1 AND member_id = $2`,
+		trigger.OrganizationID, trigger.MemberID, profile.FastMass, profile.SlowMass,
+		profile.ObservedAt, profile.LastEventAt, profile.TotalEvents); err != nil {
+		return 0, fmt.Errorf("update traffic profile: %w", err)
+	}
+	return domain.Admitted, nil
 }
 
 // ClaimDue claims immediate triggers one by one, followed by due digest
@@ -403,13 +484,22 @@ func (store *Store) Complete(ctx context.Context, batch domain.Batch, event doma
 }
 
 // Forget removes pending and retained triggers for a member, or an entire
-// organization when memberID is empty. A batch already on EventBridge cannot
-// be recalled; agents still verify membership before starting a run.
+// organization when memberID is empty, and remembers the removal, so a
+// trigger apps received before it that the bus delivers afterwards is
+// refused rather than starting a new group. A batch already on EventBridge
+// cannot be recalled; agents still verify membership before starting a run.
+//
+// Forget holds the organization's lock exclusively: it waits for every
+// trigger being recorded for the organization and deletes those too, and a
+// trigger recorded after it is screened against its tombstone.
 func (store *Store) Forget(ctx context.Context, organizationID, memberID string) error {
 	if organizationID == "" {
 		return errors.New("forgetting triggers needs an organization")
 	}
 	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, organizationLock(organizationID)); err != nil {
+			return fmt.Errorf("lock organization: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `
 			DELETE FROM batching_triggers
 			WHERE organization_id = $1 AND ($2 = '' OR member_id = $2)`, organizationID, memberID); err != nil {
@@ -430,8 +520,64 @@ func (store *Store) Forget(ctx context.Context, organizationID, memberID string)
 			  AND detail->>'organization_id' = $1 AND ($2 = '' OR detail->>'member_id' = $2)`, organizationID, memberID); err != nil {
 			return fmt.Errorf("forget unpublished batches: %w", err)
 		}
-		return nil
+		return remember(ctx, tx, organizationID, memberID, "", "", store.now().UTC())
 	})
+}
+
+// Discard drops the triggers still waiting from a connection its member
+// removed, or from one trigger when triggerID is set, and remembers the
+// removal like Forget does, so one the bus delivers late is refused too.
+// Waiting includes claimed and not yet completed: a claim that loses a
+// trigger here can no longer complete, and the rest of its group is claimed
+// again when its lease runs out. Completed batches are left alone; each is
+// one event, carrying the member's other apps' triggers too, and may already
+// be on the bus.
+func (store *Store) Discard(ctx context.Context, organizationID, connectionID, triggerID string) error {
+	if organizationID == "" || (connectionID == "" && triggerID == "") {
+		return errors.New("discarding triggers needs an organization and a connection or trigger")
+	}
+	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, organizationLock(organizationID)); err != nil {
+			return fmt.Errorf("lock organization: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM batching_triggers
+			WHERE organization_id = $1 AND batched_at IS NULL
+			  AND ($2 = '' OR connection_id = $2) AND ($3 = '' OR trigger_id = $3)`,
+			organizationID, connectionID, triggerID); err != nil {
+			return fmt.Errorf("discard waiting triggers: %w", err)
+		}
+		return remember(ctx, tx, organizationID, "", connectionID, triggerID, store.now().UTC())
+	})
+}
+
+// remember records a removal's tombstone, timed once the organization's lock
+// is held: every trigger apps received before then is either deleted with
+// the removal or refused by Record. Removing the same thing again moves the
+// time forward, never back. A member added back later is not held up, since
+// what their apps report then is received after it; one added back before a
+// removal is delivered again loses what their apps reported in between,
+// which errs towards not waking an agent for someone who may be gone.
+func remember(ctx context.Context, tx pgx.Tx, organizationID, memberID, connectionID, triggerID string, at time.Time) error {
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO batching_forgotten (organization_id, member_id, connection_id, trigger_id, forgotten_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (organization_id, member_id, connection_id, trigger_id)
+		DO UPDATE SET forgotten_at = GREATEST(batching_forgotten.forgotten_at, EXCLUDED.forgotten_at)`,
+		organizationID, memberID, connectionID, triggerID, at); err != nil {
+		return fmt.Errorf("remember removal: %w", err)
+	}
+	return nil
+}
+
+// DeleteForgotten deletes the tombstones of removals made before before. By
+// then the bus can no longer deliver anything apps received ahead of them.
+func (store *Store) DeleteForgotten(ctx context.Context, before time.Time) (int, error) {
+	tag, err := store.database.Pool.Exec(ctx, `DELETE FROM batching_forgotten WHERE forgotten_at < $1`, before)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired removals: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 func (store *Store) DeleteBatched(ctx context.Context, before time.Time, limit int) (int, error) {

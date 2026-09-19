@@ -26,6 +26,10 @@ const (
 	urgencyQuestionID = "requires_prompt_attention"
 )
 
+// maxModelLength bounds the model name TypeSafe returns, which is stored on
+// every trigger it classifies. A versioned name is a few characters.
+const maxModelLength = 100
+
 type Config struct {
 	APIKey               string
 	BaseURL              string
@@ -56,6 +60,13 @@ func New(client *http.Client, config Config) (*Classifier, error) {
 	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"))
 	if err != nil || base.Scheme == "" || base.Host == "" || base.User != nil || base.RawQuery != "" || base.Fragment != "" {
 		return nil, errors.New("Jev classifier base URL must be absolute and contain no credentials, query, or fragment")
+	}
+	switch hostname := base.Hostname(); {
+	case base.Scheme == "https":
+	case base.Scheme == "http" && (hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1"):
+		// Plain HTTP only to this machine, as tests use.
+	default:
+		return nil, errors.New("Jev classifier base URL must use HTTPS, except on localhost, since every request carries the API key")
 	}
 	return &Classifier{
 		client: client, endpoint: base.String() + systemOnePath,
@@ -159,8 +170,8 @@ func (classifier *Classifier) Classify(ctx context.Context, trigger appsv1.Trigg
 	if err := json.Unmarshal(responseBody, &output); err != nil {
 		return domain.Classification{}, fmt.Errorf("decode Jev response: %w", err)
 	}
-	if strings.TrimSpace(output.Model) == "" {
-		return domain.Classification{}, errors.New("decode Jev response: model is missing")
+	if strings.TrimSpace(output.Model) == "" || utf8.RuneCountInString(output.Model) > maxModelLength {
+		return domain.Classification{}, fmt.Errorf("decode Jev response: model is missing or longer than %d characters", maxModelLength)
 	}
 	var lane choiceAnswer
 	if err := json.Unmarshal(output.Answers[laneQuestionID], &lane); err != nil {

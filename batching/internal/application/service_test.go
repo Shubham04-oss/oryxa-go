@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -19,19 +21,46 @@ var testClock = time.Date(2026, time.September, 19, 12, 0, 0, 0, time.UTC)
 
 type fakeStore struct {
 	recorded  []domain.Trigger
+	screened  domain.Admission
+	admission domain.Admission
 	batches   []domain.Batch
 	completed []domain.Event
 	forgot    []string
+	discarded []string
 	unclaimed []string
 	claimErr  error
+	// backlog, when set, is how many due groups wait: each claim takes up to
+	// its limit of them.
+	backlog int
+	claims  int
+	// swept is the cutoff each sweep asked tombstones to be deleted before.
+	swept []time.Time
 }
 
-func (store *fakeStore) Record(_ context.Context, trigger domain.Trigger) (bool, error) {
-	store.recorded = append(store.recorded, trigger)
-	return true, nil
+func (store *fakeStore) Screen(context.Context, domain.Trigger) (domain.Admission, error) {
+	return store.screened, nil
 }
-func (store *fakeStore) ClaimDue(context.Context, domain.Rule, time.Duration, int) ([]domain.Batch, error) {
-	return store.batches, store.claimErr
+func (store *fakeStore) Record(_ context.Context, trigger domain.Trigger) (domain.Admission, error) {
+	if store.admission != domain.Admitted {
+		return store.admission, nil
+	}
+	store.recorded = append(store.recorded, trigger)
+	return domain.Admitted, nil
+}
+func (store *fakeStore) ClaimDue(_ context.Context, _ domain.Rule, _ time.Duration, limit int) ([]domain.Batch, error) {
+	store.claims++
+	if store.backlog == 0 {
+		return store.batches, store.claimErr
+	}
+	batches := make([]domain.Batch, min(limit, store.backlog))
+	store.backlog -= len(batches)
+	for index := range batches {
+		id := fmt.Sprintf("bat_%d_%d", store.claims, index)
+		batches[index] = domain.Batch{ID: id, OrganizationID: "org_1", MemberID: "user_1", Lane: domain.LaneDigest,
+			Triggers: []domain.Trigger{{ID: "evt_" + id, ReceivedAt: testClock,
+				Classification: domain.Classification{Lane: domain.LaneDigest, Classifier: "default-digest.v1"}}}}
+	}
+	return batches, nil
 }
 func (store *fakeStore) Unclaim(_ context.Context, _ string, ids []string) error {
 	store.unclaimed = append(store.unclaimed, ids...)
@@ -45,7 +74,15 @@ func (store *fakeStore) Forget(_ context.Context, organizationID, memberID strin
 	store.forgot = append(store.forgot, organizationID+"/"+memberID)
 	return nil
 }
+func (store *fakeStore) Discard(_ context.Context, organizationID, connectionID, triggerID string) error {
+	store.discarded = append(store.discarded, organizationID+"/"+connectionID+"/"+triggerID)
+	return nil
+}
 func (*fakeStore) DeleteBatched(context.Context, time.Time, int) (int, error) { return 0, nil }
+func (store *fakeStore) DeleteForgotten(_ context.Context, before time.Time) (int, error) {
+	store.swept = append(store.swept, before)
+	return 0, nil
+}
 
 func TestTriggerReceivedUsesTheClassifierAndPreservesThePayload(t *testing.T) {
 	store := &fakeStore{}
@@ -206,5 +243,185 @@ func TestRemovalEventsForgetTheRightScope(t *testing.T) {
 	}
 	if strings.Join(store.forgot, ",") != "org_1/user_1,org_2/" {
 		t.Fatalf("forgot = %v", store.forgot)
+	}
+}
+
+// TestARefusedTriggerIsAcknowledged: a trigger from a member removed after
+// apps received it is kept nowhere, and delivering it again would change
+// nothing, so it is not an error that keeps it on the queue.
+func TestARefusedTriggerIsAcknowledged(t *testing.T) {
+	store := &fakeStore{admission: domain.Forgotten}
+	service := New(store, nil, Config{}, nil)
+	err := service.TriggerReceived(context.Background(), "evt_apps_1", appsv1.TriggerReceived{
+		OrganizationID: "org_1", MemberID: "user_gone", ReceivedAt: testClock,
+	})
+	if err != nil {
+		t.Fatalf("TriggerReceived() error = %v, want the refusal acknowledged", err)
+	}
+	if len(store.recorded) != 0 {
+		t.Fatalf("recorded = %+v", store.recorded)
+	}
+}
+
+func TestTheSweepForgetsRemovalsOnlyAfterAMonth(t *testing.T) {
+	store := &fakeStore{}
+	service := New(store, nil, Config{}, nil)
+	service.now = func() time.Time { return testClock }
+	service.sweep(context.Background())
+	if len(store.swept) != 1 || !store.swept[0].Equal(testClock.Add(-30*24*time.Hour)) {
+		t.Fatalf("swept removals before %v, want %v", store.swept, testClock.Add(-30*24*time.Hour))
+	}
+}
+
+// TestAppRemovalsDiscardTheirWaitingTriggers: a disconnected app, or a
+// removed trigger, should not still wake the member's agent for what it
+// reported before it went.
+func TestAppRemovalsDiscardTheirWaitingTriggers(t *testing.T) {
+	store := &fakeStore{}
+	service := New(store, nil, Config{}, nil)
+	ctx := context.Background()
+	if err := service.ConnectionRemoved(ctx, appsv1.ConnectionRemoved{
+		ConnectionID: "apc_1", OrganizationID: "org_1", MemberID: "user_1", Reason: appsv1.RemovedByMember,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.TriggerUnsubscribed(ctx, appsv1.TriggerUnsubscribed{
+		TriggerID: "apt_1", ConnectionID: "apc_2", OrganizationID: "org_1", MemberID: "user_1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(store.discarded, ",") != "org_1/apc_1/,org_1//apt_1" {
+		t.Fatalf("discarded = %v", store.discarded)
+	}
+	if err := service.ConnectionRemoved(ctx, appsv1.ConnectionRemoved{OrganizationID: "org_1"}); err == nil {
+		t.Fatal("ConnectionRemoved() without a connection error = nil")
+	}
+	if err := service.TriggerUnsubscribed(ctx, appsv1.TriggerUnsubscribed{TriggerID: "apt_1"}); err == nil {
+		t.Fatal("TriggerUnsubscribed() without an organization error = nil")
+	}
+}
+
+// TestATriggerIsScreenedBeforeItIsClassified: a redelivery, or a trigger
+// from someone since removed, must not wait on the classifier, nor send its
+// payload to the classifier's provider a second time.
+func TestATriggerIsScreenedBeforeItIsClassified(t *testing.T) {
+	for _, screened := range []domain.Admission{domain.AlreadyRecorded, domain.Forgotten} {
+		store := &fakeStore{screened: screened}
+		classified := 0
+		service := New(store, ClassifierFunc(func(context.Context, appsv1.TriggerReceived) (domain.Classification, error) {
+			classified++
+			return domain.Classification{Lane: domain.LaneDigest, Classifier: "counting"}, nil
+		}), Config{}, nil)
+		err := service.TriggerReceived(context.Background(), "evt_apps_1", appsv1.TriggerReceived{
+			OrganizationID: "org_1", MemberID: "user_1", ReceivedAt: testClock,
+		})
+		if err != nil || classified != 0 || len(store.recorded) != 0 {
+			t.Fatalf("screened %d: error = %v, classified %d times, recorded %d", screened, err, classified, len(store.recorded))
+		}
+	}
+}
+
+// flakyProvider fails while down, and counts every time it is asked.
+type flakyProvider struct {
+	down  bool
+	asked int
+}
+
+func (provider *flakyProvider) Classify(context.Context, appsv1.TriggerReceived) (domain.Classification, error) {
+	provider.asked++
+	if provider.down {
+		return domain.Classification{}, errors.New("provider unavailable")
+	}
+	return domain.Classification{Lane: domain.LaneDigest, Priority: .2, Classifier: "jev-test"}, nil
+}
+
+// TestAFailingClassifierIsNotAskedAgainUntilItsCoolDownEnds: an outage must
+// not cost every trigger its timeout. After five failures in a row the
+// provider is left alone for a minute; then one trigger asks, a failure
+// waits another minute, and a success resumes classification. Opening and
+// closing are logged once each.
+func TestAFailingClassifierIsNotAskedAgainUntilItsCoolDownEnds(t *testing.T) {
+	provider := &flakyProvider{down: true}
+	var logs strings.Builder
+	classifier := NewResilientClassifier(provider, slog.New(slog.NewTextHandler(&logs, nil)))
+	clock := testClock
+	classifier.now = func() time.Time { return clock }
+	ctx := context.Background()
+	classify := func() domain.Classification {
+		t.Helper()
+		classification, err := classifier.Classify(ctx, appsv1.TriggerReceived{Toolkit: "slack", Trigger: "message"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return classification
+	}
+
+	for range breakerFailures {
+		classify()
+	}
+	if got := classify(); provider.asked != breakerFailures || got.Priority != domain.FallbackPriority || got.Classifier != "jev-fallback.v1" {
+		t.Fatalf("asked %d times, classification %+v; want the circuit open after %d failures", provider.asked, got, breakerFailures)
+	}
+
+	clock = clock.Add(breakerCooldown)
+	if ask, probe := classifier.admit(); !ask || !probe {
+		t.Fatalf("admit() after the cool-down = %t, %t, want one probe", ask, probe)
+	}
+	if ask, _ := classifier.admit(); ask {
+		t.Fatal("a second trigger asked while the first was probing")
+	}
+	classifier.settle(ctx, errors.New("still down"), true)
+	classify()
+	if provider.asked != breakerFailures {
+		t.Fatalf("asked %d times right after a failed probe, want the circuit open again", provider.asked)
+	}
+
+	clock = clock.Add(breakerCooldown)
+	provider.down = false
+	if got := classify(); got.Classifier != "jev-test" {
+		t.Fatalf("the probe = %+v, want the provider's answer", got)
+	}
+	classify()
+	if provider.asked != breakerFailures+2 {
+		t.Fatalf("asked %d times, want every trigger asked once the circuit closed", provider.asked)
+	}
+	if opened, closed := strings.Count(logs.String(), "without asking it"), strings.Count(logs.String(), "answered again"); opened != 1 || closed != 1 {
+		t.Fatalf("logged the circuit opening %d times and closing %d, want once each:\n%s", opened, closed, logs.String())
+	}
+}
+
+func TestACallerGivingUpDoesNotOpenTheCircuit(t *testing.T) {
+	provider := &flakyProvider{down: true}
+	classifier := NewResilientClassifier(provider, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 2 * breakerFailures {
+		if _, err := classifier.Classify(ctx, appsv1.TriggerReceived{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if provider.asked != 2*breakerFailures {
+		t.Fatalf("asked %d times, want the circuit still closed", provider.asked)
+	}
+}
+
+// TestABacklogDrainsWithinOneSweep: a sweep keeps claiming while its claims
+// come back full, so a backlog drains at the database's pace rather than a
+// few groups a second, and stops at the first short claim.
+func TestABacklogDrainsWithinOneSweep(t *testing.T) {
+	store := &fakeStore{backlog: 20}
+	service := New(store, nil, Config{GroupsPerSweep: 8}, nil)
+	service.flush(context.Background())
+	if store.claims != 3 || len(store.completed) != 20 || store.backlog != 0 {
+		t.Fatalf("claims = %d, completed = %d, left = %d; want three claims taking all twenty", store.claims, len(store.completed), store.backlog)
+	}
+}
+
+func TestASweepUnderConstantLoadStillEnds(t *testing.T) {
+	store := &fakeStore{backlog: 100_000}
+	service := New(store, nil, Config{GroupsPerSweep: 8}, nil)
+	service.flush(context.Background())
+	if store.claims != claimsPerSweep || len(store.completed) != claimsPerSweep*8 {
+		t.Fatalf("claims = %d, completed = %d; want the sweep to stop after %d claims", store.claims, len(store.completed), claimsPerSweep)
 	}
 }

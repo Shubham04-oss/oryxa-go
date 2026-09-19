@@ -2,6 +2,7 @@
 package serviceconfig
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -10,6 +11,12 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/domain"
 )
+
+// MaxJevTimeout is the longest BATCHING_JEV_TIMEOUT may be. A message is
+// handled within one classification and a few statements, and the queue must
+// hide it from other replicas for longer than that or it is handled twice;
+// the provisioner's visibility timeout is checked against this.
+const MaxJevTimeout = 10 * time.Second
 
 type Config struct {
 	EventsQueueURL      string
@@ -65,6 +72,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if jevTimeout > MaxJevTimeout {
+		return Config{}, fmt.Errorf("BATCHING_JEV_TIMEOUT must not exceed %s", MaxJevTimeout)
+	}
 	immediate, err := decimal(getenv, "BATCHING_JEV_IMMEDIATE_PROBABILITY", .85)
 	if err != nil {
 		return Config{}, err
@@ -107,6 +117,9 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, fmt.Errorf("%s must be an absolute URL", check.name)
 		}
 	}
+	if !httpsOrLocal(config.TypeSafeBaseURL) {
+		return Config{}, errors.New("TYPESAFE_BASE_URL must use HTTPS, except on localhost, since every request carries the API key")
+	}
 	return config, nil
 }
 
@@ -122,13 +135,22 @@ func decimal(getenv func(string) string, name string, fallback float64) (float64
 	return parsed, nil
 }
 
+// integer reads a whole number, and checks its bounds after defaulting too:
+// a bound can follow another setting, as the largest batch follows the
+// cold-start target, and a default does not.
 func integer(getenv func(string) string, name string, fallback, minimum, maximum int) (int, error) {
 	value := strings.TrimSpace(getenv(name))
-	if value == "" {
-		return fallback, nil
+	parsed := fallback
+	if value != "" {
+		var err error
+		if parsed, err = strconv.Atoi(value); err != nil {
+			return 0, fmt.Errorf("%s must be a whole number between %d and %d", name, minimum, maximum)
+		}
 	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed < minimum || parsed > maximum {
+	if parsed < minimum || parsed > maximum {
+		if value == "" {
+			return 0, fmt.Errorf("%s must be set to a whole number between %d and %d; its default, %d, is not", name, minimum, maximum, fallback)
+		}
 		return 0, fmt.Errorf("%s must be a whole number between %d and %d", name, minimum, maximum)
 	}
 	return parsed, nil
@@ -160,4 +182,16 @@ func endpointOr(getenv func(string) string, name, fallback string) string {
 func absoluteURL(value string) bool {
 	parsed, err := url.Parse(value)
 	return err == nil && parsed.Scheme != "" && parsed.Host != ""
+}
+
+// httpsOrLocal says a URL uses HTTPS, or HTTP on this machine as tests do.
+// Anywhere else plain HTTP would send the TypeSafe API key in cleartext.
+func httpsOrLocal(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
+	hostname := parsed.Hostname()
+	return parsed.Scheme == "https" ||
+		parsed.Scheme == "http" && (hostname == "localhost" || hostname == "127.0.0.1" || hostname == "::1")
 }

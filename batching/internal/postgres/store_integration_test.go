@@ -48,6 +48,7 @@ func testStore(t *testing.T, rule domain.Rule) (*Store, string) {
 		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_triggers WHERE organization_id = $1`, organizationID)
 		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_traffic_profiles WHERE organization_id = $1`, organizationID)
 		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_outbox WHERE id LIKE $1`, organizationID+"%")
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM batching_forgotten WHERE organization_id = $1`, organizationID)
 		database.Close()
 	})
 	return store, organizationID
@@ -64,10 +65,28 @@ func testTrigger(organizationID, memberID, id string, lane domain.Lane) domain.T
 
 func recordTrigger(t *testing.T, store *Store, trigger domain.Trigger) {
 	t.Helper()
-	recorded, err := store.Record(context.Background(), trigger)
-	if err != nil || !recorded {
-		t.Fatalf("Record(%s) = %t, %v", trigger.ID, recorded, err)
+	admission, err := store.Record(context.Background(), trigger)
+	if err != nil || admission != domain.Admitted {
+		t.Fatalf("Record(%s) = %d, %v", trigger.ID, admission, err)
 	}
+}
+
+// refused says Record kept nothing of a trigger because of a removal.
+func refused(t *testing.T, store *Store, trigger domain.Trigger) {
+	t.Helper()
+	admission, err := store.Record(context.Background(), trigger)
+	if err != nil || admission != domain.Forgotten {
+		t.Fatalf("Record(%s) = %d, %v, want it refused as forgotten", trigger.ID, admission, err)
+	}
+}
+
+func count(t *testing.T, store *Store, query string, args ...any) int {
+	t.Helper()
+	var found int
+	if err := store.database.Pool.QueryRow(context.Background(), query, args...).Scan(&found); err != nil {
+		t.Fatal(err)
+	}
+	return found
 }
 
 func ownBatches(batches []domain.Batch, organizationID string) []domain.Batch {
@@ -111,8 +130,14 @@ func TestDigestWaitsForItsSizeAndInputDeliveryIsIdempotent(t *testing.T) {
 	first := testTrigger(organizationID, "user_1", "1", domain.LaneDigest)
 	recordTrigger(t, store, first)
 	recordTrigger(t, store, testTrigger(organizationID, "user_1", "2", domain.LaneDigest))
-	if recorded, err := store.Record(ctx, first); err != nil || recorded {
-		t.Fatalf("duplicate Record() = %t, %v", recorded, err)
+	if admission, err := store.Record(ctx, first); err != nil || admission != domain.AlreadyRecorded {
+		t.Fatalf("duplicate Record() = %d, %v", admission, err)
+	}
+	if admission, err := store.Screen(ctx, first); err != nil || admission != domain.AlreadyRecorded {
+		t.Fatalf("Screen() of a recorded trigger = %d, %v", admission, err)
+	}
+	if admission, err := store.Screen(ctx, testTrigger(organizationID, "user_1", "new", domain.LaneDigest)); err != nil || admission != domain.Admitted {
+		t.Fatalf("Screen() of a new trigger = %d, %v", admission, err)
 	}
 	var observations int
 	if err := store.database.Pool.QueryRow(ctx, `
@@ -304,5 +329,357 @@ func TestAQuietPeriodFlushesItsPartialBatchAtThePersistedDeadline(t *testing.T) 
 	quiet = ownBatches(quiet, organizationID)
 	if len(quiet) != 1 || len(quiet[0].Triggers) != 2 || quiet[0].FlushReason != "hard_deadline" {
 		t.Fatalf("quiet batch = %+v", quiet)
+	}
+}
+
+// TestATriggerDeliveredAfterItsMemberWasRemovedIsRefused: the bus orders
+// nothing, so a trigger apps received before a member was removed can arrive
+// after the removal. It must not start a new group for them, nor leave a
+// traffic profile behind; another member's triggers are untouched, and the
+// same member added back later is not held up.
+func TestATriggerDeliveredAfterItsMemberWasRemovedIsRefused(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	early := testTrigger(organizationID, "user_1", "early", domain.LaneDigest)
+	recordTrigger(t, store, early)
+	late := testTrigger(organizationID, "user_1", "late", domain.LaneDigest)
+	lateImmediate := testTrigger(organizationID, "user_1", "late_immediate", domain.LaneImmediate)
+	other := testTrigger(organizationID, "user_2", "other", domain.LaneDigest)
+
+	if err := store.Forget(ctx, organizationID, "user_1"); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, store, late)
+	refused(t, store, lateImmediate)
+	refused(t, store, early) // delivered again after the removal
+	if admission, err := store.Screen(ctx, late); err != nil || admission != domain.Forgotten {
+		t.Fatalf("Screen() = %d, %v, want forgotten", admission, err)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND member_id = 'user_1'`, organizationID); got != 0 {
+		t.Fatalf("user_1 has %d triggers after the removal, want none", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_traffic_profiles WHERE organization_id = $1 AND member_id = 'user_1'`, organizationID); got != 0 {
+		t.Fatalf("a refused trigger left %d traffic profiles, want none", got)
+	}
+	recordTrigger(t, store, other)
+
+	// Added back, the member's apps report something new: it is theirs.
+	returned := testTrigger(organizationID, "user_1", "returned", domain.LaneDigest)
+	returned.ReceivedAt = time.Now().UTC()
+	recordTrigger(t, store, returned)
+}
+
+func TestDeletingAnOrganizationRefusesEveryMembersLateTriggers(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	lateFirst := testTrigger(organizationID, "user_1", "late_1", domain.LaneDigest)
+	lateSecond := testTrigger(organizationID, "user_2", "late_2", domain.LaneImmediate)
+	if err := store.Forget(ctx, organizationID, ""); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, store, lateFirst)
+	refused(t, store, lateSecond)
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1`, organizationID); got != 0 {
+		t.Fatalf("the deleted organization has %d triggers, want none", got)
+	}
+}
+
+// TestForgetWaitsForATriggerStillBeingRecorded: a trigger whose insert is
+// not yet committed when the removal runs is invisible to the removal's
+// delete, so without the organization's lock it would outlive it.
+func TestForgetWaitsForATriggerStillBeingRecorded(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	tx, err := store.database.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if admission, err := store.record(ctx, tx, testTrigger(organizationID, "user_1", "in_flight", domain.LaneDigest)); err != nil || admission != domain.Admitted {
+		t.Fatalf("record() = %d, %v", admission, err)
+	}
+
+	forgotten := make(chan error, 1)
+	go func() { forgotten <- store.Forget(ctx, organizationID, "user_1") }()
+	select {
+	case err := <-forgotten:
+		t.Fatalf("Forget() returned %v while a trigger was still being recorded", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-forgotten; err != nil {
+		t.Fatal(err)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1`, organizationID); got != 0 {
+		t.Fatalf("%d triggers outlived the removal, want none", got)
+	}
+}
+
+// TestRecordWaitsForARemovalUnderWay and then honours its tombstone.
+func TestRecordWaitsForARemovalUnderWay(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	tx, err := store.database.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, organizationLock(organizationID)); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		admission domain.Admission
+		err       error
+	}
+	recorded := make(chan result, 1)
+	go func() {
+		admission, err := store.Record(ctx, testTrigger(organizationID, "user_1", "racing", domain.LaneDigest))
+		recorded <- result{admission, err}
+	}()
+	select {
+	case got := <-recorded:
+		t.Fatalf("Record() = %d, %v while a removal was under way", got.admission, got.err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err := remember(ctx, tx, organizationID, "user_1", "", "", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-recorded; got.err != nil || got.admission != domain.Forgotten {
+		t.Fatalf("Record() = %d, %v, want it refused once the removal committed", got.admission, got.err)
+	}
+}
+
+func TestExpiredRemovalsAreSwept(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	past := time.Now().UTC().Add(-45 * 24 * time.Hour)
+	store.now = func() time.Time { return past }
+	if err := store.Forget(ctx, organizationID, "user_old"); err != nil {
+		t.Fatal(err)
+	}
+	store.now = time.Now
+	if err := store.Forget(ctx, organizationID, "user_recent"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DeleteForgotten(ctx, time.Now().UTC().Add(-30*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	var left []string
+	rows, err := store.database.Pool.Query(ctx, `SELECT member_id FROM batching_forgotten WHERE organization_id = $1`, organizationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var memberID string
+		if err := rows.Scan(&memberID); err != nil {
+			t.Fatal(err)
+		}
+		left = append(left, memberID)
+	}
+	if rows.Err() != nil {
+		t.Fatal(rows.Err())
+	}
+	if len(left) != 1 || left[0] != "user_recent" {
+		t.Fatalf("removals left = %v, want only the recent one", left)
+	}
+}
+
+// TestRemovingAConnectionDropsItsWaitingTriggers: when a member disconnects
+// an app, what it reported that is still waiting goes, claimed or not, and a
+// trigger from it the bus delivers late is refused. Their other apps'
+// triggers stay, and a batch already completed is left alone.
+func TestRemovingAConnectionDropsItsWaitingTriggers(t *testing.T) {
+	rule := domain.Rule{Size: 1, MaxWait: time.Millisecond, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+	fromConnection := func(id, connectionID string, lane domain.Lane) domain.Trigger {
+		trigger := testTrigger(organizationID, "user_1", id, lane)
+		trigger.ConnectionID = connectionID
+		return trigger
+	}
+	recordTrigger(t, store, fromConnection("completed", "apc_gone", domain.LaneImmediate))
+	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := ownBatches(claimed, organizationID)
+	if len(completed) != 1 {
+		t.Fatalf("claimed = %+v", completed)
+	}
+	event := domain.Event{ID: organizationID + "_completed", DetailType: "batching.trigger-batch.ready.v1",
+		Data: json.RawMessage(`{"batch_id":"completed"}`), OccurredAt: time.Now().UTC()}
+	if err := store.Complete(ctx, completed[0], event); err != nil {
+		t.Fatal(err)
+	}
+	recordTrigger(t, store, fromConnection("claimed", "apc_gone", domain.LaneImmediate))
+	if _, err := store.ClaimDue(ctx, rule, time.Minute, 2); err != nil {
+		t.Fatal(err)
+	}
+	recordTrigger(t, store, fromConnection("waiting", "apc_gone", domain.LaneDigest))
+	recordTrigger(t, store, fromConnection("other_app", "apc_kept", domain.LaneDigest))
+	late := fromConnection("late", "apc_gone", domain.LaneDigest)
+	for claimedState, want := range map[string]int{"IS NOT NULL": 1, "IS NULL": 1} {
+		if got := count(t, store, `SELECT count(*) FROM batching_triggers
+			WHERE organization_id = $1 AND connection_id = 'apc_gone' AND batched_at IS NULL AND batch_id `+claimedState,
+			organizationID); got != want {
+			t.Fatalf("%d waiting triggers from the app have batch_id %s before the removal, want %d", got, claimedState, want)
+		}
+	}
+
+	if err := store.Discard(ctx, organizationID, "apc_gone", ""); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, store, late)
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND connection_id = 'apc_gone' AND batched_at IS NULL`, organizationID); got != 0 {
+		t.Fatalf("%d triggers from the removed app still wait, want none", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND connection_id = 'apc_gone' AND batched_at IS NOT NULL`, organizationID); got != 1 {
+		t.Fatalf("%d completed triggers from the removed app are kept, want the one", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_outbox WHERE id = $1`, event.ID); got != 1 {
+		t.Fatalf("the completed batch was taken from the outbox")
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND connection_id = 'apc_kept'`, organizationID); got != 1 {
+		t.Fatalf("the member's other app lost its trigger")
+	}
+}
+
+func TestRemovingATriggerDropsOnlyWhatItReported(t *testing.T) {
+	store, organizationID := testStore(t, domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20})
+	ctx := context.Background()
+	gone := testTrigger(organizationID, "user_1", "gone", domain.LaneDigest)
+	gone.TriggerID = "apt_gone"
+	kept := testTrigger(organizationID, "user_1", "kept", domain.LaneDigest)
+	kept.TriggerID = "apt_kept"
+	recordTrigger(t, store, gone)
+	recordTrigger(t, store, kept)
+	late := testTrigger(organizationID, "user_1", "late", domain.LaneDigest)
+	late.TriggerID = "apt_gone"
+
+	if err := store.Discard(ctx, organizationID, "", "apt_gone"); err != nil {
+		t.Fatal(err)
+	}
+	refused(t, store, late)
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND trigger_id = 'apt_gone'`, organizationID); got != 0 {
+		t.Fatalf("%d triggers from the removed trigger remain, want none", got)
+	}
+	if got := count(t, store, `SELECT count(*) FROM batching_triggers WHERE organization_id = $1 AND trigger_id = 'apt_kept'`, organizationID); got != 1 {
+		t.Fatalf("the member's other trigger lost its event")
+	}
+	sibling := testTrigger(organizationID, "user_1", "sibling", domain.LaneDigest)
+	sibling.TriggerID = "apt_kept"
+	recordTrigger(t, store, sibling)
+}
+
+// TestATriggerPastItsCadenceIsDueAtOnce: received a couple of minutes ago,
+// its one-minute cadence already ended, so it is due as it is recorded.
+func TestATriggerPastItsCadenceIsDueAtOnce(t *testing.T) {
+	rule := domain.Rule{Size: 5, MaxWait: time.Minute, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+	late := testTrigger(organizationID, "user_1", "late", domain.LaneDigest)
+	late.ReceivedAt = time.Now().UTC().Add(-2 * time.Minute)
+	recording := time.Now().Add(-time.Millisecond)
+	recordTrigger(t, store, late)
+	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ownBatches(claimed, organizationID)
+	if len(got) != 1 || got[0].FlushReason != "hard_deadline" ||
+		got[0].HardDueAt.After(time.Now()) || got[0].HardDueAt.Before(recording) {
+		t.Fatalf("claimed = %+v, want the late trigger due at its hard deadline, its recording", got)
+	}
+}
+
+// TestABackloggedTriggerWaitsTheCatchUpWindow: received two hours before it
+// is recorded, it is part of a backlog, and waits a minute for the rest of
+// it rather than going out alone.
+func TestABackloggedTriggerWaitsTheCatchUpWindow(t *testing.T) {
+	rule := domain.Rule{Size: 5, MaxWait: time.Hour, Largest: 20}
+	store, organizationID := testStore(t, rule)
+	ctx := context.Background()
+	backlogged := testTrigger(organizationID, "user_1", "backlogged", domain.LaneDigest)
+	backlogged.ReceivedAt = time.Now().UTC().Add(-2 * time.Hour)
+	recording := time.Now()
+	recordTrigger(t, store, backlogged)
+	claimed, err := store.ClaimDue(ctx, rule, time.Minute, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ownBatches(claimed, organizationID); len(got) != 0 {
+		t.Fatalf("claimed = %+v, want the backlogged trigger held for the catch-up window", got)
+	}
+	var hardDue time.Time
+	if err := store.database.Pool.QueryRow(ctx,
+		`SELECT hard_due_at FROM batching_triggers WHERE id = $1`, backlogged.ID).Scan(&hardDue); err != nil {
+		t.Fatal(err)
+	}
+	if hardDue.Before(recording.Add(59*time.Second)) || hardDue.After(time.Now().Add(61*time.Second)) {
+		t.Fatalf("hard deadline = %s, want about a minute after its recording at %s", hardDue, recording)
+	}
+}
+
+// TestTheSchedulersConstraintsAreOnThisTable: 002 looked its constraints up
+// by name alone, and pg_constraint spans the whole database, so a same-named
+// constraint on another table made it skip adding them here. This migrates a
+// schema of its own beside another whose table already has the names.
+func TestTheSchedulersConstraintsAreOnThisTable(t *testing.T) {
+	databaseURL := os.Getenv("BATCHING_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BATCHING_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	admin, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-batching-test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	random := make([]byte, 6)
+	_, _ = rand.Read(random)
+	decoy, fresh := "batching_decoy_"+hex.EncodeToString(random), "batching_fresh_"+hex.EncodeToString(random)
+	for _, schema := range []string{decoy, fresh} {
+		if _, err := admin.Pool.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := admin.Pool.Exec(context.Background(), "DROP SCHEMA "+schema+" CASCADE"); err != nil {
+				t.Errorf("drop schema %s: %v", schema, err)
+			}
+		})
+	}
+	if _, err := admin.Pool.Exec(ctx, `
+		CREATE TABLE `+decoy+`.batching_triggers (
+			target_size integer CONSTRAINT batching_triggers_target_size_check CHECK (target_size > 0),
+			pressure double precision CONSTRAINT batching_triggers_pressure_check CHECK (pressure >= 1),
+			soft_due_at timestamptz,
+			hard_due_at timestamptz,
+			CONSTRAINT batching_triggers_deadline_order_check CHECK (soft_due_at <= hard_due_at))`); err != nil {
+		t.Fatal(err)
+	}
+	database, err := postgreskit.Open(ctx, postgreskit.Config{URL: databaseURL, ApplicationName: "oryxa-batching-test", Schema: fresh})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(database.Close)
+	if err := New(database).Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	if err := database.Pool.QueryRow(ctx, `
+		SELECT count(*) FROM pg_constraint
+		WHERE conrelid = 'batching_triggers'::regclass
+		  AND conname IN ('batching_triggers_target_size_check', 'batching_triggers_pressure_check',
+			'batching_triggers_deadline_order_check')`).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != 3 {
+		t.Fatalf("batching_triggers has %d of the scheduler's three constraints", got)
 	}
 }

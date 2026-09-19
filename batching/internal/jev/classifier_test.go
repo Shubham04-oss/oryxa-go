@@ -124,3 +124,37 @@ func TestLargePayloadIsProjectedWithoutChangingTheStoredTrigger(t *testing.T) {
 		t.Fatal("source payload was changed")
 	}
 }
+
+func TestNewRefusesToSendTheKeyInCleartext(t *testing.T) {
+	config := Config{APIKey: "secret", Model: "jev-latest", ImmediateProbability: .85, MinimumConfidence: .60}
+	for baseURL, allowed := range map[string]bool{
+		"https://api.typesafe.ai": true, "http://localhost:8080": true, "http://127.0.0.1:9000": true,
+		"http://api.typesafe.ai": false, "ftp://api.typesafe.ai": false,
+	} {
+		config.BaseURL = baseURL
+		if _, err := New(http.DefaultClient, config); (err == nil) != allowed {
+			t.Fatalf("New(%s) error = %v, want allowed %t", baseURL, err, allowed)
+		}
+	}
+}
+
+// TestAModelNameIsBounded: the model TypeSafe names is stored on every
+// trigger it classifies, so an unbounded one is not accepted as an answer.
+func TestAModelNameIsBounded(t *testing.T) {
+	for length, allowed := range map[int]bool{maxModelLength: true, maxModelLength + 1: false} {
+		model := strings.Repeat("j", length)
+		classifier := testClassifier(t, func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(`{
+				"model":"` + model + `",
+				"answers":{
+					"batch_lane":{"type":"choice","choice":"digest","confidence":1,"probabilities":{"immediate":0,"digest":1}},
+					"requires_prompt_attention":{"type":"noul","noul":0}
+				}
+			}`))
+		})
+		classification, err := classifier.Classify(context.Background(), appsv1.TriggerReceived{Toolkit: "github", Trigger: "issue"})
+		if (err == nil) != allowed {
+			t.Fatalf("a %d character model: classification %+v, error %v", length, classification, err)
+		}
+	}
+}

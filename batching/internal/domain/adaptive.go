@@ -8,21 +8,33 @@ import (
 )
 
 const (
-	AdaptivePolicyVersion = "adaptive-ewma.v2"
+	AdaptivePolicyVersion = "adaptive-ewma.v3"
 	MaximumDeliveryDelay  = 90 * time.Minute
 	fastHalfLife          = 15 * time.Minute
 	slowHalfLife          = 90 * time.Minute
 	minimumHistoryEvents  = 5
-	minimumTargetSize     = 2
-	priorityPressure      = 2.0
-	priorityDeadlineLead  = 0.75
+	// minimumTargetSize is as low as quiet traffic can bring a member's
+	// target, unless the configured cold target is lower still: an operator
+	// who asked for batches of one gets them.
+	minimumTargetSize    = 2
+	priorityPressure     = 2.0
+	priorityDeadlineLead = 0.75
+	// backlogAge is how long before its recording a trigger must have been
+	// received to count as part of a backlog, well past ordinary delivery.
+	backlogAge = 5 * time.Minute
+	// catchUpWindow is how long a backlogged trigger waits past its
+	// recording, so a member's backlog goes out in batches rather than a
+	// trigger or two per sweep.
+	catchUpWindow = time.Minute
 )
 
 // FallbackPriority is what a trigger gets when its classifier could not be
 // asked. It brings the trigger's soft deadline forward, but its pressure,
-// 1 + priorityPressure×FallbackPriority, stays under minimumTargetSize, so one
-// such trigger never makes a group due by itself and a classifier outage is
-// not one agent turn per webhook.
+// 1 + priorityPressure×FallbackPriority, stays under minimumTargetSize. That
+// is the smallest target whenever the cold target is at least two, so one
+// such trigger then never makes a group due by itself and a classifier outage
+// is not one agent turn per webhook. A cold target of one asks for a turn per
+// webhook anyway.
 const FallbackPriority = 0.4
 
 // AdaptiveScheduler combines two exponentially decayed arrival-rate views.
@@ -45,39 +57,69 @@ func (scheduler AdaptiveScheduler) Valid() bool {
 	return scheduler.rule.Size > 0 && scheduler.rule.MaxWait > 0 && scheduler.rule.MaxWait <= MaximumDeliveryDelay && scheduler.rule.Largest >= scheduler.rule.Size
 }
 
+// CountFrom is the time a trigger's deadlines count from: when apps received
+// it, since the promise is about how long what a member's app reported
+// waits, not about when a replica happened to record it. A receipt ahead of
+// the recording clock counts as the recording time, so a skewed clock cannot
+// postpone a deadline. A receipt more than MaximumDeliveryDelay before
+// recording counts as exactly that long before: every cadence boundary after
+// it has passed either way, and whatever a broken clock said, the cadence
+// arithmetic stays in range and the traffic estimate's observation recent.
+func CountFrom(receivedAt, recordedAt time.Time) time.Time {
+	receivedAt, recordedAt = receivedAt.UTC(), recordedAt.UTC()
+	if receivedAt.After(recordedAt) {
+		return recordedAt
+	}
+	if earliest := recordedAt.Add(-MaximumDeliveryDelay); receivedAt.Before(earliest) {
+		return earliest
+	}
+	return receivedAt
+}
+
 // Observe advances the time-decayed profile and assigns this trigger its
-// schedule. The returned deadlines depend only on this observation and are
-// persisted with it; a later observation cannot postpone them.
-func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, at time.Time, key string, priority float64) (TrafficProfile, Schedule, error) {
+// schedule, counted from CountFrom(receivedAt, recordedAt) but never set
+// before recordedAt: a trigger whose cadence passed on its way here is due
+// as it is recorded, not before — or, when it is part of a backlog, a short
+// catch-up window after, so the backlog goes out together. The returned deadlines depend only on this
+// observation and are persisted with it; a later observation cannot
+// postpone them.
+func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, receivedAt, recordedAt time.Time, key string, priority float64) (TrafficProfile, Schedule, error) {
 	if !scheduler.Valid() {
 		return profile, Schedule{}, errors.New("adaptive scheduler is not configured")
 	}
-	if at.IsZero() || key == "" || priority < 0 || priority > 1 {
-		return profile, Schedule{}, errors.New("adaptive observation needs a time, key, and priority between zero and one")
+	if receivedAt.IsZero() || recordedAt.IsZero() || key == "" || priority < 0 || priority > 1 {
+		return profile, Schedule{}, errors.New("adaptive observation needs its times, a key, and a priority between zero and one")
 	}
-	at = at.UTC()
+	at := CountFrom(receivedAt, recordedAt)
 	fastDecay := math.Ln2 / fastHalfLife.Hours()
 	slowDecay := math.Ln2 / slowHalfLife.Hours()
-	if profile.TotalEvents == 0 || profile.ObservedAt.IsZero() {
+	switch {
+	case profile.TotalEvents == 0 || profile.ObservedAt.IsZero():
 		// The configured cold target is an explicit prior of Size events per
 		// cadence. It prevents the first few samples from producing a wildly
 		// high or low target.
 		baseRate := float64(scheduler.rule.Size) / scheduler.rule.MaxWait.Hours()
-		profile.FastMass = baseRate / fastDecay
-		profile.SlowMass = baseRate / slowDecay
+		profile.FastMass = baseRate/fastDecay + 1
+		profile.SlowMass = baseRate/slowDecay + 1
+		profile.ObservedAt, profile.LastEventAt = at, at
+	case at.Before(profile.ObservedAt):
+		// The bus orders nothing, so an event can be older than one already
+		// observed. It adds its weight as of when it happened, and the
+		// profile's clock stays put: turning it back would decay the time in
+		// between twice. Past the first event, the order events arrive in
+		// does not change the estimate.
+		age := profile.ObservedAt.Sub(at).Hours()
+		profile.FastMass += math.Exp(-fastDecay * age)
+		profile.SlowMass += math.Exp(-slowDecay * age)
+	default:
+		elapsed := at.Sub(profile.ObservedAt).Hours()
+		profile.FastMass = profile.FastMass*math.Exp(-fastDecay*elapsed) + 1
+		profile.SlowMass = profile.SlowMass*math.Exp(-slowDecay*elapsed) + 1
 		profile.ObservedAt = at
-	} else {
-		elapsed := at.Sub(profile.ObservedAt)
-		if elapsed < 0 {
-			elapsed = 0
-		}
-		profile.FastMass *= math.Exp(-fastDecay * elapsed.Hours())
-		profile.SlowMass *= math.Exp(-slowDecay * elapsed.Hours())
 	}
-	profile.FastMass++
-	profile.SlowMass++
-	profile.ObservedAt = at
-	profile.LastEventAt = at
+	if at.After(profile.LastEventAt) {
+		profile.LastEventAt = at
+	}
 	profile.TotalEvents++
 
 	target := scheduler.rule.Size
@@ -88,12 +130,34 @@ func (scheduler AdaptiveScheduler) Observe(profile TrafficProfile, at time.Time,
 		effectiveRate := .75*fastRate + .25*slowRate
 		target = int(math.Ceil(effectiveRate * scheduler.rule.MaxWait.Hours()))
 	}
-	target = max(minimumTargetSize, min(target, scheduler.rule.Largest))
+	// The floor never exceeds the configured sizes, so the target stays
+	// within [floor, Largest] for any rule the scheduler accepts.
+	floor := min(minimumTargetSize, scheduler.rule.Size)
+	target = max(floor, min(target, scheduler.rule.Largest))
 
 	hardDue := cadenceBoundary(at, scheduler.rule.MaxWait, key)
 	window := hardDue.Sub(at)
 	lead := time.Duration(float64(window) * priorityDeadlineLead * priority)
 	softDue := hardDue.Add(-lead)
+	// Raising both to the recording keeps the soft deadline at or before
+	// the hard one.
+	recorded := recordedAt.UTC()
+	floorAt := recorded
+	if recorded.Sub(receivedAt.UTC()) > backlogAge {
+		// Arriving this late, it is part of a backlog — the consumer was
+		// down, or the queue behind — and the rest of the member's backlog
+		// is arriving with it. Due the moment each is recorded, the sweep
+		// would release it a few triggers at a time, one agent turn each;
+		// a short window lets what arrives together go together. It only
+		// ever delays what is already late, and by no more than the window.
+		floorAt = recorded.Add(catchUpWindow)
+	}
+	if hardDue.Before(floorAt) {
+		hardDue = floorAt
+	}
+	if softDue.Before(floorAt) {
+		softDue = floorAt
+	}
 	return profile, Schedule{
 		TargetSize: target, Pressure: 1 + priorityPressure*priority,
 		SoftDueAt: softDue, HardDueAt: hardDue, PolicyVersion: AdaptivePolicyVersion,

@@ -12,7 +12,8 @@ deterministic scheduler:
   bypass it through the `immediate` lane;
 - five events is the cold-start target, not a permanent threshold;
 - fast and slow time-decayed traffic estimates adapt the target per member;
-- every trigger receives persisted soft and hard deadlines on arrival;
+- every trigger receives persisted soft and hard deadlines on arrival,
+  counted from when apps received it;
 - the hard deadline is never extended by later traffic or policy changes;
 - cadence offsets are stable per member, avoiding one global hourly stampede;
 - one published batch carries at most twenty triggers;
@@ -23,7 +24,14 @@ deterministic scheduler:
   data, flagged `data_omitted`, the way apps sends one it cannot carry, rather
   than holding every trigger queued behind it;
 - member and organization deletion events erase pending trigger data,
-  including batches completed but not yet published;
+  including batches completed but not yet published, and are remembered for
+  a month, so a trigger apps received before the removal that the bus
+  delivers after it is refused instead of starting a new group; a member
+  added back later is not held up by what was forgotten;
+- a member disconnecting an app (`apps.connection.removed.v1`) or removing a
+  trigger (`apps.trigger.unsubscribed.v1`) drops what it reported that is
+  still waiting, and is remembered the same way, so it no longer wakes the
+  agent; batches already completed are left alone;
 - a published batch's payloads are blanked from the outbox once it is on the
   bus, as apps does with its own trigger events.
 
@@ -33,26 +41,49 @@ fit in one cadence, and fixes the resulting target and deadlines onto each
 event. The oldest persisted promise wins for a group. A burst, a higher
 priority, or reaching the target can only release the group earlier. Silence
 requires no new webhook: the database worker claims the partial group when its
-deadline arrives. Policy decisions are stamped `adaptive-ewma.v2`.
+deadline arrives. Policy decisions are stamped `adaptive-ewma.v3`.
 The consumer, deadline sweeper, and outbox dispatcher run continuously for the
-full 24-hour day; member presence or working hours never pause delivery.
+full 24-hour day; member presence or working hours never pause delivery. The
+consumer handles each receive's messages (at most ten) side by side, so one
+waiting on the classifier holds up none of the others, removals included.
+
+Deadlines count from the trigger's `received_at`, when apps received it, not
+from when a replica records it: a trigger that took a while to arrive has
+waited that long already. No deadline is set before the trigger is recorded,
+so one whose cadence passed on its way is due as it is recorded rather than a
+cadence later. A receipt time ahead of batching's clock counts as now, so a
+skewed clock cannot postpone a deadline; one more than 90 minutes old counts
+as 90 minutes old, which keeps the cadence arithmetic in range whatever a
+broken clock said. The traffic estimate takes each event at its receipt too;
+past a member's first event, the order the bus delivers them in does not
+change it.
 
 With `TYPESAFE_API_KEY` set, the classifier calls TypeSafe's System One API once
-per trigger and asks two parallel questions: a Choice between `immediate` and
-`digest`, and a Noul for the probability that prompt attention is required.
+per trigger. A trigger already recorded, or from something removed since, is
+screened out before it is classified, so the redelivery of a recorded trigger
+never reaches TypeSafe again. It asks two parallel questions: a Choice between
+`immediate` and `digest`, and a Noul for the probability that prompt attention
+is required.
 An event takes the immediate lane only when both its immediate probability and
 Choice confidence clear their configured gates. Otherwise the Noul probability
 and the Choice's immediate probability are combined by taking the larger value
 as its digest priority. The adapter defaults to the moving `jev-latest`
-alias and records the versioned model returned by TypeSafe in every decision.
+alias and records the versioned model returned by TypeSafe in every decision;
+a response naming a model over 100 characters is refused as malformed. The
+API key goes only over HTTPS: `TYPESAFE_BASE_URL` may use plain HTTP just to
+localhost, as tests do.
 
 Jev receives toolkit, trigger name, omission state, and at most a 48 KiB
 projection of the app payload. This projection never replaces or truncates the
 payload stored for the agent. Provider failures become a fallback digest at
 `FallbackPriority` (0.4): the event stays durable and its soft deadline comes
 forward, but its pressure stays under the smallest target, so an outage cannot
-create one agent turn per webhook. With no API key, classification remains the
-deterministic digest policy.
+create one agent turn per webhook (unless `BATCHING_BATCH_SIZE=1` asks for
+exactly that). After five failures in a row batching stops asking TypeSafe for
+a minute and takes the fallback at once, so an outage does not cost every
+trigger its timeout; then one trigger asks again, and a success resumes
+classification. Opening and closing are each logged once. With no API key,
+classification remains the deterministic digest policy.
 
 The service publishes through the shared transactional outbox. Claiming a due
 group and writing its output event are separate transactions connected by a
@@ -85,8 +116,10 @@ go run ./batching/infra/events/cmd/provision
 ```
 
 Set `BATCHING_EVENTS_QUEUE_URL` to the printed queue URL. The provisioner
-subscribes to app triggers plus auth member/organization deletion events and
-configures a target DLQ for EventBridge delivery failures.
+subscribes to app triggers, app connection and trigger removals, and auth
+member/organization deletion events, and configures a target DLQ for
+EventBridge delivery failures. Re-run it after upgrading so the rule carries
+the app removals.
 
 Useful controls are:
 
@@ -105,33 +138,42 @@ BATCHING_JEV_IMMEDIATE_PROBABILITY=0.85
 BATCHING_JEV_MIN_CONFIDENCE=0.60
 ```
 
-`BATCHING_BATCH_SIZE` is the cold-start prior. `BATCHING_MAX_WAIT` is the
-periodic hard cadence: ordinary traffic may release earlier, but never later.
-The service rejects values over `90m`; the default is `1h`, leaving operational
-headroom beneath the product's absolute delivery ceiling.
-`BATCHING_LARGEST_BATCH` must be at least the cold-start target, and the claim
-lease must exceed the sweep interval. At least two groups are handled per sweep
-so immediate traffic cannot consume every worker slot and starve due digests.
+`BATCHING_BATCH_SIZE` is the cold-start prior. Traffic moves a member's target
+between two, or the cold-start target when that is one, and
+`BATCHING_LARGEST_BATCH`. `BATCHING_MAX_WAIT` is the periodic hard cadence:
+ordinary traffic may release earlier, but never later. The service rejects
+values over `90m`; the default is `1h`, leaving operational headroom beneath
+the product's absolute delivery ceiling. `BATCHING_LARGEST_BATCH` must be at
+least the cold-start target, its default of 20 included, and the claim lease
+must exceed the sweep interval. `BATCHING_JEV_TIMEOUT` may be at most `10s`, so
+a message is always handled well within the queue's 60-second visibility
+timeout and never handled twice for being slow. `BATCHING_GROUPS_PER_SWEEP` is
+how many groups one claim takes, at least two so immediate traffic cannot
+consume every slot and starve due digests. While claims come back full a sweep
+claims again, up to 32 times, so a backlog drains at the database's pace
+rather than that many groups per sweep interval.
 
-The current agents service still consumes app triggers directly. Do not route
-the ready event to agents until that consumer is switched off, or the same app
-activity can wake an agent twice.
+Agents consumes `batching.trigger-batch.ready.v1` in place of the app triggers
+themselves, and wakes Krude for each batch as soon as it arrives: batching has
+already decided when a member's triggers make a turn, so agents' own rule
+(`AGENTS_WAKEUP_BATCH_SIZE`) defaults to one. It records each batch's triggers
+by their original event ids, so a trigger it took straight from apps before
+the switch is not told twice. So the switch loses nothing, deploy batching with
+its queue before re-provisioning agents' rule.
+
+A trigger that reaches batching more than five minutes after apps received
+it is part of a backlog: the consumer was down, or the queue fell behind.
+Its deadlines have usually passed, so it would be due the moment it is
+recorded and go out a trigger or two per sweep, one agent turn each. It waits
+a one-minute catch-up window after its recording instead, so a member's
+backlog goes out in batches. Only what is already late waits, and by no more
+than the window.
 
 ## Known gaps
 
-Found in review before the first merge, and not yet addressed:
+Found in review, and not yet addressed:
 
 - **Setting `TYPESAFE_API_KEY` is a data decision.** It sends up to 48 KiB of
   every app payload — mail bodies, direct messages — to TypeSafe, for every
   organization, with no per-organization opt-in. Leave it unset until that
-  sharing is approved. `TYPESAFE_BASE_URL` also accepts `http://`.
-- **The consumer waits on the classifier.** Messages are handled one at a
-  time and each is classified before the duplicate check, so a slow provider
-  slows the whole queue — deletion events included — and a redelivery sends
-  the payload again. `BATCHING_JEV_TIMEOUT` has no ceiling, and one over a
-  few seconds can outrun the queue's visibility timeout.
-- **A removed member can come back.** Nothing remembers a deletion, so a
-  trigger the bus delivers after the removal event starts a new group for
-  them. The agent that receives the batch still checks membership.
-- **Throughput is bounded per replica**: at most `BATCHING_GROUPS_PER_SWEEP`
-  groups per sweep interval, so the hard cadence holds only below that rate.
+  sharing is approved.
