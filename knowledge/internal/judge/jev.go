@@ -51,22 +51,100 @@ const (
 	maxJevResponse = 1 << 20
 )
 
-// kinds are the options Jev chooses among: what a document is, each with the
-// criteria Jev reads literally. keep says whether that kind is worth
-// indexing.
+// option is one answer Jev may choose, described the way TypeSafe recommends
+// for options that could be confused: what it covers, what belongs
+// elsewhere, and examples. Jev reads all of it literally.
+type option struct {
+	What     string   `json:"what"`
+	NotFor   string   `json:"not_for,omitempty"`
+	Examples []string `json:"examples,omitempty"`
+}
+
+// verdict is what a kind of document means for indexing it.
+type verdict int
+
+const (
+	keepIt verdict = iota
+	excludeIt
+	// unsure is the catch-all: nothing listed fits, so Jev has not said
+	// either way.
+	unsure
+)
+
+// kinds are the options Jev chooses among: what a document is. Each is kept
+// or excluded by what it is; the choice is mutually exclusive, and "other"
+// catches what none of them describes.
 var kinds = []struct {
-	name     string
-	criteria string
-	keep     bool
+	name    string
+	verdict verdict
+	option  option
 }{
-	{"conversation", "Messages exchanged with specific people, or written by the member: questions, replies, requests, introductions, advice, feedback.", true},
-	{"work_material", "A substantive document or note: plans, specifications, meeting notes, reports, proposals, contracts, research, or project, product or technical discussion.", true},
-	{"record", "A message that records something specific to the member which they may need to look up later: a payment made or failed, a bank transaction, an invoice, receipt, order, booking, ticket or itinerary; the status of an application, registration or support case they filed; a tax, legal, compliance or account change; a subscription started, renewed, cancelled or expired; a billing or budget alert with its figures.", true},
-	{"promotion", "Marketing or advertising: a sale, discount, offer, product launch, event promotion or sales outreach.", false},
-	{"newsletter", "A newsletter, digest, announcement or product update written for many recipients rather than about the member's own account, application or activity.", false},
-	{"notification", "A generic automated notice with nothing specific to look up later: a one-time or verification code, a sign-in or security alert, a like, follow, view or other social update, a welcome or sign-up confirmation, or a reminder that an event starts soon, or to log in, finish setting up or upgrade.", false},
-	{"spam", "Spam, phishing or a scam.", false},
-	{"empty", "An empty, untitled, placeholder, test or scratch document, or an automatic copy with no real content of its own.", false},
+	{"conversation", keepIt, option{
+		What:     "Messages exchanged with specific people, or written by the member: questions, replies, requests, introductions, advice, feedback.",
+		NotFor:   "Automated mail, even when it greets the member by name, and replies from a company's support team (support_case).",
+		Examples: []string{"Re: Q3 launch timeline", "Can we move our call to Friday?"},
+	}},
+	{"work_material", keepIt, option{
+		What:     "A substantive document or note: plans, specifications, meeting notes, reports, proposals, contracts, research, or project, product or technical discussion.",
+		NotFor:   "Marketing, announcements or newsletters about a product.",
+		Examples: []string{"Interview notes - backend candidate", "Pricing proposal v3"},
+	}},
+	{"financial_record", keepIt, option{
+		What:     "Money the member paid, received or failed to pay: a bank transaction, an invoice, receipt, bill, refund, payment failure or statement, or a billing or budget alert, with its amounts.",
+		NotFor:   "Offers and discounts, and reminders to add credits, renew or upgrade (routine_notification).",
+		Examples: []string{"Transaction alert from your bank", "Your invoice INV-2291", "Payment to Cursor was unsuccessful", "AWS Budgets: your budget exceeded its alert threshold"},
+	}},
+	{"booking", keepIt, option{
+		What:     "An order, booking, ticket, reservation or itinerary of the member's, with its details.",
+		NotFor:   "Promotions for travel or events, generic travel advice, and event registrations (event_update).",
+		Examples: []string{"Booking confirmed: BLR to SFO, 12 Oct", "Your order has shipped"},
+	}},
+	{"application_status", keepIt, option{
+		What:     "The status of an application or submission the member made to a program, fund, accelerator, employer or government or tax portal: received, under review, accepted, rejected, or needing information.",
+		NotFor:   "Invitations to apply, welcome messages after signing up, and event registrations (event_update).",
+		Examples: []string{"YC application submitted", "Thank you for applying to South Park Commons", "GST registration application saved"},
+	}},
+	{"support_case", keepIt, option{
+		What:     "A support ticket or case the member opened with a company, and the company's replies about it.",
+		NotFor:   "Surveys about the support the member received.",
+		Examples: []string{"RE:[CASE 1234] Quota increase: Bedrock", "[Cloudflare - 5678] Startup program credits not visible"},
+	}},
+	{"account_record", keepIt, option{
+		What:     "A lasting fact about the member's own accounts or services: an account opened or closed, a plan, subscription or offer bought, changed, cancelled or expired, credits granted, a domain registered, a tax or compliance filing acknowledged.",
+		NotFor:   "Trials starting or ending, reminders to renew, add credits or upgrade, and changes to terms or policies (routine_notification).",
+		Examples: []string{"Acknowledgment on filing of GSTR-3B", "Domain registered - oryxa.uk", "Your $10,000 Cloudflare credits are live", "You accepted an AWS Marketplace offer"},
+	}},
+	{"security_incident", keepIt, option{
+		What:     "A specific security problem with the member's account that someone else caused or the provider detected: unusual activity, exposed or compromised credentials, sensitive actions taken in their organization.",
+		NotFor:   "Changes the member made themselves (a password reset, a profile change, a new device, passkey or MFA setting), routine sign-in alerts and verification codes (routine_notification).",
+		Examples: []string{"Please review your AWS account and credentials", "Sensitive actions taken in your Google Cloud organization"},
+	}},
+	{"event_update", excludeIt, option{
+		What:     "About an event the member registered for or was invited to: a registration accepted, rejected or waitlisted, a venue or schedule change, a message from its host.",
+		NotFor:   "Promotions for events (promotion) and reminders that an event starts soon (routine_notification).",
+		Examples: []string{"Registration not accepted for Cursor India Roadshow", "Reality Check venue is confirmed"},
+	}},
+	{"promotion", excludeIt, option{
+		What:     "Marketing or advertising: a sale, discount, offer, product launch, event promotion or sales outreach.",
+		NotFor:   "An order, invoice or receipt from a shop.",
+		Examples: []string{"48-hour flash sale: 40% off everything", "Don't miss out, be part of the summit"},
+	}},
+	{"newsletter", excludeIt, option{
+		What:     "A newsletter, digest, announcement, product update or policy change written for many recipients.",
+		NotFor:   "A notice about the member's own account, application, order or case.",
+		Examples: []string{"Weekly digest: 12 new posts in your communities", "Transition your scripts from gsutil to gcloud"},
+	}},
+	{"routine_notification", excludeIt, option{
+		What:     "A generic automated notice with nothing lasting in it: a one-time code or sign-in link, a routine sign-in or security alert, a change the member made to their own account, a like, follow, view or other social update, a welcome or sign-up confirmation, an invitation to join an app or workspace, a trial starting or ending, a reminder that an event starts soon, or a nudge to log in, finish setting up, add credits, renew or upgrade.",
+		NotFor:   "Payments, bookings, applications, support cases, account records and security incidents.",
+		Examples: []string{"Your verification code is 482913", "Your secure link to sign in", "Welcome to Dodo Payments", "Your Slack Pro trial has ended", "The meetup starts in 1 hour"},
+	}},
+	{"spam", excludeIt, option{What: "Spam, phishing or a scam."}},
+	{"empty", excludeIt, option{
+		What:     "An empty, untitled, placeholder, test or scratch document, or an automatic copy with no real content of its own.",
+		Examples: []string{"Untitled document: test test", "Test Email", "Copy of Copy of Untitled spreadsheet"},
+	}},
+	{"other", unsure, option{What: "None of the above describes it."}},
 }
 
 const kindInstructions = "What kind of document is this, from the member's own connected apps (mail, drive, chat, notes, code)? " +
@@ -161,8 +239,7 @@ func (jev *Jev) Judge(ctx context.Context, candidate domain.Candidate) (domain.V
 	if err != nil {
 		return domain.Verdict{}, err
 	}
-	keep := result.KeepProbability >= 0.5
-	certainty := max(result.KeepProbability, 1-result.KeepProbability)
+	keep, certainty, reason := Decide(result)
 	if certainty < jev.escalateBelow {
 		if jev.escalate != nil {
 			return jev.escalate.Judge(ctx, candidate)
@@ -171,25 +248,37 @@ func (jev *Jev) Judge(ctx context.Context, candidate domain.Candidate) (domain.V
 		// than keeping something that does not.
 		keep = true
 	}
-	return domain.Verdict{Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", strings.ReplaceAll(result.Kind, "_", " "), result.Model, certainty*100)}, nil
+	return domain.Verdict{Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", reason, result.Model, certainty*100)}, nil
 }
 
-// Classification is what Jev made of one document, before any verdict is
-// drawn from it: what a caller logging or evaluating Jev wants to see.
+// Classification is Jev's own answer about one document, before any verdict
+// is drawn from it: every question's raw judgment, which Decide turns into a
+// verdict in code.
 type Classification struct {
-	// Kind is the kind of document Jev chose.
-	Kind string
-	// KeepProbability is the probability that it is a kind worth keeping.
-	KeepProbability float64
+	// Kind is the kind of document Jev chose, and Probabilities its whole
+	// distribution over every kind.
+	Kind          string             `json:"kind"`
+	Probabilities map[string]float64 `json:"probabilities"`
+	// KeepProbability and ExcludeProbability sum the kinds worth keeping and
+	// those not; what is left is "other", which says neither.
+	KeepProbability    float64 `json:"keep"`
+	ExcludeProbability float64 `json:"exclude"`
 	// Model is the model that answered, and InputTokens what it read.
-	Model       string
-	InputTokens int
+	Model       string `json:"model"`
+	InputTokens int    `json:"input_tokens"`
+}
+
+// Decide is the policy: whether a document Jev classified is worth indexing,
+// how sure that is, and why. It is code rather than a question, so it can
+// change without asking Jev again.
+func Decide(c Classification) (keep bool, certainty float64, reason string) {
+	return c.KeepProbability >= c.ExcludeProbability, max(c.KeepProbability, c.ExcludeProbability), strings.ReplaceAll(c.Kind, "_", " ")
 }
 
 type jevQuestion struct {
-	Type         string            `json:"type"`
-	Instructions string            `json:"instructions"`
-	Criteria     map[string]string `json:"criteria"`
+	Type         string         `json:"type"`
+	Instructions string         `json:"instructions"`
+	Criteria     map[string]any `json:"criteria"`
 }
 
 type jevRequest struct {
@@ -222,20 +311,16 @@ type jevResponse struct {
 	} `json:"answers"`
 }
 
-// Classify asks Jev what kind of document candidate is. Judge draws its
-// verdict from this; it is exported for a caller that wants Jev's own answer.
+// Classify asks Jev what kind of document candidate is, and the yes/no
+// questions alongside, in one request. Judge draws its verdict from this; it is
+// exported for a caller that wants Jev's own answer.
 func (jev *Jev) Classify(ctx context.Context, candidate domain.Candidate) (Classification, error) {
-	criteria := make(map[string]string, len(kinds))
+	criteria := make(map[string]any, len(kinds))
 	for _, kind := range kinds {
-		criteria[kind.name] = kind.criteria
+		criteria[kind.name] = kind.option
 	}
-	body, err := json.Marshal(jevRequest{
-		Model: jev.model,
-		State: jevStateOf(candidate),
-		Questions: map[string]jevQuestion{
-			kindQuestion: {Type: "choice", Instructions: kindInstructions, Criteria: criteria},
-		},
-	})
+	questions := map[string]jevQuestion{kindQuestion: {Type: "choice", Instructions: kindInstructions, Criteria: criteria}}
+	body, err := json.Marshal(jevRequest{Model: jev.model, State: jevStateOf(candidate), Questions: questions})
 	if err != nil {
 		return Classification{}, fmt.Errorf("encode the Jev request: %w", err)
 	}
@@ -249,7 +334,10 @@ func (jev *Jev) Classify(ctx context.Context, candidate domain.Candidate) (Class
 	if !ok || kind.Type != "choice" || kind.Probabilities == nil {
 		return Classification{}, fmt.Errorf("%w: Jev's answer did not choose a kind of document", domain.ErrQualityCheckUnavailable)
 	}
-	keepProbability := 0.0
+	result := Classification{
+		Kind: kind.Choice, Probabilities: kind.Probabilities,
+		Model: strings.TrimSpace(answer.Model), InputTokens: answer.Usage.InputTokens,
+	}
 	known := false
 	for _, option := range kinds {
 		probability := kind.Probabilities[option.name]
@@ -259,17 +347,18 @@ func (jev *Jev) Classify(ctx context.Context, candidate domain.Candidate) (Class
 		if option.name == kind.Choice {
 			known = true
 		}
-		if option.keep {
-			keepProbability += probability
+		switch option.verdict {
+		case keepIt:
+			result.KeepProbability += probability
+		case excludeIt:
+			result.ExcludeProbability += probability
 		}
 	}
 	if !known {
 		return Classification{}, fmt.Errorf("%w: Jev chose %q, which is not one of the kinds it was given", domain.ErrQualityCheckUnavailable, kind.Choice)
 	}
-	return Classification{
-		Kind: kind.Choice, KeepProbability: min(keepProbability, 1),
-		Model: strings.TrimSpace(answer.Model), InputTokens: answer.Usage.InputTokens,
-	}, nil
+	result.KeepProbability, result.ExcludeProbability = min(result.KeepProbability, 1), min(result.ExcludeProbability, 1)
+	return result, nil
 }
 
 // post makes one call to Jev, trying again when TypeSafe says it is throttled

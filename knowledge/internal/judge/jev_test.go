@@ -53,8 +53,8 @@ func (fake *fakeTypeSafe) calls() int {
 	return len(fake.requests)
 }
 
-// kindAnswer is Jev choosing choice, with the rest of probability spread over
-// the kind named by rest.
+// kindAnswer is Jev choosing choice, with the rest of probability on the kind
+// named by rest.
 func kindAnswer(choice string, probability float64, rest string) string {
 	probabilities := map[string]float64{}
 	for _, kind := range kinds {
@@ -122,8 +122,8 @@ func TestJevExcludesWhatItSortsAsNoise(t *testing.T) {
 		t.Fatal("an internal id was shown to Jev")
 	}
 	question := sent.Questions[kindQuestion]
-	if question.Type != "choice" || len(question.Criteria) != len(kinds) || question.Criteria["record"] == "" {
-		t.Fatalf("question = %+v, want a choice among every kind of document", question)
+	if question.Type != "choice" || len(question.Criteria) != len(kinds) || question.Criteria["financial_record"] == nil || question.Criteria["other"] == nil {
+		t.Fatalf("question = %+v, want a choice among every kind of document, a catch-all among them", question)
 	}
 }
 
@@ -143,7 +143,7 @@ func TestJevKeepsWhatItSortsAsWorthKeeping(t *testing.T) {
 }
 
 func TestJevEscalatesWhatItIsUnsureOf(t *testing.T) {
-	fake := &fakeTypeSafe{answers: []string{kindAnswer("notification", 0.6, "record")}}
+	fake := &fakeTypeSafe{answers: []string{kindAnswer("routine_notification", 0.6, "booking")}}
 	escalate := &recordingJudge{verdict: domain.Verdict{Keep: true, Reason: "an order with its details"}}
 	jev := testJev(t, fake, escalate)
 
@@ -201,7 +201,7 @@ func TestJevJudgesAFileByItsDetailsWithNobodyToHandItTo(t *testing.T) {
 func TestJevTriesAgainWhenThrottledOrOverloaded(t *testing.T) {
 	fake := &fakeTypeSafe{
 		statuses: []int{http.StatusTooManyRequests, 529, http.StatusOK},
-		answers:  []string{"", "", kindAnswer("record", 0.97, "notification")},
+		answers:  []string{"", "", kindAnswer("financial_record", 0.97, "routine_notification")},
 	}
 	jev := testJev(t, fake, nil)
 
@@ -233,7 +233,7 @@ func TestJevReportsItselfUnavailable(t *testing.T) {
 }
 
 func TestJevDoesNotRetryARefusedKey(t *testing.T) {
-	fake := &fakeTypeSafe{statuses: []int{http.StatusUnauthorized, http.StatusOK}, answers: []string{"", kindAnswer("record", 0.9, "spam")}}
+	fake := &fakeTypeSafe{statuses: []int{http.StatusUnauthorized, http.StatusOK}, answers: []string{"", kindAnswer("financial_record", 0.9, "spam")}}
 	jev := testJev(t, fake, nil)
 	if _, err := jev.Judge(context.Background(), promotion()); err == nil {
 		t.Fatal("Judge() error = nil for a refused key")
@@ -256,5 +256,13 @@ func TestNewJevRefusesToSendTheKeyInTheClear(t *testing.T) {
 	jev, err := NewJev(JevConfig{APIKey: "ts_test"})
 	if err != nil || jev.endpoint != DefaultTypeSafeBaseURL+"/v1/systemone" || jev.model != DefaultJevModel || jev.escalateBelow != DefaultEscalateBelow {
 		t.Fatalf("NewJev() = %+v, %v, want TypeSafe's defaults", jev, err)
+	}
+}
+
+func TestDecideCountsOtherAsNeitherKeepNorExclude(t *testing.T) {
+	unsure := Classification{Kind: "other", KeepProbability: 0.3, ExcludeProbability: 0.2}
+	keep, certainty, _ := Decide(unsure)
+	if !keep || certainty != 0.3 {
+		t.Fatalf("Decide() = %t, %.2f; want the larger side with its own low certainty", keep, certainty)
 	}
 }
