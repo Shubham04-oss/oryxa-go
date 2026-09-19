@@ -281,6 +281,55 @@ func TestAnAppWithNothingToIndexIsNotAProblem(t *testing.T) {
 	}
 }
 
+// TestProviderForGoogleDriveAndGmail covers the two toolkits this pass adds:
+// spelled the same as their knowledge provider, same as github, notion and
+// slack already were, so connecting either indexes what it holds without a
+// member naming anything.
+func TestProviderForGoogleDriveAndGmail(t *testing.T) {
+	for _, toolkit := range []string{"googledrive", "gmail"} {
+		t.Run(toolkit, func(t *testing.T) {
+			if got := providerFor(toolkit); got != toolkit {
+				t.Fatalf("providerFor(%q) = %q, want %q", toolkit, got, toolkit)
+			}
+		})
+	}
+}
+
+// TestConnectingGoogleDriveIndexesWhatItHolds mirrors
+// TestConnectingAnAppIndexesWhatItHolds for the toolkit whose default target
+// is the whole of the member's Drive: an empty target map, not a repository
+// name, is what a connection's own targets listing hands back for it.
+func TestConnectingGoogleDriveIndexesWhatItHolds(t *testing.T) {
+	store := newFakeStore()
+	apps := &fakeApps{
+		connection: domain.AppConnection{ID: "apc_1", Toolkit: "googledrive", Status: "active", MemberID: "user-1", ComposioAccountID: "ca_1"},
+		targets:    []domain.AppTarget{{Kind: "drive", ID: "root", Name: "My Drive", Target: map[string]string{}}},
+	}
+	grants := &fakeGrants{token: "member-token"}
+	service := New(Dependencies{
+		Store:      store,
+		Directory:  &fakeDirectory{membership: member(), agentToken: "member-token"},
+		Apps:       apps,
+		Grants:     grants,
+		Extractors: sources.Registry{"googledrive": &fakeExtractor{provider: "googledrive"}},
+		Clock:      func() time.Time { return testClock },
+	}, Config{})
+
+	event := connected()
+	event.Toolkit = "googledrive"
+	if err := service.ConnectionConnected(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 1 {
+		t.Fatalf("sources = %d, want the one Drive source", len(store.sources))
+	}
+	for _, source := range store.sources {
+		if source.Provider != "googledrive" || source.ConnectionID != "apc_1" {
+			t.Fatalf("source = %+v", source)
+		}
+	}
+}
+
 // TestIndexingOnConnectNeedsBothHalves keeps a deployment without a way to
 // act as a member from failing on every connection.
 func TestIndexingOnConnectNeedsBothHalves(t *testing.T) {

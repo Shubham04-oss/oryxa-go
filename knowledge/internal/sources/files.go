@@ -36,9 +36,33 @@ type objectLister interface {
 // answering, with no event to say so.
 type Files struct {
 	client objectLister
+	// originalsEnabled says a PDF or an Office file is worth reading the
+	// bytes of at all: without somewhere to keep such a file, as
+	// KNOWLEDGE_ORIGINALS_BUCKET does, its bytes are never worth the round
+	// trip, so the pre-filter in read continues to skip it before asking for
+	// content the same way it always has.
+	originalsEnabled bool
 }
 
-func NewFiles(client objectLister) *Files { return &Files{client: client} }
+// FilesOption configures Files beyond the client it reads through.
+type FilesOption func(*Files)
+
+// WithOriginals lets Files pass a PDF or an Office file through as a binary
+// item — its real MIME, its bytes untouched — instead of skipping it,
+// because the caller has somewhere to keep such a file's bytes. Without it,
+// Files behaves exactly as it always has: only a type transform.CanonicalMIME
+// already reads is published.
+func WithOriginals() FilesOption {
+	return func(source *Files) { source.originalsEnabled = true }
+}
+
+func NewFiles(client objectLister, options ...FilesOption) *Files {
+	source := &Files{client: client}
+	for _, option := range options {
+		option(source)
+	}
+	return source
+}
 
 func (source *Files) Provider() string { return "files" }
 
@@ -149,14 +173,20 @@ func publishable(object filesclient.Object, query filesclient.Query) bool {
 func (source *Files) read(ctx context.Context, request Request, object filesclient.Object) (Item, bool, error) {
 	// A file's type is checked before its bytes are asked for: most of what an
 	// organization stores is not text, and fetching a PDF to discard it is a
-	// round trip for nothing.
+	// round trip for nothing — unless there is somewhere to keep a PDF's
+	// bytes regardless of never reading them as text, which WithOriginals
+	// says.
 	declared := object.ContentType
 	if named := transform.MIMEForFilename(object.Filename); named != "" {
 		declared = named
 	}
 	mime, err := transform.CanonicalMIME(declared)
+	passthrough := false
 	if err != nil {
-		return Item{}, false, nil
+		if !source.originalsEnabled || !transform.IsPassthroughMIME(declared) {
+			return Item{}, false, nil
+		}
+		mime, passthrough = declared, true
 	}
 
 	content, served, err := source.client.Content(ctx, request.Source.OrganizationID, object.ID, request.Credential.AccessToken)
@@ -170,7 +200,17 @@ func (source *Files) read(ctx context.Context, request Request, object filesclie
 		return Item{}, false, err
 	}
 	if canonical, err := transform.CanonicalMIME(served); err == nil {
-		mime = canonical
+		mime, passthrough = canonical, false
+	} else if passthrough && transform.IsPassthroughMIME(served) {
+		// What files actually served is more trustworthy than what was
+		// declared at listing time, and is still a type worth keeping.
+		mime = served
+	}
+	if passthrough && len(content) > MaxOriginalBytes {
+		// Too large to keep; counted as skipped the same as any other file
+		// this pass steps over. transform.Normalize applies its own, much
+		// smaller ceiling to an ordinary text file instead of this one.
+		return Item{}, false, nil
 	}
 
 	created := object.CreatedAt

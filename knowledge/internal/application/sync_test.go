@@ -2,16 +2,64 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"testing"
 	"time"
 
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/transform"
 )
+
+// testServiceWithOriginals is testService with a bucket configured, for a
+// test that exercises keepOriginal.
+func testServiceWithOriginals(t *testing.T, store *fakeStore, extractor *fakeExtractor, originals *fakeOriginals) *Service {
+	t.Helper()
+	registry := sources.Registry{}
+	if extractor != nil {
+		registry[extractor.provider] = extractor
+	}
+	return New(Dependencies{
+		Store:      store,
+		Directory:  &fakeDirectory{membership: domain.OrgMembership{OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember}},
+		Grants:     &fakeGrants{token: "member-token"},
+		Extractors: registry,
+		Originals:  originals,
+		Clock:      func() time.Time { return testClock },
+	}, Config{OriginalsBucket: "test-bucket"})
+}
+
+// pdfItem is an item whose MIME is a passthrough type: transform never reads
+// text out of one, so it is only ever kept, or skipped, never normalized.
+func pdfItem(externalID string, content []byte, updated time.Time) sources.Item {
+	return sources.Item{
+		ExternalID: externalID, Kind: knowledgev1.KindFile, Title: "Report",
+		MIME: transform.MIMEPDF, Content: content, UpdatedAt: &updated,
+	}
+}
+
+func sha256Hex(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+// theOnlyDocument is the one row a test put there, for an assertion that does
+// not care about its map key.
+func theOnlyDocument(t *testing.T, store *fakeStore) domain.Document {
+	t.Helper()
+	if len(store.documents) != 1 {
+		t.Fatalf("documents = %d, want exactly 1", len(store.documents))
+	}
+	for _, document := range store.documents {
+		return document
+	}
+	panic("unreachable")
+}
 
 // testService wires the service to fakes and a frozen clock.
 func testService(t *testing.T, store *fakeStore, extractor *fakeExtractor) (*Service, *fakeGrants) {
@@ -545,5 +593,309 @@ func TestSyncRefusesASourceThatIsNotActive(t *testing.T) {
 
 	if err := service.Sync(context.Background(), source, "lease-a"); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("Sync(paused) error = %v, want ErrConflict", err)
+	}
+}
+
+// Page.Removed lets an incremental feed that already knows a document is
+// gone — Drive's changes, Gmail's history — say so immediately, rather than
+// waiting for the next full sweep to notice the same thing the slow way.
+
+func TestSyncRetractsImmediatelyWhatAPagesOwnFeedSaysIsGone(t *testing.T) {
+	store := newFakeStore()
+	watermark := testClock.Add(-2 * time.Hour)
+	store.cursors["src_1"] = domain.Cursor{SourceID: "src_1", Watermark: &watermark}
+	store.documents["src_1\x00gone-1"] = domain.Document{
+		ID: "doc_gone", OrganizationID: "org_1", SourceID: "src_1", ExternalID: "gone-1",
+		ContentHash: "unchanged", LastSeenAt: testClock.Add(-90 * time.Minute),
+	}
+	updated := testClock.Add(-time.Hour)
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
+		{Items: []sources.Item{item("1", "kept", updated)}, Watermark: &updated, Removed: []string{"gone-1", "already-gone"}},
+	}}
+	service, _ := testService(t, store, extractor)
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if run := store.lastRun(); run.Kind != knowledgev1.SyncIncremental {
+		t.Fatalf("run kind = %q, want incremental: Page.Removed must not itself force a full pass's own retraction", run.Kind)
+	}
+	if removed := store.documents["src_1\x00gone-1"]; removed.RemovedAt == nil {
+		t.Fatal("a document the page's own feed said was gone was not retracted")
+	}
+	if got := store.published(knowledgev1.DocumentRemovedDetailType); got != 1 {
+		t.Fatalf("published %d removal events, want 1: the second id names nothing live", got)
+	}
+	if store.retractUnseen != 0 {
+		t.Fatalf("retracted unseen documents %d times, want 0: an incremental pass never calls RetractUnseen", store.retractUnseen)
+	}
+	if run := store.lastRun(); run.DocumentsRemoved != 1 {
+		t.Fatalf("run.DocumentsRemoved = %d, want 1", run.DocumentsRemoved)
+	}
+}
+
+// Token is Watermark's counterpart for a provider whose position is an
+// opaque cursor rather than a moment — Drive's changes.startPageToken,
+// Gmail's historyId — and follows exactly the same lifecycle: read back to
+// start the next incremental pass, and moved only once a pass drains.
+
+func TestSyncTreatsATokenLikeAWatermarkForDecidingAFullPass(t *testing.T) {
+	store := newFakeStore()
+	store.cursors["src_1"] = domain.Cursor{SourceID: "src_1", Token: "some-opaque-token"}
+	updated := testClock.Add(-time.Hour)
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
+		{Items: []sources.Item{item("1", "changed", updated)}, Watermark: &updated},
+	}}
+	service, _ := testService(t, store, extractor)
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if run := store.lastRun(); run.Kind != knowledgev1.SyncIncremental {
+		t.Fatalf("run kind = %q, want incremental: a source with a token has been read through before, the same as one with a watermark", run.Kind)
+	}
+}
+
+func TestSyncKeepsThePlaceButNotTheTokenWhenAWalkStopsEarly(t *testing.T) {
+	store := newFakeStore()
+	extractor := &fakeExtractor{
+		provider: "files",
+		pages:    []sources.Page{{Cursor: "page-2", Token: "tok-mid"}},
+		errs:     []error{nil, domain.ErrProviderUnavailable},
+	}
+	service, _ := testService(t, store, extractor)
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	cursor := store.cursors[source.ID]
+	if cursor.Value != "page-2" {
+		t.Fatalf("cursor value = %q, want page-2", cursor.Value)
+	}
+	if cursor.Token != "" {
+		t.Fatalf("cursor token = %q, want none: the pass has not drained", cursor.Token)
+	}
+}
+
+func TestSyncPersistsATokenOnceTheWalkFinishes(t *testing.T) {
+	store := newFakeStore()
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
+		{Cursor: "page-2", Token: "tok-mid"},
+		{Cursor: "", Token: "tok-final"},
+	}}
+	service, _ := testService(t, store, extractor)
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	cursor := store.cursors[source.ID]
+	if cursor.Token != "tok-final" {
+		t.Fatalf("cursor token = %q, want the final page's token, not one from mid-walk", cursor.Token)
+	}
+	if cursor.Value != "" {
+		t.Fatalf("cursor value = %q, want empty: the source was drained", cursor.Value)
+	}
+}
+
+// A document whose bytes knowledge does not read itself — a PDF, an Office
+// file — is kept in the configured bucket instead of being skipped, once
+// there is one.
+
+func TestSyncStoresAPassthroughDocumentAsAnOriginalRatherThanNormalizingIt(t *testing.T) {
+	store := newFakeStore()
+	fakeBucket := newFakeOriginals()
+	updated := testClock.Add(-time.Hour)
+	content := []byte("%PDF-1.4 fake bytes")
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
+		{Items: []sources.Item{pdfItem("pdf-1", content, updated)}, Watermark: &updated},
+	}}
+	service := testServiceWithOriginals(t, store, extractor, fakeBucket)
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if got := store.published(knowledgev1.DocumentPublishedDetailType); got != 1 {
+		t.Fatalf("published %d documents, want 1", got)
+	}
+	document := theOnlyDocument(t, store)
+	if document.Original == nil {
+		t.Fatal("the document was published without an Original")
+	}
+	if document.Original.Bucket != "test-bucket" {
+		t.Fatalf("Original.Bucket = %q, want the configured bucket", document.Original.Bucket)
+	}
+	if !fakeBucket.has(document.Original.Key) {
+		t.Fatal("the bucket does not hold the object the document names")
+	}
+	if document.Body != "" {
+		t.Fatalf("Body = %q, want empty: the bytes live in the bucket, not the row", document.Body)
+	}
+	if document.MIME != transform.MIMEPDF {
+		t.Fatalf("MIME = %q, want the real content type", document.MIME)
+	}
+	if want := sha256Hex(content); document.ContentHash != want {
+		t.Fatalf("ContentHash = %q, want sha256 of the bytes (%q)", document.ContentHash, want)
+	}
+}
+
+func TestSyncSkipsAPassthroughDocumentWithoutABucketConfigured(t *testing.T) {
+	store := newFakeStore()
+	updated := testClock.Add(-time.Hour)
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
+		{Items: []sources.Item{pdfItem("pdf-1", []byte("%PDF-1.4"), updated)}, Watermark: &updated},
+	}}
+	service, _ := testService(t, store, extractor)
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if got := store.published(knowledgev1.DocumentPublishedDetailType); got != 0 {
+		t.Fatalf("published %d documents, want 0: nothing here can keep a PDF's bytes without a bucket", got)
+	}
+}
+
+func TestSyncSkipsReuploadingAnOriginalWhoseContentHasNotChanged(t *testing.T) {
+	store := newFakeStore()
+	fakeBucket := newFakeOriginals()
+	updated := testClock.Add(-time.Hour)
+	content := []byte("same bytes both times")
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
+		{Items: []sources.Item{pdfItem("pdf-1", content, updated)}, Watermark: &updated},
+		{Items: []sources.Item{pdfItem("pdf-1", content, updated)}, Watermark: &updated},
+	}}
+	service := testServiceWithOriginals(t, store, extractor, fakeBucket)
+	source := activeSource(store, "files")
+
+	for range 2 {
+		if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+			t.Fatalf("Sync() error = %v", err)
+		}
+	}
+	if got := store.published(knowledgev1.DocumentPublishedDetailType); got != 1 {
+		t.Fatalf("published %d documents, want 1: the second pass changed nothing", got)
+	}
+	if len(fakeBucket.puts) != 1 {
+		t.Fatalf("uploaded %d times, want 1: a weekly full sweep over an unchanged file must not re-upload it", len(fakeBucket.puts))
+	}
+}
+
+func TestSyncReplacesTheOldOriginalWhenContentChanges(t *testing.T) {
+	store := newFakeStore()
+	fakeBucket := newFakeOriginals()
+	first := testClock.Add(-2 * time.Hour)
+	second := testClock.Add(-time.Hour)
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
+		{Items: []sources.Item{pdfItem("pdf-1", []byte("version one"), first)}, Watermark: &first},
+		{Items: []sources.Item{pdfItem("pdf-1", []byte("version two"), second)}, Watermark: &second},
+	}}
+	service := testServiceWithOriginals(t, store, extractor, fakeBucket)
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() [first] error = %v", err)
+	}
+	firstKey := theOnlyDocument(t, store).Original.Key
+	if !fakeBucket.has(firstKey) {
+		t.Fatal("the first version's object is missing")
+	}
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() [second] error = %v", err)
+	}
+	if got := store.published(knowledgev1.DocumentPublishedDetailType); got != 2 {
+		t.Fatalf("published %d documents, want 2: one per version", got)
+	}
+	secondKey := theOnlyDocument(t, store).Original.Key
+	if secondKey == firstKey {
+		t.Fatal("the second version was written under the same content-addressed key as the first")
+	}
+	if !fakeBucket.has(secondKey) {
+		t.Fatal("the second version's object is missing")
+	}
+	if fakeBucket.has(firstKey) {
+		t.Fatal("the superseded object was not deleted from the bucket")
+	}
+}
+
+func TestSyncDeletesAnOriginalWhenAFullSweepRetractsItsDocument(t *testing.T) {
+	store := newFakeStore()
+	fakeBucket := newFakeOriginals()
+	key := "originals/org_1/src_1/doc_gone/somehash"
+	store.documents["src_1\x00gone-1"] = domain.Document{
+		ID: "doc_gone", OrganizationID: "org_1", SourceID: "src_1", ExternalID: "gone-1",
+		ContentHash: "somehash", LastSeenAt: testClock.Add(-2 * time.Hour),
+		Original: &domain.Original{Bucket: "test-bucket", Key: key, SHA256: "somehash"},
+	}
+	fakeBucket.objects[key] = []byte("stale bytes")
+	updated := testClock.Add(-time.Hour)
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
+		{Items: []sources.Item{item("kept-1", "kept", updated)}, Watermark: &updated},
+	}}
+	service := testServiceWithOriginals(t, store, extractor, fakeBucket)
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if run := store.lastRun(); run.Kind != knowledgev1.SyncBackfill {
+		t.Fatalf("run kind = %q, want a backfill: only a full pass may retract what it did not see", run.Kind)
+	}
+	if fakeBucket.has(key) {
+		t.Fatal("a retracted document's original was not deleted from the bucket")
+	}
+}
+
+func TestSyncDeletesAnOriginalWhenItsDocumentIsRemovedThroughPageRemoved(t *testing.T) {
+	store := newFakeStore()
+	fakeBucket := newFakeOriginals()
+	watermark := testClock.Add(-2 * time.Hour)
+	store.cursors["src_1"] = domain.Cursor{SourceID: "src_1", Watermark: &watermark}
+	key := "originals/org_1/src_1/doc_gone/somehash"
+	store.documents["src_1\x00gone-1"] = domain.Document{
+		ID: "doc_gone", OrganizationID: "org_1", SourceID: "src_1", ExternalID: "gone-1",
+		ContentHash: "somehash", LastSeenAt: testClock.Add(-90 * time.Minute),
+		Original: &domain.Original{Bucket: "test-bucket", Key: key, SHA256: "somehash"},
+	}
+	fakeBucket.objects[key] = []byte("stale bytes")
+	updated := testClock.Add(-time.Hour)
+	extractor := &fakeExtractor{provider: "files", pages: []sources.Page{
+		{Items: []sources.Item{item("kept-1", "kept", updated)}, Watermark: &updated, Removed: []string{"gone-1"}},
+	}}
+	service := testServiceWithOriginals(t, store, extractor, fakeBucket)
+	source := activeSource(store, "files")
+
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if fakeBucket.has(key) {
+		t.Fatal("a document retracted through Page.Removed did not have its original deleted")
+	}
+}
+
+func TestSyncDeletesAnOriginalWhenItsSourceIsRemoved(t *testing.T) {
+	store := newFakeStore()
+	fakeBucket := newFakeOriginals()
+	key := "originals/org_1/src_1/doc_gone/somehash"
+	source := activeSource(store, "files")
+	store.documents["src_1\x00gone-1"] = domain.Document{
+		ID: "doc_gone", OrganizationID: "org_1", SourceID: source.ID, ExternalID: "gone-1",
+		ContentHash: "somehash",
+		Original:    &domain.Original{Bucket: "test-bucket", Key: key, SHA256: "somehash"},
+	}
+	fakeBucket.objects[key] = []byte("stale bytes")
+	service := testServiceWithOriginals(t, store, &fakeExtractor{provider: "files"}, fakeBucket)
+
+	if err := service.RemoveSource(context.Background(),
+		authclient.Credentials{Authorization: "Bearer t"}, "org_1", source.ID); err != nil {
+		t.Fatalf("RemoveSource() error = %v", err)
+	}
+	if fakeBucket.has(key) {
+		t.Fatal("removing a source did not delete its documents' originals from the bucket")
 	}
 }

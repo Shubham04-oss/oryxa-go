@@ -213,7 +213,7 @@ func (s *Service) TriggerReceived(ctx context.Context, event appsv1.TriggerRecei
 // than as a provider that does not exist.
 func providerFor(toolkit string) string {
 	switch toolkit {
-	case "github", "notion", "slack":
+	case "github", "notion", "slack", "googledrive", "gmail":
 		return toolkit
 	default:
 		return ""

@@ -203,14 +203,18 @@ type Document struct {
 	SourceID       string `json:"source_id"`
 	// ExternalID is the provider's own identifier, stable across runs. It is
 	// what makes a document the same document.
-	ExternalID      string            `json:"external_id"`
-	Kind            string            `json:"kind"`
-	Title           string            `json:"title,omitempty"`
-	URL             string            `json:"url,omitempty"`
-	MIME            string            `json:"mime"`
-	ContentHash     string            `json:"content_hash"`
-	Body            string            `json:"-"`
-	ByteSize        int               `json:"byte_size"`
+	ExternalID  string `json:"external_id"`
+	Kind        string `json:"kind"`
+	Title       string `json:"title,omitempty"`
+	URL         string `json:"url,omitempty"`
+	MIME        string `json:"mime"`
+	ContentHash string `json:"content_hash"`
+	Body        string `json:"-"`
+	ByteSize    int    `json:"byte_size"`
+	// Original is where this document's own bytes live in the configured
+	// bucket, for one whose text knowledge does not read itself — a PDF, an
+	// Office file. Nil for every other document, which is the vast majority.
+	Original        *Original         `json:"-"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
 	SourceUpdatedAt *time.Time        `json:"source_updated_at,omitempty"`
 	ExtractedAt     time.Time         `json:"extracted_at"`
@@ -218,6 +222,20 @@ type Document struct {
 	// document a full pass did not see is one the source no longer holds.
 	LastSeenAt time.Time  `json:"last_seen_at"`
 	RemovedAt  *time.Time `json:"removed_at,omitempty"`
+}
+
+// Original names the object that holds a document's bytes as its provider
+// gave them, in the bucket KNOWLEDGE_ORIGINALS_BUCKET configures. It mirrors
+// contracts/events/knowledge/v1.Original, which is built from this at
+// publish time; domain depends on nothing outside the standard library, so
+// the two stay separate types even though their fields match.
+type Original struct {
+	Bucket string
+	Key    string
+	Size   int64
+	// SHA256 is over the bytes, hex encoded, and equals the owning
+	// Document's ContentHash: the object's key is content addressed on it.
+	SHA256 string
 }
 
 // Cursor is where a run stopped, so the next one carries on rather than
@@ -229,6 +247,14 @@ type Cursor struct {
 	// Watermark is the newest change knowledge has seen, for a provider that
 	// filters by time rather than paging.
 	Watermark *time.Time
+	// Token is Watermark's counterpart for a provider whose watermark is an
+	// opaque cursor rather than a moment — Drive's changes.startPageToken,
+	// Gmail's historyId. At most one of Watermark and Token is ever set, by
+	// the extractor that reads this source; like Watermark, it moves only
+	// once a pass drains, never mid-walk, so a run that stops partway keeps
+	// what it saved rather than narrowing the next incremental pass's
+	// starting point before this one actually finished.
+	Token string
 	// WalkStartedAt is when the walk this cursor is mid-way through began:
 	// the first of what can be several runs, when a source outgrows one
 	// run's page budget. Set when a walk starts from the beginning, carried

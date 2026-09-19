@@ -86,6 +86,10 @@ func (s *Service) targetsOf(ctx context.Context, connection domain.Connection) (
 		return s.slackTargets(ctx, connection)
 	case "notion":
 		return s.notionTargets(ctx, connection)
+	case "googledrive":
+		return s.googledriveTargets(ctx, connection)
+	case "gmail":
+		return s.gmailTargets(ctx, connection)
 	default:
 		// Every other app connects and delivers events; nothing here knows
 		// how to index one yet.
@@ -270,6 +274,66 @@ func (s *Service) notionTargets(ctx context.Context, connection domain.Connectio
 		}
 	}
 	return targets, nil
+}
+
+// googledriveTargets offers the whole of the connection's Drive, which is
+// knowledge's own default target and needs no read to say so, plus any
+// shared drive the account can see, which is cheap to list and worth
+// offering by name rather than making a member paste an id. Knowledge's own
+// Drive extractor takes {"folder": "<id>"} for the second kind — a shared
+// drive's own id, which Drive treats as an ordinary folder id for listing
+// purposes.
+func (s *Service) googledriveTargets(ctx context.Context, connection domain.Connection) ([]Target, error) {
+	targets := []Target{{
+		Kind: "drive", ID: "root", Name: "My Drive",
+		Description: "Everything in this account's own Drive",
+		Target:      json.RawMessage(`{}`),
+	}}
+	// Absolute, not a path under some assumed base: unlike github, slack and
+	// notion, this project has not run a shared drive listed through
+	// Composio's proxy for real, so the base URL its googledrive toolkit
+	// resolves a relative path against is not something to guess at here.
+	data, err := s.read(ctx, connection, http.MethodGet,
+		"https://www.googleapis.com/drive/v3/drives?pageSize=100&fields=drives(id,name)", nil, nil)
+	if err != nil {
+		// My Drive alone is still worth offering; a shared drive is the
+		// "if cheap" half of this, not something worth failing the whole
+		// listing over.
+		return targets, nil
+	}
+	var answer struct {
+		Drives []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"drives"`
+	}
+	if err := json.Unmarshal(data, &answer); err != nil {
+		return targets, nil
+	}
+	for _, drive := range answer.Drives {
+		if drive.ID == "" {
+			continue
+		}
+		targets = append(targets, Target{
+			Kind: "shared_drive", ID: drive.ID, Name: drive.Name, Target: sourceTarget("folder", drive.ID),
+		})
+		if len(targets) == maxTargets {
+			break
+		}
+	}
+	return targets, nil
+}
+
+// gmailTargets offers the two labels a member is most likely to want
+// searchable. Neither needs a read: knowledge's own Gmail extractor already
+// defaults to INBOX, and Sent is the other half of a member's own
+// correspondence, unlike the dozens of narrower system labels Gmail also
+// carries.
+func (s *Service) gmailTargets(context.Context, domain.Connection) ([]Target, error) {
+	return []Target{
+		{Kind: "label", ID: "INBOX", Name: "Inbox", Description: "Mail received", Target: sourceTarget("label", "INBOX")},
+		{Kind: "label", ID: "SENT", Name: "Sent", Description: "Mail sent", Target: sourceTarget("label", "SENT")},
+	}, nil
 }
 
 // sourceTarget is the payload knowledge registers a source with, built here
