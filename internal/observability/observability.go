@@ -80,6 +80,7 @@ func Setup(ctx context.Context, config Config) (Shutdown, error) {
 		tracerProvider = sdktrace.NewTracerProvider(
 			sdktrace.WithBatcher(exporter),
 			sdktrace.WithResource(serviceResource),
+			sdktrace.WithSampler(Sampler()),
 		)
 		otel.SetTracerProvider(tracerProvider)
 	}
