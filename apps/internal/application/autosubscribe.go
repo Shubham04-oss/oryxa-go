@@ -18,8 +18,10 @@ import (
 //
 // Not in the callback: a toolkit's events are subscribed one Composio call at
 // a time, and the member's browser is waiting on that redirect. The
-// connection records that it is owed and the maintenance worker does it,
-// which also survives a restart part-way through.
+// connection records that it is owed, and the callback wakes the subscriber,
+// which does it moments later and also survives a restart part-way through.
+// It used to be the fifteen-minute maintenance sweep's job, and a member who
+// had just connected an app saw no events on it for up to that long.
 
 const (
 	// autoSubscribeAttempts is how many passes a connection gets before it is
@@ -34,6 +36,35 @@ const (
 	// plus up to AutoSubscribeLimit Composio calls.
 	autoSubscribeLease = 10 * time.Minute
 )
+
+// autoSubscribeEvery is how often the subscriber looks for connections owed
+// their subscriptions when nothing has woken it: those another replica
+// completed, and any a restart interrupted.
+const autoSubscribeEvery = time.Minute
+
+// RunAutoSubscribe subscribes newly connected apps until ctx is cancelled.
+// A connection completing wakes it at once; otherwise it looks every
+// autoSubscribeEvery.
+func (s *Service) RunAutoSubscribe(ctx context.Context) {
+	for {
+		s.subscribeConnections(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.subscribeWake:
+		case <-time.After(autoSubscribeEvery):
+		}
+	}
+}
+
+// wakeSubscriber tells RunAutoSubscribe a connection is owed its
+// subscriptions now. It never blocks: a wake already pending covers this one.
+func (s *Service) wakeSubscriber() {
+	select {
+	case s.subscribeWake <- struct{}{}:
+	default:
+	}
+}
 
 // AutoSubscribeLimit is how many events one connection is subscribed to
 // without being asked. Composio's larger toolkits publish hundreds, and every

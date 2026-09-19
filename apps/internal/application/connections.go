@@ -271,6 +271,11 @@ func (s *Service) activate(ctx context.Context, connection domain.Connection, ac
 	if changed {
 		s.logger.InfoContext(ctx, "app connected",
 			"connection_id", connection.ID, "organization_id", connection.OrganizationID, "toolkit", connection.Toolkit)
+		if s.autoSubscribe && activated.AutoSubscribe {
+			// The member is about to land back in the app and look for
+			// what it will now tell them.
+			s.wakeSubscriber()
+		}
 	}
 	return Completion{Connection: activated, ReturnTo: connection.ReturnTo}, nil
 }
