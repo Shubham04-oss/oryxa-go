@@ -66,12 +66,7 @@ func Setup(ctx context.Context, config Config) (Shutdown, error) {
 		return func(context.Context) error { return nil }, nil
 	}
 
-	serviceResource, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceName(config.ServiceName),
-		semconv.ServiceVersion(config.Version),
-		semconv.DeploymentEnvironmentName(config.Environment),
-	))
+	serviceResource, err := newServiceResource(config)
 	if err != nil {
 		return nil, fmt.Errorf("build telemetry resource: %w", err)
 	}
@@ -126,6 +121,20 @@ func Setup(ctx context.Context, config Config) (Shutdown, error) {
 		}
 		return errors.Join(errs...)
 	}, nil
+}
+
+// newServiceResource describes the process to every exporter: the SDK's
+// default resource (the SDK itself, and OTEL_RESOURCE_ATTRIBUTES) with the
+// service's name, version and environment on top. Those carry no schema URL
+// of their own. The default names the semantic conventions of the SDK's own
+// release, and two resources with different schema URLs do not merge at all,
+// which failed every start with export configured.
+func newServiceResource(config Config) (*resource.Resource, error) {
+	return resource.Merge(resource.Default(), resource.NewSchemaless(
+		semconv.ServiceName(config.ServiceName),
+		semconv.ServiceVersion(config.Version),
+		semconv.DeploymentEnvironmentName(config.Environment),
+	))
 }
 
 func configureLogging(config Config) {
