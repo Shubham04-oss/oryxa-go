@@ -15,6 +15,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 // URLVariable is how another service reaches apps, such as agents finding the
@@ -57,7 +58,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	client, err := composio.New(composio.Config{
 		APIKey:  config.ComposioAPIKey,
 		BaseURL: config.ComposioBaseURL,
-		HTTP:    &http.Client{Timeout: 60 * time.Second},
+		HTTP:    &http.Client{Timeout: 60 * time.Second, Transport: observability.Transport(nil)},
 	})
 	if err != nil {
 		return host.Service{}, err

@@ -36,6 +36,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/returnurl"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/secrets"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 // Scope is the fixed OAuth scope an agent grant's refresh token is issued
@@ -99,7 +100,7 @@ func New(config Config, store Store, verifier identityVerifier, sealer Sealer) (
 		store:      store,
 		verifier:   verifier,
 		sealer:     sealer,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{Timeout: 10 * time.Second, Transport: observability.Transport(nil)},
 		now:        time.Now,
 	}, nil
 }

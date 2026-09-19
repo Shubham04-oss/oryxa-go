@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 )
 
@@ -42,7 +43,7 @@ type Client struct {
 }
 
 func New(baseURL string) *Client {
-	return &Client{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: requestTimeout}}
+	return &Client{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: requestTimeout, Transport: observability.Transport(nil)}}
 }
 
 type organizationResponse struct {

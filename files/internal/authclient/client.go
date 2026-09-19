@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 const AccessCookieName = "oryxa_access"
@@ -35,7 +36,7 @@ type Client struct {
 func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: 10 * time.Second},
+		http:    &http.Client{Timeout: 10 * time.Second, Transport: observability.Transport(nil)},
 	}
 }
 
