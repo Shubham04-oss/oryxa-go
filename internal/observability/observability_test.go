@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
@@ -33,6 +35,45 @@ func TestServiceResourceMergesWithTheSDKDefault(t *testing.T) {
 		if attributes[key] != want {
 			t.Errorf("%s = %q, want %q", key, attributes[key], want)
 		}
+	}
+}
+
+// TestSetupSucceedsAndShutsDownPromptlyAgainstAnUnreachableEndpoint guards the
+// class of bug newServiceResource fixed: every exporter is built and every
+// global provider is set eagerly in Setup, none of it waiting on the
+// endpoint actually being reachable, which otherwise only shows up once a
+// deployment sets OTEL_EXPORTER_OTLP_ENDPOINT for real. Port 1 on loopback
+// refuses the connection immediately rather than timing out, so this is fast
+// even without the bounded shutdown context below.
+func TestSetupSucceedsAndShutsDownPromptlyAgainstAnUnreachableEndpoint(t *testing.T) {
+	previousTracer := otel.GetTracerProvider()
+	previousMeter := otel.GetMeterProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+	t.Cleanup(func() {
+		otel.SetTracerProvider(previousTracer)
+		otel.SetMeterProvider(previousMeter)
+		otel.SetTextMapPropagator(previousPropagator)
+	})
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+
+	shutdown, err := Setup(context.Background(), Config{ServiceName: "oryxa-test"})
+	if err != nil {
+		t.Fatalf("Setup() with an unreachable OTLP endpoint returned an error: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		// A non-nil error here (the flush could not reach the endpoint before
+		// shutdownCtx's deadline) is an acceptable outcome; hanging is not.
+		_ = shutdown(shutdownCtx)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown did not return promptly against an unreachable OTLP endpoint")
 	}
 }
 
