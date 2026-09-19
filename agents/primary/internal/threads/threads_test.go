@@ -32,7 +32,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 )
 
-const testModel = "gemini-3.8-flash"
+const testModel = "gemini-3.5-flash-lite"
 
 // scriptedModel answers every request with what respond returns, streamed
 // the way ADK's Gemini model streams: partial chunks, then one finished

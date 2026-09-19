@@ -21,10 +21,15 @@ type Rates struct {
 	CachedMicros int64
 }
 
-// DefaultRates are the prices the configured default models are billed at.
+// DefaultRates are Vertex AI's standard prices on the global endpoint, as
+// Google listed them on 2026-09-19 (cloud.google.com/vertex-ai/generative-ai/pricing),
+// for the default model and the Flash models priced the same however long the
+// prompt. A regional endpoint costs 10% more, and a deployment that uses one
+// overrides its model's rates.
 var DefaultRates = map[string]Rates{
-	"gemini-3.8-flash":      {InputMicros: 300_000, OutputMicros: 2_500_000, CachedMicros: 75_000},
-	"gemini-3.8-flash-lite": {InputMicros: 100_000, OutputMicros: 400_000, CachedMicros: 25_000},
+	"gemini-3.5-flash-lite": {InputMicros: 300_000, OutputMicros: 2_500_000, CachedMicros: 30_000},
+	"gemini-3.5-flash":      {InputMicros: 1_500_000, OutputMicros: 9_000_000, CachedMicros: 150_000},
+	"gemini-3.1-flash-lite": {InputMicros: 250_000, OutputMicros: 1_500_000, CachedMicros: 25_000},
 }
 
 // Table prices models, applying override rates over the defaults.
@@ -93,7 +98,8 @@ func micros(tokens int32, rate int64) int64 {
 }
 
 // ParseOverrides reads a JSON object of model to USD-per-million rates, such
-// as {"gemini-3.8-flash":{"input":0.30,"output":2.50,"cached":0.075}}.
+// as {"gemini-3.5-flash-lite":{"input":0.33,"output":2.75,"cached":0.033}},
+// that model's price on a regional endpoint.
 func ParseOverrides(raw string) (map[string]Rates, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
