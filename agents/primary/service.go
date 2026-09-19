@@ -160,6 +160,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpserver.Config{
 		AllowedOrigins: settings.AllowedOrigins,
 		RunTimeout:     settings.RunTimeout,
+		Preferences:    wakeups.NewStore(platform.Database),
 	}, logger)
 
 	table, err := outbox.NewTable(platform.Database.Pool, schema+".agents_outbox")

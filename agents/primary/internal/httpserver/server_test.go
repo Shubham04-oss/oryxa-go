@@ -152,7 +152,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 7 {
+	if len(patterns) != 9 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -249,6 +249,103 @@ func TestAnUnavailableServiceSaysWhy(t *testing.T) {
 	}
 	if health := serve(server, http.MethodGet, "/healthz", "", nil); health.Code != http.StatusNoContent {
 		t.Fatalf("health = %d, want it still to pass", health.Code)
+	}
+}
+
+// fakePreferences keeps choices by organization/member; a member with none
+// has updates on.
+type fakePreferences struct {
+	off map[string]bool
+	err error
+}
+
+func (preferences *fakePreferences) AppUpdates(_ context.Context, organizationID, memberID string) (bool, error) {
+	if preferences.err != nil {
+		return false, preferences.err
+	}
+	return !preferences.off[organizationID+"/"+memberID], nil
+}
+
+func (preferences *fakePreferences) SetAppUpdates(_ context.Context, organizationID, memberID string, on bool) error {
+	if preferences.err != nil {
+		return preferences.err
+	}
+	if preferences.off == nil {
+		preferences.off = map[string]bool{}
+	}
+	preferences.off[organizationID+"/"+memberID] = !on
+	return nil
+}
+
+func TestAMemberTurnsTheirOwnAppUpdatesOffAndOn(t *testing.T) {
+	preferences := &fakePreferences{}
+	server := New(member(), &fakeThreads{}, Config{AllowedOrigins: []string{"https://app.oryxa.test"}, Preferences: preferences}, nil)
+	read := func() string {
+		t.Helper()
+		response := serve(server, http.MethodGet, "/v1/organizations/org_1/preferences", "", bearer)
+		if response.Code != http.StatusOK {
+			t.Fatalf("read = %d %s", response.Code, response.Body.String())
+		}
+		return strings.TrimSpace(response.Body.String())
+	}
+	if got := read(); got != `{"app_updates":true}` {
+		t.Fatalf("before any choice = %s, want updates on", got)
+	}
+	turned := serve(server, http.MethodPut, "/v1/organizations/org_1/preferences", `{"app_updates":false}`, bearer)
+	if turned.Code != http.StatusOK || strings.TrimSpace(turned.Body.String()) != `{"app_updates":false}` {
+		t.Fatalf("turn off = %d %s", turned.Code, turned.Body.String())
+	}
+	if got := read(); got != `{"app_updates":false}` {
+		t.Fatalf("after turning off = %s", got)
+	}
+	if !preferences.off["org_1/user_1"] || len(preferences.off) != 1 {
+		t.Fatalf("recorded %v, want only user_1's choice in org_1", preferences.off)
+	}
+
+	for _, body := range []string{``, `{}`, `{"app_updates":"no"}`, `{"app_updates":true,"briefs":false}`} {
+		if response := serve(server, http.MethodPut, "/v1/organizations/org_1/preferences", body, bearer); response.Code != http.StatusBadRequest || errorCode(t, response) != "invalid_request" {
+			t.Errorf("PUT %q = %d %s, want 400", body, response.Code, response.Body.String())
+		}
+	}
+	if got := read(); got != `{"app_updates":false}` {
+		t.Fatalf("a refused change changed it: %s", got)
+	}
+
+	crossSite := serve(server, http.MethodPut, "/v1/organizations/org_1/preferences", `{"app_updates":true}`, map[string]string{
+		"Cookie": "cookie-token", "Origin": "https://evil.test",
+	})
+	if crossSite.Code != http.StatusForbidden || !preferences.off["org_1/user_1"] {
+		t.Fatalf("cross-site change = %d, off = %v; want 403 and nothing changed", crossSite.Code, preferences.off)
+	}
+	if response := serve(server, http.MethodGet, "/v1/organizations/org_1/preferences", "", nil); response.Code != http.StatusUnauthorized {
+		t.Fatalf("anonymous read = %d, want 401", response.Code)
+	}
+}
+
+func TestAnAgentCannotChooseAMembersPreferences(t *testing.T) {
+	directory := member()
+	directory.membership.Agent = true
+	preferences := &fakePreferences{}
+	server := New(directory, &fakeThreads{}, Config{Preferences: preferences}, nil)
+	for _, method := range []string{http.MethodGet, http.MethodPut} {
+		response := serve(server, method, "/v1/organizations/org_1/preferences", `{"app_updates":false}`, bearer)
+		if response.Code != http.StatusForbidden || errorCode(t, response) != "forbidden" {
+			t.Errorf("agent %s = %d %s, want 403", method, response.Code, response.Body.String())
+		}
+	}
+	if len(preferences.off) != 0 {
+		t.Fatalf("an agent changed a member's preferences: %v", preferences.off)
+	}
+}
+
+func TestPreferencesSayWhenTheyAreNotKept(t *testing.T) {
+	response := serve(newTestServer(member(), &fakeThreads{}), http.MethodGet, "/v1/organizations/org_1/preferences", "", bearer)
+	if response.Code != http.StatusServiceUnavailable || errorCode(t, response) != "preferences_unavailable" {
+		t.Fatalf("no preferences = %d %s, want 503", response.Code, response.Body.String())
+	}
+	failing := New(member(), &fakeThreads{}, Config{Preferences: &fakePreferences{err: errors.New("database down")}}, nil)
+	if response := serve(failing, http.MethodGet, "/v1/organizations/org_1/preferences", "", bearer); response.Code != http.StatusInternalServerError {
+		t.Fatalf("failing store = %d %s, want 500", response.Code, response.Body.String())
 	}
 }
 

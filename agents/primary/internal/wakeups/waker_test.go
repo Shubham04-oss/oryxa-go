@@ -67,6 +67,11 @@ type fakeBatches struct {
 	// raceThread, when set, is recorded by another wake-up just before this
 	// one records the thread it made.
 	raceThread string
+	// quiet names, as organization/member, those who turned updates from
+	// their apps off.
+	quiet map[string]bool
+	// preferenceDown makes reading a member's preference fail.
+	preferenceDown bool
 }
 
 func (store *fakeBatches) Claim(_ context.Context, _ Rule, _ time.Duration, limit int) ([]Batch, error) {
@@ -112,6 +117,15 @@ func (store *fakeBatches) Release(_ context.Context, batchID string, failed bool
 }
 
 func (store *fakeBatches) Purge(context.Context, time.Duration) error { return nil }
+
+func (store *fakeBatches) AppUpdates(_ context.Context, organizationID, memberID string) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.preferenceDown {
+		return false, errors.New("database down")
+	}
+	return !store.quiet[organizationID+"/"+memberID], nil
+}
 
 func (store *fakeBatches) Thread(_ context.Context, organizationID, memberID string) (string, error) {
 	store.mu.Lock()
@@ -302,6 +316,33 @@ func TestAWakeUpForSomeoneWhoLeftIsDropped(t *testing.T) {
 	}
 	if len(store.dropped) != 1 || len(runs.started) != 0 || len(store.threads) != 0 {
 		t.Fatalf("dropped = %v, runs = %v, threads = %v: a departed member was woken", store.dropped, runs.started, store.threads)
+	}
+}
+
+func TestAWakeUpForAMemberWhoTurnedAppUpdatesOffIsDropped(t *testing.T) {
+	runs := &recordingRuns{}
+	service, _ := newThreads(t, &answeringModel{}, runs)
+	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}, quiet: map[string]bool{"org_1/user_1": true}}
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.dropped) != 1 || len(runs.started) != 0 || len(store.threads) != 0 {
+		t.Fatalf("dropped = %v, runs = %v, threads = %v: a member who turned updates off was told", store.dropped, runs.started, store.threads)
+	}
+}
+
+func TestAWakeUpWaitsWhenAMembersPreferenceCannotBeRead(t *testing.T) {
+	runs := &recordingRuns{}
+	service, _ := newThreads(t, &answeringModel{}, runs)
+	store := &fakeBatches{pending: []Batch{batchFor("wb_1")}, preferenceDown: true}
+	waker := NewWaker(store, service, fakeMembers{}, Config{Rule: Rule{Size: 1, MaxWait: time.Minute, Largest: 20}, Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	failed, released := store.released["wb_1"]
+	if !released || failed || len(store.dropped) != 0 || len(runs.started) != 0 {
+		t.Fatalf("released = %v (failed %v), dropped = %v, runs = %v: an unread preference must neither tell nor drop", released, failed, store.dropped, runs.started)
 	}
 }
 
