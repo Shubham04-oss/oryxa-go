@@ -13,12 +13,78 @@ import (
 	"context"
 	"iter"
 	"sync"
+	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/genai"
 
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 )
+
+// meterName scopes the model-call metrics below to this package, the way
+// ADK's own internal/telemetry scopes its generate_content and execute_tool
+// spans to "gcp.vertex.agent": both read from the same global providers this
+// process configures in internal/observability.Setup, but a viewer should
+// still be able to tell which library produced which signal.
+const meterName = "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
+
+// modelCallDuration and modelCallTokens are created once, against the global
+// MeterProvider, the same way ADK's own package-level tracer is: both are
+// resolved lazily by the otel API, so creating them before
+// internal/observability.Setup has registered the real provider is safe -
+// see go.opentelemetry.io/otel's own doc for Meter and Tracer. ADK's
+// generate_content span already carries a duration (its own start/end) and
+// the same token counts as span attributes (see internal/telemetry.
+// TraceGenerateContentResult), which is enough to read one call's numbers
+// off its trace; these give the same numbers as metrics, which is what a
+// dashboard or an alarm needs and a trace does not provide.
+var modelCallDuration, modelCallTokens = newModelMetrics()
+
+func newModelMetrics() (metric.Float64Histogram, metric.Int64Counter) {
+	meter := otel.Meter(meterName)
+	duration, err := meter.Float64Histogram("oryxa.model.call.duration",
+		metric.WithDescription("Time spent in one model call, from request to its finished (non-partial) response."),
+		metric.WithUnit("s"))
+	if err != nil {
+		otel.Handle(err)
+	}
+	tokens, err := meter.Int64Counter("oryxa.model.tokens",
+		metric.WithDescription("Tokens spent on model calls, by model and token type (input, output, cached)."),
+		metric.WithUnit("{token}"))
+	if err != nil {
+		otel.Handle(err)
+	}
+	return duration, tokens
+}
+
+// recordModelCall records one finished model call's duration and token
+// counts, mirroring Counter.Add's own billing rules (see its doc) so the
+// metrics and the run's priced usage never disagree: tool-use-prompt and
+// thinking tokens count as input and output respectively, and cached tokens
+// are reported as their own type despite already being part of input, since
+// that split is the only way to see a cache hit rate from these metrics.
+func recordModelCall(ctx context.Context, model string, metadata *genai.GenerateContentResponseUsageMetadata, duration time.Duration) {
+	if modelCallDuration == nil || metadata == nil {
+		return
+	}
+	modelAttr := attribute.String("model", model)
+	modelCallDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(modelAttr))
+
+	inputTokens := metadata.PromptTokenCount + metadata.ToolUsePromptTokenCount
+	outputTokens := metadata.CandidatesTokenCount + metadata.ThoughtsTokenCount
+	if inputTokens > 0 {
+		modelCallTokens.Add(ctx, int64(inputTokens), metric.WithAttributes(modelAttr, attribute.String("type", "input")))
+	}
+	if outputTokens > 0 {
+		modelCallTokens.Add(ctx, int64(outputTokens), metric.WithAttributes(modelAttr, attribute.String("type", "output")))
+	}
+	if metadata.CachedContentTokenCount > 0 {
+		modelCallTokens.Add(ctx, int64(metadata.CachedContentTokenCount), metric.WithAttributes(modelAttr, attribute.String("type", "cached")))
+	}
+}
 
 // Counter adds up what each model spent in one run. It is safe for
 // concurrent use: sub-agents called in the same model turn run concurrently.
@@ -172,8 +238,10 @@ func countedGenerateContent(ctx context.Context, llm model.LLM, request *model.L
 		// best measure of it left.
 		var partial *genai.GenerateContentResponseUsageMetadata
 		counted := false
+		started := time.Now()
 		defer func() {
 			if !counted && partial != nil {
+				recordModelCall(ctx, llm.Name(), partial, time.Since(started))
 				FromContext(ctx).Add(llm.Name(), partial)
 			}
 		}()
@@ -188,6 +256,7 @@ func countedGenerateContent(ctx context.Context, llm model.LLM, request *model.L
 				if response.Partial {
 					partial = response.UsageMetadata
 				} else if !counted {
+					recordModelCall(ctx, llm.Name(), response.UsageMetadata, time.Since(started))
 					FromContext(ctx).Add(llm.Name(), response.UsageMetadata)
 					counted = true
 				}

@@ -27,7 +27,12 @@ import (
 	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
+
+// component identifies this consumer in its metrics and logs, low-cardinality
+// and fixed regardless of which queue or detail type it is handling.
+const component = "agents"
 
 // Subscriptions are the detail types agents consumes, by source, for a host
 // provisioning the rule that feeds its queue.
@@ -55,6 +60,10 @@ type Consumer struct {
 	recorder Recorder
 	forget   []Forgetter
 	logger   *slog.Logger
+	metrics  observability.ConsumerMetrics
+	// queueName is set once, at the top of Poll, before Poll's single
+	// goroutine starts calling handle; it is not touched concurrently.
+	queueName string
 }
 
 // NewConsumer returns a consumer that records triggers with recorder and,
@@ -63,7 +72,11 @@ func NewConsumer(recorder Recorder, forget []Forgetter, logger *slog.Logger) *Co
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Consumer{recorder: recorder, forget: forget, logger: logger}
+	metrics, err := observability.NewConsumerMetrics()
+	if err != nil {
+		logger.Warn("consumer metrics unavailable; handling continues without them", "error", err)
+	}
+	return &Consumer{recorder: recorder, forget: forget, logger: logger, metrics: metrics}
 }
 
 type eventBridgeEvent struct {
@@ -74,9 +87,15 @@ type eventBridgeEvent struct {
 }
 
 type receivedEnvelope struct {
-	EventID string          `json:"event_id"`
-	Version int             `json:"version"`
-	Data    json.RawMessage `json:"data"`
+	EventID    string          `json:"event_id"`
+	Version    int             `json:"version"`
+	OccurredAt string          `json:"occurred_at"`
+	Data       json.RawMessage `json:"data"`
+	// TraceCarrier decodes the envelope's optional traceparent/tracestate
+	// fields; a message published before this rollout, or one that never
+	// carried one, decodes to the zero TraceCarrier, and handling continues
+	// under a fresh span rather than failing.
+	observability.TraceCarrier
 }
 
 // Handle decodes one SQS message body as an EventBridge event and acts on
@@ -84,6 +103,10 @@ type receivedEnvelope struct {
 // batch's triggers are recorded by their own events' ids, and forgetting what
 // is already gone removes nothing more.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
+	return consumer.handle(ctx, body, time.Now())
+}
+
+func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt time.Time) error {
 	var event eventBridgeEvent
 	if err := json.Unmarshal([]byte(body), &event); err != nil {
 		return fmt.Errorf("decode EventBridge event: %w", err)
@@ -95,6 +118,21 @@ func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	if envelope.Version != 1 || envelope.EventID == "" {
 		return fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, envelope.Version, envelope.EventID)
 	}
+	occurredAt, _ := time.Parse(time.RFC3339Nano, envelope.OccurredAt)
+
+	ctx, span := observability.StartConsumerSpan(ctx, envelope.TraceCarrier, consumer.queueName, event.DetailType, envelope.EventID)
+	started := time.Now()
+	err := consumer.dispatch(ctx, event, envelope)
+	observability.EndSpan(span, err)
+	consumer.metrics.Record(ctx, component, event.DetailType, occurredAt, receivedAt, started, err)
+	return err
+}
+
+// dispatch runs the handler for one decoded message. It is Handle's own
+// switch, unchanged, pulled out so handle can wrap it in a span and record
+// its outcome without the span covering decoding failures that never got far
+// enough to know a detail type worth attributing them to.
+func (consumer *Consumer) dispatch(ctx context.Context, event eventBridgeEvent, envelope receivedEnvelope) error {
 	switch {
 	case event.Source == batchingv1.Source && event.DetailType == batchingv1.TriggerBatchReadyDetailType:
 		return consumer.batchReady(ctx, envelope)
@@ -200,6 +238,10 @@ var receiveBackoff = 5 * time.Second
 // Poll long-polls the agents-events queue until ctx is cancelled, deleting
 // only the messages it handled.
 func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL string) {
+	// Poll runs as this consumer's only goroutine for its whole life, calling
+	// handle sequentially, so setting this once up front and never touching
+	// it again needs no lock.
+	consumer.queueName = observability.QueueName(queueURL)
 	for {
 		output, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(queueURL),
@@ -218,10 +260,13 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 			}
 			continue
 		}
+		// One timestamp for the whole batch: ReceiveMessage already returned,
+		// so every message in it was equally "received" as of now.
+		receivedAt := time.Now()
 
 		var handled []sqstypes.DeleteMessageBatchRequestEntry
 		for index, message := range output.Messages {
-			if err := consumer.Handle(ctx, aws.ToString(message.Body)); err != nil {
+			if err := consumer.handle(ctx, aws.ToString(message.Body), receivedAt); err != nil {
 				consumer.logger.ErrorContext(ctx, "event failed", "sqs_message_id", aws.ToString(message.MessageId), "error", err)
 				continue
 			}
