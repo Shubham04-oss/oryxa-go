@@ -139,6 +139,26 @@ resource "cloudflare_zero_trust_access_application" "hyperdrive" {
   policies         = [{ id = cloudflare_zero_trust_access_policy.hyperdrive.id, precedence = 1 }]
 }
 
+# Hyperdrive checks that it can reach the database when it is created, so it
+# waits for the connector instance to have brought the tunnel up.
+resource "terraform_data" "db_tunnel_connected" {
+  triggers_replace = [aws_instance.edge.id]
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      for attempt in $(seq 60); do
+        status=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+          "https://api.cloudflare.com/client/v4/accounts/${var.cloudflare_account_id}/cfd_tunnel/${cloudflare_zero_trust_tunnel_cloudflared.db.id}" |
+          jq -r .result.status)
+        [ "$status" = healthy ] && exit 0
+        sleep 5
+      done
+      echo "the database tunnel's connector did not connect within five minutes" >&2
+      exit 1
+    EOT
+  }
+}
+
 resource "cloudflare_hyperdrive_config" "main" {
   account_id = var.cloudflare_account_id
   name       = local.name
@@ -152,5 +172,5 @@ resource "cloudflare_hyperdrive_config" "main" {
     access_client_secret = cloudflare_zero_trust_access_service_token.hyperdrive.client_secret
   }
 
-  depends_on = [cloudflare_zero_trust_access_application.hyperdrive, cloudflare_zero_trust_tunnel_cloudflared_config.db]
+  depends_on = [cloudflare_zero_trust_access_application.hyperdrive, cloudflare_zero_trust_tunnel_cloudflared_config.db, terraform_data.db_tunnel_connected]
 }

@@ -63,14 +63,18 @@ resource "aws_instance" "edge" {
     encrypted   = true
   }
 
-  # cloudflared from Cloudflare's own repository, run as a service with the
-  # tunnel's token, which it reads from Secrets Manager at boot.
+  # cloudflared from Cloudflare's own release, run as a service with the
+  # tunnel's token, which it reads from Secrets Manager at boot. The package is
+  # installed with rpm rather than dnf: loading the distribution's repository
+  # metadata takes more memory than a nano instance has.
   user_data_replace_on_change = true
   user_data                   = <<-EOT
     #!/bin/bash
     set -euo pipefail
-    curl -fsSL https://pkg.cloudflare.com/cloudflared-ascii.repo -o /etc/yum.repos.d/cloudflared.repo
-    dnf install -y cloudflared
+    curl -fsSL --retry 5 -o /tmp/cloudflared.rpm \
+      https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-aarch64.rpm
+    rpm -i /tmp/cloudflared.rpm
+    rm /tmp/cloudflared.rpm
     TOKEN=$(aws secretsmanager get-secret-value --region ${var.aws_region} \
       --secret-id ${aws_secretsmanager_secret.db_tunnel_token.arn} --query SecretString --output text)
     cloudflared service install "$TOKEN"

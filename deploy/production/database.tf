@@ -17,9 +17,12 @@ resource "aws_db_parameter_group" "main" {
   family = "postgres17"
 
   # Every connection is TLS: Hyperdrive requires it, and the tasks use it.
+  # RDS records this one as applied at reboot whatever is asked, so asking
+  # for that keeps the plan from showing a change on every run.
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   # Queries over half a second land in the PostgreSQL log, which is exported
