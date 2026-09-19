@@ -20,6 +20,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	pgxvector "github.com/pgvector/pgvector-go/pgx"
 	"go.opentelemetry.io/otel"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 )
 
 type Config struct {
@@ -166,6 +167,21 @@ func (database *Database) WithSchema(ctx context.Context, schema, applicationNam
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("configure postgres pool for schema %s: %w", schema, err)
+	}
+	// This pool's connection tracer came from database.Pool.Config(), so
+	// query spans already carry the parent pool's tracer; pool-level stats
+	// (acquired/idle connections, wait time) are a separate registration
+	// otelpgx keys by db.client.connection.pool.name, which would otherwise
+	// collide with the parent pool's identical host:port/database and make
+	// the two indistinguishable. Naming this one with its schema keeps both
+	// readable.
+	poolName := fmt.Sprintf("%s:%d/%s?schema=%s", poolConfig.ConnConfig.Host, poolConfig.ConnConfig.Port, poolConfig.ConnConfig.Database, schema)
+	if err := otelpgx.RecordStats(pool,
+		otelpgx.WithStatsMeterProvider(otel.GetMeterProvider()),
+		otelpgx.WithMinimumReadDBStatsInterval(15*time.Second),
+		otelpgx.WithStatsAttributes(semconv.DBClientConnectionPoolName(poolName))); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("register postgres pool metrics for schema %s: %w", schema, err)
 	}
 	return &Database{
 		Pool:       pool,
