@@ -30,12 +30,19 @@ func main() {
 		log.Fatalf("load AWS configuration: %v", err)
 	}
 
-	output, err := provision.Run(ctx, provision.Clients{
+	clients := provision.Clients{
 		DynamoDB:    dynamodb.NewFromConfig(awsConfig),
 		EventBridge: eventbridge.NewFromConfig(awsConfig),
 		SES:         sesv2.NewFromConfig(awsConfig),
 		SQS:         sqs.NewFromConfig(awsConfig),
-	}, config)
+	}
+	if config.SESRegion != config.Region {
+		// SES, and the default bus it publishes its events to, answer in the
+		// region that holds production access; the rest stays in Region.
+		clients.SES = sesv2.NewFromConfig(awsConfig, func(options *sesv2.Options) { options.Region = config.SESRegion })
+		clients.SESEventBridge = eventbridge.NewFromConfig(awsConfig, func(options *eventbridge.Options) { options.Region = config.SESRegion })
+	}
+	output, err := provision.Run(ctx, clients, config)
 	if err != nil {
 		log.Fatal(err)
 	}

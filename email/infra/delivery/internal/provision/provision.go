@@ -42,6 +42,10 @@ type Clients struct {
 	EventBridge *eventbridge.Client
 	SES         *sesv2.Client
 	SQS         *sqs.Client
+	// SESEventBridge is EventBridge in the SES region, whose default bus is
+	// the only one SES can publish to. Nil means SES runs in the same region
+	// as everything else, and EventBridge is used.
+	SESEventBridge *eventbridge.Client
 }
 
 type DNSRecord struct {
@@ -144,7 +148,11 @@ func Run(ctx context.Context, clients Clients, config Config) (Output, error) {
 		if err := ensureConfigurationSet(ctx, clients.SES, config.ConfigurationSet); err != nil {
 			return Output{}, err
 		}
-		defaultBusARN, err := busARN(ctx, clients.EventBridge, defaultBus)
+		sesBus := clients.SESEventBridge
+		if sesBus == nil {
+			sesBus = clients.EventBridge
+		}
+		defaultBusARN, err := busARN(ctx, sesBus, defaultBus)
 		if err != nil {
 			return Output{}, err
 		}

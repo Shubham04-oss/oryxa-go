@@ -172,5 +172,8 @@ that is not the region the deployment runs in, `SES_REGION` names it: mail is
 sent from there, and everything else — the queue, the tables — stays in
 `AWS_REGION`. The configuration set's delivery events are then published in
 the SES region, and forwarding them to the deployment's event bus is the
-deployment's job (the provisioner here assumes one region, for local and
-single-region setups).
+deployment's job. The provisioner takes `SES_REGION` too: it checks the
+identity and sets up the configuration set and its event destination there,
+and everything else in `AWS_REGION`; a rule forwarding the SES region's
+default-bus feedback events to `AWS_REGION`'s default bus is the one piece it
+leaves to the deployment.

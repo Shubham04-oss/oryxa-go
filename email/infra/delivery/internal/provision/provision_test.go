@@ -156,6 +156,25 @@ func TestFromEnvSESEventPublishing(t *testing.T) {
 	}
 }
 
+// TestFromEnvSESRegion: SES answers in the region holding production access,
+// which defaults to the deployment's own.
+func TestFromEnvSESRegion(t *testing.T) {
+	t.Setenv("EMAIL_FROM_ADDRESS", "no-reply@example.com")
+	t.Setenv("AWS_REGION", "us-west-2")
+	t.Setenv("SES_REGION", "")
+	config, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Region != "us-west-2" || config.SESRegion != "us-west-2" {
+		t.Fatalf("regions = %q / %q, want SES in the deployment's region when unset", config.Region, config.SESRegion)
+	}
+	t.Setenv("SES_REGION", "ap-south-1")
+	if config, err = FromEnv(); err != nil || config.Region != "us-west-2" || config.SESRegion != "ap-south-1" {
+		t.Fatalf("regions = %q / %q, %v; want SES alone in ap-south-1", config.Region, config.SESRegion, err)
+	}
+}
+
 func assertJSONEqual(t *testing.T, got, want string) {
 	t.Helper()
 	var gotValue, wantValue any
