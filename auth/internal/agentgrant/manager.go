@@ -27,7 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -227,10 +227,10 @@ func (m *Manager) Revoke(ctx context.Context, userID string) error {
 		return err
 	}
 	if plaintext, openErr := m.open(ctx, userID, grant.EncryptedRefreshToken); openErr != nil {
-		log.Printf("open agent refresh token for revocation: %v", openErr)
+		slog.ErrorContext(ctx, "open agent refresh token for revocation", "error", openErr)
 	} else {
 		if revokeErr := m.revokeAtCognito(ctx, string(plaintext)); revokeErr != nil {
-			log.Printf("revoke agent refresh token at Cognito: %v", revokeErr)
+			slog.ErrorContext(ctx, "revoke agent refresh token at Cognito", "error", revokeErr)
 		}
 		secrets.Wipe(plaintext)
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -413,14 +414,14 @@ func (server *Server) logout(writer http.ResponseWriter, request *http.Request) 
 		refreshToken = cookie.Value
 	}
 	if err := server.oauth.Revoke(request.Context(), refreshToken); err != nil {
-		log.Printf("revoke Cognito token: %v", err)
+		slog.ErrorContext(request.Context(), "revoke Cognito token", "error", err)
 	}
 	if rawToken, _, ok := server.requestToken(request); ok {
 		// An agent's token is the member's identity, but signing the member
 		// out is theirs alone to do.
 		if claims, err := server.verifier.Verify(request.Context(), rawToken); err == nil && !server.isAgentToken(claims) {
 			if err := server.service.SignOut(request.Context(), claims.Subject); err != nil {
-				log.Printf("enqueue sign-out event: %v", err)
+				slog.ErrorContext(request.Context(), "enqueue sign-out event", "error", err)
 			}
 		}
 	}
