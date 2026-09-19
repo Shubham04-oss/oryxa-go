@@ -143,7 +143,13 @@ func EventPattern() (string, error) {
 			"detail-type": slices.Sorted(slices.Values(subscriptions[source])),
 		})
 	}
-	pattern, err := json.Marshal(map[string]any{"$or": sources})
+	// EventBridge refuses an $or of one branch, so a single source is the
+	// pattern itself.
+	var match any = map[string]any{"$or": sources}
+	if len(sources) == 1 {
+		match = sources[0]
+	}
+	pattern, err := json.Marshal(match)
 	if err != nil {
 		return "", fmt.Errorf("encode event pattern: %w", err)
 	}
