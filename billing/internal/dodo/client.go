@@ -15,6 +15,7 @@ import (
 	standardwebhooks "github.com/standard-webhooks/standard-webhooks/libraries/go"
 
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
 // MetadataOrganizationID is the metadata key naming the organization a Dodo
@@ -44,6 +45,11 @@ func New(config Config) (*Client, error) {
 		option.WithBearerToken(config.APIKey),
 		option.WithMaxRetries(2),
 		option.WithRequestTimeout(15 * time.Second),
+		// The SDK otherwise calls through http.DefaultClient, which carries no
+		// span and propagates nothing: this is Dodo, a third party, so a
+		// client span and traceparent matter here as much as for a call to
+		// another Oryxa service.
+		option.WithHTTPClient(&http.Client{Transport: observability.Transport(nil)}),
 	}
 	if config.LiveMode {
 		options = append(options, option.WithEnvironmentLiveMode())
