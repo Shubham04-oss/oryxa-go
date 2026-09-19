@@ -280,4 +280,16 @@ type Event struct {
 	DetailType string
 	OccurredAt time.Time
 	Data       []byte
+	// TraceContext is the outbox row's stored trace, carried through from
+	// outbox.Event so Publisher can link its producer span to the write that
+	// created this event. Code building an Event to record leaves it unset:
+	// the write path captures the current trace itself (see insertEvents),
+	// rather than trusting a caller to have filled this in.
+	//
+	// NOTE: the dispatcher's PublisherFunc closure in service.go, which
+	// converts outbox.Event to this type, is not updated to copy this field
+	// (that file is off limits for this change - see the observability
+	// rollout's notes); until it copies event.TraceContext through, rag's
+	// producer spans link to nothing; consumers are unaffected.
+	TraceContext string
 }
