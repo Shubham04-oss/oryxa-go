@@ -17,12 +17,15 @@ import (
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/memory"
 	"google.golang.org/adk/v2/runner"
+	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/session/compaction"
 	"google.golang.org/adk/v2/tool/toolconfirmation"
 
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
@@ -71,7 +74,11 @@ type Run struct {
 	content    *genai.Content
 	stateDelta map[string]any
 	started    time.Time
-	once       sync.Once
+	// remembering is the run's view of memory, scoped to the member's
+	// organization. It is built when the run starts driving, and nil when
+	// the service has no memory.
+	remembering memory.Service
+	once        sync.Once
 }
 
 // ID is the run's own ID, as its events and records name it.
@@ -259,6 +266,11 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	}
 	total := counter.Total()
 	send(Item{Type: ItemRunCompleted, RunID: run.id, At: time.Now().UTC(), Usage: &total})
+	// Remembering happens once the member has their answer: it is worth a
+	// round trip to Memory Bank, but never one the member waits through.
+	if run.remembering != nil {
+		run.remember(ctx, run.remembering)
+	}
 }
 
 // drive runs the agent and streams what it yields, returning the error the
@@ -271,11 +283,33 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 		// steers it: only the agent that can reach nothing outside runs it.
 		answering = service.unattended
 	}
+	// The run's memory is bound to the member's organization before the run
+	// starts. ADK addresses memory by user alone, and a member can belong to
+	// more than one organization, so the scope cannot be left to be read off
+	// each request: this view answers within it or not at all.
+	//
+	// A run nobody is watching gets no memory at all, neither reading nor
+	// writing. What steers it is text from the member's apps, which anyone
+	// who can email them or open an issue wrote: remembering such a run would
+	// let that text put facts about the member into what Krude knows, where
+	// they would outlive the run and steer later ones, and reading would hand
+	// that text what Krude already knows.
+	if service.memory != nil && run.startedBy != agentsv1.StartedByTrigger {
+		scoped, err := service.memory.For(adkmemory.Scope{
+			OrganizationID: run.member.OrganizationID,
+			UserID:         run.member.UserID,
+		})
+		if err != nil {
+			return fmt.Errorf("scope memory to the member's organization: %w", err)
+		}
+		run.remembering = scoped
+	}
 	adkRunner, err := runner.New(runner.Config{
 		AppName:         service.appName,
 		Agent:           answering,
 		SessionService:  service.sessions,
 		ArtifactService: service.artifacts,
+		MemoryService:   run.remembering,
 	})
 	if err != nil {
 		return fmt.Errorf("build runner: %w", err)
@@ -303,6 +337,37 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 		}
 	}
 	return failure
+}
+
+// rememberTimeout bounds handing a finished conversation to memory, which
+// happens after the member has already been answered.
+const rememberTimeout = 15 * time.Second
+
+// remember gives memory what this run added to the thread, so what the
+// member told Krude here is there for their next thread. Only this run's own
+// turns are sent: the ones before it were remembered when they happened, and
+// a thread re-read from the beginning after every run costs more to extract
+// from the longer it gets.
+//
+// It is bookkeeping after the answer, like compaction: a conversation that
+// was not remembered is worth a log line, never a failed run, and it is not
+// cancelled with the request the member has already been answered on.
+func (run *Run) remember(ctx context.Context, remembering memory.Service) {
+	service := run.service
+	rememberContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), rememberTimeout)
+	defer cancel()
+	got, err := service.sessions.Get(rememberContext, &session.GetRequest{
+		AppName: service.appName, UserID: run.member.UserID, SessionID: run.threadID,
+	})
+	if err != nil || got == nil || got.Session == nil {
+		service.logger.WarnContext(rememberContext, "read a run's thread to remember it",
+			"run_id", run.id, "thread_id", run.threadID, "error", err)
+		return
+	}
+	if err := remembering.AddSessionToMemory(rememberContext, adkmemory.Since(got.Session, run.started)); err != nil {
+		service.logger.WarnContext(rememberContext, "a run's conversation was not remembered",
+			"run_id", run.id, "thread_id", run.threadID, "error", err)
+	}
 }
 
 // renewTimeout bounds one renewal, so a stalled database cannot hold a run

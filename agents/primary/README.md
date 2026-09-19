@@ -28,7 +28,8 @@ krude              chat: the member's assistant
 ├── researcher     single-turn sub-agent: answers from the live web with Google Search and URL context
 ├── toolboxes      list_tools, load_tools: sandbox, browser, apps and knowledge, loaded on demand
 ├── subagents      create_subagent, list_subagents, remove_subagent: specialists Krude writes and reuses in a session
-└── helpers        list_helpers, spawn_helper: temporary agents for big or separate work
+├── helpers        list_helpers, spawn_helper: temporary agents for big or separate work
+└── memory         load_memory: what Krude learned about the member in earlier threads, where a memory bank is configured
 ```
 
 **Sub-agents.** Krude calls a sub-agent the way it calls a tool, and the result
@@ -537,6 +538,161 @@ AGENTS_PRIMARY_TEST_AWS_ENDPOINT=http://localhost:4566 \
   go test ./agents/primary/internal/s3artifact/
 ```
 
+## Memory
+
+Memory is what Krude knows about a member across their threads, as opposed to
+session state, which is one conversation's own.
+
+Krude reads it with `load_memory`, a tool it calls with a query when a
+question needs what it learned before. ADK also offers `preload_memory`,
+which searches on every model request and appends what it finds to the system
+instruction; that is a memory read per model step, and it would rewrite the
+stable prefix [prompt caching](#prompt-caching) exists to hold, so Krude does
+not use it. The tool is only on Krude where a memory service is actually
+behind it: without one it would be there to be called and fail every time.
+
+**A run nobody is watching has no memory at all**, neither reading nor
+writing. What steers such a run is text from the member's apps, which anyone
+who can email them or open an issue wrote (see [Wake-ups](#wake-ups)).
+Remembering one would let that text put facts about the member into what
+Krude knows, where they would outlive the run and steer later ones; reading
+would hand that text what Krude already knows. The member's own runs in the
+same thread are remembered as usual.
+
+That boundary is not airtight, and it cannot be: a member's own run on a
+thread a wake-up already wrote to answers with that text still in context, so
+Krude's own answer can carry a claim the apps made, and the answer is
+remembered. What this rules out is app text becoming a memory on its own,
+with nobody reading it.
+
+Vertex AI Memory Bank keeps the memories, behind the seam every backend comes
+through, `internal/adkmemory`. Without `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE`
+there is no backend, the runner is built without a memory service, and Krude
+remembers nothing between threads.
+
+**Memory is scoped to an organization, not just a member.** ADK addresses
+memory by app name and user alone: `memory.SearchRequest` carries nothing
+else, and the runner fills it from the session's own user. But a member can
+belong to more than one organization — `adksession` seeds them into the one
+named on the session, or their first — and threads are already kept apart by
+the organization in their state. A memory service taking ADK's addressing at
+its word would answer a question asked in one organization with what it
+learned in another.
+
+So nothing in `adkmemory` is addressed by a user alone. A `Backend` is
+reached only through a `Scope`, which is one member in one organization and
+is invalid without both:
+
+| Type | What it is |
+| --- | --- |
+| `Scope` | Whose memory a read or write addresses. `Fields` renders it as the key-value map a backend partitions by; a backend addressed by a single string instead, as mem0 is, needs both halves in it and no two scopes rendering the same |
+| `Backend` | Where memories are kept. Every call names the scope it acts in, so an implementation cannot answer outside one |
+| `Service.For` | The `memory.Service` one run is given. It holds its scope from the moment it is built |
+
+A run's scope is fixed in `internal/threads` before the run starts, from the
+member the request already resolved, rather than read off each request. The
+view refuses a request naming anyone else instead of answering it from the
+scope it happens to hold: a mismatch is a bug above it, and one that would
+read another member's memory, so it fails rather than guessing.
+
+**Memory is forgotten with the organization.** `Forget` removes every memory
+in an organization — only one member's, when a member is named — and the run
+API's own `Forget` calls it before it removes their threads, so the queue
+handler that already drops a departed member's threads and wake-ups drops
+what Krude learned from them too. Memory distilled from a conversation should
+no more outlive the organization it was held in than the conversation does.
+
+`InMemory` is a backend for development and tests, one ADK in-memory service
+per scope: the ranking is ADK's and the isolation is this package's. What it
+holds goes with the process.
+
+### Memory Bank
+
+Memory Bank does not keep conversations. It reads what was said, extracts the
+facts worth keeping, and consolidates them with what it already holds, so a
+preference stated once and contradicted later ends up as one fact rather than
+two. That extraction is the part worth buying rather than building: retrieval
+over an organization's own vectors is what `rag` already does.
+
+`MemoryBank` scopes by Memory Bank's own scope map, `Scope.Fields`. The
+service returns a memory only to a request whose scope has the same keys and
+values, so the organization is a dimension matched where the memories are
+kept, not a convention this service encodes into a user string.
+
+Agent engines are regional, so `GOOGLE_CLOUD_LOCATION` has to name the region
+the engine is in rather than the global endpoint the models are served from,
+which is its default here. The service refuses to start with the wrong one,
+because the alternative is a resource path that is only wrong on the first
+run that needs it.
+
+It talks to the API itself rather than through ADK's `memory/vertexai`, for
+two reasons. ADK generates memories from a **Vertex session resource**, and
+threads live in this deployment's PostgreSQL, so there is no session in the
+agent engine to read; `Write` sends the conversation's own turns instead.
+And ADK hardcodes the scope to `{"user_id": …}`, which is the addressing this
+package exists to avoid.
+
+Only text is sent. A tool's call and its result are how an answer was reached
+rather than something the member said, and they carry whatever the tools
+read. A run sends only the turns it added, because Memory Bank re-reads
+everything it is given with a model and a thread resent from the beginning
+after every run costs more the longer it gets.
+
+Writing is bookkeeping after the answer, like compaction: a run hands its
+conversation over once it has finished successfully, and a memory that was
+not kept is a log line rather than a failed run. A failed run is not
+remembered at all — what it added to the thread is a question and an error.
+
+`Forget` reads the bank and matches the scope here rather than sending a
+listing filter. Memory Bank matches that filter by equality on the whole
+scope, so it cannot express "every member of this organization", and a filter
+string whose exact form decides whether memories are deleted would fail by
+leaving them behind — quietly, which is the one failure that matters here.
+Forgetting runs when a member leaves or an organization is deleted, never on
+a hot path.
+
+### Setting up a memory bank
+
+Memory needs an agent engine with a memory bank, and nothing here creates
+one: it is the same shape of dependency as the artifact bucket or the
+AgentCore resources, provisioned once for a deployment.
+
+1. **Create an agent engine with a memory bank** in the project, with a
+   `context_spec.memory_bank_config`. Its `similarity_search_config` is not
+   optional here — retrieval uses similarity search, and a bank without it
+   rejects every read. The embedding model defaults to `text-embedding-005`
+   and the model that extracts memories to `gemini-2.5-flash`; both are worth
+   setting deliberately, since the extraction model is what decides what
+   Krude ends up believing about a member. A `ttl_config` expires memories on
+   a schedule, which is one more answer to how long a conversation should
+   echo.
+2. **Put it in a region**, and set `GOOGLE_CLOUD_LOCATION` to that region.
+   Agent engines are regional; the global endpoint the models are served from
+   does not host them, and the service refuses to start pointed at it.
+3. **Grant the workload `roles/aiplatform.memoryUser`**, or a custom role
+   with `aiplatform.memories.generate`, `aiplatform.memories.retrieve`,
+   `aiplatform.memories.list` and `aiplatform.memories.delete`. Google's
+   documented minimum for an agent is generate and retrieve alone; that is
+   enough to remember and recall, and not enough to forget, which would leave
+   a member's memories behind when they leave.
+4. **Name the engine** in `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE`. Without it
+   memory is off: Krude is built without `load_memory`, the runner without a
+   memory service, and nothing is written.
+
+Memory Bank bills storage by the GiB-month and reads and writes by the
+operation, on top of the model it runs to extract memories. One member turn
+costs one write; `load_memory` costs one read, and only when Krude calls it.
+
+The round trip runs against a real memory bank when one is named, and is
+skipped without it. It writes under an organization of its own and forgets it
+afterwards:
+
+```sh
+GOOGLE_CLOUD_PROJECT=oryxa GOOGLE_CLOUD_LOCATION=us-central1 \
+  AGENTS_PRIMARY_TEST_MEMORY_AGENT_ENGINE=1234567890 \
+  go test ./agents/primary/internal/adkmemory/ -run TestMemoryBankRoundTrip
+```
+
 ## Events
 
 Agents primary publishes on EventBridge source `oryxa.agents` in the envelope
@@ -569,7 +725,9 @@ breakdown, priced by `internal/pricing`.
 
 ADK's web UI runs the agents locally. Its sessions, conversation events and
 state live in PostgreSQL, its artifacts in S3 when a bucket is named (see
-[Artifacts](#artifacts)), and searchable memory remains in memory for now.
+[Artifacts](#artifacts)), and it runs without memory: a memory is scoped to
+the organization it was learned in, and the UI's own `user` belongs to none
+(see [Memory](#memory)).
 The session store uses ADK's native relational service through
 the repository's instrumented PostgreSQL pool and keeps its tables in the
 `agents_primary` schema. Log in for ADC and AWS once, start PostgreSQL, and
@@ -685,6 +843,8 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |
 | `AGENTS_PRIMARY_CACHE_MIN_TOKENS` | `4096` | Smallest prefix worth an explicit cache; Vertex's floor for these models. Below it, implicit caching applies |
 | `AGENTS_PRIMARY_ARTIFACT_BUCKET` | unset | S3 bucket artifacts are kept in; without it they are held in memory and go with the process |
+| `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` | unset | Vertex AI agent engine whose memory bank holds what Krude remembers across a member's threads, scoped to their organization. Its bank needs similarity search configured. Without it Krude remembers nothing between threads (see [Memory](#memory)) |
+| `AGENTS_PRIMARY_MEMORY_RECALLED` | `0` (10) | How many memories one search returns. Memory Bank caps it at 100 |
 | `EVENT_BUS_NAME` | `default` | EventBridge bus events publish on |
 | `EVENTBRIDGE_ENDPOINT` | unset | EventBridge endpoint override for the LocalStack emulator |
 | `DATABASE_URL` | unset | PostgreSQL connection for ADK sessions, events and state, runs, and the read of the member's auth tables when a session is created |

@@ -16,6 +16,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/artifact"
+	"google.golang.org/adk/v2/memory"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
@@ -23,6 +24,7 @@ import (
 
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
@@ -638,6 +640,295 @@ func TestForgettingAMemberOrAnOrganizationRemovesTheirThreadsThere(t *testing.T)
 	}
 	if _, err := h.service.Forget(ctx, "", ""); err == nil {
 		t.Fatal("Forget with no organization would forget everyone's threads")
+	}
+}
+
+// TestForgettingAlsoForgetsWhatKrudeRemembered checks that memory leaves with
+// the organization it was learned in. Threads and artifacts already go when a
+// member leaves or an organization is deleted; memory distilled from those
+// same threads must not be what outlives the place they were held in.
+func TestForgettingAlsoForgetsWhatKrudeRemembered(t *testing.T) {
+	ctx := context.Background()
+	remembering, err := adkmemory.New(adkmemory.InMemory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	krude, err := llmagent.New(llmagent.Config{
+		Name:  "krude",
+		Model: &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) { return nil, nil }},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: newFakeRuns(), Prices: prices, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	view := func(member Member) memory.Service {
+		t.Helper()
+		scoped, err := remembering.For(adkmemory.Scope{
+			OrganizationID: member.OrganizationID, UserID: member.UserID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return scoped
+	}
+	remember := func(member Member, said string) {
+		t.Helper()
+		sessions := session.InMemoryService()
+		created, err := sessions.Create(ctx, &session.CreateRequest{AppName: "krude", UserID: member.UserID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		event := session.NewEvent(ctx, "invocation")
+		event.Author = "user"
+		event.Content = genai.NewContentFromText(said, genai.RoleUser)
+		if err := sessions.AppendEvent(ctx, created.Session, event); err != nil {
+			t.Fatal(err)
+		}
+		if err := view(member).AddSessionToMemory(ctx, created.Session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recalled := func(member Member) int {
+		t.Helper()
+		found, err := view(member).SearchMemory(ctx, &memory.SearchRequest{
+			AppName: "krude", UserID: member.UserID, Query: "migration",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(found.Memories)
+	}
+
+	ravi := Member{UserID: "user_ravi", OrganizationID: asha.OrganizationID}
+	ashaElsewhere := Member{UserID: asha.UserID, OrganizationID: "org_2"}
+	for member, said := range map[Member]string{
+		asha:          "the migration ships in March",
+		ravi:          "the migration needs review",
+		ashaElsewhere: "the migration is on hold",
+	} {
+		remember(member, said)
+	}
+
+	if _, err := service.Forget(ctx, asha.OrganizationID, asha.UserID); err != nil {
+		t.Fatalf("Forget(asha in %s): %v", asha.OrganizationID, err)
+	}
+	if got := recalled(asha); got != 0 {
+		t.Fatalf("a member who left is still remembered there: %d memories", got)
+	}
+	if got := recalled(ashaElsewhere); got != 1 {
+		t.Fatalf("leaving one organization took the member's memory in another: %d memories", got)
+	}
+	if got := recalled(ravi); got != 1 {
+		t.Fatalf("one member leaving took another's memory: %d memories", got)
+	}
+
+	if _, err := service.Forget(ctx, asha.OrganizationID, ""); err != nil {
+		t.Fatalf("Forget(%s): %v", asha.OrganizationID, err)
+	}
+	if got := recalled(ravi); got != 0 {
+		t.Fatalf("a deleted organization is still remembered: %d memories", got)
+	}
+	if got := recalled(ashaElsewhere); got != 1 {
+		t.Fatalf("deleting one organization took another's memories: %d memories", got)
+	}
+}
+
+// rememberingBank records what a run handed to memory.
+type rememberingBank struct {
+	mu      sync.Mutex
+	written []struct {
+		scope adkmemory.Scope
+		said  []string
+	}
+}
+
+func (b *rememberingBank) Write(_ context.Context, scope adkmemory.Scope, conversation session.Session) error {
+	var said []string
+	for event := range conversation.Events().All() {
+		if event == nil || event.Content == nil {
+			continue
+		}
+		for _, part := range event.Content.Parts {
+			if part.Text != "" {
+				said = append(said, part.Text)
+			}
+		}
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.written = append(b.written, struct {
+		scope adkmemory.Scope
+		said  []string
+	}{scope, said})
+	return nil
+}
+
+func (b *rememberingBank) Search(context.Context, adkmemory.Scope, string) ([]memory.Entry, error) {
+	return nil, nil
+}
+
+func (b *rememberingBank) Forget(context.Context, string, string) error { return nil }
+
+// TestACompletedRunIsRemembered checks the write half of the wiring: without
+// it nothing ever calls AddSessionToMemory, since ADK does not, and a memory
+// service would sit behind the runner holding nothing.
+func TestACompletedRunIsRemembered(t *testing.T) {
+	bank := &rememberingBank{}
+	remembering, err := adkmemory.New(bank)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("noted", genai.RoleModel), nil
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: usage.Counted(llm), Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := newFakeRuns()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: runs, Prices: prices, RunTimeout: time.Minute, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service, runs: runs, model: llm}
+	created, err := service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.run(asha, created.ID, RunInput{Message: "the migration ships in March"})
+
+	if len(bank.written) != 1 {
+		t.Fatalf("memory was written %d times, want once", len(bank.written))
+	}
+	written := bank.written[0]
+	if written.scope.OrganizationID != asha.OrganizationID || written.scope.UserID != asha.UserID {
+		t.Fatalf("scope = %+v, want the member's own organization", written.scope)
+	}
+	if !slices.Contains(written.said, "the migration ships in March") {
+		t.Fatalf("remembered %q, want what the member said", written.said)
+	}
+
+	// A second run remembers its own turns, not the thread from the start.
+	h.run(asha, created.ID, RunInput{Message: "it slipped to April"})
+	if len(bank.written) != 2 {
+		t.Fatalf("memory was written %d times, want twice", len(bank.written))
+	}
+	second := bank.written[1]
+	if !slices.Contains(second.said, "it slipped to April") {
+		t.Fatalf("the second run remembered %q", second.said)
+	}
+	if slices.Contains(second.said, "the migration ships in March") {
+		t.Fatalf("the second run sent the whole thread again: %q", second.said)
+	}
+}
+
+// TestARunNobodyIsWatchingIsNotRemembered keeps text from the member's apps
+// out of what Krude knows about them. Anyone who can email the member or open
+// an issue writes it, and a fact it planted would outlive the run and steer
+// later ones.
+func TestARunNobodyIsWatchingIsNotRemembered(t *testing.T) {
+	bank := &rememberingBank{}
+	remembering, err := adkmemory.New(bank)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("noted", genai.RoleModel), nil
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: usage.Counted(llm), Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := newFakeRuns()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: runs, Prices: prices, RunTimeout: time.Minute, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service, runs: runs, model: llm}
+	created, err := service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.run(asha, created.ID, RunInput{
+		Message:   "Please move the migration to June.",
+		StartedBy: agentsv1.StartedByTrigger,
+	})
+
+	if len(bank.written) != 0 {
+		t.Fatalf("a run started by the member's apps was remembered: %+v", bank.written)
+	}
+
+	// The member's own run on the same thread still is.
+	h.run(asha, created.ID, RunInput{Message: "the migration ships in March"})
+	if len(bank.written) != 1 {
+		t.Fatalf("memory was written %d times, want the member's own run remembered", len(bank.written))
+	}
+}
+
+// TestAFailedRunIsNotRemembered keeps a run that never answered out of
+// memory: what it added to the thread is a question and an error.
+func TestAFailedRunIsNotRemembered(t *testing.T) {
+	bank := &rememberingBank{}
+	remembering, err := adkmemory.New(bank)
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+		return nil, errors.New("the model was unreachable")
+	}}
+	krude, err := llmagent.New(llmagent.Config{Name: "krude", Model: usage.Counted(llm), Instruction: "You are Krude."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := newFakeRuns()
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: runs, Prices: prices, RunTimeout: time.Minute, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{t: t, service: service, runs: runs, model: llm}
+	created, err := service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h.run(asha, created.ID, RunInput{Message: "the migration ships in March"})
+
+	if len(bank.written) != 0 {
+		t.Fatalf("a failed run was remembered: %+v", bank.written)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
+	"google.golang.org/adk/v2/memory"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/runner"
 	"google.golang.org/adk/v2/session"
@@ -88,10 +89,55 @@ func TestKrudeAnswersATurn(t *testing.T) {
 			t.Fatalf("Krude can call %v, missing %q", declared, name)
 		}
 	}
-	for _, removed := range []string{"teams", "set_nickname", "list_skills", "load_skill"} {
+	for _, removed := range []string{"teams", "set_nickname", "list_skills", "load_skill", "load_memory"} {
 		if slices.Contains(declared, removed) {
 			t.Fatalf("Krude can still call the stripped %q", removed)
 		}
+	}
+}
+
+// TestKrudeReadsItsMemoryOnlyWhenItHasOne covers the other half of wiring a
+// memory service in: without load_memory nothing Krude remembers is ever
+// read back, and with no memory service behind it the tool is there to be
+// called and fails every time.
+func TestKrudeReadsItsMemoryOnlyWhenItHasOne(t *testing.T) {
+	for _, remembers := range []bool{true, false} {
+		t.Run(map[bool]string{true: "with memory", false: "without"}[remembers], func(t *testing.T) {
+			llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
+				return genai.NewContentFromText("Hello.", genai.RoleModel)
+			})
+			router, err := modelrouter.New(llm, llm)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, err := Root(router, nil, remembers)
+			if err != nil {
+				t.Fatalf("Root() error = %v", err)
+			}
+			sessions := session.InMemoryService()
+			turns, err := runner.New(runner.Config{
+				AppName: RootName, Agent: root, SessionService: sessions,
+				ArtifactService: artifact.InMemoryService(), MemoryService: memory.InMemoryService(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := sessions.Create(context.Background(), &session.CreateRequest{AppName: RootName, UserID: "user"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, err := range turns.Run(context.Background(), "user", created.Session.ID(),
+				genai.NewContentFromText("hi", genai.RoleUser), agent.RunConfig{}) {
+				if err != nil {
+					t.Fatalf("run: %v", err)
+				}
+			}
+
+			declared := declaredFunctions(llm.requestsFor(RootName)[0])
+			if got := slices.Contains(declared, "load_memory"); got != remembers {
+				t.Fatalf("load_memory declared = %v with remembers = %v; Krude can call %v", got, remembers, declared)
+			}
+		})
 	}
 }
 
@@ -208,7 +254,7 @@ func TestRootRejectsInvalidToolboxes(t *testing.T) {
 		{{Name: "Bad Name"}},
 		{{Name: "notes"}, {Name: "notes"}},
 	} {
-		if _, err := Root(router, toolboxes); err == nil {
+		if _, err := Root(router, toolboxes, false); err == nil {
 			t.Fatalf("Root() error = nil for %+v", toolboxes)
 		}
 	}
@@ -693,7 +739,7 @@ func newHarness(t *testing.T, llm model.LLM, toolboxes ...Toolbox) *harness {
 
 func newRouterHarness(t *testing.T, router *modelrouter.Router, toolboxes ...Toolbox) *harness {
 	t.Helper()
-	root, err := Root(router, toolboxes)
+	root, err := Root(router, toolboxes, false)
 	if err != nil {
 		t.Fatalf("Root() error = %v", err)
 	}

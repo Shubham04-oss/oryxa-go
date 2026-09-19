@@ -20,6 +20,7 @@ import (
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/loadartifactstool"
+	"google.golang.org/adk/v2/tool/loadmemorytool"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 )
@@ -110,7 +111,11 @@ func GeminiClient(ctx context.Context, project, location string) (*genai.Client,
 // The router decides which model each role runs on: the member's conversation
 // on the main model, planning and single-turn work on the lite model, and
 // grounded research on the main model.
-func Root(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
+// When remembers is true Krude is given load_memory, which reads what it
+// learned about the member in earlier threads. Pass it only where a memory
+// service is actually on the runner: without one the tool is there to be
+// called and fails every time.
+func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agent.Agent, error) {
 	if router == nil {
 		return nil, errors.New("a model router is required")
 	}
@@ -134,7 +139,11 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) 
 	helpers := newHelpers(work, subAgents)
 	// Dynamic sub-agents: Krude creates, calls and drops them in a session.
 	subagents := newSubagents(work, catalog)
-	tools, err := buildTools(catalog.listTool, catalog.loadTool, userDetailsTool, subagents.createTool, subagents.listTool, subagents.removeTool, helpers.listTool, helpers.spawnTool, loadArtifactsTool, saveArtifactTool)
+	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, subagents.createTool, subagents.listTool, subagents.removeTool, helpers.listTool, helpers.spawnTool, loadArtifactsTool, saveArtifactTool}
+	if remembers {
+		builders = append(builders, loadMemoryTool)
+	}
+	tools, err := buildTools(builders...)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +193,15 @@ func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agen
 
 func loadArtifactsTool() (tool.Tool, error) {
 	return loadartifactstool.New(), nil
+}
+
+// loadMemoryTool lets Krude look up what it learned about the member in their
+// earlier threads. It is a tool rather than preload_memory, which searches on
+// every model request and appends what it finds to the system instruction:
+// that is a memory read per model step, and it would rewrite the stable
+// prefix the prompt cache exists to hold (see Prompt caching in the README).
+func loadMemoryTool() (tool.Tool, error) {
+	return loadmemorytool.New(), nil
 }
 
 func buildTools(builders ...func() (tool.Tool, error)) ([]tool.Tool, error) {

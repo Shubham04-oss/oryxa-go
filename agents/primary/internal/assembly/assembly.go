@@ -18,6 +18,7 @@ import (
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcorebrowser"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcoresandbox"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
@@ -58,6 +59,10 @@ type Krude struct {
 	// Artifacts keeps what conversations produce: S3 when Settings names a
 	// bucket, memory otherwise.
 	Artifacts artifact.Service
+	// Memory is what Krude remembers across a member's threads, scoped to
+	// the organization each run belongs to. It is nil unless Settings names
+	// an agent engine, and then Krude has no memory at all.
+	Memory *adkmemory.Service
 
 	// closers stops everything Build opened, kept in the order Build opened
 	// them. Close runs them in reverse — the same order devui's own defers
@@ -245,7 +250,35 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 	}
 
-	root, err := agents.Root(router, toolboxes)
+	// Memory is built before the agents, because whether Krude is given
+	// load_memory depends on there being a memory service to answer it.
+	if settings.MemoryAgentEngine != "" {
+		bank, err := adkmemory.NewMemoryBank(ctx, adkmemory.MemoryBankOptions{
+			ProjectID:   settings.GoogleCloudProject,
+			Location:    settings.GoogleCloudLocation,
+			AgentEngine: settings.MemoryAgentEngine,
+			Recalled:    settings.MemoryRecalled,
+		})
+		if err != nil {
+			return fail("memory bank", err)
+		}
+		krude.closers = append(krude.closers, func(context.Context) error {
+			if err := bank.Close(); err != nil {
+				return fmt.Errorf("close the memory bank: %w", err)
+			}
+			return nil
+		})
+		remembering, err := adkmemory.New(bank)
+		if err != nil {
+			return fail("memory", err)
+		}
+		krude.Memory = remembering
+		logger.InfoContext(ctx, "memories kept in Vertex AI Memory Bank", "agent_engine", settings.MemoryAgentEngine)
+	} else {
+		logger.InfoContext(ctx, "Krude remembers nothing between threads; set AGENTS_PRIMARY_MEMORY_AGENT_ENGINE to give it memory")
+	}
+
+	root, err := agents.Root(router, toolboxes, krude.Memory != nil)
 	if err != nil {
 		return fail("root agent", err)
 	}

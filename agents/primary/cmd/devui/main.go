@@ -110,6 +110,17 @@ func main() {
 		tokens = devMemberTokenSource(devToken)
 	}
 
+	// The UI runs Krude without memory, whatever .env says. A memory belongs
+	// to a member in one organization, and the UI's own `user` belongs to
+	// none; ADK's launcher takes one memory service for every session rather
+	// than one scoped per run, so there is nothing here to scope it to. Left
+	// set, it would open a memory bank this process never reads and give
+	// Krude a load_memory that fails every call.
+	if settings.MemoryAgentEngine != "" {
+		log.Printf("memory: AGENTS_PRIMARY_MEMORY_AGENT_ENGINE ignored, the development UI has no organization to scope memories to")
+		settings.MemoryAgentEngine = ""
+	}
+
 	krude, err := assembly.Build(ctx, assembly.Options{
 		Settings: settings,
 		AWS:      awsConfig,
