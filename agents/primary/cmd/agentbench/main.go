@@ -66,17 +66,17 @@ func main() {
 		settings.Cache = false
 	}
 
-	mainModel, err := agents.Gemini(ctx, settings.Model, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+	mainModel, err := agents.Gemini(ctx, settings.Model, settings.GoogleCloudProject, settings.GoogleCloudLocation, nil)
 	if err != nil {
 		log.Fatalf("main model: %v", err)
 	}
-	liteModel, err := agents.Gemini(ctx, settings.ModelLite, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+	liteModel, err := agents.Gemini(ctx, settings.ModelLite, settings.GoogleCloudProject, settings.GoogleCloudLocation, nil)
 	if err != nil {
 		log.Fatalf("lite model: %v", err)
 	}
 	var promptCache modelcache.Store
 	if settings.Cache {
-		client, err := agents.GeminiClient(ctx, settings.GoogleCloudProject, settings.GoogleCloudLocation)
+		client, err := agents.GeminiClient(ctx, settings.GoogleCloudProject, settings.GoogleCloudLocation, nil)
 		if err != nil {
 			log.Fatalf("prompt cache client: %v", err)
 		}

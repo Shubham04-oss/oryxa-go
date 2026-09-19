@@ -77,9 +77,13 @@ type Config struct {
 	// what Krude remembers across a member's threads. Without it Krude has no
 	// memory: nothing is written and nothing is recalled. Its bank must have
 	// similarity search configured. MemoryRecalled bounds how many memories
-	// one search returns; zero leaves the default.
+	// one search returns; zero leaves the default. MemoryLocation is the
+	// region the engine is in: agent engines are regional, while the models
+	// are usually served from the global endpoint, so it defaults to
+	// GoogleCloudLocation only for a deployment that runs both in one region.
 	MemoryAgentEngine string
 	MemoryRecalled    int
+	MemoryLocation    string
 	// ArtifactBucket is the S3 bucket artifacts are kept in. Without it they
 	// are held in memory and go with the process.
 	ArtifactBucket string
@@ -187,6 +191,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	googleCloudLocation := valueOrDefault(getenv, "GOOGLE_CLOUD_LOCATION", "global")
 	modelPrices := strings.TrimSpace(getenv("AGENTS_PRIMARY_MODEL_PRICES"))
 	if _, err := pricing.ParseOverrides(modelPrices); err != nil {
 		return Config{}, err
@@ -195,7 +200,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		Model:               valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL", "gemini-3.8-flash"),
 		ModelLite:           valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL_LITE", "gemini-3.8-flash-lite"),
 		GoogleCloudProject:  strings.TrimSpace(getenv("GOOGLE_CLOUD_PROJECT")),
-		GoogleCloudLocation: valueOrDefault(getenv, "GOOGLE_CLOUD_LOCATION", "global"),
+		GoogleCloudLocation: googleCloudLocation,
 		DatabaseURL:         strings.TrimSpace(getenv("DATABASE_URL")),
 		AutoMigrate:         autoMigrate,
 		Cache:               cache,
@@ -223,6 +228,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		KnowledgeMinRelevance: knowledgeMinRelevance,
 		MemoryAgentEngine:     strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
 		MemoryRecalled:        memoryRecalled,
+		MemoryLocation:        valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
 		ArtifactBucket:        strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
 		S3Endpoint:            artifactEndpoint(getenv),
 		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),

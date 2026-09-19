@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"cloud.google.com/go/auth"
 	"github.com/aws/aws-sdk-go-v2/aws"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -90,7 +91,13 @@ type Platform struct {
 	DatabaseURL string
 	// AWS carries the region and the tracing middleware. A client built from
 	// it still honours AWS_ENDPOINT_URL_<SERVICE> for a local emulator.
-	AWS          aws.Config
+	AWS aws.Config
+	// Google reaches Google Cloud as the service account the AWS identity
+	// federates to, when GOOGLE_WORKLOAD_IDENTITY_PROVIDER and
+	// GOOGLE_SERVICE_ACCOUNT say which (internal/gcpauth). It is nil
+	// otherwise, which every Google client takes to mean Application Default
+	// Credentials. The services share it, so its token is exchanged once.
+	Google       *auth.Credentials
 	EventBusName string
 	// Getenv reads configuration. A URL variable naming a service that runs
 	// in this process defaults to this process.

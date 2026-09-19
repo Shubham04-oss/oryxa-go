@@ -11,6 +11,7 @@ import (
 	"text/template"
 	"unicode/utf8"
 
+	"cloud.google.com/go/auth"
 	"google.golang.org/genai"
 
 	"google.golang.org/adk/v2/agent"
@@ -68,32 +69,35 @@ var krudeInstruction = template.Must(template.New("krude").Parse(krudeInstructio
 var unattendedInstruction = template.Must(template.New("krude-unattended").Parse(unattendedInstructionText))
 
 // Gemini returns the named Gemini model on Vertex AI in the given Google Cloud
-// project and location. It authenticates with Application Default Credentials:
-// locally the login from `gcloud auth application-default login`, elsewhere the
-// file GOOGLE_APPLICATION_CREDENTIALS names, such as a workload identity
-// federation configuration. An API key in the environment is never used.
-func Gemini(ctx context.Context, name, project, location string) (model.LLM, error) {
+// project and location. It authenticates with credentials when there are any,
+// such as those internal/gcpauth federates from AWS, and otherwise with
+// Application Default Credentials: locally the login from `gcloud auth
+// application-default login`, elsewhere the file GOOGLE_APPLICATION_CREDENTIALS
+// names. An API key in the environment is never used.
+func Gemini(ctx context.Context, name, project, location string, credentials *auth.Credentials) (model.LLM, error) {
 	if project == "" {
 		return nil, errors.New("a Google Cloud project is required: the agents reach Gemini through Vertex AI")
 	}
 	return gemini.NewModel(ctx, name, &genai.ClientConfig{
-		Backend:  genai.BackendVertexAI,
-		Project:  project,
-		Location: location,
+		Backend:     genai.BackendVertexAI,
+		Project:     project,
+		Location:    location,
+		Credentials: credentials,
 	})
 }
 
 // GeminiClient returns a Gen AI client on the same Vertex AI project and
 // location as the agents, for services that share their configuration such as
-// explicit prompt caching.
-func GeminiClient(ctx context.Context, project, location string) (*genai.Client, error) {
+// explicit prompt caching. It authenticates as Gemini does.
+func GeminiClient(ctx context.Context, project, location string, credentials *auth.Credentials) (*genai.Client, error) {
 	if project == "" {
 		return nil, errors.New("a Google Cloud project is required: Vertex AI serves the models")
 	}
 	return genai.NewClient(ctx, &genai.ClientConfig{
-		Backend:  genai.BackendVertexAI,
-		Project:  project,
-		Location: location,
+		Backend:     genai.BackendVertexAI,
+		Project:     project,
+		Location:    location,
+		Credentials: credentials,
 	})
 }
 

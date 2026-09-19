@@ -13,8 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
+	"cloud.google.com/go/auth"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/gcpauth"
 )
 
 // DefaultVertexRankingModel is Google's general-purpose semantic ranker.
@@ -29,8 +30,11 @@ type VertexRerankConfig struct {
 	Project string
 	// Model defaults to DefaultVertexRankingModel.
 	Model string
-	// HTTPClient carries the credentials. Leave it nil and application
-	// default credentials are used; tests set it to reach a stub.
+	// Credentials reach the Ranking API, such as those internal/gcpauth
+	// federates from AWS. Nil means Application Default Credentials.
+	Credentials *auth.Credentials
+	// HTTPClient carries the credentials in place of Credentials; tests set
+	// it to reach a stub.
 	HTTPClient *http.Client
 	// Endpoint overrides the API host, for tests.
 	Endpoint string
@@ -63,11 +67,10 @@ func NewVertexReranker(ctx context.Context, config VertexRerankConfig) (*VertexR
 	}
 	client := config.HTTPClient
 	if client == nil {
-		source, err := google.DefaultTokenSource(ctx, "https://www.googleapis.com/auth/cloud-platform")
-		if err != nil {
-			return nil, fmt.Errorf("find Google application default credentials: %w", err)
+		var err error
+		if client, err = gcpauth.HTTPClient(ctx, config.Credentials, gcpauth.Scope); err != nil {
+			return nil, err
 		}
-		client = oauth2.NewClient(ctx, source)
 		client.Timeout = 20 * time.Second
 	}
 	host := strings.TrimRight(config.Endpoint, "/")

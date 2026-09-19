@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
+	"cloud.google.com/go/auth"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/gcpauth"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 )
@@ -26,9 +27,11 @@ const VertexScope = "https://www.googleapis.com/auth/cloud-platform"
 type VertexConfig struct {
 	Project  string
 	Location string
-	// HTTPClient carries the credentials. Leave it nil and application
-	// default credentials are used, which is what the deployed service does;
-	// tests set it to reach a stub.
+	// Credentials reach Vertex AI, such as those internal/gcpauth federates
+	// from AWS. Nil means Application Default Credentials.
+	Credentials *auth.Credentials
+	// HTTPClient carries the credentials in place of Credentials; tests set
+	// it to reach a stub.
 	HTTPClient *http.Client
 	// Endpoint overrides the regional host. It is only for tests and for a
 	// private service endpoint.
@@ -51,11 +54,10 @@ func NewVertex(ctx context.Context, spec domain.EmbeddingSpec, config VertexConf
 	}
 	client := config.HTTPClient
 	if client == nil {
-		source, err := google.DefaultTokenSource(ctx, VertexScope)
-		if err != nil {
-			return nil, fmt.Errorf("find Google application default credentials: %w", err)
+		var err error
+		if client, err = gcpauth.HTTPClient(ctx, config.Credentials, VertexScope); err != nil {
+			return nil, err
 		}
-		client = oauth2.NewClient(ctx, source)
 		client.Timeout = 60 * time.Second
 	}
 	return newClient(&vertexBackend{

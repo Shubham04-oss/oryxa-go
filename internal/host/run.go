@@ -15,6 +15,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/gcpauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
@@ -133,6 +134,17 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 		return Platform{}, nil, fmt.Errorf("load AWS configuration: %w", err)
 	}
 	otelaws.AppendMiddlewares(&awsConfig.APIOptions)
+	federation, err := gcpauth.ConfigFromEnv(os.Getenv)
+	if err != nil {
+		return Platform{}, nil, err
+	}
+	google, err := gcpauth.Credentials(federation, awsConfig)
+	if err != nil {
+		return Platform{}, nil, err
+	}
+	if google != nil {
+		logger.Info("reaching Google Cloud through workload identity federation", "service_account", federation.ServiceAccount)
+	}
 
 	var database *postgreskit.Database
 	if config.DatabaseURL != "" {
@@ -152,6 +164,7 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 		Database:     database,
 		DatabaseURL:  config.DatabaseURL,
 		AWS:          awsConfig,
+		Google:       google,
 		EventBusName: config.EventBusName,
 		Getenv:       Environment(os.Getenv, selected, self),
 	}

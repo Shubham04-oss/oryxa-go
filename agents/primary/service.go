@@ -127,7 +127,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 	sessions := sessionStore.Sessions(events.NewSessionRecorder(events.NewOutbox(pool)))
 
-	krude, err := assembly.Build(ctx, assembly.Options{Settings: settings, AWS: platform.AWS, Logger: logger})
+	krude, err := assembly.Build(ctx, assembly.Options{Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger})
 	if err != nil {
 		sessionStore.Close()
 		return host.Service{}, fmt.Errorf("assemble Krude: %w", err)

@@ -426,10 +426,11 @@ decide.
 
 ## Models and routing
 
-`Gemini` builds each model on Vertex AI with Application Default Credentials,
-so there is no API key to hold: locally ADC is your `gcloud` login, and a
-deployment points `GOOGLE_APPLICATION_CREDENTIALS` at its credential
-configuration. `internal/modelrouter` routes every role to its tier, lite
+`Gemini` builds each model on Vertex AI without an API key to hold: locally
+it uses Application Default Credentials, your `gcloud` login, and on AWS the
+process signs in with its own AWS identity through workload identity
+federation (`internal/gcpauth`, set by `GOOGLE_WORKLOAD_IDENTITY_PROVIDER` and
+`GOOGLE_SERVICE_ACCOUNT`); the same credentials reach Memory Bank. `internal/modelrouter` routes every role to its tier, lite
 wherever it can carry the work:
 
 | Role | Runs on | Default |
@@ -619,11 +620,12 @@ service returns a memory only to a request whose scope has the same keys and
 values, so the organization is a dimension matched where the memories are
 kept, not a convention this service encodes into a user string.
 
-Agent engines are regional, so `GOOGLE_CLOUD_LOCATION` has to name the region
-the engine is in rather than the global endpoint the models are served from,
-which is its default here. The service refuses to start with the wrong one,
-because the alternative is a resource path that is only wrong on the first
-run that needs it.
+Agent engines are regional, so `AGENTS_PRIMARY_MEMORY_LOCATION` names the
+region the engine is in. It defaults to `GOOGLE_CLOUD_LOCATION`, whose own
+default is the global endpoint the models are served from, which does not
+host engines. The service refuses to start pointed at it, because the
+alternative is a resource path that is only wrong on the first run that needs
+it.
 
 It talks to the API itself rather than through ADK's `memory/vertexai`, for
 two reasons. ADK generates memories from a **Vertex session resource**, and
@@ -666,9 +668,10 @@ AgentCore resources, provisioned once for a deployment.
    Krude ends up believing about a member. A `ttl_config` expires memories on
    a schedule, which is one more answer to how long a conversation should
    echo.
-2. **Put it in a region**, and set `GOOGLE_CLOUD_LOCATION` to that region.
-   Agent engines are regional; the global endpoint the models are served from
-   does not host them, and the service refuses to start pointed at it.
+2. **Put it in a region**, and set `AGENTS_PRIMARY_MEMORY_LOCATION` to that
+   region. Agent engines are regional; the global endpoint the models are
+   served from does not host them, and the service refuses to start pointed
+   at it.
 3. **Grant the workload `roles/aiplatform.memoryUser`**, or a custom role
    with `aiplatform.memories.generate`, `aiplatform.memories.retrieve`,
    `aiplatform.memories.list` and `aiplatform.memories.delete`. Google's
@@ -845,6 +848,7 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_ARTIFACT_BUCKET` | unset | S3 bucket artifacts are kept in; without it they are held in memory and go with the process |
 | `AGENTS_PRIMARY_MEMORY_AGENT_ENGINE` | unset | Vertex AI agent engine whose memory bank holds what Krude remembers across a member's threads, scoped to their organization. Its bank needs similarity search configured. Without it Krude remembers nothing between threads (see [Memory](#memory)) |
 | `AGENTS_PRIMARY_MEMORY_RECALLED` | `0` (10) | How many memories one search returns. Memory Bank caps it at 100 |
+| `AGENTS_PRIMARY_MEMORY_LOCATION` | `GOOGLE_CLOUD_LOCATION` | Region the memory agent engine is in, such as `us-west1`; never `global` |
 | `EVENT_BUS_NAME` | `default` | EventBridge bus events publish on |
 | `EVENTBRIDGE_ENDPOINT` | unset | EventBridge endpoint override for the LocalStack emulator |
 | `DATABASE_URL` | unset | PostgreSQL connection for ADK sessions, events and state, runs, and the read of the member's auth tables when a session is created |
@@ -856,7 +860,9 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_BROWSER_SESSION_TIMEOUT_SECONDS` | `900` | Per-conversation browser lifetime; 60–28800 seconds |
 | `GOOGLE_CLOUD_PROJECT` | unset | Project whose Vertex AI serves Gemini; the agents require it |
 | `GOOGLE_CLOUD_LOCATION` | `global` | Vertex AI location: `global`, or the `us` or `eu` multi-region |
-| `GOOGLE_APPLICATION_CREDENTIALS` | unset | ADC credential file for deployments; locally `gcloud auth application-default login` supplies ADC |
+| `GOOGLE_APPLICATION_CREDENTIALS` | unset | ADC credential file; locally `gcloud auth application-default login` supplies ADC |
+| `GOOGLE_WORKLOAD_IDENTITY_PROVIDER` | unset | On AWS: the workload identity pool provider's audience that admits the process's role. Set with `GOOGLE_SERVICE_ACCOUNT`, it replaces ADC |
+| `GOOGLE_SERVICE_ACCOUNT` | unset | On AWS: the service account the federated role acts as, which holds the Vertex AI roles |
 | `APPS_URL` | unset | The apps service's own URL; when set, Krude gets the apps toolbox (see Acting for a member) |
 | `RAG_URL` | unset | Rag's own URL; when set, Krude gets the knowledge toolbox (see Knowledge toolbox). In the binary it defaults to this process when it runs rag |
 | `AGENTS_PRIMARY_KNOWLEDGE_MIN_RELEVANCE` | `0` (off) | Reranker relevance below which a knowledge passage is left out, so a question the documents cannot answer comes back empty. On the scale of the reranker rag runs: 0.2 was measured for Google's `semantic-ranker-default`; calibrate before using it with another. No effect without a reranker |
