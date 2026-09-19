@@ -210,7 +210,7 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 	delivery := fmt.Sprintf(`{"id":"wh_1","type":"composio.trigger.message","timestamp":"2026-09-17T12:00:00Z",
 		"metadata":{"trigger_id":%q,"trigger_slug":"GITHUB_COMMIT_EVENT","connected_account_id":%q},
 		"data":{"commit":"abc123","message":"fix the thing"}}`, composio.triggerID, composio.accountID)
-	if status := deliverWebhook(t, api.URL, delivery); status != http.StatusNoContent {
+	if status := deliverWebhook(t, api.URL, delivery); status != http.StatusOK {
 		t.Fatalf("delivery = %d", status)
 	}
 	received := waitForEvent(t, sink, appsv1.TriggerReceivedDetailType)
@@ -219,7 +219,7 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 		t.Fatalf("trigger event = %s", received.Data)
 	}
 	// Composio redelivers what it is not sure of; nothing is published twice.
-	if status := deliverWebhook(t, api.URL, delivery); status != http.StatusNoContent {
+	if status := deliverWebhook(t, api.URL, delivery); status != http.StatusOK {
 		t.Fatalf("redelivery = %d", status)
 	}
 	if count := sink.count(appsv1.TriggerReceivedDetailType); count != 1 {
@@ -282,7 +282,7 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 	// A delivery for what is gone is acknowledged and dropped: Composio would
 	// otherwise retry it forever.
 	late := strings.Replace(delivery, `"id":"wh_1"`, `"id":"wh_2"`, 1)
-	if status := deliverWebhook(t, api.URL, late); status != http.StatusNoContent {
+	if status := deliverWebhook(t, api.URL, late); status != http.StatusOK {
 		t.Fatalf("late delivery = %d", status)
 	}
 	if count := sink.count(appsv1.TriggerReceivedDetailType); count != 1 {
