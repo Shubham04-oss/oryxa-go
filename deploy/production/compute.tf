@@ -233,13 +233,25 @@ resource "aws_iam_role_policy" "task" {
         Resource = ["arn:aws:s3vectors:${var.aws_region}:${local.account_id}:bucket/${local.vectors_bucket}", "arn:aws:s3vectors:${var.aws_region}:${local.account_id}:bucket/${local.vectors_bucket}/*"]
       },
       {
+        # Ingesting or deleting a document is also authorized as
+        # StartIngestionJob on the knowledge base (AWS's service authorization
+        # reference lists what each operation needs).
         Sid    = "KnowledgeBase"
         Effect = "Allow"
         Action = [
           "bedrock:Retrieve", "bedrock:IngestKnowledgeBaseDocuments", "bedrock:GetKnowledgeBaseDocuments",
-          "bedrock:DeleteKnowledgeBaseDocuments", "bedrock:ListKnowledgeBaseDocuments",
+          "bedrock:DeleteKnowledgeBaseDocuments", "bedrock:ListKnowledgeBaseDocuments", "bedrock:StartIngestionJob",
         ]
         Resource = aws_bedrockagent_knowledge_base.main.arn
+      },
+      {
+        # Actions with no resource type, which a statement matches only with
+        # "*": reranking, and the association check ingesting and deleting a
+        # knowledge base's documents also make.
+        Sid      = "BedrockUnscoped"
+        Effect   = "Allow"
+        Action   = ["bedrock:Rerank", "bedrock:AssociateThirdPartyKnowledgeBase"]
+        Resource = "*"
       },
       {
         # Originals knowledge stores and text rag stages, for the knowledge
@@ -252,7 +264,7 @@ resource "aws_iam_role_policy" "task" {
       {
         Sid      = "Bedrock"
         Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Rerank"]
+        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
         Resource = ["arn:aws:bedrock:${var.aws_region}::foundation-model/*"]
       },
       {
