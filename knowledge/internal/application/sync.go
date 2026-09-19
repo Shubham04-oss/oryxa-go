@@ -146,9 +146,8 @@ func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source 
 		// says outright that something is gone, and that is acted on now
 		// rather than left for the next full sweep to notice the slow way.
 		for _, externalID := range page.Removed {
-			_, found, err := s.store.RetractDocument(ctx, source.ID, externalID, s.now(),
+			removed, found, err := s.store.RetractDocument(ctx, source.ID, externalID, s.now(),
 				func(removed domain.Document) (domain.Event, error) {
-					s.deleteOriginal(ctx, removed.Original)
 					return s.documentRemoved(source, removed, knowledgev1.RemovedReasonDeleted)
 				})
 			if err != nil {
@@ -156,6 +155,7 @@ func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source 
 			}
 			if found {
 				result.removed++
+				s.deleteOriginal(ctx, removed.Original)
 			}
 		}
 		if page.Watermark != nil && (result.watermark == nil || page.Watermark.After(*result.watermark)) {
@@ -300,6 +300,27 @@ func originalKey(organizationID, sourceID, documentID, sha256Hex string) string 
 	return "originals/" + organizationID + "/" + sourceID + "/" + documentID + "/" + sha256Hex
 }
 
+// pendingOriginals are the originals of documents a transaction is removing,
+// kept to delete once it has committed. Deleting them inside it would leave a
+// rolled-back removal's documents naming bytes that are gone.
+type pendingOriginals struct {
+	originals []*domain.Original
+}
+
+func (pending *pendingOriginals) add(original *domain.Original) {
+	if original != nil {
+		pending.originals = append(pending.originals, original)
+	}
+}
+
+// deleteOriginals deletes what pending collected, after the removal that
+// collected it has committed.
+func (s *Service) deleteOriginals(ctx context.Context, pending *pendingOriginals) {
+	for _, original := range pending.originals {
+		s.deleteOriginal(ctx, original)
+	}
+}
+
 // deleteOriginal removes a superseded or retracted document's bytes from the
 // configured bucket. Best effort: the database write it follows has already
 // committed to the row it describes, and an object nothing will read again is
@@ -333,14 +354,16 @@ func (s *Service) runCompleted(ctx context.Context, source domain.Source, run do
 			if cursor.WalkStartedAt != nil {
 				before = *cursor.WalkStartedAt
 			}
+			pending := &pendingOriginals{}
 			removed, err := s.store.RetractUnseen(ctx, source.ID, before, now,
 				func(document domain.Document) (domain.Event, error) {
-					s.deleteOriginal(ctx, document.Original)
+					pending.add(document.Original)
 					return s.documentRemoved(source, document, knowledgev1.RemovedReasonDeleted)
 				})
 			if err != nil {
 				return err
 			}
+			s.deleteOriginals(ctx, pending)
 			// Added to, not replaced: an incremental-shaped feed inside a
 			// full pass could in principle have already retracted some of
 			// this source's documents directly through Page.Removed.

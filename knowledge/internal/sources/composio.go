@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	neturl "net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
@@ -66,19 +70,81 @@ func binaryAllowed(ctx context.Context) bool {
 // misreports can never make this read an unbounded stream into memory.
 const maxBinaryFetchBytes = MaxOriginalBytes + (8 << 20)
 
+// storedFiles is the client fetchBinary reads Composio's stored files with.
+// The link arrives in a response, so it is treated as any address from
+// outside: HTTPS only, and every connection it makes, redirects included,
+// must reach a public address, checked after DNS has answered. Never the
+// task's metadata endpoint, a loopback or a private network.
+var storedFiles = &http.Client{
+	Timeout: 5 * time.Minute,
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout: 10 * time.Second,
+			Control: func(_, address string, _ syscall.RawConn) error {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					return err
+				}
+				ip, err := netip.ParseAddr(host)
+				if err != nil {
+					return err
+				}
+				if !publicAddress(ip) {
+					return fmt.Errorf("a stored file may only come from a public address, not %s", ip)
+				}
+				return nil
+			},
+		}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:   true,
+	},
+	CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if request.URL.Scheme != "https" {
+			return errors.New("a stored file may only be fetched over https")
+		}
+		if len(via) >= 5 {
+			return errors.New("a stored file redirected too many times")
+		}
+		return nil
+	},
+}
+
+// sharedAddressSpace is carrier-grade NAT, which IsPrivate does not count as
+// private but which is no more the public internet than 10/8 is.
+var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
+
+// publicAddress reports whether ip is on the public internet.
+func publicAddress(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !sharedAddressSpace.Contains(ip)
+}
+
 // fetchBinary follows the link Composio answered with — its own storage, not
 // the toolkit's — to read a file's bytes. It carries no credential of any
 // kind: BinaryData.URL is Composio's, presumed self-authorizing (presigned or
 // equivalent), and nothing here has a toolkit credential to place on it
 // regardless.
 func fetchBinary(ctx context.Context, url string) ([]byte, error) {
+	return fetchStoredFile(ctx, storedFiles, url)
+}
+
+func fetchStoredFile(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build the request for a stored file: %w", err)
 	}
-	response, err := http.DefaultClient.Do(request)
+	if request.URL.Scheme != "https" {
+		return nil, fmt.Errorf("a stored file may only be fetched over https: %w", domain.ErrInvalid)
+	}
+	response, err := client.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("%w: the stored file did not answer", domain.ErrProviderUnavailable)
+		// Why is kept, and the link is not: it is presigned, and a log line
+		// holding it would hand the file to whoever read the log.
+		var withURL *neturl.Error
+		if errors.As(err, &withURL) {
+			err = withURL.Err
+		}
+		return nil, fmt.Errorf("%w: the stored file did not answer: %v", domain.ErrProviderUnavailable, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {

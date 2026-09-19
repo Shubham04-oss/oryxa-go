@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -288,5 +291,55 @@ func TestComposioDoerStopsOnCancellation(t *testing.T) {
 
 	if _, err := client.Do(ctx, request(t), composioCredential("ca_1")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Do() error = %v, want context.Canceled", err)
+	}
+}
+
+// Composio's stored-file link arrives in a response, so it must never reach
+// the task's metadata endpoint, a loopback or a private network.
+func TestPublicAddressKeepsStoredFilesOffInternalNetworks(t *testing.T) {
+	for address, want := range map[string]bool{
+		"52.216.1.1":      true,
+		"2600:1f14::1":    true,
+		"169.254.169.254": false, // the instance metadata service
+		"169.254.170.2":   false, // the ECS task metadata endpoint
+		"127.0.0.1":       false,
+		"::1":             false,
+		"10.40.1.5":       false, // this VPC
+		"172.16.0.1":      false,
+		"192.168.1.2":     false,
+		"100.64.0.1":      false,
+		"0.0.0.0":         false,
+		"::ffff:10.0.0.1": false,
+		"fd00::1":         false,
+		"224.0.0.1":       false,
+	} {
+		if got := publicAddress(netip.MustParseAddr(address)); got != want {
+			t.Errorf("publicAddress(%s) = %v, want %v", address, got, want)
+		}
+	}
+}
+
+func TestFetchBinaryRefusesPlainHTTP(t *testing.T) {
+	if _, err := fetchBinary(context.Background(), "http://example.com/file.pdf"); err == nil {
+		t.Fatal("fetched a stored file over plain http")
+	}
+}
+
+// A link that resolves to a loopback address is refused when the connection
+// is made, not by looking at the host name, so DNS cannot smuggle it in.
+func TestFetchBinaryRefusesAnInternalAddressAtConnectTime(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("secret"))
+	}))
+	defer server.Close()
+	client := &http.Client{Transport: storedFiles.Transport.(*http.Transport).Clone(), CheckRedirect: storedFiles.CheckRedirect}
+	client.Transport.(*http.Transport).TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
+	_, err := fetchStoredFile(context.Background(), client, server.URL)
+	if err == nil {
+		t.Fatal("fetched a stored file from a loopback address")
+	}
+	// Refused by the address check itself, not by anything about TLS.
+	if !strings.Contains(err.Error(), "public address") {
+		t.Fatalf("error = %v, want the public-address refusal", err)
 	}
 }
