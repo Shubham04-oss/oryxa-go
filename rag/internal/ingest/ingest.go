@@ -46,6 +46,9 @@ type Store interface {
 	// RecheckDocumentAt leaves a document ingesting, claimable again at at,
 	// without counting the claim as an attempt.
 	RecheckDocumentAt(ctx context.Context, documentID string, at time.Time) error
+	// RetryDocumentAt puts a document whose attempt failed back in the
+	// queue, claimable again at at. The attempt still counts.
+	RetryDocumentAt(ctx context.Context, documentID string, at time.Time) error
 }
 
 // knowledgeBaseRecheck is how soon a document handed to the knowledge base is
@@ -80,6 +83,20 @@ type KnowledgeBase interface {
 // Retrying forever would spend money on the same rejection and hide the
 // document behind a queue that never drains.
 const MaxAttempts = 5
+
+// firstRetry is how long a document waits after its first failed attempt.
+// Each later wait is four times the one before, so the attempts MaxAttempts
+// allows span about three quarters of an hour rather than a few seconds.
+const firstRetry = 30 * time.Second
+
+// retryDelay is how long a document waits after failing attempt number
+// attempts.
+func retryDelay(attempts int) time.Duration {
+	if attempts < 1 {
+		attempts = 1
+	}
+	return firstRetry << (2 * (attempts - 1))
+}
 
 // Options tune the worker loop.
 type Options struct {
@@ -205,10 +222,14 @@ func (pipeline *Pipeline) Index(ctx context.Context, document domain.Document) (
 		return Result{}, err
 	}
 	if document.Attempts < MaxAttempts && !errors.Is(err, domain.ErrInvalid) {
-		// Worth another go later. Release it rather than failing it, so the
-		// attempt count is what decides when to give up.
-		if releaseErr := pipeline.store.ReleaseDocument(ctx, document.ID); releaseErr != nil {
-			pipeline.logger.ErrorContext(ctx, "releasing a document for retry failed", "document_id", document.ID, "error", releaseErr)
+		// Worth another go later, so the attempt count is what decides when
+		// to give up - but later, not at once. A document put straight back
+		// is claimed straight back, and a problem that takes minutes to clear
+		// (a permission not granted yet, a throttled model) used every
+		// attempt up in seconds.
+		at := pipeline.now().Add(retryDelay(document.Attempts))
+		if retryErr := pipeline.store.RetryDocumentAt(ctx, document.ID, at); retryErr != nil {
+			pipeline.logger.ErrorContext(ctx, "scheduling a document's retry failed", "document_id", document.ID, "error", retryErr)
 		}
 		return Result{}, err
 	}

@@ -449,6 +449,19 @@ func (store *Store) RecheckDocumentAt(ctx context.Context, documentID string, at
 	return nil
 }
 
+// RetryDocumentAt puts a document whose attempt failed back in the queue,
+// claimable again at at. The failed attempt still counts toward giving up;
+// only the next one waits.
+func (store *Store) RetryDocumentAt(ctx context.Context, documentID string, at time.Time) error {
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE rag_documents
+		SET status = 'pending', locked_until = $2, updated_at = now()
+		WHERE id = $1 AND status = 'ingesting'`, documentID, at); err != nil {
+		return fmt.Errorf("retry document: %w", err)
+	}
+	return nil
+}
+
 // ReleaseDocument puts a document back for another attempt without counting it
 // as a failure, for a worker shutting down mid-ingest.
 func (store *Store) ReleaseDocument(ctx context.Context, documentID string) error {

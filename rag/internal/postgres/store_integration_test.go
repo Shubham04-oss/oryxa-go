@@ -606,6 +606,72 @@ func TestDeleteDocumentReturnsItsChunksAndCascades(t *testing.T) {
 	}
 }
 
+// A document whose attempt failed waits out its retry rather than being
+// claimed straight back, and the attempt it failed still counts.
+func TestRetryDocumentAtHoldsADocumentUntilItsTime(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+	document, _, err := store.UpsertDocument(ctx,
+		newDocument(corpus, domain.Source{Kind: domain.SourceInline}, "Doc", "retry me"), "retry me",
+		testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("UpsertDocument: %v", err)
+	}
+
+	// The worker claims across every organization, so this looks for its own
+	// document among whatever else is queued.
+	claimMine := func() (domain.Document, bool) {
+		t.Helper()
+		for pass := 0; pass < 20; pass++ {
+			claimed, err := store.ClaimDocuments(ctx, 10, time.Minute)
+			if err != nil {
+				t.Fatalf("ClaimDocuments: %v", err)
+			}
+			if len(claimed) == 0 {
+				return domain.Document{}, false
+			}
+			for _, candidate := range claimed {
+				if candidate.ID == document.ID {
+					return candidate, true
+				}
+			}
+		}
+		return domain.Document{}, false
+	}
+
+	first, ok := claimMine()
+	if !ok {
+		t.Fatal("the document was never claimed")
+	}
+	if err := store.RetryDocumentAt(ctx, document.ID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("RetryDocumentAt: %v", err)
+	}
+	waiting, err := store.Document(ctx, organizationID, document.ID)
+	if err != nil {
+		t.Fatalf("Document: %v", err)
+	}
+	if waiting.Status != domain.StatusPending {
+		t.Fatalf("status = %q while waiting to retry, want pending", waiting.Status)
+	}
+	if _, ok := claimMine(); ok {
+		t.Fatal("a document waiting on its retry was claimed straight back")
+	}
+
+	// Once its time comes it is claimed again, one attempt further on.
+	if _, err := store.db.ExecContext(ctx,
+		`UPDATE rag_documents SET locked_until = now() - interval '1 second' WHERE id = $1`, document.ID); err != nil {
+		t.Fatalf("bring the retry forward: %v", err)
+	}
+	second, ok := claimMine()
+	if !ok {
+		t.Fatal("a document whose retry was due was not claimed")
+	}
+	if second.Attempts != first.Attempts+1 {
+		t.Fatalf("attempts = %d after %d, want the failed attempt counted", second.Attempts, first.Attempts)
+	}
+}
+
 func TestClaimDocumentsLeasesWorkOnce(t *testing.T) {
 	store, ctx := openTestStore(t)
 	organizationID := uniqueOrganization()

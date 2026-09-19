@@ -73,6 +73,7 @@ type fakeStore struct {
 	embedded   []string
 	kbSynced   []string
 	rechecks   map[string]time.Time
+	retries    map[string]time.Time
 }
 
 func (fake *fakeStore) Corpus(context.Context, string, string) (domain.Corpus, error) {
@@ -151,6 +152,16 @@ func (fake *fakeStore) RecheckDocumentAt(_ context.Context, documentID string, a
 		fake.rechecks = map[string]time.Time{}
 	}
 	fake.rechecks[documentID] = at
+	return nil
+}
+
+func (fake *fakeStore) RetryDocumentAt(_ context.Context, documentID string, at time.Time) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	if fake.retries == nil {
+		fake.retries = map[string]time.Time{}
+	}
+	fake.retries[documentID] = at
 	return nil
 }
 
@@ -331,9 +342,9 @@ func TestIndexKeepsWhatAFailedAttemptEmbedded(t *testing.T) {
 		t.Fatalf("kept %d chunks embedded and %d vectors, want the first slice's %d",
 			len(store.embedded), len(vectors.upserted), sliceChunks)
 	}
-	if len(store.released) != 1 || len(store.ready) != 0 || len(store.failed) != 0 {
-		t.Fatalf("released %v, ready %v, failed %v: want the document back for a retry",
-			store.released, store.ready, store.failed)
+	if len(store.retries) != 1 || len(store.ready) != 0 || len(store.failed) != 0 {
+		t.Fatalf("retries %v, ready %v, failed %v: want the document back for a retry",
+			store.retries, store.ready, store.failed)
 	}
 }
 
@@ -440,21 +451,38 @@ func TestIndexWithNothingToEmbedStillMarksReady(t *testing.T) {
 	}
 }
 
-func TestIndexReleasesForRetryAndFailsAfterTheLimit(t *testing.T) {
+func TestIndexRetriesLaterAndFailsAfterTheLimit(t *testing.T) {
 	t.Parallel()
 	// A transient failure is worth another go; the attempt count is what
 	// decides when to stop, not the error.
 	store := &fakeStore{corpus: testCorpus(), body: body}
 	embedder := &fakeEmbedder{err: errors.New("throttled")}
 	pipeline := newPipeline(store, &fakeVectorStore{}, embedder)
+	now := time.Date(2026, time.September, 19, 11, 0, 0, 0, time.UTC)
+	pipeline.now = func() time.Time { return now }
 
 	early := testDocument()
 	early.Attempts = 1
 	if _, err := pipeline.Index(context.Background(), early); err == nil {
 		t.Fatal("Index succeeded with a failing embedder")
 	}
-	if len(store.released) != 1 || len(store.failed) != 0 {
-		t.Fatalf("released = %v, failed = %v; an early attempt should be released", store.released, store.failed)
+	if len(store.failed) != 0 || len(store.released) != 0 {
+		t.Fatalf("failed = %v, released = %v; an early attempt should be retried later", store.failed, store.released)
+	}
+	// Not at once: a document put straight back is claimed straight back.
+	if at := store.retries[early.ID]; !at.Equal(now.Add(30 * time.Second)) {
+		t.Fatalf("retry at %v, want 30s after the first failure", at)
+	}
+
+	// Each wait is longer than the last.
+	later := testDocument()
+	later.ID = "doc_2"
+	later.Attempts = 3
+	if _, err := pipeline.Index(context.Background(), later); err == nil {
+		t.Fatal("Index succeeded with a failing embedder")
+	}
+	if at := store.retries[later.ID]; !at.Equal(now.Add(8 * time.Minute)) {
+		t.Fatalf("retry at %v, want 8m after the third failure", at)
 	}
 
 	// A failure that keeps repeating is the document, not the weather.
@@ -483,8 +511,8 @@ func TestIndexDoesNotRetryWhatWillNotChange(t *testing.T) {
 	if len(store.failed) != 1 {
 		t.Fatalf("failed = %v, want it recorded as failed immediately", store.failed)
 	}
-	if len(store.released) != 0 {
-		t.Fatalf("released = %v, want no retry", store.released)
+	if len(store.released) != 0 || len(store.retries) != 0 {
+		t.Fatalf("released = %v, retries = %v, want no retry", store.released, store.retries)
 	}
 }
 
@@ -691,8 +719,8 @@ func TestIndexKnowledgeBaseFailsAtOnceOnFailed(t *testing.T) {
 	if len(store.failed) != 1 || !strings.Contains(store.reasons[0], "unsupported content type") {
 		t.Fatalf("failed = %v, reasons = %v", store.failed, store.reasons)
 	}
-	if len(store.released) != 0 {
-		t.Fatalf("a final failure was released for retry: %v", store.released)
+	if len(store.released) != 0 || len(store.retries) != 0 {
+		t.Fatalf("a final failure was put back for retry: released %v, retries %v", store.released, store.retries)
 	}
 }
 
@@ -713,8 +741,8 @@ func TestIndexKnowledgeBaseResubmitsOnPartialMetadata(t *testing.T) {
 	if _, err := pipeline.Index(context.Background(), document); err == nil {
 		t.Fatal("Index succeeded on a partially indexed document")
 	}
-	if len(store.released) != 1 {
-		t.Fatalf("released = %v, want the document released to resubmit", store.released)
+	if _, retried := store.retries["doc_1"]; !retried {
+		t.Fatalf("retries = %v, want the document put back to resubmit", store.retries)
 	}
 	if len(store.kbSynced) != 1 || store.kbSynced[0] != "doc_1:" {
 		t.Fatalf("kb_synced_hash was not reset so the next claim resubmits: %v", store.kbSynced)
