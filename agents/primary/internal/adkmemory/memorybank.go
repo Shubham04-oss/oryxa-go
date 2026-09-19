@@ -136,9 +136,11 @@ func (bank *MemoryBank) Write(ctx context.Context, scope Scope, conversation ses
 		return err
 	}
 	said := spoken(conversation)
-	if len(said) == 0 {
-		// A conversation with nothing said in it has nothing to remember,
-		// and an empty source is a request Memory Bank rejects.
+	if !memberSpoke(said) {
+		// A run in which the member said nothing has nothing of theirs to
+		// remember, and Memory Bank refuses one anyway: an empty source, or
+		// one that is only the model's side ("Requests ending with a model
+		// turn are not supported"), is rejected, which production saw.
 		return nil
 	}
 	return bank.api.generate(ctx, &aiplatformpb.GenerateMemoriesRequest{
@@ -277,6 +279,16 @@ func spoken(conversation session.Session) []*aiplatformpb.GenerateMemoriesReques
 		})
 	}
 	return said
+}
+
+// memberSpoke reports whether any of turns is the member's.
+func memberSpoke(turns []*aiplatformpb.GenerateMemoriesRequest_DirectContentsSource_Event) bool {
+	for _, turn := range turns {
+		if turn.GetContent().GetRole() == genai.RoleUser {
+			return true
+		}
+	}
+	return false
 }
 
 // bankClient is memoryBankAPI over the generated client.
