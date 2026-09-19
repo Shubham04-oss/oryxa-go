@@ -168,6 +168,31 @@ func TestMemoryBankWithNothingSaidAsksForNothing(t *testing.T) {
 	}
 }
 
+// Memory Bank refuses a conversation that is only the model's side, and one
+// in which the member said nothing has nothing of theirs to remember anyway.
+func TestMemoryBankWithOnlyTheModelSpeakingAsksForNothing(t *testing.T) {
+	ctx := context.Background()
+	sessions := session.InMemoryService()
+	created, err := sessions.Create(ctx, &session.CreateRequest{AppName: "krude", UserID: "user-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := session.NewEvent(ctx, "invocation")
+	event.Author = "krude"
+	event.Content = &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{{Text: "the draft is saved"}}}
+	if err := sessions.AppendEvent(ctx, created.Session, event); err != nil {
+		t.Fatal(err)
+	}
+
+	bank := bankWith(&fakeBank{})
+	if err := bank.Write(ctx, Scope{OrganizationID: "org-acme", UserID: "user-1"}, created.Session); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if calls := len(bank.api.(*fakeBank).generated); calls != 0 {
+		t.Fatalf("a run with only the model speaking made %d calls, want none", calls)
+	}
+}
+
 func TestMemoryBankSearchReturnsTheFactsItRemembers(t *testing.T) {
 	bank := bankWith(&fakeBank{found: []*aiplatformpb.Memory{
 		memoryIn("memories/1", "org-acme", "user-1", "the migration ships in March"),
