@@ -113,7 +113,9 @@ locals {
       RAG_DEFAULT_BACKEND               = var.rag_default_backend
       KNOWLEDGE_ORIGINALS_BUCKET        = aws_s3_bucket.knowledge_base_documents.bucket
       # What connected apps yield is judged worth indexing, or not, before it
-      # is published: the same model on the same Vertex AI project as Krude.
+      # is published: by Jev, or by the same model on the same Vertex AI
+      # project as Krude, which also decides what Jev is unsure of.
+      KNOWLEDGE_JUDGE       = var.knowledge_judge
       KNOWLEDGE_JUDGE_MODEL = var.model
 
       GOOGLE_CLOUD_PROJECT              = var.gcp_project

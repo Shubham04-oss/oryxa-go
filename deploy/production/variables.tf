@@ -37,6 +37,16 @@ variable "gcp_region" {
   default     = "us-west1"
 }
 
+variable "knowledge_judge" {
+  description = "What judges whether a connected app's document is worth indexing: jev (TypeSafe; put TYPESAFE_API_KEY first), gemini (var.model), or off."
+  type        = string
+  default     = "gemini"
+  validation {
+    condition     = contains(["jev", "gemini", "off"], var.knowledge_judge)
+    error_message = "knowledge_judge must be jev, gemini or off."
+  }
+}
+
 variable "model" {
   description = "The Gemini model Krude and rag's answers use."
   type        = string
