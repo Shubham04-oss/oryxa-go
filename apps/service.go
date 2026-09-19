@@ -116,6 +116,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		service.dispatcher = outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
 			return sink.PublishEvent(ctx, domain.Event{
 				ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data,
+				TraceContext: event.TraceContext,
 			})
 		}), logger)
 	}
