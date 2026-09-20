@@ -16,10 +16,12 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3vectors"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
@@ -36,6 +38,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/generation"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/ingest"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgebase"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgeclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/retrieval"
@@ -92,10 +95,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	store := postgres.New(platform.Database)
 
 	bedrockClient := bedrockruntime.NewFromConfig(platform.AWS)
+	bedrockAgentRuntimeClient := bedrockagentruntime.NewFromConfig(platform.AWS)
 
-	// Both vector backends are built where they can be, and a corpus naming
-	// one that is not configured is refused by name rather than failing at
-	// its first write.
+	// Every backend is built where it can be, and a corpus naming one that
+	// is not configured is refused by name rather than failing at its first
+	// write.
 	stores := []vectorstore.Store{vectorstore.NewPgvector(store.Pool(), pgvectorVersion)}
 	if config.VectorBucket != "" {
 		s3VectorsClient := s3vectors.NewFromConfig(platform.AWS, func(options *s3vectors.Options) {
@@ -110,6 +114,46 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		stores = append(stores, s3Store)
 	} else {
 		logger.Warn("RAG_VECTOR_BUCKET_NAME is not set: corpora cannot be created on S3 Vectors")
+	}
+
+	// The knowledge base itself, when this deployment was given one: ingest
+	// and application both need it to submit, poll and remove documents, and
+	// retrieval needs its own, separate client to search it (see
+	// rag/internal/retrieval/bedrock_kb.go) — a different Bedrock API from
+	// the one this package manages documents through.
+	//
+	// ingestKnowledgeBase and appKnowledgeBase are declared as their
+	// consumers' interfaces, left at their true nil rather than assigned a
+	// nil *knowledgebase.Client, because an interface holding a nil pointer
+	// is not itself nil: pipeline.knowledgeBase == nil and
+	// service.knowledgeBase == nil would both read false and every method
+	// promptly panic on a nil receiver.
+	var (
+		knowledgeBaseRetriever *retrieval.KnowledgeBase
+		ingestKnowledgeBase    ingest.KnowledgeBase
+		appKnowledgeBase       application.KnowledgeBase
+	)
+	if config.KnowledgeBaseID != "" && config.KnowledgeBaseDataSourceID != "" {
+		var objects knowledgebase.Objects
+		if config.KnowledgeBaseBucket != "" {
+			objects = s3.NewFromConfig(platform.AWS)
+		} else {
+			logger.Warn("RAG_KNOWLEDGE_BASE_BUCKET is not set: a bedrock-kb document too large to send inline cannot be indexed")
+		}
+		knowledgeBaseClient, err := knowledgebase.New(bedrockagent.NewFromConfig(platform.AWS), objects, knowledgebase.Config{
+			KnowledgeBaseID: config.KnowledgeBaseID, DataSourceID: config.KnowledgeBaseDataSourceID, Bucket: config.KnowledgeBaseBucket,
+		})
+		if err != nil {
+			return host.Service{}, err
+		}
+		knowledgeBaseRetriever, err = retrieval.NewKnowledgeBase(bedrockAgentRuntimeClient, config.KnowledgeBaseID, config.RerankModelARN)
+		if err != nil {
+			return host.Service{}, err
+		}
+		ingestKnowledgeBase, appKnowledgeBase = knowledgeBaseClient, knowledgeBaseClient
+		stores = append(stores, vectorstore.BedrockKnowledgeBase{})
+	} else {
+		logger.Warn("RAG_KNOWLEDGE_BASE_ID and RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID are not set: corpora cannot be created on the bedrock-kb backend")
 	}
 	vectors := vectorstore.NewRouter(stores...)
 
@@ -133,7 +177,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	var reranker retrieval.Reranker
 	switch {
 	case config.RerankModelARN != "":
-		reranker, err = retrieval.NewBedrockReranker(bedrockagentruntime.NewFromConfig(platform.AWS), config.RerankModelARN)
+		reranker, err = retrieval.NewBedrockReranker(bedrockAgentRuntimeClient, config.RerankModelARN)
 		if err != nil {
 			return host.Service{}, err
 		}
@@ -168,7 +212,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 
-	retriever := retrieval.New(store, vectors, embedders, reranker, logger)
+	retriever := retrieval.New(store, vectors, embedders, reranker, knowledgeBaseRetriever, logger)
 
 	var teams application.Teams
 	if config.TeamsURL != "" {
@@ -204,7 +248,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 
 	service := application.New(store, authclient.New(config.AuthURL), teams, files, documents, vectors,
-		retriever, generator, application.Defaults{
+		retriever, generator, appKnowledgeBase, application.Defaults{
 			Provider:           config.DefaultProvider,
 			Model:              config.DefaultModel,
 			Metric:             config.DefaultMetric,
@@ -223,7 +267,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			TraceContext: event.TraceContext,
 		})
 	}), logger)
-	pipeline := ingest.New(store, vectors, embedders, ingest.Options{
+	pipeline := ingest.New(store, vectors, embedders, ingestKnowledgeBase, ingest.Options{
 		Batch: config.IngestBatch, Lease: config.IngestLease, Interval: config.IngestInterval,
 	}, logger)
 	workers := []host.Worker{dispatcher.Run, pipeline.Run}

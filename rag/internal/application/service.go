@@ -44,6 +44,10 @@ type Store interface {
 	Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) ([]domain.Document, string, error)
 	DocumentsBySource(ctx context.Context, organizationID string, kind domain.SourceKind, ref string) ([]domain.Document, error)
 	ChunkIDs(ctx context.Context, organizationID, documentID string) ([]string, error)
+	// DocumentIDsForCorpus is used only to remove a bedrock-kb corpus's
+	// documents from the knowledge base when the corpus itself is dropped;
+	// see dropKnowledgeBaseCorpus.
+	DocumentIDsForCorpus(ctx context.Context, corpusID string) ([]string, error)
 	DeleteDocument(ctx context.Context, organizationID, documentID string, event domain.Event) ([]string, error)
 
 	UpsertOrganization(ctx context.Context, organizationID, name string, at time.Time) error
@@ -77,6 +81,20 @@ type Vectors interface {
 	Backends() []domain.Backend
 }
 
+// KnowledgeBase is how a bedrock-kb corpus's documents are removed from
+// Amazon Bedrock. A corpus on that backend has no chunk ids for Vectors to
+// delete and no per-corpus index for it to drop the way S3 Vectors has one —
+// one knowledge base serves the whole deployment — so removal there is by
+// document id instead, against the knowledge base directly.
+type KnowledgeBase interface {
+	Delete(ctx context.Context, documentIDs []string) error
+	// DeleteStaged removes a document's staged text, when it has any. It is
+	// best-effort from the caller's point of view: left-behind staged text
+	// costs storage, not correctness, so a failure here is logged rather
+	// than failing the removal it rode in on.
+	DeleteStaged(ctx context.Context, corpus domain.Corpus, document domain.Document) error
+}
+
 // Retriever finds the passages a question should be answered from.
 type Retriever interface {
 	Search(ctx context.Context, corpus domain.Corpus, query domain.Query) (retrieval.Results, error)
@@ -93,17 +111,18 @@ type Documents interface {
 }
 
 type Service struct {
-	store     Store
-	directory Directory
-	teams     Teams
-	files     Files
-	documents Documents
-	vectors   Vectors
-	retriever Retriever
-	generator generation.Generator
-	defaults  Defaults
-	logger    *slog.Logger
-	now       func() time.Time
+	store         Store
+	directory     Directory
+	teams         Teams
+	files         Files
+	documents     Documents
+	vectors       Vectors
+	retriever     Retriever
+	generator     generation.Generator
+	knowledgeBase KnowledgeBase
+	defaults      Defaults
+	logger        *slog.Logger
+	now           func() time.Time
 }
 
 // Defaults are what a corpus gets when its creator does not choose. They come
@@ -117,8 +136,14 @@ type Defaults struct {
 	AnswerInstructions string
 }
 
+// New builds a Service. knowledgeBase is nil in a deployment with no Bedrock
+// knowledge base configured, in which case a bedrock-kb corpus's documents
+// fail to remove by name rather than reaching a nil client — the same shape
+// of failure Vectors.For already gives a corpus on a backend this deployment
+// cannot serve. Corpus creation is what actually keeps such a corpus from
+// existing in the first place; see requireBackendSpec.
 func New(store Store, directory Directory, teams Teams, files Files, documents Documents, vectors Vectors,
-	retriever Retriever, generator generation.Generator, defaults Defaults, logger *slog.Logger) *Service {
+	retriever Retriever, generator generation.Generator, knowledgeBase KnowledgeBase, defaults Defaults, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -136,7 +161,7 @@ func New(store Store, directory Directory, teams Teams, files Files, documents D
 	}
 	return &Service{
 		store: store, directory: directory, teams: teams, files: files, documents: documents, vectors: vectors,
-		retriever: retriever, generator: generator, defaults: defaults, logger: logger, now: time.Now,
+		retriever: retriever, generator: generator, knowledgeBase: knowledgeBase, defaults: defaults, logger: logger, now: time.Now,
 	}
 }
 
@@ -211,6 +236,9 @@ func (service *Service) CreateCorpus(ctx context.Context, credentials authclient
 		return domain.Corpus{}, fmt.Errorf("backend is not allowed: %w", domain.ErrInvalid)
 	}
 	if err := backend.Supports(spec.Metric); err != nil {
+		return domain.Corpus{}, err
+	}
+	if err := requireBackendSpec(backend, spec); err != nil {
 		return domain.Corpus{}, err
 	}
 	// A corpus on a backend this deployment cannot reach would accept
@@ -489,11 +517,7 @@ func (service *Service) DeleteDocument(ctx context.Context, credentials authclie
 	// The vectors go before the rows, as they do when a corpus is deleted. If
 	// the rows went first and this failed, the vectors would be left with
 	// nothing pointing at them: unfindable, and still costing money to store.
-	chunkIDs, err := service.store.ChunkIDs(ctx, organizationID, documentID)
-	if err != nil {
-		return err
-	}
-	if err := service.deleteVectors(ctx, corpus, chunkIDs); err != nil {
+	if err := service.removeDocumentVectors(ctx, corpus, document); err != nil {
 		return err
 	}
 	_, err = service.store.DeleteDocument(ctx, organizationID, documentID, event)
@@ -679,12 +703,52 @@ func (service *Service) teamAccess(ctx context.Context, credentials authclient.C
 	return access, nil
 }
 
+// requireBackendSpec refuses a corpus whose spec does not match what its
+// backend requires. Today only bedrock-kb requires one: a knowledge base
+// embeds with whatever model it was created with, chosen once by OpenTofu
+// outside rag, so a corpus there cannot pin a spec of its own the way one on
+// pgvector or S3 Vectors can. The database enforces the same rule (see
+// migration 007), so this exists to fail with a message naming what a corpus
+// on this backend actually uses, rather than a bare constraint violation.
+func requireBackendSpec(backend domain.Backend, spec domain.EmbeddingSpec) error {
+	required, ok := backend.RequiredEmbeddingSpec()
+	if !ok || spec.Equal(required) {
+		return nil
+	}
+	return fmt.Errorf("%s corpora use the knowledge base's own embedding spec (%s), not %s: %w",
+		backend, required, spec, domain.ErrInvalid)
+}
+
+// dropVectors removes everything a corpus holds, wherever its content lives:
+// vectorstore.Store for pgvector and S3 Vectors, or the knowledge base
+// itself for a bedrock-kb corpus, which vectorstore.Store never touches.
 func (service *Service) dropVectors(ctx context.Context, corpus domain.Corpus) error {
+	if corpus.Backend == domain.BackendBedrockKB {
+		return service.dropKnowledgeBaseCorpus(ctx, corpus)
+	}
 	store, err := service.vectors.For(corpus)
 	if err != nil {
 		return err
 	}
 	return store.DropCorpus(ctx, corpus)
+}
+
+// dropKnowledgeBaseCorpus deletes every document this corpus put into the
+// knowledge base. There is no per-corpus index there to drop the way S3
+// Vectors has one — one knowledge base serves the whole deployment — so a
+// corpus going away means naming every document it owned instead.
+func (service *Service) dropKnowledgeBaseCorpus(ctx context.Context, corpus domain.Corpus) error {
+	if service.knowledgeBase == nil {
+		return fmt.Errorf("this deployment cannot reach its knowledge base: %w", domain.ErrInvalid)
+	}
+	documentIDs, err := service.store.DocumentIDsForCorpus(ctx, corpus.ID)
+	if err != nil {
+		return err
+	}
+	if len(documentIDs) == 0 {
+		return nil
+	}
+	return service.knowledgeBase.Delete(ctx, documentIDs)
 }
 
 func (service *Service) deleteVectors(ctx context.Context, corpus domain.Corpus, chunkIDs []string) error {
@@ -696,6 +760,32 @@ func (service *Service) deleteVectors(ctx context.Context, corpus domain.Corpus,
 		return err
 	}
 	return store.Delete(ctx, corpus, chunkIDs)
+}
+
+// removeDocumentVectors removes one document's indexed content, wherever it
+// lives. A bedrock-kb corpus has no chunk rows for ChunkIDs to find — Bedrock
+// never hands rag any — so it is deleted by its own document id instead, and
+// any text staged for it is cleaned up alongside; every other backend keeps
+// going through ChunkIDs and Vectors.Delete exactly as before.
+func (service *Service) removeDocumentVectors(ctx context.Context, corpus domain.Corpus, document domain.Document) error {
+	if corpus.Backend == domain.BackendBedrockKB {
+		if service.knowledgeBase == nil {
+			return fmt.Errorf("this deployment cannot reach its knowledge base: %w", domain.ErrInvalid)
+		}
+		if err := service.knowledgeBase.Delete(ctx, []string{document.ID}); err != nil {
+			return err
+		}
+		if err := service.knowledgeBase.DeleteStaged(ctx, corpus, document); err != nil {
+			service.logger.WarnContext(ctx, "deleting a document's staged text failed",
+				"document_id", document.ID, "corpus_id", corpus.ID, "error", err)
+		}
+		return nil
+	}
+	chunkIDs, err := service.store.ChunkIDs(ctx, corpus.OrganizationID, document.ID)
+	if err != nil {
+		return err
+	}
+	return service.deleteVectors(ctx, corpus, chunkIDs)
 }
 
 func (service *Service) event(detailType string, payload any) (domain.Event, error) {

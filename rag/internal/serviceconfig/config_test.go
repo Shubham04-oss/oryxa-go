@@ -82,6 +82,25 @@ func TestBadDefaultsFailTheDeploy(t *testing.T) {
 		env:     map[string]string{"RAG_DEFAULT_BACKEND": "s3vectors"},
 		wantErr: "RAG_VECTOR_BUCKET_NAME",
 	}, {
+		name:    "bedrock-kb with no knowledge base configured",
+		env:     map[string]string{"RAG_DEFAULT_BACKEND": "bedrock-kb"},
+		wantErr: "RAG_KNOWLEDGE_BASE_ID",
+	}, {
+		// A knowledge base embeds with whatever model it was created with,
+		// not with whatever the default embedding configuration names.
+		name: "bedrock-kb with a mismatched embedding spec",
+		env: map[string]string{
+			"RAG_DEFAULT_BACKEND":               "bedrock-kb",
+			"RAG_KNOWLEDGE_BASE_ID":             "kb-1",
+			"RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID": "ds-1",
+			"RAG_DEFAULT_EMBEDDING_MODEL":       "amazon.titan-embed-text-v1",
+		},
+		wantErr: "knowledge base's own embedding spec",
+	}, {
+		name:    "a knowledge base data source id with no knowledge base id",
+		env:     map[string]string{"RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID": "ds-1"},
+		wantErr: "must be set together",
+	}, {
 		name: "vertex with no project",
 		env: map[string]string{
 			"RAG_DEFAULT_EMBEDDING_PROVIDER": "vertex",
@@ -173,6 +192,42 @@ func TestAWorkableS3VectorsConfiguration(t *testing.T) {
 	}
 	if config.DefaultBackend != domain.BackendS3Vectors || config.VectorBucket != "oryxa-vectors" {
 		t.Fatalf("config = %+v", config)
+	}
+}
+
+func TestAWorkableBedrockKBConfiguration(t *testing.T) {
+	config, err := FromEnv(env(minimal(map[string]string{
+		"RAG_DEFAULT_BACKEND":               "bedrock-kb",
+		"RAG_KNOWLEDGE_BASE_ID":             "kb-1",
+		"RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID": "ds-1",
+		"RAG_KNOWLEDGE_BASE_BUCKET":         "oryxa-rag-staging",
+	})))
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if config.DefaultBackend != domain.BackendBedrockKB {
+		t.Fatalf("default backend = %q, want bedrock-kb", config.DefaultBackend)
+	}
+	if config.KnowledgeBaseID != "kb-1" || config.KnowledgeBaseDataSourceID != "ds-1" || config.KnowledgeBaseBucket != "oryxa-rag-staging" {
+		t.Fatalf("config = %+v", config)
+	}
+}
+
+// TestKnowledgeBaseIsNotTheImplicitDefault: unlike S3 Vectors, which becomes
+// the default the moment a bucket is named, bedrock-kb only becomes the
+// default when RAG_DEFAULT_BACKEND says so explicitly. Configuring one
+// without opting in must not silently change what every other corpus in the
+// deployment gets created on.
+func TestKnowledgeBaseIsNotTheImplicitDefault(t *testing.T) {
+	config, err := FromEnv(env(minimal(map[string]string{
+		"RAG_KNOWLEDGE_BASE_ID":             "kb-1",
+		"RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID": "ds-1",
+	})))
+	if err != nil {
+		t.Fatalf("FromEnv: %v", err)
+	}
+	if config.DefaultBackend != domain.BackendPgvector {
+		t.Fatalf("default backend = %q, want pgvector to stay the default until asked for otherwise", config.DefaultBackend)
 	}
 }
 

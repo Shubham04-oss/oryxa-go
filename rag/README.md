@@ -11,7 +11,7 @@ file cannot index it either, without rag having to know why.
 ```text
 app ── rag HTTP ──▶ rag ── embed ──▶ Bedrock / Vertex AI
                      │
-                     ├── vectors ──▶ pgvector  or  S3 Vectors
+                     ├── vectors ──▶ pgvector, S3 Vectors, or a Bedrock knowledge base
                      ├── chunks, documents, corpora ──▶ PostgreSQL
                      ├── GET files /v1/organizations/{org}/files/{file}
                      ├── GET teams /v1/organizations/{org}/teams/{team}
@@ -54,9 +54,15 @@ still on disk.
 | --- | --- | --- |
 | `s3vectors` | Amazon S3 Vectors, one index per corpus | Wherever `RAG_VECTOR_BUCKET_NAME` names a bucket: serverless, priced by use, about 100 ms a query when warm and under a second cold |
 | `pgvector` | The shared PostgreSQL, beside the chunk text | Where no bucket is named — local development and tests, since S3 Vectors has no local emulation — and the fastest to query |
+| `bedrock-kb` | One Amazon Bedrock knowledge base per deployment, shared by every corpus on it | Never implicitly — only when `RAG_DEFAULT_BACKEND=bedrock-kb` is set explicitly. See [Knowledge base corpora](#knowledge-base-corpora) |
 
 `RAG_DEFAULT_BACKEND` overrides either default, and a corpus keeps the backend
 it was created on, so changing the default moves only corpora made after it.
+Unlike S3 Vectors, naming a knowledge base does not make it the default on its
+own: `bedrock-kb` corpora are opt-in even once configured, because parsing,
+chunking and lexical search all work differently there and a deployment
+should choose that trade deliberately rather than inherit it from which
+environment variables happen to be set.
 
 pgvector needs a declared width before it can index a column, so there is one
 table per width — 256, 384, 512, 768, 1024, 1536 and 3072 — and
@@ -291,7 +297,11 @@ added mid-walk cannot make a later page repeat or skip one already seen.
 Filters narrow on document ids and on metadata, with `eq`, `ne`, `in` and
 `nin`. That set is deliberately small: every operator maps onto both a
 PostgreSQL `jsonb` predicate and an S3 Vectors metadata filter, so a filtered
-query means the same thing whichever backend the corpus was written into.
+query means the same thing whichever backend the corpus was written into. A
+`bedrock-kb` corpus only honours `document_ids`: the knowledge base was never
+handed a caller's own metadata to filter on (see [Knowledge base
+corpora](#knowledge-base-corpora)), so a `conditions` filter against one is
+refused rather than silently answered as though it narrowed anything.
 Metadata is bounded to 16 keys and 2 KiB total, which is the tighter of the two
 backends' budgets, so a corpus indexed on one is portable to the other. Keys
 the pipeline writes itself — `chunk_id`, `document_id`, `corpus_id`,
@@ -412,6 +422,119 @@ guessed at: the one mistake this bridge must never make is a member-scoped
 document landing somewhere the whole organization, or the wrong team, can
 read it.
 
+## Knowledge base corpora
+
+A corpus on the `bedrock-kb` backend hands a document to a fully managed,
+serverless Amazon Bedrock knowledge base instead of chunking and embedding it
+here. Bedrock parses it — including PDF and Office files rag cannot read
+itself — cuts it into chunks of its own, embeds them, and answers a query by
+searching them. Nothing about chunking, embedding models or vector storage in
+the rest of this document applies to a corpus on this backend.
+
+**One knowledge base per deployment.** OpenTofu creates it — type `VECTOR`,
+embeddings Titan v2 at 1024 dimensions, storage S3 Vectors — with one data
+source of type `CUSTOM` for direct ingestion, and hands rag only their ids:
+`RAG_KNOWLEDGE_BASE_ID` and `RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID`. Rag never
+creates, configures or deletes either. Every corpus on this backend in a
+deployment shares that one knowledge base; what tells their documents apart
+inside it is metadata (`organization_id`, `corpus_id`), not separate
+infrastructure, the same way tenancy is metadata rather than infrastructure
+in the rest of Bedrock's multi-tenant surface.
+
+Because the knowledge base is created once, outside rag, with one embedding
+model, a corpus here cannot pin an embedding spec of its own the way a
+pgvector or S3 Vectors corpus can: every `bedrock-kb` corpus is Titan v2 at
+1024 dimensions, cosine, and creating one that names anything else is refused
+— by the service, naming what a `bedrock-kb` corpus must use instead, and by
+a database constraint if it ever got that far (migration `007`).
+
+**Configuration.**
+
+| Variable | Purpose |
+| --- | --- |
+| `RAG_KNOWLEDGE_BASE_ID` | The knowledge base to use. Required, with the next one, for the backend to be available at all |
+| `RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID` | Its one `CUSTOM` data source |
+| `RAG_KNOWLEDGE_BASE_BUCKET` | Where rag stages document text too large to send inline. Without it, such a document is refused by name rather than failing at ingest |
+| `RAG_DEFAULT_BACKEND=bedrock-kb` | Makes it the default for a corpus created without naming one. Configuring the two ids above does not do this on its own — see [Where the vectors live](#where-the-vectors-live) |
+
+**Ingestion.** A document in a `bedrock-kb` corpus is recorded in PostgreSQL
+exactly like any other — the same row, the same `pending → ingesting →
+ready|failed` lifecycle, the same API — but the ingest worker hands it to the
+knowledge base whole rather than cutting it into `rag_chunks` rows:
+
+- Text that fits a conservative inline limit is sent straight in the ingest
+  call. Larger text is staged first, to `RAG_KNOWLEDGE_BASE_BUCKET` at
+  `rag-staging/<organization_id>/<corpus_id>/<document_id>/<content_hash>.txt`,
+  and the knowledge base is pointed at that object instead; the staged copy is
+  deleted once the document is indexed or removed.
+- A document knowledge published with no extracted text of its own — a PDF, an
+  Office file, carried as `Original` (see [Knowledge
+  documents](#knowledge-documents)) — is pointed straight at that object in
+  knowledge's own bucket. Rag never reads those bytes; only the knowledge base
+  does. The same document published to a corpus that is not `bedrock-kb` has
+  nothing here that could index it and is skipped, logged, with a previously
+  indexed version removed if there was one — a knowledge document needs actual
+  text for every other backend.
+- Ingestion is asynchronous: submitting a document returns almost immediately,
+  and the worker polls the knowledge base's own status on later passes,
+  reusing the same lease a claim already holds rather than a timer of its own,
+  until it reports the document indexed or failed with a reason. A live test
+  indexed three documents, one of them a PDF, in about nine seconds; nothing
+  here assumes that number.
+- A knowledge base document has no chunks of rag's own to count, so its
+  `chunk_count` stays `0` — an honest answer, not a guess, once it is `ready`.
+- Removing a document, or the whole corpus, deletes it from the knowledge base
+  by the same id it was ingested under — rag's own document id doubles as the
+  custom document id Bedrock knows it by. A corpus has no per-corpus index
+  there to drop the way S3 Vectors does, so dropping one means naming every
+  document it owned.
+
+**Retrieval.** A search against a `bedrock-kb` corpus calls Bedrock's
+`Retrieve` directly, filtered to that one corpus
+(`organization_id` equals the caller's, `corpus_id` equals the corpus —
+tenant isolation that must never regress, and is asserted in
+`rag/internal/retrieval/bedrock_kb_test.go` against the exact filter Bedrock
+receives). There is no lexical half to fuse it with — a `bedrock-kb` corpus
+has no full-text index — so `mode` is not honoured the way it is elsewhere;
+Bedrock's own vector search is what runs regardless of what was asked.
+`rerank`, when `RAG_RERANK_MODEL_ARN` is set, asks Bedrock to rerank inside
+the same call rather than sending the results through the cross-encoder
+`Reranker` used for the other two backends. `top_k`, `min_score` and
+`diversity` are applied afterward exactly as they are for pgvector and S3
+Vectors, so a caller sees one contract regardless of which backend answered.
+A query's own `filter.document_ids` narrows further, inside that same tenant
+filter; `filter.conditions` is refused, since the knowledge base was never
+given a caller's own metadata to test one against — see [Filters](#api).
+
+Each returned passage becomes a `Match` whose `Chunk` is synthesized rather
+than read from `rag_chunks`, since there is no row: its id is derived from the
+document id and a hash of the passage text, stable so the same passage cites
+the same way twice, and its byte range is left at zero, since nothing here
+knows where in the document Bedrock found it. Its document's title and source
+still come from PostgreSQL, which holds a row for every document whichever
+backend indexed it. A query naming both `bedrock-kb` and other corpora — the
+knowledge toolbox's own multi-collection search, for one — runs each corpus
+through whichever path it needs and merges the results the way it always has;
+nothing about mixing them needed to change here, because a `bedrock-kb`
+match is an ordinary `Match` by the time it leaves this package.
+
+**What it does not do.**
+
+- **No PostgreSQL lexical search.** `mode: lexical` and the lexical half of
+  `hybrid` have nothing to run against; only Bedrock's vector search answers.
+- **Citations with no byte range.** `start_byte` and `end_byte` are always
+  zero — Bedrock does not report where in the source document a passage came
+  from, so nothing here can check one against the original the way a pgvector
+  or S3 Vectors citation can.
+- **Asynchronous indexing.** A document is not searchable the instant it is
+  added; how long it takes to become so depends on the knowledge base, not on
+  a setting here.
+- **No re-embed on a metadata hiccup without a resubmit.** A document Bedrock
+  reports as only partially indexing its metadata is resubmitted rather than
+  merely polled again — see `rag/internal/ingest/ingest.go` — since tenant
+  isolation depends on that metadata actually landing and polling the same
+  submission again would only ask the same question twice.
+
 ## Provision
 
 Copy the root `.env.example` to the ignored `.env`. Its emulator block points
@@ -482,6 +605,11 @@ Its runtime identity needs:
 - `s3vectors:PutVectors`, `s3vectors:QueryVectors`, `s3vectors:DeleteVectors`,
   `s3vectors:GetIndex`, `s3vectors:CreateIndex` and `s3vectors:DeleteIndex` on
   the vector bucket, when S3 Vectors is in use;
+- `bedrock:IngestKnowledgeBaseDocuments`, `bedrock:GetKnowledgeBaseDocuments`
+  and `bedrock:DeleteKnowledgeBaseDocuments` on the knowledge base and its
+  data source, and `bedrock:Retrieve` on the knowledge base, when
+  `RAG_KNOWLEDGE_BASE_ID` is set; `s3:PutObject` and `s3:DeleteObject` on
+  `RAG_KNOWLEDGE_BASE_BUCKET`, when one is named, for staging;
 - `events:PutEvents` on the event bus;
 - `sqs:ReceiveMessage` and `sqs:DeleteMessage` on `rag-events`.
 
@@ -520,6 +648,8 @@ shape it reads, and proves nothing about whether the provider agrees:
 | Vertex answering (`generateContent`) | An `httptest` server | The same, plus ADC auth |
 | Bedrock reranking | Nothing beyond construction | The whole call. This is the least exercised code in the service |
 | S3 Vectors | A fake client | Index creation, metadata filters, batch limits, the real 3–63 character index name rules |
+| Bedrock knowledge base ingest, status and delete | Fakes over `bedrockagent`'s `IngestKnowledgeBaseDocuments`, `GetKnowledgeBaseDocuments` and `DeleteKnowledgeBaseDocuments` | Whether a real knowledge base agrees with the request shapes this builds and the status words it branches on |
+| Bedrock knowledge base retrieve | A fake over `bedrockagentruntime.Retrieve` | The tenant filter's shape is asserted exactly; whether Bedrock actually honours it, and the reranking call inside Retrieve, have not run here |
 | The provisioner | Unit tests on its pattern and policy | It has never created anything, on AWS or on LocalStack |
 
 S3 Vectors has no local emulation available: the LocalStack container in the
@@ -530,6 +660,21 @@ Vertex has gone as far as search; its answers, and every Bedrock path, have
 not run. The first live run of each should be a small corpus end to end —
 create, add one document, wait for `rag.document.indexed.v1`, search, answer.
 Expect the model ids and the Bedrock reranker to be where it goes wrong first.
+
+The `bedrock-kb` backend's request and response shapes — content and metadata
+attribute structures, the document status vocabulary, the tenant filter's
+`AndAll`/`Equals`/`In` shape — follow a live test against a real knowledge
+base in `us-west-2` that indexed three documents, one a PDF, in about nine
+seconds and confirmed org_b never saw org_a's documents through the same
+filter this package builds. What has not run is this code itself against
+that or any knowledge base: the ingest worker's status-polling loop, the
+staging path, and the Retrieve call's own reranking are all new here and
+covered only by the fakes above. The first live run of this backend should
+follow the same small-corpus-end-to-end path as Vertex and Bedrock answering,
+with particular attention to the `METADATA_PARTIALLY_INDEXED` and `IGNORED`
+statuses: this package's read of what they mean (see [Knowledge base
+corpora](#knowledge-base-corpora) and `rag/internal/ingest/ingest.go`) is a
+judgment call from their documentation, not something the live test exercised.
 
 ## Known limits
 
@@ -557,6 +702,11 @@ Things that work as written, but are narrower than they will need to be.
   over-count so chunks land under the model's limit, which means chunks are
   slightly smaller than the budget asks for.
 - **No k6 journey.** `/test` covers teams, files and email; rag is not in it.
+- **Dropping a `bedrock-kb` corpus does not clean up staged text.** Deleting
+  one document does; deleting the whole corpus only removes it from the
+  knowledge base, since doing more would mean reading every document's
+  content hash first for what is, at worst, a handful of stray text objects
+  in rag's own staging bucket rather than anything reachable by a search.
 
 ## Open decisions
 

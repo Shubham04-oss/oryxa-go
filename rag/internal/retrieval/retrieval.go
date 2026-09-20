@@ -62,18 +62,27 @@ type Results struct {
 }
 
 type Retriever struct {
-	chunks    Chunks
-	vectors   Vectors
-	embedders Embedders
-	reranker  Reranker
-	logger    *slog.Logger
+	chunks        Chunks
+	vectors       Vectors
+	embedders     Embedders
+	reranker      Reranker
+	knowledgeBase *KnowledgeBase
+	logger        *slog.Logger
 }
 
-func New(chunks Chunks, vectors Vectors, embedders Embedders, reranker Reranker, logger *slog.Logger) *Retriever {
+// New builds a retriever. knowledgeBase is nil in a deployment with no
+// Bedrock knowledge base configured, in which case a query against a
+// bedrock-kb corpus fails by name rather than reaching a nil client — the
+// same shape of failure Vectors.For already gives a corpus on a backend this
+// deployment cannot serve.
+func New(chunks Chunks, vectors Vectors, embedders Embedders, reranker Reranker, knowledgeBase *KnowledgeBase, logger *slog.Logger) *Retriever {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Retriever{chunks: chunks, vectors: vectors, embedders: embedders, reranker: reranker, logger: logger}
+	return &Retriever{
+		chunks: chunks, vectors: vectors, embedders: embedders, reranker: reranker,
+		knowledgeBase: knowledgeBase, logger: logger,
+	}
 }
 
 // Search runs a query against one corpus and returns the passages to answer
@@ -82,6 +91,13 @@ func (retriever *Retriever) Search(ctx context.Context, corpus domain.Corpus, qu
 	query, err := query.Normalize()
 	if err != nil {
 		return Results{}, err
+	}
+	// A bedrock-kb corpus has no chunk rows to run a lexical search over and
+	// no vectorstore.Store to hold a dense one: Bedrock did that chunking and
+	// embedding itself, so this takes a wholly different, shorter path to a
+	// Results rather than the dense-then-lexical-then-fuse below.
+	if corpus.Backend == domain.BackendBedrockKB {
+		return retriever.searchKnowledgeBase(ctx, corpus, query)
 	}
 	var (
 		results    Results
@@ -143,6 +159,16 @@ func (retriever *Retriever) Search(ctx context.Context, corpus domain.Corpus, qu
 		}
 	}
 
+	results.Matches = retriever.finalize(matches, query)
+	return results, nil
+}
+
+// finalize applies what a query asked for after the candidates are found,
+// regardless of which path found them: spread them by diversity, cut to
+// top_k, and drop anything under min_score. Writing it once here is what
+// makes those three settings mean the same thing whichever backend a corpus
+// happens to be on.
+func (retriever *Retriever) finalize(matches []domain.Match, query domain.Query) []domain.Match {
 	// Diversification runs on more candidates than are wanted, so it has
 	// something to choose between, and the cut to TopK happens after.
 	matches = diversify(matches, *query.Diversity, query.TopK)
@@ -158,8 +184,55 @@ func (retriever *Retriever) Search(ctx context.Context, corpus domain.Corpus, qu
 		}
 		matches = kept
 	}
-	results.Matches = matches
-	return results, nil
+	return matches
+}
+
+// searchKnowledgeBase answers a query for a corpus whose vectors live in a
+// Bedrock knowledge base. It asks Bedrock for this one corpus's passages,
+// scoped by TenantFilter, then hydrates each with its document's title and
+// source the same way the pgvector and S3 Vectors path does — from
+// PostgreSQL, which still holds every document's row for a bedrock-kb corpus
+// even though it holds no chunks for one.
+func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus domain.Corpus, query domain.Query) (Results, error) {
+	if retriever.knowledgeBase == nil {
+		return Results{}, fmt.Errorf("this deployment cannot reach its knowledge base: %w", domain.ErrInvalid)
+	}
+	passages, err := retriever.knowledgeBase.retrieve(ctx, corpus.OrganizationID, []string{corpus.ID}, query, query.Candidates())
+	if err != nil {
+		return Results{}, err
+	}
+	if len(passages) == 0 {
+		return Results{}, nil
+	}
+	documentIDs := make([]string, 0, len(passages))
+	seen := make(map[string]bool, len(passages))
+	for _, passage := range passages {
+		if !seen[passage.documentID] {
+			seen[passage.documentID] = true
+			documentIDs = append(documentIDs, passage.documentID)
+		}
+	}
+	refs, err := retriever.chunks.DocumentRefs(ctx, corpus.OrganizationID, documentIDs)
+	if err != nil {
+		return Results{}, err
+	}
+	matches := make([]domain.Match, 0, len(passages))
+	for _, passage := range passages {
+		matches = append(matches, domain.Match{
+			Chunk: domain.Chunk{
+				ID: kbChunkID(passage.documentID, passage.text), DocumentID: passage.documentID,
+				CorpusID: corpus.ID, OrganizationID: corpus.OrganizationID,
+				Text: passage.text, SHA256: domain.Hash(passage.text),
+			},
+			Document: refs[passage.documentID],
+			Score:    passage.score,
+		})
+	}
+	// Bedrock's own reranking, when it ran, already reordered and scored
+	// these; the cross-encoder Reranker below is never invoked for a
+	// knowledge base corpus, since it has nothing here of its own to send it.
+	reranked := query.Rerank && retriever.knowledgeBase.rerankModelARN != ""
+	return Results{Matches: retriever.finalize(matches, query), Reranked: reranked}, nil
 }
 
 // dense embeds the question and asks the vector store.

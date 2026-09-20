@@ -88,11 +88,7 @@ func (service *Service) ObjectDeleted(ctx context.Context, event fileseventsv1.O
 		if err != nil {
 			return err
 		}
-		chunkIDs, err := service.store.ChunkIDs(ctx, event.OrganizationID, document.ID)
-		if err != nil {
-			return err
-		}
-		if err := service.deleteVectors(ctx, corpus, chunkIDs); err != nil {
+		if err := service.removeDocumentVectors(ctx, corpus, document); err != nil {
 			return err
 		}
 		if _, err := service.store.DeleteDocument(ctx, event.OrganizationID, document.ID, removal); err != nil {

@@ -38,6 +38,119 @@ func testDocumentPublished(overrides func(*knowledgeeventsv1.DocumentPublished))
 	return event
 }
 
+// newHarnessWithBedrockKBDefault is a harness whose knowledge bridge creates
+// bedrock-kb corpora, for testing what happens to a knowledge document that
+// carries only its original bytes.
+func newHarnessWithBedrockKBDefault(t *testing.T) *harness {
+	t.Helper()
+	h := newHarness()
+	h.service = New(h.store, fakeDirectory{}, h.teams, h.files, h.documents, h.vectors, h.retriever, h.generator,
+		h.knowledgeBase, Defaults{Backend: domain.BackendBedrockKB}, nil)
+	h.service.now = func() time.Time { return testClock }
+	return h
+}
+
+// TestDocumentPublishedWithAnOriginalIndexesItOnABedrockKBCorpus: a document
+// with no extracted text — a PDF, an Office file — is still recorded, with
+// no body and the location of its own bytes instead, so the ingest worker
+// can hand that location straight to the knowledge base.
+func TestDocumentPublishedWithAnOriginalIndexesItOnABedrockKBCorpus(t *testing.T) {
+	h := newHarnessWithBedrockKBDefault(t)
+	event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.Body = ""
+		event.MIME = "application/pdf"
+		event.Original = &knowledgeeventsv1.Original{Bucket: "oryxa-knowledge-originals", Key: "org/doc/handbook.pdf", Size: 4096, SHA256: "original-sha"}
+		event.ContentHash = "original-sha"
+	})
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatalf("DocumentPublished() error = %v", err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, "doc_1")
+	if err != nil {
+		t.Fatalf("KnowledgeDocumentMapping: %v", err)
+	}
+	document, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID)
+	if err != nil {
+		t.Fatalf("Document: %v", err)
+	}
+	if !document.HasOriginal() {
+		t.Fatalf("HasOriginal() is false: %+v", document)
+	}
+	if document.OriginalBucket != "oryxa-knowledge-originals" || document.OriginalKey != "org/doc/handbook.pdf" {
+		t.Fatalf("original location did not reach the document: %+v", document)
+	}
+	if document.ContentSHA256 != "original-sha" || document.ByteSize != 4096 {
+		t.Fatalf("content hash/size = %q/%d, want the original's", document.ContentSHA256, document.ByteSize)
+	}
+	corpus, err := h.store.Corpus(context.Background(), testOrganization, document.CorpusID)
+	if err != nil {
+		t.Fatalf("Corpus: %v", err)
+	}
+	if corpus.Backend != domain.BackendBedrockKB {
+		t.Fatalf("corpus backend = %q, want bedrock-kb", corpus.Backend)
+	}
+}
+
+// TestDocumentPublishedWithAnOriginalSkipsANonBedrockKBCorpus: without a
+// knowledge base to parse them, a document's own bytes are not something
+// this bridge can turn into anything searchable, so it is skipped rather
+// than indexed as a title with nothing inside it.
+func TestDocumentPublishedWithAnOriginalSkipsANonBedrockKBCorpus(t *testing.T) {
+	h := newHarness() // pgvector by default
+	event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.Body = ""
+		event.MIME = "application/pdf"
+		event.Original = &knowledgeeventsv1.Original{Bucket: "b", Key: "k", Size: 10, SHA256: "sha-1"}
+		event.ContentHash = "sha-1"
+	})
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatalf("DocumentPublished() error = %v", err)
+	}
+	if len(h.store.documents) != 0 {
+		t.Fatalf("a document with only an original was indexed on a corpus that cannot parse it: %v", h.store.documents)
+	}
+	if _, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, "doc_1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatal("a mapping was recorded for a document that was skipped")
+	}
+}
+
+// TestDocumentPublishedWithAnOriginalOnANonKBCorpusRemovesAPreviouslyIndexedVersion:
+// a document that used to carry text and now carries only its original bytes
+// is removed from a corpus that cannot parse them, rather than left
+// answering from text that no longer matches what the source has —
+// symmetric with the same rule for a body too large to carry.
+func TestDocumentPublishedWithAnOriginalOnANonKBCorpusRemovesAPreviouslyIndexedVersion(t *testing.T) {
+	h := newHarness()
+	first := testDocumentPublished(nil)
+	if err := h.service.DocumentPublished(context.Background(), first); err != nil {
+		t.Fatalf("first DocumentPublished() error = %v", err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, "doc_1")
+	if err != nil {
+		t.Fatalf("KnowledgeDocumentMapping: %v", err)
+	}
+	h.store.chunkIDs[mapping.DocumentID] = []string{"chk_1"}
+
+	becameOriginalOnly := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.Body = ""
+		event.Original = &knowledgeeventsv1.Original{Bucket: "b", Key: "k", Size: 10, SHA256: "sha-2"}
+		event.ContentHash = "sha-2"
+		event.ExtractedAt = testClock.Add(time.Hour)
+	})
+	if err := h.service.DocumentPublished(context.Background(), becameOriginalOnly); err != nil {
+		t.Fatalf("second DocumentPublished() error = %v", err)
+	}
+	if _, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatal("the previously indexed document survived becoming original-only on a non-KB corpus")
+	}
+	if _, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, "doc_1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatal("the mapping survived")
+	}
+	if got := h.vectors.store.deleted[mapping.CorpusID]; len(got) != 1 || got[0] != "chk_1" {
+		t.Fatalf("vectors deleted for %s = %v, want the removed document's one chunk", mapping.CorpusID, got)
+	}
+}
+
 func TestDocumentPublishedCreatesTheOwnersCorpusAndIndexesTheDocument(t *testing.T) {
 	h := newHarness()
 	event := testDocumentPublished(nil)
