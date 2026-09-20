@@ -26,67 +26,54 @@ exactly as much as the room.
 
 ## Becomes
 
-A list route and a room route. The room route is the room.
+A list route and a room route, and the room route is a plain group chat: a
+column of rooms, a column of messages, a box at the bottom. Nothing else
+permanent on screen.
 
-**`/app/rooms`**
+**`/app/rooms`** keeps the organization summary at the top — it is about every
+room, so it does not belong inside one — over a list where each row is the
+faces in that room, its last line, and what is unread.
 
-```
-  Rooms                                              [ + New room ]
-
-  What the organization knows                        Updated 1 hr
-  Firmware 0.9.3 builds clean on the new board. Northwind was chosen
-  for enclosures on shorter lead times. The launch date of the 14th holds.
-  2 decisions · 1 risk                                   See all →
-
-  ┌──────────────────────────────────────────────────────────┐
-  │ [▤] Launch Council            Launch crew · 4 here   3 ● │
-  │     "@member friday works, I'll send the numbers…"       │
-  └──────────────────────────────────────────────────────────┘
-```
-
-**`/app/rooms/$id`** — above 1280px, transcript and rail; below, one column
-with the rail's contents collapsed under the composer.
+**`/app/rooms/$id`**
 
 ```
-  ← Launch Council                                    ⋯
-
-  ┌────────────────────────────────────┐  ┌──────────────────┐
-  │ [S] Shubham            11:04       │  │ In this room     │
-  │ @ledger what did the last two…     │  │ [S] You     here │
-  │                                    │  │ [P] Priya   here │
-  │ [L] Ledger  agent                  │  │ [A] Ada     away │
-  │ The last two Northwind invoices    │  │ [M] Maya  · yours│
-  │ came to $1,250.00 each.            │  │ [L] Ledger·shared│
-  │                                    │  │  pricing sheet   │
-  │ [M] Maya  agent · for Ada  11:09   │  ├──────────────────┤
-  │ Agreed on Friday for the second    │  │ Decided here     │
-  │ mould answer.                      │  │ Northwind at     │
-  │                                    │  │ $4.50 · 1 hr     │
-  └────────────────────────────────────┘  │ Hold the 14th    │
-  ┌────────────────────────────────────┐  │ Owed: Shubham →  │
-  │ Say something…                 ↑   │  │ vendor by Friday │
-  └────────────────────────────────────┘  │        See all → │
-                                          └──────────────────┘
+┌──────────┬─────────────────┬────────────────────────────────────────┐
+│ Home     │ Rooms        +  │ Launch Council            [SH][PR][AD] │
+│ Rooms  3 ├─────────────────┤ Launch crew · 4 here    ✓ 3 decisions ⋯│
+│ Agents   │ Launch Council  ├────────────────────────────────────────┤
+│ Library  │ Maya: Agreed…   │           ──────  Today  ──────        │
+│ Apps     │                 │                                        │
+│          │ Firmware     2  │ [SH] Shubham  11:04                    │
+│          │ Kepler: 0.9.3…  │      @Ledger what did the last two     │
+│          │                 │      Northwind invoices come to?       │
+│          │ Vendors     Tue │                                        │
+│          │ Ada: freight…   │ [L]  Ledger  AGENT  shared · pricing   │
+│          │                 │      $1,250.00 each, on the last two.  │
+│          │                 │ ─────────────────────────────── NEW ── │
+│ Settings │                 │ [PR] Priya  11:12                      │
+│          │                 │      decision: we hold the 14th…       │
+│          │                 │      ✓ Kept as a decision              │
+│          │                 │ ┌────────────────────────────────────┐ │
+│          │                 │ │ Message Launch Council         ↑   │ │
+│          │                 │ └────────────────────────────────────┘ │
+└──────────┴─────────────────┴────────────────────────────────────────┘
 ```
 
-- **The transcript is the page.** It opens scrolled to the end, follows while
-  you are at the end, and stops the moment you scroll back.
-- **People are neutral, agents are Iris.** A person's line carries their
-  initials; an agent's carries its monogram, the word `agent`, and — when it
-  answered in somebody's absence — `for Ada`. This is already built and is the
-  single most important honesty in the room.
-- **The rail is who and what**, not configuration. Presence is a word, not a
-  card. "Shared" and "yours" replace "contributed specialist" and "whisperer".
-- **Decided here** is the ledger, reduced to what a person scanning wants: the
-  decisions, the owed items, and a link. The full ledger is a route of its own
-  (`/app/rooms/$id/decided`), which is also where the noise problem stops being
-  visible on the main screen.
-- **The organization summary moves up a level**, to the rooms list. It is about
-  every room, so it does not belong inside one.
-- Managing the room — contributing a specialist, renaming, deleting — moves
-  into the `⋯` menu and a settings sheet. Three of the current nine sections
-  exist only to configure, and configuration is not what a person comes here to
-  do.
+- **Messages, not cards.** Avatar, bold name, time, and what was said at 15px.
+  Consecutive lines from the same person lose the avatar and keep a hover
+  timestamp. No borders, no tinted boxes — the name is the boundary.
+- **Agents sit in the same column as everybody else**, marked by a quiet
+  `AGENT` tag and, when they answer for somebody who is away, `standing in for
+  Ada`. This is the room's central honesty and it costs one tag.
+- **A decision is marked where it happened** — "✓ Kept as a decision" under the
+  message — rather than filed silently into a ledger nobody has open.
+- **The ledger is a pill in the header** (`✓ 3 decisions`) that opens
+  `/app/rooms/$id/decided`. No permanent right rail: who is here is the
+  facepile, and everything else is a click.
+- **The unread line is a rule across the column** with NEW at its end, drawn
+  where the person left off — no button to press, no catch-up to remember.
+- Managing the room — contributing a specialist, renaming, deleting — lives in
+  the `⋯` menu.
 
 ## Deleted
 
@@ -122,8 +109,8 @@ with the rail's contents collapsed under the composer.
 - **Room answering:** the wait appears where the answer will be, with the seat
   that is thinking. Today the composer disables and says "The room is
   answering…", which is honest but puts the wait in the wrong place.
-- **Been away:** a divider line in the transcript — "12 lines since you were
-  here · Catch me up" — instead of a button that a person has to think to press.
+- **Been away:** the NEW rule sits where you left off, and the brief is one
+  click behind it — never a button you have to think to press.
 - **Paused room:** the composer is replaced by one line saying who paused it.
 
 ## Needs from the backend

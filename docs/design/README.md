@@ -16,6 +16,10 @@ argued with, not admired.
 | [components.md](components.md) | Cards, rows, buttons, badges, and the four states every surface owes a person |
 | [pages/](pages) | One file per screen: what it is for, what is wrong, what it becomes |
 
+The specimen — the room, the three colour candidates, type in place, and the
+avatars — is a canvas beside this plan rather than a file in it; the room is
+the thing to judge first.
+
 ## The pages
 
 | Page | Route | Phase |

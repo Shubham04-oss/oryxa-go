@@ -35,29 +35,36 @@ That is the entire list.
 - To mean "AI": no `Sparkles`, no `WandSparkles`, no `BrainCircuit`, no `Bot`.
   An agent is represented by who it is, below.
 
-## An agent is a monogram, not a robot
+## An avatar wherever a glyph stood for somebody
 
-The single change that takes the generic feeling out of the app.
+The icon set itself is fine. What has to go is the glyph standing in for a
+*who*: every place that shows a robot, a network node or a plug is a place
+that should show the face of whoever it means.
 
-Every agent already has a name — Maya-XFZP, Cora-RGMI, Ledger. So:
+- **People** — a 36px rounded square (radius 8), initials in 14/600, on a
+  muted ground picked by a stable hash of the user id: sand, dusk, clay, sage,
+  slate. Desaturated on purpose, so a roster does not turn into confetti. A
+  real photo replaces it the moment there is one.
+- **Agents** — the same square, solid and dark, initial in white. An agent
+  never reads as a colleague at a glance, and the tag beside its name says the
+  rest. (Under palette option B, agents carry Iris here instead of the dark
+  ground — the shape and sizes do not change either way.)
+- **Shared specialists** — the agent avatar with a hairline ring, which is
+  what distinguishes "the team's pricing specialist" from "Ada's own agent"
+  without a word of explanation.
+- **Apps** — their own logo at 20px inside a neutral square. GitHub is
+  GitHub's mark, never a plug.
+- **A room** — the facepile of who is in it, three avatars overlapped at -8px
+  with a 2px surface ring. A room is the people in it; that is also the only
+  thing about it you would recognise from across a list.
 
-- **Agents:** a 28px squircle, the first letter of the name in 13/600, white on
-  a tint derived from the name. The tints are five steps around Iris (`#5B53C9`
-  at 100%, 88%, 76%, 64%, 52% lightness of the same hue), picked by a stable
-  hash of the agent id, so an agent looks the same everywhere forever and two
-  agents in a room rarely collide.
-- **People:** the same squircle in neutral — `--surface-strong` with `--ink`
-  initials. People are not tinted; only agents are. That single rule means a
-  room transcript can be read at a glance: warm-neutral lines are people,
-  Iris-marked lines are agents.
-- **Shared specialists** get the agent monogram with a hairline `--agent-edge`
-  ring, which is what distinguishes "the team's pricing specialist" from
-  "Ada's own agent" without a word of explanation.
-- **Apps** use their real logo at 20px, monochrome only when the brand has no
-  usable mark.
+Sizes: 20 inline, 28 in lists and rosters, 36 in a message row, 44 on a detail
+header. Radius 8 at every size except 20, which takes 6.
 
-Sizes: 20px inline in a message line, 28px in rosters and lists, 40px on a
-detail page header.
+Beside the name, an agent carries a quiet `AGENT` tag — 11/600, neutral tint,
+the same pattern Slack uses to mark an app. When it is answering in somebody's
+absence it also carries `standing in for Ada`, which is the one thing a reader
+must never have to work out for themselves.
 
 ## The rest of the icon set
 

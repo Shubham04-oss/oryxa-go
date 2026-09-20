@@ -54,9 +54,12 @@ There is no dark mode at all: 5,159 lines of CSS, one `color-scheme: light`, no
    "contributed specialist" to a colleague, it does not go on screen.
 3. **One page, one job, one primary action.** Everything else is quiet.
 4. **Colour means something.** Action, identity, status, danger. Never
-   decoration, never two accents in one card.
-5. **An icon must do work.** Navigation, a repeated verb in a dense row, a
-   status mark. Not a mascot beside a heading.
+   decoration, never two accents in one card. How much colour — see the three
+   candidates in [foundations.md](foundations.md); the room is drawn in the
+   quietest of them.
+5. **An icon must do work,** and never stands in for a person. Navigation, a
+   repeated verb in a dense row, a status mark — everything that means a who
+   is an avatar.
 6. **Delete before you design.** A screen that survives this plan is a screen
    that earned it.
 

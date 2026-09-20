@@ -7,11 +7,30 @@ once they do, most of the "it feels cheap" problem is already gone.
 
 The base is right and stays: a warm grey canvas with warm near-black ink. What
 is missing is everything on top of it. Today the theme defines three accent
-slots — `--workspace-warm`, `--workspace-rose`, `--workspace-sage` — and sets
-all three to the same grey, while the markup still asks for three different
-colours. The product is not monochrome by design. It is monochrome by erasure.
+slots — `--workspace-warm`, `--workspace-rose` and `--workspace-sage` — and
+sets all three to the same grey, while the markup still asks for three
+different colours. The product is not monochrome by design. It is monochrome
+by erasure.
 
-Five hues, each with an ink and a soft tint. That is the whole palette.
+**Three candidates, not yet decided.** The specimen draws each one over the
+same two messages, because a palette can only be judged in place:
+
+- **A · Quiet.** One accent, used four times: the room you are in, the unread
+  line, an @mention, and send. Agents are told apart by a tag rather than a
+  colour, the way Slack marks an app. Content stays white and near-black
+  throughout. This is what the room screen in the specimen is drawn in.
+- **B · Ember and Iris.** The full palette below. Every agent carries Iris, so
+  a room full of them is readable at a glance and a colleague is never mistaken
+  for their stand-in — at the cost of more colour to keep disciplined
+  everywhere else.
+- **C · Dark rail.** The navigation rail carries the identity, the working area
+  stays plain, and dark mode is half-built the day it ships. Also the most like
+  every other team chat.
+
+Whichever wins, the token names below are what the code uses, so the decision
+is a value change rather than a rewrite. The five hues are the full set under
+option B; A and C use the neutrals plus one accent and keep the rest for
+status.
 
 ### Light
 
@@ -94,25 +113,34 @@ tokens are defined now so nothing has to be redone later.
 ## Type
 
 Everything on screen today sits between 10px and 13px, in grey. That is the
-main reason the app reads as texture rather than content.
+main reason the app reads as texture rather than content — and the reason a
+message, which is the thing people are actually here to read, is smaller than
+most buttons.
 
-One family (Geist Variable, already loaded), one scale:
+The rule: **the message is the biggest thing on its row.** A chat is read at
+speed, so what somebody said is set at 15px and everything around it gets out
+of the way. Bold names carry the rhythm, which is what removes the need for a
+box around every line.
 
 | Role | Size / line / weight | Where |
 | --- | --- | --- |
-| Display | 28 / 1.2 / 600 | the home greeting, nowhere else |
-| Title | 20 / 1.3 / 600 | page title |
-| Section | 15 / 1.4 / 600 | section headings |
-| Body | 14 / 1.55 / 400 | everything a person reads |
-| Secondary | 13 / 1.5 / 400 | supporting lines |
-| Caption | 12 / 1.4 / 500 | timestamps, counts, meta |
-| Badge | 11 / 1 / 600, `0.04em` | uppercase labels, 12 characters maximum |
+| Display | 26 / 1.2 / 600 | the home greeting, nowhere else |
+| Title | 20 / 1.3 / 600 | page title, room name |
+| Name | 15 / 1.3 / 700 | who said it |
+| Message | 15 / 1.47 / 400 | what they said, and any prose read at speed |
+| Body | 14 / 1.55 / 400 | forms, settings, descriptions |
+| Caption | 12 / 1.4 / 500 | time, counts, meta |
+| Badge | 11 / 1 / 600, `0.03em` | AGENT, status, kind — 12 characters maximum |
 
 11px is allowed only in a badge. Nothing below 12px carries a sentence.
 
-Figures in any table, counter, or price use `font-variant-numeric:
-tabular-nums`. Body copy sets `text-wrap: pretty`; titles set `text-wrap:
-balance`.
+The face stays **Geist**, which is already loaded and costs nothing. The
+specimen shows one alternative, Instrument Sans, set in the same places — a
+little narrower and more spoken. Either works; Geist is the default unless the
+alternative wins on sight.
+
+Figures in any table or counter use `font-variant-numeric: tabular-nums`. Body
+copy sets `text-wrap: pretty`; titles set `text-wrap: balance`.
 
 ## Space
 
