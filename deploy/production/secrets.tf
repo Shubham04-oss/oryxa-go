@@ -4,11 +4,16 @@
 # enter the state. The oryxa tasks read them at start through ECS.
 
 locals {
-  external_secrets = {
-    COMPOSIO_API_KEY            = "composio-api-key"
-    COMPOSIO_WEBHOOK_SECRET     = "composio-webhook-secret"
-    COGNITO_AGENT_CLIENT_SECRET = "cognito-agent-client-secret"
-  }
+  external_secrets = merge(
+    {
+      COMPOSIO_API_KEY            = "composio-api-key"
+      COMPOSIO_WEBHOOK_SECRET     = "composio-webhook-secret"
+      COGNITO_AGENT_CLIENT_SECRET = "cognito-agent-client-secret"
+    },
+    # Only when Jev judges: the tasks cannot start while a secret they name
+    # holds no value, so it exists only once there is one to put in it.
+    var.knowledge_judge == "jev" ? { TYPESAFE_API_KEY = "typesafe-api-key" } : {},
+  )
 }
 
 resource "aws_secretsmanager_secret" "external" {
