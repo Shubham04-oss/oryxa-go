@@ -268,8 +268,12 @@ func (store *Store) Delete(ctx context.Context, scope Scope, id string) error {
 		return recordLifecycle(ctx, tx, agentsv1.AgentDeletedDetailType, current)
 	})
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23503" &&
-		(pgErr.ConstraintName == "member_agent_team_members_agent_fk" || pgErr.ConstraintName == "teamspace_agent_contributions_agent_fk") {
+	// Both references are ON DELETE RESTRICT, which Postgres reports as
+	// restrict_violation (23001) rather than the foreign_key_violation
+	// (23503) a deferred constraint would raise. Reading only the latter let
+	// the raw database error reach the member, who was told an internal
+	// error had happened rather than that their specialist is on a team.
+	if errors.As(err, &pgErr) && (pgErr.Code == "23001" || pgErr.Code == "23503") && agentInUse(pgErr.ConstraintName) {
 		return fmt.Errorf("%w: remove the specialist from its teams and teamspaces first", ErrInUse)
 	}
 	return err
@@ -370,4 +374,24 @@ func generatedName() (string, error) {
 func isNameConflict(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "member_agents_org_name_idx"
+}
+
+// agentInUse names every reference that keeps an agent from being deleted: a
+// team it is on, a teamspace it was contributed to, and a team it coordinates.
+// Each is ON DELETE RESTRICT, and each means the same thing to a member —
+// something still points at this agent, and they are told which rather than
+// being shown a database error.
+//
+// The coordinator reference cannot be reached today: a team's coordinator is
+// always its member's primary agent, and deleting that is refused above. It is
+// listed so that this stays true by accident rather than by luck.
+func agentInUse(constraint string) bool {
+	switch constraint {
+	case "member_agent_team_members_agent_fk",
+		"member_agent_teams_coordinator_agent_id_fkey",
+		"teamspace_agent_contributions_agent_fk":
+		return true
+	default:
+		return false
+	}
 }

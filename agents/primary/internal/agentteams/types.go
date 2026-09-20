@@ -15,6 +15,10 @@ var (
 	ErrConflict  = errors.New("agent team name is already in use")
 	ErrDisabled  = errors.New("agent team is disabled")
 	ErrForbidden = errors.New("agent is not the team coordinator")
+	// ErrInUse is a team something still points at: a durable workflow runs
+	// it, so deleting the team would leave that workflow with nothing to
+	// dispatch to.
+	ErrInUse = errors.New("agent team is in use")
 )
 
 type Status string
