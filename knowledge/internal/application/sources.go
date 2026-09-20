@@ -234,7 +234,12 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 		// Answering not-found tells the caller nothing they did not know.
 		return domain.ErrNotFound
 	}
-	return s.store.RemoveSource(ctx, organizationID, sourceID, s.now(), s.retractions(knowledgev1.RemovedReasonSourceRemoved))
+	pending := &pendingOriginals{}
+	if err := s.store.RemoveSource(ctx, organizationID, sourceID, s.now(), s.retractions(knowledgev1.RemovedReasonSourceRemoved, pending)); err != nil {
+		return err
+	}
+	s.deleteOriginals(ctx, pending)
+	return nil
 }
 
 // SyncSource reads a source now rather than at its next interval.
@@ -299,11 +304,15 @@ func (s *Service) Document(ctx context.Context, credentials authclient.Credentia
 	return document, nil
 }
 
-// retractions builds the events that say a source's documents are gone.
-func (s *Service) retractions(reason string) func(domain.Source, []domain.Document) ([]domain.Event, error) {
+// retractions builds the events that say a source's documents are gone, and
+// notes their originals in pending, for the caller to delete once the
+// retraction has committed: the builder runs inside the transaction, which
+// may still roll back and keep the documents.
+func (s *Service) retractions(reason string, pending *pendingOriginals) func(domain.Source, []domain.Document) ([]domain.Event, error) {
 	return func(source domain.Source, documents []domain.Document) ([]domain.Event, error) {
 		events := make([]domain.Event, 0, len(documents))
 		for _, document := range documents {
+			pending.add(document.Original)
 			event, err := s.documentRemoved(source, document, reason)
 			if err != nil {
 				return nil, err

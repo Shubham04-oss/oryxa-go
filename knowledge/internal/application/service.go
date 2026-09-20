@@ -58,6 +58,17 @@ type Store interface {
 	UpsertDocument(context.Context, domain.Document, func(domain.Document) (domain.Event, error)) (bool, error)
 	RetractUnseen(context.Context, string, time.Time, time.Time, func(domain.Document) (domain.Event, error)) (int, error)
 	Document(context.Context, string, string) (domain.Document, error)
+	// DocumentByExternalID reads one document, whatever its removed_at, as a
+	// source's own extractor names it. keepOriginal uses it to find a
+	// document's stable id and its previous Original before deciding whether
+	// its bytes are worth writing again.
+	DocumentByExternalID(context.Context, string, string) (domain.Document, error)
+	// RetractDocument forgets one document immediately, named by the
+	// provider's own id for it: Page.Removed says a page's own incremental
+	// feed already knows it is gone, so nothing here waits for the next full
+	// sweep to notice the same thing the slow way. Answers the document
+	// retracted and whether there was a live one to.
+	RetractDocument(context.Context, string, string, time.Time, func(domain.Document) (domain.Event, error)) (domain.Document, bool, error)
 
 	Cursor(context.Context, string) (domain.Cursor, error)
 	SaveCursor(context.Context, domain.Cursor) error
@@ -101,14 +112,32 @@ type Grants interface {
 	MemberToken(ctx context.Context, organizationID, memberID string) (string, error)
 }
 
+// Originals is where a document's own bytes are kept when knowledge does not
+// read them itself — a PDF, an Office file — so a backend that can parse one
+// still gets to. Nil (KNOWLEDGE_ORIGINALS_BUCKET unset) means such a document
+// is skipped instead, the same as before this existed.
+type Originals interface {
+	// Put writes content under key, replacing whatever was there. mime is the
+	// original's own content type, for the object's metadata.
+	Put(ctx context.Context, key string, content []byte, mime string) error
+	// Delete removes an object a document no longer needs: it was superseded
+	// by a new version at a new, content-addressed key, or the document
+	// itself was retracted. Deleting a key that is already gone is not an
+	// error — the end state is what a caller of Delete wants, not a
+	// particular starting one.
+	Delete(ctx context.Context, key string) error
+}
+
 type Dependencies struct {
 	Store      Store
 	Directory  Directory
 	Apps       Apps
 	Grants     Grants
 	Extractors sources.Registry
-	Logger     *slog.Logger
-	Clock      func() time.Time
+	// Originals is nil unless KNOWLEDGE_ORIGINALS_BUCKET is configured.
+	Originals Originals
+	Logger    *slog.Logger
+	Clock     func() time.Time
 }
 
 type Config struct {
@@ -119,29 +148,37 @@ type Config struct {
 	// a source's first pass. Zero (the caller built Config directly, such as
 	// a test) defaults to domain.DefaultFullSweepInterval.
 	FullSweepInterval time.Duration
+	// OriginalsBucket names the bucket Originals writes to, carried on every
+	// published Original so a consumer knows where to read it from. Empty
+	// unless Dependencies.Originals is set.
+	OriginalsBucket string
 }
 
 type Service struct {
-	store      Store
-	directory  Directory
-	apps       Apps
-	grants     Grants
-	extractors sources.Registry
-	logger     *slog.Logger
-	now        func() time.Time
-	config     Config
+	store           Store
+	directory       Directory
+	apps            Apps
+	grants          Grants
+	extractors      sources.Registry
+	originals       Originals
+	originalsBucket string
+	logger          *slog.Logger
+	now             func() time.Time
+	config          Config
 }
 
 func New(dependencies Dependencies, config Config) *Service {
 	service := &Service{
-		store:      dependencies.Store,
-		directory:  dependencies.Directory,
-		apps:       dependencies.Apps,
-		grants:     dependencies.Grants,
-		extractors: dependencies.Extractors,
-		logger:     dependencies.Logger,
-		now:        dependencies.Clock,
-		config:     config,
+		store:           dependencies.Store,
+		directory:       dependencies.Directory,
+		apps:            dependencies.Apps,
+		grants:          dependencies.Grants,
+		extractors:      dependencies.Extractors,
+		originals:       dependencies.Originals,
+		originalsBucket: config.OriginalsBucket,
+		logger:          dependencies.Logger,
+		now:             dependencies.Clock,
+		config:          config,
 	}
 	if service.logger == nil {
 		service.logger = slog.New(slog.DiscardHandler)
@@ -216,6 +253,13 @@ func (s *Service) documentPublished(source domain.Source, document domain.Docume
 		published.BodyOmitted = true
 	} else {
 		published.Body = document.Body
+	}
+	if original := document.Original; original != nil {
+		// A document kept as its own bytes has no body at all; this is the
+		// only way a consumer learns where to read it from.
+		published.Original = &knowledgev1.Original{
+			Bucket: original.Bucket, Key: original.Key, Size: original.Size, SHA256: original.SHA256,
+		}
 	}
 	return s.event(knowledgev1.DocumentPublishedDetailType, published)
 }

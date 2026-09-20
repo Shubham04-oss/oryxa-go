@@ -31,6 +31,15 @@ describe("availableSourceProviders / supportsSourceProvider", () => {
 		expect(supportsSourceProvider(["slack"], "github")).toBe(false);
 		expect(supportsSourceProvider(["github"], "jira")).toBe(false);
 	});
+
+	it("offers google drive and gmail once knowledge mounts them", () => {
+		expect(
+			availableSourceProviders(["gmail", "googledrive", "github"]),
+		).toEqual(["github", "googledrive", "gmail"]);
+		expect(supportsSourceProvider(["googledrive"], "googledrive")).toBe(true);
+		expect(supportsSourceProvider(["gmail"], "gmail")).toBe(true);
+		expect(supportsSourceProvider(["github"], "gmail")).toBe(false);
+	});
 });
 
 describe("sourceTargetField", () => {
@@ -43,6 +52,13 @@ describe("sourceTargetField", () => {
 		expect(sourceTargetField("slack")).toMatchObject({
 			label: "Channel ID",
 			required: true,
+		});
+		expect(sourceTargetField("googledrive")).toMatchObject({
+			required: false,
+		});
+		expect(sourceTargetField("gmail")).toMatchObject({
+			label: "Label",
+			required: false,
 		});
 	});
 });
@@ -67,6 +83,18 @@ describe("sourceTargetPayload", () => {
 			database: "db-123",
 		});
 	});
+
+	it("leaves google drive's target empty for the whole drive, or names a folder", () => {
+		expect(sourceTargetPayload("googledrive", " ")).toEqual({});
+		expect(sourceTargetPayload("googledrive", " 1AbC ")).toEqual({
+			folder: "1AbC",
+		});
+	});
+
+	it("leaves gmail's target empty for the inbox, or names a label", () => {
+		expect(sourceTargetPayload("gmail", "")).toEqual({});
+		expect(sourceTargetPayload("gmail", "SENT")).toEqual({ label: "SENT" });
+	});
 });
 
 describe("sourceTargetProblem", () => {
@@ -85,6 +113,15 @@ describe("sourceTargetProblem", () => {
 	it("never refuses notion's target: it is optional", () => {
 		expect(sourceTargetProblem("notion", "")).toBeUndefined();
 		expect(sourceTargetProblem("notion", "db-123")).toBeUndefined();
+	});
+
+	it("takes google drive's and gmail's targets blank, or as an id", () => {
+		expect(sourceTargetProblem("googledrive", "")).toBeUndefined();
+		expect(sourceTargetProblem("googledrive", "1AbC")).toBeUndefined();
+		expect(sourceTargetProblem("googledrive", "Team folder")).toBeDefined();
+		expect(sourceTargetProblem("gmail", "")).toBeUndefined();
+		expect(sourceTargetProblem("gmail", "Label_12")).toBeUndefined();
+		expect(sourceTargetProblem("gmail", "My receipts")).toBeDefined();
 	});
 });
 
@@ -106,6 +143,21 @@ describe("sourceTargetLabel", () => {
 			"Database db-123",
 		);
 		expect(sourceTargetLabel("notion", {})).toBe("All pages");
+	});
+
+	it("reads google drive's folder, or names the whole drive", () => {
+		expect(sourceTargetLabel("googledrive", {})).toBe("My Drive");
+		expect(sourceTargetLabel("googledrive", { folder: "1AbC" })).toBe(
+			"Folder 1AbC",
+		);
+	});
+
+	it("reads gmail's label, the inbox when there is none", () => {
+		expect(sourceTargetLabel("gmail", {})).toBe("Inbox");
+		expect(sourceTargetLabel("gmail", { label: "SENT" })).toBe("Sent");
+		expect(sourceTargetLabel("gmail", { label: "Label_12" })).toBe(
+			"Label Label_12",
+		);
 	});
 });
 

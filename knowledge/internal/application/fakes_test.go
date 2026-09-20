@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"testing"
 	"time"
+
+	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -382,6 +385,44 @@ func (store *fakeStore) Document(_ context.Context, _, documentID string) (domai
 	return domain.Document{}, domain.ErrNotFound
 }
 
+// DocumentByExternalID mirrors the real store: it answers a document
+// whatever its removed_at, the same lookup UpsertDocument's own internal
+// query makes.
+func (store *fakeStore) DocumentByExternalID(_ context.Context, sourceID, externalID string) (domain.Document, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	document, ok := store.documents[sourceID+"\x00"+externalID]
+	if !ok {
+		return domain.Document{}, domain.ErrNotFound
+	}
+	return document, nil
+}
+
+// RetractDocument mirrors the real store: it retracts one live document named
+// by its external id, and answers false rather than retracting anything a
+// second time.
+func (store *fakeStore) RetractDocument(_ context.Context, sourceID, externalID string, now time.Time, event func(domain.Document) (domain.Event, error)) (domain.Document, bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := sourceID + "\x00" + externalID
+	document, ok := store.documents[key]
+	if !ok || document.RemovedAt != nil {
+		return domain.Document{}, false, nil
+	}
+	removed := now
+	document.RemovedAt = &removed
+	document.Body = ""
+	store.documents[key] = document
+	if event != nil {
+		recorded, err := event(document)
+		if err != nil {
+			return domain.Document{}, false, err
+		}
+		store.events = append(store.events, recorded)
+	}
+	return document, true, nil
+}
+
 func (store *fakeStore) Cursor(_ context.Context, sourceID string) (domain.Cursor, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -488,6 +529,26 @@ func (store *fakeStore) publishedReasons(detailType string) []string {
 	return reasons
 }
 
+// publishedDocuments decodes every DocumentPublished the store was given, so a
+// test can check what a consumer is actually told.
+func (store *fakeStore) publishedDocuments(t *testing.T) []knowledgev1.DocumentPublished {
+	t.Helper()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var documents []knowledgev1.DocumentPublished
+	for _, event := range store.events {
+		if event.DetailType != knowledgev1.DocumentPublishedDetailType {
+			continue
+		}
+		var document knowledgev1.DocumentPublished
+		if err := json.Unmarshal(event.Data, &document); err != nil {
+			t.Fatalf("decode a published document: %v", err)
+		}
+		documents = append(documents, document)
+	}
+	return documents
+}
+
 func (store *fakeStore) published(detailType string) int {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -566,6 +627,52 @@ func (grants *fakeGrants) MemberToken(_ context.Context, organizationID, memberI
 		return "", grants.err
 	}
 	return grants.token, nil
+}
+
+// fakeOriginals is the bucket a document's own bytes would be kept in,
+// recording what was stored and removed so a test can assert on it without
+// touching S3.
+type fakeOriginals struct {
+	mu      sync.Mutex
+	objects map[string][]byte
+	types   map[string]string
+	putErr  error
+
+	puts    []string
+	deletes []string
+}
+
+func newFakeOriginals() *fakeOriginals {
+	return &fakeOriginals{objects: map[string][]byte{}, types: map[string]string{}}
+}
+
+func (originals *fakeOriginals) Put(_ context.Context, key string, content []byte, mime string) error {
+	originals.mu.Lock()
+	defer originals.mu.Unlock()
+	originals.puts = append(originals.puts, key)
+	if originals.putErr != nil {
+		return originals.putErr
+	}
+	stored := make([]byte, len(content))
+	copy(stored, content)
+	originals.objects[key] = stored
+	originals.types[key] = mime
+	return nil
+}
+
+func (originals *fakeOriginals) Delete(_ context.Context, key string) error {
+	originals.mu.Lock()
+	defer originals.mu.Unlock()
+	originals.deletes = append(originals.deletes, key)
+	delete(originals.objects, key)
+	return nil
+}
+
+func (originals *fakeOriginals) has(key string) bool {
+	originals.mu.Lock()
+	defer originals.mu.Unlock()
+	_, ok := originals.objects[key]
+	return ok
 }
 
 // fakeExtractor serves scripted pages, so a test can shape a walk exactly.

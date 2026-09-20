@@ -1,10 +1,14 @@
 package sources
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,6 +209,80 @@ func TestComposioDoerMapsAccountTroubleToNeedsReconnect(t *testing.T) {
 	}
 }
 
+// TestComposioDoerFollowsABinaryLinkWhenAllowed covers Drive's export and
+// alt=media downloads: Composio never returns a file's bytes inline, only a
+// link to where it stored them, and this is the one case where following
+// that link is what the caller actually wants rather than ErrUnsupportedType.
+func TestComposioDoerFollowsABinaryLinkWhenAllowed(t *testing.T) {
+	proxy := &fakeProxier{responses: []composio.ProxyResponse{
+		{Status: http.StatusOK, Binary: &composio.BinaryData{URL: "https://storage.example.test/f1", ContentType: "application/pdf"}},
+	}}
+	fetched := []string{}
+	doer := &composioDoer{proxy: proxy, binaries: func(_ context.Context, url string) ([]byte, error) {
+		fetched = append(fetched, url)
+		return []byte("%PDF-1.4 fake"), nil
+	}}
+	client, _ := testClient(t, doer)
+
+	response, err := client.Do(AllowBinary(context.Background()), request(t), composioCredential("ca_1"))
+	if err != nil {
+		t.Fatalf("Do() error = %v", err)
+	}
+	if string(response.Body) != "%PDF-1.4 fake" {
+		t.Fatalf("Do() body = %s, want the bytes fetched from Composio's own link", response.Body)
+	}
+	if response.Header.Get("Content-Type") != "application/pdf" {
+		t.Fatalf("Content-Type = %q, want the binary's own content type", response.Header.Get("Content-Type"))
+	}
+	if len(fetched) != 1 || fetched[0] != "https://storage.example.test/f1" {
+		t.Fatalf("fetched = %v, want exactly the link Composio answered with", fetched)
+	}
+}
+
+// TestComposioDoerStillRefusesBinaryWithoutAFetcher covers a doer that was
+// told a binary is allowed but has no way to actually get one — every doer
+// built through a bare composioDoer{proxy: ...} literal, as every other test
+// in this file uses, which must keep refusing exactly as before. As with
+// TestComposioDoerMapsABinaryAnswerToUnsupportedType, the refusal is not a
+// status the retrying transport recognises as permanent, so every attempt is
+// scripted the same.
+func TestComposioDoerStillRefusesBinaryWithoutAFetcher(t *testing.T) {
+	binary := composio.ProxyResponse{Status: http.StatusOK, Binary: &composio.BinaryData{URL: "https://storage.example.test/f1"}}
+	responses := make([]composio.ProxyResponse, maxAttempts)
+	for i := range responses {
+		responses[i] = binary
+	}
+	proxy := &fakeProxier{responses: responses}
+	client, _ := testClient(t, &composioDoer{proxy: proxy})
+
+	_, err := client.Do(AllowBinary(context.Background()), request(t), composioCredential("ca_1"))
+	if !errors.Is(err, domain.ErrUnsupportedType) {
+		t.Fatalf("Do() error = %v, want ErrUnsupportedType: AllowBinary alone is not enough without a way to fetch one", err)
+	}
+}
+
+// TestDoWithLimitBoundsABinaryDownloadSeparatelyFromDo covers Drive's own
+// files being allowed up to sources.MaxOriginalBytes even though it is far
+// larger than the maxResponseBytes a page of JSON is bounded to.
+func TestDoWithLimitBoundsABinaryDownloadSeparatelyFromDo(t *testing.T) {
+	big := bytes.Repeat([]byte("a"), maxResponseBytes+1)
+	binary := composio.ProxyResponse{Status: http.StatusOK, Binary: &composio.BinaryData{URL: "https://storage.example.test/big"}}
+	proxy := &fakeProxier{responses: []composio.ProxyResponse{binary, binary}}
+	doer := &composioDoer{proxy: proxy, binaries: func(context.Context, string) ([]byte, error) { return big, nil }}
+	client, _ := testClient(t, doer)
+
+	if _, err := client.Do(AllowBinary(context.Background()), request(t), composioCredential("ca_1")); err == nil {
+		t.Fatal("Do() accepted a body larger than maxResponseBytes")
+	}
+	response, err := client.DoWithLimit(AllowBinary(context.Background()), request(t), composioCredential("ca_1"), MaxOriginalBytes)
+	if err != nil {
+		t.Fatalf("DoWithLimit() error = %v, want the larger ceiling to admit it", err)
+	}
+	if len(response.Body) != len(big) {
+		t.Fatalf("DoWithLimit() body = %d bytes, want %d", len(response.Body), len(big))
+	}
+}
+
 func TestComposioDoerStopsOnCancellation(t *testing.T) {
 	proxy := &fakeProxier{errs: []error{context.Canceled}}
 	client, _ := testClient(t, &composioDoer{proxy: proxy})
@@ -213,5 +291,55 @@ func TestComposioDoerStopsOnCancellation(t *testing.T) {
 
 	if _, err := client.Do(ctx, request(t), composioCredential("ca_1")); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Do() error = %v, want context.Canceled", err)
+	}
+}
+
+// Composio's stored-file link arrives in a response, so it must never reach
+// the task's metadata endpoint, a loopback or a private network.
+func TestPublicAddressKeepsStoredFilesOffInternalNetworks(t *testing.T) {
+	for address, want := range map[string]bool{
+		"52.216.1.1":      true,
+		"2600:1f14::1":    true,
+		"169.254.169.254": false, // the instance metadata service
+		"169.254.170.2":   false, // the ECS task metadata endpoint
+		"127.0.0.1":       false,
+		"::1":             false,
+		"10.40.1.5":       false, // this VPC
+		"172.16.0.1":      false,
+		"192.168.1.2":     false,
+		"100.64.0.1":      false,
+		"0.0.0.0":         false,
+		"::ffff:10.0.0.1": false,
+		"fd00::1":         false,
+		"224.0.0.1":       false,
+	} {
+		if got := publicAddress(netip.MustParseAddr(address)); got != want {
+			t.Errorf("publicAddress(%s) = %v, want %v", address, got, want)
+		}
+	}
+}
+
+func TestFetchBinaryRefusesPlainHTTP(t *testing.T) {
+	if _, err := fetchBinary(context.Background(), "http://example.com/file.pdf"); err == nil {
+		t.Fatal("fetched a stored file over plain http")
+	}
+}
+
+// A link that resolves to a loopback address is refused when the connection
+// is made, not by looking at the host name, so DNS cannot smuggle it in.
+func TestFetchBinaryRefusesAnInternalAddressAtConnectTime(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte("secret"))
+	}))
+	defer server.Close()
+	client := &http.Client{Transport: storedFiles.Transport.(*http.Transport).Clone(), CheckRedirect: storedFiles.CheckRedirect}
+	client.Transport.(*http.Transport).TLSClientConfig = server.Client().Transport.(*http.Transport).TLSClientConfig
+	_, err := fetchStoredFile(context.Background(), client, server.URL)
+	if err == nil {
+		t.Fatal("fetched a stored file from a loopback address")
+	}
+	// Refused by the address check itself, not by anything about TLS.
+	if !strings.Contains(err.Error(), "public address") {
+		t.Fatalf("error = %v, want the public-address refusal", err)
 	}
 }

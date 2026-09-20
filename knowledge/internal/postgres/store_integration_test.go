@@ -305,6 +305,137 @@ func TestRetractUnseenEmptiesTheBodyItForgot(t *testing.T) {
 	}
 }
 
+// TestUpsertDocumentStoresAndClearsAnOriginal covers the three columns a
+// document whose bytes knowledge does not read itself is written with, and
+// that a later write without an Original — which nothing here actually does
+// today, but the column is nullable, not conditionally required — clears them
+// rather than leaving a stale bucket and key behind.
+func TestUpsertDocumentStoresAndClearsAnOriginal(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "pdf-1", strings.Repeat("a", 64))
+	document.Original = &domain.Original{Bucket: "oryxa-knowledge-originals", Key: "originals/org_1/src/doc/aaaa", Size: 1234}
+
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+	read, err := store.DocumentByExternalID(ctx, source.ID, "pdf-1")
+	if err != nil {
+		t.Fatalf("DocumentByExternalID() error = %v", err)
+	}
+	if read.Original == nil {
+		t.Fatal("DocumentByExternalID() Original = nil, want the bucket and key written")
+	}
+	if read.Original.Bucket != document.Original.Bucket || read.Original.Key != document.Original.Key ||
+		read.Original.Size != document.Original.Size {
+		t.Fatalf("Original = %+v, want %+v", read.Original, document.Original)
+	}
+	if read.Original.SHA256 != read.ContentHash {
+		t.Fatalf("Original.SHA256 = %q, want the document's own content hash (%q)", read.Original.SHA256, read.ContentHash)
+	}
+
+	document.ContentHash = strings.Repeat("b", 64)
+	document.Original = nil
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatalf("UpsertDocument() [clearing] error = %v", err)
+	}
+	cleared, err := store.DocumentByExternalID(ctx, source.ID, "pdf-1")
+	if err != nil {
+		t.Fatalf("DocumentByExternalID() error = %v", err)
+	}
+	if cleared.Original != nil {
+		t.Fatalf("Original = %+v, want nil once a write no longer carries one", cleared.Original)
+	}
+}
+
+// TestDocumentByExternalIDAnswersNotFoundForAnUnknownDocument covers the
+// lookup keepOriginal makes before deciding whether a document's bytes are
+// worth writing again.
+func TestDocumentByExternalIDAnswersNotFoundForAnUnknownDocument(t *testing.T) {
+	store := openTestStore(t)
+	source := testSource(t, store, "org_1")
+
+	if _, err := store.DocumentByExternalID(context.Background(), source.ID, "nope"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("DocumentByExternalID() error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestDocumentByExternalIDAnswersARemovedDocumentToo covers why this cannot
+// simply be Document(): a document a full sweep already retracted must still
+// answer here, so a provider's own incremental feed reporting the same
+// document again reuses its stable id rather than minting a new one.
+func TestDocumentByExternalIDAnswersARemovedDocumentToo(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "issue-1", strings.Repeat("a", 64))
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+	later := testClock.Add(time.Hour)
+	if _, err := store.RetractUnseen(ctx, source.ID, later, later, nil); err != nil {
+		t.Fatalf("RetractUnseen() error = %v", err)
+	}
+
+	read, err := store.DocumentByExternalID(ctx, source.ID, "issue-1")
+	if err != nil {
+		t.Fatalf("DocumentByExternalID() error = %v", err)
+	}
+	if read.ID != document.ID || read.RemovedAt == nil {
+		t.Fatalf("DocumentByExternalID() = %+v, want the same, now-removed document", read)
+	}
+}
+
+// TestRetractDocumentForgetsOneDocumentImmediately covers the removal path
+// Page.Removed drives: an incremental feed that already knows a document is
+// gone retracts it by external id at once, rather than waiting for a full
+// pass to notice the same thing.
+func TestRetractDocumentForgetsOneDocumentImmediately(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "issue-1", strings.Repeat("a", 64))
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatalf("UpsertDocument() error = %v", err)
+	}
+
+	var eventPassed domain.Document
+	retracted, found, err := store.RetractDocument(ctx, source.ID, "issue-1", testClock, func(document domain.Document) (domain.Event, error) {
+		eventPassed = document
+		return testEvent(t, "knowledge.document.removed.v1"), nil
+	})
+	if err != nil || !found {
+		t.Fatalf("RetractDocument() = %v, %v, %v, want found", retracted, found, err)
+	}
+	if eventPassed.ID != document.ID {
+		t.Fatalf("the callback saw document %+v, want %s", eventPassed, document.ID)
+	}
+	read, err := store.Document(ctx, "org_1", document.ID)
+	if err != nil {
+		t.Fatalf("Document() error = %v", err)
+	}
+	if read.RemovedAt == nil || read.Body != "" {
+		t.Fatalf("Document() = %+v, want removed and emptied", read)
+	}
+
+	// Retracting the same document again finds nothing live to retract, and
+	// runs no callback: a redelivered removal must not publish twice.
+	_, foundAgain, err := store.RetractDocument(ctx, source.ID, "issue-1", testClock, func(domain.Document) (domain.Event, error) {
+		t.Fatal("the callback ran for a document already retracted")
+		return domain.Event{}, nil
+	})
+	if err != nil || foundAgain {
+		t.Fatalf("RetractDocument(again) = %v, %v, want not found", foundAgain, err)
+	}
+
+	// An id nothing here ever held answers the same way: not found, no error.
+	_, foundNever, err := store.RetractDocument(ctx, source.ID, "never-existed", testClock, nil)
+	if err != nil || foundNever {
+		t.Fatalf("RetractDocument(unknown) = %v, %v, want not found", foundNever, err)
+	}
+}
+
 func TestClaimDueSourcesHandsEachSourceToOneWorker(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -796,7 +927,7 @@ func TestCursorRemembersWhereARunStopped(t *testing.T) {
 	watermark := testClock.Add(-time.Hour)
 	walkStarted := testClock.Add(-30 * time.Minute)
 	if err := store.SaveCursor(ctx, domain.Cursor{
-		SourceID: source.ID, Value: "page-2", Watermark: &watermark, WalkStartedAt: &walkStarted, UpdatedAt: testClock,
+		SourceID: source.ID, Value: "page-2", Watermark: &watermark, Token: "start-token", WalkStartedAt: &walkStarted, UpdatedAt: testClock,
 	}); err != nil {
 		t.Fatalf("SaveCursor() error = %v", err)
 	}
@@ -806,6 +937,12 @@ func TestCursorRemembersWhereARunStopped(t *testing.T) {
 	}
 	if read.Value != "page-2" || read.Watermark == nil || !read.Watermark.Equal(watermark) {
 		t.Fatalf("Cursor() = %+v", read)
+	}
+	// Token is watermark's counterpart for a provider whose position is an
+	// opaque cursor rather than a moment — Drive's changes.startPageToken,
+	// Gmail's historyId — and is written and read back the same way.
+	if read.Token != "start-token" {
+		t.Fatalf("Cursor() token = %q, want start-token", read.Token)
 	}
 	if read.WalkStartedAt == nil || !read.WalkStartedAt.Equal(walkStarted) {
 		t.Fatalf("Cursor() walk_started_at = %v, want %v: a walk spanning several runs must resume knowing when it began", read.WalkStartedAt, walkStarted)

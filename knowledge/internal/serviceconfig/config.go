@@ -38,17 +38,23 @@ type Config struct {
 	// what an event was too large to carry. Empty means the internal API
 	// refuses every call.
 	ServiceCallers []serviceauth.Caller
-	// ComposioAPIKey turns on GitHub, Notion and Slack: without it knowledge
-	// mounts no extractor for them, only files. ComposioBaseURL overrides
-	// Composio's own API, for a test double.
+	// ComposioAPIKey turns on GitHub, Notion, Slack, Google Drive and Gmail:
+	// without it knowledge mounts no extractor for any of them, only files.
+	// ComposioBaseURL overrides Composio's own API, for a test double.
 	ComposioAPIKey  string
 	ComposioBaseURL string
+	// OriginalsBucket is where knowledge keeps the bytes of a document it does
+	// not read itself — a PDF, an Office file from Drive or the
+	// organization's own files. Empty means such a document is skipped
+	// instead, the same as before this existed.
+	OriginalsBucket string
 	// AllowedOrigins may send cookie-authenticated mutations.
 	AllowedOrigins []string
-	// EventBridgeEndpoint and SQSEndpoint override where those AWS clients
-	// call, for a local emulator.
+	// EventBridgeEndpoint, SQSEndpoint and S3Endpoint override where those AWS
+	// clients call, for a local emulator.
 	EventBridgeEndpoint string
 	SQSEndpoint         string
+	S3Endpoint          string
 	// EventsQueueURL is the queue auth's and apps' events arrive on. Without
 	// it knowledge doesn't learn that a connection, member or organization is
 	// gone.
@@ -73,9 +79,11 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		ServiceKeyID:        strings.TrimSpace(getenv("KNOWLEDGE_SERVICE_KEY_ID")),
 		ComposioAPIKey:      strings.TrimSpace(getenv("COMPOSIO_API_KEY")),
 		ComposioBaseURL:     endpoint(getenv, "COMPOSIO_BASE_URL"),
+		OriginalsBucket:     strings.TrimSpace(getenv("KNOWLEDGE_ORIGINALS_BUCKET")),
 		AllowedOrigins:      splitList(getenv("KNOWLEDGE_ALLOWED_ORIGINS")),
 		EventBridgeEndpoint: endpointOr(getenv, "EVENTBRIDGE_ENDPOINT", genericEndpoint),
 		SQSEndpoint:         endpointOr(getenv, "AWS_ENDPOINT_URL_SQS", genericEndpoint),
+		S3Endpoint:          endpointOr(getenv, "AWS_ENDPOINT_URL_S3", genericEndpoint),
 		EventsQueueURL:      strings.TrimSpace(getenv("KNOWLEDGE_EVENTS_QUEUE_URL")),
 		FullSweepInterval:   fullSweepInterval,
 	}
@@ -95,6 +103,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		{"COMPOSIO_BASE_URL", config.ComposioBaseURL},
 		{"EVENTBRIDGE_ENDPOINT", config.EventBridgeEndpoint},
 		{"AWS_ENDPOINT_URL_SQS", config.SQSEndpoint},
+		{"AWS_ENDPOINT_URL_S3", config.S3Endpoint},
 	} {
 		if check.value != "" && !absoluteURL(check.value) {
 			return Config{}, fmt.Errorf("%s must be an absolute URL", check.name)

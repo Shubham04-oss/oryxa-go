@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -33,7 +35,12 @@ type outcome struct {
 	// first would otherwise have the next run skip everything this one had
 	// not reached yet.
 	watermark *time.Time
-	drained   bool
+	// token is watermark's counterpart for a provider whose watermark is an
+	// opaque cursor rather than a moment — see domain.Cursor.Token. Unlike
+	// watermark it does not need "newest wins": Drive and Gmail's own feeds
+	// are read in order, so the last one a page sets is already the latest.
+	token   string
+	drained bool
 }
 
 // Sync reads a source once, under a lease it must keep holding.
@@ -56,14 +63,17 @@ func (s *Service) Sync(ctx context.Context, source domain.Source, lease string) 
 	}
 	startedAt := s.now()
 
-	// A source with no watermark has never been read through, so this pass is
-	// the first full one. A source that has been read through is swept in
-	// full again once its last sweep is missing or has aged past the
-	// interval — starting over from the beginning, the same as a first pass
-	// — but only when nothing is already mid-walk: a pass already under way
-	// keeps what it saved rather than discarding progress. Only a full pass
-	// may retract what it did not see.
-	full := cursor.Watermark == nil
+	// A source with no watermark and no token has never been read through, so
+	// this pass is the first full one. Token is watermark's counterpart for a
+	// provider whose position is an opaque cursor rather than a moment —
+	// Drive's changes.startPageToken, Gmail's historyId — and either one
+	// being set means a pass has drained before. A source that has been read
+	// through is swept in full again once its last sweep is missing or has
+	// aged past the interval — starting over from the beginning, the same as
+	// a first pass — but only when nothing is already mid-walk: a pass
+	// already under way keeps what it saved rather than discarding progress.
+	// Only a full pass may retract what it did not see.
+	full := cursor.Watermark == nil && cursor.Token == ""
 	if cursor.Value == "" && dueForFullSweep(source.FullSweepAt, s.config.FullSweepInterval, startedAt) {
 		full = true
 		cursor = domain.Cursor{SourceID: source.ID}
@@ -108,7 +118,7 @@ func dueForFullSweep(sweptAt *time.Time, interval time.Duration, now time.Time) 
 // walk reads page after page until the source is drained, this pass has done
 // enough, or something stops it.
 func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source domain.Source, cursor domain.Cursor, full bool, lease string) (outcome, error) {
-	result := outcome{watermark: cursor.Watermark}
+	result := outcome{watermark: cursor.Watermark, token: cursor.Token}
 	credential, err := s.credential(ctx, source)
 	if err != nil {
 		return result, err
@@ -132,8 +142,30 @@ func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source 
 				result.published++
 			}
 		}
+		// A page's own feed — Drive's changes, Gmail's history — sometimes
+		// says outright that something is gone, and that is acted on now
+		// rather than left for the next full sweep to notice the slow way.
+		for _, externalID := range page.Removed {
+			removed, found, err := s.store.RetractDocument(ctx, source.ID, externalID, s.now(),
+				func(removed domain.Document) (domain.Event, error) {
+					return s.documentRemoved(source, removed, knowledgev1.RemovedReasonDeleted)
+				})
+			if err != nil {
+				return result, err
+			}
+			if found {
+				result.removed++
+				s.deleteOriginal(ctx, removed.Original)
+			}
+		}
 		if page.Watermark != nil && (result.watermark == nil || page.Watermark.After(*result.watermark)) {
 			result.watermark = page.Watermark
+		}
+		if page.Token != "" {
+			// Drive and Gmail's own feeds are read in order, so the latest
+			// page's token is always the newest — unlike watermark, there is
+			// no "is this newer" to check.
+			result.token = page.Token
 		}
 
 		// The lease is renewed between pages rather than held for the whole
@@ -163,8 +195,14 @@ func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source 
 	return result, nil
 }
 
-// keep normalizes one item and writes it, publishing only what changed.
+// keep normalizes one item and writes it, publishing only what changed. An
+// item whose MIME is a PDF or an Office type is routed to keepOriginal
+// instead, when there is somewhere to keep such a file's bytes: nothing in
+// transform reads text out of one, so Normalize would only ever refuse it.
 func (s *Service) keep(ctx context.Context, source domain.Source, item sources.Item) (bool, error) {
+	if s.originals != nil && transform.IsPassthroughMIME(item.MIME) {
+		return s.keepOriginal(ctx, source, item)
+	}
 	text, err := transform.Normalize(item.Content, item.MIME)
 	if err != nil {
 		if errors.Is(err, domain.ErrUnsupportedType) {
@@ -189,6 +227,115 @@ func (s *Service) keep(ctx context.Context, source domain.Source, item sources.I
 	})
 }
 
+// keepOriginal stores a document whose bytes knowledge does not read itself
+// in the configured bucket, and publishes it with an Original rather than a
+// Body: empty Body, MIME the real type, ContentHash the sha256 of its bytes
+// hex encoded — which is also what makes the object's key content addressed,
+// so a changed document is a new object and a reader never sees one half
+// written.
+//
+// DocumentByExternalID is read first for two reasons: it gives the object's
+// key the document's own stable id rather than one that would be thrown away
+// the moment this turns out to be an update, and it says whether the bytes
+// have actually changed at all — a weekly full sweep over an unchanged file
+// must not re-upload it just because it read the file again.
+func (s *Service) keepOriginal(ctx context.Context, source domain.Source, item sources.Item) (bool, error) {
+	if len(item.Content) > sources.MaxOriginalBytes {
+		// Too large to keep; the extractor already counts this as skipped.
+		return false, nil
+	}
+	sum := sha256.Sum256(item.Content)
+	hash := hex.EncodeToString(sum[:])
+
+	existing, err := s.store.DocumentByExternalID(ctx, source.ID, item.ExternalID)
+	switch {
+	case err == nil:
+		if existing.RemovedAt == nil && existing.ContentHash == hash {
+			return false, nil
+		}
+	case errors.Is(err, domain.ErrNotFound):
+		existing = domain.Document{}
+	default:
+		return false, err
+	}
+
+	documentID := existing.ID
+	if documentID == "" {
+		if documentID, err = newID("doc"); err != nil {
+			return false, err
+		}
+	}
+	key := originalKey(source.OrganizationID, source.ID, documentID, hash)
+	if err := s.originals.Put(ctx, key, item.Content, item.MIME); err != nil {
+		return false, fmt.Errorf("store the document's original bytes: %w", err)
+	}
+
+	document := domain.Document{
+		ID: documentID, OrganizationID: source.OrganizationID, SourceID: source.ID, ExternalID: item.ExternalID,
+		Kind: item.Kind, Title: item.Title, URL: item.URL, MIME: item.MIME,
+		ContentHash: hash, ByteSize: len(item.Content),
+		Original: &domain.Original{Bucket: s.originalsBucket, Key: key, Size: int64(len(item.Content)), SHA256: hash},
+		Metadata: item.Metadata, SourceUpdatedAt: item.UpdatedAt, ExtractedAt: s.now(),
+	}
+	published, err := s.store.UpsertDocument(ctx, document, func(written domain.Document) (domain.Event, error) {
+		return s.documentPublished(source, written)
+	})
+	if err != nil {
+		return false, err
+	}
+	if published && existing.Original != nil && existing.Original.Key != key {
+		// The new object is already published and safe to read; a failure to
+		// clean up the one it replaced is logged rather than failing a run
+		// that has otherwise succeeded, over a byte nothing will read again.
+		s.deleteOriginal(ctx, existing.Original)
+	}
+	return published, nil
+}
+
+// originalKey is where a document's own bytes live in the configured bucket:
+// namespaced by organization and source, so a retired source's objects are
+// easy to find, and content addressed by sha256, so a changed document is a
+// new object.
+func originalKey(organizationID, sourceID, documentID, sha256Hex string) string {
+	return "originals/" + organizationID + "/" + sourceID + "/" + documentID + "/" + sha256Hex
+}
+
+// pendingOriginals are the originals of documents a transaction is removing,
+// kept to delete once it has committed. Deleting them inside it would leave a
+// rolled-back removal's documents naming bytes that are gone.
+type pendingOriginals struct {
+	originals []*domain.Original
+}
+
+func (pending *pendingOriginals) add(original *domain.Original) {
+	if original != nil {
+		pending.originals = append(pending.originals, original)
+	}
+}
+
+// deleteOriginals deletes what pending collected, after the removal that
+// collected it has committed.
+func (s *Service) deleteOriginals(ctx context.Context, pending *pendingOriginals) {
+	for _, original := range pending.originals {
+		s.deleteOriginal(ctx, original)
+	}
+}
+
+// deleteOriginal removes a superseded or retracted document's bytes from the
+// configured bucket. Best effort: the database write it follows has already
+// committed to the row it describes, and an object nothing will read again is
+// a smaller problem than failing a sync run, or a removal, over one
+// straggling byte.
+func (s *Service) deleteOriginal(ctx context.Context, original *domain.Original) {
+	if s.originals == nil || original == nil {
+		return
+	}
+	if err := s.originals.Delete(ctx, original.Key); err != nil {
+		s.logger.WarnContext(ctx, "could not delete an original from the configured bucket",
+			"key", original.Key, "error", err)
+	}
+}
+
 // runCompleted closes off a pass that did not fail.
 func (s *Service) runCompleted(ctx context.Context, source domain.Source, run domain.SyncRun, result outcome, cursor domain.Cursor, lease string) error {
 	now := s.now()
@@ -207,19 +354,25 @@ func (s *Service) runCompleted(ctx context.Context, source domain.Source, run do
 			if cursor.WalkStartedAt != nil {
 				before = *cursor.WalkStartedAt
 			}
+			pending := &pendingOriginals{}
 			removed, err := s.store.RetractUnseen(ctx, source.ID, before, now,
 				func(document domain.Document) (domain.Event, error) {
+					pending.add(document.Original)
 					return s.documentRemoved(source, document, knowledgev1.RemovedReasonDeleted)
 				})
 			if err != nil {
 				return err
 			}
-			result.removed = removed
-			run.DocumentsRemoved = removed
+			s.deleteOriginals(ctx, pending)
+			// Added to, not replaced: an incremental-shaped feed inside a
+			// full pass could in principle have already retracted some of
+			// this source's documents directly through Page.Removed.
+			result.removed += removed
+			run.DocumentsRemoved = result.removed
 			fullSweptAt = &now
 		}
 		if err := s.store.SaveCursor(ctx, domain.Cursor{
-			SourceID: source.ID, Value: "", Watermark: result.watermark, UpdatedAt: now,
+			SourceID: source.ID, Value: "", Watermark: result.watermark, Token: result.token, UpdatedAt: now,
 		}); err != nil {
 			return err
 		}
