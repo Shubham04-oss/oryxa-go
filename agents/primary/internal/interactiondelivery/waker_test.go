@@ -136,6 +136,7 @@ type startedCall struct {
 	agentID  string
 	threadID string
 	input    threads.RunInput
+	reach    managedagents.UnattendedProfile
 }
 
 type fakeAgentRuns struct {
@@ -147,10 +148,10 @@ type fakeAgentRuns struct {
 	err       error
 }
 
-func (runs *fakeAgentRuns) StartRun(_ context.Context, member threads.Member, agentID, threadID string, input threads.RunInput) (managedagents.StartedRun, error) {
+func (runs *fakeAgentRuns) StartUnattendedRun(_ context.Context, member threads.Member, agentID, threadID string, input threads.RunInput, reach managedagents.UnattendedProfile) (managedagents.StartedRun, error) {
 	runs.mu.Lock()
 	defer runs.mu.Unlock()
-	runs.calls = append(runs.calls, startedCall{member: member, agentID: agentID, threadID: threadID, input: input})
+	runs.calls = append(runs.calls, startedCall{member: member, agentID: agentID, threadID: threadID, input: input, reach: reach})
 	if runs.err != nil {
 		return managedagents.StartedRun{}, runs.err
 	}
@@ -258,6 +259,27 @@ func TestDeliveryMessageNeverCarriesInteractionContent(t *testing.T) {
 			if !strings.Contains(message, want) {
 				t.Errorf("%s message lacks %q: %s", kind, want, message)
 			}
+		}
+	}
+}
+
+// TestOnlyApprovedWorkReadsTheMembersApps: the member is not here, so what
+// their agent may reach is what it has already approved. Deciding on a new
+// request, and reporting an outcome to one's own member, run without the
+// apps toolbox at all.
+func TestOnlyApprovedWorkReadsTheMembersApps(t *testing.T) {
+	cases := []struct {
+		kind  string
+		reach managedagents.UnattendedProfile
+	}{
+		{KindTargetRequested, managedagents.UnattendedQuiet},
+		{KindTargetApproved, managedagents.UnattendedReads},
+		{KindRequesterRejected, managedagents.UnattendedQuiet},
+		{KindRequesterCompleted, managedagents.UnattendedQuiet},
+	}
+	for _, testCase := range cases {
+		if got := reach(testCase.kind); got != testCase.reach {
+			t.Errorf("reach(%s) = %q, want %q", testCase.kind, got, testCase.reach)
 		}
 	}
 }

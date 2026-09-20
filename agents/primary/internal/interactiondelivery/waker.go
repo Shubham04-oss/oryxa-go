@@ -35,9 +35,11 @@ type deliveries interface {
 }
 
 // AgentRuns starts the addressed persistent agent. managedagents.Service
-// implements it.
+// implements it. Delivery always starts an unwatched run: the member whose
+// agent is woken is not here, and what steers the run is another member's
+// words.
 type AgentRuns interface {
-	StartRun(context.Context, threads.Member, string, string, threads.RunInput) (managedagents.StartedRun, error)
+	StartUnattendedRun(context.Context, threads.Member, string, string, threads.RunInput, managedagents.UnattendedProfile) (managedagents.StartedRun, error)
 }
 
 // Requests reads authoritative interaction state. interactions.Store
@@ -202,12 +204,12 @@ func (waker *Waker) start(ctx context.Context, delivery Delivery, message string
 	}
 	input := threads.RunInput{Message: message, StartedBy: agentsv1.StartedByTrigger, Wakeup: delivery.EventID}
 	member := threads.Member{UserID: delivery.RecipientUserID, OrganizationID: delivery.OrganizationID}
-	started, err := waker.agents.StartRun(ctx, member, delivery.RecipientAgentID, threadID, input)
+	started, err := waker.agents.StartUnattendedRun(ctx, member, delivery.RecipientAgentID, threadID, input, reach(delivery.Kind))
 	if threadID != "" && errors.Is(err, threads.ErrNotFound) {
 		if clearErr := waker.store.ClearThread(ctx, delivery.RequestID, delivery.RecipientAgentID, threadID); clearErr != nil {
 			return managedagents.StartedRun{}, clearErr
 		}
-		started, err = waker.agents.StartRun(ctx, member, delivery.RecipientAgentID, "", input)
+		started, err = waker.agents.StartUnattendedRun(ctx, member, delivery.RecipientAgentID, "", input, reach(delivery.Kind))
 	}
 	if err != nil {
 		return managedagents.StartedRun{}, err
@@ -247,6 +249,17 @@ func deliverySatisfied(delivery Delivery, request agents.Interaction, now time.T
 	default:
 		return false
 	}
+}
+
+// reach says how far the woken run may go, which is what the recipient's
+// agent has actually allowed rather than what the request asked for. Only
+// work the agent already approved reads the member's apps; deciding on a new
+// request, and reporting an outcome back to one's own member, do not.
+func reach(kind string) managedagents.UnattendedProfile {
+	if kind == KindTargetApproved {
+		return managedagents.UnattendedReads
+	}
+	return managedagents.UnattendedQuiet
 }
 
 // Message contains no request content. It tells the recipient which durable

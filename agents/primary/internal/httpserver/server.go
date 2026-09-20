@@ -336,7 +336,7 @@ func teamspaceActorOf(member threads.Member) teamspaces.Actor {
 }
 
 func (server *Server) createInteraction(writer http.ResponseWriter, request *http.Request) {
-	member, ok := server.member(writer, request)
+	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
 		return
 	}
@@ -365,7 +365,7 @@ func (server *Server) interactionSent(writer http.ResponseWriter, request *http.
 }
 
 func (server *Server) listInteractions(writer http.ResponseWriter, request *http.Request, inbox bool) {
-	member, ok := server.member(writer, request)
+	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
 		return
 	}
@@ -389,7 +389,7 @@ func (server *Server) listInteractions(writer http.ResponseWriter, request *http
 }
 
 func (server *Server) getInteraction(writer http.ResponseWriter, request *http.Request) {
-	member, ok := server.member(writer, request)
+	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
 		return
 	}
@@ -406,7 +406,7 @@ func (server *Server) getInteraction(writer http.ResponseWriter, request *http.R
 }
 
 func (server *Server) decideInteraction(writer http.ResponseWriter, request *http.Request) {
-	member, ok := server.member(writer, request)
+	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
 		return
 	}
@@ -427,7 +427,7 @@ func (server *Server) decideInteraction(writer http.ResponseWriter, request *htt
 }
 
 func (server *Server) respondInteraction(writer http.ResponseWriter, request *http.Request) {
-	member, ok := server.member(writer, request)
+	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
 		return
 	}
@@ -1049,7 +1049,10 @@ func (server *Server) startAgentWorkflow(writer http.ResponseWriter, request *ht
 		return
 	}
 	var input struct{}
-	if request.ContentLength != 0 && !server.decode(writer, request, &input) {
+	// ContentLength is -1 for a chunked or otherwise unknown-length body, not
+	// 0, so a plain != 0 check treats a bodyless request sent that way as
+	// having a body and answers 400 instead of starting the workflow.
+	if request.ContentLength > 0 && !server.decode(writer, request, &input) {
 		return
 	}
 	execution, err := server.workflows.Start(request.Context(), scopeOf(member), request.PathValue("workflowID"))
@@ -1289,6 +1292,12 @@ func (server *Server) streamRun(writer http.ResponseWriter, request *http.Reques
 // member decides who the caller is in the path's organization. An agent
 // acting for a member is refused: a thread is the member's own conversation,
 // and an agent reaches Krude from inside a run, never through this API.
+//
+// It also attaches the caller's persistent agent identity when one resolves,
+// but only as a best effort: most routes use it merely to stamp state (for
+// example a new thread's initial state), so a lookup problem here leaves it
+// empty rather than failing a request that never needed it. memberWithAgent
+// is for the routes that do need it.
 func (server *Server) member(writer http.ResponseWriter, request *http.Request) (threads.Member, bool) {
 	if server.unavailable != "" {
 		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", server.unavailable)
@@ -1314,14 +1323,31 @@ func (server *Server) member(writer http.ResponseWriter, request *http.Request) 
 		AccessToken:    credentials.AccessToken(),
 	}
 	if server.agents != nil {
-		primary, err := server.agents.Primary(request.Context(), scopeOf(member))
-		if err != nil {
-			server.handleError(writer, request, err)
-			return threads.Member{}, false
+		if primary, err := server.agents.Primary(request.Context(), scopeOf(member)); err != nil {
+			server.logger.WarnContext(request.Context(), "resolve primary agent identity", "error", err)
+		} else {
+			member.AgentID = primary.ID
+			member.AgentName = primary.Name
+			member.AgentKind = string(primary.Kind)
 		}
-		member.AgentID = primary.ID
-		member.AgentName = primary.Name
-		member.AgentKind = string(primary.Kind)
+	}
+	return member, true
+}
+
+// memberWithAgent is member, but for routes that act as the caller's
+// persistent agent rather than just the member themselves: an interaction is
+// between two agents, not two members, so proceeding with an empty identity
+// would misattribute or wrongly deny it, not merely leave state unstamped.
+// Where member leaves a failed lookup as "no identity", this fails the
+// request instead.
+func (server *Server) memberWithAgent(writer http.ResponseWriter, request *http.Request) (threads.Member, bool) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return threads.Member{}, false
+	}
+	if server.agents != nil && member.AgentID == "" {
+		writeError(writer, http.StatusInternalServerError, "internal", "could not resolve the calling agent's identity")
+		return threads.Member{}, false
 	}
 	return member, true
 }

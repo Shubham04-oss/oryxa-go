@@ -119,6 +119,11 @@ type InteractionService interface {
 type InteractionConfig struct {
 	Service InteractionService
 	Tokens  memberauth.TokenSource
+	// Answering leaves out interactions_create, for a run nobody is watching
+	// that exists to answer what another member's agent already asked. Such a
+	// run may read, decide and respond; starting fresh requests on other
+	// members is the member's own business, in a conversation they are in.
+	Answering bool
 }
 
 // InteractionToolbox lets agents exchange durable requests without giving
@@ -164,10 +169,16 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	if err != nil {
 		return Toolbox{}, err
 	}
+	offered := []tool.Tool{create, inbox, sent, get, decide, respond}
+	description := "Durable agent-to-agent requests: send, inspect, approve or reject, and answer through an audited JSON contract without direct invocation."
+	if config.Answering {
+		offered = []tool.Tool{inbox, sent, get, decide, respond}
+		description = "Durable agent-to-agent requests addressed to this member: inspect, approve or reject, and answer through an audited JSON contract."
+	}
 	return Toolbox{
-		Name: "interactions", Description: "Durable agent-to-agent requests: send, inspect, approve or reject, and answer through an audited JSON contract without direct invocation.",
+		Name: "interactions", Description: description,
 		Instructions: interactionsInstructions,
-		Toolset:      fixedTools{name: "interactions", tools: []tool.Tool{create, inbox, sent, get, decide, respond}},
+		Toolset:      fixedTools{name: "interactions", tools: offered},
 	}, nil
 }
 

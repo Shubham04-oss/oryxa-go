@@ -366,14 +366,18 @@ func (consumer *Consumer) batchReady(ctx context.Context, envelope receivedEnvel
 }
 
 func (consumer *Consumer) forgetAll(ctx context.Context, eventID, organizationID, memberID string) error {
-	var failures []error
+	// Stop at the first failing forgetter instead of running every one and
+	// joining the errors. consumer.forget is built in a deliberate order
+	// (see service.go) where a later forgetter's delete can remove rows an
+	// earlier, failed one still needs to find its own state on retry - for
+	// example interactiondelivery.Cleaner's AffectedThreads LEFT JOINs
+	// agent_interactions rows that a later forgetter deletes outright. Since
+	// the whole event is retried on error anyway, running the remaining
+	// forgetters here would only risk destroying state the retry depends on.
 	for _, forget := range consumer.forget {
 		if err := forget(ctx, organizationID, memberID); err != nil {
-			failures = append(failures, err)
+			return fmt.Errorf("event %s: %w", eventID, err)
 		}
-	}
-	if err := errors.Join(failures...); err != nil {
-		return fmt.Errorf("event %s: %w", eventID, err)
 	}
 	consumer.logger.InfoContext(ctx, "forgot what agents kept", "event_id", eventID, "organization_id", organizationID, "member", memberID != "")
 	return nil

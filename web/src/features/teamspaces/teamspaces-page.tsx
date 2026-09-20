@@ -226,6 +226,7 @@ export function TeamspacesPage({ selectedId }: { selectedId?: string }) {
 							entries={entries.data ?? []}
 							entriesError={entries.isError ? entries.error : undefined}
 							entriesPending={entries.isPending}
+							key={selected.id}
 							onDeleted={() => navigate({ search: { space: undefined } })}
 							organizationId={organization.id}
 							space={selected}

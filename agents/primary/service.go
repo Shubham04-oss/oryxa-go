@@ -246,6 +246,21 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
 			})
 		},
+		// What answers when nobody is watching the run: the same agent with
+		// the reduced toolboxes and no memory, and without the member's apps
+		// at all until their agent has approved the request that woke it.
+		Unattended: func(definition managedagents.Definition, profile managedagents.UnattendedProfile) (agent.Agent, error) {
+			withApps := profile == managedagents.UnattendedReads
+			if definition.Kind == managedagents.KindPrimary {
+				if withApps {
+					return krude.Unattended, nil
+				}
+				return krude.UnattendedQuiet, nil
+			}
+			return krude.ManagedUnattended(agents.ManagedSpec{
+				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
+			}, withApps)
+		},
 		Sessions: sessions, Artifacts: krude.Artifacts, Memory: krude.Memory,
 		Runs: runstore.New(platform.Database), Prices: priceTable, Logger: logger,
 	})

@@ -39,9 +39,34 @@ type Repository interface {
 // returns remains stable even when Definition.Name changes.
 type Factory func(Definition) (agent.Agent, error)
 
+// UnattendedProfile says how far a run nobody is watching may reach. What
+// steers such a run is text somebody else wrote — another member's request,
+// or whatever a tool read — so it answers on a reduced agent rather than the
+// one a member talks to.
+type UnattendedProfile string
+
+const (
+	// UnattendedReads may read the member's apps and knowledge: the member's
+	// own unwatched work, and an interaction their agent has approved.
+	UnattendedReads UnattendedProfile = "reads"
+	// UnattendedQuiet keeps the member's apps out of the run altogether, for
+	// a request nobody has approved yet.
+	UnattendedQuiet UnattendedProfile = "quiet"
+)
+
+// UnattendedFactory builds the restricted runtime a profile allows. It must
+// answer to the same name as [Factory] for the same definition: a run picks
+// between the two, and ADK addresses the agent by name. When a service has
+// no unattended factory, an unwatched run falls back to the full agent, so
+// wiring one is what makes the restriction real.
+type UnattendedFactory func(Definition, UnattendedProfile) (agent.Agent, error)
+
 type Config struct {
 	Repository Repository
 	Factory    Factory
+	// Unattended builds the reduced agent for a run nobody is watching.
+	// Without it every unwatched run answers on the full agent.
+	Unattended UnattendedFactory
 	Sessions   session.Service
 	Artifacts  artifact.Service
 	Memory     *adkmemory.Service
@@ -69,6 +94,7 @@ type StartedRun struct {
 type Service struct {
 	repository Repository
 	factory    Factory
+	unattended UnattendedFactory
 	sessions   session.Service
 	artifacts  artifact.Service
 	memory     *adkmemory.Service
@@ -95,7 +121,7 @@ func New(config Config) (*Service, error) {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Service{
-		repository: config.Repository, factory: config.Factory, sessions: config.Sessions,
+		repository: config.Repository, factory: config.Factory, unattended: config.Unattended, sessions: config.Sessions,
 		artifacts: config.Artifacts, memory: config.Memory, runs: config.Runs,
 		prices: config.Prices, logger: logger,
 	}, nil
@@ -176,6 +202,18 @@ func (service *Service) Delete(ctx context.Context, scope Scope, id string) erro
 // threadID allocates it; a later call uses the returned ID for follow-ups or
 // tool confirmation answers.
 func (service *Service) StartRun(ctx context.Context, member threads.Member, id, threadID string, input threads.RunInput) (StartedRun, error) {
+	return service.startRun(ctx, member, id, threadID, input, UnattendedReads)
+}
+
+// StartUnattendedRun starts a run whose origin makes it unwatched, saying how
+// far the reduced agent may reach. A caller delivering what another member's
+// agent asked for passes [UnattendedQuiet] until this member's agent has
+// approved the request, so nothing unapproved reads their apps.
+func (service *Service) StartUnattendedRun(ctx context.Context, member threads.Member, id, threadID string, input threads.RunInput, profile UnattendedProfile) (StartedRun, error) {
+	return service.startRun(ctx, member, id, threadID, input, profile)
+}
+
+func (service *Service) startRun(ctx context.Context, member threads.Member, id, threadID string, input threads.RunInput, profile UnattendedProfile) (StartedRun, error) {
 	scope := Scope{OrganizationID: member.OrganizationID, UserID: member.UserID}
 	definition, err := service.repository.Get(ctx, scope, id)
 	if err != nil {
@@ -184,7 +222,7 @@ func (service *Service) StartRun(ctx context.Context, member threads.Member, id,
 	if definition.Status != StatusActive {
 		return StartedRun{}, ErrDisabled
 	}
-	engine, err := service.engine(definition)
+	engine, err := service.engine(definition, profile)
 	if err != nil {
 		return StartedRun{}, err
 	}
@@ -256,13 +294,20 @@ func (service *Service) deleteArtifacts(ctx context.Context, app, userID, thread
 	}
 }
 
-func (service *Service) engine(definition Definition) (*threads.Service, error) {
+func (service *Service) engine(definition Definition, profile UnattendedProfile) (*threads.Service, error) {
 	built, err := service.factory(definition)
 	if err != nil {
 		return nil, fmt.Errorf("build agent: %w", err)
 	}
+	var unattended agent.Agent
+	if service.unattended != nil {
+		unattended, err = service.unattended(definition, profile)
+		if err != nil {
+			return nil, fmt.Errorf("build the agent for an unwatched run: %w", err)
+		}
+	}
 	engine, err := threads.New(threads.Config{
-		AppName: appName(definition.ID), Agent: built, Sessions: service.sessions,
+		AppName: appName(definition.ID), Agent: built, Unattended: unattended, Sessions: service.sessions,
 		Artifacts: service.artifacts, Memory: service.memory, Runs: service.runs,
 		Prices: service.prices, Logger: service.logger,
 		InitialState: map[string]any{
