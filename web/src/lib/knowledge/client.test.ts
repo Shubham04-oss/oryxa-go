@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	availableSourceProviders,
 	defaultSourceIntervalSeconds,
 	effectiveKinds,
 	intervalLabel,
 	kindsSummary,
+	listKinds,
 	runStatusLabel,
 	runSummary,
 	sourceStatusLabel,
@@ -15,6 +16,39 @@ import {
 	sourceTargetProblem,
 	supportsSourceProvider,
 } from "./client";
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
+
+describe("listKinds", () => {
+	it("gets the kinds a source can index, which need no organization", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					kinds: [
+						{
+							default: true,
+							hint: "",
+							label: "Conversation",
+							name: "conversation",
+						},
+					],
+				}),
+				{ headers: { "Content-Type": "application/json" }, status: 200 },
+			),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(listKinds()).resolves.toEqual([
+			{ default: true, hint: "", label: "Conversation", name: "conversation" },
+		]);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/sources/kinds",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+});
 
 describe("availableSourceProviders / supportsSourceProvider", () => {
 	it("keeps only the connectable providers this build actually mounts", () => {

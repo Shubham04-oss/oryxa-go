@@ -136,6 +136,20 @@ func historyItems(events []*session.Event) []Item {
 	return items
 }
 
+// displayAgent replaces only the answering agent's immutable ADK name with
+// its renameable member-facing identity. Sub-agent authors remain distinct.
+func displayAgent(items []Item, machineName, displayName string) []Item {
+	if displayName == "" || displayName == machineName {
+		return items
+	}
+	for index := range items {
+		if items[index].Author == machineName {
+			items[index].Author = displayName
+		}
+	}
+	return items
+}
+
 // eventItems turns one finished event into items, in the order its parts
 // came in. Confirmations take their status from answers; a confirmation
 // answers does not hold is pending.

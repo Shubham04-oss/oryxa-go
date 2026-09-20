@@ -11,12 +11,13 @@ import {
 import { displayName, initials, roleLabel } from "@/components/app/identity";
 import {
 	accountSettingsNavigation,
+	collaborationNavigation,
 	type NavigationItem,
 	organizationAdminNavigation,
-	organizationNavigation,
 	organizationOperationsNavigation,
+	resourceNavigation,
 	settingsNavigation,
-	workspaceNavigation,
+	soloNavigation,
 } from "@/components/app/navigation";
 import {
 	DropdownMenu,
@@ -87,11 +88,11 @@ function WorkspaceSidebar({ pathname }: { pathname: string }) {
 						<SidebarMenuButton
 							asChild
 							className="app-new-thread"
-							tooltip="New thread"
+							tooltip="New conversation"
 						>
 							<Link to="/app">
 								<Plus />
-								<span>New thread</span>
+								<span>New conversation</span>
 								<kbd>N</kbd>
 							</Link>
 						</SidebarMenuButton>
@@ -101,26 +102,33 @@ function WorkspaceSidebar({ pathname }: { pathname: string }) {
 
 			<SidebarContent>
 				<NavigationGroup
-					items={workspaceNavigation}
-					label="Workspace"
+					items={soloNavigation}
+					label="Solo workspace"
 					pathname={pathname}
 				/>
 				<NavigationGroup
-					items={organizationNavigation}
-					label="Organization"
+					items={collaborationNavigation}
+					label="Collaborate"
+					pathname={pathname}
+				/>
+				<NavigationGroup
+					items={resourceNavigation}
+					label="Resources"
 					pathname={pathname}
 				/>
 			</SidebarContent>
 
 			<SidebarFooter className="product-sidebar-footer">
 				<SidebarMenu>
-					{settingsNavigation.map((item) => (
-						<NavigationMenuItem
-							item={item}
-							key={item.href}
-							pathname={pathname}
-						/>
-					))}
+					{settingsNavigation
+						.filter((item) => item.href !== accountSettingsNavigation.href)
+						.map((item) => (
+							<NavigationMenuItem
+								item={item}
+								key={item.href}
+								pathname={pathname}
+							/>
+						))}
 				</SidebarMenu>
 				<AccountMenu />
 			</SidebarFooter>
@@ -222,6 +230,12 @@ function AccountMenu() {
 			>
 				<DropdownMenuLabel>{user.email}</DropdownMenuLabel>
 				<DropdownMenuSeparator />
+				<DropdownMenuItem
+					onSelect={() => navigate({ to: accountSettingsNavigation.href })}
+				>
+					<CircleUserRound />
+					Account settings
+				</DropdownMenuItem>
 				<DropdownMenuItem onSelect={leave}>
 					<LogOut />
 					Sign out

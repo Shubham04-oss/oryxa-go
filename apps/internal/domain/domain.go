@@ -23,8 +23,9 @@ var (
 	// ErrNotConnected means the member has no active connection to the app a
 	// call needs.
 	ErrNotConnected = errors.New("the app is not connected")
-	// ErrChooseConnection means the member has several connections to the
-	// app and the call did not say which.
+	// ErrChooseConnection guards legacy data with several active connections.
+	// New connections enforce one current account per member and app; this
+	// sentinel stays for safe failure and a future explicit assignment model.
 	ErrChooseConnection = errors.New("several connections could be meant")
 	// ErrNeedsReconnect means the connection exists but can no longer act:
 	// it expired, or Composio refuses it.
@@ -89,7 +90,7 @@ type Connection struct {
 	ComposioAccountID string
 	Status            ConnectionStatus
 	StatusReason      string
-	// Label tells several connections to one app apart, such as
+	// Label identifies the connected account to the member, such as
 	// github_red-castle.
 	Label string
 	// ReturnTo is where the member's browser goes once they finish.

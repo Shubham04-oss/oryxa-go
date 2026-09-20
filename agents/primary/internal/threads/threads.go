@@ -25,6 +25,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
@@ -66,6 +67,12 @@ const (
 type Member struct {
 	UserID         string
 	OrganizationID string
+	// AgentID, AgentName and AgentKind are the persistent identity answering
+	// this request. Runs refresh them into state, so renames affect existing
+	// conversations without changing ADK's immutable machine name.
+	AgentID   string
+	AgentName string
+	AgentKind string
 	// AccessToken is the member's own token. A run carries it so the tools
 	// that act for the member present it as theirs; it is never stored or
 	// logged.
@@ -127,21 +134,26 @@ type Config struct {
 	// without renewing; a run renews it every third of that.
 	RunTimeout time.Duration
 	Lease      time.Duration
+	// InitialState is copied into each new thread. It lets a persistent agent
+	// carry its stable id and renameable display identity without changing
+	// ADK's machine name.
+	InitialState map[string]any
 }
 
 // Service is the run API.
 type Service struct {
-	appName    string
-	agent      agent.Agent
-	unattended agent.Agent
-	sessions   session.Service
-	artifacts  artifact.Service
-	memory     *adkmemory.Service
-	runs       RunStore
-	prices     *pricing.Table
-	logger     *slog.Logger
-	runTimeout time.Duration
-	lease      time.Duration
+	appName      string
+	agent        agent.Agent
+	unattended   agent.Agent
+	sessions     session.Service
+	artifacts    artifact.Service
+	memory       *adkmemory.Service
+	runs         RunStore
+	prices       *pricing.Table
+	logger       *slog.Logger
+	runTimeout   time.Duration
+	lease        time.Duration
+	initialState map[string]any
 }
 
 // New returns the service.
@@ -169,18 +181,47 @@ func New(config Config) (*Service, error) {
 		unattended = config.Agent
 	}
 	return &Service{
-		appName:    config.AppName,
-		agent:      config.Agent,
-		unattended: unattended,
-		sessions:   config.Sessions,
-		artifacts:  config.Artifacts,
-		memory:     config.Memory,
-		runs:       config.Runs,
-		prices:     config.Prices,
-		logger:     logger,
-		runTimeout: cmp.Or(config.RunTimeout, defaultRunTimeout),
-		lease:      cmp.Or(config.Lease, defaultLease),
+		appName:      config.AppName,
+		agent:        config.Agent,
+		unattended:   unattended,
+		sessions:     config.Sessions,
+		artifacts:    config.Artifacts,
+		memory:       config.Memory,
+		runs:         config.Runs,
+		prices:       config.Prices,
+		logger:       logger,
+		runTimeout:   cmp.Or(config.RunTimeout, defaultRunTimeout),
+		lease:        cmp.Or(config.Lease, defaultLease),
+		initialState: cloneState(config.InitialState),
 	}, nil
+}
+
+func cloneState(source map[string]any) map[string]any {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func memberAgentState(member Member) map[string]any {
+	state := map[string]any{}
+	if member.AgentID != "" {
+		state[agents.AgentIDKey] = member.AgentID
+	}
+	if member.AgentName != "" {
+		state[agents.AgentNameKey] = member.AgentName
+	}
+	if member.AgentKind != "" {
+		state[agents.AgentKindKey] = member.AgentKind
+	}
+	if len(state) == 0 {
+		return nil
+	}
+	return state
 }
 
 // Create starts a thread for the member in their organization.
@@ -194,6 +235,12 @@ func (service *Service) CreateTitled(ctx context.Context, member Member, title s
 	state := map[string]any{
 		adksession.StateOrganizationID: member.OrganizationID,
 		stateCreatedAt:                 time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	for key, value := range service.initialState {
+		state[key] = value
+	}
+	for key, value := range memberAgentState(member) {
+		state[key] = value
 	}
 	if title = bounded(strings.Join(strings.Fields(title), " "), maxTitleRunes); title != "" {
 		state[stateTitle] = title
@@ -238,7 +285,7 @@ func (service *Service) Get(ctx context.Context, member Member, threadID string)
 	history := sessionEvents(stored)
 	return Detail{
 		Thread:  threadOf(stored),
-		Items:   historyItems(history),
+		Items:   displayAgent(historyItems(history), service.agent.Name(), member.AgentName),
 		Pending: nonNil(pendingConfirmations(history, service.agent.Name())),
 	}, nil
 }

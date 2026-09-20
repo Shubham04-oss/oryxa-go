@@ -96,7 +96,7 @@ func TestEveryPayloadShapeReachesAWakeUp(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			recorder := &recordingRecorder{}
-			consumer := NewConsumer(recorder, nil, nil)
+			consumer := NewConsumer(recorder, nil, nil, nil)
 
 			if err := consumer.Handle(context.Background(),
 				eventFor(t, "evt_1", "github", "GITHUB_COMMIT_EVENT", payload)); err != nil {
@@ -140,7 +140,7 @@ func TestEveryPayloadShapeReachesAWakeUp(t *testing.T) {
 func TestAWakeUpNamesTheAppEvenWhenAPayloadIsLeftOut(t *testing.T) {
 	t.Parallel()
 	recorder := &recordingRecorder{}
-	consumer := NewConsumer(recorder, nil, nil)
+	consumer := NewConsumer(recorder, nil, nil, nil)
 	omitted := trigger("evt_1", "gmail", "GMAIL_NEW_GMAIL_MESSAGE", "")
 	omitted.DataOmitted = true
 	if err := consumer.Handle(context.Background(), batchFor(t, "evt_batch_1", omitted)); err != nil {
@@ -161,7 +161,7 @@ func TestAWakeUpNamesTheAppEvenWhenAPayloadIsLeftOut(t *testing.T) {
 func TestABurstOfEveryShapeMakesOneReadableWakeUp(t *testing.T) {
 	t.Parallel()
 	recorder := &recordingRecorder{}
-	consumer := NewConsumer(recorder, nil, nil)
+	consumer := NewConsumer(recorder, nil, nil, nil)
 	shapes := payloads()
 
 	var triggers []batchingv1.Trigger
@@ -194,7 +194,7 @@ func TestABurstOfEveryShapeMakesOneReadableWakeUp(t *testing.T) {
 func TestTheBusDeliveringTwiceRecordsOneWakeUp(t *testing.T) {
 	t.Parallel()
 	recorder := &recordingRecorder{seen: map[string]bool{}}
-	consumer := NewConsumer(recorder, nil, nil)
+	consumer := NewConsumer(recorder, nil, nil, nil)
 	body := eventFor(t, "evt_1", "slack", "SLACK_RECEIVE_MESSAGE", `{"text":"ship it"}`)
 
 	for range 3 {

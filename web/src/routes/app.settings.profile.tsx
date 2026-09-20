@@ -364,7 +364,7 @@ function AgentAccessSection() {
 					<StatusBadge tone="active">On</StatusBadge>
 					<ConfirmDialog
 						confirmLabel="Revoke access"
-						description="Krude can no longer act for you while you're away. It can still help while you're here, and you can grant this again any time."
+						description="Your agents can no longer act for you while you're away. They can still help while you're here, and you can grant this again any time."
 						onConfirm={async () => {
 							await revokeAgentGrant();
 							await queryClient.invalidateQueries({
@@ -392,7 +392,7 @@ function AgentAccessSection() {
 					</div>
 				) : null}
 				<SettingsRow
-					description="Off. Krude will say so in the thread instead of acting, the next time it needs this while you're away."
+					description="Off. Your agent will explain the boundary in the conversation instead of acting while you're away."
 					title="Agent access"
 				>
 					<Button
@@ -410,9 +410,9 @@ function AgentAccessSection() {
 
 	return (
 		<SettingsSection
-			description="When events from your connected apps wake Krude, it reads your apps with your own identity through this grant, and never changes anything while you're away. You can withdraw it any time."
+			description="When connected-app events wake your agents, they use this grant under your identity and retain the same confirmation boundaries. You can withdraw it any time."
 			id="account-agent-access"
-			title="Let Krude act for you while you're away"
+			title="Background agent access"
 		>
 			{content}
 		</SettingsSection>

@@ -3,7 +3,7 @@ import { apiPath, apiRequest } from "../api/client";
 
 export type SourceStatus = "active" | "paused" | "removed";
 
-/** One thing an organization asked Krude to index, such as a GitHub repository. */
+/** One thing an organization asked its agents to index, such as a repository. */
 export interface Source {
 	connection_id?: string;
 	created_at: string;

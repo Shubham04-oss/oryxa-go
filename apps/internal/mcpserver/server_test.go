@@ -213,6 +213,11 @@ func TestEndpointOffersFourTools(t *testing.T) {
 	if read := schemaOf(t, byName[ToolRunRead]); strings.Contains(read, "idempotency_key") {
 		t.Fatalf("a read asks for an idempotency key: %s", read)
 	}
+	for _, name := range []string{ToolRunRead, ToolRunWrite} {
+		if schema := schemaOf(t, byName[name]); strings.Contains(schema, "connection_id") {
+			t.Fatalf("%s lets an agent choose an account: %s", name, schema)
+		}
+	}
 }
 
 // schemaOf is a tool's input schema as JSON, whatever shape the SDK keeps it in.
@@ -240,14 +245,18 @@ func TestConnectionsListsWhatTheMemberCanActThrough(t *testing.T) {
 		t.Fatalf("result = %+v", answer(t, result))
 	}
 	listed := answer(t, result)["connections"].([]any)
-	var ids []string
+	var toolkits []string
 	for _, item := range listed {
-		ids = append(ids, item.(map[string]any)["connection_id"].(string))
+		view := item.(map[string]any)
+		toolkits = append(toolkits, view["toolkit"].(string))
+		if _, exposed := view["connection_id"]; exposed {
+			t.Fatalf("agent-facing connection=%v exposes routing id", view)
+		}
 	}
 	// A pending or removed connection can do nothing; an expired one is
 	// listed so the agent can ask the member to reconnect it.
-	if strings.Join(ids, ",") != "apc_1,apc_2" {
-		t.Fatalf("listed = %v", ids)
+	if strings.Join(toolkits, ",") != "github,gmail" {
+		t.Fatalf("listed = %v", toolkits)
 	}
 	// Nothing of Composio's own bookkeeping reaches the model.
 	for _, forbidden := range []string{"ca_1", "ca_2", "oryxa.org_1.user-1", "composio"} {
@@ -332,7 +341,7 @@ func TestRunWriteToolCarriesTheKey(t *testing.T) {
 
 	result := callTool(t, connected, ToolRunWrite, map[string]any{
 		"tool": "GITHUB_CREATE_AN_ISSUE", "arguments": map[string]any{"title": "bug"},
-		"idempotency_key": "issue-2026-09-17", "connection_id": "apc_1",
+		"idempotency_key": "issue-2026-09-17",
 	})
 	if result.IsError {
 		t.Fatalf("result = %+v", answer(t, result))
@@ -340,7 +349,7 @@ func TestRunWriteToolCarriesTheKey(t *testing.T) {
 	if fake.input.OnlyReads {
 		t.Fatal("the write tool asked for reads only")
 	}
-	if fake.input.IdempotencyKey != "issue-2026-09-17" || fake.input.ConnectionID != "apc_1" {
+	if fake.input.IdempotencyKey != "issue-2026-09-17" || fake.input.ConnectionID != "" {
 		t.Fatalf("input = %+v", fake.input)
 	}
 	answered := answer(t, result)
@@ -416,10 +425,10 @@ func TestArgumentsMustMatchTheSchema(t *testing.T) {
 	connected := memberSession(t, fake)
 
 	// An argument the schema does not allow is refused before anything runs,
-	// so a client cannot smuggle in a field such as another member.
+	// so a client cannot smuggle in another member or choose an account.
 	result := callTool(t, connected, ToolRunWrite, map[string]any{
 		"tool": "GITHUB_CREATE_AN_ISSUE", "arguments": map[string]any{},
-		"idempotency_key": "issue-2026-09-17", "as_member": "user-2",
+		"idempotency_key": "issue-2026-09-17", "connection_id": "apc_other",
 	})
 	if !result.IsError {
 		t.Fatalf("an unknown argument was accepted: %+v", answer(t, result))

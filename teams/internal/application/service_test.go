@@ -384,6 +384,41 @@ func TestSearchMembersReturnsTeamsAndHidesTheRest(t *testing.T) {
 	}
 }
 
+func TestOrganizationDirectoryReturnsTheRosterAndOnlyVisibleTeamLinks(t *testing.T) {
+	service, _, _ := newService()
+	ctx := context.Background()
+	engineering, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Engineering"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	design, err := service.CreateTeam(ctx, creds("user-admin"), "org_1", CreateTeamInput{Name: "Design"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddMember(ctx, creds("user-owner"), "org_1", engineering.ID, AddMemberInput{UserID: "user-member", Role: domain.RoleMember}); err != nil {
+		t.Fatal(err)
+	}
+
+	directory, err := service.OrganizationDirectory(ctx, creds("user-member"), "org_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directory.Organization.ID != "org_1" || directory.Organization.Name != "Acme" || len(directory.Members) != 4 || len(directory.Teams) != 1 || directory.Teams[0].ID != engineering.ID {
+		t.Fatalf("member directory = %+v", directory)
+	}
+	for _, person := range directory.Members {
+		for _, team := range person.Teams {
+			if team.ID == design.ID {
+				t.Fatalf("hidden Design leaked through %+v", person)
+			}
+		}
+	}
+	ownerDirectory, err := service.OrganizationDirectory(ctx, creds("user-owner"), "org_1")
+	if err != nil || len(ownerDirectory.Teams) != 2 {
+		t.Fatalf("owner directory = %+v, %v", ownerDirectory, err)
+	}
+}
+
 func TestUnknownOrganizationIsNotFound(t *testing.T) {
 	service, _, _ := newService()
 	if _, err := service.Teams(context.Background(), creds("user-owner"), "org_missing"); !errors.Is(err, domain.ErrNotFound) {

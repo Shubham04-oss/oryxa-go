@@ -13,7 +13,13 @@ import (
 	"testing"
 	"time"
 
+	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentworkflows"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
@@ -111,8 +117,385 @@ func (run *fakeRun) Execute(_ context.Context, emit func(threads.Item) error) {
 
 func (run *fakeRun) Discard(_ context.Context, reason string) { run.discarded = reason }
 
+type fakeManagedAgents struct {
+	definitions []managedagents.Definition
+	run         *fakeRun
+	lastInput   threads.RunInput
+	threadID    string
+}
+
+type fakeAgentTeams struct {
+	teams      []agentteams.Team
+	seenScopes []agentteams.Scope
+}
+
+type fakeAgentWorkflows struct {
+	workflow  agentworkflows.Workflow
+	execution agentworkflows.Execution
+	scopes    []agentworkflows.Scope
+}
+
+type fakeTeamspaces struct {
+	space             teamspaces.Space
+	organizationAgent teamspaces.OrganizationAgent
+	entries           []teamspaces.Entry
+	actors            []teamspaces.Actor
+}
+
+type fakeOrganizationContext struct{}
+
+func (*fakeOrganizationContext) Synthesis(_ context.Context, organizationID string) (organizationagents.Synthesis, error) {
+	return organizationagents.Synthesis{
+		OrganizationID: organizationID, AgentID: "oag_oryxa", Revision: 2,
+		Summary: "Launch is on track.", Decisions: []string{"Use the reviewed design."},
+		Risks: []string{}, OpenQuestions: []string{"Confirm rollout date."}, SourceEntryID: "tse_review",
+	}, nil
+}
+
+func (*fakeOrganizationContext) ListFollowUps(_ context.Context, organizationID string, _ int) ([]organizationagents.FollowUp, error) {
+	return []organizationagents.FollowUp{{
+		ID: "ofu_1", OrganizationID: organizationID, SynthesisRevision: 2,
+		SourceEntryID: "tse_review", TeamspaceID: "tsp_engineering",
+		TargetAgentID: "agt_primary", Task: "Confirm rollout date", Rationale: "It remains open", Status: organizationagents.FollowUpProposed,
+	}}, nil
+}
+
+func (service *fakeTeamspaces) OrganizationAgent(_ context.Context, actor teamspaces.Actor) (teamspaces.OrganizationAgent, error) {
+	service.actors = append(service.actors, actor)
+	if service.organizationAgent.ID == "" {
+		service.organizationAgent = teamspaces.OrganizationAgent{
+			ID: "oag_oryxa", OrganizationID: actor.OrganizationID, Name: "Oryxa Agent",
+			Instructions: "Coordinate shared context.", Status: teamspaces.StatusActive, Revision: 1, CanManage: true,
+		}
+	}
+	return service.organizationAgent, nil
+}
+
+func (service *fakeTeamspaces) UpdateOrganizationAgent(_ context.Context, actor teamspaces.Actor, input teamspaces.OrganizationAgentUpdate) (teamspaces.OrganizationAgent, error) {
+	agent, err := service.OrganizationAgent(context.Background(), actor)
+	if err != nil {
+		return teamspaces.OrganizationAgent{}, err
+	}
+	if input.Name != nil {
+		agent.Name = *input.Name
+	}
+	if input.Description != nil {
+		agent.Description = *input.Description
+	}
+	if input.Instructions != nil {
+		agent.Instructions = *input.Instructions
+	}
+	if input.Status != nil {
+		agent.Status = *input.Status
+	}
+	agent.Revision++
+	service.organizationAgent = agent
+	return agent, nil
+}
+
+func (service *fakeTeamspaces) List(_ context.Context, actor teamspaces.Actor) ([]teamspaces.Space, error) {
+	service.actors = append(service.actors, actor)
+	return []teamspaces.Space{service.space}, nil
+}
+
+func (service *fakeTeamspaces) Get(_ context.Context, actor teamspaces.Actor, id string) (teamspaces.Space, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return teamspaces.Space{}, teamspaces.ErrNotFound
+	}
+	return service.space, nil
+}
+
+func (service *fakeTeamspaces) Create(_ context.Context, actor teamspaces.Actor, input teamspaces.CreateInput) (teamspaces.Space, error) {
+	service.actors = append(service.actors, actor)
+	organizationAgent, _ := service.OrganizationAgent(context.Background(), actor)
+	service.space = teamspaces.Space{
+		ID: "tsp_engineering", OrganizationID: actor.OrganizationID, TeamID: input.TeamID,
+		Name: input.Name, Description: input.Description, CreatedByUserID: actor.UserID,
+		OrganizationAgentID: organizationAgent.ID, OrganizationAgent: organizationAgent,
+		Whisperers: []teamspaces.Whisperer{{UserID: actor.UserID, AgentID: "agt_primary", AgentName: "Carl", Mode: "whisperer"}},
+		Status:     teamspaces.StatusActive, Revision: 1, Contributions: []teamspaces.Contribution{}, CanManage: true, IsMember: true,
+	}
+	return service.space, nil
+}
+
+func (service *fakeTeamspaces) Update(_ context.Context, actor teamspaces.Actor, id string, input teamspaces.UpdateInput) (teamspaces.Space, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return teamspaces.Space{}, teamspaces.ErrNotFound
+	}
+	if input.Name != nil {
+		service.space.Name = *input.Name
+	}
+	service.space.Revision++
+	return service.space, nil
+}
+
+func (service *fakeTeamspaces) Delete(_ context.Context, actor teamspaces.Actor, id string) error {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return teamspaces.ErrNotFound
+	}
+	return nil
+}
+
+func (service *fakeTeamspaces) AddContribution(_ context.Context, actor teamspaces.Actor, id string, input teamspaces.ContributionInput) (teamspaces.Space, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return teamspaces.Space{}, teamspaces.ErrNotFound
+	}
+	service.space.Contributions = append(service.space.Contributions, teamspaces.Contribution{
+		AgentID: input.AgentID, OwnerUserID: actor.UserID, Name: "Reviewer", Role: input.Role, DelegationMode: input.DelegationMode,
+	})
+	return service.space, nil
+}
+
+func (service *fakeTeamspaces) UpdateContribution(_ context.Context, actor teamspaces.Actor, id, agentID string, input teamspaces.ContributionUpdate) (teamspaces.Space, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id || len(service.space.Contributions) == 0 || service.space.Contributions[0].AgentID != agentID {
+		return teamspaces.Space{}, teamspaces.ErrNotFound
+	}
+	if input.Role != nil {
+		service.space.Contributions[0].Role = *input.Role
+	}
+	if input.DelegationMode != nil {
+		service.space.Contributions[0].DelegationMode = *input.DelegationMode
+	}
+	return service.space, nil
+}
+
+func (service *fakeTeamspaces) DeleteContribution(_ context.Context, actor teamspaces.Actor, id, agentID string) (teamspaces.Space, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id || len(service.space.Contributions) == 0 || service.space.Contributions[0].AgentID != agentID {
+		return teamspaces.Space{}, teamspaces.ErrNotFound
+	}
+	service.space.Contributions = []teamspaces.Contribution{}
+	return service.space, nil
+}
+
+func (service *fakeTeamspaces) PublishEntry(_ context.Context, actor teamspaces.Actor, id string, input teamspaces.PublishEntryInput) (teamspaces.Entry, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return teamspaces.Entry{}, teamspaces.ErrNotFound
+	}
+	entry := teamspaces.Entry{
+		ID: "tse_review", TeamspaceID: id, OrganizationID: actor.OrganizationID,
+		AuthorUserID: actor.UserID, AuthorAgentID: input.AuthorAgentID, AuthorAgentName: "Carl",
+		Kind: input.Kind, Title: input.Title, Summary: input.Summary,
+		ToolsUsed: input.ToolsUsed, Artifacts: input.Artifacts, CreatedAt: time.Unix(2, 0).UTC(),
+	}
+	service.entries = append(service.entries, entry)
+	return entry, nil
+}
+
+func (service *fakeTeamspaces) ListEntries(_ context.Context, actor teamspaces.Actor, id string, _ int) ([]teamspaces.Entry, error) {
+	service.actors = append(service.actors, actor)
+	if service.space.ID != id {
+		return nil, teamspaces.ErrNotFound
+	}
+	return service.entries, nil
+}
+
+func (service *fakeAgentWorkflows) List(_ context.Context, scope agentworkflows.Scope) ([]agentworkflows.Workflow, error) {
+	service.scopes = append(service.scopes, scope)
+	return []agentworkflows.Workflow{service.workflow}, nil
+}
+func (service *fakeAgentWorkflows) Get(_ context.Context, scope agentworkflows.Scope, id string) (agentworkflows.Workflow, error) {
+	service.scopes = append(service.scopes, scope)
+	if service.workflow.ID != id {
+		return agentworkflows.Workflow{}, agentworkflows.ErrNotFound
+	}
+	return service.workflow, nil
+}
+func (service *fakeAgentWorkflows) Create(_ context.Context, scope agentworkflows.Scope, input agentworkflows.CreateInput) (agentworkflows.Workflow, error) {
+	service.scopes = append(service.scopes, scope)
+	service.workflow = agentworkflows.Workflow{ID: "awf_pipeline", OrganizationID: scope.OrganizationID, OwnerUserID: scope.UserID, Name: input.Name, Description: input.Description, TeamID: input.TeamID, Status: agentworkflows.StatusActive, Assignments: input.Assignments, Schedule: input.Schedule, Revision: 1}
+	return service.workflow, nil
+}
+func (service *fakeAgentWorkflows) Update(_ context.Context, scope agentworkflows.Scope, id string, input agentworkflows.UpdateInput) (agentworkflows.Workflow, error) {
+	service.scopes = append(service.scopes, scope)
+	if service.workflow.ID != id {
+		return agentworkflows.Workflow{}, agentworkflows.ErrNotFound
+	}
+	if input.Name != nil {
+		service.workflow.Name = *input.Name
+	}
+	service.workflow.Revision++
+	return service.workflow, nil
+}
+func (service *fakeAgentWorkflows) Delete(_ context.Context, scope agentworkflows.Scope, id string) error {
+	service.scopes = append(service.scopes, scope)
+	if service.workflow.ID != id {
+		return agentworkflows.ErrNotFound
+	}
+	return nil
+}
+func (service *fakeAgentWorkflows) Start(_ context.Context, scope agentworkflows.Scope, id string) (agentworkflows.Execution, error) {
+	service.scopes = append(service.scopes, scope)
+	if service.workflow.ID != id {
+		return agentworkflows.Execution{}, agentworkflows.ErrNotFound
+	}
+	service.execution = agentworkflows.Execution{ID: "awx_1", WorkflowID: id, OrganizationID: scope.OrganizationID, OwnerUserID: scope.UserID, StartedBy: agentworkflows.StartedByAPI, Status: agentworkflows.ExecutionQueued, ExternalID: "arn:execution:1"}
+	return service.execution, nil
+}
+func (service *fakeAgentWorkflows) ListExecutions(_ context.Context, scope agentworkflows.Scope, workflowID string, _ int) ([]agentworkflows.Execution, error) {
+	service.scopes = append(service.scopes, scope)
+	if service.workflow.ID != workflowID {
+		return nil, agentworkflows.ErrNotFound
+	}
+	return []agentworkflows.Execution{service.execution}, nil
+}
+func (service *fakeAgentWorkflows) GetExecution(_ context.Context, scope agentworkflows.Scope, id string) (agentworkflows.Execution, error) {
+	service.scopes = append(service.scopes, scope)
+	if service.execution.ID != id {
+		return agentworkflows.Execution{}, agentworkflows.ErrNotFound
+	}
+	return service.execution, nil
+}
+
+func (teams *fakeAgentTeams) List(_ context.Context, scope agentteams.Scope) ([]agentteams.Team, error) {
+	teams.seenScopes = append(teams.seenScopes, scope)
+	return teams.teams, nil
+}
+
+func (teams *fakeAgentTeams) Get(_ context.Context, scope agentteams.Scope, id string) (agentteams.Team, error) {
+	teams.seenScopes = append(teams.seenScopes, scope)
+	for _, team := range teams.teams {
+		if team.ID == id {
+			return team, nil
+		}
+	}
+	return agentteams.Team{}, agentteams.ErrNotFound
+}
+
+func (teams *fakeAgentTeams) Create(_ context.Context, scope agentteams.Scope, input agentteams.CreateInput) (agentteams.Team, error) {
+	teams.seenScopes = append(teams.seenScopes, scope)
+	created := agentteams.Team{
+		ID: "atm_revenue", OrganizationID: scope.OrganizationID, OwnerUserID: scope.UserID,
+		Name: input.Name, Description: input.Description, CoordinatorAgentID: "agt_primary",
+		CoordinatorName: "Carl", Status: agentteams.StatusActive, Revision: 1,
+	}
+	for position, member := range input.Members {
+		created.Members = append(created.Members, agentteams.Member{
+			AgentID: member.AgentID, Role: member.Role, Position: position, Status: managedagents.StatusActive,
+		})
+	}
+	teams.teams = append(teams.teams, created)
+	return created, nil
+}
+
+func (teams *fakeAgentTeams) Update(_ context.Context, scope agentteams.Scope, id string, input agentteams.UpdateInput) (agentteams.Team, error) {
+	teams.seenScopes = append(teams.seenScopes, scope)
+	var found agentteams.Team
+	for _, team := range teams.teams {
+		if team.ID == id {
+			found = team
+			break
+		}
+	}
+	if found.ID == "" {
+		return agentteams.Team{}, agentteams.ErrNotFound
+	}
+	if input.Name != nil {
+		found.Name = *input.Name
+	}
+	found.Revision++
+	return found, nil
+}
+
+func (teams *fakeAgentTeams) Delete(_ context.Context, scope agentteams.Scope, id string) error {
+	teams.seenScopes = append(teams.seenScopes, scope)
+	if id != "atm_revenue" {
+		return agentteams.ErrNotFound
+	}
+	return nil
+}
+
+type fakeInteractions struct {
+	request primaryagents.Interaction
+	actor   primaryagents.InteractionActor
+	token   string
+	key     string
+}
+
+func (service *fakeInteractions) Create(_ context.Context, actor primaryagents.InteractionActor, token, key string, input primaryagents.InteractionCreateInput) (primaryagents.Interaction, error) {
+	service.actor, service.token, service.key = actor, token, key
+	service.request = primaryagents.Interaction{ID: "irq_1", OrganizationID: actor.OrganizationID, Requester: primaryagents.InteractionParty{UserID: actor.UserID, AgentID: actor.AgentID}, Target: primaryagents.InteractionParty{AgentID: input.TargetAgentID}, Purpose: input.Purpose, Task: input.Task, Status: "pending"}
+	return service.request, nil
+}
+func (service *fakeInteractions) Inbox(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error) {
+	return []primaryagents.Interaction{service.request}, nil
+}
+func (service *fakeInteractions) Sent(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error) {
+	return []primaryagents.Interaction{service.request}, nil
+}
+func (service *fakeInteractions) Get(context.Context, primaryagents.InteractionActor, string) (primaryagents.Interaction, error) {
+	return service.request, nil
+}
+func (service *fakeInteractions) Decide(_ context.Context, _ primaryagents.InteractionActor, _ string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
+	service.request.Status = input.Decision
+	return service.request, nil
+}
+func (service *fakeInteractions) Respond(_ context.Context, _ primaryagents.InteractionActor, _ string, input primaryagents.InteractionResponseInput) (primaryagents.Interaction, error) {
+	service.request.Status = input.Status
+	return service.request, nil
+}
+
+func (agents *fakeManagedAgents) Primary(_ context.Context, scope managedagents.Scope) (managedagents.Definition, error) {
+	for _, definition := range agents.definitions {
+		if definition.Kind == managedagents.KindPrimary {
+			definition.OrganizationID = scope.OrganizationID
+			definition.OwnerUserID = scope.UserID
+			return definition, nil
+		}
+	}
+	return managedagents.Definition{}, managedagents.ErrNotFound
+}
+
+func (agents *fakeManagedAgents) List(_ context.Context, _ managedagents.Scope) ([]managedagents.Definition, error) {
+	return agents.definitions, nil
+}
+func (agents *fakeManagedAgents) Get(_ context.Context, _ managedagents.Scope, id string) (managedagents.Definition, error) {
+	for _, definition := range agents.definitions {
+		if definition.ID == id {
+			return definition, nil
+		}
+	}
+	return managedagents.Definition{}, managedagents.ErrNotFound
+}
+func (agents *fakeManagedAgents) Create(_ context.Context, scope managedagents.Scope, input managedagents.CreateInput) (managedagents.Definition, error) {
+	created := managedagents.Definition{ID: "agt_sales", OrganizationID: scope.OrganizationID, OwnerUserID: scope.UserID, Kind: managedagents.KindSpecialist, Name: input.Name, Description: input.Description, Instructions: input.Instructions, Status: managedagents.StatusActive}
+	agents.definitions = append(agents.definitions, created)
+	return created, nil
+}
+func (agents *fakeManagedAgents) Update(_ context.Context, scope managedagents.Scope, id string, input managedagents.UpdateInput) (managedagents.Definition, error) {
+	definition, err := agents.Get(context.Background(), scope, id)
+	if err != nil {
+		return managedagents.Definition{}, err
+	}
+	if input.Name != nil {
+		definition.Name = *input.Name
+	}
+	return definition, nil
+}
+func (agents *fakeManagedAgents) Delete(_ context.Context, _ managedagents.Scope, id string) error {
+	if id == "agt_primary" {
+		return managedagents.ErrInvalid
+	}
+	return nil
+}
+func (agents *fakeManagedAgents) StartRun(_ context.Context, _ threads.Member, _ string, threadID string, input threads.RunInput) (managedagents.StartedRun, error) {
+	agents.lastInput = input
+	if threadID == "" {
+		threadID = "agent_thread_1"
+	}
+	agents.threadID = threadID
+	return managedagents.StartedRun{ThreadID: threadID, Run: agents.run}, nil
+}
+
 func newTestServer(directory *fakeDirectory, service *fakeThreads) *Server {
-	return New(directory, service, Config{AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute}, nil)
+	managed := &fakeManagedAgents{definitions: []managedagents.Definition{{ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive}}, run: &fakeRun{}}
+	return New(directory, service, Config{AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Agents: managed}, nil)
 }
 
 func member() *fakeDirectory {
@@ -152,7 +535,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 9 {
+	if len(patterns) != 48 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)
@@ -162,6 +545,167 @@ func TestPatternsNameEveryRoute(t *testing.T) {
 		if _, matched := server.mux.Handler(request); matched != pattern {
 			t.Errorf("%s routes to %q", pattern, matched)
 		}
+	}
+}
+
+func TestAgentTeamsCanBeComposedAndManagedInsideTheMemberBoundary(t *testing.T) {
+	teams := &fakeAgentTeams{}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
+		Agents: &fakeManagedAgents{definitions: []managedagents.Definition{{
+			ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive,
+		}}},
+		Teams: teams,
+	}, nil)
+
+	created := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-teams", `{"name":"Revenue","description":"Qualify and close","members":[{"agent_id":"agt_sales","role":"Qualify opportunities"}]}`, bearer)
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"id":"atm_revenue"`) || !strings.Contains(created.Body.String(), `"coordinator_agent_id":"agt_primary"`) {
+		t.Fatalf("create=%d %s", created.Code, created.Body.String())
+	}
+	listed := serve(server, http.MethodGet, "/v1/organizations/org_1/agent-teams", "", bearer)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"name":"Revenue"`) {
+		t.Fatalf("list=%d %s", listed.Code, listed.Body.String())
+	}
+	updated := serve(server, http.MethodPatch, "/v1/organizations/org_1/agent-teams/atm_revenue", `{"name":"Go to market"}`, bearer)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"name":"Go to market"`) {
+		t.Fatalf("update=%d %s", updated.Code, updated.Body.String())
+	}
+	deleted := serve(server, http.MethodDelete, "/v1/organizations/org_1/agent-teams/atm_revenue", "", bearer)
+	if deleted.Code != http.StatusNoContent {
+		t.Fatalf("delete=%d %s", deleted.Code, deleted.Body.String())
+	}
+	for _, scope := range teams.seenScopes {
+		if scope.OrganizationID != "org_1" || scope.UserID != "user_1" {
+			t.Fatalf("scope=%+v", scope)
+		}
+	}
+	bad := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-teams", `{"name":"Revenue","members":[],"unknown":true}`, bearer)
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("unknown field=%d %s", bad.Code, bad.Body.String())
+	}
+}
+
+func TestTeamspacesExposeOrganizationAgentWhisperersAndExplicitAgentContributions(t *testing.T) {
+	spaces := &fakeTeamspaces{}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
+		Agents: &fakeManagedAgents{definitions: []managedagents.Definition{{
+			ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive,
+		}}},
+		Teamspaces: spaces, OrganizationContext: &fakeOrganizationContext{},
+	}, nil)
+
+	created := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces",
+		`{"team_id":"team_engineering","name":"Engineering Space"}`, bearer)
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"id":"tsp_engineering"`) || !strings.Contains(created.Body.String(), `"id":"oag_oryxa"`) || !strings.Contains(created.Body.String(), `"mode":"whisperer"`) {
+		t.Fatalf("create=%d %s", created.Code, created.Body.String())
+	}
+
+	organizationAgent := serve(server, http.MethodGet, "/v1/organizations/org_1/organization-agent", "", bearer)
+	if organizationAgent.Code != http.StatusOK || !strings.Contains(organizationAgent.Body.String(), `"id":"oag_oryxa"`) {
+		t.Fatalf("organization agent=%d %s", organizationAgent.Code, organizationAgent.Body.String())
+	}
+	updatedAgent := serve(server, http.MethodPatch, "/v1/organizations/org_1/organization-agent", `{"name":"Atlas"}`, bearer)
+	if updatedAgent.Code != http.StatusOK || !strings.Contains(updatedAgent.Body.String(), `"name":"Atlas"`) {
+		t.Fatalf("update organization agent=%d %s", updatedAgent.Code, updatedAgent.Body.String())
+	}
+	contextView := serve(server, http.MethodGet, "/v1/organizations/org_1/organization-agent/context", "", bearer)
+	if contextView.Code != http.StatusOK || !strings.Contains(contextView.Body.String(), `"revision":2`) || !strings.Contains(contextView.Body.String(), `"source_entry_id":"tse_review"`) {
+		t.Fatalf("organization context=%d %s", contextView.Code, contextView.Body.String())
+	}
+	followUps := serve(server, http.MethodGet, "/v1/organizations/org_1/organization-agent/follow-ups?limit=20", "", bearer)
+	if followUps.Code != http.StatusOK || !strings.Contains(followUps.Body.String(), `"id":"ofu_1"`) || !strings.Contains(followUps.Body.String(), `"status":"proposed"`) {
+		t.Fatalf("organization follow-ups=%d %s", followUps.Code, followUps.Body.String())
+	}
+
+	contributed := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/agents",
+		`{"agent_id":"agt_reviewer","role":"Review architecture","delegation_mode":"automatic"}`, bearer)
+	if contributed.Code != http.StatusCreated || !strings.Contains(contributed.Body.String(), `"delegation_mode":"automatic"`) {
+		t.Fatalf("contribute=%d %s", contributed.Code, contributed.Body.String())
+	}
+
+	mode := serve(server, http.MethodPatch, "/v1/organizations/org_1/teamspaces/tsp_engineering/agents/agt_reviewer",
+		`{"delegation_mode":"request"}`, bearer)
+	if mode.Code != http.StatusOK || !strings.Contains(mode.Body.String(), `"delegation_mode":"request"`) {
+		t.Fatalf("change contribution=%d %s", mode.Code, mode.Body.String())
+	}
+
+	listed := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces", "", bearer)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"teamspaces"`) {
+		t.Fatalf("list=%d %s", listed.Code, listed.Body.String())
+	}
+	published := serve(server, http.MethodPost, "/v1/organizations/org_1/teamspaces/tsp_engineering/entries",
+		`{"author_agent_id":"agt_primary","kind":"result","title":"Architecture review","summary":"Ready to proceed.","tools_used":["github.search"]}`, bearer)
+	if published.Code != http.StatusCreated || !strings.Contains(published.Body.String(), `"id":"tse_review"`) || !strings.Contains(published.Body.String(), `"author_agent_name":"Carl"`) {
+		t.Fatalf("publish=%d %s", published.Code, published.Body.String())
+	}
+	entries := serve(server, http.MethodGet, "/v1/organizations/org_1/teamspaces/tsp_engineering/entries?limit=20", "", bearer)
+	if entries.Code != http.StatusOK || !strings.Contains(entries.Body.String(), `"entries"`) || !strings.Contains(entries.Body.String(), `"tse_review"`) {
+		t.Fatalf("entries=%d %s", entries.Code, entries.Body.String())
+	}
+	for _, actor := range spaces.actors {
+		if actor.OrganizationID != "org_1" || actor.UserID != "user_1" || actor.AccessToken != "member-token" {
+			t.Fatalf("actor escaped member identity: %+v", actor)
+		}
+	}
+}
+
+func TestAgentWorkflowsCanBeScheduledStartedAndObservedThroughTheAPI(t *testing.T) {
+	workflows := &fakeAgentWorkflows{}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
+		Agents: &fakeManagedAgents{definitions: []managedagents.Definition{{
+			ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive,
+		}}},
+		Workflows: workflows,
+	}, nil)
+
+	created := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-workflows",
+		`{"name":"Weekly pipeline","team_id":"atm_revenue","assignments":[{"agent_id":"agt_sales","task":"Review pipeline"}],"schedule":{"expression":"cron(0 9 ? * MON *)","timezone":"Asia/Kolkata","state":"enabled"}}`, bearer)
+	if created.Code != http.StatusCreated || workflows.workflow.ID != "awf_pipeline" || workflows.workflow.Schedule.Expression == "" {
+		t.Fatalf("create = %d %s workflow=%+v", created.Code, created.Body.String(), workflows.workflow)
+	}
+
+	started := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-workflows/awf_pipeline/executions", "{}", bearer)
+	if started.Code != http.StatusAccepted || workflows.execution.Status != agentworkflows.ExecutionQueued {
+		t.Fatalf("start = %d %s execution=%+v", started.Code, started.Body.String(), workflows.execution)
+	}
+
+	listed := serve(server, http.MethodGet, "/v1/organizations/org_1/agent-workflows/awf_pipeline/executions", "", bearer)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"awx_1"`) {
+		t.Fatalf("list executions = %d %s", listed.Code, listed.Body.String())
+	}
+	got := serve(server, http.MethodGet, "/v1/organizations/org_1/agent-workflow-executions/awx_1", "", bearer)
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"step_functions_execution_arn":"arn:execution:1"`) {
+		t.Fatalf("get execution = %d %s", got.Code, got.Body.String())
+	}
+
+	for _, scope := range workflows.scopes {
+		if scope.OrganizationID != "org_1" || scope.UserID != "user_1" {
+			t.Fatalf("workflow scope escaped member boundary: %+v", scope)
+		}
+	}
+}
+
+func TestAgentRequestsCarryThePrimaryIdentityAndIdempotencyKey(t *testing.T) {
+	managed := &fakeManagedAgents{definitions: []managedagents.Definition{{ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive}}}
+	interactions := &fakeInteractions{}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
+		Agents: managed, Interactions: interactions,
+	}, nil)
+	created := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-requests",
+		`{"target_agent_id":"agt_engineering","purpose":"Architecture","task":"Explain the boundary."}`,
+		map[string]string{"Authorization": "Bearer member-token", "Idempotency-Key": "request-1"})
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"id":"irq_1"`) {
+		t.Fatalf("create=%d %s", created.Code, created.Body.String())
+	}
+	if interactions.actor.AgentID != "agt_primary" || interactions.actor.AgentName != "Carl" || interactions.token != "member-token" || interactions.key != "request-1" {
+		t.Fatalf("actor=%+v token=%q key=%q", interactions.actor, interactions.token, interactions.key)
+	}
+	inbox := serve(server, http.MethodGet, "/v1/organizations/org_1/agent-requests/inbox", "", bearer)
+	if inbox.Code != http.StatusOK || !strings.Contains(inbox.Body.String(), `"requests":[{"id":"irq_1"`) {
+		t.Fatalf("inbox=%d %s", inbox.Code, inbox.Body.String())
 	}
 }
 
@@ -207,7 +751,7 @@ func TestACookieChangesNothingFromAnotherSite(t *testing.T) {
 	if read := serve(server, http.MethodGet, "/v1/organizations/org_1/threads", "", map[string]string{"Cookie": "cookie-token"}); read.Code != http.StatusOK {
 		t.Fatalf("cookie read = %d, want 200", read.Code)
 	}
-	if len(service.members) != 2 || service.members[0].AccessToken != "cookie-token" {
+	if len(service.members) != 2 || service.members[0].AccessToken != "cookie-token" || service.members[0].AgentName != "Carl" {
 		t.Fatalf("members = %+v, want the cookie's token carried as the member's own", service.members)
 	}
 }
@@ -249,6 +793,38 @@ func TestAnUnavailableServiceSaysWhy(t *testing.T) {
 	}
 	if health := serve(server, http.MethodGet, "/healthz", "", nil); health.Code != http.StatusNoContent {
 		t.Fatalf("health = %d, want it still to pass", health.Code)
+	}
+}
+
+func TestManagedAgentsCanBeCreatedRenamedAndRun(t *testing.T) {
+	managed := &fakeManagedAgents{
+		definitions: []managedagents.Definition{{ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive}},
+		run:         &fakeRun{items: []threads.Item{{Type: threads.ItemRunCompleted, RunID: "run_1"}}},
+	}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Agents: managed,
+	}, nil)
+
+	listed := serve(server, http.MethodGet, "/v1/organizations/org_1/agents", "", bearer)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"name":"Carl"`) {
+		t.Fatalf("list = %d %s", listed.Code, listed.Body.String())
+	}
+	created := serve(server, http.MethodPost, "/v1/organizations/org_1/agents", `{"name":"Sales","description":"Own pipeline","instructions":"Review CRM."}`, bearer)
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"id":"agt_sales"`) {
+		t.Fatalf("create = %d %s", created.Code, created.Body.String())
+	}
+	name := "Crew"
+	updated := serve(server, http.MethodPatch, "/v1/organizations/org_1/agents/agt_primary", `{"name":"`+name+`"}`, bearer)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"name":"Crew"`) {
+		t.Fatalf("update = %d %s", updated.Code, updated.Body.String())
+	}
+
+	run := serve(server, http.MethodPost, "/v1/organizations/org_1/agents/agt_sales/runs", `{"message":"Review this quarter"}`, bearer)
+	if run.Code != http.StatusOK || run.Header().Get("X-Oryxa-Thread") != "agent_thread_1" || !managed.run.executed {
+		t.Fatalf("run = %d headers=%v body=%s executed=%v", run.Code, run.Header(), run.Body.String(), managed.run.executed)
+	}
+	if managed.lastInput.Message != "Review this quarter" {
+		t.Fatalf("run input = %+v", managed.lastInput)
 	}
 }
 

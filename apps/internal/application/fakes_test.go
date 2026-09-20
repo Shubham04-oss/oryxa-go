@@ -23,14 +23,15 @@ var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
 // fakeStore keeps apps' tables in memory, with the same conditional
 // semantics the Store interface promises.
 type fakeStore struct {
-	mu          sync.Mutex
-	connections map[string]domain.Connection
-	states      map[string]string // state hash → connection id
-	authConfigs map[string]AuthConfig
-	triggers    map[string]domain.Trigger
-	actions     map[string]domain.Action
-	handled     map[string]bool
-	events      []domain.Event
+	mu                  sync.Mutex
+	createConnectionErr error
+	connections         map[string]domain.Connection
+	states              map[string]string // state hash → connection id
+	authConfigs         map[string]AuthConfig
+	triggers            map[string]domain.Trigger
+	actions             map[string]domain.Action
+	handled             map[string]bool
+	events              []domain.Event
 	// subscribeAttempts counts what ConnectionsAwaitingSubscribe has claimed,
 	// the way the column does.
 	subscribeAttempts map[string]int
@@ -60,8 +61,19 @@ func (store *fakeStore) published(detailType string) []domain.Event {
 func (store *fakeStore) CreateConnection(_ context.Context, connection domain.Connection, stateHash string, event domain.Event) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	if store.createConnectionErr != nil {
+		return store.createConnectionErr
+	}
 	if _, taken := store.states[stateHash]; taken {
 		return domain.ErrConflict
+	}
+	for _, existing := range store.connections {
+		if existing.OrganizationID == connection.OrganizationID && existing.MemberID == connection.MemberID &&
+			existing.Toolkit == connection.Toolkit &&
+			(existing.Status == domain.ConnectionPending || existing.Status == domain.ConnectionActive) &&
+			(connection.Status == domain.ConnectionPending || connection.Status == domain.ConnectionActive) {
+			return domain.ErrConflict
+		}
 	}
 	store.connections[connection.ID] = connection
 	store.states[stateHash] = connection.ID
@@ -700,6 +712,7 @@ var (
 	otherToken      = authclient.Credentials{Authorization: "Bearer other"}
 	adminToken      = authclient.Credentials{Authorization: "Bearer admin"}
 	agentToken      = authclient.Credentials{Authorization: "Bearer agent"}
+	specialistToken = authclient.Credentials{Authorization: "Bearer specialist-agent"}
 	adminAgentToken = authclient.Credentials{Authorization: "Bearer admin-agent"}
 )
 
@@ -720,6 +733,7 @@ func newHarness(t *testing.T) harness {
 			otherToken.Authorization:      {OrganizationID: "org_1", UserID: "user-2", Role: domain.OrgRoleMember},
 			adminToken.Authorization:      {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin},
 			agentToken.Authorization:      {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember, Agent: true},
+			specialistToken.Authorization: {OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember, Agent: true},
 			adminAgentToken.Authorization: {OrganizationID: "org_1", UserID: "user-3", Role: domain.OrgRoleAdmin, Agent: true},
 		}},
 		Composio: fake,

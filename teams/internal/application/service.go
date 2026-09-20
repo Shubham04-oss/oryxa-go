@@ -93,6 +93,20 @@ type MemberSearchHit struct {
 	Teams       []MemberTeamRef `json:"teams"`
 }
 
+// OrganizationDirectory is the caller-visible organization tree. Teams and
+// team references are visibility-filtered; people come from auth's current
+// organization roster, which remains the source of membership identity.
+type OrganizationDirectory struct {
+	Organization DirectoryOrganization `json:"organization"`
+	Teams        []TeamSummary         `json:"teams"`
+	Members      []MemberSearchHit     `json:"members"`
+}
+
+type DirectoryOrganization struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type Service struct {
 	store     Store
 	directory Directory
@@ -247,61 +261,21 @@ func (s *Service) SetTeamEmbedding(ctx context.Context, credentials authclient.C
 }
 
 func (s *Service) SearchMembers(ctx context.Context, credentials authclient.Credentials, organizationID, query string, limit int) ([]MemberSearchHit, error) {
-	org, err := s.caller(ctx, credentials, organizationID)
-	if err != nil {
-		return nil, err
-	}
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return nil, fmt.Errorf("search query is required: %w", domain.ErrInvalid)
 	}
 	limit = domain.ClampSearchLimit(limit)
-	people, err := s.directory.Members(ctx, organizationID, credentials)
-	if err != nil {
-		return nil, conceal(err)
-	}
-	memberships, err := s.store.OrganizationMemberships(ctx, organizationID)
+	directory, err := s.OrganizationDirectory(ctx, credentials, organizationID)
 	if err != nil {
 		return nil, err
 	}
-	visibleTeamIDs := map[string]struct{}{}
-	if org.Role.IsOrgAdmin() {
-		for _, membership := range memberships {
-			visibleTeamIDs[membership.TeamID] = struct{}{}
-		}
-	} else {
-		teams, err := s.store.TeamsForUser(ctx, organizationID, org.UserID)
-		if err != nil {
-			return nil, err
-		}
-		for _, team := range teams {
-			visibleTeamIDs[team.ID] = struct{}{}
-		}
-	}
-	teamsByUser := map[string][]MemberTeamRef{}
-	for _, membership := range memberships {
-		if _, ok := visibleTeamIDs[membership.TeamID]; !ok {
-			continue
-		}
-		teamsByUser[membership.UserID] = append(teamsByUser[membership.UserID], MemberTeamRef{
-			ID: membership.TeamID, Name: membership.TeamName, Path: membership.Path,
-			MemberPath: membership.MemberPath, Role: membership.Role,
-		})
-	}
-
 	hits := make([]MemberSearchHit, 0)
-	for _, person := range people {
+	for _, person := range directory.Members {
 		if !domain.FuzzyMatch(query, person.Email, person.DisplayName, person.UserID) {
 			continue
 		}
-		teams := teamsByUser[person.UserID]
-		if teams == nil {
-			teams = []MemberTeamRef{}
-		}
-		hits = append(hits, MemberSearchHit{
-			UserID: person.UserID, Email: person.Email, DisplayName: person.DisplayName,
-			OrgRole: person.Role, Path: domain.UserPath(organizationID, person.UserID), Teams: teams,
-		})
+		hits = append(hits, person)
 	}
 	slices.SortFunc(hits, func(a, b MemberSearchHit) int {
 		as := max(domain.Similarity(query, a.Email), domain.Similarity(query, a.DisplayName))
@@ -318,6 +292,71 @@ func (s *Service) SearchMembers(ctx context.Context, credentials authclient.Cred
 		hits = hits[:limit]
 	}
 	return hits, nil
+}
+
+// OrganizationDirectory returns every current organization member and the
+// team tree the caller may see. A non-admin still sees people, as member
+// search already permits, but team references outside their teams are absent.
+func (s *Service) OrganizationDirectory(ctx context.Context, credentials authclient.Credentials, organizationID string) (OrganizationDirectory, error) {
+	visible, org, err := s.visibleTeams(ctx, credentials, organizationID)
+	if err != nil {
+		return OrganizationDirectory{}, err
+	}
+	teams, err := s.summarizeTeams(ctx, org, visible)
+	if err != nil {
+		return OrganizationDirectory{}, err
+	}
+	people, err := s.directory.Members(ctx, organizationID, credentials)
+	if err != nil {
+		return OrganizationDirectory{}, conceal(err)
+	}
+	memberships, err := s.store.OrganizationMemberships(ctx, organizationID)
+	if err != nil {
+		return OrganizationDirectory{}, err
+	}
+	visibleTeamIDs := make(map[string]struct{}, len(visible))
+	for _, team := range visible {
+		visibleTeamIDs[team.ID] = struct{}{}
+	}
+	teamsByUser := map[string][]MemberTeamRef{}
+	for _, membership := range memberships {
+		if _, ok := visibleTeamIDs[membership.TeamID]; !ok {
+			continue
+		}
+		teamsByUser[membership.UserID] = append(teamsByUser[membership.UserID], MemberTeamRef{
+			ID: membership.TeamID, Name: membership.TeamName, Path: membership.Path,
+			MemberPath: membership.MemberPath, Role: membership.Role,
+		})
+	}
+	members := make([]MemberSearchHit, 0, len(people))
+	for _, person := range people {
+		teamRefs := teamsByUser[person.UserID]
+		if teamRefs == nil {
+			teamRefs = []MemberTeamRef{}
+		}
+		slices.SortFunc(teamRefs, func(a, b MemberTeamRef) int { return strings.Compare(a.Path, b.Path) })
+		members = append(members, MemberSearchHit{
+			UserID: person.UserID, Email: person.Email, DisplayName: person.DisplayName,
+			OrgRole: person.Role, Path: domain.UserPath(organizationID, person.UserID), Teams: teamRefs,
+		})
+	}
+	slices.SortFunc(members, func(a, b MemberSearchHit) int {
+		if n := strings.Compare(strings.ToLower(a.DisplayName), strings.ToLower(b.DisplayName)); n != 0 {
+			return n
+		}
+		return strings.Compare(strings.ToLower(a.Email), strings.ToLower(b.Email))
+	})
+	return OrganizationDirectory{
+		Organization: DirectoryOrganization{ID: organizationID, Name: org.OrganizationName},
+		Teams:        nonNilTeams(teams), Members: members,
+	}, nil
+}
+
+func nonNilTeams(teams []TeamSummary) []TeamSummary {
+	if teams == nil {
+		return []TeamSummary{}
+	}
+	return teams
 }
 
 func (s *Service) TeamsNearest(ctx context.Context, credentials authclient.Credentials, organizationID string, values []float32, limit int) ([]TeamSummary, error) {

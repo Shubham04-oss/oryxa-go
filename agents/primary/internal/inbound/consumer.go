@@ -1,12 +1,12 @@
-// Package inbound handles what other services publish that agents must act
-// on: a batch of what a member's apps reported, ready to wake Krude for
-// them, and a member leaving an organization or the organization going
-// away, which takes their conversations with it.
+// Package inbound handles events agents must act on: app batches that wake a
+// member's primary agent, interaction lifecycle changes that wake persistent
+// agents, shared publications that wake the organization synthesizer,
+// membership removal that takes private state with it, and human-team deletion
+// that removes the corresponding shared teamspace.
 //
-// Batching decides when a member's app triggers make a batch — it sees every
-// trigger, and holds them across replicas and restarts — so agents consumes
-// its batches rather than the triggers themselves, and wakes Krude for each
-// one as soon as it arrives.
+// Batching decides when app triggers make a batch, while interaction events
+// carry routing identity and state only; authoritative request content stays
+// in agents' own ledger.
 package inbound
 
 import (
@@ -22,10 +22,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
+	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
+	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactiondelivery"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
@@ -40,6 +44,13 @@ func Subscriptions() map[string][]string {
 	return map[string][]string{
 		batchingv1.Source: {batchingv1.TriggerBatchReadyDetailType},
 		authv1.Source:     {authv1.MemberRemovedDetailType, authv1.OrganizationDeletedDetailType},
+		teamsv1.Source:    {teamsv1.TeamDeletedDetailType, teamsv1.MemberRemovedDetailType},
+		agentsv1.Source: {
+			agentsv1.InteractionRequestedDetailType,
+			agentsv1.InteractionDecidedDetailType,
+			agentsv1.InteractionCompletedDetailType,
+			agentsv1.TeamspaceEntryPublishedDetailType,
+		},
 	}
 }
 
@@ -50,25 +61,68 @@ type Recorder interface {
 	RecordBatch(ctx context.Context, events []wakeups.Event) (int, error)
 }
 
+// InteractionRecorder keeps a content-minimal lifecycle event until the
+// addressed persistent agent handles it. interactiondelivery.Store
+// implements it.
+type InteractionRecorder interface {
+	Record(context.Context, interactiondelivery.Delivery) (bool, error)
+}
+
+type OrganizationSynthesisRecorder interface {
+	Record(context.Context, organizationagents.Delivery) (bool, error)
+}
+
 // Forgetter removes what a service keeps for an organization — only one
 // member's, when memberID is named. threads.Service and wakeups.Store each
 // forget their own part; the threads service reports how many it removed.
 type Forgetter func(ctx context.Context, organizationID, memberID string) error
 
+// TeamForgetter removes state whose human-team authority has ended.
+type TeamForgetter func(ctx context.Context, organizationID, teamID string) error
+
+// TeamMemberForgetter withdraws private agent contributions when a person's
+// place on a human team ends.
+type TeamMemberForgetter func(ctx context.Context, organizationID, teamID, userID string) error
+
 // Consumer dispatches agents' queue.
 type Consumer struct {
-	recorder Recorder
-	forget   []Forgetter
-	logger   *slog.Logger
-	metrics  observability.ConsumerMetrics
+	recorder             Recorder
+	interactionRecorder  InteractionRecorder
+	organizationRecorder OrganizationSynthesisRecorder
+	forget               []Forgetter
+	forgetTeam           TeamForgetter
+	forgetTeamMember     TeamMemberForgetter
+	logger               *slog.Logger
+	metrics              observability.ConsumerMetrics
 	// queueName is set once, at the top of Poll, before Poll's single
 	// goroutine starts calling handle; it is not touched concurrently.
 	queueName string
 }
 
+// WithOrganizationSynthesisRecorder records shared-entry events for the
+// singleton organization agent. EventBridge content is never trusted as the
+// synthesis source; the worker reloads the authoritative entry.
+func (consumer *Consumer) WithOrganizationSynthesisRecorder(recorder OrganizationSynthesisRecorder) *Consumer {
+	consumer.organizationRecorder = recorder
+	return consumer
+}
+
+// WithTeamForgetter adds the cleanup used for teams.team.deleted.v1. Keeping
+// it separate from member cleanup preserves the distinct team identity.
+func (consumer *Consumer) WithTeamForgetter(forget TeamForgetter) *Consumer {
+	consumer.forgetTeam = forget
+	return consumer
+}
+
+// WithTeamMemberForgetter adds cleanup for teams.member.removed.v1.
+func (consumer *Consumer) WithTeamMemberForgetter(forget TeamMemberForgetter) *Consumer {
+	consumer.forgetTeamMember = forget
+	return consumer
+}
+
 // NewConsumer returns a consumer that records triggers with recorder and,
 // when a member or an organization is gone, runs every forgetter.
-func NewConsumer(recorder Recorder, forget []Forgetter, logger *slog.Logger) *Consumer {
+func NewConsumer(recorder Recorder, interactionRecorder InteractionRecorder, forget []Forgetter, logger *slog.Logger) *Consumer {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -76,7 +130,7 @@ func NewConsumer(recorder Recorder, forget []Forgetter, logger *slog.Logger) *Co
 	if err != nil {
 		logger.Warn("consumer metrics unavailable; handling continues without them", "error", err)
 	}
-	return &Consumer{recorder: recorder, forget: forget, logger: logger, metrics: metrics}
+	return &Consumer{recorder: recorder, interactionRecorder: interactionRecorder, forget: forget, logger: logger, metrics: metrics}
 }
 
 type eventBridgeEvent struct {
@@ -99,9 +153,9 @@ type receivedEnvelope struct {
 }
 
 // Handle decodes one SQS message body as an EventBridge event and acts on
-// it. The bus delivers at least once, and every handler is safe to repeat: a
-// batch's triggers are recorded by their own events' ids, and forgetting what
-// is already gone removes nothing more.
+// it. The bus delivers at least once, and every handler is safe to repeat:
+// app triggers, interaction deliveries, and organization synthesis deliveries
+// use event ids, and forgetting what is already gone removes nothing more.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	return consumer.handle(ctx, body, time.Now())
 }
@@ -136,6 +190,25 @@ func (consumer *Consumer) dispatch(ctx context.Context, event eventBridgeEvent, 
 	switch {
 	case event.Source == batchingv1.Source && event.DetailType == batchingv1.TriggerBatchReadyDetailType:
 		return consumer.batchReady(ctx, envelope)
+	case event.Source == agentsv1.Source &&
+		(event.DetailType == agentsv1.InteractionRequestedDetailType ||
+			event.DetailType == agentsv1.InteractionDecidedDetailType ||
+			event.DetailType == agentsv1.InteractionCompletedDetailType):
+		return consumer.interactionChanged(ctx, event.DetailType, envelope)
+	case event.Source == agentsv1.Source && event.DetailType == agentsv1.TeamspaceEntryPublishedDetailType:
+		if consumer.organizationRecorder == nil {
+			return fmt.Errorf("event %s: organization-agent synthesis is not configured", envelope.EventID)
+		}
+		var published agentsv1.TeamspaceEntryPublished
+		if err := json.Unmarshal(envelope.Data, &published); err != nil {
+			return fmt.Errorf("event %s: decode teamspace entry: %w", envelope.EventID, err)
+		}
+		_, err := consumer.organizationRecorder.Record(ctx, organizationagents.Delivery{
+			EventID: envelope.EventID, EntryID: published.EntryID, TeamspaceID: published.TeamspaceID,
+			OrganizationID: published.OrganizationID, AuthorUserID: published.AuthorUserID,
+			AuthorAgentID: published.AuthorAgentID, Kind: published.Kind, PublishedAt: published.PublishedAt,
+		})
+		return err
 	case event.Source == appsv1.Source && event.DetailType == appsv1.TriggerReceivedDetailType:
 		// Delivered straight from apps, as agents' rule did before batching
 		// took over; one can still be on the queue from then. Batching has
@@ -161,9 +234,89 @@ func (consumer *Consumer) dispatch(ctx context.Context, event eventBridgeEvent, 
 			return fmt.Errorf("event %s: a deleted organization needs its id", envelope.EventID)
 		}
 		return consumer.forgetAll(ctx, envelope.EventID, deleted.OrganizationID, "")
+	case event.Source == teamsv1.Source && event.DetailType == teamsv1.TeamDeletedDetailType:
+		var deleted teamsv1.TeamDeleted
+		if err := json.Unmarshal(envelope.Data, &deleted); err != nil {
+			return fmt.Errorf("event %s: decode team deleted: %w", envelope.EventID, err)
+		}
+		if deleted.OrganizationID == "" || deleted.TeamID == "" {
+			return fmt.Errorf("event %s: a deleted team needs an organization and team id", envelope.EventID)
+		}
+		if consumer.forgetTeam == nil {
+			return fmt.Errorf("event %s: teamspace cleanup is not configured", envelope.EventID)
+		}
+		return consumer.forgetTeam(ctx, deleted.OrganizationID, deleted.TeamID)
+	case event.Source == teamsv1.Source && event.DetailType == teamsv1.MemberRemovedDetailType:
+		var removed teamsv1.MemberRemoved
+		if err := json.Unmarshal(envelope.Data, &removed); err != nil {
+			return fmt.Errorf("event %s: decode team member removed: %w", envelope.EventID, err)
+		}
+		if removed.OrganizationID == "" || removed.TeamID == "" || removed.UserID == "" {
+			return fmt.Errorf("event %s: a removed team member needs an organization, team and user id", envelope.EventID)
+		}
+		if consumer.forgetTeamMember == nil {
+			return fmt.Errorf("event %s: teamspace member cleanup is not configured", envelope.EventID)
+		}
+		return consumer.forgetTeamMember(ctx, removed.OrganizationID, removed.TeamID, removed.UserID)
 	default:
 		return fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
 	}
+}
+
+func (consumer *Consumer) interactionChanged(ctx context.Context, detailType string, envelope receivedEnvelope) error {
+	if consumer.interactionRecorder == nil {
+		return fmt.Errorf("event %s: interaction delivery recorder is not configured", envelope.EventID)
+	}
+	var changed agentsv1.InteractionChanged
+	if err := json.Unmarshal(envelope.Data, &changed); err != nil {
+		return fmt.Errorf("event %s: decode interaction change: %w", envelope.EventID, err)
+	}
+	if changed.RequestID == "" || changed.OrganizationID == "" || changed.RequesterUserID == "" ||
+		changed.RequesterAgentID == "" || changed.TargetUserID == "" || changed.TargetAgentID == "" ||
+		changed.Status == "" || changed.Revision < 1 || changed.ChangedAt.IsZero() {
+		return fmt.Errorf("event %s: interaction change is missing routing identity, status, revision, or timestamp", envelope.EventID)
+	}
+	delivery := interactiondelivery.Delivery{
+		EventID: envelope.EventID, RequestID: changed.RequestID, OrganizationID: changed.OrganizationID,
+		Status: changed.Status, Revision: changed.Revision, ChangedAt: changed.ChangedAt,
+	}
+	switch detailType {
+	case agentsv1.InteractionRequestedDetailType:
+		if changed.Status != "pending" {
+			return fmt.Errorf("event %s: requested interaction has status %q", envelope.EventID, changed.Status)
+		}
+		delivery.RecipientUserID = changed.TargetUserID
+		delivery.RecipientAgentID = changed.TargetAgentID
+		delivery.Kind = interactiondelivery.KindTargetRequested
+	case agentsv1.InteractionDecidedDetailType:
+		switch changed.Status {
+		case "approved":
+			delivery.RecipientUserID = changed.TargetUserID
+			delivery.RecipientAgentID = changed.TargetAgentID
+			delivery.Kind = interactiondelivery.KindTargetApproved
+		case "rejected":
+			delivery.RecipientUserID = changed.RequesterUserID
+			delivery.RecipientAgentID = changed.RequesterAgentID
+			delivery.Kind = interactiondelivery.KindRequesterRejected
+		default:
+			return fmt.Errorf("event %s: decided interaction has status %q", envelope.EventID, changed.Status)
+		}
+	case agentsv1.InteractionCompletedDetailType:
+		if changed.Status != "completed" && changed.Status != "failed" {
+			return fmt.Errorf("event %s: completed interaction has status %q", envelope.EventID, changed.Status)
+		}
+		delivery.RecipientUserID = changed.RequesterUserID
+		delivery.RecipientAgentID = changed.RequesterAgentID
+		delivery.Kind = interactiondelivery.KindRequesterCompleted
+	}
+	recorded, err := consumer.interactionRecorder.Record(ctx, delivery)
+	if err != nil {
+		return fmt.Errorf("event %s: %w", envelope.EventID, err)
+	}
+	consumer.logger.InfoContext(ctx, "interaction delivery recorded",
+		"event_id", envelope.EventID, "request_id", changed.RequestID,
+		"recipient_agent_id", delivery.RecipientAgentID, "kind", delivery.Kind, "new", recorded)
+	return nil
 }
 
 func (consumer *Consumer) batchReady(ctx context.Context, envelope receivedEnvelope) error {

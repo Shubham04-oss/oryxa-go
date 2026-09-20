@@ -22,7 +22,7 @@ import {
 
 export const Route = createFileRoute("/app/threads/")({
 	component: ThreadsPage,
-	head: () => ({ meta: [{ title: "Threads · The Weirdly ODD" }] }),
+	head: () => ({ meta: [{ title: "Conversations · The Weirdly ODD" }] }),
 });
 
 function ThreadsPage() {
@@ -52,7 +52,7 @@ function ThreadsPage() {
 			<div className="settings-section-alert">
 				<QueryError
 					error={threads.error}
-					fallback="Could not load threads"
+					fallback="Could not load conversations"
 					onRetry={threads.refetch}
 				/>
 			</div>
@@ -60,9 +60,9 @@ function ThreadsPage() {
 	} else if (threads.data.length === 0) {
 		content = (
 			<EmptyState
-				description="Start a conversation with Krude to see it here."
+				description="Start a conversation with your primary agent to see it here."
 				icon={MessageSquareText}
-				title="No threads yet"
+				title="No conversations yet"
 			/>
 		);
 	} else {
@@ -84,15 +84,18 @@ function ThreadsPage() {
 					type="button"
 				>
 					<Plus data-icon="inline-start" />
-					{startThread.isPending ? "Creating…" : "New thread"}
+					{startThread.isPending ? "Creating…" : "New conversation"}
 				</Button>
 			}
-			description="Every conversation with Krude, in one place."
-			title="Threads"
+			description="Every conversation with your primary agent, in one place."
+			title="Conversations"
 		>
 			{startThread.isError ? (
 				<AppAlert>
-					{apiErrorMessage(startThread.error, "Could not start a new thread")}
+					{apiErrorMessage(
+						startThread.error,
+						"Could not start a new conversation",
+					)}
 				</AppAlert>
 			) : null}
 			<Card className="workspace-panel">{content}</Card>
@@ -103,7 +106,7 @@ function ThreadsPage() {
 function ThreadRow({ thread }: { thread: Thread }) {
 	const { organization } = useWorkspace();
 	const queryClient = useQueryClient();
-	const title = thread.title || "New thread";
+	const title = thread.title || "New conversation";
 
 	return (
 		<div className="settings-list-row">
@@ -121,7 +124,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
 				<small>Updated {relativeTime(thread.updated_at)}</small>
 			</div>
 			<ConfirmDialog
-				confirmLabel="Delete thread"
+				confirmLabel="Delete conversation"
 				description={`"${title}" is removed for everyone in ${organization.name}.`}
 				onConfirm={async () => {
 					await deleteThread(organization.id, thread.id);
@@ -129,7 +132,7 @@ function ThreadRow({ thread }: { thread: Thread }) {
 						queryKey: threadsQueryKey(organization.id),
 					});
 				}}
-				title="Delete this thread?"
+				title="Delete this conversation?"
 				trigger={
 					<Button
 						aria-label={`Delete ${title}`}

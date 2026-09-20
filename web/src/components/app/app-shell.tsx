@@ -1,8 +1,7 @@
 import { useLocation } from "@tanstack/react-router";
-import { Search } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { AppSidebar } from "@/components/app/app-sidebar";
-import { Button } from "@/components/ui/button";
+import { WorkspaceSearch } from "@/components/app/workspace-search";
 import {
 	SidebarInset,
 	SidebarProvider,
@@ -16,6 +15,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 	const isOrganizationSettings = pathname.startsWith(
 		"/app/settings/organization",
 	);
+	const scope = workspaceScope(pathname);
 
 	return (
 		<SidebarProvider
@@ -32,20 +32,37 @@ export function AppShell({ children }: { children: ReactNode }) {
 				<header className="app-topbar">
 					<div className="app-topbar-context">
 						<SidebarTrigger aria-label="Toggle navigation" />
-						<span>
-							{isOrganizationSettings
-								? "Organization settings"
-								: organization.name}
-						</span>
+						<div>
+							<small>{scope}</small>
+							<span>
+								{isOrganizationSettings
+									? "Organization settings"
+									: organization.name}
+							</span>
+						</div>
 					</div>
-					<Button className="app-search" size="sm" variant="ghost">
-						<Search />
-						<span>Search</span>
-						<kbd>⌘ K</kbd>
-					</Button>
+					<WorkspaceSearch />
 				</header>
 				{children}
 			</SidebarInset>
 		</SidebarProvider>
 	);
+}
+
+export function workspaceScope(pathname: string): string {
+	if (pathname.startsWith("/app/settings")) return "Settings";
+	if (
+		pathname.startsWith("/app/teamspaces") ||
+		pathname.startsWith("/app/teams")
+	) {
+		return "Collaborate";
+	}
+	if (
+		pathname.startsWith("/app/knowledge") ||
+		pathname.startsWith("/app/files") ||
+		pathname.startsWith("/app/connections")
+	) {
+		return "Resources";
+	}
+	return "Solo workspace";
 }

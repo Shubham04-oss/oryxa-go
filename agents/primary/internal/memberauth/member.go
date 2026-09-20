@@ -96,6 +96,7 @@ type contextKey int
 const (
 	accessTokenContextKey contextKey = iota
 	memberContextKey
+	runOriginContextKey
 )
 
 // WithAccessToken attaches the member's own access token to ctx: the same
@@ -112,6 +113,19 @@ func WithAccessToken(ctx context.Context, token string) context.Context {
 func AccessToken(ctx context.Context) string {
 	token, _ := ctx.Value(accessTokenContextKey).(string)
 	return token
+}
+
+// WithRunOrigin records whether this execution was started by the member, an
+// external trigger, or their primary agent's team coordinator. It is runtime
+// context only and is never persisted as a credential.
+func WithRunOrigin(ctx context.Context, origin string) context.Context {
+	return context.WithValue(ctx, runOriginContextKey, origin)
+}
+
+// RunOrigin returns the execution origin attached by the threads runtime.
+func RunOrigin(ctx context.Context) string {
+	origin, _ := ctx.Value(runOriginContextKey).(string)
+	return origin
 }
 
 // withMember attaches member to ctx, so a CredentialProvider — which only

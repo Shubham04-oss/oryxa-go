@@ -43,7 +43,7 @@ const appsUpdatePreviewLines = 4;
 
 export const Route = createFileRoute("/app/threads/$threadId")({
 	component: ThreadConversationPage,
-	head: () => ({ meta: [{ title: "Thread · The Weirdly ODD" }] }),
+	head: () => ({ meta: [{ title: "Conversation · The Weirdly ODD" }] }),
 });
 
 function isAbortError(error: unknown): boolean {
@@ -53,13 +53,16 @@ function isAbortError(error: unknown): boolean {
 function runFailureMessage(error: unknown): string {
 	if (error instanceof ApiError) {
 		if (error.code === "run_in_progress") {
-			return "Krude is still answering in this thread.";
+			return "Your primary agent is still answering in this conversation.";
 		}
 		if (error.code === "agents_unavailable") {
-			return "Krude isn't available right now.";
+			return "Your primary agent isn't available right now.";
 		}
 	}
-	return apiErrorMessage(error, "Krude could not answer. Try again.");
+	return apiErrorMessage(
+		error,
+		"Your primary agent could not answer. Try again.",
+	);
 }
 
 function formatJson(value: Record<string, unknown>): string {
@@ -99,7 +102,7 @@ function ThreadConversationPage() {
 							setOptimisticMessage(undefined);
 						}
 						if (item.type === "run_failed") {
-							setRunError(item.error ?? "Krude could not answer.");
+							setRunError(item.error ?? "Your primary agent could not answer.");
 						}
 					},
 					signal: controller.signal,
@@ -190,7 +193,7 @@ function ThreadConversationPage() {
 			<div className="thread-conversation-error">
 				<QueryError
 					error={thread.error}
-					fallback="Could not load this thread"
+					fallback="Could not load this conversation"
 					onRetry={thread.refetch}
 				/>
 			</div>
@@ -237,7 +240,7 @@ function ThreadConversationPage() {
 
 	const composerDisabled = runMutation.isPending || actionable.length > 0;
 	const composerHint = runMutation.isPending
-		? "Krude is answering…"
+		? "Your primary agent is answering…"
 		: actionable.length > 0
 			? `Answer the confirmation${actionable.length > 1 ? "s" : ""} above to continue.`
 			: undefined;
@@ -245,9 +248,9 @@ function ThreadConversationPage() {
 	return (
 		<div className="thread-conversation">
 			<header className="thread-conversation-header">
-				<h1>{thread.data?.title || "New thread"}</h1>
+				<h1>{thread.data?.title || "New conversation"}</h1>
 				<ConfirmDialog
-					confirmLabel="Delete thread"
+					confirmLabel="Delete conversation"
 					description="This conversation and its history are removed for everyone in the organization."
 					onConfirm={async () => {
 						await deleteThread(organization.id, threadId);
@@ -256,10 +259,10 @@ function ThreadConversationPage() {
 						});
 						await navigate({ to: "/app/threads" });
 					}}
-					title="Delete this thread?"
+					title="Delete this conversation?"
 					trigger={
 						<Button
-							aria-label="Delete thread"
+							aria-label="Delete conversation"
 							size="icon-sm"
 							type="button"
 							variant="ghost"

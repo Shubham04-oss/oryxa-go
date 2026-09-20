@@ -100,8 +100,8 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 		return nil, fmt.Errorf("%w: a wake-up carries a message", ErrInvalid)
 	}
 	startedBy := cmp.Or(input.StartedBy, agentsv1.StartedByMember)
-	if startedBy != agentsv1.StartedByMember && startedBy != agentsv1.StartedByTrigger {
-		return nil, fmt.Errorf("%w: a run is started by a member or a trigger", ErrInvalid)
+	if startedBy != agentsv1.StartedByMember && startedBy != agentsv1.StartedByTrigger && startedBy != agentsv1.StartedByTeam && startedBy != agentsv1.StartedByWorkflow && startedBy != agentsv1.StartedByOrganization {
+		return nil, fmt.Errorf("%w: a run is started by a member, trigger, team coordinator, workflow or organization agent", ErrInvalid)
 	}
 
 	// The thread must be the member's before this run takes it, even for a
@@ -144,6 +144,14 @@ func (service *Service) StartRun(ctx context.Context, member Member, threadID st
 // confirmation the thread waits on.
 func (run *Run) prepare(ctx context.Context, message string, input RunInput) error {
 	service := run.service
+	run.stateDelta = cloneState(service.initialState)
+	identity := memberAgentState(run.member)
+	if run.stateDelta == nil && len(identity) > 0 {
+		run.stateDelta = map[string]any{}
+	}
+	for key, value := range identity {
+		run.stateDelta[key] = value
+	}
 	stored, err := service.thread(ctx, run.member, run.threadID)
 	if err != nil {
 		return err
@@ -154,11 +162,16 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 			return ErrConfirmationPending
 		}
 		run.content = genai.NewContentFromText(message, genai.RoleUser)
-		run.stateDelta = map[string]any{}
 		if stateString(stored.State(), stateTitle) == "" {
+			if run.stateDelta == nil {
+				run.stateDelta = map[string]any{}
+			}
 			run.stateDelta[stateTitle] = titleFrom(message)
 		}
 		if input.Wakeup != "" {
+			if run.stateDelta == nil {
+				run.stateDelta = map[string]any{}
+			}
 			run.stateDelta[stateWakeup] = input.Wakeup
 		}
 		return nil
@@ -235,6 +248,7 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 		fmt.Errorf("the run took longer than %s: %w", service.runTimeout, context.DeadlineExceeded))
 	defer cancelTimeout()
 	runContext = usage.WithCounter(runContext, counter)
+	runContext = memberauth.WithRunOrigin(runContext, run.startedBy)
 	if run.member.AccessToken != "" {
 		runContext = memberauth.WithAccessToken(runContext, run.member.AccessToken)
 	}
@@ -332,7 +346,7 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 			}
 			continue
 		}
-		for _, item := range streamItems(event) {
+		for _, item := range displayAgent(streamItems(event), answering.Name(), run.member.AgentName) {
 			send(item)
 		}
 	}

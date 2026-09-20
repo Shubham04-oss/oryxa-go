@@ -24,12 +24,20 @@ func TestEventPatternMatchesEverythingAgentsConsumes(t *testing.T) {
 	assertJSONEqual(t, pattern, `{
 		"$or": [
 			{
+				"source": ["oryxa.agents"],
+				"detail-type": ["agents.interaction.completed.v1", "agents.interaction.decided.v1", "agents.interaction.requested.v1", "agents.teamspace.entry.published.v1"]
+			},
+			{
 				"source": ["oryxa.auth"],
 				"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
 			},
 			{
 				"source": ["oryxa.batching"],
 				"detail-type": ["batching.trigger-batch.ready.v1"]
+			},
+			{
+				"source": ["oryxa.teams"],
+				"detail-type": ["teams.member.removed.v1", "teams.team.deleted.v1"]
 			}
 		]
 	}`)
@@ -110,7 +118,7 @@ func TestRunCreatesTheQueueDeadLetterQueueAndRule(t *testing.T) {
 	if !ok {
 		t.Fatalf("rule %s was not created", ruleName)
 	}
-	assertJSONEqual(t, rule.pattern, `{"$or":[{"source":["oryxa.auth"],"detail-type":["auth.member.removed.v1","auth.organization.deleted.v1"]},{"source":["oryxa.batching"],"detail-type":["batching.trigger-batch.ready.v1"]}]}`)
+	assertJSONEqual(t, rule.pattern, `{"$or":[{"source":["oryxa.agents"],"detail-type":["agents.interaction.completed.v1","agents.interaction.decided.v1","agents.interaction.requested.v1","agents.teamspace.entry.published.v1"]},{"source":["oryxa.auth"],"detail-type":["auth.member.removed.v1","auth.organization.deleted.v1"]},{"source":["oryxa.batching"],"detail-type":["batching.trigger-batch.ready.v1"]},{"source":["oryxa.teams"],"detail-type":["teams.member.removed.v1","teams.team.deleted.v1"]}]}`)
 	if rule.state != eventbridgetypes.RuleStateEnabled {
 		t.Fatalf("rule state = %s, want ENABLED", rule.state)
 	}

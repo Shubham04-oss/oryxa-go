@@ -109,7 +109,7 @@ func Run(ctx context.Context, eventBridgeClient eventBridgeAPI, sqsClient sqsAPI
 
 	rule, err := eventBridgeClient.PutRule(ctx, &eventbridge.PutRuleInput{
 		Name:         aws.String(ruleName),
-		Description:  aws.String("App trigger events that wake Krude for a member"),
+		Description:  aws.String("Agent wake-ups, identity cleanup, and teamspace lifecycle events"),
 		EventBusName: aws.String(config.EventBusName),
 		EventPattern: aws.String(pattern),
 		State:        eventbridgetypes.RuleStateEnabled,
@@ -152,8 +152,10 @@ func Run(ctx context.Context, eventBridgeClient eventBridgeAPI, sqsClient sqsAPI
 	}, nil
 }
 
-// EventPattern matches exactly the events agents consumes: the app triggers
-// that wake Krude, and auth's news of a member or an organization gone.
+// EventPattern matches exactly the events agents consumes: app batches,
+// interaction lifecycle changes, shared teamspace publications for
+// organization synthesis, auth's news of a member or organization gone, and
+// human-team deletion for shared teamspace cleanup.
 func EventPattern() (string, error) {
 	subscriptions := inbound.Subscriptions()
 	var sources []map[string][]string

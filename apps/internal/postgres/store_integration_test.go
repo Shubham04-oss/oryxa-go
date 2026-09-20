@@ -222,6 +222,40 @@ func TestConnectionHidesAnotherOrganizations(t *testing.T) {
 	}
 }
 
+func TestOneCurrentConnectionPerMemberAndApp(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first, _ := testConnection(t, store, "org_1", "member_1")
+
+	second := first
+	second.ID = "con_" + randomHex(8)
+	second.ComposioAccountID = "acc_" + randomHex(8)
+	if err := store.CreateConnection(ctx, second, "state_"+randomHex(8), testEvent(t, "apps.connection.initiated.v1")); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("second current connection error=%v, want conflict", err)
+	}
+
+	// Another member owns a separate connection slot to the same app.
+	other := second
+	other.ID = "con_" + randomHex(8)
+	other.MemberID = "member_2"
+	other.ComposioUserID = domain.ComposioUserID("org_1", other.MemberID)
+	other.ComposioAccountID = "acc_" + randomHex(8)
+	if err := store.CreateConnection(ctx, other, "state_"+randomHex(8), testEvent(t, "apps.connection.initiated.v1")); err != nil {
+		t.Fatalf("other member connection error=%v", err)
+	}
+
+	// A failed attempt is history, not a permanent lock: the member can retry.
+	if _, err := store.FailConnection(ctx, first.ID, "denied_at_provider", testClock.Add(time.Minute), testEvent(t, "apps.connection.failed.v1")); err != nil {
+		t.Fatal(err)
+	}
+	replacement := second
+	replacement.ID = "con_" + randomHex(8)
+	replacement.ComposioAccountID = "acc_" + randomHex(8)
+	if err := store.CreateConnection(ctx, replacement, "state_"+randomHex(8), testEvent(t, "apps.connection.initiated.v1")); err != nil {
+		t.Fatalf("replacement connection error=%v", err)
+	}
+}
+
 func TestConnectionsListsNewestFirstAndFilters(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -242,6 +276,7 @@ func TestConnectionsListsNewestFirstAndFilters(t *testing.T) {
 
 	removed := older
 	removed.ID = "con_" + randomHex(8)
+	removed.Toolkit = "notion"
 	removed.ComposioAccountID = "acc_" + randomHex(8)
 	removed.CreatedAt = testClock.Add(2 * time.Minute)
 	removed.UpdatedAt = removed.CreatedAt
@@ -858,6 +893,7 @@ func TestFailPendingConnectionsBeforeFailsOnlyOldPendingOnes(t *testing.T) {
 	old, _ := testConnection(t, store, "org_1", "member_1")
 	fresh := old
 	fresh.ID = "con_" + randomHex(8)
+	fresh.Toolkit = "slack"
 	fresh.ComposioAccountID = "acc_" + randomHex(8)
 	fresh.CreatedAt = testClock.Add(time.Hour)
 	fresh.UpdatedAt = fresh.CreatedAt

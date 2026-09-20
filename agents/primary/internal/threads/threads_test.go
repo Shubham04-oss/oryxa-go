@@ -25,6 +25,7 @@ import (
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
+	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
@@ -577,6 +578,30 @@ func TestARunThatCannotStartSaysWhy(t *testing.T) {
 	}
 }
 
+func TestAnOrganizationAgentCanStartAnIsolatedSynthesisRun(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText(`{"summary":"shared"}`, genai.RoleModel), nil
+	})
+	organization := Member{
+		UserID: "organization-agent:org_1", OrganizationID: "org_1",
+		AgentID: "oag_1", AgentName: "Org Agent", AgentKind: "organization",
+	}
+	created, err := h.service.Create(context.Background(), organization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := h.service.StartRun(context.Background(), organization, created.ID, RunInput{
+		Message: "Synthesize this shared publication.", StartedBy: agentsv1.StartedByOrganization,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(h.runs.started) != 1 || h.runs.started[0].StartedBy != agentsv1.StartedByOrganization {
+		t.Fatalf("started runs=%+v", h.runs.started)
+	}
+	run.Discard(context.Background(), "test complete")
+}
+
 func TestADiscardedRunFreesItsThread(t *testing.T) {
 	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
 		return genai.NewContentFromText("ok", genai.RoleModel), nil
@@ -989,6 +1014,40 @@ func TestTitleFrom(t *testing.T) {
 		if got := titleFrom(message); got != want {
 			t.Errorf("titleFrom(%q) = %q, want %q", message, got, want)
 		}
+	}
+}
+
+func TestARunRefreshesThePersistentAgentDisplayName(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("done", genai.RoleModel), nil
+	})
+	member := asha
+	member.AgentID, member.AgentName, member.AgentKind = "agt_primary", "Carl", "primary"
+	created, err := h.service.Create(context.Background(), member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member.AgentName = "Crew"
+	h.run(member, created.ID, RunInput{Message: "hello"})
+	stored, err := h.sessions.Get(context.Background(), &session.GetRequest{AppName: "krude", UserID: member.UserID, SessionID: created.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := stored.Session.State().Get(primaryagents.AgentNameKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name != "Crew" {
+		t.Fatalf("agent name in session = %v, want Crew", name)
+	}
+}
+
+func TestDisplayIdentityDoesNotRenameSubagentsOrTheMember(t *testing.T) {
+	items := displayAgent([]Item{
+		{Author: "krude"}, {Author: "planner"}, {Author: AuthorMember},
+	}, "krude", "Crew")
+	if items[0].Author != "Crew" || items[1].Author != "planner" || items[2].Author != AuthorMember {
+		t.Fatalf("displayed authors = %+v", items)
 	}
 }
 

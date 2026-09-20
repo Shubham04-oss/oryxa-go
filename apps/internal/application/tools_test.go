@@ -9,6 +9,7 @@ import (
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
 )
@@ -304,6 +305,31 @@ func TestRunToolPicksTheCallersOwnConnection(t *testing.T) {
 	_, err = h.service.RunTool(context.Background(), adminToken, "org_1", RunToolInput{Tool: tool.Slug, ConnectionID: theirs.ID})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("an admin acting as a member = %v, want not found", err)
+	}
+}
+
+func TestMemberAndOwnedAgentsShareTheSameConnection(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	tool := h.readTool()
+	connection := h.activeConnection("apc_gmail", "user-1", "github", "ca_shared")
+
+	for _, credentials := range []authclient.Credentials{memberToken, agentToken, specialistToken} {
+		run, err := h.service.RunTool(context.Background(), credentials, "org_1", RunToolInput{Tool: tool.Slug})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if run.Action.ConnectionID != connection.ID {
+			t.Fatalf("caller %q used connection %q, want shared %q", credentials.Authorization, run.Action.ConnectionID, connection.ID)
+		}
+	}
+	if len(h.composio.executed) != 3 {
+		t.Fatalf("executions=%d", len(h.composio.executed))
+	}
+	for _, request := range h.composio.executed {
+		if request.ConnectedAccountID != "ca_shared" || request.UserID != "oryxa.org_1.user-1" {
+			t.Fatalf("provider request=%+v", request)
+		}
 	}
 }
 

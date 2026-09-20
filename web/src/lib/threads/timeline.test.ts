@@ -435,16 +435,16 @@ describe("confirmationHint", () => {
 
 	it("writes its own words when the backend left the developer-facing default out", () => {
 		expect(confirmationHint("slack_post_message", undefined)).toBe(
-			"Krude wants to use Slack post message. It only runs if you approve.",
+			"Your agent wants to use Slack post message. It only runs if you approve.",
 		);
 		expect(confirmationHint("slack_post_message", "")).toBe(
-			"Krude wants to use Slack post message. It only runs if you approve.",
+			"Your agent wants to use Slack post message. It only runs if you approve.",
 		);
 	});
 
 	it("still says something sensible with no tool name at all", () => {
 		expect(confirmationHint(undefined, undefined)).toBe(
-			"Krude wants to use a tool. It only runs if you approve.",
+			"Your agent wants to use a tool. It only runs if you approve.",
 		);
 	});
 });

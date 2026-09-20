@@ -34,7 +34,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.GuardrailIdentifier != "" || config.GuardrailVersion != "" || config.GuardrailFailClosed || config.ModelPrices != "" {
 		t.Fatalf("guardrail/pricing config = %+v", config)
 	}
-	if config.AppsURL != "" || config.AuthURL != "" || config.ServiceKeyID != "" {
+	if config.AppsURL != "" || config.RagURL != "" || config.TeamsURL != "" || config.AuthURL != "" || config.ServiceKeyID != "" {
 		t.Fatalf("apps config = %+v", config)
 	}
 	if len(config.AllowedOrigins) != 0 || config.RunTimeout != 10*time.Minute || config.DatabaseMaxConns != 8 {
@@ -45,8 +45,21 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.EventsQueueURL != "" || config.WakeupBatchSize != 1 || config.WakeupMaxWait != 2*time.Minute {
 		t.Fatalf("wake-up config = %+v", config)
 	}
+	if config.WorkflowQueueURL != "" || config.WorkflowStateMachineARN != "" || config.WorkflowSchedulerRoleARN != "" || config.WorkflowSchedulerGroup != "default" || config.WorkflowLocal {
+		t.Fatalf("workflow config = %+v", config)
+	}
 	if config.KnowledgeMinRelevance != 0 {
 		t.Fatalf("knowledge min relevance = %v, want off", config.KnowledgeMinRelevance)
+	}
+}
+
+func TestFromEnvReadsTeamsURL(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{"TEAMS_URL": " https://teams.example.test/ "}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.TeamsURL != "https://teams.example.test" {
+		t.Fatalf("TeamsURL = %q", config.TeamsURL)
 	}
 }
 
@@ -149,6 +162,14 @@ func TestFromEnvOverrides(t *testing.T) {
 		"AGENTS_ALLOWED_ORIGINS":                         " http://localhost:3000, https://app.oryxa.test/ ",
 		"AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS":             "300",
 		"AGENTS_PRIMARY_DATABASE_MAX_CONNS":              "4",
+		"AGENTS_WORKFLOW_QUEUE_URL":                      " https://sqs.example/workflows ",
+		"AGENTS_WORKFLOW_STATE_MACHINE_ARN":              " arn:aws:states:ap-south-1:1:stateMachine:workflows ",
+		"AGENTS_WORKFLOW_SCHEDULER_ROLE_ARN":             " arn:aws:iam::1:role/scheduler ",
+		"AGENTS_WORKFLOW_SCHEDULE_DLQ_ARN":               " arn:aws:sqs:ap-south-1:1:workflow-dlq ",
+		"AGENTS_WORKFLOW_SCHEDULER_GROUP":                " oryxa ",
+		"AWS_ENDPOINT_URL_SFN":                           " http://localhost:4566/ ",
+		"AWS_ENDPOINT_URL_SCHEDULER":                     " http://localhost:4567/ ",
+		"AGENTS_WORKFLOW_LOCAL":                          " true ",
 	}))
 	if err != nil {
 		t.Fatalf("FromEnv() error = %v", err)
@@ -182,6 +203,10 @@ func TestFromEnvOverrides(t *testing.T) {
 	}
 	if config.RunTimeout != 5*time.Minute || config.DatabaseMaxConns != 4 {
 		t.Fatalf("run API config = %+v", config)
+	}
+	if config.WorkflowQueueURL != "https://sqs.example/workflows" || config.WorkflowSchedulerGroup != "oryxa" ||
+		config.StepFunctionsEndpoint != "http://localhost:4566" || config.SchedulerEndpoint != "http://localhost:4567" || !config.WorkflowLocal {
+		t.Fatalf("workflow config = %+v", config)
 	}
 }
 

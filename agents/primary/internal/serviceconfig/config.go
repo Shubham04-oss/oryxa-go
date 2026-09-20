@@ -69,6 +69,9 @@ type Config struct {
 	// RagURL is rag's own URL. When set, Krude gets the knowledge toolbox,
 	// which searches the member's and their organization's collections.
 	RagURL string
+	// TeamsURL is Teams' own URL. When set, primary and specialist agents get
+	// a read-only organization directory toolbox.
+	TeamsURL string
 	// KnowledgeMinRelevance is the reranker relevance below which Krude's
 	// knowledge search leaves a passage out; zero keeps every passage. It is
 	// on the scale of the reranker rag runs (see agents.KnowledgeConfig).
@@ -109,6 +112,19 @@ type Config struct {
 	// a queue, nothing wakes Krude for a member's apps.
 	EventsQueueURL string
 	SQSEndpoint    string
+	// WorkflowQueueURL is the callback queue used by the Step Functions
+	// Standard workflow. The remaining values let the API start executions
+	// and create one EventBridge Scheduler schedule per workflow.
+	WorkflowQueueURL         string
+	WorkflowStateMachineARN  string
+	WorkflowSchedulerRoleARN string
+	WorkflowScheduleDLQARN   string
+	WorkflowSchedulerGroup   string
+	StepFunctionsEndpoint    string
+	SchedulerEndpoint        string
+	// WorkflowLocal is an explicit development-only in-process adapter used
+	// to exercise the real API and model without AWS orchestration resources.
+	WorkflowLocal bool
 	// WakeupBatchSize and WakeupMaxWait decide when a member's waiting app
 	// events wake Krude: once this many wait, or the oldest has waited this
 	// long, whichever comes first. Batching already decided when they make a
@@ -145,6 +161,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	guardrailFailClosed, err := boolValue(getenv, "AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED", false)
+	if err != nil {
+		return Config{}, err
+	}
+	workflowLocal, err := boolValue(getenv, "AGENTS_WORKFLOW_LOCAL", false)
 	if err != nil {
 		return Config{}, err
 	}
@@ -216,30 +236,39 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			getenv, "AGENTS_PRIMARY_BROWSER_ID",
 			"aws.browser.v1",
 		),
-		BrowserSessionTimeout: browserTimeout,
-		EventBusName:          valueOrDefault(getenv, "EVENT_BUS_NAME", "default"),
-		EventBridgeEndpoint:   strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")),
-		GuardrailIdentifier:   guardrailIdentifier,
-		GuardrailVersion:      guardrailVersion,
-		GuardrailFailClosed:   guardrailFailClosed,
-		ModelPrices:           modelPrices,
-		AppsURL:               strings.TrimSpace(getenv("APPS_URL")),
-		RagURL:                strings.TrimSpace(getenv("RAG_URL")),
-		KnowledgeMinRelevance: knowledgeMinRelevance,
-		MemoryAgentEngine:     strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
-		MemoryRecalled:        memoryRecalled,
-		MemoryLocation:        valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
-		ArtifactBucket:        strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
-		S3Endpoint:            artifactEndpoint(getenv),
-		AuthURL:               strings.TrimSpace(getenv("AUTH_URL")),
-		ServiceKeyID:          strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
-		AllowedOrigins:        allowedOrigins,
-		RunTimeout:            runTimeout,
-		DatabaseMaxConns:      databaseMaxConns,
-		EventsQueueURL:        strings.TrimSpace(getenv("AGENTS_EVENTS_QUEUE_URL")),
-		SQSEndpoint:           sqsEndpoint(getenv),
-		WakeupBatchSize:       wakeupBatchSize,
-		WakeupMaxWait:         wakeupMaxWait,
+		BrowserSessionTimeout:    browserTimeout,
+		EventBusName:             valueOrDefault(getenv, "EVENT_BUS_NAME", "default"),
+		EventBridgeEndpoint:      strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")),
+		GuardrailIdentifier:      guardrailIdentifier,
+		GuardrailVersion:         guardrailVersion,
+		GuardrailFailClosed:      guardrailFailClosed,
+		ModelPrices:              modelPrices,
+		AppsURL:                  strings.TrimSpace(getenv("APPS_URL")),
+		RagURL:                   strings.TrimSpace(getenv("RAG_URL")),
+		TeamsURL:                 strings.TrimRight(strings.TrimSpace(getenv("TEAMS_URL")), "/"),
+		KnowledgeMinRelevance:    knowledgeMinRelevance,
+		MemoryAgentEngine:        strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
+		MemoryRecalled:           memoryRecalled,
+		MemoryLocation:           valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
+		ArtifactBucket:           strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
+		S3Endpoint:               artifactEndpoint(getenv),
+		AuthURL:                  strings.TrimSpace(getenv("AUTH_URL")),
+		ServiceKeyID:             strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
+		AllowedOrigins:           allowedOrigins,
+		RunTimeout:               runTimeout,
+		DatabaseMaxConns:         databaseMaxConns,
+		EventsQueueURL:           strings.TrimSpace(getenv("AGENTS_EVENTS_QUEUE_URL")),
+		SQSEndpoint:              sqsEndpoint(getenv),
+		WorkflowQueueURL:         strings.TrimSpace(getenv("AGENTS_WORKFLOW_QUEUE_URL")),
+		WorkflowStateMachineARN:  strings.TrimSpace(getenv("AGENTS_WORKFLOW_STATE_MACHINE_ARN")),
+		WorkflowSchedulerRoleARN: strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULER_ROLE_ARN")),
+		WorkflowScheduleDLQARN:   strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULE_DLQ_ARN")),
+		WorkflowSchedulerGroup:   valueOrDefault(getenv, "AGENTS_WORKFLOW_SCHEDULER_GROUP", "default"),
+		StepFunctionsEndpoint:    serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SFN"),
+		SchedulerEndpoint:        serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SCHEDULER"),
+		WorkflowLocal:            workflowLocal,
+		WakeupBatchSize:          wakeupBatchSize,
+		WakeupMaxWait:            wakeupMaxWait,
 	}, nil
 }
 
@@ -266,6 +295,15 @@ func originList(getenv func(string) string, name string) ([]string, error) {
 // the generic, as apps reads it.
 func sqsEndpoint(getenv func(string) string) string {
 	for _, name := range []string{"AWS_ENDPOINT_URL_SQS", "AWS_ENDPOINT_URL"} {
+		if value := strings.TrimRight(strings.TrimSpace(getenv(name)), "/"); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func serviceEndpoint(getenv func(string) string, specific string) string {
+	for _, name := range []string{specific, "AWS_ENDPOINT_URL"} {
 		if value := strings.TrimRight(strings.TrimSpace(getenv(name)), "/"); value != "" {
 			return value
 		}

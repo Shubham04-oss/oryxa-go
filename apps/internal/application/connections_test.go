@@ -107,6 +107,56 @@ func TestConnectReusesWhatTheProjectAlreadyHas(t *testing.T) {
 	}
 }
 
+func TestConnectKeepsOneCurrentConnectionPerMemberAndApp(t *testing.T) {
+	t.Run("pending", func(t *testing.T) {
+		h := newHarness(t)
+		h.pending(t, "gmail")
+		_, _, err := h.service.Connect(context.Background(), memberToken, "org_1", ConnectInput{Toolkit: "gmail"})
+		if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "already being connected") {
+			t.Fatalf("second pending connection error=%v", err)
+		}
+		if len(h.composio.links) != 1 {
+			t.Fatalf("connect links=%d, want no second provider flow", len(h.composio.links))
+		}
+	})
+
+	t.Run("active", func(t *testing.T) {
+		h := newHarness(t)
+		h.activeConnection("apc_gmail", "user-1", "gmail", "ca_gmail")
+		_, _, err := h.service.Connect(context.Background(), memberToken, "org_1", ConnectInput{Toolkit: "gmail"})
+		if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "already connected") {
+			t.Fatalf("second active connection error=%v", err)
+		}
+		if len(h.composio.links) != 0 {
+			t.Fatalf("connect links=%d, want no provider flow", len(h.composio.links))
+		}
+	})
+
+	t.Run("expired can reconnect", func(t *testing.T) {
+		h := newHarness(t)
+		expired := h.activeConnection("apc_old", "user-1", "gmail", "ca_old")
+		expired.Status = domain.ConnectionExpired
+		h.store.connections[expired.ID] = expired
+		h.composio.toolkits["gmail"] = composio.Toolkit{Slug: "gmail", AuthSchemes: []string{"OAUTH2"}, ComposioManagedAuthSchemes: []string{"OAUTH2"}}
+		if _, _, err := h.service.Connect(context.Background(), memberToken, "org_1", ConnectInput{Toolkit: "gmail"}); err != nil {
+			t.Fatalf("reconnect error=%v", err)
+		}
+	})
+}
+
+func TestConnectRevokesAProviderAccountThatLosesTheConnectionRace(t *testing.T) {
+	h := newHarness(t)
+	h.composio.toolkits["gmail"] = composio.Toolkit{Slug: "gmail", AuthSchemes: []string{"OAUTH2"}, ComposioManagedAuthSchemes: []string{"OAUTH2"}}
+	h.store.createConnectionErr = domain.ErrConflict
+
+	if _, _, err := h.service.Connect(context.Background(), memberToken, "org_1", ConnectInput{Toolkit: "gmail"}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("connect error=%v", err)
+	}
+	if len(h.composio.deleted) != 1 || h.composio.deleted[0] != "ca_new" || len(h.composio.revoked) != 1 || !h.composio.revoked[0] {
+		t.Fatalf("deleted=%v revoked=%v", h.composio.deleted, h.composio.revoked)
+	}
+}
+
 func TestConnectUsesASchemeTheMemberTypesInWhenComposioHasNoApp(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)

@@ -21,6 +21,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/bench"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
@@ -49,6 +50,7 @@ func main() {
 	taskNames := flag.String("tasks", "", "comma-separated task names to run (default: all)")
 	cacheEnabled := flag.Bool("cache", true, "use explicit Vertex prompt caching")
 	withNotes := flag.Bool("with-notes", false, "register the notes fixture toolbox and the tools task, to exercise loading, its skill and caching")
+	withTeamspaces := flag.Bool("with-teamspaces", false, "run multi-user whisperer-mode tasks against a deterministic shared Teamspace fixture")
 	verbose := flag.Bool("v", false, "log every agent event while measuring")
 	answers := flag.Bool("answers", false, "log each run's final answer")
 	flag.Parse()
@@ -100,8 +102,18 @@ func main() {
 	}
 
 	var toolboxes []agents.Toolbox
+	var teamspaces *benchTeamspaces
 	if *withNotes {
 		toolboxes = append(toolboxes, notesToolbox())
+	}
+	if *withTeamspaces {
+		teamspaces = newBenchTeamspaces()
+		box, err := agents.TeamspaceToolbox(agents.TeamspaceConfig{Service: teamspaces})
+		if err != nil {
+			log.Fatalf("teamspaces toolbox: %v", err)
+		}
+		toolboxes = append(toolboxes, box)
+		ctx = memberauth.WithAccessToken(ctx, "bench-member-token")
 	}
 	root, err := agents.Root(router, toolboxes, false)
 	if err != nil {
@@ -171,6 +183,9 @@ func main() {
 			agents.UserRoleKey:       "admin",
 			agents.OrgNameKey:        "Acme",
 			agents.OrganizationIDKey: "org_bench",
+			agents.AgentIDKey:        "agt_primary_bench",
+			agents.AgentNameKey:      "Carl",
+			agents.AgentKindKey:      "primary",
 		},
 		Pricing: prices,
 		ModelFor: func(event *session.Event) string {
@@ -189,7 +204,7 @@ func main() {
 		},
 	}
 
-	tasks := selectTasks(*taskNames, *withNotes)
+	tasks := selectTasks(*taskNames, *withNotes, *withTeamspaces)
 	log.Printf("running %d tasks x %d: main %s, lite %s, prompt cache %t (min %d tokens)",
 		len(tasks), *repeat, settings.Model, settings.ModelLite, settings.Cache, settings.CacheMinTokens)
 
@@ -212,14 +227,25 @@ func main() {
 		}
 	}
 
-	bench.WriteReport(os.Stdout, runs, bench.Summarize(runs), settings.Cache)
+	summary := bench.Summarize(runs)
+	bench.WriteReport(os.Stdout, runs, summary, settings.Cache)
+	if teamspaces != nil {
+		stats := teamspaces.Stats()
+		log.Printf("whisperer collaboration: lists %d, ledger reads %d, deliberate publications %d, privacy rejections %d, model tool calls/run %.2f, service operations/run %.2f",
+			stats.Lists, stats.Reads, stats.Publications, stats.PrivacyViolations,
+			float64(summary.ToolCalls)/float64(len(runs)),
+			float64(stats.Lists+stats.Reads+stats.Publications)/float64(len(runs)))
+	}
 	log.Printf("note: token usage inside sub-agent and helper runs is not visible in the event stream, so those calls may be undercounted")
 }
 
-func selectTasks(names string, withNotes bool) []bench.Task {
+func selectTasks(names string, withNotes, withTeamspaces bool) []bench.Task {
 	available := defaultTasks
 	if withNotes {
 		available = append(append([]bench.Task{}, defaultTasks...), toolsTask)
+	}
+	if withTeamspaces {
+		available = append(append([]bench.Task{}, available...), teamspaceTasks...)
 	}
 	names = strings.TrimSpace(names)
 	if names == "" {

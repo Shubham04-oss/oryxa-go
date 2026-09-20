@@ -20,7 +20,7 @@ import {
 
 export const Route = createFileRoute("/app/knowledge/")({
 	component: KnowledgePage,
-	head: () => ({ meta: [{ title: "Knowledge · The Weirdly ODD" }] }),
+	head: () => ({ meta: [{ title: "Knowledge bases · The Weirdly ODD" }] }),
 });
 
 function KnowledgePage() {
@@ -43,12 +43,12 @@ function KnowledgePage() {
 			<EmptyState
 				action={
 					<Button asChild size="sm" type="button">
-						<Link to="/app/connections">Go to Connections</Link>
+						<Link to="/app/connections">Open apps & tools</Link>
 					</Button>
 				}
 				description="Connect GitHub, Notion or Slack so a member can make it searchable, or add a collection of your own."
 				icon={BookOpen}
-				title="Nothing for Krude to search yet"
+				title="No searchable knowledge yet"
 			/>
 		);
 	} else {
@@ -63,8 +63,8 @@ function KnowledgePage() {
 
 	return (
 		<WorkspacePage
-			description="What Krude can search when it answers you or acts on your connected apps."
-			title="Knowledge"
+			description="Curated knowledge bases your primary agent and bounded specialists can search."
+			title="Knowledge bases"
 		>
 			{content}
 		</WorkspacePage>

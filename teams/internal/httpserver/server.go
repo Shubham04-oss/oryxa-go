@@ -38,6 +38,7 @@ type teamsService interface {
 	SetTeamEmbedding(context.Context, authclient.Credentials, string, string, []float32) error
 	TeamsNearest(context.Context, authclient.Credentials, string, []float32, int) ([]application.TeamSummary, error)
 	SearchMembers(context.Context, authclient.Credentials, string, string, int) ([]application.MemberSearchHit, error)
+	OrganizationDirectory(context.Context, authclient.Credentials, string) (application.OrganizationDirectory, error)
 }
 
 type Config struct {
@@ -74,6 +75,7 @@ func New(service teamsService, config Config, logger *slog.Logger) *Server {
 	server.handle("GET /v1/organizations/{organizationID}/tools", server.tools)
 	server.handle("POST /v1/organizations/{organizationID}/tools/{name}", server.callTool)
 	server.handle("GET /v1/organizations/{organizationID}/teams", server.teams)
+	server.handle("GET /v1/organizations/{organizationID}/directory", server.directory)
 	server.handle("POST /v1/organizations/{organizationID}/teams", server.createTeam)
 	server.handle("GET /v1/organizations/{organizationID}/members/search", server.searchMembers)
 	server.handle("GET /v1/organizations/{organizationID}/teams/search", server.searchTeams)
@@ -90,6 +92,19 @@ func New(service teamsService, config Config, logger *slog.Logger) *Server {
 	server.handle("PATCH /v1/organizations/{organizationID}/teams/{teamID}/members/{userID}", server.changeRole)
 	server.handle("DELETE /v1/organizations/{organizationID}/teams/{teamID}/members/{userID}", server.removeMember)
 	return server
+}
+
+func (server *Server) directory(writer http.ResponseWriter, request *http.Request) {
+	credentials, ok := server.credentials(writer, request)
+	if !ok {
+		return
+	}
+	directory, err := server.service.OrganizationDirectory(request.Context(), credentials, request.PathValue("organizationID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, directory)
 }
 
 // handle registers a route and remembers its pattern, so a host serving

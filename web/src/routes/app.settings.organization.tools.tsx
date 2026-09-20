@@ -24,7 +24,7 @@ import { useMembership, useWorkspace } from "@/lib/auth/session";
 
 export const Route = createFileRoute("/app/settings/organization/tools")({
 	component: OrganizationToolsPage,
-	head: () => ({ meta: [{ title: "Apps · The Weirdly ODD" }] }),
+	head: () => ({ meta: [{ title: "Tool access · The Weirdly ODD" }] }),
 });
 
 function toolkitName(toolkit: string): string {
@@ -42,7 +42,7 @@ function OrganizationToolsPage() {
 	return (
 		<WorkspacePage
 			description="Which apps the organization's members have connected."
-			title="Apps"
+			title="Tool access"
 		>
 			<SettingsPageBody>
 				{isAdmin ? (
@@ -60,7 +60,7 @@ function NonAdminNote() {
 		<SettingsSection
 			description="Members connect their own apps; there is nothing here to manage."
 			id="apps-summary"
-			title="Apps"
+			title="Connected apps"
 		>
 			<Card className="service-placeholder">
 				<span aria-hidden="true">
@@ -97,7 +97,7 @@ function AdminAppsSummary({ organizationId }: AdminAppsSummaryProps) {
 
 	return (
 		<SettingsSection
-			description="Each member connects and disconnects their own apps from Connections; Krude only ever uses a member's apps as that member."
+			description="Each member connects and disconnects their own apps from Apps & tools; every agent uses a member's apps only as that member."
 			footer={
 				<Button asChild variant="ghost">
 					<Link to="/app/connections">

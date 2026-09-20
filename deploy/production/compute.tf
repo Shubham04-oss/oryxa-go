@@ -130,6 +130,12 @@ locals {
       AGENTS_PRIMARY_MEMORY_AGENT_ENGINE = var.memory_agent_engine
       AGENTS_PRIMARY_MEMORY_LOCATION     = var.gcp_region
 
+      AGENTS_WORKFLOW_QUEUE_URL          = aws_sqs_queue.agent_workflows.url
+      AGENTS_WORKFLOW_STATE_MACHINE_ARN  = aws_sfn_state_machine.agent_workflows.arn
+      AGENTS_WORKFLOW_SCHEDULER_ROLE_ARN = aws_iam_role.agent_workflow_scheduler.arn
+      AGENTS_WORKFLOW_SCHEDULE_DLQ_ARN   = aws_sqs_queue.agent_workflow_schedule_dlq.arn
+      AGENTS_WORKFLOW_SCHEDULER_GROUP    = aws_scheduler_schedule_group.agent_workflows.name
+
       EMAIL_FROM_ADDRESS       = "no-reply@${var.domain}"
       EMAIL_FROM_NAME          = "Oryxa"
       SES_REGION               = var.ses_region

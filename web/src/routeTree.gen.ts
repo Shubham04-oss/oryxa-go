@@ -13,11 +13,13 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as OnboardingRouteImport } from './routes/onboarding'
 import { Route as AppIndexRouteImport } from './routes/app.index'
+import { Route as AppAgentsRouteImport } from './routes/app.agents'
 import { Route as AppConnectionsRouteImport } from './routes/app.connections'
 import { Route as AppFilesRouteImport } from './routes/app.files'
 import { Route as AppKnowledgeRouteImport } from './routes/app.knowledge'
 import { Route as AppSettingsRouteImport } from './routes/app.settings'
 import { Route as AppTeamsRouteImport } from './routes/app.teams'
+import { Route as AppTeamspacesRouteImport } from './routes/app.teamspaces'
 import { Route as AppThreadsRouteImport } from './routes/app.threads'
 import { Route as AuthForgotPasswordRouteImport } from './routes/auth.forgot-password'
 import { Route as AuthResetPasswordRouteImport } from './routes/auth.reset-password'
@@ -60,6 +62,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppAgentsRoute = AppAgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppConnectionsRoute = AppConnectionsRouteImport.update({
   id: '/connections',
   path: '/connections',
@@ -83,6 +90,11 @@ const AppSettingsRoute = AppSettingsRouteImport.update({
 const AppTeamsRoute = AppTeamsRouteImport.update({
   id: '/teams',
   path: '/teams',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppTeamspacesRoute = AppTeamspacesRouteImport.update({
+  id: '/teamspaces',
+  path: '/teamspaces',
   getParentRoute: () => AppRoute,
 } as any)
 const AppThreadsRoute = AppThreadsRouteImport.update({
@@ -201,11 +213,13 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/app': typeof AppRouteWithChildren
   '/onboarding': typeof OnboardingRoute
+  '/app/agents': typeof AppAgentsRoute
   '/app/connections': typeof AppConnectionsRoute
   '/app/files': typeof AppFilesRoute
   '/app/knowledge': typeof AppKnowledgeRouteWithChildren
   '/app/settings': typeof AppSettingsRouteWithChildren
   '/app/teams': typeof AppTeamsRoute
+  '/app/teamspaces': typeof AppTeamspacesRoute
   '/app/threads': typeof AppThreadsRouteWithChildren
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/reset-password': typeof AuthResetPasswordRoute
@@ -232,10 +246,12 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/onboarding': typeof OnboardingRoute
+  '/app/agents': typeof AppAgentsRoute
   '/app/connections': typeof AppConnectionsRoute
   '/app/files': typeof AppFilesRoute
   '/app/settings': typeof AppSettingsRouteWithChildren
   '/app/teams': typeof AppTeamsRoute
+  '/app/teamspaces': typeof AppTeamspacesRoute
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/reset-password': typeof AuthResetPasswordRoute
   '/auth/sign-in': typeof AuthSignInRoute
@@ -262,11 +278,13 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/app': typeof AppRouteWithChildren
   '/onboarding': typeof OnboardingRoute
+  '/app/agents': typeof AppAgentsRoute
   '/app/connections': typeof AppConnectionsRoute
   '/app/files': typeof AppFilesRoute
   '/app/knowledge': typeof AppKnowledgeRouteWithChildren
   '/app/settings': typeof AppSettingsRouteWithChildren
   '/app/teams': typeof AppTeamsRoute
+  '/app/teamspaces': typeof AppTeamspacesRoute
   '/app/threads': typeof AppThreadsRouteWithChildren
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/reset-password': typeof AuthResetPasswordRoute
@@ -296,11 +314,13 @@ export interface FileRouteTypes {
     | '/'
     | '/app'
     | '/onboarding'
+    | '/app/agents'
     | '/app/connections'
     | '/app/files'
     | '/app/knowledge'
     | '/app/settings'
     | '/app/teams'
+    | '/app/teamspaces'
     | '/app/threads'
     | '/auth/forgot-password'
     | '/auth/reset-password'
@@ -327,10 +347,12 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/onboarding'
+    | '/app/agents'
     | '/app/connections'
     | '/app/files'
     | '/app/settings'
     | '/app/teams'
+    | '/app/teamspaces'
     | '/auth/forgot-password'
     | '/auth/reset-password'
     | '/auth/sign-in'
@@ -356,11 +378,13 @@ export interface FileRouteTypes {
     | '/'
     | '/app'
     | '/onboarding'
+    | '/app/agents'
     | '/app/connections'
     | '/app/files'
     | '/app/knowledge'
     | '/app/settings'
     | '/app/teams'
+    | '/app/teamspaces'
     | '/app/threads'
     | '/auth/forgot-password'
     | '/auth/reset-password'
@@ -429,6 +453,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/app/agents': {
+      id: '/app/agents'
+      path: '/agents'
+      fullPath: '/app/agents'
+      preLoaderRoute: typeof AppAgentsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/connections': {
       id: '/app/connections'
       path: '/connections'
@@ -462,6 +493,13 @@ declare module '@tanstack/react-router' {
       path: '/teams'
       fullPath: '/app/teams'
       preLoaderRoute: typeof AppTeamsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/teamspaces': {
+      id: '/app/teamspaces'
+      path: '/teamspaces'
+      fullPath: '/app/teamspaces'
+      preLoaderRoute: typeof AppTeamspacesRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/threads': {
@@ -681,21 +719,25 @@ const AppThreadsRouteWithChildren = AppThreadsRoute._addFileChildren(
 )
 
 interface AppRouteChildren {
+  AppAgentsRoute: typeof AppAgentsRoute
   AppConnectionsRoute: typeof AppConnectionsRoute
   AppFilesRoute: typeof AppFilesRoute
   AppKnowledgeRoute: typeof AppKnowledgeRouteWithChildren
   AppSettingsRoute: typeof AppSettingsRouteWithChildren
   AppTeamsRoute: typeof AppTeamsRoute
+  AppTeamspacesRoute: typeof AppTeamspacesRoute
   AppThreadsRoute: typeof AppThreadsRouteWithChildren
   AppIndexRoute: typeof AppIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
+  AppAgentsRoute: AppAgentsRoute,
   AppConnectionsRoute: AppConnectionsRoute,
   AppFilesRoute: AppFilesRoute,
   AppKnowledgeRoute: AppKnowledgeRouteWithChildren,
   AppSettingsRoute: AppSettingsRouteWithChildren,
   AppTeamsRoute: AppTeamsRoute,
+  AppTeamspacesRoute: AppTeamspacesRoute,
   AppThreadsRoute: AppThreadsRouteWithChildren,
   AppIndexRoute: AppIndexRoute,
 }

@@ -16,9 +16,6 @@ connection.
   Replaying the same key answers the first result rather than repeating the
   action, so reuse the same key if you retry after a timeout or an
   `unavailable` error.
-- If a result's error is `choose_connection`, it names the member's
-  candidate connections; call again with the `connection_id` of the one that
-  fits.
 - If a result's error is `not_connected` or `needs_reconnect`, say so and
   tell the member to connect or reconnect that app in Oryxa. You cannot
   connect or reconnect an app yourself.

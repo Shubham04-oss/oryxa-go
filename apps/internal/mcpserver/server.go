@@ -108,7 +108,7 @@ func (handler *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Requ
 
 // instructions ride along as the server's guidance, for a client that shows
 // them; Krude carries its own copy in the toolbox's skill.
-const instructions = `Tools in the apps the member connected to Oryxa, run as the member.
+const instructions = `Tools in the apps the member connected to Oryxa, run as the member through their one current connection per app.
 Find the member's connected apps with apps_connections, search an app's tools with apps_search_tools,
 run a read with apps_run_read_tool, and a change with apps_run_write_tool and an idempotency key.
 An agent cannot connect an app: on not_connected or needs_reconnect, ask the member to do it in Oryxa.`
@@ -123,7 +123,7 @@ func (handler *Handler) server(request *http.Request) *mcp.Server {
 
 	server.AddTool(&mcp.Tool{
 		Name:        ToolConnections,
-		Description: "List the apps the member connected, optionally one app's, with the connection each tool would act through.",
+		Description: "List the apps the member connected, optionally one app's, with its status and account label.",
 		InputSchema: json.RawMessage(`{"type":"object","properties":{"toolkit":{"type":"string","description":"An app's slug, such as github."}},"additionalProperties":false}`),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: &notDestructive},
 	}, handler.connections(current))
@@ -156,9 +156,8 @@ func (handler *Handler) server(request *http.Request) *mcp.Server {
 
 func runSchema(write bool) json.RawMessage {
 	properties := map[string]any{
-		"tool":          map[string]any{"type": "string", "description": "The tool's slug, as apps_search_tools gives it, such as GITHUB_LIST_ISSUES."},
-		"arguments":     map[string]any{"type": "object", "description": "The tool's input, matching its input_schema."},
-		"connection_id": map[string]any{"type": "string", "description": "Which connection to act through; needed only when the member has several to the app."},
+		"tool":      map[string]any{"type": "string", "description": "The tool's slug, as apps_search_tools gives it, such as GITHUB_LIST_ISSUES."},
+		"arguments": map[string]any{"type": "object", "description": "The tool's input, matching its input_schema."},
 	}
 	required := []string{"tool", "arguments"}
 	if write {
@@ -194,8 +193,7 @@ func (handler *Handler) connections(current call) mcp.ToolHandler {
 				continue
 			}
 			listed = append(listed, map[string]any{
-				"connection_id": connection.ID, "toolkit": connection.Toolkit,
-				"label": connection.Label, "status": string(connection.Status),
+				"toolkit": connection.Toolkit, "label": connection.Label, "status": string(connection.Status),
 			})
 		}
 		return answered(map[string]any{"connections": listed}), nil
@@ -225,14 +223,13 @@ func (handler *Handler) run(current call, onlyReads bool) mcp.ToolHandler {
 		var input struct {
 			Tool           string          `json:"tool"`
 			Arguments      json.RawMessage `json:"arguments"`
-			ConnectionID   string          `json:"connection_id"`
 			IdempotencyKey string          `json:"idempotency_key"`
 		}
 		if err := decodeArguments(request, &input); err != nil {
 			return failed(err), nil
 		}
 		run, err := handler.service.RunTool(ctx, current.credentials, current.organizationID, application.RunToolInput{
-			Tool: input.Tool, ConnectionID: input.ConnectionID, Arguments: input.Arguments,
+			Tool: input.Tool, Arguments: input.Arguments,
 			IdempotencyKey: input.IdempotencyKey, OnlyReads: onlyReads,
 		})
 		if err != nil {
@@ -286,7 +283,7 @@ func answered(value map[string]any) *mcp.CallToolResult {
 }
 
 // failed tells the model what went wrong in the contract's words, so it can
-// ask the member to reconnect, choose a connection, or stop, rather than
+// ask the member to reconnect or stop, rather than
 // guess from prose. A tool failure is a result, not a protocol error.
 func failed(err error) *mcp.CallToolResult {
 	_, code := httpserver.ErrorCode(err)
