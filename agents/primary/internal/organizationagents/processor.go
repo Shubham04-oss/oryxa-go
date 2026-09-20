@@ -19,10 +19,13 @@ const (
 	processorRetryAfter  = time.Minute
 	processorRetention   = 7 * 24 * time.Hour
 	processorClaims      = 8
-	maxSummaryRunes      = 30_000
-	maxListItems         = 100
-	maxListItemRunes     = 2_000
-	maxFollowUps         = 20
+	// maxSummaryRunes bounds the shared summary. It is carried into every
+	// later synthesis and read by people, so it is kept to a few pages
+	// rather than the limit the store would accept.
+	maxSummaryRunes  = 8_000
+	maxListItems     = 100
+	maxListItemRunes = 2_000
+	maxFollowUps     = 20
 )
 
 type deliveryStore interface {
@@ -30,6 +33,7 @@ type deliveryStore interface {
 	Synthesis(context.Context, string) (Synthesis, error)
 	Apply(context.Context, Delivery, string, Result) (Synthesis, error)
 	Release(context.Context, string, bool, int, time.Duration, string) (bool, error)
+	SetAside(context.Context, string, string) error
 	Drop(context.Context, string, string) error
 	Purge(context.Context, time.Duration) error
 }
@@ -48,14 +52,19 @@ type ProcessorConfig struct {
 	Interval    time.Duration
 	Lease       time.Duration
 	Concurrency int
+	// Relevance decides which publications are organization context and
+	// which are the working group talking among themselves. [ByShape] reads
+	// the publication itself and is the default.
+	Relevance Relevance
 }
 
 type Processor struct {
-	store   deliveryStore
-	sources sharedSources
-	runtime synthesizer
-	config  ProcessorConfig
-	logger  *slog.Logger
+	store     deliveryStore
+	sources   sharedSources
+	runtime   synthesizer
+	relevance Relevance
+	config    ProcessorConfig
+	logger    *slog.Logger
 }
 
 func NewProcessor(store deliveryStore, sources sharedSources, runtime synthesizer, config ProcessorConfig, logger *slog.Logger) (*Processor, error) {
@@ -72,7 +81,11 @@ func NewProcessor(store deliveryStore, sources sharedSources, runtime synthesize
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Processor{store: store, sources: sources, runtime: runtime, config: config, logger: logger}, nil
+	relevance := config.Relevance
+	if relevance == nil {
+		relevance = ByShape{}
+	}
+	return &Processor{store: store, sources: sources, runtime: runtime, relevance: relevance, config: config, logger: logger}, nil
 }
 
 func (processor *Processor) Run(ctx context.Context) {
@@ -155,6 +168,22 @@ func (processor *Processor) process(ctx context.Context, delivery Delivery) {
 		processor.drop(ctx, delivery, ErrDisabled.Error(), logger)
 		return
 	}
+	// Chatter never reaches the organization agent: it would cost a run and
+	// a revision of what everyone reads, to record that somebody said thanks.
+	relevant, why, err := processor.relevance.OrganizationRelevant(ctx, entry)
+	if err != nil {
+		processor.retry(ctx, delivery, err, logger)
+		return
+	}
+	if !relevant {
+		if err := processor.store.SetAside(context.WithoutCancel(ctx), delivery.EventID, why); err != nil {
+			logger.ErrorContext(ctx, "set aside an organization-agent delivery", "error", err)
+			return
+		}
+		logger.InfoContext(ctx, "shared publication left out of organization context", "source_entry_id", entry.ID, "reason", why)
+		return
+	}
+
 	previous, err := processor.store.Synthesis(ctx, delivery.OrganizationID)
 	if err != nil {
 		processor.retry(ctx, delivery, err, logger)
@@ -206,6 +235,12 @@ func participantIDs(space teamspaces.Space, entry teamspaces.Entry) []string {
 
 func cleanResult(result Result, participants []string) Result {
 	result.Summary = strings.TrimSpace(result.Summary)
+	// The summary is read back into every later synthesis, so a run that
+	// rambles would make every run after it more expensive. Cut it here
+	// rather than refusing the whole result.
+	if summary := []rune(result.Summary); len(summary) > maxSummaryRunes {
+		result.Summary = strings.TrimSpace(string(summary[:maxSummaryRunes]))
+	}
 	result.Decisions = cleanList(result.Decisions)
 	result.Risks = cleanList(result.Risks)
 	result.OpenQuestions = cleanList(result.OpenQuestions)
