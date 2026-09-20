@@ -16,6 +16,7 @@ type fakeDeliveryStore struct {
 	result   Result
 	applied  bool
 	dropped  string
+	setAside string
 	released string
 }
 
@@ -40,6 +41,11 @@ func (store *fakeDeliveryStore) Release(_ context.Context, _ string, _ bool, _ i
 
 func (store *fakeDeliveryStore) Drop(_ context.Context, _ string, reason string) error {
 	store.dropped = reason
+	return nil
+}
+
+func (store *fakeDeliveryStore) SetAside(_ context.Context, _ string, reason string) error {
+	store.setAside = reason
 	return nil
 }
 
@@ -222,5 +228,44 @@ func TestNewProcessorRequiresEveryBoundary(t *testing.T) {
 		if _, err := NewProcessor(input.store, input.sources, input.runtime, ProcessorConfig{}, nil); err == nil {
 			t.Fatal("missing processor boundary was accepted")
 		}
+	}
+}
+
+// TestProcessorLeavesChatterOutOfTheSharedContextWithoutCallingModel: a
+// teamspace fills with people talking. Only what the organization would want
+// to read costs a synthesis run; the rest is recorded as read and set aside,
+// which is neither a failure nor a retry.
+func TestProcessorLeavesChatterOutOfTheSharedContextWithoutCallingModel(t *testing.T) {
+	delivery, sources := synthesisFixture()
+	delivery.Kind = "update"
+	sources.entry.Kind = teamspaces.EntryUpdate
+	sources.entry.Summary = "Thanks, nice work everyone."
+	store := &fakeDeliveryStore{}
+	runtime := &fakeSynthesizer{result: Result{Summary: "unused"}}
+	processor, err := NewProcessor(store, sources, runtime, ProcessorConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.process(context.Background(), delivery)
+	if runtime.called {
+		t.Error("chatter cost a synthesis run")
+	}
+	if store.applied || store.dropped != "" || store.released != "" {
+		t.Errorf("applied=%v dropped=%q released=%q: chatter is set aside, not applied, dropped or retried", store.applied, store.dropped, store.released)
+	}
+	if store.setAside == "" {
+		t.Error("nothing recorded about why the publication was set aside")
+	}
+
+	// The same teamspace's decisions still advance it.
+	delivery, sources = synthesisFixture()
+	store, runtime = &fakeDeliveryStore{}, &fakeSynthesizer{result: Result{Summary: "Northwind chosen."}}
+	processor, err = NewProcessor(store, sources, runtime, ProcessorConfig{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor.process(context.Background(), delivery)
+	if !runtime.called || !store.applied || store.setAside != "" {
+		t.Errorf("called=%v applied=%v setAside=%q: a decision must still advance the synthesis", runtime.called, store.applied, store.setAside)
 	}
 }

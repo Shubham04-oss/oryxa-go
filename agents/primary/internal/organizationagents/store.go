@@ -233,6 +233,16 @@ func (store *Store) Release(ctx context.Context, eventID string, failed bool, ma
 	return dropped, err
 }
 
+// SetAside records that a publication was read and deliberately left out of
+// the organization's context. It is not a failure and not a loss: the entry
+// stays in its teamspace, and the reason says why the synthesis did not move.
+func (store *Store) SetAside(ctx context.Context, eventID, reason string) error {
+	_, err := store.database.Pool.Exec(ctx, `UPDATE agents_primary.organization_agent_deliveries
+		SET handled_at=now(), claimed_until=NULL, last_error=$2
+		WHERE event_id=$1 AND handled_at IS NULL`, eventID, bounded(reason))
+	return err
+}
+
 func (store *Store) Drop(ctx context.Context, eventID, reason string) error {
 	_, err := store.database.Pool.Exec(ctx, `UPDATE agents_primary.organization_agent_deliveries
 		SET handled_at=now(), claimed_until=NULL, dropped=true, last_error=$2
