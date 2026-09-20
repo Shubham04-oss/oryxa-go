@@ -12,7 +12,8 @@ argued with, not admired.
 | --- | --- |
 | [philosophy.md](philosophy.md) | The two references decoded, the one rule — pass as little as possible on to the user — and the ten things this app stops asking |
 | [direction.md](direction.md) | Why the app feels the way it does, the six rules that fix it, and the navigation it collapses to |
-| [foundations.md](foundations.md) | Colour, type, spacing, motion — the tokens every page draws from |
+| [foundations.md](foundations.md) | Black, eleven greys, white — the tokens every page draws from |
+| [dots.md](dots.md) | The four orbs, the only thing in the product that moves |
 | [icons.md](icons.md) | What may carry an icon, what carries a monogram instead, and what is banned |
 | [components.md](components.md) | Cards, rows, buttons, badges, and the four states every surface owes a person |
 | [pages/](pages) | One file per screen: what it is for, what is wrong, what it becomes |

@@ -1,169 +1,118 @@
 # Foundations
 
-Tokens first. Nothing else in this plan can be built until these exist, and
-once they do, most of the "it feels cheap" problem is already gone.
+Black, eleven greys, white, and dots. That is the whole system.
 
-## Colour
+## Surfaces
 
-The base is right and stays: a warm grey canvas with warm near-black ink. What
-is missing is everything on top of it. Today the theme defines three accent
-slots — `--workspace-warm`, `--workspace-rose` and `--workspace-sage` — and
-sets all three to the same grey, while the markup still asks for three
-different colours. The product is not monochrome by design. It is monochrome
-by erasure.
+Pure black underneath, the way Vercel does it, so that lightness is free to
+mean something. Nothing in the product is ever coloured.
 
-**Decided: Ember and Iris.** Two other candidates were drawn over the same two
-messages and rejected — a single quiet accent with agents marked only by a tag,
-and colour carried in a dark navigation rail. What won the argument is that
-roughly half of what happens in this product is done by an agent, and a person
-has to be able to tell a colleague from a colleague's stand-in without reading
-a word. That is worth a hue of its own.
-
-So: **Ember** is the action, **Iris** belongs to agents and to the @mentions
-that summon them, and the remaining three are status.
-
-### Light
-
-| Token | Hex | What it is for |
+| Token | Value | What it is |
 | --- | --- | --- |
-| `--canvas` | `#F7F7F6` | the page |
-| `--surface` | `#FFFFFF` | cards, rows, sheets |
-| `--surface-subtle` | `#FBFBFA` | nested panels, table headers |
-| `--border` | `#E2E2DE` | hairlines |
-| `--border-strong` | `#D2D2CC` | edges that need to be seen |
-| `--ink` | `#171716` | text |
-| `--ink-muted` | `#6B6B67` | secondary text |
-| `--ink-faint` | `#8A8A84` | captions, timestamps |
-| **Ember** `--brand` | `#C1502E` | the one primary action on a page |
-| `--brand-hover` | `#A64322` | its hover |
-| `--brand-soft` | `#FBEEE8` | its tint |
-| `--brand-edge` | `#EFD2C5` | its border on tinted surfaces |
-| **Iris** `--agent` | `#5B53C9` | agents: monograms, the agent badge, an agent's line |
-| `--agent-soft` | `#EEEDFB` | agent surfaces |
-| `--agent-edge` | `#D9D6F4` | agent borders |
-| **Moss** `--ok` | `#3F7A48` | active, connected, present, healthy |
-| `--ok-soft` | `#EAF3EB` | |
-| **Amber** `--attention` | `#9A6B10` | waiting on somebody, paused, expiring |
-| `--attention-soft` | `#FBF2DF` | |
-| **Clay** `--danger` | `#B53C35` | destructive and failed |
-| `--danger-soft` | `#FFF0EE` | |
+| `--app` | `#000000` | the page, everywhere |
+| `--card` | `#0A0A0A` | a card — and only a card |
+| `--raised` | `#161616` | composer, the row you are on, a quiet button |
+| `--line` | `#1F1F1F` | a separator's dot |
+| `--edge` | `#2E2E2E` | an edge that must be seen |
+| `--ghost` | `#454545` | disabled text |
+| `--faint` | `#6E6E6E` | timestamps, the least of it |
+| `--meta` | `#8F8F8F` | secondary lines |
+| `--second` | `#A1A1A1` | supporting text |
+| `--ready` | `#D4D4D4` | a button at rest |
+| `--text` | `#EDEDED` | what you read |
+| `--now` | `#FFFFFF` | the one thing to do next |
 
-Ember is warm on purpose. Against a warm grey canvas a blue accent fights the
-base and lands the app in the middle of every other B2B product; terracotta
-belongs there and is recognisably ours.
+### Grey is ready, white is now
 
-Iris earns its own hue because roughly half of what happens in this product is
-done by an agent, and a person must be able to tell at a glance whether a
-colleague or a colleague's agent just said something. It is the only decorative-
-looking use of colour in the system, and it is not decorative: it is identity.
+This replaces every accent colour the product might have had.
 
-### Dark
+- A button rests at `--ready`: clean light grey, obviously pressable, nothing
+  has happened yet.
+- It becomes `--now` the moment it is the thing to do — you typed something,
+  or it is the single action the screen exists for.
+- Everything that is not the point is `--raised` with `--meta` text.
+- The same rule runs through every control: a switch is grey off and white on,
+  a row is dark until it is the one you are in, an unread mark is a small white
+  dot, an agent's avatar is near-white where a person's is dark grey.
 
-Real dark mode, not an inversion. Surfaces lift by lightness; shadows do
-nothing in the dark.
+**The check:** count the white on a screen. More than one white element means
+the screen has more than one job.
 
-| Token | Hex |
-| --- | --- |
-| `--canvas` | `#141412` |
-| `--surface` | `#1C1C1A` |
-| `--surface-subtle` | `#191917` |
-| `--border` | `#2C2C29` |
-| `--border-strong` | `#3A3A36` |
-| `--ink` | `#F3F3F0` |
-| `--ink-muted` | `#A6A6A0` |
-| `--ink-faint` | `#84847E` |
-| `--brand` | `#E2744B` |
-| `--brand-soft` | `#2A1C15` |
-| `--agent` | `#9A93F0` |
-| `--agent-soft` | `#1E1C33` |
-| `--ok` | `#68B471` |
-| `--attention` | `#D6A441` |
-| `--danger` | `#E4736A` |
+### What it cannot say
 
-Shipped behind `prefers-color-scheme` with an explicit override attribute, so a
-person can pin it either way. Today there is no dark mode at all, so this is
-new work rather than a repaint — it belongs at the end of phase 5, but the
-tokens are defined now so nothing has to be redone later.
+Danger. Delete and save look identical, so a destructive action is carried by
+its words and by a dialog rather than by a red fill. That is stricter than a
+red button and slower on purpose. If it proves too quiet in real use, one red
+is the smallest exception worth making — and it would appear nowhere except
+failure and deletion.
 
-### Rules
+## Separators
 
-1. One accent per card. If a card already carries an agent tint, its button is
-   quiet, not Ember.
-2. One Ember *fill* per screen — the primary action. Where you are (the active
-   nav item, the room you are reading) and how much is waiting (an unread
-   count) may carry Ember too, as a soft tint or a small count. A second Ember
-   button means the page has two jobs and needs splitting.
-3. Iris is agents and nothing else: their avatar, the tag beside their name,
-   and an @mention of one. A person never carries it.
-4. Status colour never appears without a word beside it. A green dot alone is
-   not an accessible status.
-5. Contrast targets: 4.5:1 for text, 3:1 for control edges and icons. Every
-   pair in this table is verified against both surfaces before it ships; the
-   soft tints are backgrounds only and never carry text of their own hue at
-   small sizes.
-6. Charts use the categorical five in this order — Iris, Ember, Moss, Amber,
-   Slate `#4C6272` — never the five greys they use today.
+Dotted, always. A 1px dot every 5px in `--edge`, horizontally and vertically:
+
+```css
+/* a rule */
+height: 1px;
+background-image: linear-gradient(to right, #2E2E2E 1px, transparent 1px);
+background-size: 5px 1px;
+```
+
+There should be almost none of them. The room has exactly one — the edge
+between the conversation and your agent. Space separates things; a line is
+what you reach for when space has already failed.
 
 ## Type
 
-Everything on screen today sits between 10px and 13px, in grey. That is the
-main reason the app reads as texture rather than content — and the reason a
-message, which is the thing people are actually here to read, is smaller than
-most buttons.
-
-The rule: **the message is the biggest thing on its row.** A chat is read at
-speed, so what somebody said is set at 15px and everything around it gets out
-of the way. Bold names carry the rhythm, which is what removes the need for a
-box around every line.
+Geist, already loaded. The message is the biggest thing on its row, because a
+chat is read at speed and everything else is scaffolding.
 
 | Role | Size / line / weight | Where |
 | --- | --- | --- |
-| Display | 26 / 1.2 / 600 | the home greeting, nowhere else |
-| Title | 20 / 1.3 / 600 | page title, room name |
-| Name | 15 / 1.3 / 700 | who said it |
-| Message | 15 / 1.47 / 400 | what they said, and any prose read at speed |
-| Body | 14 / 1.55 / 400 | forms, settings, descriptions |
-| Caption | 12 / 1.4 / 500 | time, counts, meta |
-| Badge | 11 / 1 / 600, `0.03em` | AGENT, status, kind — 12 characters maximum |
+| Title | 22 / 1.25 / 600, `-0.014em` | a room's name, a page |
+| Name | 14 / 1.3 / 600 | who said it |
+| Message | 15 / 1.6 / 400 | what they said |
+| Body | 14 / 1.6 / 400 | cards, settings, descriptions |
+| UI | 13 / 1.4 / 400–500 | rows, buttons, the rail |
+| Meta | 12 / 1.4 | time, counts |
+| Label | 10 / 600, `0.08em`, caps | the one word on a card |
 
-11px is allowed only in a badge. Nothing below 12px carries a sentence.
+Nothing below 12px carries a sentence. Figures use `tabular-nums`.
 
-The face is **Geist**, which is already loaded and costs nothing. Instrument
-Sans was set beside it in the same two messages and did not earn the extra
-load.
+## Shape and space
 
-Figures in any table or counter use `font-variant-numeric: tabular-nums`. Body
-copy sets `text-wrap: pretty`; titles set `text-wrap: balance`.
+- Radii: **14** a card, **8** a control, **6** an avatar or a small chip.
+- Card padding 16–18; at least 20 of air around it.
+- Reading column 640–720px, centred, whatever the window does.
+- Rows 44px minimum.
+- Scale: 4, 8, 12, 14, 18, 20, 24, 32, 40.
 
-## Space
+No shadows. A card is one step of light and a single inset hairline along its
+top edge — `inset 0 1px 0 rgb(255 255 255 / 4%)` — which is the only highlight
+in the system.
 
-A 4px base, and a scale that does not improvise: **4, 8, 12, 16, 20, 24, 32,
-40, 56**.
+## Dots
 
-- Card padding 20 (16 below 640px)
-- Gap between sections 24
-- Page gutter 32 (16 below 640px)
-- Content max width 1120px; any column of prose max 72 characters
-- Row minimum height 44px, so every row is a touch target
-- Dense table rows 40px
+The one material that moves. Four states, each a different shape, generated
+geometry rather than an image: a sphere is thought, a turning globe is search,
+a scatter is a tool working, a ring is a person being waited on.
 
-Radii keep what they have: 16 for cards, 10 for controls, 999 for badges and
-pills.
+Dots always mean something is happening. Never a texture, never a background,
+never a decorative grid — if nothing is running, there are no dots on screen.
+Always beside words, because an orb alone is a mystery. 20px inline, 46px when
+it is the only thing there.
 
-## Elevation
-
-Borders, not shadows. One hairline shadow token exists for menus, popovers, and
-dragged things; cards never use it. In dark mode elevation is lightness only.
+See [dots.md](dots.md).
 
 ## Motion
 
+The orbs, and nothing else.
+
 | What | Duration | Curve |
 | --- | --- | --- |
-| Hover, tint, focus ring | 120ms | ease-out |
-| Disclosure, panel, sheet | 180ms | ease-out |
+| Hover, tint, focus | 120ms | ease-out |
+| Disclosure, sheet | 180ms | ease-out |
 | Route change | 240ms | ease-out |
 
-Nothing animates position by more than 8px. Everything respects
-`prefers-reduced-motion: reduce` by dropping to an opacity change. A skeleton
-that would show for under 400ms is not shown at all — a quiet, correctly sized
-placeholder beats a flash of bones.
+Nothing travels more than 8px. `prefers-reduced-motion: reduce` stops the orbs
+where they are — the shape and the sentence still say everything — and drops
+every transition to an opacity change.
