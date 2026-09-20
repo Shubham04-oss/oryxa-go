@@ -1430,6 +1430,8 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, agentteams.ErrDisabled):
 		return http.StatusConflict, "team_disabled"
+	case errors.Is(err, agentteams.ErrInUse):
+		return http.StatusConflict, "team_in_use"
 	case errors.Is(err, agentteams.ErrConflict):
 		return http.StatusConflict, "name_conflict"
 	case errors.Is(err, agentteams.ErrNotFound):
