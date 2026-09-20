@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -122,6 +123,11 @@ type fakeManagedAgents struct {
 	run         *fakeRun
 	lastInput   threads.RunInput
 	threadID    string
+	// primaryErr, when set, is what Primary returns instead of looking
+	// through definitions - simulating the agent registry itself failing
+	// (a database blip), as opposed to it working but having no primary
+	// agent yet.
+	primaryErr error
 }
 
 type fakeAgentTeams struct {
@@ -442,6 +448,9 @@ func (service *fakeInteractions) Respond(_ context.Context, _ primaryagents.Inte
 }
 
 func (agents *fakeManagedAgents) Primary(_ context.Context, scope managedagents.Scope) (managedagents.Definition, error) {
+	if agents.primaryErr != nil {
+		return managedagents.Definition{}, agents.primaryErr
+	}
 	for _, definition := range agents.definitions {
 		if definition.Kind == managedagents.KindPrimary {
 			definition.OrganizationID = scope.OrganizationID
@@ -1066,5 +1075,82 @@ func TestArtifactsAreServedWithoutEverRunningAsAPage(t *testing.T) {
 	}
 	if anonymous := serve(server, http.MethodGet, "/v1/organizations/org_1/threads/thread_1/artifacts/screenshot.png", "", nil); anonymous.Code != http.StatusUnauthorized {
 		t.Fatalf("without a member = %d, want 401", anonymous.Code)
+	}
+}
+
+// TestABrokenAgentLookupOnlyFailsRoutesThatNeedAnAgentIdentity is the
+// regression test for member() resolving the primary agent on every
+// authenticated route: a thread is the member's own conversation and never
+// needed an agent identity, so a database blip resolving one must not turn
+// listing threads into a 500. An agent request, in contrast, is between two
+// agents: it must still fail loudly rather than act with an empty identity.
+func TestABrokenAgentLookupOnlyFailsRoutesThatNeedAnAgentIdentity(t *testing.T) {
+	managed := &fakeManagedAgents{primaryErr: errors.New("agent registry is down")}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
+		Agents: managed,
+	}, nil)
+
+	threadsResponse := serve(server, http.MethodGet, "/v1/organizations/org_1/threads", "", bearer)
+	if threadsResponse.Code != http.StatusOK {
+		t.Fatalf("threads = %d %s, want 200: a broken agent lookup must not fail a route that never needed an agent identity", threadsResponse.Code, threadsResponse.Body.String())
+	}
+
+	inbox := serve(server, http.MethodGet, "/v1/organizations/org_1/agent-requests/inbox", "", bearer)
+	if inbox.Code != http.StatusInternalServerError || errorCode(t, inbox) != "internal" {
+		t.Fatalf("inbox = %d %s, want 500 internal: it acts as the member's own agent and cannot proceed with no identity", inbox.Code, inbox.Body.String())
+	}
+}
+
+// chunkedBody is an io.Reader whose concrete type is none of the ones
+// net/http special-cases when it builds a request (*bytes.Buffer,
+// *bytes.Reader, *strings.Reader), so it leaves ContentLength at -1 even
+// when nothing is left to read - the same as a real request sent chunked,
+// with no Content-Length header at all.
+type chunkedBody struct{ io.Reader }
+
+// TestStartingAWorkflowWithNoBodyAndAnUnknownLengthStillStarts is the
+// regression test for startAgentWorkflow treating request.ContentLength !=
+// 0 as "there is a body to decode": ContentLength is -1, not 0, when the
+// length is unknown (chunked transfer encoding), so a perfectly valid
+// bodyless start was answered 400 and the workflow never started.
+func TestStartingAWorkflowWithNoBodyAndAnUnknownLengthStillStarts(t *testing.T) {
+	workflows := &fakeAgentWorkflows{workflow: agentworkflows.Workflow{ID: "awf_pipeline"}}
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
+		Workflows: workflows,
+	}, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/organizations/org_1/agent-workflows/awf_pipeline/executions", chunkedBody{strings.NewReader("")})
+	if request.ContentLength != -1 {
+		t.Fatalf("ContentLength = %d, want -1 for an unknown-length body, or this test is not exercising the bug", request.ContentLength)
+	}
+	request.Header.Set("Authorization", "Bearer member-token")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted || workflows.execution.ID != "awx_1" {
+		t.Fatalf("start = %d %s, want 202 and a started execution", recorder.Code, recorder.Body.String())
+	}
+}
+
+// TestEveryListingRefusesTheSameBadLimit: one API, one answer. A limit that
+// is not a positive number used to be ignored on some routes and refused on
+// others.
+func TestEveryListingRefusesTheSameBadLimit(t *testing.T) {
+	managed := &fakeManagedAgents{definitions: []managedagents.Definition{{ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive}}}
+	server := New(member(), &fakeThreads{}, Config{
+		Agents: managed, Interactions: &fakeInteractions{},
+	}, nil)
+	for _, path := range []string{
+		"/v1/organizations/org_1/agent-requests/inbox",
+		"/v1/organizations/org_1/agent-requests/sent",
+	} {
+		response := serve(server, http.MethodGet, path+"?limit=abc", "", bearer)
+		if response.Code != http.StatusBadRequest || errorCode(t, response) != "invalid_request" {
+			t.Errorf("GET %s?limit=abc = %d %s, want 400", path, response.Code, response.Body.String())
+		}
+		if response := serve(server, http.MethodGet, path, "", bearer); response.Code != http.StatusOK {
+			t.Errorf("GET %s with no limit = %d %s, want 200", path, response.Code, response.Body.String())
+		}
 	}
 }

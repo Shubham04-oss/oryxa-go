@@ -72,8 +72,14 @@ type Krude struct {
 	// Root is Krude, the agent every conversation starts with.
 	Root agent.Agent
 	// Unattended is Krude for a run nobody is watching, such as a wake-up:
-	// it reads the member's apps and knowledge, and can reach nothing else.
+	// it reads the member's apps and knowledge, answers the interactions
+	// another member's agent addressed to this one, and can reach nothing
+	// else.
 	Unattended agent.Agent
+	// UnattendedQuiet is Unattended without the apps toolbox, for a run that
+	// has not been allowed to read the member's apps: an interaction nobody
+	// has approved yet, and the reports that follow a finished one.
+	UnattendedQuiet agent.Agent
 	// Artifacts keeps what conversations produce: S3 when Settings names a
 	// bucket, memory otherwise.
 	Artifacts artifact.Service
@@ -84,8 +90,10 @@ type Krude struct {
 
 	// router and toolboxes are kept so persistent specialist definitions can
 	// receive the same models and member-scoped tools as the primary agent.
-	router    *modelrouter.Router
-	toolboxes []agents.Toolbox
+	router          *modelrouter.Router
+	toolboxes       []agents.Toolbox
+	unattended      []agents.Toolbox
+	unattendedQuiet []agents.Toolbox
 
 	// closers stops everything Build opened, kept in the order Build opened
 	// them. Close runs them in reverse — the same order devui's own defers
@@ -238,6 +246,11 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	// What a run nobody watches may use: nothing that reaches outside, since
 	// text from the member's apps steers it. See agents.UnattendedRoot.
 	var unattended []agents.Toolbox
+	// unattendedQuiet is the unattended list without the apps toolbox, for a
+	// run nobody is watching that has not been allowed to read the member's
+	// apps at all — an interaction another member's agent asked for, before
+	// this member's agent has approved anything.
+	var unattendedQuiet []agents.Toolbox
 	if settings.AppsURL != "" {
 		httpClient := options.HTTP
 		if httpClient == nil {
@@ -278,6 +291,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		} else {
 			toolboxes = append(toolboxes, knowledgeToolbox)
 			unattended = append(unattended, knowledgeToolbox)
+			unattendedQuiet = append(unattendedQuiet, knowledgeToolbox)
 			logger.InfoContext(ctx, "knowledge toolbox", "url", settings.RagURL)
 		}
 	}
@@ -295,6 +309,17 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			return fail("agent interactions toolbox", err)
 		}
 		toolboxes = append(toolboxes, interactionToolbox)
+		// An interaction is delivered to an agent whose member is away, and
+		// the run has to read the request, record a decision and answer it.
+		// It may not start requests of its own on other members, and nothing
+		// the directory, teamspaces or agent system offer belongs in a run
+		// another member asked for.
+		answeringToolbox, err := agents.InteractionToolbox(agents.InteractionConfig{Service: options.Interactions, Tokens: tokens, Answering: true})
+		if err != nil {
+			return fail("agent interactions toolbox for an unwatched run", err)
+		}
+		unattended = append(unattended, answeringToolbox)
+		unattendedQuiet = append(unattendedQuiet, answeringToolbox)
 		logger.InfoContext(ctx, "agent interactions toolbox configured")
 	}
 	if options.Teamspaces != nil {
@@ -306,6 +331,8 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		logger.InfoContext(ctx, "teamspace collaboration toolbox configured")
 	}
 	krude.toolboxes = toolboxes
+	krude.unattended = unattended
+	krude.unattendedQuiet = unattendedQuiet
 
 	// Memory is built before the agents, because whether Krude is given
 	// load_memory depends on there being a memory service to answer it.
@@ -346,6 +373,11 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		return fail("unattended root agent", err)
 	}
 	krude.Unattended = unattendedRoot
+	quietRoot, err := agents.UnattendedRoot(router, unattendedQuiet)
+	if err != nil {
+		return fail("unattended root agent without apps", err)
+	}
+	krude.UnattendedQuiet = quietRoot
 
 	artifacts := artifact.InMemoryService()
 	if settings.ArtifactBucket != "" {
@@ -374,6 +406,20 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 // with the assembled primary agent.
 func (krude *Krude) Managed(spec agents.ManagedSpec) (agent.Agent, error) {
 	return agents.Managed(krude.router, krude.toolboxes, krude.Memory != nil, spec)
+}
+
+// ManagedUnattended builds the same specialist for a run nobody is watching:
+// the reduced toolboxes Krude itself gets when it is woken, and no memory,
+// because what steers such a run is text somebody else wrote. withApps says
+// whether the run may read the member's connected apps; an interaction that
+// has not been approved may not. The agent answers to the same name as the
+// attended one, which is what binds the two in a run.
+func (krude *Krude) ManagedUnattended(spec agents.ManagedSpec, withApps bool) (agent.Agent, error) {
+	toolboxes := krude.unattendedQuiet
+	if withApps {
+		toolboxes = krude.unattended
+	}
+	return agents.Managed(krude.router, toolboxes, false, spec)
 }
 
 // OrganizationAgent builds an organization-owned synthesis agent. It shares

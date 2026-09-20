@@ -4,8 +4,15 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"google.golang.org/adk/v2/agent"
+	"google.golang.org/adk/v2/agent/llmagent"
 	"google.golang.org/adk/v2/session"
+
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
@@ -166,5 +173,67 @@ func TestDeleteThreadWorksAfterTheAgentDefinitionIsGone(t *testing.T) {
 	})
 	if !errors.Is(err, session.ErrNotFound) {
 		t.Fatalf("deleted session error=%v", err)
+	}
+}
+
+type noRuns struct{}
+
+func (noRuns) Start(context.Context, runstore.Run, time.Duration) error { return nil }
+func (noRuns) Renew(context.Context, string, time.Duration) error       { return nil }
+func (noRuns) Finish(context.Context, string, runstore.Outcome, events.Event) error {
+	return nil
+}
+func (noRuns) Cancel(context.Context, string) error { return nil }
+
+func namedAgent(t *testing.T, name string) agent.Agent {
+	t.Helper()
+	built, err := llmagent.New(llmagent.Config{Name: name, Instruction: "Answer."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return built
+}
+
+// TestAnUnwatchedRunAnswersOnTheRestrictedAgent: every engine a persistent
+// agent runs in is given the reduced agent as well, so a run nobody is
+// watching is not answered by the one a member talks to. The profile the
+// caller asked for decides how little that agent may reach.
+func TestAnUnwatchedRunAnswersOnTheRestrictedAgent(t *testing.T) {
+	repo := newFakeRepository()
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked []UnattendedProfile
+	service := &Service{
+		repository: repo,
+		factory:    func(Definition) (agent.Agent, error) { return namedAgent(t, "managed_agt_primary"), nil },
+		unattended: func(_ Definition, profile UnattendedProfile) (agent.Agent, error) {
+			asked = append(asked, profile)
+			return namedAgent(t, "managed_agt_primary"), nil
+		},
+		sessions: session.InMemoryService(), runs: noRuns{}, prices: prices,
+	}
+	for _, profile := range []UnattendedProfile{UnattendedQuiet, UnattendedReads} {
+		if _, err := service.engine(repo.primary, profile); err != nil {
+			t.Fatalf("engine(%q) error = %v", profile, err)
+		}
+	}
+	if len(asked) != 2 || asked[0] != UnattendedQuiet || asked[1] != UnattendedReads {
+		t.Fatalf("the restricted agent was asked for %v", asked)
+	}
+
+	// Without a restricted agent the engine still runs, which is what makes
+	// wiring one the thing that matters: say so rather than assume it.
+	service.unattended = nil
+	if _, err := service.engine(repo.primary, UnattendedQuiet); err != nil {
+		t.Fatalf("engine() without a restricted agent error = %v", err)
+	}
+
+	service.unattended = func(Definition, UnattendedProfile) (agent.Agent, error) {
+		return nil, errors.New("no restricted agent")
+	}
+	if _, err := service.engine(repo.primary, UnattendedQuiet); err == nil {
+		t.Fatal("engine() ran on with no restricted agent to fall back to")
 	}
 }

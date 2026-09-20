@@ -299,6 +299,19 @@ cannot report using a tool outside the approved set. These grants describe the
 interaction envelope; they never bypass a tool's existing authorization or
 human-confirmation requirements.
 
+**What a delivered request may reach.** The member whose agent is woken is not
+there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
+what it may reach follows what their own agent has already allowed:
+
+- **Deciding** on a new request, and **reporting** a finished one back to its
+  own member, run without the apps toolbox at all. Nothing another member
+  wrote can read this member's connected apps before their agent has approved
+  it.
+- **Doing approved work** runs with the read-only apps toolbox — the same one
+  a wake-up gets — and never the writing one.
+- No unwatched run may start an interaction of its own: `interactions_create`
+  is left out, so a request cannot fan out into requests on other members.
+
 Each create, decision, and response is committed with an EventBridge outbox
 event. The event contains routing identities and lifecycle state, not the task,
 context, decision text, or result. Agents' EventBridge rule feeds those events
@@ -681,6 +694,13 @@ wakes Krude for each batch it hands over, as `batching.trigger-batch.ready.v1`
   thread per organization, made the first time and made again if they delete
   it. The events arrive there as a message from their apps (`author: apps`),
   not from them, and Krude's answer follows.
+- **Answered by the reduced agent, with no memory.** A run a member is not
+  watching — an app event, a schedule or durable workflow, the organization
+  agent, or an interaction another member's agent addressed here — is answered
+  by the reduced agent rather than the one the member talks to, and neither
+  reads nor writes memory. Every persistent agent has such a variant, not only
+  Krude itself. A team delegation is not unwatched: the member asked for it in
+  their own thread.
 - **Told, not acted on.** The message hands Krude the events as data, never
   instructions — nothing in them changes what it may do — and asks it to say
   what happened and what needs the member's attention, reading more from

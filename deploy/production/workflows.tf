@@ -183,7 +183,15 @@ resource "aws_iam_role_policy" "task_agent_workflows" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["states:StartExecution", "states:SendTaskSuccess", "states:SendTaskFailure", "states:SendTaskHeartbeat"]
+        Action   = "states:StartExecution"
+        Resource = aws_sfn_state_machine.agent_workflows.arn
+      },
+      {
+        # These callbacks authorise by the task token they carry, not by an
+        # ARN, so Step Functions has no resource type for them: "*" is the
+        # only resource that action supports.
+        Effect   = "Allow"
+        Action   = ["states:SendTaskSuccess", "states:SendTaskFailure", "states:SendTaskHeartbeat"]
         Resource = "*"
       },
       {

@@ -19,3 +19,7 @@ connection.
 - If a result's error is `not_connected` or `needs_reconnect`, say so and
   tell the member to connect or reconnect that app in Oryxa. You cannot
   connect or reconnect an app yourself.
+- If a result's error is `choose_connection`, the member has more than one
+  active connection to that app, and there is nothing you can pass to choose
+  between them. Tell the member to disconnect the extra connection for that
+  app in Apps & tools, leaving a single one, rather than retrying the tool.

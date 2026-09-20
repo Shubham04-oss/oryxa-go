@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -72,5 +73,39 @@ func TestInteractionToolboxDerivesTheRequesterIdentity(t *testing.T) {
 func TestInteractionToolboxNeedsAService(t *testing.T) {
 	if _, err := InteractionToolbox(InteractionConfig{}); err == nil {
 		t.Fatal("InteractionToolbox() accepted no service")
+	}
+}
+
+// TestAnAnsweringToolboxCannotStartNewRequests: the toolbox a woken agent
+// gets answers what another member asked; it does not let that member's words
+// turn into fresh requests on everyone else.
+func TestAnAnsweringToolboxCannotStartNewRequests(t *testing.T) {
+	names := func(answering bool) []string {
+		t.Helper()
+		toolbox, err := InteractionToolbox(InteractionConfig{Service: &fakeInteractions{}, Answering: answering})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tools, err := toolbox.Toolset.Tools(nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var offered []string
+		for _, one := range tools {
+			offered = append(offered, one.Name())
+		}
+		return offered
+	}
+	if !slices.Contains(names(false), "interactions_create") {
+		t.Fatal("a member's own agent cannot start a request")
+	}
+	answering := names(true)
+	if slices.Contains(answering, "interactions_create") {
+		t.Fatalf("a run nobody is watching was offered interactions_create: %v", answering)
+	}
+	for _, needed := range []string{"interactions_get", "interactions_decide", "interactions_respond"} {
+		if !slices.Contains(answering, needed) {
+			t.Fatalf("a woken agent cannot %s: %v", needed, answering)
+		}
 	}
 }

@@ -287,14 +287,28 @@ func (run *Run) execute(ctx context.Context, emit func(Item) error) {
 	}
 }
 
+// unwatched reports whether nobody is there to see what a run does. An app
+// event woke it, a schedule or durable workflow dispatched it, or the
+// organization agent is reading what members published. A team delegation is
+// not unwatched: the member asked for it, in their own thread, and waits for
+// the answer.
+func unwatched(startedBy string) bool {
+	switch startedBy {
+	case agentsv1.StartedByTrigger, agentsv1.StartedByWorkflow, agentsv1.StartedByOrganization:
+		return true
+	default:
+		return false
+	}
+}
+
 // drive runs the agent and streams what it yields, returning the error the
 // run ended with, if any.
 func (run *Run) drive(ctx context.Context, send func(Item)) error {
 	service := run.service
 	answering := service.agent
-	if run.startedBy == agentsv1.StartedByTrigger {
-		// Nobody is watching this run, and text from the member's apps
-		// steers it: only the agent that can reach nothing outside runs it.
+	if unwatched(run.startedBy) {
+		// Nobody is watching this run, and text somebody else wrote steers
+		// it: only the agent that can reach nothing outside runs it.
 		answering = service.unattended
 	}
 	// The run's memory is bound to the member's organization before the run
@@ -303,12 +317,13 @@ func (run *Run) drive(ctx context.Context, send func(Item)) error {
 	// each request: this view answers within it or not at all.
 	//
 	// A run nobody is watching gets no memory at all, neither reading nor
-	// writing. What steers it is text from the member's apps, which anyone
-	// who can email them or open an issue wrote: remembering such a run would
-	// let that text put facts about the member into what Krude knows, where
-	// they would outlive the run and steer later ones, and reading would hand
-	// that text what Krude already knows.
-	if service.memory != nil && run.startedBy != agentsv1.StartedByTrigger {
+	// writing. What steers it is text from the member's apps, a schedule
+	// firing, or another member's request — which anyone who can email them,
+	// open an issue or address their agent wrote: remembering such a run
+	// would let that text put facts about the member into what Krude knows,
+	// where they would outlive the run and steer later ones, and reading
+	// would hand that text what Krude already knows.
+	if service.memory != nil && !unwatched(run.startedBy) {
 		scoped, err := service.memory.For(adkmemory.Scope{
 			OrganizationID: run.member.OrganizationID,
 			UserID:         run.member.UserID,

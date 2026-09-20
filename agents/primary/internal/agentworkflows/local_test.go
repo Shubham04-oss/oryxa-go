@@ -13,6 +13,16 @@ func (executor recordingWorkflowExecutor) Execute(_ context.Context, dispatch Di
 	return Execution{ID: dispatch.ExecutionID, WorkflowID: dispatch.WorkflowID, Status: ExecutionSucceeded}, nil
 }
 
+// blockingWorkflowExecutor never returns on its own; it only reports whether
+// the context it was launched with was cancelled.
+type blockingWorkflowExecutor struct{ cancelled chan struct{} }
+
+func (executor blockingWorkflowExecutor) Execute(ctx context.Context, _ Dispatch) (Execution, error) {
+	<-ctx.Done()
+	close(executor.cancelled)
+	return Execution{}, ctx.Err()
+}
+
 func TestLocalRuntimeStartsTheSameIdentifierOnlyDispatch(t *testing.T) {
 	executor := recordingWorkflowExecutor{calls: make(chan Dispatch, 1)}
 	runtime := NewLocalRuntime(time.Second, nil)
@@ -37,6 +47,29 @@ func TestLocalRuntimeStartsTheSameIdentifierOnlyDispatch(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("local execution was not dispatched")
+	}
+}
+
+// Close used to cancel only pending schedule timers; a launched execution's
+// goroutine built its context from context.Background(), so it kept running
+// for up to the runtime timeout after shutdown. Close must now stop it too.
+func TestLocalRuntimeCloseCancelsInFlightRun(t *testing.T) {
+	executor := blockingWorkflowExecutor{cancelled: make(chan struct{})}
+	runtime := NewLocalRuntime(time.Minute, nil) // long enough that only Close should end the run
+	if err := runtime.Bind(executor); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.Start(context.Background(), StartRequest{
+		ExecutionID: "awx_1", WorkflowID: "awf_1", OrganizationID: "org_1",
+		OwnerUserID: "user_1", StartedBy: StartedByAPI,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.Close()
+	select {
+	case <-executor.cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel the in-flight run's context")
 	}
 }
 

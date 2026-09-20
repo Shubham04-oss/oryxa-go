@@ -21,6 +21,8 @@ type LocalRuntime struct {
 	timeout  time.Duration
 	logger   *slog.Logger
 	closed   bool
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 func NewLocalRuntime(timeout time.Duration, logger *slog.Logger) *LocalRuntime {
@@ -30,7 +32,8 @@ func NewLocalRuntime(timeout time.Duration, logger *slog.Logger) *LocalRuntime {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &LocalRuntime{timers: map[string]context.CancelFunc{}, timeout: timeout, logger: logger}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &LocalRuntime{timers: map[string]context.CancelFunc{}, timeout: timeout, logger: logger, ctx: ctx, cancel: cancel}
 }
 
 func (runtime *LocalRuntime) Bind(executor workflowExecutor) error {
@@ -93,6 +96,7 @@ func (runtime *LocalRuntime) Close() {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	runtime.closed = true
+	runtime.cancel()
 	for id, cancel := range runtime.timers {
 		cancel()
 		delete(runtime.timers, id)
@@ -101,13 +105,16 @@ func (runtime *LocalRuntime) Close() {
 
 func (runtime *LocalRuntime) launch(dispatch Dispatch) error {
 	runtime.mu.Lock()
-	executor, closed := runtime.executor, runtime.closed
+	executor, closed, parent := runtime.executor, runtime.closed, runtime.ctx
 	runtime.mu.Unlock()
 	if closed || executor == nil {
 		return ErrUnavailable
 	}
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), runtime.timeout)
+		// parent is runtime.ctx, cancelled by Close, so shutdown stops
+		// in-flight development runs instead of leaving them to run for up
+		// to the full runtime timeout after the process asked them to stop.
+		ctx, cancel := context.WithTimeout(parent, runtime.timeout)
 		defer cancel()
 		if _, err := executor.Execute(ctx, dispatch); err != nil && !errors.Is(err, ErrInProgress) {
 			runtime.logger.ErrorContext(ctx, "local agent workflow failed", "workflow_id", dispatch.WorkflowID, "error", err)

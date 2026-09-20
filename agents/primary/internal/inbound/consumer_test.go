@@ -289,13 +289,17 @@ func TestAMemberLeavingOrAnOrganizationGoingIsForgottenEverywhere(t *testing.T) 
 	}
 
 	// A forgetter that fails makes the event fail, so the queue delivers it
-	// again, and every other forgetter still runs.
+	// again, but forgetAll now stops at the first failure instead of running
+	// the rest: a later forgetter can delete rows an earlier, failed one
+	// still needs to find its own state when the event is retried (see the
+	// comment on forgetAll and on interactiondelivery.Store.AffectedThreads),
+	// so running it anyway would let the retry silently miss work.
 	calls = nil
 	failing := NewConsumer(&fakeRecorder{}, nil, []Forgetter{forgetter("threads", errors.New("database down")), forgetter("wakeups", nil)}, nil)
 	err := failing.Handle(context.Background(), delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_3",
 		authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user_1"}))
-	if err == nil || !strings.Contains(err.Error(), "database down") || len(calls) != 2 {
-		t.Fatalf("failing forget = %v after %v", err, calls)
+	if err == nil || !strings.Contains(err.Error(), "database down") || len(calls) != 1 {
+		t.Fatalf("failing forget = %v after %v, want only the failing forgetter to have run", err, calls)
 	}
 	if err := consumer.Handle(context.Background(), delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_4",
 		authv1.MemberRemoved{OrganizationID: "org_1"})); err == nil {

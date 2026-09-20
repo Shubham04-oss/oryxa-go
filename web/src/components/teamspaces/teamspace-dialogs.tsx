@@ -713,8 +713,18 @@ export function EditTeamspaceDialog({
 		},
 	});
 
+	function changeOpen(next: boolean) {
+		setOpen(next);
+		if (next) {
+			setName(space.name);
+			setDescription(space.description ?? "");
+			setStatus(space.status);
+			save.reset();
+		}
+	}
+
 	return (
-		<Dialog onOpenChange={setOpen} open={open}>
+		<Dialog onOpenChange={changeOpen} open={open}>
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
 			<DialogContent>
 				<DialogHeader>

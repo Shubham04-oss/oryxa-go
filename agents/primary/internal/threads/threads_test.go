@@ -1051,7 +1051,7 @@ func TestDisplayIdentityDoesNotRenameSubagentsOrTheMember(t *testing.T) {
 	}
 }
 
-func TestATriggerRunIsAnsweredByTheUnattendedAgent(t *testing.T) {
+func TestARunNobodyWatchesIsAnsweredByTheUnattendedAgent(t *testing.T) {
 	answering := func(answer string) *scriptedModel {
 		return &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
 			return genai.NewContentFromText(answer, genai.RoleModel), nil
@@ -1087,6 +1087,19 @@ func TestATriggerRunIsAnsweredByTheUnattendedAgent(t *testing.T) {
 	if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "attended" {
 		t.Fatalf("a member's run was answered by %q", answers[len(answers)-1].Text)
 	}
+	// A schedule firing, and the organization agent reading what members
+	// published, are as unwatched as an app event. A team delegation is not:
+	// the member asked for it in their own thread.
+	for _, startedBy := range []string{agentsv1.StartedByWorkflow, agentsv1.StartedByOrganization} {
+		items, _ = h.run(away, created.ID, RunInput{Message: "run it", StartedBy: startedBy})
+		if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "unattended" {
+			t.Fatalf("a %s run was answered by %q", startedBy, answers[len(answers)-1].Text)
+		}
+	}
+	items, _ = h.run(asha, created.ID, RunInput{Message: "delegate", StartedBy: agentsv1.StartedByTeam})
+	if answers := find(items, ItemMessage); answers[len(answers)-1].Text != "attended" {
+		t.Fatalf("a team delegation the member asked for was answered by %q", answers[len(answers)-1].Text)
+	}
 
 	other, err := llmagent.New(llmagent.Config{Name: "someone_else", Model: answering("x"), Instruction: "x"})
 	if err != nil {
@@ -1094,5 +1107,66 @@ func TestATriggerRunIsAnsweredByTheUnattendedAgent(t *testing.T) {
 	}
 	if _, err := New(Config{AppName: "krude", Agent: attended, Unattended: other, Sessions: session.InMemoryService(), Runs: newFakeRuns(), Prices: prices}); err == nil {
 		t.Fatal("New() accepted an unattended agent answering to another name")
+	}
+}
+
+// TestARunNobodyWatchesRemembersNothing: memory holds what the member told
+// Krude. A run a schedule, an app event or another member's request started
+// is steered by words the member did not write, so it must leave memory
+// alone — a fact put there would outlive the run and steer later ones.
+func TestARunNobodyWatchesRemembersNothing(t *testing.T) {
+	ctx := context.Background()
+	remembering, err := adkmemory.New(adkmemory.InMemory())
+	if err != nil {
+		t.Fatal(err)
+	}
+	krude, err := llmagent.New(llmagent.Config{
+		Name: "krude",
+		Model: &scriptedModel{respond: func(*model.LLMRequest) (*genai.Content, error) {
+			return genai.NewContentFromText("noted", genai.RoleModel), nil
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prices, err := pricing.NewTable(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(Config{
+		AppName: "krude", Agent: krude, Sessions: session.InMemoryService(),
+		Runs: newFakeRuns(), Prices: prices, Memory: remembering,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scoped, err := remembering.For(adkmemory.Scope{OrganizationID: asha.OrganizationID, UserID: asha.UserID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recalled := func(query string) int {
+		t.Helper()
+		found, err := scoped.SearchMemory(ctx, &memory.SearchRequest{AppName: "krude", UserID: asha.UserID, Query: query})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(found.Memories)
+	}
+
+	h := &harness{t: t, service: service}
+	created, err := service.Create(ctx, asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	away := Member{UserID: asha.UserID, OrganizationID: asha.OrganizationID}
+	for _, startedBy := range []string{agentsv1.StartedByTrigger, agentsv1.StartedByWorkflow, agentsv1.StartedByOrganization} {
+		h.run(away, created.ID, RunInput{Message: "the invoice mentions tungsten, " + startedBy, StartedBy: startedBy})
+		if remembered := recalled("tungsten"); remembered != 0 {
+			t.Fatalf("a %s run left %d memories behind", startedBy, remembered)
+		}
+	}
+	h.run(asha, created.ID, RunInput{Message: "our office moved to Basel"})
+	if remembered := recalled("Basel"); remembered == 0 {
+		t.Fatal("a run the member started remembered nothing")
 	}
 }

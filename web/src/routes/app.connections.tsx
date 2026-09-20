@@ -190,9 +190,15 @@ function ConnectionRow({
 	const current = detail.data ?? connection;
 	const name = toolkit?.name ?? toolkitName(current.toolkit);
 	const refresh = () =>
-		queryClient.invalidateQueries({
-			queryKey: connectionsQueryOptions(organizationId).queryKey,
-		});
+		Promise.all([
+			queryClient.invalidateQueries({
+				queryKey: connectionsQueryOptions(organizationId).queryKey,
+			}),
+			queryClient.invalidateQueries({
+				queryKey: connectionQueryOptions(organizationId, connection.id)
+					.queryKey,
+			}),
+		]);
 	const reconnect = useMutation({
 		mutationFn: async () => {
 			const { redirect_url } = await connect(organizationId, {

@@ -293,7 +293,10 @@ func (s *Service) connectionFor(ctx context.Context, organizationID, memberID, t
 	case len(active) == 1:
 		return active[0], nil
 	case len(active) > 1:
-		return domain.Connection{}, fmt.Errorf("%d %s connections could be meant: %w", len(active), toolkit, domain.ErrChooseConnection)
+		// connection_id used to disambiguate this; it is gone from the tool
+		// schema and the toolbox instructions, and it is not coming back, so
+		// the only way out is telling the member what to do about it.
+		return domain.Connection{}, fmt.Errorf("%d %s connections are active; disconnect the extra one in Apps & tools so only one remains: %w", len(active), toolkit, domain.ErrChooseConnection)
 	case expired:
 		return domain.Connection{}, fmt.Errorf("the %s connection expired: %w", toolkit, domain.ErrNeedsReconnect)
 	default:

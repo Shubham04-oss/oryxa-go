@@ -511,8 +511,9 @@ func isExternalExecutionConflict(err error) bool {
 
 func truncate(value string, limit int) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= limit {
+	runes := []rune(value)
+	if len(runes) <= limit {
 		return value
 	}
-	return value[:limit]
+	return string(runes[:limit])
 }
