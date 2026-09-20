@@ -128,6 +128,12 @@ type fakeManagedAgents struct {
 	// (a database blip), as opposed to it working but having no primary
 	// agent yet.
 	primaryErr error
+	// scopes and members record, in call order, exactly what every method
+	// was invoked with - so an authorization test can assert the handler
+	// always passed the authenticated caller's own identity, never one
+	// taken from the request path or body.
+	scopes  []managedagents.Scope
+	members []threads.Member
 }
 
 type fakeAgentTeams struct {
@@ -148,9 +154,17 @@ type fakeTeamspaces struct {
 	actors            []teamspaces.Actor
 }
 
-type fakeOrganizationContext struct{}
+// fakeOrganizationContext records, in call order, the organization id every
+// method was invoked with. The interface takes no user identity at all: the
+// organization-agent's synthesis and follow-ups are shared, organization-wide
+// context by design (like a teamspace), not a member-owned resource, so the
+// only boundary this layer can and must hold is the organization one.
+type fakeOrganizationContext struct {
+	organizationIDs []string
+}
 
-func (*fakeOrganizationContext) Synthesis(_ context.Context, organizationID string) (organizationagents.Synthesis, error) {
+func (service *fakeOrganizationContext) Synthesis(_ context.Context, organizationID string) (organizationagents.Synthesis, error) {
+	service.organizationIDs = append(service.organizationIDs, organizationID)
 	return organizationagents.Synthesis{
 		OrganizationID: organizationID, AgentID: "oag_oryxa", Revision: 2,
 		Summary: "Launch is on track.", Decisions: []string{"Use the reviewed design."},
@@ -158,7 +172,8 @@ func (*fakeOrganizationContext) Synthesis(_ context.Context, organizationID stri
 	}, nil
 }
 
-func (*fakeOrganizationContext) ListFollowUps(_ context.Context, organizationID string, _ int) ([]organizationagents.FollowUp, error) {
+func (service *fakeOrganizationContext) ListFollowUps(_ context.Context, organizationID string, _ int) ([]organizationagents.FollowUp, error) {
+	service.organizationIDs = append(service.organizationIDs, organizationID)
 	return []organizationagents.FollowUp{{
 		ID: "ofu_1", OrganizationID: organizationID, SynthesisRevision: 2,
 		SourceEntryID: "tse_review", TeamspaceID: "tsp_engineering",
@@ -422,32 +437,43 @@ type fakeInteractions struct {
 	actor   primaryagents.InteractionActor
 	token   string
 	key     string
+	// actors records, in call order, the actor every method was invoked
+	// with - so an authorization test can assert each route always acted as
+	// the authenticated caller's own persistent agent identity.
+	actors []primaryagents.InteractionActor
 }
 
 func (service *fakeInteractions) Create(_ context.Context, actor primaryagents.InteractionActor, token, key string, input primaryagents.InteractionCreateInput) (primaryagents.Interaction, error) {
+	service.actors = append(service.actors, actor)
 	service.actor, service.token, service.key = actor, token, key
 	service.request = primaryagents.Interaction{ID: "irq_1", OrganizationID: actor.OrganizationID, Requester: primaryagents.InteractionParty{UserID: actor.UserID, AgentID: actor.AgentID}, Target: primaryagents.InteractionParty{AgentID: input.TargetAgentID}, Purpose: input.Purpose, Task: input.Task, Status: "pending"}
 	return service.request, nil
 }
-func (service *fakeInteractions) Inbox(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error) {
+func (service *fakeInteractions) Inbox(_ context.Context, actor primaryagents.InteractionActor, _ int) ([]primaryagents.Interaction, error) {
+	service.actors = append(service.actors, actor)
 	return []primaryagents.Interaction{service.request}, nil
 }
-func (service *fakeInteractions) Sent(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error) {
+func (service *fakeInteractions) Sent(_ context.Context, actor primaryagents.InteractionActor, _ int) ([]primaryagents.Interaction, error) {
+	service.actors = append(service.actors, actor)
 	return []primaryagents.Interaction{service.request}, nil
 }
-func (service *fakeInteractions) Get(context.Context, primaryagents.InteractionActor, string) (primaryagents.Interaction, error) {
+func (service *fakeInteractions) Get(_ context.Context, actor primaryagents.InteractionActor, _ string) (primaryagents.Interaction, error) {
+	service.actors = append(service.actors, actor)
 	return service.request, nil
 }
-func (service *fakeInteractions) Decide(_ context.Context, _ primaryagents.InteractionActor, _ string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
+func (service *fakeInteractions) Decide(_ context.Context, actor primaryagents.InteractionActor, _ string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
+	service.actors = append(service.actors, actor)
 	service.request.Status = input.Decision
 	return service.request, nil
 }
-func (service *fakeInteractions) Respond(_ context.Context, _ primaryagents.InteractionActor, _ string, input primaryagents.InteractionResponseInput) (primaryagents.Interaction, error) {
+func (service *fakeInteractions) Respond(_ context.Context, actor primaryagents.InteractionActor, _ string, input primaryagents.InteractionResponseInput) (primaryagents.Interaction, error) {
+	service.actors = append(service.actors, actor)
 	service.request.Status = input.Status
 	return service.request, nil
 }
 
 func (agents *fakeManagedAgents) Primary(_ context.Context, scope managedagents.Scope) (managedagents.Definition, error) {
+	agents.scopes = append(agents.scopes, scope)
 	if agents.primaryErr != nil {
 		return managedagents.Definition{}, agents.primaryErr
 	}
@@ -461,10 +487,12 @@ func (agents *fakeManagedAgents) Primary(_ context.Context, scope managedagents.
 	return managedagents.Definition{}, managedagents.ErrNotFound
 }
 
-func (agents *fakeManagedAgents) List(_ context.Context, _ managedagents.Scope) ([]managedagents.Definition, error) {
+func (agents *fakeManagedAgents) List(_ context.Context, scope managedagents.Scope) ([]managedagents.Definition, error) {
+	agents.scopes = append(agents.scopes, scope)
 	return agents.definitions, nil
 }
-func (agents *fakeManagedAgents) Get(_ context.Context, _ managedagents.Scope, id string) (managedagents.Definition, error) {
+func (agents *fakeManagedAgents) Get(_ context.Context, scope managedagents.Scope, id string) (managedagents.Definition, error) {
+	agents.scopes = append(agents.scopes, scope)
 	for _, definition := range agents.definitions {
 		if definition.ID == id {
 			return definition, nil
@@ -473,11 +501,13 @@ func (agents *fakeManagedAgents) Get(_ context.Context, _ managedagents.Scope, i
 	return managedagents.Definition{}, managedagents.ErrNotFound
 }
 func (agents *fakeManagedAgents) Create(_ context.Context, scope managedagents.Scope, input managedagents.CreateInput) (managedagents.Definition, error) {
+	agents.scopes = append(agents.scopes, scope)
 	created := managedagents.Definition{ID: "agt_sales", OrganizationID: scope.OrganizationID, OwnerUserID: scope.UserID, Kind: managedagents.KindSpecialist, Name: input.Name, Description: input.Description, Instructions: input.Instructions, Status: managedagents.StatusActive}
 	agents.definitions = append(agents.definitions, created)
 	return created, nil
 }
 func (agents *fakeManagedAgents) Update(_ context.Context, scope managedagents.Scope, id string, input managedagents.UpdateInput) (managedagents.Definition, error) {
+	agents.scopes = append(agents.scopes, scope)
 	definition, err := agents.Get(context.Background(), scope, id)
 	if err != nil {
 		return managedagents.Definition{}, err
@@ -487,13 +517,15 @@ func (agents *fakeManagedAgents) Update(_ context.Context, scope managedagents.S
 	}
 	return definition, nil
 }
-func (agents *fakeManagedAgents) Delete(_ context.Context, _ managedagents.Scope, id string) error {
+func (agents *fakeManagedAgents) Delete(_ context.Context, scope managedagents.Scope, id string) error {
+	agents.scopes = append(agents.scopes, scope)
 	if id == "agt_primary" {
 		return managedagents.ErrInvalid
 	}
 	return nil
 }
-func (agents *fakeManagedAgents) StartRun(_ context.Context, _ threads.Member, _ string, threadID string, input threads.RunInput) (managedagents.StartedRun, error) {
+func (agents *fakeManagedAgents) StartRun(_ context.Context, member threads.Member, _ string, threadID string, input threads.RunInput) (managedagents.StartedRun, error) {
+	agents.members = append(agents.members, member)
 	agents.lastInput = input
 	if threadID == "" {
 		threadID = "agent_thread_1"
@@ -842,9 +874,15 @@ func TestManagedAgentsCanBeCreatedRenamedAndRun(t *testing.T) {
 type fakePreferences struct {
 	off map[string]bool
 	err error
+	// calls records, in call order, the (organizationID, memberID) pair
+	// every method was invoked with - so an authorization test can assert
+	// the handler always read or wrote the authenticated caller's own
+	// preferences, never an identity taken from the request path or body.
+	calls [][2]string
 }
 
 func (preferences *fakePreferences) AppUpdates(_ context.Context, organizationID, memberID string) (bool, error) {
+	preferences.calls = append(preferences.calls, [2]string{organizationID, memberID})
 	if preferences.err != nil {
 		return false, preferences.err
 	}
@@ -852,6 +890,7 @@ func (preferences *fakePreferences) AppUpdates(_ context.Context, organizationID
 }
 
 func (preferences *fakePreferences) SetAppUpdates(_ context.Context, organizationID, memberID string, on bool) error {
+	preferences.calls = append(preferences.calls, [2]string{organizationID, memberID})
 	if preferences.err != nil {
 		return preferences.err
 	}
