@@ -139,6 +139,9 @@ type fakeManagedAgents struct {
 type fakeAgentTeams struct {
 	teams      []agentteams.Team
 	seenScopes []agentteams.Scope
+	// deleteErr, when set, is what Delete answers: the store refusing to
+	// remove a team something still points at.
+	deleteErr error
 }
 
 type fakeAgentWorkflows struct {
@@ -426,6 +429,9 @@ func (teams *fakeAgentTeams) Update(_ context.Context, scope agentteams.Scope, i
 
 func (teams *fakeAgentTeams) Delete(_ context.Context, scope agentteams.Scope, id string) error {
 	teams.seenScopes = append(teams.seenScopes, scope)
+	if teams.deleteErr != nil {
+		return teams.deleteErr
+	}
 	if id != "atm_revenue" {
 		return agentteams.ErrNotFound
 	}
@@ -1191,5 +1197,22 @@ func TestEveryListingRefusesTheSameBadLimit(t *testing.T) {
 		if response := serve(server, http.MethodGet, path, "", bearer); response.Code != http.StatusOK {
 			t.Errorf("GET %s with no limit = %d %s, want 200", path, response.Code, response.Body.String())
 		}
+	}
+}
+
+// TestAnInUseTeamAnswersConflictRatherThanAnInternalError: a team a workflow
+// still runs cannot be deleted, and the member is told which — not shown the
+// internal error a raw database refusal would become.
+func TestAnInUseTeamAnswersConflictRatherThanAnInternalError(t *testing.T) {
+	teams := &fakeAgentTeams{deleteErr: fmt.Errorf("%w: delete the workflows that run this team first", agentteams.ErrInUse)}
+	server := New(member(), &fakeThreads{}, Config{Agents: &fakeManagedAgents{
+		definitions: []managedagents.Definition{{ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive}},
+	}, Teams: teams}, nil)
+	response := serve(server, http.MethodDelete, "/v1/organizations/org_1/agent-teams/atm_revenue", "", bearer)
+	if response.Code != http.StatusConflict || errorCode(t, response) != "team_in_use" {
+		t.Fatalf("delete an in-use team = %d %s, want 409 team_in_use", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "workflows") {
+		t.Fatalf("the answer does not say what is still using the team: %s", response.Body.String())
 	}
 }

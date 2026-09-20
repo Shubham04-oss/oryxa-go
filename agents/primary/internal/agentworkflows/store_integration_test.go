@@ -101,8 +101,17 @@ func TestStoreLifecycle(t *testing.T) {
 	if _, err := store.Update(ctx, scope, workflow.ID, UpdateInput{Name: &renamed}); err != nil {
 		t.Fatal(err)
 	}
+	// A team a workflow still runs cannot be deleted out from under it, and
+	// the member is told that rather than shown a database error.
+	if err := teamStore.Delete(ctx, agentteams.Scope(scope), team.ID); !errors.Is(err, agentteams.ErrInUse) {
+		t.Fatalf("delete a team a workflow runs error=%v, want ErrInUse", err)
+	}
 	if err := store.Delete(ctx, scope, workflow.ID); err != nil {
 		t.Fatal(err)
+	}
+	// With its workflows gone, the team goes too.
+	if err := teamStore.Delete(ctx, agentteams.Scope(scope), team.ID); err != nil {
+		t.Fatalf("delete the team after its workflows error=%v", err)
 	}
 	var lifecycleEvents, sensitiveEvents int
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.agents_outbox

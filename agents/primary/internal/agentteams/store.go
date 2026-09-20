@@ -188,7 +188,7 @@ func (store *Store) Update(ctx context.Context, scope Scope, id string, input Up
 }
 
 func (store *Store) Delete(ctx context.Context, scope Scope, id string) error {
-	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		current, err := getForUpdate(ctx, tx, scope, id)
 		if err != nil {
 			return err
@@ -204,6 +204,17 @@ func (store *Store) Delete(ctx context.Context, scope Scope, id string) error {
 		current.UpdatedAt = time.Now().UTC()
 		return recordLifecycle(ctx, tx, agentsv1.AgentTeamDeletedDetailType, current)
 	})
+	// A workflow's team is ON DELETE RESTRICT, which Postgres reports as
+	// restrict_violation rather than the foreign_key_violation a deferred
+	// constraint would raise. Without reading it the member is told an
+	// internal error happened, when what happened is that their own workflow
+	// still runs this team.
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "23001" || pgErr.Code == "23503") &&
+		pgErr.ConstraintName == "member_agent_workflows_team_id_fkey" {
+		return fmt.Errorf("%w: delete the workflows that run this team first", ErrInUse)
+	}
+	return err
 }
 
 func (store *Store) Forget(ctx context.Context, organizationID, userID string) error {
