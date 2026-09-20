@@ -103,6 +103,41 @@ func CanonicalMIME(declared string) (string, error) {
 	}
 }
 
+// The binary media types a caller with somewhere to keep original bytes may
+// pass through rather than have refused here: a PDF, and the old and new
+// forms of Word, Excel and PowerPoint documents. Normalize still refuses
+// every one of these — nothing here reads text out of them — so a caller
+// that means to keep one checks IsPassthroughMIME before calling Normalize
+// at all, rather than after it fails.
+const (
+	MIMEPDF  = "application/pdf"
+	MIMEDOC  = "application/msword"
+	MIMEDOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	MIMEXLS  = "application/vnd.ms-excel"
+	MIMEXLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	MIMEPPT  = "application/vnd.ms-powerpoint"
+	MIMEPPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+)
+
+// IsPassthroughMIME says whether declared is one of the binary types a
+// document's own bytes may be kept for, unread, rather than indexed as text.
+// Parameters are dropped the same way CanonicalMIME drops them, so
+// "application/pdf; charset=binary" still matches.
+func IsPassthroughMIME(declared string) bool {
+	value := strings.TrimSpace(declared)
+	if parsed, _, err := mime.ParseMediaType(value); err == nil {
+		value = parsed
+	} else {
+		value = strings.ToLower(strings.TrimSpace(strings.Split(value, ";")[0]))
+	}
+	switch value {
+	case MIMEPDF, MIMEDOC, MIMEDOCX, MIMEXLS, MIMEXLSX, MIMEPPT, MIMEPPTX:
+		return true
+	default:
+		return false
+	}
+}
+
 // MIMEForFilename guesses a media type from a name, for a provider that
 // stores a file without saying what it is. It answers an empty string when
 // the name says nothing, so the caller can fall back to what it was told.

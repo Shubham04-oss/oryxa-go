@@ -22,6 +22,8 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/filesclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/judge"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/originals"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
@@ -40,11 +42,13 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	return postgres.New(platform.Database).Migrate(ctx)
 }
 
-// Mount assembles knowledge on what the host shares. GitHub, Notion and
-// Slack are mounted once COMPOSIO_API_KEY says app sources are on; files,
-// which reads as the member who registered it, once FILES_URL and
-// KNOWLEDGE_SERVICE_KEY_ID give it a way to act as one.
-func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
+// Mount assembles knowledge on what the host shares. GitHub, Notion, Slack,
+// Google Drive and Gmail are mounted once COMPOSIO_API_KEY says app sources
+// are on; files, which reads as the member who registered it, once FILES_URL
+// and KNOWLEDGE_SERVICE_KEY_ID give it a way to act as one; and a PDF or an
+// Office file is kept rather than skipped once KNOWLEDGE_ORIGINALS_BUCKET
+// names somewhere to keep it.
+func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if platform.Database == nil {
 		return host.Service{}, host.ErrDatabaseRequired
 	}
@@ -69,7 +73,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 			extractors[provider] = extractor
 		}
 	} else {
-		logger.Warn("COMPOSIO_API_KEY is not set: app sources (GitHub, Notion, Slack) are off")
+		logger.Warn("COMPOSIO_API_KEY is not set: app sources (GitHub, Notion, Slack, Google Drive, Gmail) are off")
 	}
 
 	// Acting as a member while they are away is what the files source reads
@@ -88,13 +92,38 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("KNOWLEDGE_SERVICE_KEY_ID is not set: knowledge cannot act as a member while they are away, " +
 			"so neither the organization's own files nor what a newly connected app holds are indexed for them")
 	}
+	// A document knowledge does not read itself — a PDF, an Office file —
+	// keeps its bytes here instead of being skipped outright, once there is
+	// somewhere configured to put them.
+	var documentOriginals application.Originals
+	if config.OriginalsBucket != "" {
+		documentOriginals = originals.NewS3FromConfig(platform.AWS, config.S3Endpoint, config.OriginalsBucket)
+	} else {
+		logger.Warn("KNOWLEDGE_ORIGINALS_BUCKET is not set: a PDF or an Office file is skipped rather than kept")
+	}
+
+	// What a connected app yields is judged before it is published, once
+	// there is a model to judge with.
+	documentJudge, err := judgeFor(ctx, config, platform)
+	if err != nil {
+		return host.Service{}, err
+	}
+	if documentJudge == nil {
+		logger.Warn("KNOWLEDGE_JUDGE is off: documents from connected apps are indexed without judging whether they are worth it, " +
+			"so only Gmail's own Promotions and Social categories and empty documents are kept out")
+	}
+
 	// Files is the one source with nobody to act as: every route there wants
 	// a member's own credentials, and a scheduled pass has none.
 	switch {
 	case config.FilesURL == "":
 		logger.Warn("FILES_URL is not set: the organization's own files are not indexed")
 	case grants != nil:
-		files := sources.NewFiles(filesclient.New(config.FilesURL))
+		var fileOptions []sources.FilesOption
+		if documentOriginals != nil {
+			fileOptions = append(fileOptions, sources.WithOriginals())
+		}
+		files := sources.NewFiles(filesclient.New(config.FilesURL), fileOptions...)
 		extractors[files.Provider()] = files
 	}
 
@@ -126,10 +155,12 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Grants:     grants,
 		Sink:       events.NewPublisher(eventClient, platform.EventBusName),
 		Extractors: extractors,
+		Originals:  documentOriginals,
+		Judge:      documentJudge,
 		Logger:     logger,
 	}, Config{
 		AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval,
-		Services: serviceVerifier,
+		Services: serviceVerifier, OriginalsBucket: config.OriginalsBucket,
 	})
 	if err != nil {
 		return host.Service{}, err
@@ -183,5 +214,44 @@ func (grants memberGrants) MemberToken(ctx context.Context, organizationID, memb
 		return "", err
 	default:
 		return "", fmt.Errorf("%w: %w", domain.ErrProviderUnavailable, err)
+	}
+}
+
+// judgeFor builds the judge KNOWLEDGE_JUDGE names: Jev, with the Gemini model,
+// when there is one, deciding what Jev is unsure of and what it cannot read;
+// or the Gemini model alone. Nil when judging is off.
+func judgeFor(ctx context.Context, config serviceconfig.Config, platform host.Platform) (application.Judge, error) {
+	var gemini *judge.Gemini
+	if config.Judge != serviceconfig.JudgeOff && config.JudgeModel != "" {
+		var err error
+		gemini, err = judge.New(ctx, judge.Config{
+			Project: config.GoogleCloudProject, Location: config.GoogleCloudLocation,
+			Model: config.JudgeModel, Credentials: platform.Google,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	switch config.Judge {
+	case serviceconfig.JudgeJev:
+		jevConfig := judge.JevConfig{
+			APIKey: config.TypeSafeAPIKey, BaseURL: config.TypeSafeBaseURL, Model: config.JudgeJevModel,
+			EscalateBelow: config.JudgeEscalateBelow,
+		}
+		if gemini != nil {
+			jevConfig.Escalate = gemini
+		}
+		jev, err := judge.NewJev(jevConfig)
+		if err != nil {
+			return nil, err
+		}
+		return jev, nil
+	case serviceconfig.JudgeGemini:
+		if gemini == nil {
+			return nil, nil
+		}
+		return gemini, nil
+	default:
+		return nil, nil
 	}
 }

@@ -354,6 +354,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Interactions:        interactionService,
 		Teamspaces:          teamspaceService,
 		OrganizationContext: organizationStore,
+		Preferences:         wakeups.NewStore(platform.Database),
 	}, logger)
 
 	table, err := outbox.NewTable(platform.Database.Pool, schema+".agents_outbox")

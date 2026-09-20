@@ -35,6 +35,10 @@ output "database_address" {
   value = aws_db_instance.main.address
 }
 
+output "knowledge_base_id" {
+  value = aws_bedrockagent_knowledge_base.main.id
+}
+
 output "hyperdrive_id" {
   description = "For the web app's wrangler.jsonc hyperdrive binding."
   value       = cloudflare_hyperdrive_config.main.id

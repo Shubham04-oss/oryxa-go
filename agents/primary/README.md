@@ -340,6 +340,8 @@ from inside a run.
 | `DELETE /v1/organizations/{org}/threads/{thread}` | Removes the thread, and the artifacts its runs kept that are not the member's own `user:` ones |
 | `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run |
 | `GET /v1/organizations/{org}/threads/{thread}/artifacts/{name}` | A file the thread's runs kept, its latest version or `?version=` |
+| `GET /v1/organizations/{org}/preferences` | What the member chose about Krude here: `{"app_updates": true}` until they turn [wake-ups](#wake-ups) off |
+| `PUT /v1/organizations/{org}/preferences` | Records the member's own choice, `{"app_updates": false}`; an agent's token is refused like everywhere else |
 
 ### Persistent agent API
 
@@ -698,6 +700,13 @@ wakes Krude for each batch it hands over, as `batching.trigger-batch.ready.v1`
   its member still belongs to the organization before anything runs; one for
   someone who left is dropped, since the bus can deliver their last events
   after the news that they left.
+- **Only for someone who wants it.** A member can turn updates from their apps
+  off in each organization (`PUT .../preferences`, "Updates from your apps" in
+  their account settings; `agents_primary.wakeup_preferences`, no row meaning
+  on). Then nothing new is kept for them, what was waiting is dropped, and a
+  batch claimed before they turned it off is dropped when its turn comes; only
+  a wake-up already running finishes. Their app connections and triggers are
+  untouched, and turning it on again starts from what arrives next.
 - **At least once, and never for ever.** A delivery the bus repeats is kept
   once, by the event's own ID. A batch is claimed with a lease just before its
   run, four members' at once; a thread that is busy — the member is in it, or

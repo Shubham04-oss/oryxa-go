@@ -66,8 +66,8 @@ func TestMountServesAppsRoutesAndRunsItsWorkers(t *testing.T) {
 			t.Errorf("routes do not include %q: %v", route, service.Routes)
 		}
 	}
-	if len(service.Workers) != 3 {
-		t.Fatalf("workers = %d, want maintenance, the dispatcher and the consumer", len(service.Workers))
+	if len(service.Workers) != 4 {
+		t.Fatalf("workers = %d, want maintenance, the auto-subscriber, the dispatcher and the consumer", len(service.Workers))
 	}
 	if service.Timeouts.Read == 0 || service.Timeouts.Write == 0 {
 		t.Fatalf("timeouts = %+v", service.Timeouts)
@@ -77,8 +77,8 @@ func TestMountServesAppsRoutesAndRunsItsWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(withoutQueue.Workers) != 2 {
-		t.Fatalf("workers without a queue = %d, want maintenance and the dispatcher", len(withoutQueue.Workers))
+	if len(withoutQueue.Workers) != 3 {
+		t.Fatalf("workers without a queue = %d, want maintenance, the auto-subscriber and the dispatcher", len(withoutQueue.Workers))
 	}
 }
 

@@ -73,6 +73,8 @@ type Service struct {
 	// triggers holds each app's trigger definitions for a while, so checking
 	// a subscription against the event it names costs no catalog walk.
 	triggers *triggerCatalog
+	// subscribeWake wakes RunAutoSubscribe when a connection completes.
+	subscribeWake chan struct{}
 }
 
 func New(dependencies Dependencies, config Config) (*Service, error) {
@@ -87,6 +89,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		autoSubscribe: !config.NoAutoSubscribe,
 		wait:          sleep,
 		tools:         map[string]cachedTool{},
+		subscribeWake: make(chan struct{}, 1),
 	}
 	if service.logger == nil {
 		service.logger = slog.New(slog.DiscardHandler)

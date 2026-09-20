@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
+	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -278,6 +280,55 @@ func TestAnAppWithNothingToIndexIsNotAProblem(t *testing.T) {
 	}
 	if len(store.sources) != 0 {
 		t.Fatalf("sources = %d, want none", len(store.sources))
+	}
+}
+
+// TestProviderForGoogleDriveAndGmail covers the two toolkits this pass adds:
+// spelled the same as their knowledge provider, same as github, notion and
+// slack already were, so connecting either indexes what it holds without a
+// member naming anything.
+func TestProviderForGoogleDriveAndGmail(t *testing.T) {
+	for _, toolkit := range []string{"googledrive", "gmail"} {
+		t.Run(toolkit, func(t *testing.T) {
+			if got := providerFor(toolkit); got != toolkit {
+				t.Fatalf("providerFor(%q) = %q, want %q", toolkit, got, toolkit)
+			}
+		})
+	}
+}
+
+// TestConnectingGoogleDriveIndexesWhatItHolds mirrors
+// TestConnectingAnAppIndexesWhatItHolds for the toolkit whose default target
+// is the whole of the member's Drive: an empty target map, not a repository
+// name, is what a connection's own targets listing hands back for it.
+func TestConnectingGoogleDriveIndexesWhatItHolds(t *testing.T) {
+	store := newFakeStore()
+	apps := &fakeApps{
+		connection: domain.AppConnection{ID: "apc_1", Toolkit: "googledrive", Status: "active", MemberID: "user-1", ComposioAccountID: "ca_1"},
+		targets:    []domain.AppTarget{{Kind: "drive", ID: "root", Name: "My Drive", Target: map[string]string{}}},
+	}
+	grants := &fakeGrants{token: "member-token"}
+	service := New(Dependencies{
+		Store:      store,
+		Directory:  &fakeDirectory{membership: member(), agentToken: "member-token"},
+		Apps:       apps,
+		Grants:     grants,
+		Extractors: sources.Registry{"googledrive": &fakeExtractor{provider: "googledrive"}},
+		Clock:      func() time.Time { return testClock },
+	}, Config{})
+
+	event := connected()
+	event.Toolkit = "googledrive"
+	if err := service.ConnectionConnected(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 1 {
+		t.Fatalf("sources = %d, want the one Drive source", len(store.sources))
+	}
+	for _, source := range store.sources {
+		if source.Provider != "googledrive" || source.ConnectionID != "apc_1" {
+			t.Fatalf("source = %+v", source)
+		}
 	}
 }
 
@@ -686,5 +737,55 @@ func TestSyncSourceChecksWhoIsAskingAndWhatTheSourceIs(t *testing.T) {
 				t.Fatalf("error = %v, want %v", err, testCase.want)
 			}
 		})
+	}
+}
+
+// A deleted file stops being searchable the moment files says so, rather than
+// when the next full sweep notices it missing, up to a week later — and its
+// original goes with it.
+func TestFileDeletedForgetsTheFileAtOnce(t *testing.T) {
+	store := newFakeStore()
+	fakeBucket := newFakeOriginals()
+	key := "originals/org_1/src_1/doc_1/somehash"
+	store.documents["src_1\x00file_1"] = domain.Document{
+		ID: "doc_1", OrganizationID: "org_1", SourceID: "src_1", ExternalID: "file_1",
+		ContentHash: "somehash", LastSeenAt: testClock,
+		Original: &domain.Original{Bucket: "test-bucket", Key: key, SHA256: "somehash"},
+	}
+	store.documents["src_1\x00file_2"] = domain.Document{
+		ID: "doc_2", OrganizationID: "org_1", SourceID: "src_1", ExternalID: "file_2",
+		ContentHash: "otherhash", LastSeenAt: testClock,
+	}
+	fakeBucket.objects[key] = []byte("the pdf")
+	service := testServiceWithOriginals(t, store, &fakeExtractor{provider: "files"}, fakeBucket)
+	activeSource(store, "files")
+
+	if err := service.FileDeleted(context.Background(), filesv1.ObjectDeleted{
+		FileID: "file_1", OrganizationID: "org_1", Scope: "organization", Reason: filesv1.DeletedReasonDeleted,
+	}); err != nil {
+		t.Fatalf("FileDeleted() error = %v", err)
+	}
+	if store.documents["src_1\x00file_1"].RemovedAt == nil {
+		t.Fatal("the deleted file's document is still searchable")
+	}
+	if store.documents["src_1\x00file_2"].RemovedAt != nil {
+		t.Fatal("another file's document was removed too")
+	}
+	var removed []string
+	for _, event := range store.events {
+		if event.DetailType == knowledgev1.DocumentRemovedDetailType {
+			removed = append(removed, string(event.Data))
+		}
+	}
+	if len(removed) != 1 || !strings.Contains(removed[0], `"document_id":"doc_1"`) {
+		t.Fatalf("removed events = %v, want one for doc_1", removed)
+	}
+	if fakeBucket.has(key) {
+		t.Fatal("the deleted file's original was left in the bucket")
+	}
+
+	// Delivered again, as the bus may, it finds nothing left to do.
+	if err := service.FileDeleted(context.Background(), filesv1.ObjectDeleted{FileID: "file_1", OrganizationID: "org_1"}); err != nil {
+		t.Fatalf("FileDeleted() again error = %v", err)
 	}
 }

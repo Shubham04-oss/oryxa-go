@@ -26,6 +26,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/chunking"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/embedding"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgebase"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/vectorstore"
 )
 
@@ -39,7 +40,21 @@ type Store interface {
 	MarkDocumentReady(ctx context.Context, documentID string, chunkCount int, at time.Time, event domain.Event) error
 	MarkDocumentFailed(ctx context.Context, documentID, reason string, at time.Time, event domain.Event) error
 	ReleaseDocument(ctx context.Context, documentID string) error
+	// MarkKnowledgeBaseSubmitted is used only for a bedrock-kb corpus's
+	// documents; see indexKnowledgeBase.
+	MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, contentSHA256 string, at time.Time) error
+	// RecheckDocumentAt leaves a document ingesting, claimable again at at,
+	// without counting the claim as an attempt.
+	RecheckDocumentAt(ctx context.Context, documentID string, at time.Time) error
+	// RetryDocumentAt puts a document whose attempt failed back in the
+	// queue, claimable again at at. The attempt still counts.
+	RetryDocumentAt(ctx context.Context, documentID string, at time.Time) error
 }
+
+// knowledgeBaseRecheck is how soon a document handed to the knowledge base is
+// asked about again. Bedrock indexes a document in seconds; holding the whole
+// lease would leave one waiting five minutes to be called ready.
+const knowledgeBaseRecheck = 10 * time.Second
 
 // Vectors routes a corpus to the store holding its vectors.
 type Vectors interface {
@@ -51,6 +66,16 @@ type Embedders interface {
 	For(ctx context.Context, spec domain.EmbeddingSpec) (embedding.Embedder, error)
 }
 
+// KnowledgeBase is what indexes a document in a bedrock-kb corpus, in place
+// of chunking.Cut, Embedders and Vectors above: Bedrock does the chunking,
+// embedding and, for a document with no extracted text, the parsing, so
+// there is nothing here to cut or embed — only to submit and poll.
+type KnowledgeBase interface {
+	Submit(ctx context.Context, corpus domain.Corpus, document domain.Document, text string) error
+	Statuses(ctx context.Context, documentIDs []string) (map[string]knowledgebase.DocumentStatus, error)
+	DeleteStaged(ctx context.Context, corpus domain.Corpus, document domain.Document) error
+}
+
 // MaxAttempts is how many times a document is tried before it is left failed.
 //
 // A failure that repeats is usually the document rather than the weather: a
@@ -58,6 +83,20 @@ type Embedders interface {
 // Retrying forever would spend money on the same rejection and hide the
 // document behind a queue that never drains.
 const MaxAttempts = 5
+
+// firstRetry is how long a document waits after its first failed attempt.
+// Each later wait is four times the one before, so the attempts MaxAttempts
+// allows span about three quarters of an hour rather than a few seconds.
+const firstRetry = 30 * time.Second
+
+// retryDelay is how long a document waits after failing attempt number
+// attempts.
+func retryDelay(attempts int) time.Duration {
+	if attempts < 1 {
+		attempts = 1
+	}
+	return firstRetry << (2 * (attempts - 1))
+}
 
 // Options tune the worker loop.
 type Options struct {
@@ -90,20 +129,26 @@ type Result struct {
 }
 
 type Pipeline struct {
-	store     Store
-	vectors   Vectors
-	embedders Embedders
-	options   Options
-	logger    *slog.Logger
-	now       func() time.Time
+	store         Store
+	vectors       Vectors
+	embedders     Embedders
+	knowledgeBase KnowledgeBase
+	options       Options
+	logger        *slog.Logger
+	now           func() time.Time
 }
 
-func New(store Store, vectors Vectors, embedders Embedders, options Options, logger *slog.Logger) *Pipeline {
+// New builds a Pipeline. knowledgeBase is nil in a deployment with no
+// Bedrock knowledge base configured, in which case a document in a
+// bedrock-kb corpus fails by name rather than reaching a nil client — the
+// same shape of failure Vectors.For already gives a corpus on a backend this
+// deployment cannot serve.
+func New(store Store, vectors Vectors, embedders Embedders, knowledgeBase KnowledgeBase, options Options, logger *slog.Logger) *Pipeline {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Pipeline{
-		store: store, vectors: vectors, embedders: embedders,
+		store: store, vectors: vectors, embedders: embedders, knowledgeBase: knowledgeBase,
 		options: options.withDefaults(), logger: logger, now: time.Now,
 	}
 }
@@ -177,10 +222,14 @@ func (pipeline *Pipeline) Index(ctx context.Context, document domain.Document) (
 		return Result{}, err
 	}
 	if document.Attempts < MaxAttempts && !errors.Is(err, domain.ErrInvalid) {
-		// Worth another go later. Release it rather than failing it, so the
-		// attempt count is what decides when to give up.
-		if releaseErr := pipeline.store.ReleaseDocument(ctx, document.ID); releaseErr != nil {
-			pipeline.logger.ErrorContext(ctx, "releasing a document for retry failed", "document_id", document.ID, "error", releaseErr)
+		// Worth another go later, so the attempt count is what decides when
+		// to give up - but later, not at once. A document put straight back
+		// is claimed straight back, and a problem that takes minutes to clear
+		// (a permission not granted yet, a throttled model) used every
+		// attempt up in seconds.
+		at := pipeline.now().Add(retryDelay(document.Attempts))
+		if retryErr := pipeline.store.RetryDocumentAt(ctx, document.ID, at); retryErr != nil {
+			pipeline.logger.ErrorContext(ctx, "scheduling a document's retry failed", "document_id", document.ID, "error", retryErr)
 		}
 		return Result{}, err
 	}
@@ -201,6 +250,11 @@ func (pipeline *Pipeline) index(ctx context.Context, document domain.Document) (
 	corpus, err := pipeline.store.Corpus(ctx, document.OrganizationID, document.CorpusID)
 	if err != nil {
 		return Result{}, fmt.Errorf("read the corpus: %w", err)
+	}
+	// A bedrock-kb corpus is never chunked or embedded here: Bedrock does
+	// both, so this document takes a wholly different, shorter path.
+	if corpus.Backend == domain.BackendBedrockKB {
+		return pipeline.indexKnowledgeBase(ctx, corpus, document)
 	}
 	body, err := pipeline.store.DocumentBody(ctx, document.ID)
 	if err != nil {
@@ -274,6 +328,118 @@ func (pipeline *Pipeline) index(ctx context.Context, document domain.Document) (
 		"document_id", document.ID, "corpus_id", corpus.ID, "chunks", len(chunks),
 		"embedded", len(sync.Fresh), "reused", len(sync.Reused), "removed", len(sync.Removed))
 	return result, nil
+}
+
+// indexKnowledgeBase hands a document to a Bedrock knowledge base instead of
+// chunking and embedding it. Ingestion there is asynchronous — a live test
+// indexed three documents, one a PDF, in about nine seconds — so this claim
+// either submits the document, if its current content was never submitted,
+// or polls the outcome of a submission already running.
+//
+// It reuses the ordinary lease and claim: a submission leaves the document
+// 'ingesting' with the lease ClaimDocuments already set, so the next poll
+// happens on the next claim after that lease passes, and two replicas can
+// never submit the same content twice at once, exactly as they can never
+// both embed the same chunk at once on the pgvector or S3 Vectors path.
+func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.Corpus, document domain.Document) (Result, error) {
+	if pipeline.knowledgeBase == nil {
+		return Result{}, fmt.Errorf("this deployment cannot reach its knowledge base: %w", domain.ErrInvalid)
+	}
+	at := pipeline.now().UTC()
+
+	// kb_synced_hash is the content_sha256 last handed to the knowledge base.
+	// It differs from the document's own content_sha256 exactly when this
+	// content has never been submitted, or was submitted under an id the
+	// knowledge base then lost or only partially indexed — both handled by
+	// submitting again, since re-ingesting the same custom document id
+	// replaces whatever was there.
+	if document.ContentSHA256 != document.KBSyncedHash {
+		var text string
+		if !document.HasOriginal() {
+			body, err := pipeline.store.DocumentBody(ctx, document.ID)
+			if err != nil {
+				return Result{}, fmt.Errorf("read the document text: %w", err)
+			}
+			text = body
+		}
+		if err := pipeline.knowledgeBase.Submit(ctx, corpus, document, text); err != nil {
+			return Result{}, err
+		}
+		if err := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document.ID, document.ContentSHA256, at); err != nil {
+			return Result{}, err
+		}
+		pipeline.logger.InfoContext(ctx, "submitted a document to the knowledge base",
+			"document_id", document.ID, "corpus_id", corpus.ID)
+		return Result{}, pipeline.store.RecheckDocumentAt(ctx, document.ID, at.Add(knowledgeBaseRecheck))
+	}
+
+	statuses, err := pipeline.knowledgeBase.Statuses(ctx, []string{document.ID})
+	if err != nil {
+		return Result{}, err
+	}
+	status := statuses[document.ID]
+	switch status.Code {
+	case "INDEXED", "IGNORED":
+		// IGNORED, measured against the validated behaviour, is what
+		// re-ingesting content the knowledge base already holds unchanged
+		// looks like — nothing rag's own dedup would call a failure either.
+		return Result{}, pipeline.markKnowledgeBaseReady(ctx, corpus, document, at)
+	case "FAILED", "METADATA_UPDATE_FAILED":
+		reason := status.Reason
+		if reason == "" {
+			reason = "the knowledge base reported " + status.Code
+		}
+		// A failure the knowledge base itself calls final is unlikely to
+		// come out differently for trying again with identical content —
+		// the same reasoning that fails a document which chunks to nothing
+		// at once rather than spending every attempt on the same rejection.
+		return Result{}, fmt.Errorf("%s: %w", reason, domain.ErrInvalid)
+	case "METADATA_PARTIALLY_INDEXED", "NOT_FOUND", "DELETING", "DELETE_IN_PROGRESS":
+		// The knowledge base has finished with this attempt — successfully
+		// in part, not at all, or by losing the document some other way —
+		// rather than still working on it, so polling again on the same
+		// submission would only ask the same question and get the same
+		// answer. Forgetting that this content was ever synced is what
+		// makes the next claim submit it again instead, which tenant
+		// isolation depends on actually completing: a corpus_id or
+		// organization_id attribute that only partially landed is a risk to
+		// it, not a success.
+		if resetErr := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document.ID, "", at); resetErr != nil {
+			return Result{}, resetErr
+		}
+		return Result{}, fmt.Errorf("the knowledge base reported %s for this document; resubmitting", status.Code)
+	default:
+		// STARTING, PENDING, IN_PROGRESS and PARTIALLY_INDEXED all mean
+		// "still working": leave the document ingesting and ask again
+		// shortly.
+		return Result{}, pipeline.store.RecheckDocumentAt(ctx, document.ID, at.Add(knowledgeBaseRecheck))
+	}
+}
+
+// markKnowledgeBaseReady records a document the knowledge base finished
+// indexing. There is no chunk count of rag's own to report — Bedrock chunked
+// it, not rag — so the field stays zero for a document on this backend,
+// which is an honest answer rather than a guess.
+func (pipeline *Pipeline) markKnowledgeBaseReady(ctx context.Context, corpus domain.Corpus, document domain.Document, at time.Time) error {
+	indexed, err := pipeline.event(rageventsv1.DocumentIndexedDetailType, rageventsv1.DocumentIndexed{
+		DocumentID: document.ID, CorpusID: document.CorpusID, OrganizationID: document.OrganizationID,
+		Provider: string(corpus.Spec.Provider), Model: corpus.Spec.Model, IndexedAt: at,
+	})
+	if err != nil {
+		return err
+	}
+	if err := pipeline.store.MarkDocumentReady(ctx, document.ID, 0, at, indexed); err != nil {
+		return err
+	}
+	// Staged text left behind after indexing costs storage, not correctness,
+	// so a failure to remove it is logged rather than failing the document.
+	if err := pipeline.knowledgeBase.DeleteStaged(ctx, corpus, document); err != nil {
+		pipeline.logger.WarnContext(ctx, "deleting a document's staged text failed",
+			"document_id", document.ID, "corpus_id", corpus.ID, "error", err)
+	}
+	pipeline.logger.InfoContext(ctx, "a knowledge base finished indexing a document",
+		"document_id", document.ID, "corpus_id", corpus.ID, "status", "INDEXED")
+	return nil
 }
 
 // sliceChunks is how many changed chunks are embedded and written at a time. A

@@ -85,26 +85,65 @@ const (
 	// per stored vector and is where large, cold or archival corpora belong;
 	// the chunk text stays in PostgreSQL either way.
 	BackendS3Vectors Backend = "s3vectors"
+	// BackendBedrockKB hands a corpus to a fully managed Amazon Bedrock
+	// knowledge base: one per deployment, which parses (including PDF and
+	// Office files), chunks, embeds and retrieves on rag's behalf. Nothing
+	// here cuts a chunk or calls an embedding model for a corpus on this
+	// backend — there is no chunk text to keep in PostgreSQL either, since
+	// Bedrock never hands it back.
+	BackendBedrockKB Backend = "bedrock-kb"
 )
 
 func (backend Backend) Valid() bool {
-	return backend == BackendPgvector || backend == BackendS3Vectors
+	switch backend {
+	case BackendPgvector, BackendS3Vectors, BackendBedrockKB:
+		return true
+	default:
+		return false
+	}
 }
 
 // Supports reports whether a backend can serve a metric at all.
 //
 // S3 Vectors indexes on cosine or euclidean only. Accepting an inner-product
 // corpus for it and finding out at the first write would leave a corpus that
-// exists, accepts documents and can never be searched.
+// exists, accepts documents and can never be searched. A Bedrock knowledge
+// base is narrower still: it embeds with exactly one model, chosen once when
+// it was created, so RequiredEmbeddingSpec is what actually gates a corpus
+// there — this only rejects a metric nothing could ever satisfy.
 func (backend Backend) Supports(metric Metric) error {
 	if backend == BackendS3Vectors && metric == MetricInnerProduct {
 		return fmt.Errorf("S3 Vectors indexes on %q or %q, not %q: %w",
 			MetricCosine, MetricL2, MetricInnerProduct, ErrInvalid)
 	}
+	if backend == BackendBedrockKB && metric != MetricCosine {
+		return fmt.Errorf("a Bedrock knowledge base always embeds with %q, not %q: %w",
+			MetricCosine, metric, ErrInvalid)
+	}
 	if !metric.Valid() {
 		return fmt.Errorf("embedding metric is not allowed: %w", ErrInvalid)
 	}
 	return nil
+}
+
+// BedrockKnowledgeBaseEmbeddingSpec is the only spec a bedrock-kb corpus may
+// pin, matching the knowledge base OpenTofu creates outside rag: Titan v2 at
+// 1024 dimensions, cosine. See RequiredEmbeddingSpec.
+var BedrockKnowledgeBaseEmbeddingSpec = EmbeddingSpec{
+	Provider: ProviderBedrock, Model: "amazon.titan-embed-text-v2:0", Dimensions: 1024, Metric: MetricCosine,
+}
+
+// RequiredEmbeddingSpec is the embedding spec a backend fixes for every
+// corpus on it, when it fixes one. A Bedrock knowledge base embeds with
+// whatever model it was created with, chosen once by OpenTofu outside rag,
+// so a corpus on this backend cannot pin a spec of its own the way one on
+// pgvector or S3 Vectors can; ok is false for a backend that leaves the
+// choice to the corpus.
+func (backend Backend) RequiredEmbeddingSpec() (spec EmbeddingSpec, ok bool) {
+	if backend == BackendBedrockKB {
+		return BedrockKnowledgeBaseEmbeddingSpec, true
+	}
+	return EmbeddingSpec{}, false
 }
 
 // InputKind says which side of the search a text is on.

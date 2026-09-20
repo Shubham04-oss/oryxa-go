@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
@@ -69,7 +71,7 @@ func TestTeamForbiddenFromTeamsIsConcealedAsNotFound(t *testing.T) {
 
 func TestTeamScopeIsUnavailableWithoutATeamsService(t *testing.T) {
 	store := newFakeStore()
-	service := New(store, fakeDirectory{}, nil, &fakeFiles{}, nil, newFakeVectors(), &fakeRetriever{}, &fakeGenerator{}, Defaults{}, nil)
+	service := New(store, fakeDirectory{}, nil, &fakeFiles{}, nil, newFakeVectors(), &fakeRetriever{}, &fakeGenerator{}, nil, Defaults{}, nil)
 	if _, err := service.CreateCorpus(context.Background(), creds("user-creator"), testOrganization, CreateCorpusInput{
 		Name: "Handbook", Scope: domain.ScopeTeam, TeamID: "team_eng",
 	}); !errors.Is(err, domain.ErrInvalid) {
@@ -125,6 +127,44 @@ func TestCreateCorpusByScopeAndRole(t *testing.T) {
 				t.Fatalf("the corpus was not recorded: %v", err)
 			}
 		})
+	}
+}
+
+// TestCreateCorpusRejectsAMismatchedBedrockKBSpec: a knowledge base embeds
+// with whatever model it was created with, not with whatever a caller asks
+// for, so a corpus naming a different one is refused before it is recorded —
+// the database would refuse it too (see the postgres package's own
+// integration test), but the service is what a caller actually sees.
+func TestCreateCorpusRejectsAMismatchedBedrockKBSpec(t *testing.T) {
+	h := newHarness()
+	_, err := h.service.CreateCorpus(context.Background(), creds("user-creator"), testOrganization, CreateCorpusInput{
+		Name: "Handbook", Backend: domain.BackendBedrockKB, Dimensions: 512,
+	})
+	if !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("error = %v, want ErrInvalid", err)
+	}
+	if !strings.Contains(err.Error(), "knowledge base's own embedding spec") {
+		t.Fatalf("error = %v, want it to name what a bedrock-kb corpus must use", err)
+	}
+}
+
+// TestCreateCorpusOnBedrockKBWithTheRightSpecSucceeds is the positive case:
+// the harness's own defaults already resolve to Titan v2 at 1024 dimensions,
+// cosine, so naming no embedding configuration at all is what a caller who
+// just wants a knowledge base corpus actually does.
+func TestCreateCorpusOnBedrockKBWithTheRightSpecSucceeds(t *testing.T) {
+	h := newHarness()
+	corpus, err := h.service.CreateCorpus(context.Background(), creds("user-creator"), testOrganization, CreateCorpusInput{
+		Name: "Handbook", Backend: domain.BackendBedrockKB,
+	})
+	if err != nil {
+		t.Fatalf("CreateCorpus: %v", err)
+	}
+	if corpus.Backend != domain.BackendBedrockKB {
+		t.Fatalf("backend = %q", corpus.Backend)
+	}
+	if corpus.Spec != domain.BedrockKnowledgeBaseEmbeddingSpec {
+		t.Fatalf("spec = %+v, want the knowledge base's own %+v", corpus.Spec, domain.BedrockKnowledgeBaseEmbeddingSpec)
 	}
 }
 
@@ -195,7 +235,7 @@ func TestSearchAndAnswerHonorTheReadGate(t *testing.T) {
 
 func TestAnswerWithoutAGeneratorConfigured(t *testing.T) {
 	h := newHarness()
-	h.service = New(h.store, fakeDirectory{}, h.teams, h.files, h.documents, h.vectors, h.retriever, nil, Defaults{}, nil)
+	h.service = New(h.store, fakeDirectory{}, h.teams, h.files, h.documents, h.vectors, h.retriever, nil, h.knowledgeBase, Defaults{}, nil)
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})
 
 	// This check runs before the corpus is even looked up: a deployment with
@@ -346,7 +386,7 @@ func TestAddDocumentFetchesFromFilesAsTheCaller(t *testing.T) {
 
 func TestAddDocumentFromAFileNeedsFilesConfigured(t *testing.T) {
 	h := newHarness()
-	h.service = New(h.store, fakeDirectory{}, h.teams, nil, nil, h.vectors, h.retriever, h.generator, Defaults{}, nil)
+	h.service = New(h.store, fakeDirectory{}, h.teams, nil, nil, h.vectors, h.retriever, h.generator, h.knowledgeBase, Defaults{}, nil)
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})
 	if _, err := h.service.AddDocument(context.Background(), creds("user-creator"), testOrganization, corpus.ID, AddDocumentInput{
 		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_1"},
@@ -372,6 +412,35 @@ func TestDeleteDocumentHonorsTheWriteGateAndDeletesVectorsBeforeRows(t *testing.
 	}
 	if got := h.vectors.store.deleted[corpus.ID]; len(got) != 2 {
 		t.Fatalf("vectors deleted for %s = %v, want the document's two chunks", corpus.ID, got)
+	}
+}
+
+// TestDeleteDocumentOnBedrockKBUsesTheKnowledgeBaseNotVectors: a bedrock-kb
+// corpus has no chunk rows for ChunkIDs to find, so deletion must go through
+// the knowledge base by document id instead of silently doing nothing the
+// way an empty chunk list would for vectorstore.Store.Delete.
+func TestDeleteDocumentOnBedrockKBUsesTheKnowledgeBaseNotVectors(t *testing.T) {
+	h := newHarness()
+	corpus := seedCorpus(h.store, domain.Corpus{
+		Slug: "kb1", Scope: domain.ScopeMember, MemberID: "user-creator",
+		Backend: domain.BackendBedrockKB, Spec: domain.BedrockKnowledgeBaseEmbeddingSpec,
+	})
+	document := seedDocument(h.store, domain.Document{CorpusID: corpus.ID, Status: domain.StatusReady, ContentSHA256: "hash-1"})
+
+	if err := h.service.DeleteDocument(context.Background(), creds("user-creator"), testOrganization, corpus.ID, document.ID); err != nil {
+		t.Fatalf("DeleteDocument() error = %v", err)
+	}
+	if _, err := h.store.Document(context.Background(), testOrganization, document.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the document still exists: %v", err)
+	}
+	if got := h.knowledgeBase.deleted; len(got) != 1 || got[0] != document.ID {
+		t.Fatalf("knowledge base deletions = %v, want exactly [%s]", got, document.ID)
+	}
+	if len(h.knowledgeBase.deletedStaged) != 1 || h.knowledgeBase.deletedStaged[0] != document.ID {
+		t.Fatalf("staged text was not cleaned up: %v", h.knowledgeBase.deletedStaged)
+	}
+	if got := h.vectors.store.deleted[corpus.ID]; len(got) != 0 {
+		t.Fatalf("vectorstore.Store.Delete was called for a bedrock-kb corpus: %v", got)
 	}
 }
 
@@ -414,6 +483,40 @@ func TestDeleteCorpusByScope(t *testing.T) {
 				t.Fatalf("vectors dropped = %v, want exactly [%s]", got, corpus.ID)
 			}
 		})
+	}
+}
+
+// TestDeleteCorpusOnBedrockKBRemovesFromTheKnowledgeBase: there is no
+// per-corpus index for a bedrock-kb corpus the way S3 Vectors has one — one
+// knowledge base serves the whole deployment — so deleting the corpus means
+// naming every document it owned to the knowledge base instead of dropping
+// one thing.
+func TestDeleteCorpusOnBedrockKBRemovesFromTheKnowledgeBase(t *testing.T) {
+	h := newHarness()
+	corpus := seedCorpus(h.store, domain.Corpus{
+		Slug: "kb1", Scope: domain.ScopeOrganization,
+		Backend: domain.BackendBedrockKB, Spec: domain.BedrockKnowledgeBaseEmbeddingSpec,
+	})
+	first := seedDocument(h.store, domain.Document{CorpusID: corpus.ID, Status: domain.StatusReady, ContentSHA256: "h1"})
+	second := seedDocument(h.store, domain.Document{CorpusID: corpus.ID, Status: domain.StatusIngesting, ContentSHA256: "h2"})
+
+	if err := h.service.DeleteCorpus(context.Background(), creds("user-owner"), testOrganization, corpus.ID); err != nil {
+		t.Fatalf("DeleteCorpus() error = %v", err)
+	}
+	if _, err := h.store.Corpus(context.Background(), testOrganization, corpus.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the corpus still exists after delete: %v", err)
+	}
+	got := h.knowledgeBase.deleted
+	if len(got) != 2 {
+		t.Fatalf("knowledge base deletions = %v, want both documents", got)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		if !slices.Contains(got, id) {
+			t.Fatalf("knowledge base deletions = %v, missing %s", got, id)
+		}
+	}
+	if len(h.vectors.store.dropped) != 0 {
+		t.Fatalf("vectorstore.Store.DropCorpus was called for a bedrock-kb corpus: %v", h.vectors.store.dropped)
 	}
 }
 

@@ -234,7 +234,12 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 		// Answering not-found tells the caller nothing they did not know.
 		return domain.ErrNotFound
 	}
-	return s.store.RemoveSource(ctx, organizationID, sourceID, s.now(), s.retractions(knowledgev1.RemovedReasonSourceRemoved))
+	pending := &pendingOriginals{}
+	if err := s.store.RemoveSource(ctx, organizationID, sourceID, s.now(), s.retractions(knowledgev1.RemovedReasonSourceRemoved, pending)); err != nil {
+		return err
+	}
+	s.deleteOriginals(ctx, pending)
+	return nil
 }
 
 // SyncSource reads a source now rather than at its next interval.
@@ -299,11 +304,15 @@ func (s *Service) Document(ctx context.Context, credentials authclient.Credentia
 	return document, nil
 }
 
-// retractions builds the events that say a source's documents are gone.
-func (s *Service) retractions(reason string) func(domain.Source, []domain.Document) ([]domain.Event, error) {
+// retractions builds the events that say a source's documents are gone, and
+// notes their originals in pending, for the caller to delete once the
+// retraction has committed: the builder runs inside the transaction, which
+// may still roll back and keep the documents.
+func (s *Service) retractions(reason string, pending *pendingOriginals) func(domain.Source, []domain.Document) ([]domain.Event, error) {
 	return func(source domain.Source, documents []domain.Document) ([]domain.Event, error) {
 		events := make([]domain.Event, 0, len(documents))
 		for _, document := range documents {
+			pending.add(document.Original)
 			event, err := s.documentRemoved(source, document, reason)
 			if err != nil {
 				return nil, err
@@ -326,4 +335,57 @@ func pausedBy(err error) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+// SetSourceKinds records what kinds of document a source indexes, for its
+// creator or an org admin: include names kinds from domain.Kinds, nil
+// returns it to the default. What the source already holds is decided again
+// on its next pass, which is brought forward, from what the judge answered
+// before rather than by asking it again.
+func (s *Service) SetSourceKinds(ctx context.Context, credentials authclient.Credentials, organizationID, sourceID string, include []string) (domain.Source, error) {
+	caller, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if caller.Agent {
+		return domain.Source{}, fmt.Errorf("an agent cannot change what a source indexes: %w", domain.ErrForbidden)
+	}
+	source, err := s.store.Source(ctx, organizationID, sourceID)
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
+		// Answering not-found tells the caller nothing they did not know.
+		return domain.Source{}, domain.ErrNotFound
+	}
+	if s.judge == nil || !gated(source) {
+		return domain.Source{}, fmt.Errorf("this source's documents are not judged, so there are no kinds to choose: %w", domain.ErrConflict)
+	}
+	if include != nil {
+		if err := domain.ValidateKinds(include); err != nil {
+			return domain.Source{}, err
+		}
+		chosen := map[string]bool{}
+		for _, name := range include {
+			chosen[name] = true
+		}
+		// Kept in the order kinds are shown, once each.
+		include = include[:0:0]
+		for _, kind := range domain.Kinds {
+			if chosen[kind.Name] {
+				include = append(include, kind.Name)
+			}
+		}
+		if len(include) == 0 {
+			return domain.Source{}, fmt.Errorf("choose at least one kind of document; to index nothing, remove the source: %w", domain.ErrInvalid)
+		}
+	}
+	changed, err := s.store.SetSourceKinds(ctx, organizationID, sourceID, include, s.now())
+	if err != nil {
+		return domain.Source{}, err
+	}
+	if !changed {
+		return domain.Source{}, domain.ErrNotFound
+	}
+	return s.store.Source(ctx, organizationID, sourceID)
 }

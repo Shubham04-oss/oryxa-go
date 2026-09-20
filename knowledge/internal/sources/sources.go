@@ -43,6 +43,21 @@ type Page struct {
 	// Watermark is the newest change this page saw, for a provider that reads
 	// by time rather than by page.
 	Watermark *time.Time
+	// Token is Watermark's counterpart for a provider whose watermark is an
+	// opaque cursor rather than a moment, such as Drive's
+	// changes.startPageToken or Gmail's historyId. It is carried into
+	// domain.Cursor.Token the same way Watermark is carried into
+	// Cursor.Watermark: read back on the next incremental pass, and moved
+	// only once this pass drains. An extractor that reads by time leaves it
+	// empty and never sets it.
+	Token string
+	// Removed is the external ids an incremental page's own provider already
+	// said are gone — Drive's changes feed, Gmail's history — so the caller
+	// retracts them now rather than waiting for the next full sweep to
+	// notice the same thing the slow way. Nil for an extractor that has no
+	// such feed; a full pass never needs it, since it retracts everything it
+	// did not see once it drains.
+	Removed []string
 }
 
 // Request is what to read, and what to read it with.
@@ -99,6 +114,15 @@ func (registry Registry) Providers() []string {
 // nothing. It is deliberately modest: a page is the unit of work a lease has
 // to cover, and a smaller one resumes more precisely.
 const DefaultLimit = 100
+
+// MaxOriginalBytes bounds a document whose own bytes are kept as they are
+// rather than read as text — a PDF, an Office file. It is what an extractor
+// checks before downloading one at all, so a file too large to keep is never
+// pulled into memory just to be discarded, and it is also the ceiling this
+// package's own HTTP client and Composio's binary indirection (composio.go)
+// hold a downloaded file to, so the two can never disagree about how large
+// is too large.
+const MaxOriginalBytes = 50 << 20
 
 // Limit keeps a caller's page size inside what a provider will answer.
 func Limit(requested, maximum int) int {

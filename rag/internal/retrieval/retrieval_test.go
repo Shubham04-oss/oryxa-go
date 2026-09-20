@@ -151,7 +151,7 @@ func TestHybridFusesBothRetrievers(t *testing.T) {
 		{ChunkID: "chk_a", Score: 0.95}, {ChunkID: "chk_b", Score: 0.9}, {ChunkID: "chk_c", Score: 0.85},
 	}}
 	embedder := &fakeEmbedder{}
-	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{embedder}, nil, nil)
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{embedder}, nil, nil, nil)
 
 	results, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "how does rotation work?", TopK: 4})
 	if err != nil {
@@ -194,7 +194,7 @@ func TestFusedScoreIsOneWhenEveryRetrieverRanksItFirst(t *testing.T) {
 	// not a dial anyone can set.
 	chunks := &fakeChunks{lexical: []domain.ScoredChunk{{ChunkID: "chk_a", Score: 0.9}}}
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{{ChunkID: "chk_a", Score: 0.95}}}
-	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 
 	results, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q"})
 	if err != nil {
@@ -208,7 +208,7 @@ func TestFusedScoreIsOneWhenEveryRetrieverRanksItFirst(t *testing.T) {
 func TestQueryIsEmbeddedAsAQuestionNotAPassage(t *testing.T) {
 	t.Parallel()
 	embedder := &fakeEmbedder{}
-	retriever := New(&fakeChunks{}, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{embedder}, nil, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{embedder}, nil, nil, nil)
 	if _, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", Mode: domain.ModeDense}); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestModesRunOnlyWhatTheyNeed(t *testing.T) {
 			chunks := &fakeChunks{lexical: []domain.ScoredChunk{{ChunkID: "chk_a", Score: 1}}}
 			vectors := &fakeVectorStore{hits: []vectorstore.Hit{{ChunkID: "chk_a", Score: 1}}}
 			embedder := &fakeEmbedder{}
-			retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{embedder}, nil, nil)
+			retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{embedder}, nil, nil, nil)
 			if _, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", Mode: testCase.mode}); err != nil {
 				t.Fatalf("Search: %v", err)
 			}
@@ -259,7 +259,7 @@ func TestDenseOnlyKeepsItsOwnSimilarity(t *testing.T) {
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{
 		{ChunkID: "chk_a", Score: 0.91}, {ChunkID: "chk_b", Score: 0.42},
 	}}
-	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	results, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", Mode: domain.ModeDense})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -275,7 +275,7 @@ func TestFilterReachesBothRetrievers(t *testing.T) {
 	// A filter that only narrowed one half would leak through the other.
 	chunks := &fakeChunks{}
 	vectors := &fakeVectorStore{}
-	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	filter := domain.Filter{Conditions: []domain.Condition{
 		{Key: "team", Operator: domain.OperatorEqual, Values: []string{"platform"}},
 	}}
@@ -295,7 +295,7 @@ func TestOverFetchAsksForMoreThanIsWanted(t *testing.T) {
 	// Fusing two lists of exactly TopK would discard the chunks only one
 	// retriever ranked well, which is the point of running both.
 	vectors := &fakeVectorStore{}
-	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	if _, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", TopK: 5, OverFetch: 4}); err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestRerankReordersAndReplacesTheScore(t *testing.T) {
 	// The cross-encoder disagrees with the fused order: the third candidate
 	// is the one that actually answers the question.
 	reranker := &fakeReranker{scores: []Scored{{Index: 2, Score: 0.99}, {Index: 0, Score: 0.4}, {Index: 1, Score: 0.1}}}
-	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, reranker, nil)
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, reranker, nil, nil)
 
 	results, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", Mode: domain.ModeDense, Rerank: true, TopK: 3})
 	if err != nil {
@@ -342,7 +342,7 @@ func TestRerankIsOptInAndNotUsedOtherwise(t *testing.T) {
 	t.Parallel()
 	reranker := &fakeReranker{}
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{{ChunkID: "chk_a", Score: 0.9}}}
-	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, reranker, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, reranker, nil, nil)
 	results, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", Mode: domain.ModeDense})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -363,7 +363,7 @@ func TestRerankFailureFallsBackToTheFusedOrder(t *testing.T) {
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{
 		{ChunkID: "chk_a", Score: 0.9}, {ChunkID: "chk_b", Score: 0.8},
 	}}
-	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, reranker, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, reranker, nil, nil)
 	results, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", Mode: domain.ModeDense, Rerank: true})
 	if err != nil {
 		t.Fatalf("Search returned an error when only the reranker failed: %v", err)
@@ -382,7 +382,7 @@ func TestRerankRefusesAnIndexOutsideTheBatch(t *testing.T) {
 	// citation to a passage the answer never saw.
 	reranker := &fakeReranker{scores: []Scored{{Index: 9, Score: 1}}}
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{{ChunkID: "chk_a", Score: 0.9}}}
-	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, reranker, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, reranker, nil, nil)
 	results, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", Mode: domain.ModeDense, Rerank: true})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -405,7 +405,7 @@ func TestDiversifySuppressesNearDuplicates(t *testing.T) {
 		{ChunkID: "chk_a", Score: 0.95}, {ChunkID: "chk_b", Score: 0.94},
 		{ChunkID: "chk_c", Score: 0.93}, {ChunkID: "chk_d", Score: 0.4},
 	}}
-	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 
 	// Pure relevance takes the three copies of the same passage.
 	plain, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", Mode: domain.ModeDense, TopK: 2})
@@ -439,7 +439,7 @@ func TestMinScoreDropsWeakMatches(t *testing.T) {
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{
 		{ChunkID: "chk_a", Score: 0.8}, {ChunkID: "chk_b", Score: 0.2},
 	}}
-	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	results, err := retriever.Search(context.Background(), testCorpus(),
 		domain.Query{Text: "q", Mode: domain.ModeDense, MinScore: 0.5})
 	if err != nil {
@@ -460,7 +460,7 @@ func TestChunkDeletedBetweenIndexAndReadIsDropped(t *testing.T) {
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{
 		{ChunkID: "chk_a", Score: 0.9}, {ChunkID: "chk_b", Score: 0.85}, {ChunkID: "chk_c", Score: 0.8},
 	}}
-	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	results, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", Mode: domain.ModeDense})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -472,7 +472,7 @@ func TestChunkDeletedBetweenIndexAndReadIsDropped(t *testing.T) {
 
 func TestEmptyCorpusReturnsNothingNotAnError(t *testing.T) {
 	t.Parallel()
-	retriever := New(&fakeChunks{}, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	results, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q"})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -484,7 +484,7 @@ func TestEmptyCorpusReturnsNothingNotAnError(t *testing.T) {
 
 func TestSearchRejectsAnUnusableQuery(t *testing.T) {
 	t.Parallel()
-	retriever := New(&fakeChunks{}, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	if _, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "   "}); err == nil {
 		t.Fatal("an empty query was accepted")
 	}
@@ -500,7 +500,7 @@ func TestResultsAreDeterministic(t *testing.T) {
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{
 		{ChunkID: "chk_a", Score: 0.9}, {ChunkID: "chk_b", Score: 0.9}, {ChunkID: "chk_c", Score: 0.9},
 	}}
-	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	first, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q", TopK: 5})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
@@ -591,7 +591,7 @@ func TestDenseFailureIsReported(t *testing.T) {
 	// Unlike a reranker, a retriever that fails means the answer would be
 	// built from the wrong passages. That has to surface.
 	vectors := &fakeVectorStore{err: fmt.Errorf("index unavailable")}
-	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(&fakeChunks{}, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	if _, err := retriever.Search(context.Background(), testCorpus(), domain.Query{Text: "q"}); err == nil {
 		t.Fatal("a failing vector store was swallowed")
 	}
@@ -623,7 +623,7 @@ func TestRerankPoolLargerThanTheCeiling(t *testing.T) {
 		return scored, nil
 	}}
 	retriever := New(&fakeChunks{}, fakeVectors{&fakeVectorStore{hits: hits}},
-		fakeEmbedders{&fakeEmbedder{}}, reranker, nil)
+		fakeEmbedders{&fakeEmbedder{}}, reranker, nil, nil)
 
 	results, err := retriever.Search(context.Background(), testCorpus(),
 		domain.Query{Text: "q", Mode: domain.ModeDense, TopK: 100, OverFetch: 2, Rerank: true})
@@ -661,7 +661,7 @@ func TestFusionIgnoresARetrieverThatFoundNothing(t *testing.T) {
 	t.Parallel()
 	chunks := &fakeChunks{} // the lexical side matches nothing
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{{ChunkID: "chk_a", Score: 0.9}}}
-	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 
 	results, err := retriever.Search(context.Background(), testCorpus(),
 		domain.Query{Text: "q", Mode: domain.ModeHybrid, MinScore: 0.9})
@@ -688,7 +688,7 @@ func TestDiversityZeroIsHonoured(t *testing.T) {
 	vectors := &fakeVectorStore{hits: []vectorstore.Hit{
 		{ChunkID: "chk_a", Score: 0.95}, {ChunkID: "chk_b", Score: 0.94}, {ChunkID: "chk_c", Score: 0.1},
 	}}
-	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil)
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
 	results, err := retriever.Search(context.Background(), testCorpus(),
 		domain.Query{Text: "q", Mode: domain.ModeDense, TopK: 2, Diversity: pointerTo(0.0)})
 	if err != nil {

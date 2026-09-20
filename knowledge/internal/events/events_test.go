@@ -66,6 +66,10 @@ func (app *fakeApplication) FileStored(context.Context, filesv1.ObjectCreated) e
 	return app.act(filesv1.ObjectCreatedDetailType)
 }
 
+func (app *fakeApplication) FileDeleted(context.Context, filesv1.ObjectDeleted) error {
+	return app.act(filesv1.ObjectDeletedDetailType)
+}
+
 func (app *fakeApplication) ConnectionExpired(context.Context, appsv1.ConnectionExpired) error {
 	return app.act(appsv1.ConnectionExpiredDetailType)
 }

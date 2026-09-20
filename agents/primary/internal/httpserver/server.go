@@ -130,6 +130,13 @@ type OrganizationAgentContext interface {
 	ListFollowUps(context.Context, string, int) ([]organizationagents.FollowUp, error)
 }
 
+// Preferences keeps what a member chose about Krude's updates from their
+// apps. wakeups.Store implements it.
+type Preferences interface {
+	AppUpdates(ctx context.Context, organizationID, memberID string) (bool, error)
+	SetAppUpdates(ctx context.Context, organizationID, memberID string, on bool) error
+}
+
 // Config is how the server runs.
 type Config struct {
 	// AllowedOrigins may send cookie-authenticated requests that change
@@ -140,6 +147,9 @@ type Config struct {
 	// Unavailable, when set, is why the service cannot run agents here: every
 	// thread route answers 503 with it, and the health check still passes.
 	Unavailable string
+	// Preferences keeps what a member chose about updates from their apps;
+	// nil answers that none are kept here.
+	Preferences Preferences
 	// Agents enables persistent member-owned agent routes. It may be nil only
 	// when Unavailable is set or in a host that intentionally exposes only the
 	// legacy primary-thread API.
@@ -171,6 +181,7 @@ type Server struct {
 	allowedOrigins      map[string]struct{}
 	runTimeout          time.Duration
 	unavailable         string
+	preferences         Preferences
 	logger              *slog.Logger
 	mux                 *http.ServeMux
 	patterns            []string
@@ -194,6 +205,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		allowedOrigins:      map[string]struct{}{},
 		runTimeout:          config.RunTimeout,
 		unavailable:         config.Unavailable,
+		preferences:         config.Preferences,
 		logger:              logger,
 		mux:                 http.NewServeMux(),
 	}
@@ -251,7 +263,61 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}", server.deleteTeamspaceContribution)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.listTeamspaceEntries)
 	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.publishTeamspaceEntry)
+	server.handle("GET /v1/organizations/{organizationID}/preferences", server.getPreferences)
+	server.handle("PUT /v1/organizations/{organizationID}/preferences", server.setPreferences)
 	return server
+}
+
+// preferencesView is what a member chose about Krude, in this organization.
+type preferencesView struct {
+	// AppUpdates says whether Krude tells the member what their apps report.
+	AppUpdates bool `json:"app_updates"`
+}
+
+// getPreferences reads the calling member's own preferences.
+func (server *Server) getPreferences(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.preferences == nil {
+		writeError(writer, http.StatusServiceUnavailable, "preferences_unavailable", "Preferences are not kept on this server.")
+		return
+	}
+	on, err := server.preferences.AppUpdates(request.Context(), member.OrganizationID, member.UserID)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, preferencesView{AppUpdates: on})
+}
+
+// setPreferences records the calling member's own preferences. An agent
+// acting for them cannot: member refuses it.
+func (server *Server) setPreferences(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.preferences == nil {
+		writeError(writer, http.StatusServiceUnavailable, "preferences_unavailable", "Preferences are not kept on this server.")
+		return
+	}
+	var body struct {
+		AppUpdates *bool `json:"app_updates"`
+	}
+	if !server.decode(writer, request, &body) {
+		return
+	}
+	if body.AppUpdates == nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "app_updates is required.")
+		return
+	}
+	if err := server.preferences.SetAppUpdates(request.Context(), member.OrganizationID, member.UserID, *body.AppUpdates); err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, preferencesView{AppUpdates: *body.AppUpdates})
 }
 
 func scopeOf(member threads.Member) managedagents.Scope {

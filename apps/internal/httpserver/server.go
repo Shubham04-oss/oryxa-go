@@ -487,7 +487,10 @@ func (server *Server) receiveWebhook(writer http.ResponseWriter, request *http.R
 		server.handleError(writer, request, err)
 		return
 	}
-	writer.WriteHeader(http.StatusNoContent)
+	// Composio counts only 200 and 201 as delivered. A 204 is a failure to
+	// it: it logs the delivery as failed and sends it again, so every event
+	// arrived four times.
+	writer.WriteHeader(http.StatusOK)
 }
 
 func (server *Server) credentials(writer http.ResponseWriter, request *http.Request) (authclient.Credentials, bool) {

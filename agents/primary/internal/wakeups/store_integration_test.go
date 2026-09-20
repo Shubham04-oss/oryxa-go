@@ -42,6 +42,7 @@ func testStore(t *testing.T) (*Store, string) {
 	t.Cleanup(func() {
 		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM agents_primary.wakeup_events WHERE organization_id = $1`, organizationID)
 		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM agents_primary.wakeup_threads WHERE organization_id = $1`, organizationID)
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM agents_primary.wakeup_preferences WHERE organization_id = $1`, organizationID)
 		database.Close()
 	})
 	return store, organizationID
@@ -325,6 +326,106 @@ func TestForgettingRemovesAMembersOrAnOrganizationsWakeUps(t *testing.T) {
 	if err := store.Forget(ctx, "", ""); err == nil {
 		t.Fatal("Forget with no organization would forget everyone's wake-ups")
 	}
+}
+
+// TestAMemberWhoTurnsAppUpdatesOffIsToldNothing: updates are on until a
+// member turns them off; then what waits is dropped, nothing new is kept, and
+// only a wake-up already running finishes. Turning them on again starts
+// afresh.
+func TestAMemberWhoTurnsAppUpdatesOffIsToldNothing(t *testing.T) {
+	store, organizationID := testStore(t)
+	ctx := context.Background()
+	rule := Rule{Size: 1, MaxWait: time.Hour, Largest: 20}
+	if on, err := store.AppUpdates(ctx, organizationID, "user_a"); err != nil || !on {
+		t.Fatalf("AppUpdates() before any choice = %t, %v; want on", on, err)
+	}
+	record(t, store, organizationID, "user_a", "1")
+	record(t, store, organizationID, "user_a", "2")
+	record(t, store, organizationID, "user_b", "1")
+	claimed, err := store.Claim(ctx, Rule{Size: 1, MaxWait: time.Hour, Largest: 20}, time.Minute, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var running Batch
+	for _, batch := range ours(claimed, organizationID) {
+		if batch.MemberID == "user_b" {
+			running = batch
+		} else if err := store.Unclaim(ctx, eventIDs(batch)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if running.ID == "" {
+		t.Fatalf("claimed %+v, want a batch of user_b's", claimed)
+	}
+
+	for _, member := range []string{"user_a", "user_b"} {
+		if err := store.SetAppUpdates(ctx, organizationID, member, false); err != nil {
+			t.Fatal(err)
+		}
+		if on, err := store.AppUpdates(ctx, organizationID, member); err != nil || on {
+			t.Fatalf("AppUpdates(%s) after turning off = %t, %v", member, on, err)
+		}
+	}
+	// user_a's waiting events are gone; user_b's running wake-up keeps its own.
+	var waiting, runningLeft int
+	if err := store.database.Pool.QueryRow(ctx, `
+		SELECT count(*) FILTER (WHERE member_id = 'user_a'), count(*) FILTER (WHERE batch_id = $2)
+		FROM agents_primary.wakeup_events WHERE organization_id = $1 AND handled_at IS NULL`,
+		organizationID, running.ID).Scan(&waiting, &runningLeft); err != nil {
+		t.Fatal(err)
+	}
+	if waiting != 0 || runningLeft != len(running.Events) {
+		t.Fatalf("after turning off: %d of user_a's events wait, %d of the running batch's are left; want 0 and %d", waiting, runningLeft, len(running.Events))
+	}
+	if err := store.Done(ctx, running.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	recorded, err := store.Record(ctx, Event{
+		ID: organizationID + "_user_a_3", OrganizationID: organizationID, MemberID: "user_a",
+		Toolkit: "gmail", Trigger: "GMAIL_NEW_MESSAGE", Data: json.RawMessage(`{"n":"3"}`), ReceivedAt: time.Now().UTC(),
+	})
+	if err != nil || recorded {
+		t.Fatalf("Record() while off = %t, %v; want nothing kept", recorded, err)
+	}
+	if err := store.SetAppUpdates(ctx, organizationID, "user_b", true); err != nil {
+		t.Fatal(err)
+	}
+	var batch []Event
+	for _, member := range []string{"user_a", "user_b"} {
+		batch = append(batch, Event{
+			ID: organizationID + "_" + member + "_batch", OrganizationID: organizationID, MemberID: member,
+			Toolkit: "gmail", Trigger: "GMAIL_NEW_MESSAGE", Data: json.RawMessage(`{}`), ReceivedAt: time.Now().UTC(),
+		})
+	}
+	if recorded, err := store.RecordBatch(ctx, batch); err != nil || recorded != 1 {
+		t.Fatalf("RecordBatch() = %d, %v; want only user_b's, who turned updates on again", recorded, err)
+	}
+	again, err := store.Claim(ctx, rule, time.Minute, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batches := ours(again, organizationID); len(batches) != 1 || batches[0].MemberID != "user_b" || len(batches[0].Events) != 1 {
+		t.Fatalf("claimed %+v, want user_b's one new event", batches)
+	}
+
+	if err := store.SetAppUpdates(ctx, organizationID, "", false); err == nil {
+		t.Fatal("SetAppUpdates with no member was accepted")
+	}
+	if err := store.Forget(ctx, organizationID, "user_a"); err != nil {
+		t.Fatal(err)
+	}
+	if on, err := store.AppUpdates(ctx, organizationID, "user_a"); err != nil || !on {
+		t.Fatalf("AppUpdates() after user_a left = %t, %v; want the default again", on, err)
+	}
+}
+
+func eventIDs(batch Batch) []string {
+	ids := make([]string, 0, len(batch.Events))
+	for _, event := range batch.Events {
+		ids = append(ids, event.ID)
+	}
+	return ids
 }
 
 func TestDroppedUnclaimedAndStaleEvents(t *testing.T) {

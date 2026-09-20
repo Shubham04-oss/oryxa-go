@@ -70,9 +70,11 @@ type Client struct {
 }
 
 // NewClient builds the client extractors share, reading every request
-// through Composio's proxy rather than sending it directly.
+// through Composio's proxy rather than sending it directly. The doer follows
+// Composio's own link to fetch a file's bytes when a request marked with
+// AllowBinary gets one back — see composio.go.
 func NewClient(proxy Proxier) *Client {
-	return newClient(&composioDoer{proxy: proxy})
+	return newClient(&composioDoer{proxy: proxy, binaries: fetchBinary})
 }
 
 func newClient(base Doer) *Client {
@@ -86,8 +88,18 @@ func (client *Client) For(credential domain.Credential) *http.Client {
 }
 
 // Do sends one request and reads the answer, mapping the toolkit's status to
-// the reason a caller acts on.
+// the reason a caller acts on. The body is bounded by maxResponseBytes, which
+// is generous for a page of JSON and far too tight for a file — a caller
+// expecting one uses DoWithLimit instead, with AllowBinary on its context.
 func (client *Client) Do(ctx context.Context, request *http.Request, credential domain.Credential) (*Response, error) {
+	return client.DoWithLimit(ctx, request, credential, maxResponseBytes)
+}
+
+// DoWithLimit is Do with the response body bounded by maxBytes instead of
+// maxResponseBytes, for a call whose answer can legitimately be larger than a
+// page of JSON: an export or a download, bounded instead by the caller's own
+// ceiling on how large a document it will hold in memory (sources.MaxOriginalBytes).
+func (client *Client) DoWithLimit(ctx context.Context, request *http.Request, credential domain.Credential, maxBytes int) (*Response, error) {
 	response, err := client.For(credential).Do(request.WithContext(ctx))
 	if err != nil {
 		if ctx.Err() != nil {
@@ -102,12 +114,12 @@ func (client *Client) Do(ctx context.Context, request *http.Request, credential 
 		return nil, fmt.Errorf("%w: the provider did not answer", domain.ErrProviderUnavailable)
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	body, err := io.ReadAll(io.LimitReader(response.Body, int64(maxBytes)+1))
 	if err != nil {
 		return nil, fmt.Errorf("%w: the provider's answer could not be read", domain.ErrProviderUnavailable)
 	}
-	if len(body) > maxResponseBytes {
-		return nil, fmt.Errorf("the provider answered with more than %d bytes: %w", maxResponseBytes, domain.ErrInvalid)
+	if len(body) > maxBytes {
+		return nil, fmt.Errorf("the provider answered with more than %d bytes: %w", maxBytes, domain.ErrInvalid)
 	}
 	answer := &Response{Status: response.StatusCode, Header: response.Header, Body: body}
 	if answer.Status >= 200 && answer.Status < 300 {

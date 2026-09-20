@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,9 +16,13 @@ import (
 
 // fakeFiles answers a fixed listing, recording which files had bytes read.
 type fakeFiles struct {
-	objects  []filesclient.Object
-	bodies   map[string]string
-	missing  map[string]bool
+	objects []filesclient.Object
+	bodies  map[string]string
+	missing map[string]bool
+	// served overrides the content type Content answers for a file id; a file
+	// not named here answers text/markdown, matching every test written
+	// before this field existed.
+	served   map[string]string
 	listErr  error
 	fetched  []string
 	listedAs filesclient.Query
@@ -36,7 +41,11 @@ func (files *fakeFiles) Content(_ context.Context, _, fileID, _ string) ([]byte,
 	if files.missing[fileID] {
 		return nil, "", domain.ErrNotFound
 	}
-	return []byte(files.bodies[fileID]), "text/markdown", nil
+	contentType := "text/markdown"
+	if served, ok := files.served[fileID]; ok {
+		contentType = served
+	}
+	return []byte(files.bodies[fileID]), contentType, nil
 }
 
 func storedFile(id, filename, contentType string) filesclient.Object {
@@ -266,6 +275,54 @@ func TestFilesTargetRefusesAFieldNamedButLeftEmpty(t *testing.T) {
 	}
 	if err := source.Target(map[string]string{}); err != nil {
 		t.Fatalf("Target(nothing named) error = %v, want nil", err)
+	}
+}
+
+// TestFilesPassesAPDFThroughOnlyWithOriginals covers the switch WithOriginals
+// is: without it, a PDF is skipped exactly as before, and its bytes are
+// never even asked for; with it, the same file comes back as an item with
+// its real MIME and untouched bytes, ready for keepOriginal to decide what
+// to do with.
+func TestFilesPassesAPDFThroughOnlyWithOriginals(t *testing.T) {
+	files := &fakeFiles{
+		objects: []filesclient.Object{storedFile("file_1", "report.pdf", "application/pdf")},
+		bodies:  map[string]string{"file_1": "%PDF-1.4 fake"},
+		served:  map[string]string{"file_1": "application/pdf"},
+	}
+	page, err := NewFiles(files).Fetch(context.Background(), filesRequest())
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("Fetch() = %+v, want the PDF skipped without WithOriginals", page.Items)
+	}
+	if len(files.fetched) != 0 {
+		t.Fatal("read a PDF's bytes even though nothing can keep them")
+	}
+
+	page, err = NewFiles(files, WithOriginals()).Fetch(context.Background(), filesRequest())
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].MIME != "application/pdf" || string(page.Items[0].Content) != "%PDF-1.4 fake" {
+		t.Fatalf("Fetch() = %+v, want the PDF passed through with its real MIME and bytes untouched", page.Items)
+	}
+}
+
+// TestFilesSkipsAnOversizeOriginalEvenWithWithOriginals covers the memory
+// ceiling: WithOriginals is not a promise to hold anything of any size.
+func TestFilesSkipsAnOversizeOriginalEvenWithWithOriginals(t *testing.T) {
+	files := &fakeFiles{
+		objects: []filesclient.Object{storedFile("file_1", "huge.pdf", "application/pdf")},
+		bodies:  map[string]string{"file_1": strings.Repeat("a", MaxOriginalBytes+1)},
+		served:  map[string]string{"file_1": "application/pdf"},
+	}
+	page, err := NewFiles(files, WithOriginals()).Fetch(context.Background(), filesRequest())
+	if err != nil {
+		t.Fatalf("Fetch() error = %v", err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("Fetch() = %d items, want the oversize file skipped", len(page.Items))
 	}
 }
 

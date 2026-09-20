@@ -105,6 +105,18 @@ locals {
       RAG_ANSWER_PROVIDER    = "vertex"
       RAG_ANSWER_MODEL       = var.model
       RAG_RERANK_MODEL_ARN   = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.rerank_model}"
+      # The Bedrock knowledge base new corpora are indexed in, once the image
+      # knows it (rag_default_backend).
+      RAG_KNOWLEDGE_BASE_ID             = aws_bedrockagent_knowledge_base.main.id
+      RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID = aws_bedrockagent_data_source.main.data_source_id
+      RAG_KNOWLEDGE_BASE_BUCKET         = aws_s3_bucket.knowledge_base_documents.bucket
+      RAG_DEFAULT_BACKEND               = var.rag_default_backend
+      KNOWLEDGE_ORIGINALS_BUCKET        = aws_s3_bucket.knowledge_base_documents.bucket
+      # What connected apps yield is judged worth indexing, or not, before it
+      # is published: by Jev, or by the same model on the same Vertex AI
+      # project as Krude, which also decides what Jev is unsure of.
+      KNOWLEDGE_JUDGE       = var.knowledge_judge
+      KNOWLEDGE_JUDGE_MODEL = var.model
 
       GOOGLE_CLOUD_PROJECT              = var.gcp_project
       GOOGLE_CLOUD_LOCATION             = "global"
@@ -232,9 +244,38 @@ resource "aws_iam_role_policy" "task" {
         Resource = ["arn:aws:s3vectors:${var.aws_region}:${local.account_id}:bucket/${local.vectors_bucket}", "arn:aws:s3vectors:${var.aws_region}:${local.account_id}:bucket/${local.vectors_bucket}/*"]
       },
       {
+        # Ingesting or deleting a document is also authorized as
+        # StartIngestionJob on the knowledge base (AWS's service authorization
+        # reference lists what each operation needs).
+        Sid    = "KnowledgeBase"
+        Effect = "Allow"
+        Action = [
+          "bedrock:Retrieve", "bedrock:IngestKnowledgeBaseDocuments", "bedrock:GetKnowledgeBaseDocuments",
+          "bedrock:DeleteKnowledgeBaseDocuments", "bedrock:ListKnowledgeBaseDocuments", "bedrock:StartIngestionJob",
+        ]
+        Resource = aws_bedrockagent_knowledge_base.main.arn
+      },
+      {
+        # Actions with no resource type, which a statement matches only with
+        # "*": reranking, and the association check ingesting and deleting a
+        # knowledge base's documents also make.
+        Sid      = "BedrockUnscoped"
+        Effect   = "Allow"
+        Action   = ["bedrock:Rerank", "bedrock:AssociateThirdPartyKnowledgeBase"]
+        Resource = "*"
+      },
+      {
+        # Originals knowledge stores and text rag stages, for the knowledge
+        # base to read.
+        Sid      = "KnowledgeBaseDocuments"
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
+        Resource = [aws_s3_bucket.knowledge_base_documents.arn, "${aws_s3_bucket.knowledge_base_documents.arn}/*"]
+      },
+      {
         Sid      = "Bedrock"
         Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream", "bedrock:Rerank"]
+        Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
         Resource = ["arn:aws:bedrock:${var.aws_region}::foundation-model/*"]
       },
       {

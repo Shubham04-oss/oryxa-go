@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	availableSourceProviders,
 	defaultSourceIntervalSeconds,
+	effectiveKinds,
 	intervalLabel,
+	kindsSummary,
+	listKinds,
 	runStatusLabel,
+	runSummary,
 	sourceStatusLabel,
 	sourceStatusTone,
 	sourceTargetField,
@@ -12,6 +16,39 @@ import {
 	sourceTargetProblem,
 	supportsSourceProvider,
 } from "./client";
+
+afterEach(() => {
+	vi.unstubAllGlobals();
+});
+
+describe("listKinds", () => {
+	it("gets the kinds a source can index, which need no organization", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					kinds: [
+						{
+							default: true,
+							hint: "",
+							label: "Conversation",
+							name: "conversation",
+						},
+					],
+				}),
+				{ headers: { "Content-Type": "application/json" }, status: 200 },
+			),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(listKinds()).resolves.toEqual([
+			{ default: true, hint: "", label: "Conversation", name: "conversation" },
+		]);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/sources/kinds",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+});
 
 describe("availableSourceProviders / supportsSourceProvider", () => {
 	it("keeps only the connectable providers this build actually mounts", () => {
@@ -31,6 +68,15 @@ describe("availableSourceProviders / supportsSourceProvider", () => {
 		expect(supportsSourceProvider(["slack"], "github")).toBe(false);
 		expect(supportsSourceProvider(["github"], "jira")).toBe(false);
 	});
+
+	it("offers google drive and gmail once knowledge mounts them", () => {
+		expect(
+			availableSourceProviders(["gmail", "googledrive", "github"]),
+		).toEqual(["github", "googledrive", "gmail"]);
+		expect(supportsSourceProvider(["googledrive"], "googledrive")).toBe(true);
+		expect(supportsSourceProvider(["gmail"], "gmail")).toBe(true);
+		expect(supportsSourceProvider(["github"], "gmail")).toBe(false);
+	});
 });
 
 describe("sourceTargetField", () => {
@@ -43,6 +89,13 @@ describe("sourceTargetField", () => {
 		expect(sourceTargetField("slack")).toMatchObject({
 			label: "Channel ID",
 			required: true,
+		});
+		expect(sourceTargetField("googledrive")).toMatchObject({
+			required: false,
+		});
+		expect(sourceTargetField("gmail")).toMatchObject({
+			label: "Label",
+			required: false,
 		});
 	});
 });
@@ -67,6 +120,18 @@ describe("sourceTargetPayload", () => {
 			database: "db-123",
 		});
 	});
+
+	it("leaves google drive's target empty for the whole drive, or names a folder", () => {
+		expect(sourceTargetPayload("googledrive", " ")).toEqual({});
+		expect(sourceTargetPayload("googledrive", " 1AbC ")).toEqual({
+			folder: "1AbC",
+		});
+	});
+
+	it("leaves gmail's target empty for the inbox, or names a label", () => {
+		expect(sourceTargetPayload("gmail", "")).toEqual({});
+		expect(sourceTargetPayload("gmail", "SENT")).toEqual({ label: "SENT" });
+	});
 });
 
 describe("sourceTargetProblem", () => {
@@ -85,6 +150,15 @@ describe("sourceTargetProblem", () => {
 	it("never refuses notion's target: it is optional", () => {
 		expect(sourceTargetProblem("notion", "")).toBeUndefined();
 		expect(sourceTargetProblem("notion", "db-123")).toBeUndefined();
+	});
+
+	it("takes google drive's and gmail's targets blank, or as an id", () => {
+		expect(sourceTargetProblem("googledrive", "")).toBeUndefined();
+		expect(sourceTargetProblem("googledrive", "1AbC")).toBeUndefined();
+		expect(sourceTargetProblem("googledrive", "Team folder")).toBeDefined();
+		expect(sourceTargetProblem("gmail", "")).toBeUndefined();
+		expect(sourceTargetProblem("gmail", "Label_12")).toBeUndefined();
+		expect(sourceTargetProblem("gmail", "My receipts")).toBeDefined();
 	});
 });
 
@@ -106,6 +180,21 @@ describe("sourceTargetLabel", () => {
 			"Database db-123",
 		);
 		expect(sourceTargetLabel("notion", {})).toBe("All pages");
+	});
+
+	it("reads google drive's folder, or names the whole drive", () => {
+		expect(sourceTargetLabel("googledrive", {})).toBe("My Drive");
+		expect(sourceTargetLabel("googledrive", { folder: "1AbC" })).toBe(
+			"Folder 1AbC",
+		);
+	});
+
+	it("reads gmail's label, the inbox when there is none", () => {
+		expect(sourceTargetLabel("gmail", {})).toBe("Inbox");
+		expect(sourceTargetLabel("gmail", { label: "SENT" })).toBe("Sent");
+		expect(sourceTargetLabel("gmail", { label: "Label_12" })).toBe(
+			"Label Label_12",
+		);
 	});
 });
 
@@ -135,5 +224,63 @@ describe("status labels", () => {
 		expect(runStatusLabel("running")).toBe("Running");
 		expect(runStatusLabel("completed")).toBe("Completed");
 		expect(runStatusLabel("failed")).toBe("Failed");
+	});
+});
+
+describe("runSummary", () => {
+	it("names what a run skipped as noise, when it skipped any", () => {
+		expect(
+			runSummary({
+				documents_excluded: 212,
+				documents_published: 40,
+				documents_removed: 3,
+				documents_seen: 255,
+			}),
+		).toBe("40 published · 212 skipped as noise · 3 removed of 255 seen");
+	});
+
+	it("reads as before for a run that skipped nothing, or predates skipping", () => {
+		const run = {
+			documents_published: 2,
+			documents_removed: 0,
+			documents_seen: 2,
+		};
+		expect(runSummary(run)).toBe("2 published · 0 removed of 2 seen");
+		expect(runSummary({ ...run, documents_excluded: 0 })).toBe(
+			"2 published · 0 removed of 2 seen",
+		);
+	});
+});
+
+describe("effectiveKinds / kindsSummary", () => {
+	const kinds = [
+		{ default: true, hint: "", label: "Conversations", name: "conversation" },
+		{ default: true, hint: "", label: "Support cases", name: "support_case" },
+		{ default: false, hint: "", label: "Event updates", name: "event_update" },
+		{ default: false, hint: "", label: "Promotions", name: "promotion" },
+	];
+
+	it("is the default kinds until a member chooses", () => {
+		expect(effectiveKinds(kinds, undefined)).toEqual([
+			"conversation",
+			"support_case",
+		]);
+		expect(kindsSummary(kinds, undefined)).toBe("Default kinds");
+	});
+
+	it("is the member's choice once they make one", () => {
+		expect(effectiveKinds(kinds, ["conversation", "event_update"])).toEqual([
+			"conversation",
+			"event_update",
+		]);
+	});
+
+	it("names what a choice adds to and takes from the default", () => {
+		expect(kindsSummary(kinds, ["conversation", "event_update"])).toBe(
+			"+ Event updates, − Support cases",
+		);
+		expect(kindsSummary(kinds, ["conversation", "support_case"])).toBe(
+			"Default kinds",
+		);
 	});
 });

@@ -17,6 +17,8 @@ export interface Source {
 	scope: "member" | "organization" | "team";
 	status: SourceStatus;
 	sync_at?: string;
+	/** The kinds of document this source indexes; absent means the default kinds. */
+	include_kinds?: string[];
 	/** What to index at the provider, in the provider's own terms. */
 	target: Record<string, string>;
 	team_id?: string;
@@ -26,6 +28,8 @@ export interface Source {
 export type RunStatus = "completed" | "failed" | "running";
 
 export interface SyncRun {
+	/** What the run judged not worth indexing: promotions, notifications, empty files. */
+	documents_excluded?: number;
 	documents_published: number;
 	documents_removed: number;
 	documents_seen: number;
@@ -42,6 +46,10 @@ export interface SyncRun {
 
 function providersPath(): string {
 	return "/v1/sources/providers";
+}
+
+function kindsPath(): string {
+	return "/v1/sources/kinds";
 }
 
 function sourcesPath(organizationId: string): string {
@@ -68,6 +76,70 @@ export async function listProviders(): Promise<string[]> {
 		providersPath(),
 	);
 	return providers;
+}
+
+/** A kind of document a member can choose to index, as knowledge names it. */
+export interface SourceKind {
+	/** Whether a source indexes it unless its member chooses. */
+	default: boolean;
+	hint: string;
+	label: string;
+	name: string;
+}
+
+/** The kinds of document a member chooses among, in the order they are shown. */
+export async function listKinds(): Promise<SourceKind[]> {
+	const { kinds } = await apiRequest<{ kinds: SourceKind[] }>(kindsPath());
+	return kinds;
+}
+
+/** What a source indexes: its member's choice, or else the default kinds. */
+export function effectiveKinds(
+	kinds: readonly SourceKind[],
+	chosen: readonly string[] | undefined,
+): string[] {
+	if (chosen) {
+		return [...chosen];
+	}
+	return kinds.filter((kind) => kind.default).map((kind) => kind.name);
+}
+
+/** How a source's choice of kinds reads in its row. */
+export function kindsSummary(
+	kinds: readonly SourceKind[],
+	chosen: readonly string[] | undefined,
+): string {
+	if (!chosen) {
+		return "Default kinds";
+	}
+	const defaults = new Set(effectiveKinds(kinds, undefined));
+	const picked = new Set(chosen);
+	const added = kinds.filter(
+		(kind) => picked.has(kind.name) && !defaults.has(kind.name),
+	);
+	const dropped = kinds.filter(
+		(kind) => !picked.has(kind.name) && defaults.has(kind.name),
+	);
+	if (added.length === 0 && dropped.length === 0) {
+		return "Default kinds";
+	}
+	const parts = [
+		...added.map((kind) => `+ ${kind.label}`),
+		...dropped.map((kind) => `− ${kind.label}`),
+	];
+	return parts.join(", ");
+}
+
+/** Records what kinds of document a source indexes; null returns it to the default. */
+export function setSourceKinds(
+	organizationId: string,
+	sourceId: string,
+	include: readonly string[] | null,
+): Promise<Source> {
+	return apiRequest<Source>(
+		`${sourcesPath(organizationId)}${apiPath`/${sourceId}`}/kinds`,
+		{ body: { include_kinds: include }, method: "PUT" },
+	);
 }
 
 export interface SourceFilter {
@@ -150,6 +222,15 @@ export function providersQueryOptions() {
 	});
 }
 
+/** Like the providers, the kinds change only when knowledge is deployed. */
+export function kindsQueryOptions() {
+	return queryOptions({
+		queryFn: listKinds,
+		queryKey: ["knowledge", "kinds"] as const,
+		staleTime: Number.POSITIVE_INFINITY,
+	});
+}
+
 export function sourcesQueryOptions(
 	organizationId: string,
 	filter: SourceFilter = {},
@@ -181,6 +262,8 @@ export const connectableSourceProviders = [
 	"github",
 	"notion",
 	"slack",
+	"googledrive",
+	"gmail",
 ] as const;
 
 export type SourceProvider = (typeof connectableSourceProviders)[number];
@@ -231,6 +314,18 @@ const targetFields: Record<SourceProvider, SourceTargetField> = {
 		placeholder: "C0123456789",
 		required: true,
 	},
+	googledrive: {
+		help: "Docs, Sheets, Slides, PDFs and Office files: the whole Drive, or one folder and everything under it.",
+		label: "Drive or folder",
+		placeholder: "A folder's ID; leave blank for the whole Drive",
+		required: false,
+	},
+	gmail: {
+		help: "One label's mail, the Inbox unless you choose another. The first pass reads the last ninety days; attachments are left out.",
+		label: "Label",
+		placeholder: "INBOX, SENT, or a label's ID",
+		required: false,
+	},
 };
 
 export function sourceTargetField(provider: SourceProvider): SourceTargetField {
@@ -250,6 +345,10 @@ export function sourceTargetPayload(
 			return { channel: value };
 		case "notion":
 			return value === "" ? {} : { database: value };
+		case "googledrive":
+			return value === "" ? {} : { folder: value };
+		case "gmail":
+			return value === "" ? {} : { label: value };
 		default:
 			return {};
 	}
@@ -267,6 +366,12 @@ export function sourceTargetProblem(
 	if (provider === "slack" && (value === "" || /\s/.test(value))) {
 		return "Enter the channel's ID, such as C0123456789.";
 	}
+	if (provider === "googledrive" && /\s/.test(value)) {
+		return "Enter the folder's ID from its link, or leave this blank for the whole Drive.";
+	}
+	if (provider === "gmail" && /\s/.test(value)) {
+		return "Enter the label's ID, such as INBOX or SENT, not its name.";
+	}
 	return undefined;
 }
 
@@ -282,10 +387,26 @@ export function sourceTargetLabel(
 			return target.channel ? `#${target.channel}` : "Channel";
 		case "notion":
 			return target.database ? `Database ${target.database}` : "All pages";
+		case "googledrive":
+			return target.folder ? `Folder ${target.folder}` : "My Drive";
+		case "gmail":
+			return gmailLabelName(target.label ?? "INBOX");
 		default: {
 			const values = Object.values(target);
 			return values.length > 0 ? values.join(", ") : "—";
 		}
+	}
+}
+
+/** Gmail's own names for the labels it is most often indexed by. */
+function gmailLabelName(label: string): string {
+	switch (label) {
+		case "INBOX":
+			return "Inbox";
+		case "SENT":
+			return "Sent";
+		default:
+			return `Label ${label}`;
 	}
 }
 
@@ -349,6 +470,24 @@ export function sourceStatusTone(
 		default:
 			return "neutral";
 	}
+}
+
+/** What one pass did, as the runs list reads it. */
+export function runSummary(
+	run: Pick<
+		SyncRun,
+		| "documents_excluded"
+		| "documents_published"
+		| "documents_removed"
+		| "documents_seen"
+	>,
+): string {
+	const parts = [`${run.documents_published} published`];
+	if (run.documents_excluded) {
+		parts.push(`${run.documents_excluded} skipped as noise`);
+	}
+	parts.push(`${run.documents_removed} removed of ${run.documents_seen} seen`);
+	return parts.join(" · ");
 }
 
 export function runStatusLabel(status: RunStatus): string {

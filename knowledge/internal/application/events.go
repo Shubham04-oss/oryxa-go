@@ -47,11 +47,13 @@ func (s *Service) MemberRemoved(ctx context.Context, event authv1.MemberRemoved)
 // would publish their documents again and rag would build the deleted team a
 // new corpus from them.
 func (s *Service) TeamDeleted(ctx context.Context, event teamsv1.TeamDeleted) error {
+	pending := &pendingOriginals{}
 	removed, err := s.store.RemoveSourcesByTeam(ctx, event.OrganizationID, event.TeamID, s.now(),
-		s.retractions(knowledgev1.RemovedReasonTeamDeleted))
+		s.retractions(knowledgev1.RemovedReasonTeamDeleted, pending))
 	if err != nil {
 		return err
 	}
+	s.deleteOriginals(ctx, pending)
 	if len(removed) > 0 {
 		s.logger.InfoContext(ctx, "sources retired", "count", len(removed), "reason", knowledgev1.RemovedReasonTeamDeleted)
 	}
@@ -71,10 +73,12 @@ func (s *Service) pause(ctx context.Context, connectionID, reason string) error 
 }
 
 func (s *Service) retire(ctx context.Context, organizationID, createdBy, reason string) error {
-	removed, err := s.store.RemoveSources(ctx, organizationID, createdBy, s.now(), s.retractions(reason))
+	pending := &pendingOriginals{}
+	removed, err := s.store.RemoveSources(ctx, organizationID, createdBy, s.now(), s.retractions(reason, pending))
 	if err != nil {
 		return err
 	}
+	s.deleteOriginals(ctx, pending)
 	if len(removed) > 0 {
 		s.logger.InfoContext(ctx, "sources retired", "count", len(removed), "reason", reason)
 	}
@@ -82,10 +86,12 @@ func (s *Service) retire(ctx context.Context, organizationID, createdBy, reason 
 }
 
 func (s *Service) retireByConnection(ctx context.Context, connectionID, reason string) error {
-	removed, err := s.store.RemoveSourcesByConnection(ctx, connectionID, s.now(), s.retractions(reason))
+	pending := &pendingOriginals{}
+	removed, err := s.store.RemoveSourcesByConnection(ctx, connectionID, s.now(), s.retractions(reason, pending))
 	if err != nil {
 		return err
 	}
+	s.deleteOriginals(ctx, pending)
 	if len(removed) > 0 {
 		s.logger.InfoContext(ctx, "sources retired", "count", len(removed), "reason", reason)
 	}

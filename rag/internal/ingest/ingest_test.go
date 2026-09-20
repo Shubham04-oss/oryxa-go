@@ -11,6 +11,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/embedding"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgebase"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/vectorstore"
 )
 
@@ -34,6 +35,25 @@ func testDocument() domain.Document {
 	}
 }
 
+func testKBCorpus() domain.Corpus {
+	return domain.Corpus{
+		ID: "cor_1", OrganizationID: "org_1", Backend: domain.BackendBedrockKB, Spec: domain.BedrockKnowledgeBaseEmbeddingSpec,
+	}
+}
+
+// testKBDocument is a document in a bedrock-kb corpus. Attempts starts at 1,
+// as a document claimed for the first time always has it after
+// ClaimDocuments increments it, so a test does not accidentally exercise the
+// early-attempt release path when it means to check a terminal one.
+func testKBDocument() domain.Document {
+	return domain.Document{
+		ID: "doc_1", CorpusID: "cor_1", OrganizationID: "org_1",
+		Source: domain.Source{Kind: domain.SourceInline}, Title: "Runbook",
+		ContentType: "text/plain", Status: domain.StatusIngesting, Attempts: 1,
+		ContentSHA256: "hash-1",
+	}
+}
+
 // fakeStore records what ingest did to a document.
 type fakeStore struct {
 	mutex      sync.Mutex
@@ -51,6 +71,9 @@ type fakeStore struct {
 	reasons    []string
 	released   []string
 	embedded   []string
+	kbSynced   []string
+	rechecks   map[string]time.Time
+	retries    map[string]time.Time
 }
 
 func (fake *fakeStore) Corpus(context.Context, string, string) (domain.Corpus, error) {
@@ -122,6 +145,33 @@ func (fake *fakeStore) ReleaseDocument(_ context.Context, documentID string) err
 	return nil
 }
 
+func (fake *fakeStore) RecheckDocumentAt(_ context.Context, documentID string, at time.Time) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	if fake.rechecks == nil {
+		fake.rechecks = map[string]time.Time{}
+	}
+	fake.rechecks[documentID] = at
+	return nil
+}
+
+func (fake *fakeStore) RetryDocumentAt(_ context.Context, documentID string, at time.Time) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	if fake.retries == nil {
+		fake.retries = map[string]time.Time{}
+	}
+	fake.retries[documentID] = at
+	return nil
+}
+
+func (fake *fakeStore) MarkKnowledgeBaseSubmitted(_ context.Context, documentID, contentSHA256 string, _ time.Time) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.kbSynced = append(fake.kbSynced, documentID+":"+contentSHA256)
+	return nil
+}
+
 type fakeVectorStore struct {
 	upserted  []domain.Vector
 	deleted   []string
@@ -181,7 +231,61 @@ func (fake fakeEmbedders) For(context.Context, domain.EmbeddingSpec) (embedding.
 }
 
 func newPipeline(store *fakeStore, vectors *fakeVectorStore, embedder *fakeEmbedder) *Pipeline {
-	return New(store, fakeVectors{vectors}, fakeEmbedders{embedder}, Options{}, nil)
+	return New(store, fakeVectors{vectors}, fakeEmbedders{embedder}, nil, Options{}, nil)
+}
+
+// fakeKnowledgeBase stands in for a Bedrock knowledge base, recording what it
+// was asked to submit and answering whatever status a test configures.
+type fakeKnowledgeBase struct {
+	mutex sync.Mutex
+
+	submitted     []domain.Document
+	submittedText []string
+	submitErr     error
+
+	statuses  map[string]knowledgebase.DocumentStatus
+	statusErr error
+
+	deletedStaged []string
+}
+
+func (fake *fakeKnowledgeBase) Submit(_ context.Context, _ domain.Corpus, document domain.Document, text string) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	if fake.submitErr != nil {
+		return fake.submitErr
+	}
+	fake.submitted = append(fake.submitted, document)
+	fake.submittedText = append(fake.submittedText, text)
+	return nil
+}
+
+func (fake *fakeKnowledgeBase) Statuses(_ context.Context, documentIDs []string) (map[string]knowledgebase.DocumentStatus, error) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	if fake.statusErr != nil {
+		return nil, fake.statusErr
+	}
+	result := make(map[string]knowledgebase.DocumentStatus, len(documentIDs))
+	for _, id := range documentIDs {
+		if status, ok := fake.statuses[id]; ok {
+			result[id] = status
+			continue
+		}
+		result[id] = knowledgebase.DocumentStatus{Code: "NOT_FOUND"}
+	}
+	return result, nil
+}
+
+func (fake *fakeKnowledgeBase) DeleteStaged(_ context.Context, _ domain.Corpus, document domain.Document) error {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.deletedStaged = append(fake.deletedStaged, document.ID)
+	return nil
+}
+
+func newKBPipeline(store *fakeStore, knowledgeBase *fakeKnowledgeBase) *Pipeline {
+	return New(store, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, knowledgeBase, Options{}, nil)
 }
 
 const body = "# Rotation\n\nCredentials rotate every ninety days.\n\n## Failure\n\nA rotation that fails pages the on-call engineer.\n"
@@ -238,9 +342,9 @@ func TestIndexKeepsWhatAFailedAttemptEmbedded(t *testing.T) {
 		t.Fatalf("kept %d chunks embedded and %d vectors, want the first slice's %d",
 			len(store.embedded), len(vectors.upserted), sliceChunks)
 	}
-	if len(store.released) != 1 || len(store.ready) != 0 || len(store.failed) != 0 {
-		t.Fatalf("released %v, ready %v, failed %v: want the document back for a retry",
-			store.released, store.ready, store.failed)
+	if len(store.retries) != 1 || len(store.ready) != 0 || len(store.failed) != 0 {
+		t.Fatalf("retries %v, ready %v, failed %v: want the document back for a retry",
+			store.retries, store.ready, store.failed)
 	}
 }
 
@@ -347,21 +451,38 @@ func TestIndexWithNothingToEmbedStillMarksReady(t *testing.T) {
 	}
 }
 
-func TestIndexReleasesForRetryAndFailsAfterTheLimit(t *testing.T) {
+func TestIndexRetriesLaterAndFailsAfterTheLimit(t *testing.T) {
 	t.Parallel()
 	// A transient failure is worth another go; the attempt count is what
 	// decides when to stop, not the error.
 	store := &fakeStore{corpus: testCorpus(), body: body}
 	embedder := &fakeEmbedder{err: errors.New("throttled")}
 	pipeline := newPipeline(store, &fakeVectorStore{}, embedder)
+	now := time.Date(2026, time.September, 19, 11, 0, 0, 0, time.UTC)
+	pipeline.now = func() time.Time { return now }
 
 	early := testDocument()
 	early.Attempts = 1
 	if _, err := pipeline.Index(context.Background(), early); err == nil {
 		t.Fatal("Index succeeded with a failing embedder")
 	}
-	if len(store.released) != 1 || len(store.failed) != 0 {
-		t.Fatalf("released = %v, failed = %v; an early attempt should be released", store.released, store.failed)
+	if len(store.failed) != 0 || len(store.released) != 0 {
+		t.Fatalf("failed = %v, released = %v; an early attempt should be retried later", store.failed, store.released)
+	}
+	// Not at once: a document put straight back is claimed straight back.
+	if at := store.retries[early.ID]; !at.Equal(now.Add(30 * time.Second)) {
+		t.Fatalf("retry at %v, want 30s after the first failure", at)
+	}
+
+	// Each wait is longer than the last.
+	later := testDocument()
+	later.ID = "doc_2"
+	later.Attempts = 3
+	if _, err := pipeline.Index(context.Background(), later); err == nil {
+		t.Fatal("Index succeeded with a failing embedder")
+	}
+	if at := store.retries[later.ID]; !at.Equal(now.Add(8 * time.Minute)) {
+		t.Fatalf("retry at %v, want 8m after the third failure", at)
 	}
 
 	// A failure that keeps repeating is the document, not the weather.
@@ -390,8 +511,8 @@ func TestIndexDoesNotRetryWhatWillNotChange(t *testing.T) {
 	if len(store.failed) != 1 {
 		t.Fatalf("failed = %v, want it recorded as failed immediately", store.failed)
 	}
-	if len(store.released) != 0 {
-		t.Fatalf("released = %v, want no retry", store.released)
+	if len(store.released) != 0 || len(store.retries) != 0 {
+		t.Fatalf("released = %v, retries = %v, want no retry", store.released, store.retries)
 	}
 }
 
@@ -433,7 +554,7 @@ func TestRunWorksTheQueueAndStops(t *testing.T) {
 	store := &fakeStore{corpus: testCorpus(), body: body, claim: [][]domain.Document{
 		{testDocument()},
 	}}
-	pipeline := New(store, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}},
+	pipeline := New(store, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil,
 		Options{Interval: time.Millisecond}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -463,5 +584,195 @@ func TestRunWorksTheQueueAndStops(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the worker did not stop when its context ended")
+	}
+}
+
+// TestIndexKnowledgeBaseSubmitsUnsyncedContent: a document whose content was
+// never handed to the knowledge base is submitted, and only that — it is not
+// marked ready, failed or released, since the outcome is still unknown and
+// the next claim, once this one's lease passes, is what polls for it.
+func TestIndexKnowledgeBaseSubmitsUnsyncedContent(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{corpus: testKBCorpus(), body: "the runbook's text"}
+	knowledgeBase := &fakeKnowledgeBase{}
+	pipeline := newKBPipeline(store, knowledgeBase)
+
+	if _, err := pipeline.Index(context.Background(), testKBDocument()); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if len(knowledgeBase.submitted) != 1 || knowledgeBase.submitted[0].ID != "doc_1" {
+		t.Fatalf("submitted = %+v, want doc_1 submitted once", knowledgeBase.submitted)
+	}
+	if knowledgeBase.submittedText[0] != "the runbook's text" {
+		t.Fatalf("submitted text = %q", knowledgeBase.submittedText[0])
+	}
+	if len(store.kbSynced) != 1 || store.kbSynced[0] != "doc_1:hash-1" {
+		t.Fatalf("kb_synced_hash was not recorded: %v", store.kbSynced)
+	}
+	if len(store.ready) != 0 || len(store.failed) != 0 || len(store.released) != 0 {
+		t.Fatalf("a freshly submitted document was not left waiting: ready=%v failed=%v released=%v",
+			store.ready, store.failed, store.released)
+	}
+	// Asked about again in seconds, the time Bedrock takes, not once the
+	// whole lease has passed.
+	if at, ok := store.rechecks["doc_1"]; !ok || at.Sub(pipeline.now()) > knowledgeBaseRecheck {
+		t.Fatalf("recheck = %v (%v), want within %s", at, ok, knowledgeBaseRecheck)
+	}
+}
+
+// TestIndexKnowledgeBaseSubmitsAnOriginalDocumentWithNoBody: a document with
+// no extracted text is never read from PostgreSQL's body column — there is
+// nothing there — and reaches the knowledge base with an empty text, which is
+// what tells Submit to point at the original object instead.
+func TestIndexKnowledgeBaseSubmitsAnOriginalDocumentWithNoBody(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{corpus: testKBCorpus(), bodyErr: errors.New("DocumentBody must not be called for an original document")}
+	knowledgeBase := &fakeKnowledgeBase{}
+	pipeline := newKBPipeline(store, knowledgeBase)
+
+	document := testKBDocument()
+	document.OriginalBucket, document.OriginalKey = "oryxa-knowledge-originals", "org/doc/handbook.pdf"
+	if _, err := pipeline.Index(context.Background(), document); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if len(knowledgeBase.submitted) != 1 || knowledgeBase.submittedText[0] != "" {
+		t.Fatalf("submitted = %+v, text = %q; want an empty text for an original document",
+			knowledgeBase.submitted, knowledgeBase.submittedText)
+	}
+}
+
+// TestIndexKnowledgeBaseNeverResubmitsAlreadySyncedContent is what makes the
+// leases and claims actually save a re-embed: a claim of a document whose
+// content_sha256 already matches kb_synced_hash must only poll, never submit
+// again.
+func TestIndexKnowledgeBaseNeverResubmitsAlreadySyncedContent(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{corpus: testKBCorpus(), body: "text"}
+	knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{
+		"doc_1": {Code: "IN_PROGRESS"},
+	}}
+	pipeline := newKBPipeline(store, knowledgeBase)
+
+	document := testKBDocument()
+	document.KBSyncedHash = document.ContentSHA256
+	if _, err := pipeline.Index(context.Background(), document); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if len(knowledgeBase.submitted) != 0 {
+		t.Fatalf("resubmitted already-synced content: %+v", knowledgeBase.submitted)
+	}
+	if len(store.ready) != 0 || len(store.failed) != 0 || len(store.released) != 0 {
+		t.Fatalf("a still-indexing document was not left waiting: ready=%v failed=%v released=%v",
+			store.ready, store.failed, store.released)
+	}
+}
+
+// TestIndexKnowledgeBaseMarksReadyOnIndexedOrIgnored covers both statuses
+// this pipeline treats as a finished, searchable document.
+func TestIndexKnowledgeBaseMarksReadyOnIndexedOrIgnored(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{"INDEXED", "IGNORED"} {
+		t.Run(code, func(t *testing.T) {
+			t.Parallel()
+			store := &fakeStore{corpus: testKBCorpus(), body: "text"}
+			knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": {Code: code}}}
+			pipeline := newKBPipeline(store, knowledgeBase)
+
+			document := testKBDocument()
+			document.KBSyncedHash = document.ContentSHA256
+			if _, err := pipeline.Index(context.Background(), document); err != nil {
+				t.Fatalf("Index: %v", err)
+			}
+			if len(store.ready) != 1 || store.ready[0] != "doc_1" {
+				t.Fatalf("ready = %v", store.ready)
+			}
+			// A chunk count of rag's own would be a guess; a knowledge base
+			// corpus reports zero rather than inventing one.
+			if store.readyCount[0] != 0 {
+				t.Fatalf("chunk count = %d, want 0 for a document rag never chunked", store.readyCount[0])
+			}
+			if len(knowledgeBase.deletedStaged) != 1 || knowledgeBase.deletedStaged[0] != "doc_1" {
+				t.Fatalf("staged text was not cleaned up: %v", knowledgeBase.deletedStaged)
+			}
+		})
+	}
+}
+
+// TestIndexKnowledgeBaseFailsAtOnceOnFailed: a failure the knowledge base
+// itself calls final is not retried — the same reasoning that fails a
+// document which chunks to nothing immediately rather than spending every
+// attempt on the same rejection.
+func TestIndexKnowledgeBaseFailsAtOnceOnFailed(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{corpus: testKBCorpus(), body: "text"}
+	knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{
+		"doc_1": {Code: "FAILED", Reason: "unsupported content type"},
+	}}
+	pipeline := newKBPipeline(store, knowledgeBase)
+
+	document := testKBDocument()
+	document.KBSyncedHash = document.ContentSHA256
+	document.Attempts = 1 // Nowhere near MaxAttempts: this must still fail at once.
+	if _, err := pipeline.Index(context.Background(), document); err == nil {
+		t.Fatal("Index succeeded on a knowledge base FAILED status")
+	}
+	if len(store.failed) != 1 || !strings.Contains(store.reasons[0], "unsupported content type") {
+		t.Fatalf("failed = %v, reasons = %v", store.failed, store.reasons)
+	}
+	if len(store.released) != 0 || len(store.retries) != 0 {
+		t.Fatalf("a final failure was put back for retry: released %v, retries %v", store.released, store.retries)
+	}
+}
+
+// TestIndexKnowledgeBaseResubmitsOnPartialMetadata: tenant isolation depends
+// on the corpus_id and organization_id attributes actually reaching the
+// index, so a document only partially indexed is treated as worth
+// resubmitting, not as done.
+func TestIndexKnowledgeBaseResubmitsOnPartialMetadata(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{corpus: testKBCorpus(), body: "text"}
+	knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{
+		"doc_1": {Code: "METADATA_PARTIALLY_INDEXED"},
+	}}
+	pipeline := newKBPipeline(store, knowledgeBase)
+
+	document := testKBDocument()
+	document.KBSyncedHash = document.ContentSHA256
+	if _, err := pipeline.Index(context.Background(), document); err == nil {
+		t.Fatal("Index succeeded on a partially indexed document")
+	}
+	if _, retried := store.retries["doc_1"]; !retried {
+		t.Fatalf("retries = %v, want the document put back to resubmit", store.retries)
+	}
+	if len(store.kbSynced) != 1 || store.kbSynced[0] != "doc_1:" {
+		t.Fatalf("kb_synced_hash was not reset so the next claim resubmits: %v", store.kbSynced)
+	}
+}
+
+// TestIndexKnowledgeBaseWaitsOnStillWorkingStatuses: a status that means the
+// knowledge base has not finished yet leaves the document exactly as it was
+// claimed, for the next pass to check again.
+func TestIndexKnowledgeBaseWaitsOnStillWorkingStatuses(t *testing.T) {
+	t.Parallel()
+	for _, code := range []string{"STARTING", "PENDING", "IN_PROGRESS", "PARTIALLY_INDEXED"} {
+		t.Run(code, func(t *testing.T) {
+			t.Parallel()
+			store := &fakeStore{corpus: testKBCorpus(), body: "text"}
+			knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": {Code: code}}}
+			pipeline := newKBPipeline(store, knowledgeBase)
+
+			document := testKBDocument()
+			document.KBSyncedHash = document.ContentSHA256
+			if _, err := pipeline.Index(context.Background(), document); err != nil {
+				t.Fatalf("Index: %v", err)
+			}
+			if len(store.ready) != 0 || len(store.failed) != 0 || len(store.released) != 0 || len(store.kbSynced) != 0 {
+				t.Fatalf("a still-working status changed something: ready=%v failed=%v released=%v kbSynced=%v",
+					store.ready, store.failed, store.released, store.kbSynced)
+			}
+			if _, ok := store.rechecks["doc_1"]; !ok {
+				t.Fatal("a still-working document was not scheduled to be asked about again")
+			}
+		})
 	}
 }

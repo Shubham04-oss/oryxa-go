@@ -20,15 +20,15 @@ The root `.env.example` documents knowledge's older variables but not yet
 `APPS_URL`, `COMPOSIO_API_KEY` or `COMPOSIO_BASE_URL` — outside `knowledge/`,
 so worth a follow-up rather than something this pass could reach.
 
-**GitHub, Notion and Slack read again, through Composio.** The connections
-service they used to read through is gone for good; these three now proxy
-every call through Composio's API on the connected account named by an
-`apps` connection, and `application.Apps` (`internal/appsclient`) reads that
-connection at registration. They mount only once `COMPOSIO_API_KEY` (and
+**GitHub, Notion, Slack, Google Drive and Gmail read through Composio.** The
+connections service they used to read through is gone for good; these five
+now proxy every call through Composio's API on the connected account named by
+an `apps` connection, and `application.Apps` (`internal/appsclient`) reads
+that connection at registration. They mount only once `COMPOSIO_API_KEY` (and
 `APPS_URL`) are configured; unset, the binary mounts no extractor for them,
 same as `files` today. `internal/providerapi`'s generated GitHub and Notion
-clients are not restored — both are hand-rolled on the shared paced client
-the way Slack already was, since Composio holds the credential and a
+clients are not restored — all five are hand-rolled on the shared paced
+client the way Slack already was, since Composio holds the credential and a
 generated client has nowhere to place one.
 
 **`files` is indexed again (fixed).** `application.Grants` now has an
@@ -203,3 +203,76 @@ it needs the provisioner to create two rules rather than one.
    `serve` stops every mounted service's workers together and waits for them
    on the way down, so the gap this bullet pointed at is closed process-wide,
    not only for the service that happened to hand its workers back.
+
+## 11. Google Drive, Gmail and originals (added this pass)
+
+A connected Gmail or Google Drive account now indexes: `providerFor`
+(`internal/application/connected.go`) knows both toolkits, `googledrive.go`
+and `gmail.go` join the Composio-proxied extractors, and a PDF or an Office
+file — from Drive, or from the organization's own files — is kept in
+`KNOWLEDGE_ORIGINALS_BUCKET` instead of skipped when that is configured; see
+[README.md, Originals](README.md#originals). This is what closes over, and
+what does not.
+
+**A folder-scoped Drive source's incremental pass only matches a change
+against the folder's direct parent.** A full pass walks a folder's whole
+subtree breadth first, so a file three levels down is found; the changes feed
+an incremental pass reads gives only a changed file's immediate `parents`,
+and matching a deeply nested one against a target folder would mean this
+pass already knowing the whole current tree, which only a full walk has just
+built. So a file added or changed inside a subfolder is not picked up until
+the source's next full sweep (`KNOWLEDGE_FULL_SWEEP_INTERVAL`, weekly by
+default) — documented in `googledrive.go`'s `incremental` rather than solved.
+The unscoped default target (the whole of a member's Drive) has no such gap:
+Drive's changes feed already covers everything the account can see.
+
+**Google Docs export as `text/plain`, not `text/markdown`.** Drive is
+reported to support exporting a Doc directly to Markdown, which would read
+better than plain text, but this was built and tested entirely against
+scripted Composio proxy answers — no live Drive account — so `text/plain` is
+what this asks for, since every version of the API has always answered it.
+Worth trying `text/markdown` against a real account and switching
+`driveExportTargets` in `googledrive.go` if it answers cleanly.
+
+**Composio's binary indirection for Drive is unverified against a live
+account.** Composio's own docs, and its `ProxyResponse.Binary` shape, say a
+non-JSON answer comes back as a link to fetch rather than inline bytes; this
+pass takes that at face value (`sources.AllowBinary`, `fetchBinary` in
+`composio.go`) and unit-tests it against a fake proxy and a fake link fetch,
+but nothing here has driven a real `alt=media` download or a real
+`/export` call through Composio's actual proxy for either Drive or Gmail.
+The shape of a JSON answer for `files.list`, `changes.list`,
+`messages.list`, `messages.get` and `history.list` is likewise taken from
+Google's own API documentation, not confirmed against Composio's proxy in
+front of it. Worth a real connected account and a `go run` against it before
+trusting this in production, the same way apps' own `triggercheck` and the
+GitHub source were proven for real (see `apps/README.md`, "What has and has
+not been run").
+
+**Gmail attachments are left out entirely.** `gmail.go`'s `gmailFindPart`
+only ever returns a part that carries inline `data`; an attachment, which
+carries an `attachmentId` instead, is never fetched. A message with no
+readable inline part still indexes by its subject and headers alone.
+
+**Only Page.Removed's own two producers clean up an original's S3 object,
+plus every path that already retracts a document wholesale.** `keepOriginal`
+deletes the previous object when a document's content changes;
+`RetractUnseen`, `RetractDocument` (which `Page.Removed` drives) and
+`retractions` (shared by `RemoveSource`, `RemoveSources`,
+`RemoveSourcesByConnection` and `RemoveSourcesByTeam` — so a source, a
+connection, a team, a member or a whole organization going away all clean up
+their documents' originals too) all call it. A delete is best effort, logged
+rather than retried, on the theory that the database row is already correct
+and a byte nothing will read again is a smaller problem than failing a sync
+run or a removal over it — so a crash between a successful database write and
+the delete call that follows it can still leave an orphaned object behind. It
+is namespaced `originals/<organization_id>/<source_id>/...`, so a future
+sweep-by-prefix is straightforward if orphaned objects ever turn out to
+matter at real volume.
+
+**A weekly full sweep over a Drive folder walks the whole tree again.**
+Unlike the unscoped default, which asks Drive for everything in one call,
+`fullFolder` re-visits every folder from the top on each full sweep, the same
+cost as a source's first pass every time §2's periodic sweep comes due. Fine
+at the volumes this has been tested at; worth watching for an organization
+whose target folder is enormous.

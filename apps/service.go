@@ -145,7 +145,7 @@ const WebhookPath = "/v1/apps/webhooks/composio"
 // Workers is the background work apps needs running. A host starts each one
 // and waits for it on the way down.
 func (service *Service) Workers() []Worker {
-	workers := []Worker{service.app.RunMaintenance}
+	workers := []Worker{service.app.RunMaintenance, service.app.RunAutoSubscribe}
 	if service.dispatcher != nil {
 		workers = append(workers, service.dispatcher.Run)
 	}

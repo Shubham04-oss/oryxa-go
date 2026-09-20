@@ -89,48 +89,73 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 		}
 	}
 
-	body := event.Body
-	if event.BodyOmitted {
-		// The largest documents an organization has are the ones it most
-		// wants to search, so a body that could not travel is read back
-		// rather than lost.
-		fetched, err := service.fetchKnowledgeBody(ctx, event)
-		if err != nil {
-			return err
-		}
-		if fetched == "" {
-			// Nothing can be indexed for it. A version already held no
-			// longer matches what the source has, so it is removed rather
-			// than left answering from stale text.
-			if !found {
-				service.logger.InfoContext(ctx, "a knowledge document's body was too large to carry and could not be read back; skipping",
-					"document_id", event.DocumentID, "source_id", event.SourceID)
-				return nil
-			}
-			service.logger.InfoContext(ctx, "a knowledge document's body was too large to carry and could not be read back; removing the version already indexed",
-				"document_id", event.DocumentID, "source_id", event.SourceID)
-			return service.removeKnowledgeDocument(ctx, event.OrganizationID, mapping)
-		}
-		body = fetched
-	}
-
-	text, err := domain.Text(body)
-	if err != nil {
-		return service.dropUnindexable(ctx, event.OrganizationID, found, mapping, event.DocumentID, "had no usable text")
-	}
 	contentType, err := domain.ContentType(event.MIME)
 	if err != nil {
 		contentType = "text/plain"
 	}
-	normalized := chunking.Normalize(text, contentType)
-	if strings.TrimSpace(normalized) == "" {
-		return service.dropUnindexable(ctx, event.OrganizationID, found, mapping, event.DocumentID, "had no text once normalized")
+
+	// normalized is the text this document is indexed from, when it has
+	// any; a document with an Original carries none — see the field's own
+	// comment on knowledgeeventsv1.DocumentPublished — and originalBucket
+	// and originalKey are what an ingest worker hands a knowledge base to
+	// parse in its place. contentHash and byteSize describe whichever of
+	// the two is what actually got indexed, since that is what a caller
+	// asking about this document should see.
+	var normalized, originalBucket, originalKey, contentHash string
+	var byteSize int64
+	switch {
+	case event.Original != nil:
+		originalBucket, originalKey = event.Original.Bucket, event.Original.Key
+		contentHash, byteSize = event.Original.SHA256, event.Original.Size
+	default:
+		body := event.Body
+		if event.BodyOmitted {
+			// The largest documents an organization has are the ones it
+			// most wants to search, so a body that could not travel is
+			// read back rather than lost.
+			fetched, err := service.fetchKnowledgeBody(ctx, event)
+			if err != nil {
+				return err
+			}
+			if fetched == "" {
+				// Nothing can be indexed for it. A version already held no
+				// longer matches what the source has, so it is removed
+				// rather than left answering from stale text.
+				if !found {
+					service.logger.InfoContext(ctx, "a knowledge document's body was too large to carry and could not be read back; skipping",
+						"document_id", event.DocumentID, "source_id", event.SourceID)
+					return nil
+				}
+				service.logger.InfoContext(ctx, "a knowledge document's body was too large to carry and could not be read back; removing the version already indexed",
+					"document_id", event.DocumentID, "source_id", event.SourceID)
+				return service.removeKnowledgeDocument(ctx, event.OrganizationID, mapping)
+			}
+			body = fetched
+		}
+		text, err := domain.Text(body)
+		if err != nil {
+			return service.dropUnindexable(ctx, event.OrganizationID, found, mapping, event.DocumentID, "had no usable text")
+		}
+		normalized = chunking.Normalize(text, contentType)
+		if strings.TrimSpace(normalized) == "" {
+			return service.dropUnindexable(ctx, event.OrganizationID, found, mapping, event.DocumentID, "had no text once normalized")
+		}
+		contentHash, byteSize = domain.Hash(normalized), int64(len(normalized))
 	}
 
 	creator := knowledgeCreator(scope, event.MemberID)
 	corpus, err := service.knowledgeCorpus(ctx, event.OrganizationID, scope, event.TeamID, event.MemberID, creator)
 	if err != nil {
 		return fmt.Errorf("find or create the corpus for a knowledge document: %w", err)
+	}
+	if event.Original != nil && corpus.Backend != domain.BackendBedrockKB {
+		// Turning these bytes into something searchable means a backend
+		// that parses them itself — today, a Bedrock knowledge base.
+		// Anywhere else there is nothing here to chunk or embed, so this is
+		// skipped rather than indexed as an empty shell with a title and
+		// nothing to search inside it.
+		return service.dropUnindexable(ctx, event.OrganizationID, found, mapping, event.DocumentID,
+			"has only its original bytes, and this corpus cannot parse them")
 	}
 
 	ref := knowledgeDocumentRef(event)
@@ -176,8 +201,9 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 	document := domain.Document{
 		ID: id, CorpusID: corpus.ID, OrganizationID: event.OrganizationID,
 		Source: domain.Source{Kind: domain.SourceExternal, Ref: ref},
-		Title:  title, ContentType: contentType, ContentSHA256: domain.Hash(normalized), ByteSize: int64(len(normalized)),
+		Title:  title, ContentType: contentType, ContentSHA256: contentHash, ByteSize: byteSize,
 		Metadata: metadata, Status: domain.StatusPending,
+		OriginalBucket: originalBucket, OriginalKey: originalKey,
 		CreatedBy: creator, CreatedAt: now, UpdatedAt: now,
 	}
 	received, err := service.event(rageventsv1.DocumentReceivedDetailType, rageventsv1.DocumentReceived{
@@ -284,11 +310,7 @@ func (service *Service) removeKnowledgeDocument(ctx context.Context, organizatio
 // first, exactly in the order every other removal in this service uses: a
 // failure between the two must never leave a vector nothing points at.
 func (service *Service) removeIndexedDocument(ctx context.Context, organizationID string, corpus domain.Corpus, document domain.Document) error {
-	chunkIDs, err := service.store.ChunkIDs(ctx, organizationID, document.ID)
-	if err != nil {
-		return err
-	}
-	if err := service.deleteVectors(ctx, corpus, chunkIDs); err != nil {
+	if err := service.removeDocumentVectors(ctx, corpus, document); err != nil {
 		return err
 	}
 	removal, err := service.event(rageventsv1.DocumentRemovedDetailType, rageventsv1.DocumentRemoved{
@@ -345,6 +367,9 @@ func (service *Service) knowledgeCorpus(ctx context.Context, organizationID stri
 	}
 	backend := service.defaults.Backend
 	if err := backend.Supports(spec.Metric); err != nil {
+		return domain.Corpus{}, err
+	}
+	if err := requireBackendSpec(backend, spec); err != nil {
 		return domain.Corpus{}, err
 	}
 	if _, err := service.vectors.For(domain.Corpus{Backend: backend}); err != nil {

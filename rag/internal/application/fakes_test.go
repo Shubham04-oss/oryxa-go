@@ -314,6 +314,18 @@ func (store *fakeStore) ChunkIDs(_ context.Context, _, documentID string) ([]str
 	return store.chunkIDs[documentID], nil
 }
 
+func (store *fakeStore) DocumentIDsForCorpus(_ context.Context, corpusID string) ([]string, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var ids []string
+	for id, document := range store.documents {
+		if document.CorpusID == corpusID {
+			ids = append(ids, id)
+		}
+	}
+	return ids, nil
+}
+
 func (store *fakeStore) DeleteDocument(_ context.Context, organizationID, documentID string, event domain.Event) ([]string, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -507,6 +519,37 @@ func (fake *fakeRetriever) Search(_ context.Context, corpus domain.Corpus, query
 	return fake.results, fake.err
 }
 
+// fakeKnowledgeBase stands in for the Bedrock knowledge base a bedrock-kb
+// corpus's documents are removed from, recording what was deleted so a test
+// can check it without a real Bedrock behind it.
+type fakeKnowledgeBase struct {
+	mu              sync.Mutex
+	deleted         []string
+	deletedStaged   []string
+	err             error
+	deleteStagedErr error
+}
+
+func (fake *fakeKnowledgeBase) Delete(_ context.Context, documentIDs []string) error {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.err != nil {
+		return fake.err
+	}
+	fake.deleted = append(fake.deleted, documentIDs...)
+	return nil
+}
+
+func (fake *fakeKnowledgeBase) DeleteStaged(_ context.Context, _ domain.Corpus, document domain.Document) error {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.deleteStagedErr != nil {
+		return fake.deleteStagedErr
+	}
+	fake.deletedStaged = append(fake.deletedStaged, document.ID)
+	return nil
+}
+
 type fakeGenerator struct {
 	model    string
 	response generation.Response
@@ -541,14 +584,15 @@ func (documents *fakeDocuments) Body(_ context.Context, organizationID, document
 }
 
 type harness struct {
-	service   *Service
-	store     *fakeStore
-	teams     *fakeTeams
-	files     *fakeFiles
-	documents *fakeDocuments
-	vectors   *fakeVectors
-	retriever *fakeRetriever
-	generator *fakeGenerator
+	service       *Service
+	store         *fakeStore
+	teams         *fakeTeams
+	files         *fakeFiles
+	documents     *fakeDocuments
+	vectors       *fakeVectors
+	retriever     *fakeRetriever
+	generator     *fakeGenerator
+	knowledgeBase *fakeKnowledgeBase
 }
 
 var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
@@ -561,8 +605,9 @@ func newHarness() *harness {
 	vectors := newFakeVectors()
 	retriever := &fakeRetriever{}
 	generator := &fakeGenerator{model: "test-model"}
-	service := New(store, fakeDirectory{}, teams, files, documents, vectors, retriever, generator, Defaults{}, nil)
+	knowledgeBase := &fakeKnowledgeBase{}
+	service := New(store, fakeDirectory{}, teams, files, documents, vectors, retriever, generator, knowledgeBase, Defaults{}, nil)
 	service.now = func() time.Time { return testClock }
 	return &harness{service: service, store: store, teams: teams, files: files, documents: documents,
-		vectors: vectors, retriever: retriever, generator: generator}
+		vectors: vectors, retriever: retriever, generator: generator, knowledgeBase: knowledgeBase}
 }
