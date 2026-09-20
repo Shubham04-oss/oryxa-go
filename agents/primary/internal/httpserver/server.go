@@ -142,7 +142,7 @@ type Preferences interface {
 // agents talking in one place. rooms.Service implements it.
 type Rooms interface {
 	Post(ctx context.Context, actor rooms.Actor, roomID, body string) ([]rooms.Message, error)
-	Read(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64, limit int) ([]rooms.Message, error)
+	Read(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64, limit int) ([]rooms.Message, []rooms.Seat, error)
 	Catchup(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64) (rooms.Brief, []rooms.Message, error)
 }
 
@@ -1443,12 +1443,12 @@ func (server *Server) readRoom(writer http.ResponseWriter, request *http.Request
 	if !ok {
 		return
 	}
-	said, err := server.rooms.Read(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), after, limit)
+	said, seats, err := server.rooms.Read(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), after, limit)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{"messages": said})
+	writeJSON(writer, http.StatusOK, map[string]any{"messages": said, "seats": seats})
 }
 
 // catchUpOnRoom is for somebody who has been away: what the room amounts to,
@@ -1530,6 +1530,12 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusConflict, "teamspace_conflict"
 	case errors.Is(err, teamspaces.ErrNotFound):
 		return http.StatusNotFound, "not_found"
+	case errors.Is(err, rooms.ErrInvalid):
+		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, rooms.ErrForbidden):
+		return http.StatusForbidden, "forbidden"
+	case errors.Is(err, rooms.ErrNotFound):
+		return http.StatusNotFound, "not_found"
 	case errors.Is(err, agentworkflows.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, agentworkflows.ErrDisabled):
@@ -1607,6 +1613,7 @@ func message(err error) string {
 		text = strings.TrimPrefix(text, interactions.ErrInvalid.Error()+": ")
 		text = strings.TrimPrefix(text, agentworkflows.ErrInvalid.Error()+": ")
 		text = strings.TrimPrefix(text, teamspaces.ErrInvalid.Error()+": ")
+		text = strings.TrimPrefix(text, rooms.ErrInvalid.Error()+": ")
 		return strings.TrimSpace(text)
 	default:
 		return err.Error()

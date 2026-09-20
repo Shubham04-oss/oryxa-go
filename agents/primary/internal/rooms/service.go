@@ -123,6 +123,13 @@ func (service *Service) Post(ctx context.Context, actor Actor, roomID, body stri
 	if err != nil {
 		return nil, err
 	}
+	// Saying something is the plainest evidence there is that somebody is in
+	// the room, and it is recorded before the seating is read so the author is
+	// present in their own message's situation: an agent must never answer
+	// over the person it speaks for while that person is doing the talking.
+	if err := service.store.Watch(ctx, space.ID, actor.UserID, time.Now().UTC()); err != nil {
+		service.logger.WarnContext(ctx, "record that a member is talking in a room", "room_id", space.ID, "error", err)
+	}
 	situation, seats, err := service.situation(ctx, space)
 	if err != nil {
 		return nil, err
@@ -165,23 +172,38 @@ func (service *Service) Post(ctx context.Context, actor Actor, roomID, body stri
 	if verdict.Keep && service.ledger != nil {
 		service.publish(ctx, actor, space, posted, verdict)
 	}
-	service.compact(ctx, situation, space.ID, verdict, said[len(said)-1].Seq)
+	// A conclusion is new state by definition: a brief that does not mention
+	// what the room just decided is already out of date, whatever the decider
+	// thought of the brief a moment ago.
+	service.compact(ctx, situation, space.ID, verdict.Compact || verdict.Keep, said[len(said)-1].Seq)
 	return said, nil
 }
 
-// Read returns what was said after seq, oldest first.
-func (service *Service) Read(ctx context.Context, actor Actor, roomID string, afterSeq int64, limit int) ([]Message, error) {
+// Read returns what was said after seq, oldest first, and who is in the room
+// to hear it. The seating comes back with every read because it is not static:
+// it says who is here right now, and it carries the handles people are
+// addressed by — which a reader has to know before they can name anybody.
+func (service *Service) Read(ctx context.Context, actor Actor, roomID string, afterSeq int64, limit int) ([]Message, []Seat, error) {
 	space, err := service.space(ctx, actor, roomID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 200
 	}
+	// Recorded before the seating is read, so a reader is in their own answer.
 	if err := service.store.Watch(ctx, space.ID, actor.UserID, time.Now().UTC()); err != nil {
 		service.logger.WarnContext(ctx, "record that a member is reading a room", "room_id", space.ID, "error", err)
 	}
-	return service.store.Messages(ctx, space.ID, afterSeq, limit)
+	messages, err := service.store.Messages(ctx, space.ID, afterSeq, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	watching, err := service.store.Watching(ctx, space.ID, time.Now().UTC().Add(-presentWithin))
+	if err != nil {
+		return nil, nil, err
+	}
+	return messages, seatsOf(space, watching), nil
 }
 
 // Catchup is what somebody who has been away is handed: what the room amounts
@@ -268,8 +290,8 @@ func (service *Service) publish(ctx context.Context, actor Actor, space teamspac
 // compact rewrites the brief when the room has moved past it. It runs after
 // the member already has their answer, and a failure only means the brief is
 // older than it could be.
-func (service *Service) compact(ctx context.Context, situation Situation, roomID string, verdict Verdict, latestSeq int64) {
-	if service.compactor == nil || !Due(situation.Brief, latestSeq, verdict.Compact) {
+func (service *Service) compact(ctx context.Context, situation Situation, roomID string, decided bool, latestSeq int64) {
+	if service.compactor == nil || !Due(situation.Brief, latestSeq, decided) {
 		return
 	}
 	since, err := service.store.Messages(ctx, roomID, situation.Brief.ThroughSeq, recentMessages*4)
@@ -306,8 +328,8 @@ func seatsOf(space teamspaces.Space, watching []string) []Seat {
 		seats = append(seats, Seat{
 			Handle: handle(whisperer.AgentName, taken), Kind: SeatAgent,
 			UserID: whisperer.UserID, AgentID: whisperer.AgentID, AgentName: whisperer.AgentName,
-			DisplayName: whisperer.AgentName,
-			Role:        whisperer.UserDisplayName + "'s own agent",
+			DisplayName: whisperer.AgentName, SpeaksFor: whisperer.UserID,
+			Role: whisperer.UserDisplayName + "'s own agent",
 		})
 	}
 	for _, contribution := range space.Contributions {
@@ -371,12 +393,28 @@ func whispererAgent(space teamspaces.Space, userID string) string {
 
 // firstLine is a title made from what was said, since a room has no titles.
 func firstLine(body string) string {
-	line := body
-	if cut := strings.IndexAny(line, ".\n"); cut > 0 {
+	line := strings.TrimSpace(body)
+	if cut := strings.IndexByte(line, '\n'); cut > 0 {
 		line = line[:cut]
 	}
+	// A full stop ends a sentence only when a space or the end of the line
+	// follows it. "4.50" is a price, and a title cut inside one reads as a
+	// mistake to everybody who sees it in the ledger.
+	for at := 0; at < len(line); at++ {
+		if line[at] != '.' && line[at] != '!' && line[at] != '?' {
+			continue
+		}
+		if at > 0 && (at+1 == len(line) || line[at+1] == ' ') {
+			line = line[:at]
+			break
+		}
+	}
 	if runes := []rune(strings.TrimSpace(line)); len(runes) > 80 {
-		return strings.TrimSpace(string(runes[:80]))
+		cut := strings.TrimSpace(string(runes[:80]))
+		if space := strings.LastIndexByte(cut, ' '); space > 40 {
+			cut = cut[:space]
+		}
+		return strings.TrimRight(cut, " ,;:-") + "…"
 	}
 	return strings.TrimSpace(line)
 }

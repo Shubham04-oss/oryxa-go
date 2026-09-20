@@ -50,6 +50,12 @@ type Seat struct {
 	// AgentID and AgentName are set for an agent seat.
 	AgentID   string `json:"agent_id,omitempty"`
 	AgentName string `json:"agent_name,omitempty"`
+	// SpeaksFor is the person an agent seat is the agent OF, set only for
+	// somebody's own agent and never for a contributed specialist. It is
+	// what lets a reader tell "Ada's agent, standing in while she is away"
+	// from "the pricing specialist the team shares" — two very different
+	// things to be answered by, which look identical without it.
+	SpeaksFor string `json:"speaks_for,omitempty"`
 	// DisplayName is the person's name, or the agent's.
 	DisplayName string `json:"display_name"`
 	// Role is what this seat is here for, in the member's own words — "sales",

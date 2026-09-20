@@ -570,9 +570,9 @@ func (f *fakeRooms) Post(_ context.Context, actor rooms.Actor, _, _ string) ([]r
 	return []rooms.Message{{Seq: 1, Body: "hello"}}, nil
 }
 
-func (f *fakeRooms) Read(_ context.Context, actor rooms.Actor, _ string, _ int64, _ int) ([]rooms.Message, error) {
+func (f *fakeRooms) Read(_ context.Context, actor rooms.Actor, _ string, _ int64, _ int) ([]rooms.Message, []rooms.Seat, error) {
 	f.actors = append(f.actors, actor)
-	return nil, nil
+	return nil, nil, nil
 }
 
 func (f *fakeRooms) Catchup(_ context.Context, actor rooms.Actor, _ string, _ int64) (rooms.Brief, []rooms.Message, error) {

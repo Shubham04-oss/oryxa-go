@@ -20,6 +20,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
@@ -1191,5 +1192,31 @@ func TestEveryListingRefusesTheSameBadLimit(t *testing.T) {
 		if response := serve(server, http.MethodGet, path, "", bearer); response.Code != http.StatusOK {
 			t.Errorf("GET %s with no limit = %d %s, want 200", path, response.Code, response.Body.String())
 		}
+	}
+}
+
+// A room refuses things — a message too long for a chat line, a teamspace
+// that is not this organization's, somebody who is not on the team — and a
+// caller has to be able to tell those apart from the service falling over.
+func TestARoomsRefusalsAreNotInternalErrors(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantCode   string
+	}{
+		{"a message the room will not take", fmt.Errorf("%w: a message is at most 4000 characters", rooms.ErrInvalid), http.StatusBadRequest, "invalid_request"},
+		{"a room in another organization", rooms.ErrNotFound, http.StatusNotFound, "not_found"},
+		{"somebody who is not on the team", rooms.ErrForbidden, http.StatusForbidden, "forbidden"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			status, code := ErrorCode(testCase.err)
+			if status != testCase.wantStatus || code != testCase.wantCode {
+				t.Fatalf("ErrorCode = %d %q, want %d %q", status, code, testCase.wantStatus, testCase.wantCode)
+			}
+			if said := message(testCase.err); strings.Contains(said, rooms.ErrInvalid.Error()) {
+				t.Errorf("the caller is told %q, which repeats the sentinel instead of what to fix", said)
+			}
+		})
 	}
 }

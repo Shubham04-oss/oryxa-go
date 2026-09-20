@@ -42,12 +42,15 @@ const (
 )
 
 // compactionBackstop is how many messages since the brief accumulate before
-// Due says yes regardless of the decider's judgment. It exists so a room
-// where the judgment never fires — a quiet room, a decider that never
-// returns Compact — still gets consolidated before its "since" grows past
-// what one compaction pass reads (maxCompactionMessages above); it is kept
-// well under that cap so the ordinary case never runs into it.
-const compactionBackstop = 200
+// Due says yes regardless of the decider's judgment.
+//
+// It is the room's own continuity rule rather than a safety valve. Anybody
+// taking a turn is shown the brief and the last handful of messages and
+// nothing else, so a brief that falls further behind than that handful
+// leaves a hole in the middle of the room: too new for the brief, too old
+// to be shown. Keeping the backstop at the size of that window is what
+// guarantees the two always meet.
+const compactionBackstop = recentMessages
 
 // Due says whether a room's brief should be rewritten now: the decider's
 // own opinion (decided), ORed with a backstop on how many messages have
