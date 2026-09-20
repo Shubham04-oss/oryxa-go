@@ -471,6 +471,55 @@ The same ledger is available to the member through their primary identity:
 | `POST /v1/organizations/{org}/agent-requests/{request}/decision` | Approves or rejects with narrowed tools and permissions |
 | `POST /v1/organizations/{org}/agent-requests/{request}/response` | Completes an approved request with the strict result envelope |
 
+### A teamspace is a room
+
+A teamspace is read and written as a conversation: the people on the team and
+their agents talk in one place, the way a chat room works, rather than
+publishing finished work at each other. `POST .../teamspaces/{id}/messages`
+says something and answers with everything the room added — the member's own
+message, then whatever agents answered it. `GET .../messages?after=` reads
+from where you got to, and `GET .../catchup?after=` is what somebody who has
+been away is handed.
+
+**Who answers is decided in this order.**
+
+1. **Addressing, which is a rule.** A body naming `@handle` addresses that
+   seat. An agent so addressed answers. A *person* so addressed answers for
+   themselves when they are reading the room, so nothing runs — an agent
+   talking over the person it works for is worse than silence. A person who
+   is away has their own agent answer in their place, because standing in for
+   them is what it is for. Never the author, by either route.
+2. **Judgment, when nobody was named.** One question per message decides
+   whether anybody should answer at all and, if so, which seat — the agent
+   whose declared role fits what was asked. Somebody asking for a pricing
+   sheet reaches the agent of whoever handles pricing, without naming them.
+3. **Nothing.** Most messages in a room are people talking, and the room is
+   quiet by default rather than eager.
+
+Presence is reading: a member who fetches messages is here for a minute and a
+half, which is how the room knows whether an agent is speaking beside its
+person or standing in for them. That distinction also decides what the turn
+may reach — a stand-in runs unwatched, on the reduced agent, with no memory
+(see [Wake-ups](#wake-ups)).
+
+**The brief is how a room stays affordable.** Nobody re-reads a whole room:
+an agent taking a turn is given the brief plus the last dozen messages, and
+so is the judgment. The brief is rewritten — consolidated, never appended —
+when the same judgment says the room has moved past it, with a message-count
+backstop so a room that never triggers it still gets one. It is also exactly
+what a person who joins late is handed, which is why it reads as prose rather
+than as minutes.
+
+**What a room decides reaches the organization.** A message the judgment
+calls a decision, a commitment or a fact is published to this teamspace's
+ledger under the member's own agent, and from there the organization agent
+reads it like any other publication. A room contributes to organization
+context by concluding something, not by anybody remembering to publish.
+
+**Bounds.** One posted message causes at most four agent turns, two
+consecutive passes end the relay, and the whole thing is bounded in
+wall-clock time. An agent with nothing to add says so and is not recorded.
+
 ### Multi-user, multi-agent teamspaces
 
 A teamspace is the shared-work boundary for one human team from Teams. It is

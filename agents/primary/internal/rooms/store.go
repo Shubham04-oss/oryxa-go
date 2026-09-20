@@ -1,0 +1,434 @@
+package rooms
+
+import (
+	"context"
+	"crypto/rand"
+	"embed"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
+)
+
+//go:embed migrations/*.sql
+var migrations embed.FS
+
+// migrationsAdvisoryLock keeps replicas that start together from installing
+// this package's tables at once. Every agents/primary package picks its own
+// number from the same 72635107xx range; the highest taken before this one
+// was organizationagents' 7263510714.
+const migrationsAdvisoryLock int64 = 7263510716
+
+// ErrRoomNotFound is returned for a room whose teamspace does not exist. A
+// room is a teamspace (see rooms.go's package doc), so every write here
+// proves that by deriving organization_id from agents_primary.teamspaces
+// rather than trusting a caller-supplied value nothing else validates.
+var ErrRoomNotFound = errors.New("room not found")
+
+// PostgresStore is the PostgreSQL-backed [Store]. It is not named Store,
+// unlike its sibling packages' own stores, because rooms.go already spends
+// that name on the interface this type implements.
+type PostgresStore struct{ database *postgreskit.Database }
+
+// NewStore returns the store over database.
+func NewStore(database *postgreskit.Database) *PostgresStore {
+	return &PostgresStore{database: database}
+}
+
+// Migrate installs this package's tables. Running it twice is harmless.
+func (store *PostgresStore) Migrate(ctx context.Context) error {
+	return store.database.Migrate(ctx, "rooms", migrations, "migrations/*.sql", migrationsAdvisoryLock)
+}
+
+const messageColumns = `id, room_id, seq, author_handle, author_kind, author_user_id,
+	author_agent_id, body, addressed_to, in_reply_to_seq, created_at`
+
+// Append implements [Store]. It allocates the room's next sequence number
+// and inserts message under it, atomically, then returns the stored row.
+//
+// The sequence lives in its own counter row (room_message_seqs) rather than
+// as a MAX(seq) over room_messages, because an increment folded into an
+// INSERT is safe under concurrency in a way a read-then-write can never
+// quite be: two Appends for the same room both running
+// INSERT ... ON CONFLICT DO UPDATE SET next_seq = next_seq + 1 do not both
+// compute "current max plus one" from the same snapshot and collide. The
+// second one's statement blocks, as part of resolving the conflict, until
+// the first commits, and only then increments what the first actually left
+// behind. That is what makes the sequence gapless and unique without a
+// retry loop on either side — the room_messages_room_idx UNIQUE(room_id,seq)
+// constraint is a safety net behind this, not a substitute for it.
+//
+// The same statement derives organization_id from the room's teamspace (a
+// room IS a teamspace) and doubles as the room's existence check: the
+// SELECT ... FROM teamspaces supplies the one candidate row the upsert
+// needs, so a room whose teamspace is gone yields no candidate, no upsert,
+// and ErrRoomNotFound — on the first message exactly as on the thousandth.
+func (store *PostgresStore) Append(ctx context.Context, message Message) (Message, error) {
+	// The store gives a message both of the things that make it one: its
+	// place in the room, and its name. A caller that invented ids would have
+	// to be trusted to keep them unique across every room at once, and the
+	// one that forgot would collide here rather than where the mistake was.
+	if strings.TrimSpace(message.ID) == "" {
+		id, err := newMessageID()
+		if err != nil {
+			return Message{}, err
+		}
+		message.ID = id
+	}
+	message.CreatedAt = time.Now().UTC()
+	if message.AddressedTo == nil {
+		message.AddressedTo = []string{}
+	}
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		var organizationID string
+		err := tx.QueryRow(ctx, `
+			INSERT INTO agents_primary.room_message_seqs (room_id, organization_id, next_seq)
+			SELECT $1, teamspace.organization_id, 2
+			FROM agents_primary.teamspaces teamspace WHERE teamspace.id = $1
+			ON CONFLICT (room_id) DO UPDATE SET next_seq = room_message_seqs.next_seq + 1
+			RETURNING next_seq - 1, organization_id`,
+			message.RoomID).Scan(&message.Seq, &organizationID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrRoomNotFound
+		}
+		if err != nil {
+			return fmt.Errorf("allocate room message sequence: %w", err)
+		}
+		return scanMessage(tx.QueryRow(ctx, `
+			INSERT INTO agents_primary.room_messages (`+messageColumns+`, organization_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			RETURNING `+messageColumns,
+			message.ID, message.RoomID, message.Seq, message.AuthorHandle, message.AuthorKind,
+			message.AuthorUserID, message.AuthorAgentID, message.Body, message.AddressedTo,
+			message.InReplyToSeq, message.CreatedAt, organizationID), &message)
+	})
+	if errors.Is(err, ErrRoomNotFound) {
+		return Message{}, ErrRoomNotFound
+	}
+	if err != nil {
+		return Message{}, fmt.Errorf("append room message: %w", err)
+	}
+	return message, nil
+}
+
+// Messages implements [Store].
+func (store *PostgresStore) Messages(ctx context.Context, roomID string, afterSeq int64, limit int) ([]Message, error) {
+	return store.listMessages(ctx, `SELECT `+messageColumns+` FROM agents_primary.room_messages
+		WHERE room_id=$1 AND seq>$2 ORDER BY seq ASC LIMIT $3`, roomID, afterSeq, clampLimit(limit))
+}
+
+// Recent implements [Store]. The inner query takes the newest limit rows by
+// seq; the outer one puts them back in reading order.
+func (store *PostgresStore) Recent(ctx context.Context, roomID string, limit int) ([]Message, error) {
+	return store.listMessages(ctx, `SELECT `+messageColumns+` FROM (
+		SELECT `+messageColumns+` FROM agents_primary.room_messages
+		WHERE room_id=$1 ORDER BY seq DESC LIMIT $2
+	) recent ORDER BY seq ASC`, roomID, clampLimit(limit))
+}
+
+func (store *PostgresStore) listMessages(ctx context.Context, query string, args ...any) ([]Message, error) {
+	rows, err := store.database.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list room messages: %w", err)
+	}
+	defer rows.Close()
+	messages := []Message{}
+	for rows.Next() {
+		var message Message
+		if err := scanMessage(rows, &message); err != nil {
+			return nil, fmt.Errorf("scan room message: %w", err)
+		}
+		messages = append(messages, message)
+	}
+	return messages, rows.Err()
+}
+
+type scanner interface{ Scan(...any) error }
+
+func scanMessage(row scanner, message *Message) error {
+	if err := row.Scan(&message.ID, &message.RoomID, &message.Seq, &message.AuthorHandle, &message.AuthorKind,
+		&message.AuthorUserID, &message.AuthorAgentID, &message.Body, &message.AddressedTo,
+		&message.InReplyToSeq, &message.CreatedAt); err != nil {
+		return err
+	}
+	if message.AddressedTo == nil {
+		message.AddressedTo = []string{}
+	}
+	return nil
+}
+
+const briefColumns = `room_id, revision, through_seq, summary, decided, open_items, owed, updated_at`
+
+// Brief implements [Store].
+func (store *PostgresStore) Brief(ctx context.Context, roomID string) (Brief, error) {
+	var brief Brief
+	err := scanBrief(store.database.Pool.QueryRow(ctx, `SELECT `+briefColumns+`
+		FROM agents_primary.room_briefs WHERE room_id=$1`, roomID), &brief)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return zeroBrief(roomID), nil
+	}
+	if err != nil {
+		return Brief{}, fmt.Errorf("get room brief: %w", err)
+	}
+	return brief, nil
+}
+
+// SaveBrief implements [Store]: it compares expected against the revision
+// already stored and only writes when they match, so two compactions racing
+// on the same room cannot clobber one another. The loser gets back what the
+// winner just committed, unchanged, with no error.
+//
+// A room with no brief yet has no row for FOR UPDATE to lock, so the first
+// statement idempotently plants one at revision 0 — deriving organization_id
+// from the room's teamspace, same as Append, and failing the same way with
+// ErrRoomNotFound when it does not exist — before the second statement locks
+// whatever is there. From that point on, ordinary row locking does the
+// rest: two concurrent SaveBriefs for the same room serialize on that lock,
+// and whichever runs second sees the first's committed revision and fails
+// the comparison cleanly instead of racing it.
+func (store *PostgresStore) SaveBrief(ctx context.Context, brief Brief, expected int64) (Brief, error) {
+	var result Brief
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO agents_primary.room_briefs
+				(room_id, organization_id, revision, through_seq, summary, decided, open_items, owed, updated_at)
+			SELECT $1, teamspace.organization_id, 0, 0, '', '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, now()
+			FROM agents_primary.teamspaces teamspace WHERE teamspace.id = $1
+			ON CONFLICT (room_id) DO NOTHING`, brief.RoomID); err != nil {
+			return fmt.Errorf("plant room brief: %w", err)
+		}
+		var current Brief
+		err := scanBrief(tx.QueryRow(ctx, `SELECT `+briefColumns+`
+			FROM agents_primary.room_briefs WHERE room_id=$1 FOR UPDATE`, brief.RoomID), &current)
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The plant above inserted nothing, which only happens when the
+			// room's teamspace does not exist: nothing to compact against.
+			return ErrRoomNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if current.Revision != expected {
+			result = current
+			return nil
+		}
+		decided, err := json.Marshal(nonNilStrings(brief.Decided))
+		if err != nil {
+			return err
+		}
+		open, err := json.Marshal(nonNilStrings(brief.Open))
+		if err != nil {
+			return err
+		}
+		owed, err := json.Marshal(nonNilStrings(brief.Owed))
+		if err != nil {
+			return err
+		}
+		return scanBrief(tx.QueryRow(ctx, `UPDATE agents_primary.room_briefs SET
+			revision=revision+1, through_seq=$2, summary=$3, decided=$4, open_items=$5, owed=$6, updated_at=$7
+			WHERE room_id=$1 RETURNING `+briefColumns,
+			current.RoomID, brief.ThroughSeq, brief.Summary, decided, open, owed, time.Now().UTC()), &result)
+	})
+	if errors.Is(err, ErrRoomNotFound) {
+		return Brief{}, ErrRoomNotFound
+	}
+	if err != nil {
+		return Brief{}, fmt.Errorf("save room brief: %w", err)
+	}
+	return result, nil
+}
+
+func zeroBrief(roomID string) Brief {
+	return Brief{RoomID: roomID, Decided: []string{}, Open: []string{}, Owed: []string{}}
+}
+
+func nonNilStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
+}
+
+func scanBrief(row scanner, brief *Brief) error {
+	var decided, open, owed []byte
+	if err := row.Scan(&brief.RoomID, &brief.Revision, &brief.ThroughSeq, &brief.Summary,
+		&decided, &open, &owed, &brief.UpdatedAt); err != nil {
+		return err
+	}
+	if err := json.Unmarshal(decided, &brief.Decided); err != nil {
+		return fmt.Errorf("decode brief decided: %w", err)
+	}
+	if err := json.Unmarshal(open, &brief.Open); err != nil {
+		return fmt.Errorf("decode brief open: %w", err)
+	}
+	if err := json.Unmarshal(owed, &brief.Owed); err != nil {
+		return fmt.Errorf("decode brief owed: %w", err)
+	}
+	if brief.Decided == nil {
+		brief.Decided = []string{}
+	}
+	if brief.Open == nil {
+		brief.Open = []string{}
+	}
+	if brief.Owed == nil {
+		brief.Owed = []string{}
+	}
+	return nil
+}
+
+// Watch implements [Store]. Presence only moves forward: GREATEST keeps a
+// delayed duplicate ping from undoing a later one that already landed.
+func (store *PostgresStore) Watch(ctx context.Context, roomID, userID string, at time.Time) error {
+	tag, err := store.database.Pool.Exec(ctx, `
+		INSERT INTO agents_primary.room_presence (room_id, organization_id, user_id, last_read_at)
+		SELECT $1, teamspace.organization_id, $2, $3
+		FROM agents_primary.teamspaces teamspace WHERE teamspace.id = $1
+		ON CONFLICT (room_id, user_id) DO UPDATE
+			SET last_read_at = GREATEST(room_presence.last_read_at, EXCLUDED.last_read_at)`,
+		roomID, userID, at)
+	if err != nil {
+		return fmt.Errorf("watch room: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRoomNotFound
+	}
+	return nil
+}
+
+// Watching implements [Store].
+func (store *PostgresStore) Watching(ctx context.Context, roomID string, since time.Time) ([]string, error) {
+	rows, err := store.database.Pool.Query(ctx, `
+		SELECT user_id FROM agents_primary.room_presence
+		WHERE room_id=$1 AND last_read_at>=$2
+		ORDER BY user_id`, roomID, since)
+	if err != nil {
+		return nil, fmt.Errorf("list room watchers: %w", err)
+	}
+	defer rows.Close()
+	userIDs := []string{}
+	for rows.Next() {
+		var userID string
+		if err := rows.Scan(&userID); err != nil {
+			return nil, fmt.Errorf("scan room watcher: %w", err)
+		}
+		userIDs = append(userIDs, userID)
+	}
+	return userIDs, rows.Err()
+}
+
+// Thread implements [Threads] (declared in speaker.go): the empty string
+// when agentID has not spoken in roomID yet.
+func (store *PostgresStore) Thread(ctx context.Context, roomID, agentID string) (string, error) {
+	var threadID string
+	err := store.database.Pool.QueryRow(ctx, `
+		SELECT thread_id FROM agents_primary.room_agent_threads
+		WHERE room_id=$1 AND agent_id=$2`, roomID, agentID).Scan(&threadID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read room agent thread: %w", err)
+	}
+	return threadID, nil
+}
+
+// SetThread implements [Threads]. Last writer wins: two turns of the same
+// agent in one room are already serialized by the relay that runs them, so
+// there is no compare-and-set here the way there is for the brief. An empty
+// threadID is a deliberate clear, not a no-op, so a caller telling us the
+// old thread is gone is recorded exactly like a caller telling us a new one.
+func (store *PostgresStore) SetThread(ctx context.Context, roomID, agentID, threadID string) error {
+	tag, err := store.database.Pool.Exec(ctx, `
+		INSERT INTO agents_primary.room_agent_threads (room_id, organization_id, agent_id, thread_id, updated_at)
+		SELECT $1, teamspace.organization_id, $2, $3, now()
+		FROM agents_primary.teamspaces teamspace WHERE teamspace.id = $1
+		ON CONFLICT (room_id, agent_id) DO UPDATE
+			SET thread_id = EXCLUDED.thread_id, updated_at = EXCLUDED.updated_at`,
+		roomID, agentID, threadID)
+	if err != nil {
+		return fmt.Errorf("record room agent thread: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrRoomNotFound
+	}
+	return nil
+}
+
+func clampLimit(limit int) int {
+	switch {
+	case limit <= 0:
+		return 100
+	case limit > 500:
+		return 500
+	default:
+		return limit
+	}
+}
+
+// Forget implements [Store]: it removes a member's own messages, presence
+// and agent-thread pointers from organizationID's rooms, or, when userID is
+// empty, everything every room of that organization holds. A message's
+// owning member is always AuthorUserID, whether a person or their own agent
+// said it (Message.AuthorUserID is never empty), so scoping by it catches
+// both. The brief is a room's own synthesis rather than any one member's, so
+// a per-member Forget leaves it standing — the same convention
+// teamspaces.Forget follows for a team-owned space when one contributor
+// leaves it. A member's agent threads are found through member_agents'
+// ownership, the same join organizationagents.Forget uses to reach a
+// member's own follow-ups.
+func (store *PostgresStore) Forget(ctx context.Context, organizationID, userID string) error {
+	if strings.TrimSpace(userID) == "" {
+		return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+			if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_messages WHERE organization_id=$1`, organizationID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_briefs WHERE organization_id=$1`, organizationID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_presence WHERE organization_id=$1`, organizationID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_agent_threads WHERE organization_id=$1`, organizationID); err != nil {
+				return err
+			}
+			_, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_message_seqs WHERE organization_id=$1`, organizationID)
+			return err
+		})
+	}
+	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_messages
+			WHERE organization_id=$1 AND author_user_id=$2`, organizationID, userID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_presence
+			WHERE organization_id=$1 AND user_id=$2`, organizationID, userID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `DELETE FROM agents_primary.room_agent_threads
+			WHERE organization_id=$1 AND agent_id IN (
+				SELECT id FROM agents_primary.member_agents WHERE organization_id=$1 AND owner_user_id=$2
+			)`, organizationID, userID)
+		return err
+	})
+}
+
+var (
+	_ Store   = (*PostgresStore)(nil)
+	_ Threads = (*PostgresStore)(nil)
+)
+
+// newMessageID names one message, the way every other id in this service is
+// made.
+func newMessageID() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("create room message id: %w", err)
+	}
+	return "rmg_" + base64.RawURLEncoding.EncodeToString(bytes), nil
+}
