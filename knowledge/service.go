@@ -43,6 +43,8 @@ func Builtin(proxy sources.Proxier) sources.Registry {
 		sources.NewGitHub(client),
 		sources.NewNotion(client),
 		sources.NewSlack(client),
+		sources.NewGoogleDrive(client),
+		sources.NewGmail(client),
 	} {
 		registry[extractor.Provider()] = extractor
 	}
@@ -74,7 +76,16 @@ type Dependencies struct {
 	// Extractors is what this build can read. None is built in: a host
 	// supplies each one with the client it reads through.
 	Extractors sources.Registry
-	Logger     *slog.Logger
+	// Originals is where a document's own bytes are kept when nothing here
+	// reads them as text — a PDF, an Office file. Nil unless
+	// KNOWLEDGE_ORIGINALS_BUCKET is configured, in which case such a document
+	// is skipped instead, as it always has been.
+	Originals application.Originals
+	// Judge decides whether a connected app's document is worth indexing.
+	// Nil unless KNOWLEDGE_JUDGE_MODEL is configured, in which case only the
+	// rules keep noise out.
+	Judge  application.Judge
+	Logger *slog.Logger
 }
 
 // Config is what a host tells knowledge about itself.
@@ -88,6 +99,10 @@ type Config struct {
 	// Services identifies a service reading a document's body through the
 	// internal API. Nil means that route refuses every call.
 	Services httpserver.ServiceVerifier
+	// OriginalsBucket names the bucket Dependencies.Originals writes to, so a
+	// published document's Original names where a consumer reads it from.
+	// Empty unless Dependencies.Originals is set.
+	OriginalsBucket string
 }
 
 // Service is knowledge, ready to mount.
@@ -119,8 +134,12 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Apps:       dependencies.Apps,
 		Grants:     dependencies.Grants,
 		Extractors: extractors,
+		Originals:  dependencies.Originals,
+		Judge:      dependencies.Judge,
 		Logger:     logger,
-	}, application.Config{ServiceName: Name, FullSweepInterval: config.FullSweepInterval})
+	}, application.Config{
+		ServiceName: Name, FullSweepInterval: config.FullSweepInterval, OriginalsBucket: config.OriginalsBucket,
+	})
 
 	service := &Service{
 		app:   app,

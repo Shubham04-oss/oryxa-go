@@ -69,8 +69,16 @@ func (store *Store) Migrate(ctx context.Context) error {
 	return store.database.Migrate(ctx, "agents-wakeups", migrations, "migrations/*.sql", migrationsAdvisoryLock)
 }
 
+// appUpdatesOn holds, in a statement whose $2 and $3 are an event's
+// organization and member, unless that member turned updates from their apps
+// off: what arrives while they are off is not kept to tell them later.
+const appUpdatesOn = `NOT EXISTS (
+	SELECT 1 FROM agents_primary.wakeup_preferences preference
+	WHERE preference.organization_id = $2 AND preference.member_id = $3 AND NOT preference.app_updates)`
+
 // Record keeps an event until it is handed to Krude. It reports false for an
-// event it already has, which the bus may deliver more than once.
+// event it already has, which the bus may deliver more than once, and for one
+// whose member turned updates from their apps off.
 func (store *Store) Record(ctx context.Context, event Event) (bool, error) {
 	if event.ID == "" || event.OrganizationID == "" || event.MemberID == "" {
 		return false, errors.New("a wake-up event needs its id, organization and member")
@@ -82,7 +90,8 @@ func (store *Store) Record(ctx context.Context, event Event) (bool, error) {
 	tag, err := store.database.Pool.Exec(ctx, `
 		INSERT INTO agents_primary.wakeup_events
 			(id, organization_id, member_id, toolkit, trigger, data, data_omitted, received_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8
+		WHERE `+appUpdatesOn+`
 		ON CONFLICT (id) DO NOTHING`,
 		event.ID, event.OrganizationID, event.MemberID, event.Toolkit, event.Trigger, data, event.DataOmitted, event.ReceivedAt)
 	if err != nil {
@@ -94,7 +103,8 @@ func (store *Store) Record(ctx context.Context, event Event) (bool, error) {
 // RecordBatch keeps a batch's events, all of them or none, in one
 // transaction: a wake-up claiming between two of them would otherwise hand
 // Krude part of the batch now and the rest later. It answers how many were
-// new; the bus may deliver a batch, or a trigger in it, more than once.
+// new; the bus may deliver a batch, or a trigger in it, more than once, and a
+// member who turned updates from their apps off has none kept.
 func (store *Store) RecordBatch(ctx context.Context, events []Event) (int, error) {
 	for _, event := range events {
 		if event.ID == "" || event.OrganizationID == "" || event.MemberID == "" {
@@ -111,7 +121,8 @@ func (store *Store) RecordBatch(ctx context.Context, events []Event) (int, error
 			tag, err := tx.Exec(ctx, `
 				INSERT INTO agents_primary.wakeup_events
 					(id, organization_id, member_id, toolkit, trigger, data, data_omitted, received_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				SELECT $1, $2, $3, $4, $5, $6::jsonb, $7, $8
+				WHERE `+appUpdatesOn+`
 				ON CONFLICT (id) DO NOTHING`,
 				event.ID, event.OrganizationID, event.MemberID, event.Toolkit, event.Trigger, data, event.DataOmitted, event.ReceivedAt)
 			if err != nil {
@@ -305,6 +316,11 @@ func (store *Store) Forget(ctx context.Context, organizationID, memberID string)
 			WHERE organization_id = $1 AND ($2 = '' OR member_id = $2)`, organizationID, memberID); err != nil {
 			return fmt.Errorf("forget wake-up threads: %w", err)
 		}
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM agents_primary.wakeup_preferences
+			WHERE organization_id = $1 AND ($2 = '' OR member_id = $2)`, organizationID, memberID); err != nil {
+			return fmt.Errorf("forget wake-up preferences: %w", err)
+		}
 		return nil
 	})
 }
@@ -386,4 +402,50 @@ func (store *Store) ReplaceThread(ctx context.Context, organizationID, memberID,
 		return "", errors.New("record wake-up thread: it changed while being recorded; try again")
 	}
 	return current, nil
+}
+
+// AppUpdates says whether a member wants Krude to tell them what their apps
+// report in an organization: yes, unless they turned it off.
+func (store *Store) AppUpdates(ctx context.Context, organizationID, memberID string) (bool, error) {
+	var on bool
+	err := store.database.Pool.QueryRow(ctx, `
+		SELECT app_updates FROM agents_primary.wakeup_preferences
+		WHERE organization_id = $1 AND member_id = $2`, organizationID, memberID).Scan(&on)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read app updates preference: %w", err)
+	}
+	return on, nil
+}
+
+// SetAppUpdates records whether a member wants Krude to tell them what their
+// apps report. Turning it off drops what is already waiting to be told, so
+// nothing from before wakes Krude later; a wake-up already running finishes.
+func (store *Store) SetAppUpdates(ctx context.Context, organizationID, memberID string, on bool) error {
+	if organizationID == "" || memberID == "" {
+		return errors.New("a preference needs its organization and member")
+	}
+	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO agents_primary.wakeup_preferences (organization_id, member_id, app_updates, updated_at)
+			VALUES ($1, $2, $3, now())
+			ON CONFLICT (organization_id, member_id) DO UPDATE SET
+				app_updates = excluded.app_updates, updated_at = excluded.updated_at`,
+			organizationID, memberID, on); err != nil {
+			return fmt.Errorf("record app updates preference: %w", err)
+		}
+		if on {
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE agents_primary.wakeup_events
+			SET handled_at = now(), data = NULL, dropped = true, batch_id = NULL, claimed_until = NULL
+			WHERE organization_id = $1 AND member_id = $2 AND handled_at IS NULL
+				AND (batch_id IS NULL OR claimed_until < now())`, organizationID, memberID); err != nil {
+			return fmt.Errorf("drop waiting app updates: %w", err)
+		}
+		return nil
+	})
 }

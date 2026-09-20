@@ -213,7 +213,7 @@ func TestRetrievalQuality(t *testing.T) {
 	// then run the ingest pipeline over each document.
 	paths, _ := filepath.Glob("testdata/corpus/*.md")
 	sort.Strings(paths)
-	pipeline := ingest.New(store, vectors, embedders, ingest.Options{}, logger)
+	pipeline := ingest.New(store, vectors, embedders, nil, ingest.Options{}, logger)
 	documentIDs := map[string]string{}
 	bodies := map[string]string{}
 	result := report{Embedding: spec.Model, Backend: backend, Policy: policy, Documents: len(paths)}
@@ -257,7 +257,7 @@ func TestRetrievalQuality(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reranker: %v", err)
 	}
-	retriever := retrieval.New(store, vectors, embedders, reranker, logger)
+	retriever := retrieval.New(store, vectors, embedders, reranker, nil, logger)
 	for _, mode := range []domain.SearchMode{domain.ModeHybrid, domain.ModeDense, domain.ModeLexical} {
 		result.Modes = append(result.Modes, measure(t, ctx, retriever, counter, corpus, mode, false, questions, documentIDs, bodies))
 	}

@@ -73,6 +73,13 @@ func Run(ctx context.Context, client *cognitoidentityprovider.Client, config Con
 	if err != nil {
 		return Output{}, err
 	}
+	// The grant sends a member through Cognito's own sign-in page, which the
+	// web client's sign-in never shows (it goes straight to Google). With
+	// managed login, a client without a branding style of its own gets
+	// "Login pages unavailable" there, so no member could ever grant.
+	if err := ensureManagedLoginBranding(ctx, client, poolID, agentClientID); err != nil {
+		return Output{}, err
+	}
 	output.AgentAppClientID = agentClientID
 	return output, nil
 }

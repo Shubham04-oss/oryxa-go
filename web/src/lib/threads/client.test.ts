@@ -3,9 +3,11 @@ import {
 	artifactContentUrl,
 	createThread,
 	deleteThread,
+	getKrudePreferences,
 	getThread,
 	type Item,
 	listThreads,
+	setAppUpdates,
 	startRun,
 } from "./client";
 
@@ -103,6 +105,38 @@ describe("deleteThread", () => {
 			"/v1/organizations/org_1/threads/th_1",
 			expect.objectContaining({ method: "DELETE" }),
 		);
+	});
+});
+
+describe("Krude preferences", () => {
+	it("reads the member's own preferences in the organization", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(json(200, { app_updates: true }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(getKrudePreferences("org_1")).resolves.toEqual({
+			app_updates: true,
+		});
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/organizations/org_1/preferences",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+
+	it("puts the app updates choice", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(json(200, { app_updates: false }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(setAppUpdates("org_1", false)).resolves.toEqual({
+			app_updates: false,
+		});
+		const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+		expect(path).toBe("/v1/organizations/org_1/preferences");
+		expect(init.method).toBe("PUT");
+		expect(JSON.parse(String(init.body))).toEqual({ app_updates: false });
 	});
 });
 

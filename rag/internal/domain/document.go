@@ -182,6 +182,32 @@ type Document struct {
 	CreatedAt      time.Time    `json:"created_at"`
 	UpdatedAt      time.Time    `json:"updated_at"`
 	IngestedAt     *time.Time   `json:"ingested_at,omitempty"`
+
+	// OriginalBucket and OriginalKey locate a document's own bytes in S3, for
+	// a document indexed with no extracted text of its own — a PDF, an
+	// Office file — because indexing it means handing those bytes to a
+	// knowledge base that parses them itself, not chunking text rag never
+	// has. Both empty, the ordinary case, means the document was indexed
+	// from text kept in its body instead. Internal bookkeeping for the
+	// ingest worker, not part of the public API.
+	OriginalBucket string `json:"-"`
+	OriginalKey    string `json:"-"`
+	// KBSyncedHash is the ContentSHA256 that was last handed to a Bedrock
+	// knowledge base for this document. Ingestion there is asynchronous, so
+	// the ingest worker claims a document many times before the knowledge
+	// base reports it indexed; comparing this to the current ContentSHA256
+	// is how a claim knows whether to submit again — never submitted, or the
+	// content changed since it last was — or only to poll for the outcome of
+	// a submission already running. Meaningless outside a bedrock-kb corpus,
+	// and not part of the public API.
+	KBSyncedHash string `json:"-"`
+}
+
+// HasOriginal reports whether a document was indexed with no extracted text
+// of its own — its bytes live in S3 instead, for a backend that parses them
+// itself to read.
+func (document Document) HasOriginal() bool {
+	return document.OriginalBucket != "" && document.OriginalKey != ""
 }
 
 // Chunk is one embeddable piece of a document, with enough provenance to cite

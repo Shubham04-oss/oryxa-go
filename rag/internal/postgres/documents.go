@@ -15,7 +15,8 @@ import (
 const documentColumns = `
 	id, corpus_id, organization_id, source_kind, source_ref, title, content_type,
 	content_sha256, byte_size, metadata, status, failure_reason, chunk_count,
-	attempts, created_by, created_at, updated_at, ingested_at`
+	attempts, created_by, created_at, updated_at, ingested_at,
+	original_bucket, original_key, kb_synced_hash`
 
 // documentColumnsQualified is the same list for a statement that also has
 // another relation in scope, where a bare "id" is ambiguous.
@@ -24,7 +25,8 @@ const documentColumnsQualified = `
 	document.source_ref, document.title, document.content_type, document.content_sha256,
 	document.byte_size, document.metadata, document.status, document.failure_reason,
 	document.chunk_count, document.attempts, document.created_by, document.created_at,
-	document.updated_at, document.ingested_at`
+	document.updated_at, document.ingested_at,
+	document.original_bucket, document.original_key, document.kb_synced_hash`
 
 type documentRow struct {
 	ID             string     `db:"id"`
@@ -45,6 +47,9 @@ type documentRow struct {
 	CreatedAt      time.Time  `db:"created_at"`
 	UpdatedAt      time.Time  `db:"updated_at"`
 	IngestedAt     *time.Time `db:"ingested_at"`
+	OriginalBucket string     `db:"original_bucket"`
+	OriginalKey    string     `db:"original_key"`
+	KBSyncedHash   string     `db:"kb_synced_hash"`
 }
 
 func (row documentRow) document() (domain.Document, error) {
@@ -70,6 +75,9 @@ func (row documentRow) document() (domain.Document, error) {
 		CreatedAt:      row.CreatedAt,
 		UpdatedAt:      row.UpdatedAt,
 		IngestedAt:     row.IngestedAt,
+		OriginalBucket: row.OriginalBucket,
+		OriginalKey:    row.OriginalKey,
+		KBSyncedHash:   row.KBSyncedHash,
 	}, nil
 }
 
@@ -114,16 +122,21 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 		case found:
 			// Same source, new content — or a previous attempt that never
 			// finished. Either way it goes back to pending and is re-cut.
+			// original_bucket and original_key are written again too: an
+			// original object is content addressed, so a changed document
+			// with one is a new object at a new key.
 			var row documentRow
 			if err := tx.GetContext(ctx, &row, `
 				UPDATE rag_documents
 				SET title = $2, content_type = $3, content_sha256 = $4, byte_size = $5,
 				    body = $6, metadata = $7, status = 'pending', failure_reason = '',
-				    attempts = 0, locked_until = NULL, updated_at = $8, ingested_at = NULL
+				    attempts = 0, locked_until = NULL, updated_at = $8, ingested_at = NULL,
+				    original_bucket = $9, original_key = $10
 				WHERE id = $1
 				RETURNING `+documentColumns,
 				existing.ID, document.Title, document.ContentType, document.ContentSHA256,
-				document.ByteSize, body, metadata, document.UpdatedAt); err != nil {
+				document.ByteSize, body, metadata, document.UpdatedAt,
+				document.OriginalBucket, document.OriginalKey); err != nil {
 				return mapWriteError("update document", err)
 			}
 			stored, err = row.document()
@@ -137,13 +150,14 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 				INSERT INTO rag_documents (
 					id, corpus_id, organization_id, source_kind, source_ref, title,
 					content_type, content_sha256, byte_size, body, metadata, status,
-					created_by, created_at, updated_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13, $13)
+					created_by, created_at, updated_at, original_bucket, original_key)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13, $13, $14, $15)
 				RETURNING `+documentColumns,
 				document.ID, document.CorpusID, document.OrganizationID,
 				document.Source.Kind, document.Source.Ref, document.Title,
 				document.ContentType, document.ContentSHA256, document.ByteSize, body, metadata,
-				document.CreatedBy, document.CreatedAt); err != nil {
+				document.CreatedBy, document.CreatedAt,
+				document.OriginalBucket, document.OriginalKey); err != nil {
 				return mapWriteError("insert document", err)
 			}
 			stored, err = row.document()
@@ -404,6 +418,50 @@ func (store *Store) MarkDocumentFailed(ctx context.Context, documentID, reason s
 	})
 }
 
+// MarkKnowledgeBaseSubmitted records that a document's current content has
+// been handed to a Bedrock knowledge base, without otherwise disturbing its
+// status or its lease: the document stays 'ingesting' until the ingest
+// worker's next claim polls the knowledge base for the outcome, exactly as
+// the lease that claim already holds intends. Recording this separately from
+// MarkDocumentReady is what lets a claim tell "never submitted, or the
+// content changed since it last was" from "already submitted, only the
+// outcome is still unknown" without resubmitting on every poll.
+func (store *Store) MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, contentSHA256 string, at time.Time) error {
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE rag_documents SET kb_synced_hash = $2, updated_at = $3 WHERE id = $1`,
+		documentID, contentSHA256, at); err != nil {
+		return fmt.Errorf("mark document submitted to the knowledge base: %w", err)
+	}
+	return nil
+}
+
+// RecheckDocumentAt leaves a document ingesting but claimable again at at:
+// how a bedrock-kb document waits on the knowledge base, which indexes in
+// seconds, rather than holding a whole lease. The claim that polled it did
+// not count as an attempt, so polling cannot use a document's attempts up.
+func (store *Store) RecheckDocumentAt(ctx context.Context, documentID string, at time.Time) error {
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE rag_documents
+		SET locked_until = $2, attempts = GREATEST(attempts - 1, 0), updated_at = now()
+		WHERE id = $1 AND status = 'ingesting'`, documentID, at); err != nil {
+		return fmt.Errorf("recheck document: %w", err)
+	}
+	return nil
+}
+
+// RetryDocumentAt puts a document whose attempt failed back in the queue,
+// claimable again at at. The failed attempt still counts toward giving up;
+// only the next one waits.
+func (store *Store) RetryDocumentAt(ctx context.Context, documentID string, at time.Time) error {
+	if _, err := store.db.ExecContext(ctx, `
+		UPDATE rag_documents
+		SET status = 'pending', locked_until = $2, updated_at = now()
+		WHERE id = $1 AND status = 'ingesting'`, documentID, at); err != nil {
+		return fmt.Errorf("retry document: %w", err)
+	}
+	return nil
+}
+
 // ReleaseDocument puts a document back for another attempt without counting it
 // as a failure, for a worker shutting down mid-ingest.
 func (store *Store) ReleaseDocument(ctx context.Context, documentID string) error {
@@ -414,6 +472,19 @@ func (store *Store) ReleaseDocument(ctx context.Context, documentID string) erro
 		return fmt.Errorf("release document: %w", err)
 	}
 	return nil
+}
+
+// DocumentIDsForCorpus lists every document a corpus holds, whatever its
+// status. It exists for dropping a bedrock-kb corpus's documents from the
+// knowledge base: there is no per-corpus index there to drop the way S3
+// Vectors has one, so removing a corpus means naming every document it owned
+// instead of the whole thing at once.
+func (store *Store) DocumentIDsForCorpus(ctx context.Context, corpusID string) ([]string, error) {
+	var ids []string
+	if err := store.db.SelectContext(ctx, &ids, `SELECT id FROM rag_documents WHERE corpus_id = $1`, corpusID); err != nil {
+		return nil, fmt.Errorf("list document ids for corpus: %w", err)
+	}
+	return ids, nil
 }
 
 // DocumentsBySource finds every document indexed from one source, across all

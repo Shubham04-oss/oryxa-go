@@ -39,6 +39,16 @@ type Config struct {
 	VectorBucket      string
 	S3VectorsEndpoint string
 
+	// KnowledgeBaseID and KnowledgeBaseDataSourceID name the one Bedrock
+	// knowledge base and its one data source this deployment was given;
+	// OpenTofu creates both outside rag. The backend is available only when
+	// both are set. KnowledgeBaseBucket is where rag stages document text
+	// too large to send inline; without it, staging is unavailable and such
+	// a document is refused by name rather than failing at ingest.
+	KnowledgeBaseID           string
+	KnowledgeBaseDataSourceID string
+	KnowledgeBaseBucket       string
+
 	// GoogleCloudProject and GoogleCloudLocation are where Vertex AI serves
 	// the models, matching how the agents service is configured.
 	GoogleCloudProject  string
@@ -116,6 +126,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		VectorBucket:      strings.TrimSpace(getenv("RAG_VECTOR_BUCKET_NAME")),
 		S3VectorsEndpoint: endpointOr(getenv, "AWS_ENDPOINT_URL_S3VECTORS", genericEndpoint),
 
+		KnowledgeBaseID:           strings.TrimSpace(getenv("RAG_KNOWLEDGE_BASE_ID")),
+		KnowledgeBaseDataSourceID: strings.TrimSpace(getenv("RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID")),
+		KnowledgeBaseBucket:       strings.TrimSpace(getenv("RAG_KNOWLEDGE_BASE_BUCKET")),
+
 		GoogleCloudProject:  strings.TrimSpace(getenv("GOOGLE_CLOUD_PROJECT")),
 		GoogleCloudLocation: valueOrDefault(getenv, "GOOGLE_CLOUD_LOCATION", "global"),
 
@@ -161,16 +175,26 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("the default embedding configuration is unusable: %w", err)
 	}
 	if !config.DefaultBackend.Valid() {
-		return Config{}, fmt.Errorf("RAG_DEFAULT_BACKEND must be %q or %q", domain.BackendPgvector, domain.BackendS3Vectors)
+		return Config{}, fmt.Errorf("RAG_DEFAULT_BACKEND must be %q, %q or %q", domain.BackendPgvector, domain.BackendS3Vectors, domain.BackendBedrockKB)
 	}
 	if err := config.DefaultBackend.Supports(spec.Metric); err != nil {
 		return Config{}, err
 	}
+	if required, ok := config.DefaultBackend.RequiredEmbeddingSpec(); ok && !spec.Equal(required) {
+		return Config{}, fmt.Errorf("the default embedding configuration is unusable: %s corpora use the knowledge base's own embedding spec (%s), not %s",
+			config.DefaultBackend, required, spec)
+	}
 	if config.DefaultBackend == domain.BackendS3Vectors && config.VectorBucket == "" {
 		return Config{}, errors.New("RAG_VECTOR_BUCKET_NAME is required when the default backend is s3vectors")
 	}
+	if config.DefaultBackend == domain.BackendBedrockKB && (config.KnowledgeBaseID == "" || config.KnowledgeBaseDataSourceID == "") {
+		return Config{}, errors.New("RAG_KNOWLEDGE_BASE_ID and RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID are required when the default backend is bedrock-kb")
+	}
 	if config.DefaultProvider == domain.ProviderVertex && config.GoogleCloudProject == "" {
 		return Config{}, errors.New("GOOGLE_CLOUD_PROJECT is required when the default embedding provider is vertex")
+	}
+	if (config.KnowledgeBaseID == "") != (config.KnowledgeBaseDataSourceID == "") {
+		return Config{}, errors.New("RAG_KNOWLEDGE_BASE_ID and RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID must be set together")
 	}
 
 	if !config.AnswerProvider.Valid() {

@@ -2,14 +2,19 @@ package sources
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	neturl "net/url"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
@@ -37,11 +42,135 @@ func credentialFromContext(ctx context.Context) domain.Credential {
 	return credential
 }
 
+// binaryAllowedContextKey marks a request whose answer may legitimately be a
+// file rather than JSON: Drive's export and alt=media downloads, which
+// Composio's proxy never returns inline (see BinaryData). Every other call
+// this package makes is a page of JSON, and a toolkit answering one with a
+// file is the provider holding something this package cannot read — which
+// stays a refusal unless the caller says otherwise.
+type binaryAllowedContextKey struct{}
+
+// AllowBinary marks ctx as a call whose answer may be a file. Composio does
+// not hand a file's bytes back inline: it stores the file and answers a link
+// to it (BinaryData.URL), which composioDoer follows on the caller's behalf
+// once this marker says the caller is ready to receive that rather than
+// ErrUnsupportedType.
+func AllowBinary(ctx context.Context) context.Context {
+	return context.WithValue(ctx, binaryAllowedContextKey{}, true)
+}
+
+func binaryAllowed(ctx context.Context) bool {
+	allowed, _ := ctx.Value(binaryAllowedContextKey{}).(bool)
+	return allowed
+}
+
+// maxBinaryFetchBytes bounds the file composioDoer will follow Composio's own
+// link to fetch, before a caller's own, usually tighter, limit — DoWithLimit's
+// maxBytes — trims the response further. It exists so a size Composio itself
+// misreports can never make this read an unbounded stream into memory.
+const maxBinaryFetchBytes = MaxOriginalBytes + (8 << 20)
+
+// storedFiles is the client fetchBinary reads Composio's stored files with.
+// The link arrives in a response, so it is treated as any address from
+// outside: HTTPS only, and every connection it makes, redirects included,
+// must reach a public address, checked after DNS has answered. Never the
+// task's metadata endpoint, a loopback or a private network.
+var storedFiles = &http.Client{
+	Timeout: 5 * time.Minute,
+	Transport: &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout: 10 * time.Second,
+			Control: func(_, address string, _ syscall.RawConn) error {
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					return err
+				}
+				ip, err := netip.ParseAddr(host)
+				if err != nil {
+					return err
+				}
+				if !publicAddress(ip) {
+					return fmt.Errorf("a stored file may only come from a public address, not %s", ip)
+				}
+				return nil
+			},
+		}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		ForceAttemptHTTP2:   true,
+	},
+	CheckRedirect: func(request *http.Request, via []*http.Request) error {
+		if request.URL.Scheme != "https" {
+			return errors.New("a stored file may only be fetched over https")
+		}
+		if len(via) >= 5 {
+			return errors.New("a stored file redirected too many times")
+		}
+		return nil
+	},
+}
+
+// sharedAddressSpace is carrier-grade NAT, which IsPrivate does not count as
+// private but which is no more the public internet than 10/8 is.
+var sharedAddressSpace = netip.MustParsePrefix("100.64.0.0/10")
+
+// publicAddress reports whether ip is on the public internet.
+func publicAddress(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !sharedAddressSpace.Contains(ip)
+}
+
+// fetchBinary follows the link Composio answered with — its own storage, not
+// the toolkit's — to read a file's bytes. It carries no credential of any
+// kind: BinaryData.URL is Composio's, presumed self-authorizing (presigned or
+// equivalent), and nothing here has a toolkit credential to place on it
+// regardless.
+func fetchBinary(ctx context.Context, url string) ([]byte, error) {
+	return fetchStoredFile(ctx, storedFiles, url)
+}
+
+func fetchStoredFile(ctx context.Context, client *http.Client, url string) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build the request for a stored file: %w", err)
+	}
+	if request.URL.Scheme != "https" {
+		return nil, fmt.Errorf("a stored file may only be fetched over https: %w", domain.ErrInvalid)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		// Why is kept, and the link is not: it is presigned, and a log line
+		// holding it would hand the file to whoever read the log.
+		var withURL *neturl.Error
+		if errors.As(err, &withURL) {
+			err = withURL.Err
+		}
+		return nil, fmt.Errorf("%w: the stored file did not answer: %v", domain.ErrProviderUnavailable, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("%w: the stored file answered %d", domain.ErrProviderUnavailable, response.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxBinaryFetchBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("%w: the stored file could not be read", domain.ErrProviderUnavailable)
+	}
+	if len(body) > maxBinaryFetchBytes {
+		return nil, fmt.Errorf("the stored file is more than %d bytes: %w", maxBinaryFetchBytes, domain.ErrInvalid)
+	}
+	return body, nil
+}
+
 // composioDoer is the base Doer a Client built by NewClient runs on. It never
 // sends a request itself: it turns one into a call through Composio's proxy,
 // since Composio holds the credential and this process never does.
 type composioDoer struct {
 	proxy Proxier
+	// binaries fetches a file Composio stored and answered a link to, for a
+	// request AllowBinary marked. NewClient wires this to fetchBinary; nil
+	// leaves the default behaviour of refusing a binary answer outright, which
+	// is what every test that builds a composioDoer literal gets unless it
+	// sets this itself.
+	binaries func(ctx context.Context, url string) ([]byte, error)
 }
 
 func (doer *composioDoer) Do(request *http.Request) (*http.Response, error) {
@@ -68,7 +197,7 @@ func (doer *composioDoer) Do(request *http.Request) (*http.Response, error) {
 	if err != nil {
 		return composioFailure(err)
 	}
-	return providerResponse(response)
+	return providerResponse(request.Context(), response, doer.binaries)
 }
 
 // readBody reads a request's body whole, since Composio's proxy takes it as
@@ -114,12 +243,28 @@ func headerParameters(header http.Header) []composio.ProxyParameter {
 
 // providerResponse turns what the toolkit answered into the *http.Response
 // the rest of this package reads exactly as if it had called the toolkit
-// directly. A file is the one shape it cannot carry forward: nothing here
-// extracts text from one, so it is refused rather than handed to a decoder
-// that would only fail on it less clearly.
-func providerResponse(response composio.ProxyResponse) (*http.Response, error) {
+// directly. A file is refused, the same way a decoder failing on one would
+// read, unless the request was marked with AllowBinary and this doer has a
+// way to fetch one — Drive's export and alt=media downloads are the only
+// calls this package makes that ever set the marker.
+func providerResponse(ctx context.Context, response composio.ProxyResponse, fetch func(context.Context, string) ([]byte, error)) (*http.Response, error) {
 	if response.Binary != nil {
-		return nil, fmt.Errorf("%w: the provider answered with a file, not text", domain.ErrUnsupportedType)
+		if !binaryAllowed(ctx) || fetch == nil {
+			return nil, fmt.Errorf("%w: the provider answered with a file, not text", domain.ErrUnsupportedType)
+		}
+		body, err := fetch(ctx, response.Binary.URL)
+		if err != nil {
+			return nil, err
+		}
+		header := http.Header{}
+		if response.Binary.ContentType != "" {
+			header.Set("Content-Type", response.Binary.ContentType)
+		}
+		return &http.Response{
+			StatusCode: cmp.Or(response.Status, http.StatusOK),
+			Header:     header,
+			Body:       io.NopCloser(bytes.NewReader(body)),
+		}, nil
 	}
 	header := http.Header{}
 	for name, value := range response.Headers {

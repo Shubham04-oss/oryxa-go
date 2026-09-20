@@ -152,6 +152,40 @@ export function threadQueryOptions(organizationId: string, threadId: string) {
 	});
 }
 
+/** What a member chose about Krude, in one organization. */
+export interface KrudePreferences {
+	/** Whether Krude wakes up to tell the member what their connected apps report. On until they turn it off. */
+	app_updates: boolean;
+}
+
+function preferencesPath(organizationId: string): string {
+	return apiPath`/v1/organizations/${organizationId}/preferences`;
+}
+
+export function getKrudePreferences(
+	organizationId: string,
+): Promise<KrudePreferences> {
+	return apiRequest<KrudePreferences>(preferencesPath(organizationId));
+}
+
+/** Turning app updates off also drops what was waiting to be told. */
+export function setAppUpdates(
+	organizationId: string,
+	appUpdates: boolean,
+): Promise<KrudePreferences> {
+	return apiRequest<KrudePreferences>(preferencesPath(organizationId), {
+		body: { app_updates: appUpdates },
+		method: "PUT",
+	});
+}
+
+export function krudePreferencesQueryOptions(organizationId: string) {
+	return queryOptions({
+		queryFn: () => getKrudePreferences(organizationId),
+		queryKey: ["krude-preferences", organizationId] as const,
+	});
+}
+
 export interface StartRunOptions {
 	/** Called for every item the stream carries, in order, until it ends. */
 	onItem: (item: Item) => void;

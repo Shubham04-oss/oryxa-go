@@ -7,15 +7,15 @@ something, and the `oryxa.knowledge` events a retrieval pipeline holds. It
 mounts into the single `oryxa` binary like every other service — see
 [Mounting it](#mounting-it) and [Run locally](#run-locally).
 
-**GitHub, Notion and Slack read through Composio.** Knowledge holds no
-credential for any of them: a member connects an app through `apps`, which
-owns the connection and its Composio connected account, and a source names
-that connection at registration. Every call is proxied through Composio's own
-API, never made directly, so this process never sees a token. These three are
-mounted only when `COMPOSIO_API_KEY` is set; without it the binary mounts no
-extractor for them, and `apps` need not even be running. The files source
-reads the organization's own storage as the member who registered it, and
-mounts once it has a way to act as one — see
+**GitHub, Notion, Slack, Google Drive and Gmail read through Composio.**
+Knowledge holds no credential for any of them: a member connects an app
+through `apps`, which owns the connection and its Composio connected account,
+and a source names that connection at registration. Every call is proxied
+through Composio's own API, never made directly, so this process never sees a
+token. These five are mounted only when `COMPOSIO_API_KEY` is set; without it
+the binary mounts no extractor for them, and `apps` need not even be running.
+The files source reads the organization's own storage as the member who
+registered it, and mounts once it has a way to act as one — see
 [Sources](#sources).
 
 Knowledge owns what has been extracted and when. Auth remains the identity and
@@ -29,7 +29,7 @@ member ── registers a source, naming a connection ──▶ knowledge
                                                           │
                                                           ├── GET  auth     /v1/organizations/{org}
                                                           ├── GET  apps     /v1/organizations/{org}/apps/connections/{id}
-                                                          ├── POST composio /tools/execute/proxy ──▶ GitHub / Notion / Slack
+                                                          ├── POST composio /tools/execute/proxy ──▶ GitHub / Notion / Slack / Drive / Gmail
                                                           └── oryxa.knowledge ──▶ the bus ──▶ retrieval
 
 auth ── organization deleted, member removed ──▶ knowledge-events queue
@@ -44,6 +44,11 @@ these". The first **organization-scoped** upload does: knowledge hears
 `files.object.created.v1`, and registers the organization's files source once.
 Every upload after that finds it already there, so the cost is one lookup and
 no token.
+
+A deletion is heard the same way: `files.object.deleted.v1` retracts the
+file's document from every files source in the organization at once, and
+deletes its original, instead of leaving it searchable until the next full
+sweep notices it missing, up to a week later.
 
 Only a shared upload counts. A member's private file and a team's do not start
 it, and the source itself asks files for the organization's own scope alone —
@@ -168,6 +173,23 @@ pass, once its last sweep is older than `KNOWLEDGE_FULL_SWEEP_INTERVAL` (a Go
 duration, a week by default), so a document deleted at the provider is
 eventually noticed even long after a source's first pass.
 
+Some providers do better than that. Drive's changes feed and Gmail's history
+both say outright, as part of the very page that reports what changed, that a
+particular document is now gone — `Page.Removed`, a list of external ids an
+extractor is certain of. Sync retracts those at once rather than waiting for
+the next full sweep: a file trashed in Drive or a message deleted in Gmail
+stops being searchable within the source's ordinary interval, not up to a
+week later. `github`, `notion`, `slack` and `files` have no such feed and
+never set it; nothing changes for them.
+
+A provider's own incremental cursor is not always a moment. Drive hands back
+`changes.startPageToken`, an opaque string; Gmail hands back a `historyId`,
+a number it treats as opaque too. `Cursor.Token` carries this the way
+`Cursor.Watermark` carries a time-based provider's position — read back to
+start the next incremental pass, moved only once a pass drains — so a source
+with a token behind it is exactly as "already read through" as one with a
+watermark for deciding whether the next pass is full or incremental.
+
 A document is published when it is first seen and whenever its content hash
 changes, and not otherwise, so a pass over an unchanged source publishes
 nothing. Normalizing before hashing is what makes that true: a provider that
@@ -191,12 +213,79 @@ the source failing, so nothing is recorded against it.
 | `github` | `{"repository": "<owner>/<name>"}` | Issues and pull requests, oldest updated first | GitHub's own page number |
 | `notion` | `{"database": "<id>"}`, or nothing for every page the connection can see | Pages, or one database's rows across every data source it holds since the 2025-09-03 split | Notion's own `start_cursor`/`next_cursor` |
 | `slack` | `{"channel": "<id>"}` | One channel's message history | Slack's own `cursor`, `oldest` a second before the watermark |
+| `googledrive` | `{"folder": "<id>"}`, or nothing for the whole of the member's Drive | Google Docs, Sheets and Slides as text; PDF, Word, Excel and PowerPoint files as their original bytes | Drive's own `pageToken`, plus a breadth-first queue of subfolders when scoped to a folder |
+| `gmail` | `{"label": "<id>"}`, or nothing for `INBOX` | One label's messages | Gmail's own `pageToken` |
 | `files` | `{"team": "<id>"}` or `{"purpose": "<purpose>"}`, or nothing | The organization's own stored files | Paged here: files answers its whole listing at once |
 
-`github`, `notion` and `slack` take a `connection_id`, naming a connection a
-member made through `apps`; every call is proxied through Composio's API on
-the connected account behind it, never made directly. They mount only when
-`COMPOSIO_API_KEY` is set.
+`github`, `notion`, `slack`, `googledrive` and `gmail` take a `connection_id`,
+naming a connection a member made through `apps`; every call is proxied
+through Composio's API on the connected account behind it, never made
+directly. They mount only when `COMPOSIO_API_KEY` is set.
+
+### Google Drive
+
+`GET .../drive/v3/files` lists everything the account can see — Drive's own
+default corpus already covers "the whole of my Drive" without this walking
+anything — with a `q` of `trashed = false`, paged by `pageToken`, asking for
+`fields=nextPageToken,files(id,name,mimeType,modifiedTime,webViewLink,size,md5Checksum,trashed,parents)`.
+A folder target instead asks `q='<id>' in parents and trashed = false`
+against that one folder, and Drive's query language has no operator for
+"under this folder, however deep": a subfolder found in a page is queued
+rather than descended into immediately, so a walk scoped to a folder visits
+every folder under it breadth first, one cursor carrying which folder is
+current, Drive's own page token within it, and everything still queued.
+
+A Google Doc or Slide is read with `GET .../files/<id>/export?mimeType=text/plain`;
+a Sheet the same way with `mimeType=text/csv`, since that is what its rows
+actually are. Drive can reportedly export a Doc as `text/markdown` too, which
+would read better, but nothing here has confirmed that against a live
+account, so this asks for `text/plain`, which every version of the API has
+always answered — see TODO.md. A PDF, a `.doc`, `.docx`, `.xls`, `.xlsx`,
+`.ppt` or `.pptx` file is downloaded whole with `GET .../files/<id>?alt=media`
+and kept as-is; Drive told its size in the same listing that named it, so
+anything over 50 MiB is never downloaded at all, only counted as skipped.
+Everything else Drive holds — an image, a video, a Form, a Site, a Drawing —
+is skipped the same way. Composio never returns a file's bytes inline for
+either call: it stores the file and answers a link, which the shared client
+follows itself (`sources.AllowBinary`, `composio.go`) rather than refusing the
+way every other call here does.
+
+An incremental pass reads `GET .../drive/v3/changes`, from the token a full
+pass leaves behind (`GET .../changes/startPageToken`, asked once a walk
+drains). A changed file still in scope is read the same way a full pass would
+read it; one Drive reports `removed` or `trashed` is retracted at once
+through `Page.Removed`. Scoped to a folder, a change is kept only when the
+file's own `parents` names that folder directly — matching a file nested in a
+subfolder would mean this pass already knowing the whole current tree, which
+only a full walk actually has, so that is left to the next full sweep
+instead, documented rather than solved.
+
+### Gmail
+
+`GET .../gmail/v1/users/me/messages` lists a label's messages —
+`labelIds=INBOX` by default — and, only on a source's very first pass,
+`q=newer_than:90d`: recent mail is useful the moment a connection is made,
+and reading years of history before anything is searchable would make a
+heavy mailbox's first connection look hung. A periodic re-sweep of a source
+already read once carries no such bound, because a message that has simply
+aged past ninety days between one sweep and the next must not look deleted
+just because a bounded re-sweep stopped seeing it. Each message is then read
+with `GET .../messages/<id>?format=full`; the document is the message itself
+— title the subject, text its `text/plain` part or, missing that, its
+`text/html` part stripped through the same transform an HTML page from any
+other source reads through — with its from, to, date and thread id as
+metadata, and its Gmail web link as its URL. Attachments are left out
+entirely: nothing here follows an attachment's id to fetch what it names.
+
+An incremental pass reads `GET .../users/me/history`, from the `historyId`
+the previous pass left (`GET .../users/me/profile`, asked once a walk
+drains), for `messageAdded`, `messageDeleted` and `labelRemoved`. A message
+added to the label is read in full; one deleted outright, or one that merely
+left this label — archived out of `INBOX`, say — is retracted through
+`Page.Removed` either way, since this source is exactly that label. Gmail
+keeps history for about a week; a `startHistoryId` older than that answers
+404, which reads as a fresh watermark rather than a failure, and the next
+periodic full sweep is what actually catches anything missed in between.
 
 `files` reads the organization's own storage as the member who registered it,
 and takes no connection. A scheduled pass has no member at a browser, so it
@@ -216,7 +305,9 @@ names one, and publishes under that same scope. Billing attachments are never
 read, whoever the source reads as.
 
 Only text is indexed. A media type holding none is refused rather than stored
-as though bytes were words.
+as though bytes were words — unless it is a PDF or an Office file and
+`KNOWLEDGE_ORIGINALS_BUCKET` is configured, in which case its own bytes are
+kept instead of refused; see [Originals](#originals).
 
 HTML is read by taking its text out: the title, then the prose, with a line
 wherever a block element begins or ends so a list does not run together into
@@ -225,6 +316,46 @@ do not survive; neither do attributes. What is stored is `text/plain`, because
 that is what the body then is, and the hash is over those words rather than
 the markup — so a provider that re-serializes the same page has not changed
 it.
+
+## Originals
+
+A PDF or an Office file holds no text this package reads itself, and used to
+be skipped outright — counted, never published. With `KNOWLEDGE_ORIGINALS_BUCKET`
+set, one is kept instead: its bytes go to S3 at
+`originals/<organization_id>/<source_id>/<document_id>/<sha256>`, content
+addressed so a changed document is a new object and a reader never sees one
+half written, and the document is published with `Original{Bucket, Key,
+Size, SHA256}` (`contracts/events/knowledge/v1`) rather than a `Body` —
+`MIME` is the file's real type, and `ContentHash` is `Original.SHA256`. A
+retrieval backend that can parse such a file, such as a Bedrock knowledge
+base, reads it from there; one that cannot still gets everything else this
+service already publishes. Without the bucket configured, nothing about this
+changes: such a file is skipped exactly as before.
+
+Two sources produce these today. Drive's own PDF, Word, Excel and PowerPoint
+files pass through as-is (see [Google Drive](#google-drive)). The
+organization's own files source (`files`) does the same for a stored PDF or
+Office file, but only once the bucket is configured — unlike Drive, it checks
+first, the same way it already avoided fetching any file's bytes until its
+declared type said they were worth reading. Either way, a file over 50 MiB
+(`sources.MaxOriginalBytes`) is never kept: counted as skipped, the same as a
+type nothing here reads at all.
+
+Before writing a new version, the previous document with the same external id
+is read back (`DocumentByExternalID`) — cheap, and it means a weekly full
+sweep over a file that has not actually changed re-uploads nothing, and that
+the object's key carries the document's own stable id rather than a
+throwaway one that would not survive an update. The old object is deleted
+once the new one is safely published, and whenever a document carrying an
+Original is itself retracted — a full sweep no longer seeing it, `Page.Removed`
+saying so at once, or the source, connection, team, member or organization it
+belonged to going away — its object is deleted with it. A failed delete is
+logged and not retried: the row is already correct, and a byte nothing will
+read again is a smaller problem than failing a sync run or a removal over it.
+
+`KNOWLEDGE_ORIGINALS_BUCKET` is knowledge's own bucket; nothing outside this
+service reads or writes it directly. `AWS_ENDPOINT_URL_S3` (or the generic
+`AWS_ENDPOINT_URL`) points it at a local emulator instead of AWS.
 
 ## API
 
@@ -382,10 +513,10 @@ for _, worker := range service.Workers() {
 
 Building the pool, the AWS clients and the Composio client stays the host's
 job: a host running several services shares those rather than having each
-build its own. `knowledge.Builtin` wires `github`, `notion` and `slack` onto
-one shared HTTP client so pacing and rate-limit backoff are per toolkit across
-all of them; `knowledge.Subscriptions()` says which events the queue it polls
-must carry.
+build its own. `knowledge.Builtin` wires `github`, `notion`, `slack`,
+`googledrive` and `gmail` onto one shared HTTP client so pacing and
+rate-limit backoff are per toolkit across all of them; `knowledge.Subscriptions()`
+says which events the queue it polls must carry.
 
 ## Provision
 
@@ -416,9 +547,11 @@ docker compose up -d
 
 Without `KNOWLEDGE_EVENTS_QUEUE_URL` knowledge still starts, but it will not
 pause or retire a source when its connection, member or organization goes
-away. Without `COMPOSIO_API_KEY` it starts with `github`, `notion` and `slack`
-unmounted; without `FILES_URL` and `KNOWLEDGE_SERVICE_KEY_ID`, without
-`files`.
+away. Without `COMPOSIO_API_KEY` it starts with `github`, `notion`, `slack`,
+`googledrive` and `gmail` unmounted; without `FILES_URL` and
+`KNOWLEDGE_SERVICE_KEY_ID`, without `files`; without
+`KNOWLEDGE_ORIGINALS_BUCKET`, a PDF or an Office file is skipped rather than
+kept — see [Originals](#originals).
 
 ## Deploy
 

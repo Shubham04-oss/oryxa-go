@@ -36,7 +36,7 @@ func TestConnectingSubscribesToEverythingTheAppDelivers(t *testing.T) {
 	// so each needs its own id for the store to keep them apart.
 	h.composio.upsertPerSlug = true
 
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 
 	subscribed := map[string]domain.Trigger{}
 	for _, trigger := range h.store.triggers {
@@ -67,6 +67,83 @@ func TestConnectingSubscribesToEverythingTheAppDelivers(t *testing.T) {
 	}
 }
 
+// A member who connects an app lands back in it moments later and looks for
+// its events, so completing the connection wakes the subscriber rather than
+// leaving it to the next sweep.
+func TestCompletingAConnectionWakesTheSubscriber(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	connection, state := h.pending(t, "github")
+	h.composio.accounts[connection.ComposioAccountID] = []composio.ConnectedAccount{account(connection, composio.StatusActive)}
+
+	if _, err := h.service.CompleteConnection(context.Background(), state, "success", connection.ComposioAccountID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.service.subscribeWake:
+	default:
+		t.Fatal("completing a connection did not wake the subscriber")
+	}
+}
+
+// Woken, the subscriber subscribes at once instead of at its next look.
+func TestRunAutoSubscribeSubscribesAsSoonAsWoken(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.composio.upsertPerSlug = true
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		h.service.RunAutoSubscribe(ctx)
+		close(done)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	// Owed only after its first look has passed, so nothing but the wake
+	// can find it before autoSubscribeEvery.
+	time.Sleep(50 * time.Millisecond)
+	h.store.mu.Lock()
+	connection := h.activeConnection("apc_1", "user-1", "github", "ca_1")
+	connection.AutoSubscribe = true
+	h.store.connections[connection.ID] = connection
+	h.store.mu.Unlock()
+	h.service.wakeSubscriber()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		h.store.mu.Lock()
+		subscribed := h.store.connections[connection.ID].AutoSubscribedAt != nil
+		h.store.mu.Unlock()
+		if subscribed {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the woken subscriber did not subscribe the connection")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRunAutoSubscribeStopsWithItsContext(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		h.service.RunAutoSubscribe(ctx)
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the subscriber did not stop")
+	}
+}
+
 // TestAnEventNeedingConfigurationIsLeftForTheMember covers the one thing
 // connecting cannot decide: a trigger whose schema names a repository or a
 // channel has no answer that would not be a guess.
@@ -76,7 +153,7 @@ func TestAnEventNeedingConfigurationIsLeftForTheMember(t *testing.T) {
 	h.awaiting("apc_1", "github", "ca_1")
 	h.composio.upsertPerSlug = true
 
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 
 	for _, trigger := range h.store.triggers {
 		if trigger.Slug == "GITHUB_COMMIT_EVENT" {
@@ -100,7 +177,7 @@ func TestSubscribingRunsOnceEvenIfTheWorkerRunsAgain(t *testing.T) {
 	h.composio.upsertPerSlug = true
 
 	for range 3 {
-		h.service.maintain(context.Background())
+		h.service.subscribeConnections(context.Background())
 	}
 	if calls := len(h.composio.upserts); calls != 1 {
 		t.Fatalf("asked Composio %d times, want once", calls)
@@ -119,7 +196,7 @@ func TestAConnectionThatSaidNoIsNotSubscribed(t *testing.T) {
 	connection.AutoSubscribe = false
 	h.store.connections[connection.ID] = connection
 
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 
 	if len(h.store.triggers) != 0 {
 		t.Fatalf("subscribed anyway: %v", h.store.triggers)
@@ -136,7 +213,7 @@ func TestADeploymentCanTurnItOff(t *testing.T) {
 	h.service.autoSubscribe = false
 	h.awaiting("apc_1", "github", "ca_1")
 
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 
 	if len(h.store.triggers) != 0 {
 		t.Fatalf("subscribed although the deployment turned it off: %v", h.store.triggers)
@@ -195,7 +272,7 @@ func TestSubscribingIsBoundedSoConnectingCannotCommitSomeoneToHundreds(t *testin
 	h.awaiting("apc_1", "bigapp", "ca_1")
 	h.composio.upsertPerSlug = true
 
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 
 	if len(h.store.triggers) != AutoSubscribeLimit {
 		t.Fatalf("subscribed to %d events, want the ceiling of %d", len(h.store.triggers), AutoSubscribeLimit)
@@ -210,7 +287,7 @@ func TestAnAppThatCannotBeReadIsTriedAgain(t *testing.T) {
 	connection := h.awaiting("apc_1", "github", "ca_1")
 	h.composio.triggerTypeErr = composio.ErrUnavailable
 
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 	if h.store.connections[connection.ID].AutoSubscribedAt != nil {
 		t.Fatal("a connection nothing could be read for was marked done")
 	}
@@ -218,7 +295,7 @@ func TestAnAppThatCannotBeReadIsTriedAgain(t *testing.T) {
 	// Composio comes back, and the next pass does the work.
 	h.composio.triggerTypeErr = nil
 	h.composio.upsertPerSlug = true
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 	if len(h.store.triggers) == 0 {
 		t.Fatal("the retry subscribed nothing")
 	}
@@ -236,7 +313,7 @@ func TestAnAppThatKeepsFailingIsGivenUpOn(t *testing.T) {
 	h.composio.triggerTypeErr = composio.ErrUnavailable
 
 	for range autoSubscribeAttempts + 3 {
-		h.service.maintain(context.Background())
+		h.service.subscribeConnections(context.Background())
 	}
 	if reads := h.composio.triggerLists; reads > autoSubscribeAttempts {
 		t.Fatalf("read the catalog %d times, want at most %d", reads, autoSubscribeAttempts)
@@ -259,7 +336,7 @@ func TestAPassWhereEveryEventIsRefusedIsTriedAgain(t *testing.T) {
 	connection := h.awaiting("apc_1", "github", "ca_1")
 	h.composio.upsertErr = fmt.Errorf("%w: user_id is required to create or update a trigger", composio.ErrInvalid)
 
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 	if h.store.connections[connection.ID].AutoSubscribedAt != nil {
 		t.Fatal("a pass that subscribed nothing was marked done")
 	}
@@ -267,7 +344,7 @@ func TestAPassWhereEveryEventIsRefusedIsTriedAgain(t *testing.T) {
 	// Once the refusal stops, the next pass subscribes and finishes.
 	h.composio.upsertErr = nil
 	h.composio.upsertPerSlug = true
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 	if h.store.connections[connection.ID].AutoSubscribedAt == nil {
 		t.Fatal("the connection was not subscribed once Composio accepted it")
 	}
@@ -299,7 +376,7 @@ func TestAutoSubscribeGivingUpIsLogged(t *testing.T) {
 	store.connections[connection.ID] = connection
 
 	for attempt := 1; attempt <= autoSubscribeAttempts; attempt++ {
-		service.maintain(context.Background())
+		service.subscribeConnections(context.Background())
 		if attempt < autoSubscribeAttempts && strings.Contains(logs.String(), "gave up") {
 			t.Fatalf("gave up before the last attempt (attempt %d of %d): %s", attempt, autoSubscribeAttempts, logs.String())
 		}
@@ -318,7 +395,7 @@ func TestAutoSubscribeGivingUpIsLogged(t *testing.T) {
 	// It gave up: a further pass does not read the catalog again, and does
 	// not repeat the warning.
 	logs.Reset()
-	service.maintain(context.Background())
+	service.subscribeConnections(context.Background())
 	if reads := fake.triggerLists; reads != autoSubscribeAttempts {
 		t.Fatalf("read the catalog %d times, want exactly %d (no further attempts)", reads, autoSubscribeAttempts)
 	}
@@ -364,7 +441,7 @@ func TestAutoSubscribeSkipsWhatIsAlreadyOnTheConnection(t *testing.T) {
 		Toolkit: "github", Slug: "GITHUB_FORK_EVENT", ComposioTriggerID: "ti_y", Status: domain.TriggerRemoved,
 	}
 
-	h.service.maintain(context.Background())
+	h.service.subscribeConnections(context.Background())
 
 	bySlug := map[string]bool{}
 	for _, trigger := range h.store.triggers {

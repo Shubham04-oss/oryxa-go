@@ -144,6 +144,79 @@ func TestNotionTargetsAreTheParentDatabasesOfItsDataSources(t *testing.T) {
 	}
 }
 
+// TestGoogleDriveTargetsOffersTheWholeDriveAndSharedDrives covers the target
+// knowledge's own extractor takes no read to offer at all — the whole of the
+// member's Drive is always the first target — plus a shared drive read from
+// Drive itself, listed by an absolute URL rather than a path under some
+// assumed base for a toolkit this project has not proxied for real yet.
+func TestGoogleDriveTargetsOffersTheWholeDriveAndSharedDrives(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	connection := h.activeConnection("apc_1", "user-1", "googledrive", "ca_1")
+	h.answers(200, `{"drives":[{"id":"shared_1","name":"Marketing"},{"id":"","name":"Nameless"}]}`)
+
+	targets, err := h.service.ConnectionTargets(context.Background(), memberToken, "org_1", connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("targets = %+v, want the whole Drive plus the one named shared drive", targets)
+	}
+	if targets[0].Kind != "drive" || string(targets[0].Target) != `{}` {
+		t.Fatalf("first target = %+v, want the whole Drive with an empty target", targets[0])
+	}
+	if targets[1].ID != "shared_1" || string(targets[1].Target) != `{"folder":"shared_1"}` {
+		t.Fatalf("second target = %+v, want the shared drive as a folder target", targets[1])
+	}
+	if len(h.composio.proxied) != 1 || h.composio.proxied[0].Endpoint == "" {
+		t.Fatalf("proxied = %+v", h.composio.proxied)
+	}
+}
+
+// TestGoogleDriveTargetsStillOffersMyDriveWhenSharedDrivesCannotBeRead covers
+// the "if cheap" half of the offer: a personal account, or a refused read,
+// leaves the one target nothing can fail on.
+func TestGoogleDriveTargetsStillOffersMyDriveWhenSharedDrivesCannotBeRead(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	connection := h.activeConnection("apc_1", "user-1", "googledrive", "ca_1")
+	h.answers(403, `{"error":"insufficient permission"}`)
+
+	targets, err := h.service.ConnectionTargets(context.Background(), memberToken, "org_1", connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Kind != "drive" {
+		t.Fatalf("targets = %+v, want My Drive alone", targets)
+	}
+}
+
+// TestGmailTargetsOffersInboxAndSent covers the two labels a member is most
+// likely to want searchable — knowledge's own extractor defaults to INBOX
+// already, so this needs no read at all, unlike every other toolkit here.
+func TestGmailTargetsOffersInboxAndSent(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	connection := h.activeConnection("apc_1", "user-1", "gmail", "ca_1")
+
+	targets, err := h.service.ConnectionTargets(context.Background(), memberToken, "org_1", connection.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("targets = %+v, want INBOX and SENT", targets)
+	}
+	if targets[0].ID != "INBOX" || string(targets[0].Target) != `{"label":"INBOX"}` {
+		t.Fatalf("first target = %+v", targets[0])
+	}
+	if targets[1].ID != "SENT" || string(targets[1].Target) != `{"label":"SENT"}` {
+		t.Fatalf("second target = %+v", targets[1])
+	}
+	if len(h.composio.proxied) != 0 {
+		t.Fatalf("proxied = %+v, want no read: both labels are known without asking", h.composio.proxied)
+	}
+}
+
 // TestAnAppNothingCanBeIndexedForAnswersNothing keeps a picker from showing a
 // problem where the honest answer is that there is nothing to index.
 func TestAnAppNothingCanBeIndexedForAnswersNothing(t *testing.T) {

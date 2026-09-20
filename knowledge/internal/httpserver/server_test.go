@@ -27,6 +27,18 @@ type fakeService struct {
 	seen       authclient.Credentials
 	registered application.RegisterInput
 	query      domain.SourceQuery
+	kinds      []string
+	kindsSet   bool
+}
+
+func (service *fakeService) SetSourceKinds(_ context.Context, credentials authclient.Credentials, _, _ string, include []string) (domain.Source, error) {
+	service.seen, service.kinds, service.kindsSet = credentials, include, true
+	if service.err != nil {
+		return domain.Source{}, service.err
+	}
+	source := service.source
+	source.IncludeKinds = include
+	return source, nil
 }
 
 func (service *fakeService) RegisterSource(_ context.Context, credentials authclient.Credentials, _ string, input application.RegisterInput) (domain.Source, error) {
@@ -145,6 +157,7 @@ func TestEveryOrganizationRouteNeedsACaller(t *testing.T) {
 		{http.MethodDelete, "/v1/organizations/org_1/sources/src_1"},
 		{http.MethodGet, "/v1/organizations/org_1/sources/src_1/runs"},
 		{http.MethodGet, "/v1/organizations/org_1/documents/doc_1"},
+		{http.MethodPut, "/v1/organizations/org_1/sources/src_1/kinds"},
 	} {
 		recorder := send(server, route.method, route.path, "{}", nil)
 		if recorder.Code != http.StatusUnauthorized {
@@ -417,4 +430,45 @@ func (service *fakeService) SyncSource(_ context.Context, credentials authclient
 		return domain.Source{}, service.err
 	}
 	return service.source, nil
+}
+
+func TestKindsAreReadableBeforeACallerHasAnything(t *testing.T) {
+	recorder := send(testServer(t, &fakeService{}), http.MethodGet, "/v1/sources/kinds", "", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET /v1/sources/kinds = %d, want 200", recorder.Code)
+	}
+	var answer struct {
+		Kinds []domain.KindInfo `json:"kinds"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Kinds) != len(domain.Kinds) || answer.Kinds[0].Label == "" {
+		t.Fatalf("kinds = %+v, want every kind a member chooses among, labelled", answer.Kinds)
+	}
+}
+
+func TestSetSourceKindsPassesTheChoiceThrough(t *testing.T) {
+	service := &fakeService{source: registered()}
+	recorder := send(testServer(t, service), http.MethodPut, "/v1/organizations/org_1/sources/src_1/kinds",
+		`{"include_kinds":["conversation","event_update"]}`, bearer())
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("PUT kinds = %d: %s", recorder.Code, recorder.Body)
+	}
+	if len(service.kinds) != 2 || service.kinds[1] != "event_update" {
+		t.Fatalf("kinds = %v, want the member's choice", service.kinds)
+	}
+	var answer struct {
+		IncludeKinds []string `json:"include_kinds"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &answer); err != nil || len(answer.IncludeKinds) != 2 {
+		t.Fatalf("answer = %s, want the source with its choice", recorder.Body)
+	}
+
+	// Null returns a source to the default.
+	recorder = send(testServer(t, service), http.MethodPut, "/v1/organizations/org_1/sources/src_1/kinds",
+		`{"include_kinds":null}`, bearer())
+	if recorder.Code != http.StatusOK || service.kinds != nil {
+		t.Fatalf("PUT null = %d, kinds %v; want the default back", recorder.Code, service.kinds)
+	}
 }

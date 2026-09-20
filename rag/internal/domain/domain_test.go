@@ -536,3 +536,63 @@ func TestDiversityZeroIsExpressible(t *testing.T) {
 		t.Fatal("a negative diversity was accepted")
 	}
 }
+
+func TestBackendValid(t *testing.T) {
+	t.Parallel()
+	for _, backend := range []Backend{BackendPgvector, BackendS3Vectors, BackendBedrockKB} {
+		if !backend.Valid() {
+			t.Errorf("%q is not valid", backend)
+		}
+	}
+	if Backend("firestore").Valid() {
+		t.Fatal("an unknown backend is valid")
+	}
+}
+
+func TestBackendSupportsMetric(t *testing.T) {
+	t.Parallel()
+	if err := BackendS3Vectors.Supports(MetricInnerProduct); err == nil {
+		t.Fatal("S3 Vectors accepted inner product")
+	}
+	if err := BackendS3Vectors.Supports(MetricCosine); err != nil {
+		t.Fatalf("S3 Vectors refused cosine: %v", err)
+	}
+	// A Bedrock knowledge base embeds with exactly one metric — whatever it
+	// was created with — so anything else is refused before a corpus can
+	// even be pinned to it, the same way S3 Vectors refuses inner product.
+	if err := BackendBedrockKB.Supports(MetricInnerProduct); err == nil {
+		t.Fatal("bedrock-kb accepted inner product")
+	}
+	if err := BackendBedrockKB.Supports(MetricL2); err == nil {
+		t.Fatal("bedrock-kb accepted l2")
+	}
+	if err := BackendBedrockKB.Supports(MetricCosine); err != nil {
+		t.Fatalf("bedrock-kb refused cosine: %v", err)
+	}
+	if err := BackendPgvector.Supports(MetricInnerProduct); err != nil {
+		t.Fatalf("pgvector refused inner product: %v", err)
+	}
+}
+
+// TestBackendRequiredEmbeddingSpec: only bedrock-kb fixes a spec of its own;
+// a corpus on pgvector or S3 Vectors is free to pin whatever its caller
+// resolved.
+func TestBackendRequiredEmbeddingSpec(t *testing.T) {
+	t.Parallel()
+	required, ok := BackendBedrockKB.RequiredEmbeddingSpec()
+	if !ok {
+		t.Fatal("bedrock-kb has no required embedding spec")
+	}
+	if required != BedrockKnowledgeBaseEmbeddingSpec {
+		t.Fatalf("required spec = %+v, want %+v", required, BedrockKnowledgeBaseEmbeddingSpec)
+	}
+	if required.Provider != ProviderBedrock || required.Model != "amazon.titan-embed-text-v2:0" ||
+		required.Dimensions != 1024 || required.Metric != MetricCosine {
+		t.Fatalf("the knowledge base's spec changed unexpectedly: %+v", required)
+	}
+	for _, backend := range []Backend{BackendPgvector, BackendS3Vectors} {
+		if _, ok := backend.RequiredEmbeddingSpec(); ok {
+			t.Fatalf("%q reported a required embedding spec, but a corpus there may choose its own", backend)
+		}
+	}
+}

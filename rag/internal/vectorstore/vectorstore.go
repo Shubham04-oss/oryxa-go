@@ -85,7 +85,7 @@ func (router *Router) For(corpus domain.Corpus) (Store, error) {
 // Backends lists what this deployment can serve.
 func (router *Router) Backends() []domain.Backend {
 	backends := make([]domain.Backend, 0, len(router.stores))
-	for _, candidate := range []domain.Backend{domain.BackendPgvector, domain.BackendS3Vectors} {
+	for _, candidate := range []domain.Backend{domain.BackendPgvector, domain.BackendS3Vectors, domain.BackendBedrockKB} {
 		if _, configured := router.stores[candidate]; configured {
 			backends = append(backends, candidate)
 		}

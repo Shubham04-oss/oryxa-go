@@ -167,12 +167,24 @@ a source with — so a caller passes it on rather than assembling it.
 | `github` | Repositories, most recently pushed first, archived ones left out | `GET /user/repos` |
 | `slack` | Channels it is in, by name rather than id | `GET /api/users.conversations` |
 | `notion` | Databases, one per data source found and de-duplicated by parent database (a query reads a data source since the 2025-09-03 split, but a database id is what knowledge's extractor takes) | `POST /v1/search` |
+| `googledrive` | The whole of the account's Drive (always, no read needed) plus any shared drive it can see | `GET https://www.googleapis.com/drive/v3/drives` |
+| `gmail` | `INBOX` and `SENT` (fixed; no read at all — knowledge's own default is already `INBOX`) | Nothing asked |
 
 An app nothing can be indexed for answers an empty list rather than an error:
 that is a fact about the app, not a failure, and a picker wants to say
 "nothing to index here". An app that refuses the read — a missing scope, a
 credential it no longer likes — says so as `unavailable`, since an empty
-workspace and a refused one are not the same answer.
+workspace and a refused one are not the same answer. Google Drive is the one
+exception: a refused or missing shared-drive listing still answers the whole
+Drive alone rather than `unavailable`, since My Drive is always there to
+offer and a shared drive is only ever the cheap extra.
+
+`googledrive`'s listing is the one call here made with an absolute URL rather
+than a path under an assumed base: unlike github, slack and notion, this
+project has not proxied a real Drive account through Composio to confirm what
+toolkit base URL `googledrive` resolves a relative path against, so an
+absolute endpoint (`composio.ProxyRequest.Endpoint` takes either) sidesteps
+the question rather than guessing at it.
 
 ## Triggers
 
@@ -599,6 +611,15 @@ stand-in, the database a throwaway schema, no tunnel):
 Not yet run, and not to be described as working:
 
 - **Slack and Notion accounts.** Their targets (a member's own channels; parent databases) are proven only against a stand-in.
+- **Google Drive and Gmail accounts, in every respect.** Connecting either,
+  their targets (the whole Drive, a shared drive, `INBOX`/`SENT`), and
+  knowledge's own extractors reading through them — Drive's `files.list`,
+  `export`, `alt=media` and `changes`; Gmail's `messages.list`,
+  `messages.get`, `history.list` and `profile` — are all proven only against
+  scripted Composio proxy answers, unit-tested with fakes. In particular,
+  Composio's binary indirection (a link to fetch rather than inline bytes,
+  which Drive's export and download calls depend on) has not been observed
+  for real.
 - **The outbox reaching the bus.** EventBridge pointed at a dead local endpoint for both runs; events were written and held, never published.
 - **Auth.** A stand-in answered membership; Cognito was not wired in, so indexing on connect, which redeems a member's grant, has not run.
 

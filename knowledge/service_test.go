@@ -88,7 +88,7 @@ func TestMountWithoutAComposioKeyReadsNothing(t *testing.T) {
 	}
 }
 
-func TestMountWithAComposioKeyReadsGitHubNotionAndSlack(t *testing.T) {
+func TestMountWithAComposioKeyReadsEveryAppSource(t *testing.T) {
 	values := required()
 	values["COMPOSIO_API_KEY"] = "sk_live_1"
 	values["APPS_URL"] = "http://localhost:8083"
@@ -96,8 +96,9 @@ func TestMountWithAComposioKeyReadsGitHubNotionAndSlack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := providers(t, service.Handler); !slices.Equal(got, []string{"github", "notion", "slack"}) {
-		t.Fatalf("providers = %v, want github, notion and slack", got)
+	want := []string{"github", "gmail", "googledrive", "notion", "slack"}
+	if got := providers(t, service.Handler); !slices.Equal(got, want) {
+		t.Fatalf("providers = %v, want %v", got, want)
 	}
 }
 
