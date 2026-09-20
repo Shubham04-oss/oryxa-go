@@ -26,6 +26,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
@@ -137,6 +138,14 @@ type Preferences interface {
 	SetAppUpdates(ctx context.Context, organizationID, memberID string, on bool) error
 }
 
+// Rooms is a teamspace read and written as a conversation: people and their
+// agents talking in one place. rooms.Service implements it.
+type Rooms interface {
+	Post(ctx context.Context, actor rooms.Actor, roomID, body string) ([]rooms.Message, error)
+	Read(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64, limit int) ([]rooms.Message, []rooms.Seat, error)
+	Catchup(ctx context.Context, actor rooms.Actor, roomID string, afterSeq int64) (rooms.Brief, []rooms.Message, error)
+}
+
 // Config is how the server runs.
 type Config struct {
 	// AllowedOrigins may send cookie-authenticated requests that change
@@ -163,6 +172,9 @@ type Config struct {
 	// Teamspaces enables the organization agent, member whisperers, shared
 	// team workspaces, and explicit specialist contributions.
 	Teamspaces Teamspaces
+	// Rooms serves the conversation inside a teamspace. Nil leaves the room
+	// routes answering that they are not configured.
+	Rooms Rooms
 	// OrganizationContext exposes the durable shared synthesis and proposed
 	// follow-ups produced by the singleton organization agent.
 	OrganizationContext OrganizationAgentContext
@@ -177,6 +189,7 @@ type Server struct {
 	workflows           AgentWorkflows
 	interactions        AgentInteractions
 	teamspaces          Teamspaces
+	rooms               Rooms
 	organizationContext OrganizationAgentContext
 	allowedOrigins      map[string]struct{}
 	runTimeout          time.Duration
@@ -201,6 +214,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		workflows:           config.Workflows,
 		interactions:        config.Interactions,
 		teamspaces:          config.Teamspaces,
+		rooms:               config.Rooms,
 		organizationContext: config.OrganizationContext,
 		allowedOrigins:      map[string]struct{}{},
 		runTimeout:          config.RunTimeout,
@@ -263,6 +277,9 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}", server.deleteTeamspaceContribution)
 	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.listTeamspaceEntries)
 	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.publishTeamspaceEntry)
+	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", server.postRoomMessage)
+	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", server.readRoom)
+	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/catchup", server.catchUpOnRoom)
 	server.handle("GET /v1/organizations/{organizationID}/preferences", server.getPreferences)
 	server.handle("PUT /v1/organizations/{organizationID}/preferences", server.setPreferences)
 	return server
@@ -1374,6 +1391,107 @@ func (server *Server) credentials(writer http.ResponseWriter, request *http.Requ
 // limit reads how many results a listing was asked for. No limit is the
 // caller leaving it out; anything else has to be a positive number, on every
 // route that takes one, rather than a typo quietly meaning "everything".
+// roomActorOf is who is acting in a room: the member themself, carrying
+// their own token, because what happens in the room on their behalf is bound
+// by what they may reach.
+func roomActorOf(member threads.Member) rooms.Actor {
+	return rooms.Actor{OrganizationID: member.OrganizationID, UserID: member.UserID, AccessToken: member.AccessToken}
+}
+
+// postRoomMessage says something in a room and answers with everything the
+// room added: the member's own message, then whatever agents answered it.
+func (server *Server) postRoomMessage(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.rooms == nil {
+		writeError(writer, http.StatusServiceUnavailable, "rooms_unavailable", "teamspace conversations are not configured")
+		return
+	}
+	var body struct {
+		Body string `json:"body"`
+	}
+	if !server.decode(writer, request, &body) {
+		return
+	}
+	said, err := server.rooms.Post(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), body.Body)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, map[string]any{"messages": said})
+}
+
+// readRoom returns what was said after ?after, oldest first, and records that
+// the member is reading it — which is how the room knows they are here, and
+// therefore that their agent must not answer over them.
+func (server *Server) readRoom(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.rooms == nil {
+		writeError(writer, http.StatusServiceUnavailable, "rooms_unavailable", "teamspace conversations are not configured")
+		return
+	}
+	after, ok := server.sequence(writer, request, "after")
+	if !ok {
+		return
+	}
+	limit, ok := server.limit(writer, request)
+	if !ok {
+		return
+	}
+	said, seats, err := server.rooms.Read(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), after, limit)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"messages": said, "seats": seats})
+}
+
+// catchUpOnRoom is for somebody who has been away: what the room amounts to,
+// and what they have not seen.
+func (server *Server) catchUpOnRoom(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.rooms == nil {
+		writeError(writer, http.StatusServiceUnavailable, "rooms_unavailable", "teamspace conversations are not configured")
+		return
+	}
+	after, ok := server.sequence(writer, request, "after")
+	if !ok {
+		return
+	}
+	brief, said, err := server.rooms.Catchup(request.Context(), roomActorOf(member), request.PathValue("teamspaceID"), after)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"brief": brief, "messages": said})
+}
+
+// sequence reads a message sequence from the query, which is how a reader
+// says where they got to. Absent means from the beginning; anything that is
+// not a whole number at or above zero is the caller's mistake rather than
+// silently the beginning again.
+func (server *Server) sequence(writer http.ResponseWriter, request *http.Request, name string) (int64, bool) {
+	value := request.URL.Query().Get(name)
+	if value == "" {
+		return 0, true
+	}
+	parsed, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || parsed < 0 {
+		writeError(writer, http.StatusBadRequest, "invalid_request", name+" must be a message sequence")
+		return 0, false
+	}
+	return parsed, true
+}
+
+// limit reads how many results a listing was asked for.
 func (server *Server) limit(writer http.ResponseWriter, request *http.Request) (int, bool) {
 	value := request.URL.Query().Get("limit")
 	if value == "" {
@@ -1411,6 +1529,12 @@ func ErrorCode(err error) (int, string) {
 	case errors.Is(err, teamspaces.ErrConflict):
 		return http.StatusConflict, "teamspace_conflict"
 	case errors.Is(err, teamspaces.ErrNotFound):
+		return http.StatusNotFound, "not_found"
+	case errors.Is(err, rooms.ErrInvalid):
+		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, rooms.ErrForbidden):
+		return http.StatusForbidden, "forbidden"
+	case errors.Is(err, rooms.ErrNotFound):
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, agentworkflows.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"
@@ -1491,6 +1615,7 @@ func message(err error) string {
 		text = strings.TrimPrefix(text, interactions.ErrInvalid.Error()+": ")
 		text = strings.TrimPrefix(text, agentworkflows.ErrInvalid.Error()+": ")
 		text = strings.TrimPrefix(text, teamspaces.ErrInvalid.Error()+": ")
+		text = strings.TrimPrefix(text, rooms.ErrInvalid.Error()+": ")
 		return strings.TrimSpace(text)
 	default:
 		return err.Error()

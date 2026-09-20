@@ -102,6 +102,13 @@ type Config struct {
 	// AllowedOrigins may send cookie-authenticated requests that change
 	// something, such as starting a run, from a member's browser.
 	AllowedOrigins []string
+	// TypeSafeAPIKey and TypeSafeBaseURL reach TypeSafe, which serves Jev:
+	// the classifier a room asks, on every message, who should answer, what
+	// is worth keeping, and whether its brief still describes it. Without a
+	// key a room falls back to rules that answer less and keep less.
+	TypeSafeAPIKey  string
+	TypeSafeBaseURL string
+
 	// RunTimeout bounds one run of the run API.
 	RunTimeout time.Duration
 	// DatabaseMaxConns sizes the pool the service keeps for ADK's tables,
@@ -252,6 +259,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		MemoryLocation:           valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
 		ArtifactBucket:           strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
 		S3Endpoint:               artifactEndpoint(getenv),
+		TypeSafeAPIKey:           strings.TrimSpace(getenv("TYPESAFE_API_KEY")),
+		TypeSafeBaseURL:          strings.TrimSpace(getenv("TYPESAFE_BASE_URL")),
 		AuthURL:                  strings.TrimSpace(getenv("AUTH_URL")),
 		ServiceKeyID:             strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
 		AllowedOrigins:           allowedOrigins,

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -33,12 +34,14 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
@@ -94,6 +97,9 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	}
 	if err := agentinteractions.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
+	}
+	if err := rooms.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate rooms: %w", err)
 	}
 	if err := teamspaces.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
@@ -190,6 +196,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 	var teamspaceService *teamspaces.Service
 	teamspaceStore := teamspaces.NewStore(platform.Database)
+	roomStore := rooms.NewStore(platform.Database)
 	if organizationDirectory != nil {
 		teamspaceService, err = teamspaces.New(teamspaceStore, organizationDirectory)
 		if err != nil {
@@ -360,6 +367,40 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		closeAll()
 		return host.Service{}, err
 	}
+	// A room is a teamspace read as a conversation, so it exists only where
+	// teamspaces do. Everything a room decides — who answers, what is worth
+	// keeping, when its brief is stale — is one judgment per message: Jev
+	// when a key is configured, and rules that answer less when it is not.
+	var roomService *rooms.Service
+	if teamspaceService != nil {
+		decider := roomDecider(settings, logger)
+		speaker, err := rooms.NewAgentSpeaker(agentRegistry, roomStore, settings.RunTimeout)
+		if err != nil {
+			closeAll()
+			return host.Service{}, err
+		}
+		relay, err := rooms.NewRelay(roomStore, speaker)
+		if err != nil {
+			closeAll()
+			return host.Service{}, err
+		}
+		relay.Logger = logger
+		compactor, err := rooms.NewModelCompactor(krude.Compact)
+		if err != nil {
+			closeAll()
+			return host.Service{}, err
+		}
+		roomService, err = rooms.New(rooms.Config{
+			Store: roomStore, Spaces: teamspaceService, Ledger: teamspaceService,
+			Decider: decider, Compactor: compactor, Relay: relay, Logger: logger,
+		})
+		if err != nil {
+			closeAll()
+			return host.Service{}, err
+		}
+		logger.Info("teamspaces are rooms: people and their agents talk in them", "decider", deciderName(settings))
+	}
+
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpserver.Config{
 		AllowedOrigins:      settings.AllowedOrigins,
 		RunTimeout:          settings.RunTimeout,
@@ -368,6 +409,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Workflows:           workflowService,
 		Interactions:        interactionService,
 		Teamspaces:          teamspaceService,
+		Rooms:               roomService,
 		OrganizationContext: organizationStore,
 		Preferences:         wakeups.NewStore(platform.Database),
 	}, logger)
@@ -422,6 +464,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			interactionStore.Forget,
 			organizationStore.Forget,
 			teamspaceStore.Forget,
+			roomStore.Forget,
 			workflowService.Forget,
 			teamStore.Forget,
 			registryStore.Forget,
@@ -466,4 +509,34 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Workers:  workers,
 		Close:    closeAll,
 	}, nil
+}
+
+// roomDecider is what a room asks about every message. Jev answers in a few
+// hundred milliseconds for a fraction of a model turn, which is what makes
+// asking on every message reasonable at all; without a key the rules answer
+// less and keep less, and say so.
+// roomCompactEvery backstops a room's brief when no judgment says to rewrite
+// it: however quiet a room's messages look, the brief is rebuilt after this
+// many of them.
+const roomCompactEvery = 25
+
+func roomDecider(settings serviceconfig.Config, logger *slog.Logger) rooms.Decider {
+	fallback := rooms.Rules{CompactEvery: roomCompactEvery}
+	if settings.TypeSafeAPIKey == "" {
+		return fallback
+	}
+	client, err := jev.New(jev.Config{APIKey: settings.TypeSafeAPIKey, BaseURL: settings.TypeSafeBaseURL})
+	if err != nil {
+		logger.Warn("rooms fall back to rules: Jev could not be reached", "error", err)
+		return fallback
+	}
+	return rooms.Jev{Ask: client.Ask, Fallback: fallback, Logger: logger}
+}
+
+// deciderName is for the one line that says which way a room is running.
+func deciderName(settings serviceconfig.Config) string {
+	if settings.TypeSafeAPIKey == "" {
+		return "rules"
+	}
+	return "jev"
 }

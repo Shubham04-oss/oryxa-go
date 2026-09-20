@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"cloud.google.com/go/auth"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -27,12 +28,15 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
+
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/ragclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/s3artifact"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/usage"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/serviceauth"
+	"google.golang.org/adk/v2/model"
+	"google.golang.org/genai"
 )
 
 // Options are what Build needs.
@@ -420,6 +424,40 @@ func (krude *Krude) ManagedUnattended(spec agents.ManagedSpec, withApps bool) (a
 		toolboxes = krude.unattended
 	}
 	return agents.Managed(krude.router, toolboxes, false, spec)
+}
+
+// Compact answers one prompt on the lite model and returns the text, with no
+// tools, no memory and no conversation around it.
+//
+// It is what a room's brief is rewritten with: mechanical summarising that
+// nobody is waiting on and that runs many times a day, so it belongs on the
+// cheap model rather than the one members talk to.
+func (krude *Krude) Compact(ctx context.Context, prompt string) (string, error) {
+	llm := krude.router.For(modelrouter.RoleWork)
+	request := &model.LLMRequest{
+		Model:    llm.Name(),
+		Contents: []*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)},
+		Config: &genai.GenerateContentConfig{
+			// A brief is data, not conversation: nothing here needs the model
+			// to think out loud, and the JSON it returns is parsed strictly.
+			Temperature: genai.Ptr[float32](0),
+		},
+	}
+	var answered strings.Builder
+	for response, err := range llm.GenerateContent(ctx, request, false) {
+		if err != nil {
+			return "", fmt.Errorf("compact a room: %w", err)
+		}
+		if response == nil || response.Content == nil {
+			continue
+		}
+		for _, part := range response.Content.Parts {
+			if part != nil && !part.Thought {
+				answered.WriteString(part.Text)
+			}
+		}
+	}
+	return strings.TrimSpace(answered.String()), nil
 }
 
 // OrganizationAgent builds an organization-owned synthesis agent. It shares

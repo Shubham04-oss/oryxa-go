@@ -1,12 +1,14 @@
 package httpserver
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
 )
 
 // This file is the authorization sweep for every route the multi-agent
@@ -54,6 +56,7 @@ type authHarness struct {
 	workflows    *fakeAgentWorkflows
 	interactions *fakeInteractions
 	teamspaces   *fakeTeamspaces
+	rooms        *fakeRooms
 	orgContext   *fakeOrganizationContext
 	preferences  *fakePreferences
 	server       *Server
@@ -71,6 +74,7 @@ func newAuthHarness() *authHarness {
 		workflows:    &fakeAgentWorkflows{},
 		interactions: &fakeInteractions{},
 		teamspaces:   &fakeTeamspaces{},
+		rooms:        &fakeRooms{},
 		orgContext:   &fakeOrganizationContext{},
 		preferences:  &fakePreferences{},
 	}
@@ -82,6 +86,7 @@ func newAuthHarness() *authHarness {
 		Workflows:           h.workflows,
 		Interactions:        h.interactions,
 		Teamspaces:          h.teamspaces,
+		Rooms:               h.rooms,
 		OrganizationContext: h.orgContext,
 		Preferences:         h.preferences,
 	}, nil)
@@ -152,6 +157,11 @@ func lastInteractionActor(h *authHarness) (string, string) {
 
 func lastTeamspaceActor(h *authHarness) (string, string) {
 	a := h.teamspaces.actors[len(h.teamspaces.actors)-1]
+	return a.OrganizationID, a.UserID
+}
+
+func lastRoomActor(h *authHarness) (string, string) {
+	a := h.rooms.actors[len(h.rooms.actors)-1]
 	return a.OrganizationID, a.UserID
 }
 
@@ -355,6 +365,19 @@ var authzRoutes = []authzRoute{
 		pattern: "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", method: http.MethodPost,
 		path: "/v1/organizations/org_1/teamspaces/tsp_other/entries", body: "{}", malformedBody: unknownField, identity: lastTeamspaceActor,
 	},
+	// -- rooms: a teamspace read as a conversation ---------------------------
+	{
+		pattern: "POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", method: http.MethodPost,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/messages", body: `{"body":"hello"}`, malformedBody: unknownField, identity: lastRoomActor,
+	},
+	{
+		pattern: "GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/messages", method: http.MethodGet,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/messages", malformedQuery: "?limit=abc", identity: lastRoomActor,
+	},
+	{
+		pattern: "GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/catchup", method: http.MethodGet,
+		path: "/v1/organizations/org_1/teamspaces/tsp_other/catchup", malformedQuery: "?after=abc", identity: lastRoomActor,
+	},
 	// -- preferences --------------------------------------------------------
 	{
 		pattern: "GET /v1/organizations/{organizationID}/preferences", method: http.MethodGet,
@@ -378,8 +401,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 47 {
-		t.Fatalf("authzRoutes has %d entries, want 47 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 50 {
+		t.Fatalf("authzRoutes has %d entries, want 50 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -471,8 +494,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 26 {
-		t.Fatalf("tested %d state-changing routes, want 26 - a route's method changed without updating this expectation", tested)
+	if tested != 27 {
+		t.Fatalf("tested %d state-changing routes, want 27 - a route's method changed without updating this expectation", tested)
 	}
 }
 
@@ -530,7 +553,29 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 26 {
-		t.Fatalf("tested %d routes for malformed input, want 26 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 29 {
+		t.Fatalf("tested %d routes for malformed input, want 29 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
+}
+
+// fakeRooms records the actor every room call was made with, which is what
+// the sweep asserts: a room acts for the caller the directory resolved, never
+// for an id taken from the path or the body.
+type fakeRooms struct {
+	actors []rooms.Actor
+}
+
+func (f *fakeRooms) Post(_ context.Context, actor rooms.Actor, _, _ string) ([]rooms.Message, error) {
+	f.actors = append(f.actors, actor)
+	return []rooms.Message{{Seq: 1, Body: "hello"}}, nil
+}
+
+func (f *fakeRooms) Read(_ context.Context, actor rooms.Actor, _ string, _ int64, _ int) ([]rooms.Message, []rooms.Seat, error) {
+	f.actors = append(f.actors, actor)
+	return nil, nil, nil
+}
+
+func (f *fakeRooms) Catchup(_ context.Context, actor rooms.Actor, _ string, _ int64) (rooms.Brief, []rooms.Message, error) {
+	f.actors = append(f.actors, actor)
+	return rooms.Brief{}, nil, nil
 }
