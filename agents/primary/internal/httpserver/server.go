@@ -373,7 +373,10 @@ func (server *Server) listInteractions(writer http.ResponseWriter, request *http
 		writeError(writer, http.StatusServiceUnavailable, "interactions_unavailable", "agent interactions are not configured")
 		return
 	}
-	limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
+	limit, ok := server.limit(writer, request)
+	if !ok {
+		return
+	}
 	var listed []primaryagents.Interaction
 	var err error
 	if inbox {
@@ -749,14 +752,9 @@ func (server *Server) listOrganizationAgentFollowUps(writer http.ResponseWriter,
 		writeError(writer, http.StatusServiceUnavailable, "organization_agent_unavailable", "organization-agent synthesis is not configured")
 		return
 	}
-	limit := 0
-	if value := request.URL.Query().Get("limit"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 1 {
-			writeError(writer, http.StatusBadRequest, "invalid_request", "limit must be a positive integer")
-			return
-		}
-		limit = parsed
+	limit, ok := server.limit(writer, request)
+	if !ok {
+		return
 	}
 	followUps, err := server.organizationContext.ListFollowUps(request.Context(), member.OrganizationID, limit)
 	if err != nil {
@@ -909,14 +907,9 @@ func (server *Server) listTeamspaceEntries(writer http.ResponseWriter, request *
 		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
 		return
 	}
-	limit := 0
-	if value := request.URL.Query().Get("limit"); value != "" {
-		parsed, err := strconv.Atoi(value)
-		if err != nil || parsed < 1 {
-			writeError(writer, http.StatusBadRequest, "invalid_request", "limit must be a positive integer")
-			return
-		}
-		limit = parsed
+	limit, ok := server.limit(writer, request)
+	if !ok {
+		return
 	}
 	entries, err := server.teamspaces.ListEntries(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"), limit)
 	if err != nil {
@@ -1072,7 +1065,10 @@ func (server *Server) listAgentWorkflowExecutions(writer http.ResponseWriter, re
 		writeError(writer, http.StatusServiceUnavailable, "agent_workflows_unavailable", "agent workflows are not configured")
 		return
 	}
-	limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
+	limit, ok := server.limit(writer, request)
+	if !ok {
+		return
+	}
 	listed, err := server.workflows.ListExecutions(request.Context(), scopeOf(member), request.PathValue("workflowID"), limit)
 	if err != nil {
 		server.handleError(writer, request, err)
@@ -1373,6 +1369,22 @@ func (server *Server) credentials(writer http.ResponseWriter, request *http.Requ
 		}
 	}
 	return credentials, true
+}
+
+// limit reads how many results a listing was asked for. No limit is the
+// caller leaving it out; anything else has to be a positive number, on every
+// route that takes one, rather than a typo quietly meaning "everything".
+func (server *Server) limit(writer http.ResponseWriter, request *http.Request) (int, bool) {
+	value := request.URL.Query().Get("limit")
+	if value == "" {
+		return 0, true
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < 1 {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "limit must be a positive integer")
+		return 0, false
+	}
+	return parsed, true
 }
 
 // decode reads a JSON body with no unknown fields, answering 400 itself when

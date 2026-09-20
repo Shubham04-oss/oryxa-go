@@ -1132,3 +1132,25 @@ func TestStartingAWorkflowWithNoBodyAndAnUnknownLengthStillStarts(t *testing.T) 
 		t.Fatalf("start = %d %s, want 202 and a started execution", recorder.Code, recorder.Body.String())
 	}
 }
+
+// TestEveryListingRefusesTheSameBadLimit: one API, one answer. A limit that
+// is not a positive number used to be ignored on some routes and refused on
+// others.
+func TestEveryListingRefusesTheSameBadLimit(t *testing.T) {
+	managed := &fakeManagedAgents{definitions: []managedagents.Definition{{ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive}}}
+	server := New(member(), &fakeThreads{}, Config{
+		Agents: managed, Interactions: &fakeInteractions{},
+	}, nil)
+	for _, path := range []string{
+		"/v1/organizations/org_1/agent-requests/inbox",
+		"/v1/organizations/org_1/agent-requests/sent",
+	} {
+		response := serve(server, http.MethodGet, path+"?limit=abc", "", bearer)
+		if response.Code != http.StatusBadRequest || errorCode(t, response) != "invalid_request" {
+			t.Errorf("GET %s?limit=abc = %d %s, want 400", path, response.Code, response.Body.String())
+		}
+		if response := serve(server, http.MethodGet, path, "", bearer); response.Code != http.StatusOK {
+			t.Errorf("GET %s with no limit = %d %s, want 200", path, response.Code, response.Body.String())
+		}
+	}
+}
