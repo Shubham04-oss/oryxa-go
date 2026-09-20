@@ -45,10 +45,9 @@ that should show the face of whoever it means.
   muted ground picked by a stable hash of the user id: sand, dusk, clay, sage,
   slate. Desaturated on purpose, so a roster does not turn into confetti. A
   real photo replaces it the moment there is one.
-- **Agents** — the same square, solid and dark, initial in white. An agent
-  never reads as a colleague at a glance, and the tag beside its name says the
-  rest. (Under palette option B, agents carry Iris here instead of the dark
-  ground — the shape and sizes do not change either way.)
+- **Agents** — the same square in Iris, initial in white, the tint picked by a
+  stable hash of the agent id from five steps around the hue. An agent never
+  reads as a colleague at a glance, and the tag beside its name says the rest.
 - **Shared specialists** — the agent avatar with a hairline ring, which is
   what distinguishes "the team's pricing specialist" from "Ada's own agent"
   without a word of explanation.
@@ -61,7 +60,7 @@ that should show the face of whoever it means.
 Sizes: 20 inline, 28 in lists and rosters, 36 in a message row, 44 on a detail
 header. Radius 8 at every size except 20, which takes 6.
 
-Beside the name, an agent carries a quiet `AGENT` tag — 11/600, neutral tint,
+Beside the name, an agent carries a quiet `AGENT` tag — 11/600, Iris tint,
 the same pattern Slack uses to mark an app. When it is answering in somebody's
 absence it also carries `standing in for Ada`, which is the one thing a reader
 must never have to work out for themselves.

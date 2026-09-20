@@ -12,25 +12,15 @@ sets all three to the same grey, while the markup still asks for three
 different colours. The product is not monochrome by design. It is monochrome
 by erasure.
 
-**Three candidates, not yet decided.** The specimen draws each one over the
-same two messages, because a palette can only be judged in place:
+**Decided: Ember and Iris.** Two other candidates were drawn over the same two
+messages and rejected — a single quiet accent with agents marked only by a tag,
+and colour carried in a dark navigation rail. What won the argument is that
+roughly half of what happens in this product is done by an agent, and a person
+has to be able to tell a colleague from a colleague's stand-in without reading
+a word. That is worth a hue of its own.
 
-- **A · Quiet.** One accent, used four times: the room you are in, the unread
-  line, an @mention, and send. Agents are told apart by a tag rather than a
-  colour, the way Slack marks an app. Content stays white and near-black
-  throughout. This is what the room screen in the specimen is drawn in.
-- **B · Ember and Iris.** The full palette below. Every agent carries Iris, so
-  a room full of them is readable at a glance and a colleague is never mistaken
-  for their stand-in — at the cost of more colour to keep disciplined
-  everywhere else.
-- **C · Dark rail.** The navigation rail carries the identity, the working area
-  stays plain, and dark mode is half-built the day it ships. Also the most like
-  every other team chat.
-
-Whichever wins, the token names below are what the code uses, so the decision
-is a value change rather than a rewrite. The five hues are the full set under
-option B; A and C use the neutrals plus one accent and keep the rest for
-status.
+So: **Ember** is the action, **Iris** belongs to agents and to the @mentions
+that summon them, and the remaining three are status.
 
 ### Light
 
@@ -99,15 +89,19 @@ tokens are defined now so nothing has to be redone later.
 
 1. One accent per card. If a card already carries an agent tint, its button is
    quiet, not Ember.
-2. Exactly one Ember element per screen: the primary action. A second Ember
+2. One Ember *fill* per screen — the primary action. Where you are (the active
+   nav item, the room you are reading) and how much is waiting (an unread
+   count) may carry Ember too, as a soft tint or a small count. A second Ember
    button means the page has two jobs and needs splitting.
-3. Status colour never appears without a word beside it. A green dot alone is
+3. Iris is agents and nothing else: their avatar, the tag beside their name,
+   and an @mention of one. A person never carries it.
+4. Status colour never appears without a word beside it. A green dot alone is
    not an accessible status.
-4. Contrast targets: 4.5:1 for text, 3:1 for control edges and icons. Every
+5. Contrast targets: 4.5:1 for text, 3:1 for control edges and icons. Every
    pair in this table is verified against both surfaces before it ships; the
    soft tints are backgrounds only and never carry text of their own hue at
    small sizes.
-5. Charts use the categorical five in this order — Iris, Ember, Moss, Amber,
+6. Charts use the categorical five in this order — Iris, Ember, Moss, Amber,
    Slate `#4C6272` — never the five greys they use today.
 
 ## Type
@@ -134,10 +128,9 @@ box around every line.
 
 11px is allowed only in a badge. Nothing below 12px carries a sentence.
 
-The face stays **Geist**, which is already loaded and costs nothing. The
-specimen shows one alternative, Instrument Sans, set in the same places — a
-little narrower and more spoken. Either works; Geist is the default unless the
-alternative wins on sight.
+The face is **Geist**, which is already loaded and costs nothing. Instrument
+Sans was set beside it in the same two messages and did not earn the extra
+load.
 
 Figures in any table or counter use `font-variant-numeric: tabular-nums`. Body
 copy sets `text-wrap: pretty`; titles set `text-wrap: balance`.

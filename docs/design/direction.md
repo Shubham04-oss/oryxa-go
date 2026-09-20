@@ -54,9 +54,8 @@ There is no dark mode at all: 5,159 lines of CSS, one `color-scheme: light`, no
    "contributed specialist" to a colleague, it does not go on screen.
 3. **One page, one job, one primary action.** Everything else is quiet.
 4. **Colour means something.** Action, identity, status, danger. Never
-   decoration, never two accents in one card. How much colour — see the three
-   candidates in [foundations.md](foundations.md); the room is drawn in the
-   quietest of them.
+   decoration, never two accents in one card. Ember is the action; Iris is
+   agents, and only agents.
 5. **An icon must do work,** and never stands in for a person. Navigation, a
    repeated verb in a dense row, a status mark — everything that means a who
    is an avatar.
