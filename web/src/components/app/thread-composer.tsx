@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 interface ThreadComposerProps {
 	/** Disables input while a run streams or an answer is required first. */
 	disabled?: boolean;
+	/** What a screen reader calls this box; the default is a new thread. */
+	label?: string;
 	/** Why the composer is disabled right now, shown under it. */
 	hint?: ReactNode;
 	inputRef?: RefObject<HTMLTextAreaElement | null>;
@@ -22,6 +24,7 @@ interface ThreadComposerProps {
 export function ThreadComposer({
 	disabled = false,
 	hint,
+	label = "Message The Weirdly ODD",
 	inputRef,
 	onChange,
 	onStop,
@@ -60,7 +63,7 @@ export function ThreadComposer({
 				onSubmit={submit}
 			>
 				<AutosizeTextarea
-					aria-label="Message The Weirdly ODD"
+					aria-label={label}
 					disabled={disabled}
 					maxRows={7}
 					minRows={1}
