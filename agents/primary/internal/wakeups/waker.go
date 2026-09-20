@@ -68,6 +68,7 @@ type batches interface {
 	DropStale(ctx context.Context, age time.Duration) (int, error)
 	Thread(ctx context.Context, organizationID, memberID string) (string, error)
 	ReplaceThread(ctx context.Context, organizationID, memberID, expected, next string) (string, error)
+	AppUpdates(ctx context.Context, organizationID, memberID string) (bool, error)
 }
 
 // Config is how the waker batches.
@@ -164,6 +165,22 @@ func (waker *Waker) wake(ctx context.Context, batch Batch) {
 	}
 	if !member {
 		logger.InfoContext(ctx, "dropped a wake-up for someone no longer in the organization")
+		if err := waker.store.Drop(context.WithoutCancel(ctx), batch.ID); err != nil {
+			logger.ErrorContext(ctx, "drop a wake-up batch", "error", err)
+		}
+		return
+	}
+
+	// A member who turned updates from their apps off is not told, even of
+	// what was recorded before they did.
+	wanted, err := waker.store.AppUpdates(ctx, batch.OrganizationID, batch.MemberID)
+	if err != nil {
+		logger.ErrorContext(ctx, "read a member's app updates preference", "error", err)
+		waker.release(ctx, batch, false, logger)
+		return
+	}
+	if !wanted {
+		logger.InfoContext(ctx, "dropped a wake-up: the member turned updates from their apps off")
 		if err := waker.store.Drop(context.WithoutCancel(ctx), batch.ID); err != nil {
 			logger.ErrorContext(ctx, "drop a wake-up batch", "error", err)
 		}

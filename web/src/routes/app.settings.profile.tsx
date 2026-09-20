@@ -5,7 +5,7 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { UsersRound } from "lucide-react";
+import { BellRing, UsersRound } from "lucide-react";
 import type { ReactNode } from "react";
 import { AppAlert, QueryError } from "@/components/app/app-alert";
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
@@ -46,6 +46,10 @@ import {
 	teamQueryOptions,
 	teamsQueryOptions,
 } from "@/lib/teams/client";
+import {
+	krudePreferencesQueryOptions,
+	setAppUpdates,
+} from "@/lib/threads/client";
 
 export const Route = createFileRoute("/app/settings/profile")({
 	component: ProfileSettingsPage,
@@ -57,7 +61,7 @@ function ProfileSettingsPage() {
 
 	return (
 		<WorkspacePage
-			description="Your profile, organizations, and email preferences."
+			description="Your profile, organizations, and notification preferences."
 			title="Account settings"
 		>
 			<SettingsPageBody>
@@ -83,6 +87,7 @@ function ProfileSettingsPage() {
 				</SettingsSection>
 				<YourOrganizations />
 				<TeamCallEmails />
+				<AppUpdates />
 				<AgentAccessSection />
 				<SignIn />
 			</SettingsPageBody>
@@ -148,6 +153,80 @@ function YourOrganizations() {
 					);
 				})}
 			</div>
+		</SettingsSection>
+	);
+}
+
+function AppUpdates() {
+	const { organization } = useWorkspace();
+	const queryClient = useQueryClient();
+	const preferences = useQuery(krudePreferencesQueryOptions(organization.id));
+	const toggle = useMutation({
+		mutationFn: (on: boolean) => setAppUpdates(organization.id, on),
+		onSuccess: (saved) =>
+			queryClient.setQueryData(
+				krudePreferencesQueryOptions(organization.id).queryKey,
+				saved,
+			),
+	});
+	const saved = preferences.data?.app_updates ?? true;
+	const checked =
+		toggle.isPending && toggle.variables !== undefined
+			? toggle.variables
+			: saved;
+	let note = checked
+		? "Krude wakes up and tells you what your apps report"
+		: "Off: Krude stays quiet about your apps";
+	if (toggle.isError) {
+		note = apiErrorMessage(toggle.error, "Could not save that");
+	}
+
+	let content: ReactNode;
+	if (preferences.isPending) {
+		content = <SettingsListSkeleton />;
+	} else if (preferences.isError) {
+		content = (
+			<div className="settings-section-alert">
+				<QueryError
+					error={preferences.error}
+					fallback="Could not load your preferences"
+					onRetry={preferences.refetch}
+				/>
+			</div>
+		);
+	} else {
+		content = (
+			<div className="settings-list">
+				<div className="settings-list-row">
+					<span aria-hidden="true" className="settings-list-icon">
+						<BellRing />
+					</span>
+					<div className="settings-list-copy">
+						<strong>Tell me what my apps report</strong>
+						<small
+							className={toggle.isError ? "settings-list-error" : undefined}
+						>
+							{note}
+						</small>
+					</div>
+					<Switch
+						aria-label="Updates from your apps"
+						checked={checked}
+						disabled={toggle.isPending}
+						onCheckedChange={(value) => toggle.mutate(value)}
+					/>
+				</div>
+			</div>
+		);
+	}
+
+	return (
+		<SettingsSection
+			description={`When your connected apps in ${organization.name} report something, Krude wakes up and briefs you in "Updates from your apps". Turn it off to hear nothing; what arrives while it is off is not kept.`}
+			id="account-app-updates"
+			title="Updates from your apps"
+		>
+			{content}
 		</SettingsSection>
 	);
 }
