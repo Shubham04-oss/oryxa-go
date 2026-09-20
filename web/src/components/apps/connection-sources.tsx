@@ -57,7 +57,7 @@ interface ConnectionSourcesProps {
 	provider: SourceProvider;
 }
 
-/** "Searchable by Krude": the sources indexed on this connection. */
+/** Sources agents may search through this connection. */
 export function ConnectionSources({
 	connectionId,
 	organizationId,
@@ -76,7 +76,7 @@ export function ConnectionSources({
 		<div className="apps-panel">
 			<div className="apps-panel-header">
 				<p className="apps-panel-note">
-					Krude can search what it indexes here alongside the rest of your
+					Your agents can search what is indexed here alongside the rest of your
 					organization's knowledge.
 				</p>
 				<IndexSourceDialog
@@ -154,7 +154,7 @@ function SourceRow({ onRemoved, organizationId, source }: SourceRowProps) {
 			/>
 			<ConfirmDialog
 				confirmLabel="Remove"
-				description={`Krude stops indexing ${label}, and what it already indexed here is retracted.`}
+				description={`Your agents stop indexing ${label}, and what is already indexed here is retracted.`}
 				onConfirm={async () => {
 					await removeSource(organizationId, source.id);
 					onRemoved();
@@ -308,7 +308,7 @@ function IndexSourceDialog({
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>Index for Krude to search</DialogTitle>
+					<DialogTitle>Add to searchable knowledge</DialogTitle>
 					<DialogDescription>{field.help}</DialogDescription>
 				</DialogHeader>
 				<form className="dialog-form" onSubmit={submit}>

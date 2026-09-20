@@ -1,7 +1,7 @@
-import { ArrowUp, Paperclip, SlidersHorizontal, Square } from "lucide-react";
-import type { FormEvent, ReactNode, RefObject } from "react";
+import { ArrowUp, Square } from "lucide-react";
+import type { FormEvent, KeyboardEvent, ReactNode, RefObject } from "react";
+import { AutosizeTextarea } from "@/components/ui/autosize-textarea";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 
 interface ThreadComposerProps {
 	/** Disables input while a run streams or an answer is required first. */
@@ -38,6 +38,20 @@ export function ThreadComposer({
 		onSubmit?.(value.trim());
 	}
 
+	function submitFromKeyboard(event: KeyboardEvent<HTMLTextAreaElement>) {
+		if (
+			event.key !== "Enter" ||
+			event.shiftKey ||
+			event.nativeEvent.isComposing ||
+			streaming
+		) {
+			return;
+		}
+		event.preventDefault();
+		if (!hasInput || disabled) return;
+		onSubmit?.(value.trim());
+	}
+
 	return (
 		<>
 			<form
@@ -45,39 +59,19 @@ export function ThreadComposer({
 				data-has-input={hasInput}
 				onSubmit={submit}
 			>
-				<Button
-					aria-label="Add files"
-					className="composer-file-button"
-					disabled={disabled}
-					size="icon"
-					title="Add files"
-					type="button"
-					variant="ghost"
-				>
-					<Paperclip />
-				</Button>
-
-				<Textarea
+				<AutosizeTextarea
 					aria-label="Message The Weirdly ODD"
 					disabled={disabled}
+					maxRows={7}
+					minRows={1}
 					onChange={(event) => onChange(event.target.value)}
+					onKeyDown={submitFromKeyboard}
 					placeholder={placeholder}
 					ref={inputRef}
-					rows={1}
 					value={value}
 				/>
 
 				<div className="composer-pill-actions">
-					<Button
-						aria-label="Choose tools"
-						disabled={disabled}
-						size="icon"
-						title="Choose tools"
-						type="button"
-						variant="ghost"
-					>
-						<SlidersHorizontal />
-					</Button>
 					{streaming ? (
 						<Button
 							aria-label="Stop"

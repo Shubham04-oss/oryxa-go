@@ -94,7 +94,7 @@ function KnowledgeCorpusPage() {
 	} else if (allDocuments.length === 0) {
 		content = (
 			<EmptyState
-				description="Connect an app such as GitHub, Notion or Slack in Connections, or add a document of your own, so Krude can search it."
+				description="Connect an app such as GitHub, Notion or Slack in Apps & tools, or add a document of your own, so your agents can search it."
 				icon={FileText}
 				title="No documents yet"
 			/>

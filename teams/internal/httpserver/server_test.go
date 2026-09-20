@@ -35,6 +35,14 @@ func (fake *fakeService) Teams(context.Context, authclient.Credentials, string) 
 	return []application.TeamSummary{{Team: fake.team, CanManage: true}}, fake.err
 }
 
+func (fake *fakeService) OrganizationDirectory(context.Context, authclient.Credentials, string) (application.OrganizationDirectory, error) {
+	return application.OrganizationDirectory{
+		Organization: application.DirectoryOrganization{ID: "org_1", Name: "Acme"},
+		Teams:        []application.TeamSummary{{Team: fake.team}},
+		Members:      []application.MemberSearchHit{{UserID: "user-1", Email: "asha@example.com", Teams: []application.MemberTeamRef{}}},
+	}, fake.err
+}
+
 func (fake *fakeService) Team(context.Context, authclient.Credentials, string, string) (application.TeamDetail, error) {
 	return application.TeamDetail{Team: fake.team, CanManage: true}, fake.err
 }
@@ -121,6 +129,13 @@ func TestPatternsNameEveryRoute(t *testing.T) {
 		if _, matched := server.mux.Handler(request); matched != pattern {
 			t.Errorf("%s routes to %q", pattern, matched)
 		}
+	}
+}
+
+func TestOrganizationDirectory(t *testing.T) {
+	response := do(New(&fakeService{team: domain.Team{ID: "team_1", Name: "Engineering"}}, Config{}, nil), http.MethodGet, "/v1/organizations/org_1/directory", "")
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"organization":{"id":"org_1","name":"Acme"}`) || !strings.Contains(response.Body.String(), `"asha@example.com"`) {
+		t.Fatalf("directory = %d %s", response.Code, response.Body.String())
 	}
 }
 

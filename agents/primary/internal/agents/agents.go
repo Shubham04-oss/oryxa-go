@@ -46,6 +46,11 @@ const (
 	UserRoleKey       = "user_role"
 	OrgNameKey        = "org_name"
 	OrganizationIDKey = "organization_id"
+	// AgentIDKey, AgentNameKey and AgentKindKey carry a persistent agent's
+	// stable identity separately from ADK's immutable machine name.
+	AgentIDKey   = "managed_agent_id"
+	AgentNameKey = "managed_agent_name"
+	AgentKindKey = "managed_agent_kind"
 )
 
 // maxStateTextRunes bounds a member-written value placed in Krude's
@@ -227,11 +232,12 @@ func instructionFrom(instruction *template.Template, catalog *toolCatalog) func(
 	return func(ctx agent.ReadonlyContext) (string, error) {
 		state := ctx.ReadonlyState()
 		var rendered strings.Builder
-		err := instruction.Execute(&rendered, struct{ UserName, UserAbout, OrgName, Member string }{
+		err := instruction.Execute(&rendered, struct{ UserName, UserAbout, OrgName, Member, AgentName string }{
 			UserName:  stateText(state, UserNameKey, "the member you are talking with"),
 			UserAbout: stateText(state, UserAboutKey, ""),
 			OrgName:   stateText(state, OrgNameKey, "their organization"),
 			Member:    memberDetails(state),
+			AgentName: stateText(state, AgentNameKey, "Krude"),
 		})
 		if err != nil {
 			return "", err

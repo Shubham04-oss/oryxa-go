@@ -35,6 +35,8 @@ so keep the app on `http://localhost:3000`.
 - `/app`: the workspace. It sends a signed-out visitor to sign in, and a member
   without an organization to their invitations, or to onboarding when there
   are none. It remembers the organization last chosen in that browser.
+- `/app/agents`: a tabbed workspace for the member's primary agent,
+  specialists, agent teams, durable workflows, and audited cross-user requests.
 - `/app/teams`: the team tree, each team's people, and your email switch for it.
 - `/app/files`: organization and personal files, with uploads and downloads.
 - `/app/connections`: connect a tool, reconnect it, or replace its key.

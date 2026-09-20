@@ -43,6 +43,10 @@ user_id = oryxa.{organizationID}.{memberID}
 A member reaches only their own connections. An org admin can see the
 organization's and remove them, never act through them. An agent acts as the
 member whose session it runs in, and may not connect or remove an app at all.
+Every primary and specialist agent owned by that member therefore resolves the
+same connection. For now there is one pending or active connection per member,
+organization and app; account assignment and multiple connections to one app
+are deliberately deferred.
 
 | Refused | Because |
 | --- | --- |
@@ -67,6 +71,11 @@ Composio sometimes redirects a moment before the account is active, so the
 callback reads it back up to five times, a second apart. A connection still
 initiating stays pending and can be finished later; the maintenance sweep fails
 one whose member never came back after 24 hours.
+
+Starting another connection to the same app while one is pending or active is
+refused before another provider flow is created. Failed, expired and removed
+connections remain as history but release the slot, allowing the member to
+retry or reconnect.
 
 The project's auth config for an app is found or made the first time anyone
 connects it: Composio's own app where Composio has one, otherwise a scheme
@@ -104,7 +113,7 @@ request, and every request carries its own member.
 
 | Tool | Does |
 | --- | --- |
-| `apps_connections` | The member's connected apps, with the connection each tool would act through |
+| `apps_connections` | The member's connected apps, with each app's status and account label |
 | `apps_search_tools` | One app's tools, with what each takes and whether it only reads |
 | `apps_run_read_tool` | Runs a tool Composio marks read-only; refuses anything else |
 | `apps_run_write_tool` | Runs a change, with an idempotency key |
@@ -118,7 +127,7 @@ the JSON-RPC method, `Mcp-Name` naming the tool for a `tools/call`, and
 a JSON-RPC error saying which is missing.
 
 Failures come back as codes a model can act on rather than prose:
-`not_connected`, `needs_reconnect`, `choose_connection`, `not_read_only`,
+`not_connected`, `needs_reconnect`, `not_read_only`,
 `app_error`, `rate_limited`. Krude's side of this is
 `agents/primary/internal/agents/apps.go` and its skill in
 `toolboxes/apps.md`.
@@ -333,7 +342,7 @@ mutation also needs an `Origin` in `APPS_ALLOWED_ORIGINS`.
 
 Errors are `{"error":{"code","message"}}` with the codes
 `invalid_request`, `unauthorized`, `forbidden`, `not_read_only`, `not_found`,
-`not_connected`, `choose_connection`, `needs_reconnect`, `not_connectable`,
+`not_connected`, `needs_reconnect`, `not_connectable`,
 `conflict`, `rate_limited`, `unavailable`, `internal`.
 
 ## Events
@@ -394,7 +403,7 @@ Apps uses `/internal/postgreskit`. Other services never read these tables.
 
 | Table | Holds |
 | --- | --- |
-| `apps_connections` | A member's connection to an app: its Composio account, status and label, the hash of its pending round trip, and whether it has been subscribed to what the app delivers |
+| `apps_connections` | A member's connection to an app: its Composio account, status and label, the hash of its pending round trip, and whether it has been subscribed to what the app delivers. A partial unique index permits one pending or active row per member and app |
 | `apps_auth_configs` | The auth config the project connects each app with, so two members agree on one |
 | `apps_triggers` | What a connection is subscribed to, the Composio instance behind it, how it delivers, and whether it ever has |
 | `apps_actions` | Tool runs, with the idempotency key a write can be replayed under |

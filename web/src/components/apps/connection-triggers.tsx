@@ -47,7 +47,7 @@ interface ConnectionTriggersProps {
 	toolkit: string;
 }
 
-/** "Wake Krude when…": a connection's event subscriptions, and adding more. */
+/** A connection's event subscriptions, and the controls for adding more. */
 export function ConnectionTriggers({
 	connectionId,
 	organizationId,
@@ -74,8 +74,8 @@ export function ConnectionTriggers({
 		<div className="apps-panel">
 			<div className="apps-panel-header">
 				<p className="apps-panel-note">
-					Krude reads these events and reports them in your “Updates from your
-					apps” thread.
+					Your primary agent reads these events and reports them in your
+					“Updates from your apps” thread.
 				</p>
 				<AddTriggerDialog
 					available={available}
@@ -156,7 +156,7 @@ function TriggerRow({
 			) : null}
 			<ConfirmDialog
 				confirmLabel="Stop"
-				description={`Krude stops watching ${name} on this connection.`}
+				description={`Your agents stop watching ${name} on this connection.`}
 				onConfirm={async () => {
 					await removeTrigger(organizationId, trigger.id);
 					onRemoved();
@@ -207,7 +207,7 @@ function AddTriggerDialog({
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
 			<DialogContent>
 				<DialogHeader>
-					<DialogTitle>Wake Krude on an event</DialogTitle>
+					<DialogTitle>Wake my agents on an event</DialogTitle>
 					<DialogDescription>
 						Choose what this connection should watch for.
 					</DialogDescription>

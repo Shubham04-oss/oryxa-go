@@ -63,12 +63,22 @@ type Run struct {
 	Latency     time.Duration
 	TimeToFirst time.Duration
 	// Models holds the token usage per model, which is what pricing needs.
-	Models   map[string]Usage
+	Models map[string]Usage
+	// Tools counts completed function-call requests by tool name.
+	Tools    map[string]int
 	Cost     agentsv1.Cost
 	Unpriced []string
 	Error    string
 	// Answer is the root agent's final text, for inspecting a run.
 	Answer string
+}
+
+func (run Run) ToolCalls() int {
+	var total int
+	for _, calls := range run.Tools {
+		total += calls
+	}
+	return total
 }
 
 // Usage is the sum of the run's models.
@@ -113,12 +123,18 @@ func (harness *Harness) RunTask(ctx context.Context, task Task, attempt int) (Ru
 
 	start := now()
 	models := map[string]Usage{}
+	tools := map[string]int{}
 	var timeToFirst time.Duration
 	var answer string
 	sawText := false
 	for event, err := range harness.Turns.Run(ctx, harness.UserID, created.Session.ID(), genai.NewContentFromText(task.Prompt, genai.RoleUser), agent.RunConfig{StreamingMode: agent.StreamingModeSSE}) {
 		if err != nil {
-			return Run{Task: task.Name, Attempt: attempt, Latency: now().Sub(start), Error: err.Error()}, fmt.Errorf("run %s: %w", task.Name, err)
+			run := Run{
+				Task: task.Name, Attempt: attempt, Latency: now().Sub(start), TimeToFirst: timeToFirst,
+				Models: models, Tools: tools, Answer: answer, Error: err.Error(),
+			}
+			run.Cost, run.Unpriced = harness.price(models)
+			return run, fmt.Errorf("run %s: %w", task.Name, err)
 		}
 		if event == nil {
 			continue
@@ -134,6 +150,13 @@ func (harness *Harness) RunTask(ctx context.Context, task Task, attempt int) (Ru
 			usage.Add(meta)
 			models[model] = usage
 		}
+		if event.Content != nil && !event.Partial {
+			for _, part := range event.Content.Parts {
+				if part != nil && part.FunctionCall != nil {
+					tools[part.FunctionCall.Name]++
+				}
+			}
+		}
 		if event.Author == harness.AppName && event.Content != nil {
 			if text := contentText(event.Content); text != "" {
 				if !sawText {
@@ -147,7 +170,7 @@ func (harness *Harness) RunTask(ctx context.Context, task Task, attempt int) (Ru
 		}
 	}
 
-	run := Run{Task: task.Name, Attempt: attempt, Latency: now().Sub(start), TimeToFirst: timeToFirst, Models: models, Answer: answer}
+	run := Run{Task: task.Name, Attempt: attempt, Latency: now().Sub(start), TimeToFirst: timeToFirst, Models: models, Tools: tools, Answer: answer}
 	run.Cost, run.Unpriced = harness.price(models)
 	return run, nil
 }
@@ -184,33 +207,36 @@ type Summary struct {
 	ColdRuns      int
 	ColdLatency   time.Duration
 	Usage         Usage
+	ToolCalls     int
 	Cost          agentsv1.Cost
 	// Unpriced names any model the price table did not know.
 	Unpriced map[string]bool
 }
 
 // Summarize folds the runs into totals and cache-hit versus cold latency.
-// Failed runs count but contribute no usage or latency.
+// Failed runs contribute observed usage, tool calls, and spend, but never
+// latency averages: a failure can stop at an arbitrary point in the stream.
 func Summarize(runs []Run) Summary {
 	summary := Summary{Unpriced: map[string]bool{}}
 	var cachedTotal, coldTotal time.Duration
 	for _, run := range runs {
 		summary.Runs++
-		if run.Error != "" {
-			summary.FailedRuns++
-			continue
-		}
 		usage := run.Usage()
 		summary.Usage.InputTokens += usage.InputTokens
 		summary.Usage.OutputTokens += usage.OutputTokens
 		summary.Usage.CachedTokens += usage.CachedTokens
 		summary.Usage.ModelCalls += usage.ModelCalls
+		summary.ToolCalls += run.ToolCalls()
 		summary.Cost.InputMicros += run.Cost.InputMicros
 		summary.Cost.OutputMicros += run.Cost.OutputMicros
 		summary.Cost.CachedMicros += run.Cost.CachedMicros
 		summary.Cost.TotalMicros += run.Cost.TotalMicros
 		for _, model := range run.Unpriced {
 			summary.Unpriced[model] = true
+		}
+		if run.Error != "" {
+			summary.FailedRuns++
+			continue
 		}
 		if usage.CachedTokens > 0 {
 			summary.CachedRuns++
@@ -236,30 +262,32 @@ func Dollars(micros int64) string {
 
 // WriteReport writes the per-run table and the summary.
 func WriteReport(writer io.Writer, runs []Run, summary Summary, cacheEnabled bool) {
-	fmt.Fprintf(writer, "%-8s %3s %10s %10s %8s %8s %7s %11s %s\n",
-		"task", "att", "latency", "ttft", "input", "cached", "output", "cost", "models")
+	fmt.Fprintf(writer, "%-8s %3s %10s %10s %8s %8s %7s %5s %11s %s\n",
+		"task", "att", "latency", "ttft", "input", "cached", "output", "tools", "cost", "models")
 	for _, run := range runs {
-		if run.Error != "" {
-			fmt.Fprintf(writer, "%-8s %3d %10s %10s %8s %8s %7s %11s failed: %s\n",
-				run.Task, run.Attempt, run.Latency.Round(time.Millisecond), "-", "-", "-", "-", "-", firstLine(run.Error))
-			continue
-		}
 		usage := run.Usage()
 		var models []string
 		for model, calls := range run.Models {
 			models = append(models, fmt.Sprintf("%s x%d", model, calls.ModelCalls))
 		}
 		sort.Strings(models)
-		fmt.Fprintf(writer, "%-8s %3d %10s %10s %8d %8d %7d %11s %s\n",
+		if run.Error != "" {
+			fmt.Fprintf(writer, "%-8s %3d %10s %10s %8d %8d %7d %5d %11s failed: %s (%s)\n",
+				run.Task, run.Attempt, run.Latency.Round(time.Millisecond), run.TimeToFirst.Round(time.Millisecond),
+				usage.InputTokens, usage.CachedTokens, usage.OutputTokens, run.ToolCalls(), Dollars(run.Cost.TotalMicros),
+				firstLine(run.Error), strings.Join(models, ", "))
+			continue
+		}
+		fmt.Fprintf(writer, "%-8s %3d %10s %10s %8d %8d %7d %5d %11s %s\n",
 			run.Task, run.Attempt, run.Latency.Round(time.Millisecond), run.TimeToFirst.Round(time.Millisecond),
-			usage.InputTokens, usage.CachedTokens, usage.OutputTokens, Dollars(run.Cost.TotalMicros), strings.Join(models, ", "))
+			usage.InputTokens, usage.CachedTokens, usage.OutputTokens, run.ToolCalls(), Dollars(run.Cost.TotalMicros), strings.Join(models, ", "))
 	}
 
-	fmt.Fprintf(writer, "\nruns %d · tokens in %d (cached %d) out %d · model calls %d · cost %s\n",
+	fmt.Fprintf(writer, "\nruns %d · tokens in %d (cached %d) out %d · model calls %d · tool calls %d · cost %s\n",
 		summary.Runs, summary.Usage.InputTokens, summary.Usage.CachedTokens, summary.Usage.OutputTokens,
-		summary.Usage.ModelCalls, Dollars(summary.Cost.TotalMicros))
+		summary.Usage.ModelCalls, summary.ToolCalls, Dollars(summary.Cost.TotalMicros))
 	if summary.FailedRuns > 0 {
-		fmt.Fprintf(writer, "failed runs %d (excluded from the averages and cost)\n", summary.FailedRuns)
+		fmt.Fprintf(writer, "failed runs %d (excluded from latency averages; observed spend remains included)\n", summary.FailedRuns)
 	}
 	if summary.ColdRuns > 0 {
 		fmt.Fprintf(writer, "cold runs %d · average %s\n", summary.ColdRuns, summary.ColdLatency.Round(time.Millisecond))

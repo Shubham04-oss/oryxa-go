@@ -23,6 +23,7 @@ import {
 	type Connection,
 	canReconnect,
 	connect,
+	connectionQueryOptions,
 	connectionStatusLabel,
 	connectionStatusTone,
 	connectionsQueryOptions,
@@ -53,7 +54,7 @@ export const Route = createFileRoute("/app/connections")({
 		status: searchText(search.status),
 	}),
 	component: ConnectionsPage,
-	head: () => ({ meta: [{ title: "Connections · The Weirdly ODD" }] }),
+	head: () => ({ meta: [{ title: "Apps & tools · The Weirdly ODD" }] }),
 });
 
 function toolkitName(toolkit: string): string {
@@ -122,7 +123,7 @@ function ConnectionsPage() {
 		body = (
 			<Card className="workspace-panel">
 				<EmptyState
-					description="Connect an app so Krude can watch it and search what it holds."
+					description="Connect an app so your agents can use its tools, subscribe to its events, and search what it holds."
 					icon={Plug}
 					title="Nothing connected yet"
 				/>
@@ -156,8 +157,8 @@ function ConnectionsPage() {
 					}
 				/>
 			}
-			description="Connect apps for Krude to work in, watch for events, and search."
-			title="Connections"
+			description="One place for member-owned connections, event subscriptions, searchable sources, and agent tools."
+			title="Apps & tools"
 		>
 			<div className="workspace-blocks">
 				{notice ? <AppAlert tone={notice.tone}>{notice.text}</AppAlert> : null}
@@ -182,7 +183,12 @@ function ConnectionRow({
 }: ConnectionRowProps) {
 	const queryClient = useQueryClient();
 	const [expanded, setExpanded] = useState(false);
-	const name = toolkit?.name ?? toolkitName(connection.toolkit);
+	const detail = useQuery({
+		...connectionQueryOptions(organizationId, connection.id),
+		enabled: expanded,
+	});
+	const current = detail.data ?? connection;
+	const name = toolkit?.name ?? toolkitName(current.toolkit);
 	const refresh = () =>
 		queryClient.invalidateQueries({
 			queryKey: connectionsQueryOptions(organizationId).queryKey,
@@ -191,12 +197,12 @@ function ConnectionRow({
 		mutationFn: async () => {
 			const { redirect_url } = await connect(organizationId, {
 				returnTo: connectReturnTo(window.location.origin),
-				toolkit: connection.toolkit,
+				toolkit: current.toolkit,
 			});
 			window.location.assign(redirect_url);
 		},
 	});
-	const canExpand = connection.status === "active";
+	const canExpand = current.status === "active";
 
 	return (
 		<Card className="workspace-panel">
@@ -205,11 +211,19 @@ function ConnectionRow({
 				<div className="settings-list-copy">
 					<strong>
 						{name}
-						{connection.label ? ` · ${connection.label}` : ""}
+						{current.label ? ` · ${current.label}` : ""}
 					</strong>
-					{connection.status_reason ? (
+					{current.status_reason ? (
 						<small className="settings-list-error">
-							{connection.status_reason}
+							{current.status_reason}
+						</small>
+					) : null}
+					{detail.isError ? (
+						<small className="settings-list-error">
+							{appsErrorMessage(
+								detail.error,
+								"Could not refresh connection details",
+							)}
 						</small>
 					) : null}
 					{reconnect.isError ? (
@@ -218,10 +232,10 @@ function ConnectionRow({
 						</small>
 					) : null}
 				</div>
-				<StatusBadge tone={connectionStatusTone(connection.status)}>
-					{connectionStatusLabel(connection.status)}
+				<StatusBadge tone={connectionStatusTone(current.status)}>
+					{connectionStatusLabel(current.status)}
 				</StatusBadge>
-				{canReconnect(connection.status) ? (
+				{canReconnect(current.status) ? (
 					<Button
 						disabled={reconnect.isPending}
 						onClick={() => reconnect.mutate()}
@@ -233,10 +247,10 @@ function ConnectionRow({
 						{reconnect.isPending ? "Reconnecting…" : "Reconnect"}
 					</Button>
 				) : null}
-				{connection.status !== "removed" ? (
+				{current.status !== "removed" ? (
 					<ConfirmDialog
 						confirmLabel="Disconnect"
-						description={`Krude stops using this ${name} connection, and its access is revoked at ${name} where it allows it.`}
+						description={`Your agents stop using this ${name} connection, and its access is revoked at ${name} where it allows it.`}
 						onConfirm={async () => {
 							await disconnectConnection(organizationId, connection.id);
 							await refresh();
@@ -269,19 +283,19 @@ function ConnectionRow({
 			</div>
 			{canExpand && expanded ? (
 				<div className="apps-connection-details">
-					<WorkspaceSection title="Wake Krude when…">
+					<WorkspaceSection title="Wake my agents when…">
 						<ConnectionTriggers
-							connectionId={connection.id}
+							connectionId={current.id}
 							organizationId={organizationId}
-							toolkit={connection.toolkit}
+							toolkit={current.toolkit}
 						/>
 					</WorkspaceSection>
-					{supportsSourceProvider(knowledgeProviders, connection.toolkit) ? (
-						<WorkspaceSection title="Searchable by Krude">
+					{supportsSourceProvider(knowledgeProviders, current.toolkit) ? (
+						<WorkspaceSection title="Searchable knowledge">
 							<ConnectionSources
-								connectionId={connection.id}
+								connectionId={current.id}
 								organizationId={organizationId}
-								provider={connection.toolkit}
+								provider={current.toolkit}
 							/>
 						</WorkspaceSection>
 					) : null}

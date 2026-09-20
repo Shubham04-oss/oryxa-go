@@ -203,6 +203,20 @@ export function getConnection(
 	);
 }
 
+export function connectionQueryOptions(
+	organizationId: string,
+	connectionId: string,
+) {
+	return queryOptions({
+		queryFn: () => getConnection(organizationId, connectionId),
+		queryKey: [
+			...appsQueryKey(organizationId),
+			"connections",
+			connectionId,
+		] as const,
+	});
+}
+
 export async function disconnectConnection(
 	organizationId: string,
 	connectionId: string,

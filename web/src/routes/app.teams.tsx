@@ -68,7 +68,7 @@ export const Route = createFileRoute("/app/teams")({
 				: undefined,
 	}),
 	component: TeamsPage,
-	head: () => ({ meta: [{ title: "Teams · The Weirdly ODD" }] }),
+	head: () => ({ meta: [{ title: "People & teams · The Weirdly ODD" }] }),
 });
 
 function TeamsPage() {
@@ -104,7 +104,7 @@ function TeamsPage() {
 				) : undefined
 			}
 			description="People organized around the work, so assistants reach the right ones."
-			title="Teams"
+			title="People & teams"
 		>
 			{teams.isPending ? (
 				<Card className="workspace-panel">

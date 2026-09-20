@@ -3,7 +3,7 @@ import { apiRequest } from "../api/client";
 
 /**
  * Whether the member has granted "agents may act for me": when a trigger or
- * schedule wakes Krude with nobody watching, this is what lets it act with
+ * schedule wakes a primary agent with nobody watching, this lets it act with
  * the member's own identity instead of stopping at "no member present".
  */
 export interface AgentGrant {

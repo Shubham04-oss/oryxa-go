@@ -7,25 +7,39 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
+	"github.com/aws/aws-sdk-go-v2/service/scheduler"
+	"github.com/aws/aws-sdk-go-v2/service/sfn"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"google.golang.org/adk/v2/agent"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentsystem"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentworkflows"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/assembly"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/directoryclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/inbound"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactiondelivery"
+	agentinteractions "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
 
@@ -44,9 +58,13 @@ const closeTimeout = 10 * time.Second
 // events one wake-up hands over (the rest wait for the next), and how many
 // members are woken at once.
 const (
-	wakeupInterval     = 15 * time.Second
-	wakeupLargestBatch = 20
-	wakeupConcurrency  = 4
+	wakeupInterval                   = 15 * time.Second
+	wakeupLargestBatch               = 20
+	wakeupConcurrency                = 4
+	interactionDeliveryInterval      = 5 * time.Second
+	interactionDeliveryConcurrency   = 4
+	organizationSynthesisInterval    = 5 * time.Second
+	organizationSynthesisConcurrency = 4
 )
 
 // Definition is how a host builds agents primary.
@@ -63,6 +81,27 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 		return err
 	}
 	if err := wakeups.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	if err := managedagents.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	if err := agentteams.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	if err := agentworkflows.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	if err := agentinteractions.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	if err := teamspaces.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	if err := organizationagents.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return err
+	}
+	if err := interactiondelivery.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
 	}
 	scoped, err := platform.Database.WithSchema(ctx, schema, "oryxa-migrate-agents", 2)
@@ -127,12 +166,52 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}
 	sessions := sessionStore.Sessions(events.NewSessionRecorder(events.NewOutbox(pool)))
 
-	krude, err := assembly.Build(ctx, assembly.Options{Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger})
+	registryStore := managedagents.NewStore(platform.Database)
+	interactionStore := agentinteractions.NewStore(platform.Database)
+	var organizationDirectory agents.Directory
+	if settings.TeamsURL != "" {
+		organizationDirectory, err = directoryclient.New(settings.TeamsURL, &http.Client{Transport: observability.Transport(nil)}, registryStore)
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
+	} else {
+		logger.Warn("TEAMS_URL is not set: agents cannot discover people or teams")
+	}
+	var interactionService *agentinteractions.Service
+	if organizationDirectory != nil {
+		interactionService, err = agentinteractions.New(agentinteractions.Config{
+			Repository: interactionStore, Directory: organizationDirectory,
+		})
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
+	}
+	var teamspaceService *teamspaces.Service
+	teamspaceStore := teamspaces.NewStore(platform.Database)
+	if organizationDirectory != nil {
+		teamspaceService, err = teamspaces.New(teamspaceStore, organizationDirectory)
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
+	}
+	agentSystemBinding := agents.NewAgentSystemBinding()
+	krude, err := assembly.Build(ctx, assembly.Options{
+		Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger,
+		Directory: organizationDirectory, Interactions: interactionService,
+		AgentSystem: agentSystemBinding, Teamspaces: teamspaceService,
+	})
 	if err != nil {
 		sessionStore.Close()
 		return host.Service{}, fmt.Errorf("assemble Krude: %w", err)
 	}
+	var localWorkflowRuntime *agentworkflows.LocalRuntime
 	closeAll := func() {
+		if localWorkflowRuntime != nil {
+			localWorkflowRuntime.Close()
+		}
 		closeContext, cancel := context.WithTimeout(context.Background(), closeTimeout)
 		defer cancel()
 		if err := krude.Close(closeContext); err != nil {
@@ -157,9 +236,124 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		closeAll()
 		return host.Service{}, err
 	}
+	agentRegistry, err := managedagents.New(managedagents.Config{
+		Repository: registryStore,
+		Factory: func(definition managedagents.Definition) (agent.Agent, error) {
+			if definition.Kind == managedagents.KindPrimary {
+				return krude.Root, nil
+			}
+			return krude.Managed(agents.ManagedSpec{
+				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
+			})
+		},
+		Sessions: sessions, Artifacts: krude.Artifacts, Memory: krude.Memory,
+		Runs: runstore.New(platform.Database), Prices: priceTable, Logger: logger,
+	})
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	teamStore := agentteams.NewStore(platform.Database)
+	teamService, err := agentteams.New(teamStore)
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	agentSystem, err := agentsystem.New(agentRegistry, teamService)
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	if err := agentSystemBinding.Bind(agentSystem); err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	workflowStore := agentworkflows.NewStore(platform.Database)
+	var workflowOrchestrator agentworkflows.Orchestrator
+	var workflowScheduler agentworkflows.Scheduler
+	var workflowSFN *sfn.Client
+	awsWorkflowConfigured := settings.WorkflowStateMachineARN != "" && settings.WorkflowQueueURL != ""
+	if settings.WorkflowLocal {
+		localWorkflowRuntime = agentworkflows.NewLocalRuntime(settings.RunTimeout+time.Minute, logger)
+		workflowOrchestrator = localWorkflowRuntime
+		workflowScheduler = localWorkflowRuntime
+		logger.Warn("AGENTS_WORKFLOW_LOCAL is enabled: workflows run in process for development and are not durable across restarts")
+	} else if awsWorkflowConfigured {
+		workflowSFN = sfn.NewFromConfig(platform.AWS, func(options *sfn.Options) {
+			if settings.StepFunctionsEndpoint != "" {
+				options.BaseEndpoint = aws.String(settings.StepFunctionsEndpoint)
+			}
+		})
+		workflowOrchestrator, err = agentworkflows.NewStepFunctions(workflowSFN, settings.WorkflowStateMachineARN)
+		if err != nil {
+			closeAll()
+			return host.Service{}, err
+		}
+		if settings.WorkflowSchedulerRoleARN != "" {
+			schedulerClient := scheduler.NewFromConfig(platform.AWS, func(options *scheduler.Options) {
+				if settings.SchedulerEndpoint != "" {
+					options.BaseEndpoint = aws.String(settings.SchedulerEndpoint)
+				}
+			})
+			workflowScheduler, err = agentworkflows.NewEventBridgeScheduler(schedulerClient, agentworkflows.SchedulerConfig{
+				StateMachineARN: settings.WorkflowStateMachineARN, RoleARN: settings.WorkflowSchedulerRoleARN,
+				DeadLetterARN: settings.WorkflowScheduleDLQARN, GroupName: settings.WorkflowSchedulerGroup,
+			})
+			if err != nil {
+				closeAll()
+				return host.Service{}, err
+			}
+		}
+	} else if settings.WorkflowStateMachineARN != "" || settings.WorkflowQueueURL != "" {
+		logger.Warn("agent workflows need both AGENTS_WORKFLOW_STATE_MACHINE_ARN and AGENTS_WORKFLOW_QUEUE_URL; execution remains unavailable")
+	}
+	workflowService, err := agentworkflows.New(agentworkflows.Config{
+		Repository: workflowStore, Teams: teamService, Agents: agentRegistry, Delegator: agentSystem,
+		Orchestrator: workflowOrchestrator, Scheduler: workflowScheduler, ExecutionLease: settings.RunTimeout + time.Minute,
+	})
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	if localWorkflowRuntime != nil {
+		if err := localWorkflowRuntime.Bind(workflowService); err != nil {
+			closeAll()
+			return host.Service{}, err
+		}
+	}
+	organizationStore := organizationagents.NewStore(platform.Database)
+	organizationRuntime, err := organizationagents.NewRuntime(organizationagents.RuntimeConfig{
+		Factory: func(definition teamspaces.OrganizationAgent) (agent.Agent, error) {
+			return krude.OrganizationAgent(agents.OrganizationSpec{
+				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
+			})
+		},
+		Sessions: sessions, Artifacts: krude.Artifacts, Runs: runstore.New(platform.Database),
+		Prices: priceTable, Logger: logger, RunTimeout: settings.RunTimeout,
+	})
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	organizationProcessor, err := organizationagents.NewProcessor(
+		organizationStore, teamspaceStore, organizationRuntime,
+		organizationagents.ProcessorConfig{
+			Interval: organizationSynthesisInterval, Lease: settings.RunTimeout + time.Minute,
+			Concurrency: organizationSynthesisConcurrency,
+		}, logger)
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpserver.Config{
-		AllowedOrigins: settings.AllowedOrigins,
-		RunTimeout:     settings.RunTimeout,
+		AllowedOrigins:      settings.AllowedOrigins,
+		RunTimeout:          settings.RunTimeout,
+		Agents:              agentRegistry,
+		Teams:               teamService,
+		Workflows:           workflowService,
+		Interactions:        interactionService,
+		Teamspaces:          teamspaceService,
+		OrganizationContext: organizationStore,
 	}, logger)
 
 	table, err := outbox.NewTable(platform.Database.Pool, schema+".agents_outbox")
@@ -181,15 +375,43 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	}), logger)
 
 	workers := []host.Worker{dispatcher.Run}
+	if awsWorkflowConfigured && !settings.WorkflowLocal {
+		queue := sqs.NewFromConfig(platform.AWS, func(options *sqs.Options) {
+			if settings.SQSEndpoint != "" {
+				options.BaseEndpoint = aws.String(settings.SQSEndpoint)
+			}
+		})
+		workflowWorker, err := agentworkflows.NewWorker(queue, workflowSFN, workflowService, agentworkflows.WorkerConfig{
+			QueueURL: settings.WorkflowQueueURL, Visibility: settings.RunTimeout + 2*time.Minute,
+		}, logger)
+		if err != nil {
+			closeAll()
+			return host.Service{}, err
+		}
+		workers = append(workers, workflowWorker.Poll)
+		logger.Info("durable agent workflow worker configured", "queue", settings.WorkflowQueueURL,
+			"state_machine", settings.WorkflowStateMachineARN, "scheduler", workflowScheduler != nil)
+	}
 	if settings.EventsQueueURL != "" {
 		store := wakeups.NewStore(platform.Database)
-		consumer := inbound.NewConsumer(store, []inbound.Forgetter{
+		deliveryStore := interactiondelivery.NewStore(platform.Database)
+		deliveryCleaner := interactiondelivery.NewCleaner(deliveryStore, agentRegistry)
+		consumer := inbound.NewConsumer(store, deliveryStore, []inbound.Forgetter{
 			func(ctx context.Context, organizationID, memberID string) error {
 				_, err := service.Forget(ctx, organizationID, memberID)
 				return err
 			},
 			store.Forget,
-		}, logger)
+			deliveryCleaner.Forget,
+			interactionStore.Forget,
+			organizationStore.Forget,
+			teamspaceStore.Forget,
+			workflowService.Forget,
+			teamStore.Forget,
+			registryStore.Forget,
+		}, logger).WithTeamForgetter(teamspaceStore.ForgetTeam).
+			WithTeamMemberForgetter(teamspaceStore.ForgetTeamMember).
+			WithOrganizationSynthesisRecorder(organizationStore)
 		queue := sqs.NewFromConfig(platform.AWS, func(options *sqs.Options) {
 			if settings.SQSEndpoint != "" {
 				options.BaseEndpoint = aws.String(settings.SQSEndpoint)
@@ -203,12 +425,21 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			Lease:       settings.RunTimeout + time.Minute,
 			Concurrency: wakeupConcurrency,
 		}, logger)
+		interactionWaker := interactiondelivery.NewWaker(deliveryStore, agentRegistry, interactionStore, interactiondelivery.Config{
+			Interval:    interactionDeliveryInterval,
+			Lease:       settings.RunTimeout + time.Minute,
+			Concurrency: interactionDeliveryConcurrency,
+		}, logger)
 		workers = append(workers,
 			func(ctx context.Context) { consumer.Poll(ctx, queue, settings.EventsQueueURL) },
-			waker.Run)
-		logger.Info("app events wake Krude", "batch_size", settings.WakeupBatchSize, "max_wait", settings.WakeupMaxWait.String())
+			waker.Run,
+			interactionWaker.Run,
+			organizationProcessor.Run)
+		logger.Info("events wake persistent agents", "app_batch_size", settings.WakeupBatchSize,
+			"app_max_wait", settings.WakeupMaxWait.String(), "interaction_interval", interactionDeliveryInterval.String(),
+			"organization_synthesis_interval", organizationSynthesisInterval.String())
 	} else {
-		logger.Warn("AGENTS_EVENTS_QUEUE_URL is not set: events from members' apps will not wake Krude, and a member's threads outlive their place in an organization")
+		logger.Warn("AGENTS_EVENTS_QUEUE_URL is not set: app events, interaction requests, and shared publications will not wake agents, and a member's threads outlive their place in an organization")
 	}
 
 	logger.Info("agents mounted", "model", settings.Model, "model_lite", settings.ModelLite, "run_timeout", settings.RunTimeout.String())

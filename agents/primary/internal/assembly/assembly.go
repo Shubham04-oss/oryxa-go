@@ -52,6 +52,19 @@ type Options struct {
 	// HTTP is the client the apps toolbox's MCP calls go out on. Defaults to
 	// a fresh http.Client.
 	HTTP *http.Client
+	// Directory is the caller-visible people, team and agent directory. When
+	// nil, the directory toolbox is absent.
+	Directory agents.Directory
+	// Interactions is the durable cross-user request ledger. When nil, agents
+	// can discover one another but cannot exchange requests.
+	Interactions agents.InteractionService
+	// AgentSystem binds the member's persistent agent/team registry after the
+	// agents themselves are assembled. When nil, conversational creation and
+	// team delegation are absent.
+	AgentSystem *agents.AgentSystemBinding
+	// Teamspaces is the shared collaboration ledger. When nil, agents cannot
+	// participate as team whisperers or contributed specialists.
+	Teamspaces agents.TeamspaceService
 }
 
 // Krude is the assembled agent with what it runs with.
@@ -68,6 +81,11 @@ type Krude struct {
 	// the organization each run belongs to. It is nil unless Settings names
 	// an agent engine, and then Krude has no memory at all.
 	Memory *adkmemory.Service
+
+	// router and toolboxes are kept so persistent specialist definitions can
+	// receive the same models and member-scoped tools as the primary agent.
+	router    *modelrouter.Router
+	toolboxes []agents.Toolbox
 
 	// closers stops everything Build opened, kept in the order Build opened
 	// them. Close runs them in reverse — the same order devui's own defers
@@ -187,6 +205,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	if err != nil {
 		return fail("model router", err)
 	}
+	krude.router = router
 	logger.InfoContext(ctx, "models: main model with lite model for planning and bulk work",
 		"model", settings.Model, "model_lite", settings.ModelLite, "prompt_cache", settings.Cache)
 
@@ -194,11 +213,19 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		agents.SandboxToolbox(sandboxTools),
 		agents.BrowserToolbox(browserTools),
 	}
+	if options.AgentSystem != nil {
+		agentSystemToolbox, err := agents.AgentSystemToolbox(options.AgentSystem)
+		if err != nil {
+			return fail("persistent agent system toolbox", err)
+		}
+		toolboxes = append(toolboxes, agentSystemToolbox)
+		logger.InfoContext(ctx, "persistent agent system toolbox configured")
+	}
 	// The apps and knowledge toolboxes act as the session's member: with the
 	// member's own token when the run carries it, otherwise with an agent
 	// token minted under the member's standing grant.
 	tokens := options.Tokens
-	if tokens == nil && (settings.AppsURL != "" || settings.RagURL != "") {
+	if tokens == nil && (settings.AppsURL != "" || settings.RagURL != "" || options.Directory != nil || options.Interactions != nil || options.Teamspaces != nil) {
 		if settings.AuthURL != "" && settings.ServiceKeyID != "" {
 			tokens = memberauth.NewAuthClient(memberauth.AuthClientConfig{
 				BaseURL: settings.AuthURL,
@@ -254,6 +281,31 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			logger.InfoContext(ctx, "knowledge toolbox", "url", settings.RagURL)
 		}
 	}
+	if options.Directory != nil {
+		directoryToolbox, err := agents.DirectoryToolbox(agents.DirectoryConfig{Directory: options.Directory, Tokens: tokens})
+		if err != nil {
+			return fail("organization directory toolbox", err)
+		}
+		toolboxes = append(toolboxes, directoryToolbox)
+		logger.InfoContext(ctx, "organization directory toolbox configured")
+	}
+	if options.Interactions != nil {
+		interactionToolbox, err := agents.InteractionToolbox(agents.InteractionConfig{Service: options.Interactions, Tokens: tokens})
+		if err != nil {
+			return fail("agent interactions toolbox", err)
+		}
+		toolboxes = append(toolboxes, interactionToolbox)
+		logger.InfoContext(ctx, "agent interactions toolbox configured")
+	}
+	if options.Teamspaces != nil {
+		teamspaceToolbox, err := agents.TeamspaceToolbox(agents.TeamspaceConfig{Service: options.Teamspaces, Tokens: tokens})
+		if err != nil {
+			return fail("teamspace collaboration toolbox", err)
+		}
+		toolboxes = append(toolboxes, teamspaceToolbox)
+		logger.InfoContext(ctx, "teamspace collaboration toolbox configured")
+	}
+	krude.toolboxes = toolboxes
 
 	// Memory is built before the agents, because whether Krude is given
 	// load_memory depends on there being a memory service to answer it.
@@ -315,6 +367,19 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	krude.Artifacts = artifacts
 
 	return krude, nil
+}
+
+// Managed builds one persistent specialist from a stored definition. It is
+// cheap and side-effect free: heavyweight clients and toolboxes are shared
+// with the assembled primary agent.
+func (krude *Krude) Managed(spec agents.ManagedSpec) (agent.Agent, error) {
+	return agents.Managed(krude.router, krude.toolboxes, krude.Memory != nil, spec)
+}
+
+// OrganizationAgent builds an organization-owned synthesis agent. It shares
+// the model router but none of the member-scoped toolboxes or memory.
+func (krude *Krude) OrganizationAgent(spec agents.OrganizationSpec) (agent.Agent, error) {
+	return agents.OrganizationAgent(krude.router, spec)
 }
 
 // Close stops what Krude opened: AgentCore sandboxes and browsers, and the

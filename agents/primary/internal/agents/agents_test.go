@@ -97,6 +97,54 @@ func TestKrudeAnswersATurn(t *testing.T) {
 	}
 }
 
+func TestManagedSpecialistCanRunAsItsPersistentThreadRoot(t *testing.T) {
+	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
+		return genai.NewContentFromText(`{"status":"completed","summary":"done","tools_used":[],"artifacts":[],"handoffs":[]}`, genai.RoleModel)
+	})
+	router, err := modelrouter.New(llm, llm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	specialist, err := Managed(router, nil, false, ManagedSpec{
+		ID: "agt_sales", Name: "Sales", Description: "Reviews pipeline", Instructions: "Complete the assigned sales task.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := session.InMemoryService()
+	turns, err := runner.New(runner.Config{
+		AppName: "managed_agt_sales", Agent: specialist, SessionService: sessions,
+		ArtifactService: artifact.InMemoryService(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := sessions.Create(context.Background(), &session.CreateRequest{AppName: "managed_agt_sales", UserID: "user_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range turns.Run(context.Background(), "user_1", created.Session.ID(), genai.NewContentFromText("Review pipeline", genai.RoleUser), agent.RunConfig{}) {
+		if err != nil {
+			t.Fatalf("run managed root: %v", err)
+		}
+	}
+	if len(llm.requestsFor("subagent")) != 1 {
+		t.Fatalf("managed model requests = %d, want 1", len(llm.requestsFor("subagent")))
+	}
+	instruction := text(llm.requestsFor("subagent")[0].Config.SystemInstruction)
+	for _, required := range []string{
+		"The summary is the deliverable",
+		"Never use a meta-summary",
+		"only when the exact action tool returns success",
+		"Never simulate an action or tool call, invent an ID or status",
+		"including failed calls",
+	} {
+		if !strings.Contains(instruction, required) {
+			t.Fatalf("managed instruction is missing %q:\n%s", required, instruction)
+		}
+	}
+}
+
 // TestKrudeReadsItsMemoryOnlyWhenItHasOne covers the other half of wiring a
 // memory service in: without load_memory nothing Krude remembers is ever
 // read back, and with no memory service behind it the tool is there to be

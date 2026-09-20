@@ -243,7 +243,7 @@ export function confirmationHint(
 		return hint;
 	}
 	const name = tool ? humanizeToolName(tool) : "a tool";
-	return `Krude wants to use ${name}. It only runs if you approve.`;
+	return `Your agent wants to use ${name}. It only runs if you approve.`;
 }
 
 const imageArtifactExtensions: ReadonlySet<string> = new Set([

@@ -1,13 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { ArrowUpRight, Blocks, Clock3, ListTodo, ScanText } from "lucide-react";
+import {
+	ArrowRight,
+	ArrowUpRight,
+	Blocks,
+	Bot,
+	Clock3,
+	ListTodo,
+	Network,
+	ScanText,
+	Workflow,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { ThreadComposer } from "@/components/app/thread-composer";
 import { WorkspaceSection } from "@/components/app/workspace-section";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+	agentsQueryOptions,
+	agentTeamsQueryOptions,
+	agentWorkflowsQueryOptions,
+} from "@/lib/agents/client";
 import { apiErrorMessage } from "@/lib/api/client";
 import { useWorkspace } from "@/lib/auth/session";
 import { relativeTime } from "@/lib/format";
+import { teamspacesQueryOptions } from "@/lib/teamspaces/client";
 import {
 	createThread,
 	threadsQueryKey,
@@ -76,15 +92,19 @@ export function WorkspaceHome() {
 		setError("");
 		startThread.mutate(message, {
 			onError: (caught) =>
-				setError(apiErrorMessage(caught, "Could not start a new thread")),
+				setError(apiErrorMessage(caught, "Could not start a new conversation")),
 		});
 	}
 
 	return (
 		<section className="workspace-launchpad">
 			<header className="workspace-launchpad-header">
-				<span>{organization.name}</span>
-				<h1>What are we working on?</h1>
+				<span>Solo workspace · {organization.name}</span>
+				<h1>What do you want to move forward?</h1>
+				<p>
+					Start privately with your primary agent, coordinate specialists, or
+					publish deliberate work into a Teamspace.
+				</p>
 			</header>
 
 			<ThreadComposer
@@ -95,6 +115,8 @@ export function WorkspaceHome() {
 				value={draft}
 			/>
 			{error ? <p className="workspace-launchpad-error">{error}</p> : null}
+
+			<WorkModes />
 
 			<div className="workspace-home-panels">
 				<WorkspaceSection title="Start here">
@@ -132,6 +154,113 @@ export function WorkspaceHome() {
 	);
 }
 
+function WorkModes() {
+	const { organization } = useWorkspace();
+	const agents = useQuery(agentsQueryOptions(organization.id));
+	const teams = useQuery(agentTeamsQueryOptions(organization.id));
+	const workflows = useQuery(agentWorkflowsQueryOptions(organization.id));
+	const spaces = useQuery(teamspacesQueryOptions(organization.id));
+	const activeAgents = agents.data?.filter(
+		(agent) => agent.status === "active",
+	);
+	const activeWorkflows = workflows.data?.filter(
+		(workflow) => workflow.status === "active",
+	);
+
+	return (
+		<section aria-labelledby="work-modes-title" className="workspace-modes">
+			<header>
+				<div>
+					<span>Work modes</span>
+					<h2 id="work-modes-title">One product, clear boundaries</h2>
+				</div>
+				<p>Private by default. Shared only when you choose a shared surface.</p>
+			</header>
+			<div className="workspace-mode-grid">
+				<WorkModeCard
+					description="Talk directly with your primary agent. Its conversations and working context remain yours."
+					eyebrow="Single user"
+					href="/app/threads"
+					icon={Bot}
+					metric={
+						agents.isError
+							? "Unavailable"
+							: countLabel(activeAgents?.length, "active agent")
+					}
+					title="Solo work"
+				/>
+				<WorkModeCard
+					description="Create specialist teams and durable workflows coordinated under your identity and permissions."
+					eyebrow="Multi-agent"
+					href="/app/agents"
+					icon={Workflow}
+					metric={
+						teams.isError || workflows.isError
+							? "Unavailable"
+							: countPair(teams.data?.length, activeWorkflows?.length)
+					}
+					title="Agent system"
+				/>
+				<WorkModeCard
+					description="Collaborate with teammates through attributed summaries, bounded specialists, and organization context."
+					eyebrow="Multi-user"
+					href="/app/teamspaces"
+					icon={Network}
+					metric={
+						spaces.isError
+							? "Unavailable"
+							: countLabel(spaces.data?.length, "Teamspace")
+					}
+					title="Teamwork"
+				/>
+			</div>
+		</section>
+	);
+}
+
+function WorkModeCard({
+	description,
+	eyebrow,
+	href,
+	icon: Icon,
+	metric,
+	title,
+}: {
+	description: string;
+	eyebrow: string;
+	href: "/app/agents" | "/app/teamspaces" | "/app/threads";
+	icon: typeof Bot;
+	metric: string;
+	title: string;
+}) {
+	return (
+		<Link className="workspace-mode-card" to={href}>
+			<span className="workspace-mode-icon" aria-hidden="true">
+				<Icon />
+			</span>
+			<div>
+				<small>{eyebrow}</small>
+				<strong>{title}</strong>
+				<p>{description}</p>
+			</div>
+			<footer>
+				<span>{metric}</span>
+				<ArrowRight aria-hidden="true" />
+			</footer>
+		</Link>
+	);
+}
+
+function countLabel(count: number | undefined, singular: string): string {
+	if (count === undefined) return "Loading…";
+	return `${count} ${count === 1 ? singular : `${singular}s`}`;
+}
+
+function countPair(teams: number | undefined, workflows: number | undefined) {
+	if (teams === undefined || workflows === undefined) return "Loading…";
+	return `${teams} teams · ${workflows} active workflows`;
+}
+
 function RecentThreads() {
 	const { organization } = useWorkspace();
 	const threads = useQuery(threadsQueryOptions(organization.id));
@@ -152,7 +281,7 @@ function RecentThreads() {
 	if (threads.isError) {
 		return (
 			<p className="workspace-naked-empty">
-				{apiErrorMessage(threads.error, "Could not load recent threads.")}
+				{apiErrorMessage(threads.error, "Could not load recent conversations.")}
 			</p>
 		);
 	}
@@ -174,7 +303,7 @@ function RecentThreads() {
 					params={{ threadId: thread.id }}
 					to="/app/threads/$threadId"
 				>
-					<span>{thread.title || "New thread"}</span>
+					<span>{thread.title || "New conversation"}</span>
 					<small>
 						<Clock3 />
 						{relativeTime(thread.updated_at)}

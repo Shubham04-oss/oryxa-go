@@ -4,6 +4,7 @@ import {
 	appsErrorMessage,
 	type Connection,
 	canReconnect,
+	connectionQueryOptions,
 	connectionStatusLabel,
 	connectionStatusTone,
 	connectReturnNotice,
@@ -173,6 +174,33 @@ describe("listConnectionTargets", () => {
 
 		expect(fetchMock).toHaveBeenCalledWith(
 			"/v1/organizations/org_1/apps/connections/apc_1/targets",
+			expect.objectContaining({ method: "GET" }),
+		);
+	});
+});
+
+describe("connectionQueryOptions", () => {
+	it("keys and loads one authoritative connection detail", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(
+				json(200, connection({ id: "apc_detail", label: "Work Gmail" })),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		const options = connectionQueryOptions("org_1", "apc_detail");
+
+		expect(options.queryKey).toEqual([
+			"apps",
+			"org_1",
+			"connections",
+			"apc_detail",
+		]);
+		await expect(options.queryFn?.({} as never)).resolves.toMatchObject({
+			id: "apc_detail",
+			label: "Work Gmail",
+		});
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/organizations/org_1/apps/connections/apc_detail",
 			expect.objectContaining({ method: "GET" }),
 		);
 	});

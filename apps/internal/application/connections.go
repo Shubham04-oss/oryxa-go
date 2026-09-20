@@ -26,7 +26,8 @@ type ConnectInput struct {
 	// ReturnTo is where their browser goes once they finish; it must be under
 	// one of the configured return origins.
 	ReturnTo string
-	// Alias names the account, to tell several connections to one app apart.
+	// Alias is an optional provider-facing label for the account. Agents do
+	// not route by it: a member has one current connection per app.
 	Alias string
 	// AutoSubscribe says whether connecting should subscribe to everything
 	// this app can deliver. Unset means the deployment's own default, which
@@ -56,6 +57,20 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 	toolkit, err := domain.CheckToolkit(input.Toolkit)
 	if err != nil {
 		return domain.Connection{}, "", err
+	}
+	current, err := s.store.Connections(ctx, organizationID, domain.ConnectionQuery{
+		MemberID: caller.UserID, Toolkit: toolkit,
+		Statuses: []domain.ConnectionStatus{domain.ConnectionPending, domain.ConnectionActive},
+	})
+	if err != nil {
+		return domain.Connection{}, "", err
+	}
+	if len(current) > 0 {
+		state := "already connected"
+		if current[0].Status == domain.ConnectionPending {
+			state = "already being connected"
+		}
+		return domain.Connection{}, "", fmt.Errorf("%s is %s for this member: %w", toolkit, state, domain.ErrConflict)
 	}
 	returnTo := strings.TrimSpace(input.ReturnTo)
 	if returnTo != "" && !s.returnAllowed(returnTo) {
@@ -110,6 +125,16 @@ func (s *Service) Connect(ctx context.Context, credentials authclient.Credential
 		return domain.Connection{}, "", err
 	}
 	if err := s.store.CreateConnection(ctx, connection, stateHash, event); err != nil {
+		// A concurrent connect may have won the one-current-connection slot
+		// after our preflight. Do not leave the losing provider account alive
+		// and untracked with standing access to the member's app.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		if cleanupErr := s.composio.DeleteConnectedAccount(cleanup, link.ConnectedAccountID, true); cleanupErr != nil {
+			s.logger.ErrorContext(ctx, "revoke unrecorded app connection",
+				"organization_id", organizationID, "member_id", caller.UserID,
+				"toolkit", toolkit, "error", cleanupErr)
+		}
 		return domain.Connection{}, "", err
 	}
 	s.logger.InfoContext(ctx, "app connection started",

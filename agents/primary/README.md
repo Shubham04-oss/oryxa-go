@@ -15,7 +15,9 @@ in `contracts/events/agents/v1`. The service, mounted in the single `oryxa`
 binary as `agents`, serves the run API: a member's threads with Krude, each
 run streamed as server-sent events with the member's own token on it (see
 [Run API](#run-api)). `cmd/devui` still opens the same Krude in ADK's
-development web UI.
+development web UI. Members also have a persistent, renameable primary-agent
+identity and can create persistent specialist agents that run through the same
+member-scoped tool, confirmation, artifact, memory and usage pipeline.
 
 ## Agents
 
@@ -26,7 +28,7 @@ assembles it:
 krude              chat: the member's assistant
 ├── planner        single-turn sub-agent: turns multi-step work into a plan
 ├── researcher     single-turn sub-agent: answers from the live web with Google Search and URL context
-├── toolboxes      list_tools, load_tools: sandbox, browser, apps and knowledge, loaded on demand
+├── toolboxes      list_tools, load_tools: agent system, sandbox, browser, apps, knowledge, directory, interactions and teamspaces, loaded on demand
 ├── subagents      create_subagent, list_subagents, remove_subagent: specialists Krude writes and reuses in a session
 ├── helpers        list_helpers, spawn_helper: temporary agents for big or separate work
 └── memory         load_memory: what Krude learned about the member in earlier threads, where a memory bank is configured
@@ -174,7 +176,10 @@ endpoint at `POST {APPS_URL}/v1/mcp/apps`, wrapped as above, and its skill is
 `internal/agents/toolboxes/apps.md`, embedded the way sandbox's and browser's
 are. `apps_connections` lists what the member has connected, `apps_search_tools`
 finds a toolkit's tools, and `apps_run_read_tool`/`apps_run_write_tool` call
-one. Unlike the archived integrations toolboxes, there is no provider
+one. A member has one current connection per app, shared by their primary and
+all persistent specialists because every run carries that same member
+identity; agents neither select account IDs nor own credentials. Unlike the
+archived integrations toolboxes, there is no provider
 catalogue: a member's connected apps and their tools are discovered live,
 through these tools, rather than fetched once at startup, and building the
 toolbox makes no network call of its own — the MCP session, and the first
@@ -242,6 +247,79 @@ read exactly as it does for them. The service and `cmd/devui` build it when
 `RAG_URL` is set, which in the binary defaults to this process when it runs
 rag. A team's corpus is searched only when named.
 
+### Organization directory toolbox
+
+When `TEAMS_URL` is set, the service adds a read-only `directory` toolbox to
+both primary and specialist agents. Its skill lives at
+`internal/agents/toolboxes/directory.md`, and exposes four member-scoped tools:
+
+- `directory_load` returns the current organization roster, the team tree the
+  caller may see, visible team memberships, and each person's active agents.
+- `directory_find_people` searches by display name, email, or user id.
+- `directory_find_teams` searches caller-visible teams by name.
+- `directory_find_agents` searches active agents by name, purpose, or owner.
+
+Teams remains the authority for current organization membership and team
+visibility. The agents service first asks Teams as the acting member, then
+joins only safe agent handles (`id`, owner identity, kind, display name, description)
+onto the people Teams returned. Agent instructions and disabled agents never
+enter the directory. This ordering also prevents a stale agent record from
+revealing a former or otherwise hidden organization member.
+
+The primary agent is listed before a person's specialists. IDs are canonical;
+display names may be renamed. Directory reads do not ping or contact anyone,
+emit a team-call event, grant permission, or execute a handoff. They identify
+the intended person, team, or agent for the communication protocol built on
+top of this layer.
+
+### Agent interactions toolbox
+
+When the organization directory is configured, primary and specialist agents
+also receive the `interactions` toolbox. It implements the controlled path
+from discovery to collaboration without handing one agent a direct runtime
+reference to another:
+
+```text
+discover target → create request → target decides → target responds → requester observes result
+```
+
+An interaction is a persisted JSON contract containing the requester and
+target's stable user/agent identities, purpose, bounded task, labelled context,
+requested tools and permissions, expiry, decision, and final result. The
+requester identity comes from authenticated session state; the model cannot
+claim to be another agent. Requests must target an active agent belonging to a
+different current member returned by Teams.
+
+The toolbox exposes `interactions_create`, `interactions_inbox`,
+`interactions_sent`, `interactions_get`, `interactions_decide`, and
+`interactions_respond`. A specialist sees only requests it sent or received;
+the member's primary agent may mediate every request belonging to that member.
+Approval can only narrow the requested tools and permissions, and a response
+cannot report using a tool outside the approved set. These grants describe the
+interaction envelope; they never bypass a tool's existing authorization or
+human-confirmation requirements.
+
+Each create, decision, and response is committed with an EventBridge outbox
+event. The event contains routing identities and lifecycle state, not the task,
+context, decision text, or result. Agents' EventBridge rule feeds those events
+back through its SQS queue into `internal/interactiondelivery`: requested work
+wakes the target, approval wakes it again when a result is still needed, and a
+rejection or final result wakes the original requester. The request path never
+invokes another user's agent inline. Retries from the same model tool call are
+idempotent, and requests expire after one day by default (five minutes to seven
+days when explicitly chosen).
+
+The delivery row stores only the event's routing projection. A woken agent
+loads the authoritative record through `interactions_get`, treats all of its
+cross-user content as untrusted data, and records decisions and results with
+the strict tools. A model answer by itself does not acknowledge target work:
+the ledger must actually leave `pending` or `approved`. Every recipient uses
+one stable conversation per interaction, recorded earlier revisions settle
+before later ones while newer authoritative state supersedes stale work, and
+repeat events deduplicate by `event_id`. Runs carry no member access token, do
+not read or write long-term memory, and remain subject to the normal tool
+authorization and confirmation boundaries.
+
 ## Run API
 
 The `agents` service serves a member's conversations with Krude, called
@@ -262,6 +340,209 @@ from inside a run.
 | `DELETE /v1/organizations/{org}/threads/{thread}` | Removes the thread, and the artifacts its runs kept that are not the member's own `user:` ones |
 | `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run |
 | `GET /v1/organizations/{org}/threads/{thread}/artifacts/{name}` | A file the thread's runs kept, its latest version or `?version=` |
+
+### Persistent agent API
+
+The registry creates one primary definition lazily for each member in each
+organization. Its friendly generated name is display identity only; the
+stable `agt_...` id remains the agent's machine identity, so the member can
+rename it without losing conversations. Existing threads refresh that name on
+their next run, and streamed/history items show it instead of the machine
+name. A member can add specialist agents
+with their own purpose and operating instructions. Every registry query is
+scoped by both organization and owner.
+
+| Route | What it does |
+| --- | --- |
+| `GET /v1/organizations/{org}/agents` | Ensures the member's primary definition exists, then lists their primary and specialists |
+| `POST /v1/organizations/{org}/agents` | Creates a specialist from `name`, optional `description`, and required `instructions` |
+| `GET /v1/organizations/{org}/agents/{agent}` | Reads one of the member's definitions |
+| `PATCH /v1/organizations/{org}/agents/{agent}` | Renames it, changes description/instructions, or sets `status` to `active` or `disabled` |
+| `DELETE /v1/organizations/{org}/agents/{agent}` | Deletes a specialist. The primary identity cannot be deleted |
+| `POST /v1/organizations/{org}/agents/{agent}/runs` | Starts or continues that agent and streams the run |
+
+An agent run accepts the same `message` or `confirmations` fields as a primary
+thread run, plus optional `thread_id`. Omit it on the first turn; the response
+returns the allocated conversation in `X-Oryxa-Thread`, which later turns and
+confirmation answers send back. `X-Oryxa-Run` still identifies the individual
+run. Specialists use an ADK output schema and finish with a JSON work result:
+`status`, `summary`, `tools_used`, `artifacts`, and proposed `handoffs`.
+Handoffs remain output suggestions until an agent deliberately turns one into
+an `interactions_create` request. The target still decides what it accepts and
+what it returns.
+
+### Single-user multi-agent teams
+
+A member can compose persistent specialists into reusable teams. The member's
+primary agent is always the sole coordinator; specialists are active workers
+with explicit roles, stable identities, their own durable conversations, and
+the same member-scoped tools and confirmation boundaries as their standalone
+runs. Teams never copy or broaden an agent's instructions.
+
+The `agent_system` toolbox makes the primary agent the conversational control
+plane. It can list the member's definitions, help draft a precise specialist,
+and create, update, or delete agents and teams only after ADK human
+confirmation. Its delegation tool accepts one bounded assignment per selected
+team member, starts independent specialists concurrently, and returns each
+agent's status, strict JSON output, durable thread/run IDs, and pending
+confirmation IDs. A trigger-started run cannot delegate a team, so untrusted
+app content cannot fan work out autonomously. Specialists may inspect team
+context but cannot read every agent's private operating instructions, mutate
+the registry, or coordinate a team.
+
+| Route | What it does |
+| --- | --- |
+| `GET /v1/organizations/{org}/agent-teams` | Lists the member's persistent teams, coordinator, members, roles and status |
+| `POST /v1/organizations/{org}/agent-teams` | Composes active, same-member specialists into a team |
+| `GET /v1/organizations/{org}/agent-teams/{team}` | Reads one team inside the member boundary |
+| `PATCH /v1/organizations/{org}/agent-teams/{team}` | Changes its name, description, status, or complete ordered membership |
+| `DELETE /v1/organizations/{org}/agent-teams/{team}` | Deletes the team but leaves its agents intact |
+
+An agent that still belongs to a team cannot be deleted; remove it from every
+team first. This preserves an explicit team revision and lifecycle event for
+every membership change instead of silently cascading membership away.
+
+### Durable team workflows
+
+A member can save a bounded set of team assignments as a durable workflow,
+start it through the API, or attach an EventBridge Scheduler `rate`, `cron`, or
+one-time `at` expression with an IANA timezone. Both paths start the same Step
+Functions Standard state machine. Its callback task contains only workflow,
+execution, organization, and owner IDs; the worker loads the current team and
+assignments from PostgreSQL and runs the same specialist delegation pipeline
+as the primary agent.
+
+Each execution has a durable ledger row and a lease, so an SQS redelivery does
+not run a live execution twice. Step Functions waits on the task token while
+the model work runs, and its execution ARN is kept as an external correlation
+ID. Assignments, provider credentials, task tokens, tool output, and model
+results never enter Step Functions, Scheduler, SQS, or EventBridge lifecycle
+events. The result ledger stores the strict per-specialist envelopes, thread
+and run IDs, used tools, artifacts, and any pending confirmation IDs.
+
+Scheduled work inherits the workflow owner's identity boundary, not their
+live browser token. It may use a standing agent grant, but it cannot manufacture
+human approval: a write tool that requires confirmation ends the workflow in
+`needs_confirmation`, and the member continues it through the ordinary agent
+thread API.
+
+| Route | What it does |
+| --- | --- |
+| `GET /v1/organizations/{org}/agent-workflows` | Lists the member's workflow definitions and schedules |
+| `POST /v1/organizations/{org}/agent-workflows` | Creates a workflow for one active team, with one bounded task per selected active specialist |
+| `GET /v1/organizations/{org}/agent-workflows/{workflow}` | Reads one member-owned workflow |
+| `PATCH /v1/organizations/{org}/agent-workflows/{workflow}` | Changes its metadata, team, assignments, status, or schedule |
+| `DELETE /v1/organizations/{org}/agent-workflows/{workflow}` | Removes its external schedule and durable definition |
+| `POST /v1/organizations/{org}/agent-workflows/{workflow}/executions` | Starts the Standard workflow and returns `202` with its execution ledger row |
+| `GET /v1/organizations/{org}/agent-workflows/{workflow}/executions` | Lists recent executions for that workflow |
+| `GET /v1/organizations/{org}/agent-workflow-executions/{execution}` | Reads one execution, including its final strict result or actionable error |
+
+`AGENTS_WORKFLOW_LOCAL=true` swaps only the orchestration adapters for a
+development in-process driver, so API and Gemini tests still exercise the
+database, workflow service, team delegation, and result schema. It supports
+`at(...)` and `rate(...)`; `cron(...)` is rejected explicitly. The local driver
+is not durable across a process restart and is never selected by production.
+
+### Agent request API
+
+The same ledger is available to the member through their primary identity:
+
+| Route | What it does |
+| --- | --- |
+| `POST /v1/organizations/{org}/agent-requests` | Creates a request; accepts `Idempotency-Key` for caller retries |
+| `GET /v1/organizations/{org}/agent-requests/inbox` | Lists requests addressed to the member's agents |
+| `GET /v1/organizations/{org}/agent-requests/sent` | Lists requests sent by the member's agents |
+| `GET /v1/organizations/{org}/agent-requests/{request}` | Reads one request visible to the member |
+| `POST /v1/organizations/{org}/agent-requests/{request}/decision` | Approves or rejects with narrowed tools and permissions |
+| `POST /v1/organizations/{org}/agent-requests/{request}/response` | Completes an approved request with the strict result envelope |
+
+### Multi-user, multi-agent teamspaces
+
+A teamspace is the shared-work boundary for one human team from Teams. It is
+not owned by the person who creates it: the current team remains its authority,
+and every read or mutation resolves the caller against Teams' live directory.
+There is one stable `oag_...` organization agent for the whole organization,
+not one coordinator per teamspace. Organization owners and admins configure
+that agent; team admins configure their spaces.
+
+Every team member's active primary agent remains part of the collaboration in
+`whisperer` mode. The teamspace projects its safe handle from the live
+directory, but never its instructions, conversations, connections, or
+credentials. A whisperer follows the relevant teamspace context, privately
+advises its own member, can use that member's specialists for bounded work,
+and publishes only deliberate, attributed output into shared space. The
+organization agent consumes shared output and maintains the broad organization
+context; it does not replace or impersonate members' primary agents.
+
+The on-demand `teamspaces` toolbox makes that participation executable rather
+than merely descriptive. `teamspaces_list` shows only spaces where the current
+persistent agent is a whisperer or explicit specialist contribution,
+`teamspaces_entries` reads the recent attributed ledger, and
+`teamspaces_publish` writes as the current session agent without accepting an
+author id from the model. Specialists lose this view immediately when their
+contribution is withdrawn; primary participation follows live Teams
+membership.
+
+Contributing a specialist never transfers its identity, instructions, app
+connections, or tool permissions. The specialist still runs as its owner. The
+owner chooses `request` delegation, which uses the audited cross-user request
+protocol, or explicitly opts into `automatic` bounded delegation by the
+organization agent. Existing per-tool authorization and human-confirmation
+requirements remain in force in both modes. Another member, including a team
+admin, cannot increase that standing authority; they can only remove the
+contribution. At this layer the organization agent records follow-ups as
+`proposed` only; it does not yet execute them, even when a contribution has
+automatic delegation authority. Execution is a separate authority boundary.
+
+Organization-agent and teamspace lifecycle events contain only routing
+identity, status, revision, and contributor user ids. Prompts, whisperer
+context, roles, connection data, and model output remain out of EventBridge. A
+`teams.team.deleted.v1` event removes the corresponding space through the
+agents queue, while a departing member's private contributions are removed
+before their agent registry is cleaned up. The whisperer roster needs no
+cleanup because it is derived from Teams on every read.
+
+Shared work is an append-only publication ledger. A member can publish only
+as their own primary whisperer or one of their active specialists explicitly
+contributed to that space. Each entry has a constrained kind, title, summary,
+tool-name audit list, and artifact references; the service resolves and stores
+the author name itself, so a caller cannot claim another teammate or agent.
+EventBridge receives only the entry and author routing ids—the shared content
+stays behind the teamspace API.
+
+Each publication wakes the singleton organization agent through the agents
+EventBridge/SQS path. The queue stores an idempotent, content-minimal delivery,
+and the worker reloads the authoritative entry, teamspace, active participant
+handles, organization-agent definition, and preceding synthesis from
+PostgreSQL. Publications are processed in order within one organization while
+different organizations can run concurrently. Missing, changed, or disabled
+sources are dropped safely; retryable model or database failures are leased
+and retried before being marked dropped.
+
+The synthesis turn is isolated and temporary. Its model has no member token,
+memory, private conversation, app connection, toolbox, or external-action
+tool. It returns a strict JSON snapshot—summary, decisions, risks, open
+questions, and proposed follow-ups—and the service atomically advances that
+snapshot, records proposals, marks the delivery handled, and writes a
+content-minimal lifecycle event. Replaying an EventBridge delivery or worker
+transaction cannot create a second revision or duplicate proposal.
+
+| Route | What it does |
+| --- | --- |
+| `GET /v1/organizations/{org}/organization-agent` | Gets or lazily creates the organization's singleton coordinating agent |
+| `PATCH /v1/organizations/{org}/organization-agent` | Lets an organization owner or admin change that agent's name, instructions, or lifecycle status |
+| `GET /v1/organizations/{org}/organization-agent/context` | Reads the latest durable shared synthesis; an untouched organization returns revision zero |
+| `GET /v1/organizations/{org}/organization-agent/follow-ups` | Lists proposed follow-ups; these are auditable proposals, not claims of executed work |
+| `GET /v1/organizations/{org}/teamspaces` | Lists spaces whose human teams are currently visible to the member |
+| `POST /v1/organizations/{org}/teamspaces` | Creates one shared work space for a team the caller manages and binds the organization agent |
+| `GET /v1/organizations/{org}/teamspaces/{space}` | Reads the organization agent, live whisperer roster, and safe contributed-specialist handles |
+| `PATCH /v1/organizations/{org}/teamspaces/{space}` | Changes shared metadata or lifecycle status as a team manager |
+| `DELETE /v1/organizations/{org}/teamspaces/{space}` | Removes the space without deleting members' private agents |
+| `POST /v1/organizations/{org}/teamspaces/{space}/agents` | Contributes one of the caller's active specialists with a role and delegation mode |
+| `PATCH /v1/organizations/{org}/teamspaces/{space}/agents/{agent}` | Lets only the specialist owner change its role or standing delegation authority |
+| `DELETE /v1/organizations/{org}/teamspaces/{space}/agents/{agent}` | Lets the owner withdraw it or a team manager remove it |
+| `GET /v1/organizations/{org}/teamspaces/{space}/entries` | Reads recent attributed shared publications, newest first |
+| `POST /v1/organizations/{org}/teamspaces/{space}/entries` | Publishes immutable work as the caller's whisperer or contributed active specialist |
 
 A thread is `{"id", "title", "created_at", "updated_at"}`; its title is the
 first line of its first message.
@@ -340,8 +621,12 @@ never run as a page there: every response carries a sandboxing
 are shown in place; anything else, HTML included, downloads. A `user:` file
 is the member's own and reads through any of their threads.
 
-**Not yet.** A run is not durable: a closed tab or a deploy ends it, and what
-it had stored stays in the thread.
+**Durability boundary.** An interactive SSE run is not durable: a closed tab
+or a deploy ends it, and what it had stored stays in the thread. Team workflow
+executions are durable at the orchestration and ledger boundary and can be
+redelivered through the callback queue. An individual model attempt remains
+bounded by its run timeout; a retry reclaims the execution only after its
+lease expires.
 
 ## Events agents consumes
 
@@ -352,14 +637,19 @@ fills it (`internal/inbound`):
 | Detail type | What agents does |
 | --- | --- |
 | `batching.trigger-batch.ready.v1` | Keeps the batch's triggers, all at once, to wake Krude for its member (see [Wake-ups](#wake-ups)) |
-| `auth.member.removed.v1` | Removes the member's threads in that organization, with what their runs kept, and their waiting wake-ups |
+| `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent |
+| `agents.interaction.decided.v1` | Wakes the target to finish approved work, or the requester to observe a rejection |
+| `agents.interaction.completed.v1` | Wakes the requester to observe a completed or failed result |
+| `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, and cross-user request content in that organization |
 | `auth.organization.deleted.v1` | The same for everyone in the organization |
 
-A conversation should not outlive the place it was held in, so both of auth's
-remove every thread there. Runs' records stay, for billing. Every handler is
-safe to repeat, since the bus delivers at least once. Without a queue, nothing
-wakes Krude and a member's threads outlive their place in an organization; the
-service says so at startup.
+A conversation, agent definition, or interaction payload should not outlive
+the place it belonged to, so both of auth's events remove them there. Runs'
+records and already published routing events stay for billing and audit, but
+routing events contain no task or response content. Every handler is safe to
+repeat, since the bus delivers at least once. Without a queue, nothing wakes
+Krude and member-owned state outlives its place in an organization; the service
+says so at startup.
 
 Known limits: ADK files a member's `user:` artifacts under the member alone,
 not the organization, so one saved while working in one organization reads
@@ -418,6 +708,15 @@ wakes Krude for each batch it hands over, as `batching.trigger-batch.ready.v1`
   than counting as told. Two wake-ups making a member's thread at once settle
   on whichever was recorded first. A handled event keeps its ID for a week, to
   recognise a late repeat, and loses the app's data at once.
+
+Interaction wake-ups use a separate durable job table because they have a
+state machine rather than an app digest. The target's `requested` delivery is
+complete only after it records a decision; an `approved` delivery is complete
+only after it records a final result. Rejected and completed deliveries notify
+the requesting agent. Jobs lease across replicas, retry failed runs three
+times, settle recorded revisions in order per request and recipient, and keep handled IDs
+for a week. If an earlier run already advanced the interaction, a later or
+repeated delivery is settled without running the agent again.
 
 Not yet: nothing skips the wait for something urgent, such as a direct
 mention, since that means reading each app's payload; and Krude is only ever
@@ -708,6 +1007,22 @@ Contracts live in `/contracts/events/agents/v1`:
 | `agents.session.deleted.v1` | A session is deleted |
 | `agents.run.completed.v1` | A run finishes, with the model usage it cost |
 | `agents.run.failed.v1` | A run ends in an error |
+| `agents.agent.created.v1` | A primary identity or specialist is created |
+| `agents.agent.updated.v1` | An agent is renamed, reconfigured, enabled or disabled |
+| `agents.agent.deleted.v1` | A specialist is deleted |
+| `agents.team.created.v1` | A member composes a primary-coordinated specialist team |
+| `agents.team.updated.v1` | Team identity, status, roles or membership changes |
+| `agents.team.deleted.v1` | A member deletes a team while its agents remain |
+| `agents.workflow.created.v1` | A member creates a durable team workflow |
+| `agents.workflow.updated.v1` | Workflow configuration, status, or schedule changes |
+| `agents.workflow.deleted.v1` | A member deletes a workflow |
+| `agents.workflow.execution.queued.v1` | An API or scheduled execution receives a durable ledger row |
+| `agents.workflow.execution.started.v1` | A callback worker claims the execution |
+| `agents.workflow.execution.completed.v1` | Execution succeeds or stops for member confirmation |
+| `agents.workflow.execution.failed.v1` | Execution ends without a result |
+| `agents.interaction.requested.v1` | A durable request is ready to route to its target agent |
+| `agents.interaction.decided.v1` | The target approved or rejected a request |
+| `agents.interaction.completed.v1` | The target completed or failed an approved request |
 
 `internal/events` holds the outbox, publisher and dispatcher: events are
 recorded in `agents_primary.agents_outbox` with the state they describe and
@@ -809,7 +1124,12 @@ repository root's `.env`:
 curl -i http://localhost:8080/healthz
 ```
 
-Its migrations install `agents_primary.agent_runs` and the events outbox on
+Its migrations install `agents_primary.agent_runs`, the persistent
+`agents_primary.member_agents` registry, member-owned team and membership
+tables, the `agents_primary.agent_interactions`
+request ledger, the content-minimal `agents_primary.interaction_deliveries`
+jobs and their stable-thread map, durable workflow definitions and execution
+ledger, and the events outbox on
 the host's pool, then ADK's session tables. ADK names its tables without a
 schema, so they migrate, and the service keeps them, on a pool of its own
 whose search_path leads with `agents_primary`
@@ -834,6 +1154,14 @@ AUTHSTUB_ADDRESS=127.0.0.1:18080 go run ./test/cmd/authstub
 curl -X POST -H 'Authorization: Bearer owner' http://localhost:8080/v1/organizations/<org>/threads
 curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' \
   -d '{"message":"hello"}' http://localhost:8080/v1/organizations/<org>/threads/<thread>/runs
+
+curl -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' \
+  -d '{"name":"Sales","description":"Owns pipeline work","instructions":"Review CRM opportunities and report risks."}' \
+  http://localhost:8080/v1/organizations/<org>/agents
+
+curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/json' \
+  -d '{"message":"Review this quarter"}' \
+  http://localhost:8080/v1/organizations/<org>/agents/<agent>/runs
 ```
 
 ## Configuration
@@ -874,10 +1202,18 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
 | `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
-| `AGENTS_EVENTS_QUEUE_URL` | unset | Queue batching's trigger batches arrive on; without it nothing wakes Krude for a member's apps (see [Wake-ups](#wake-ups)) |
+| `AGENTS_EVENTS_QUEUE_URL` | unset | Queue carrying batching's app batches and interaction lifecycle events; without it neither app nor cross-agent events wake persistent agents (see [Wake-ups](#wake-ups)) |
 | `AWS_ENDPOINT_URL_SQS` | unset | SQS endpoint override for the LocalStack emulator |
 | `AGENTS_WAKEUP_BATCH_SIZE` | `1` | How many of a member's waiting events wake Krude at once; 1–100. Batching already decided when they make a batch, so one wakes Krude as it arrives |
 | `AGENTS_WAKEUP_MAX_WAIT_SECONDS` | `120` | Longest a member's oldest waiting event waits before waking Krude anyway; 10–86400 |
+| `AGENTS_WORKFLOW_QUEUE_URL` | unset | SQS callback queue polled by the workflow worker |
+| `AGENTS_WORKFLOW_STATE_MACHINE_ARN` | unset | Step Functions Standard state machine started by both API and Scheduler |
+| `AGENTS_WORKFLOW_SCHEDULER_ROLE_ARN` | unset | Role EventBridge Scheduler assumes to start that state machine |
+| `AGENTS_WORKFLOW_SCHEDULE_DLQ_ARN` | unset | DLQ for exhausted Scheduler deliveries |
+| `AGENTS_WORKFLOW_SCHEDULER_GROUP` | `default` | EventBridge Scheduler group holding member workflow schedules |
+| `AWS_ENDPOINT_URL_SFN` | unset | Step Functions endpoint override for development emulators |
+| `AWS_ENDPOINT_URL_SCHEDULER` | unset | EventBridge Scheduler endpoint override for development emulators |
+| `AGENTS_WORKFLOW_LOCAL` | `false` | Development-only in-process workflow adapter for HTTP/Gemini tests; not restart-durable and does not support cron |
 
 The host sets no write timeout for this service: a run's stream outlives any
 fixed write deadline, so the run route sets its own.

@@ -1,14 +1,16 @@
 import {
 	Blocks,
-	BookOpen,
+	Bot,
 	Building2,
 	CircleUserRound,
 	CreditCard,
+	Database,
 	Files,
-	House,
+	LayoutDashboard,
 	type LucideIcon,
 	Mail,
 	MessageSquareText,
+	Network,
 	Plug,
 	Settings2,
 	UserRoundCog,
@@ -19,6 +21,8 @@ export type AppPath =
 	| "/app"
 	| "/app/threads"
 	| "/app/knowledge"
+	| "/app/agents"
+	| "/app/teamspaces"
 	| "/app/teams"
 	| "/app/files"
 	| "/app/connections"
@@ -37,17 +41,27 @@ export interface NavigationItem {
 	match?: "exact" | "prefix";
 }
 
-export const workspaceNavigation: NavigationItem[] = [
-	{ href: "/app", icon: House, label: "Home", match: "exact" },
-	{ href: "/app/threads", icon: MessageSquareText, label: "Threads" },
-	{ href: "/app/knowledge", icon: BookOpen, label: "Knowledge" },
+export const soloNavigation: NavigationItem[] = [
+	{ href: "/app", icon: LayoutDashboard, label: "Overview", match: "exact" },
+	{ href: "/app/threads", icon: MessageSquareText, label: "Conversations" },
+	{ href: "/app/agents", icon: Bot, label: "Agent system" },
 ];
 
-export const organizationNavigation: NavigationItem[] = [
-	{ href: "/app/teams", icon: UsersRound, label: "Teams" },
-	{ href: "/app/files", icon: Files, label: "Files" },
-	{ href: "/app/connections", icon: Plug, label: "Connections" },
+export const collaborationNavigation: NavigationItem[] = [
+	{ href: "/app/teamspaces", icon: Network, label: "Teamspaces" },
+	{ href: "/app/teams", icon: UsersRound, label: "People & teams" },
 ];
+
+export const resourceNavigation: NavigationItem[] = [
+	{ href: "/app/knowledge", icon: Database, label: "Knowledge bases" },
+	{ href: "/app/files", icon: Files, label: "Files" },
+	{ href: "/app/connections", icon: Plug, label: "Apps & tools" },
+];
+
+// Compatibility aliases keep the navigation contract stable for extensions
+// while the visible shell moves to explicit work modes.
+export const workspaceNavigation = soloNavigation;
+export const organizationNavigation = collaborationNavigation;
 
 export const accountSettingsNavigation: NavigationItem = {
 	href: "/app/settings/profile",
@@ -87,7 +101,7 @@ export const organizationOperationsNavigation: NavigationItem[] = [
 	{
 		href: "/app/settings/organization/tools",
 		icon: Blocks,
-		label: "Tools",
+		label: "Tool access",
 	},
 	{
 		href: "/app/settings/organization/email",

@@ -19,7 +19,14 @@ import (
 	"strings"
 	"time"
 
+	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentworkflows"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
@@ -56,6 +63,73 @@ type Run interface {
 	Discard(ctx context.Context, reason string)
 }
 
+// ManagedAgents is the member-owned agent registry and its execution adapter.
+// managedagents.Service implements it.
+type ManagedAgents interface {
+	Primary(context.Context, managedagents.Scope) (managedagents.Definition, error)
+	List(context.Context, managedagents.Scope) ([]managedagents.Definition, error)
+	Get(context.Context, managedagents.Scope, string) (managedagents.Definition, error)
+	Create(context.Context, managedagents.Scope, managedagents.CreateInput) (managedagents.Definition, error)
+	Update(context.Context, managedagents.Scope, string, managedagents.UpdateInput) (managedagents.Definition, error)
+	Delete(context.Context, managedagents.Scope, string) error
+	StartRun(context.Context, threads.Member, string, string, threads.RunInput) (managedagents.StartedRun, error)
+}
+
+// AgentTeams is the member-owned primary-plus-specialists team catalogue.
+type AgentTeams interface {
+	List(context.Context, agentteams.Scope) ([]agentteams.Team, error)
+	Get(context.Context, agentteams.Scope, string) (agentteams.Team, error)
+	Create(context.Context, agentteams.Scope, agentteams.CreateInput) (agentteams.Team, error)
+	Update(context.Context, agentteams.Scope, string, agentteams.UpdateInput) (agentteams.Team, error)
+	Delete(context.Context, agentteams.Scope, string) error
+}
+
+// AgentWorkflows is the durable Step Functions-backed workflow catalogue and
+// execution ledger exposed to a member.
+type AgentWorkflows interface {
+	List(context.Context, agentworkflows.Scope) ([]agentworkflows.Workflow, error)
+	Get(context.Context, agentworkflows.Scope, string) (agentworkflows.Workflow, error)
+	Create(context.Context, agentworkflows.Scope, agentworkflows.CreateInput) (agentworkflows.Workflow, error)
+	Update(context.Context, agentworkflows.Scope, string, agentworkflows.UpdateInput) (agentworkflows.Workflow, error)
+	Delete(context.Context, agentworkflows.Scope, string) error
+	Start(context.Context, agentworkflows.Scope, string) (agentworkflows.Execution, error)
+	ListExecutions(context.Context, agentworkflows.Scope, string, int) ([]agentworkflows.Execution, error)
+	GetExecution(context.Context, agentworkflows.Scope, string) (agentworkflows.Execution, error)
+}
+
+// AgentInteractions is the cross-user request ledger. interactions.Service
+// implements it; the HTTP actor is always the member's primary agent.
+type AgentInteractions interface {
+	Create(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionCreateInput) (primaryagents.Interaction, error)
+	Inbox(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error)
+	Sent(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error)
+	Get(context.Context, primaryagents.InteractionActor, string) (primaryagents.Interaction, error)
+	Decide(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error)
+	Respond(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionResponseInput) (primaryagents.Interaction, error)
+}
+
+// Teamspaces is the shared multi-user agent-space catalogue. Authorization is
+// resolved from the live human-team directory on every call.
+type Teamspaces interface {
+	OrganizationAgent(context.Context, teamspaces.Actor) (teamspaces.OrganizationAgent, error)
+	UpdateOrganizationAgent(context.Context, teamspaces.Actor, teamspaces.OrganizationAgentUpdate) (teamspaces.OrganizationAgent, error)
+	List(context.Context, teamspaces.Actor) ([]teamspaces.Space, error)
+	Get(context.Context, teamspaces.Actor, string) (teamspaces.Space, error)
+	Create(context.Context, teamspaces.Actor, teamspaces.CreateInput) (teamspaces.Space, error)
+	Update(context.Context, teamspaces.Actor, string, teamspaces.UpdateInput) (teamspaces.Space, error)
+	Delete(context.Context, teamspaces.Actor, string) error
+	AddContribution(context.Context, teamspaces.Actor, string, teamspaces.ContributionInput) (teamspaces.Space, error)
+	UpdateContribution(context.Context, teamspaces.Actor, string, string, teamspaces.ContributionUpdate) (teamspaces.Space, error)
+	DeleteContribution(context.Context, teamspaces.Actor, string, string) (teamspaces.Space, error)
+	PublishEntry(context.Context, teamspaces.Actor, string, teamspaces.PublishEntryInput) (teamspaces.Entry, error)
+	ListEntries(context.Context, teamspaces.Actor, string, int) ([]teamspaces.Entry, error)
+}
+
+type OrganizationAgentContext interface {
+	Synthesis(context.Context, string) (organizationagents.Synthesis, error)
+	ListFollowUps(context.Context, string, int) ([]organizationagents.FollowUp, error)
+}
+
 // Config is how the server runs.
 type Config struct {
 	// AllowedOrigins may send cookie-authenticated requests that change
@@ -66,18 +140,40 @@ type Config struct {
 	// Unavailable, when set, is why the service cannot run agents here: every
 	// thread route answers 503 with it, and the health check still passes.
 	Unavailable string
+	// Agents enables persistent member-owned agent routes. It may be nil only
+	// when Unavailable is set or in a host that intentionally exposes only the
+	// legacy primary-thread API.
+	Agents ManagedAgents
+	// Teams enables persistent single-user multi-agent team routes.
+	Teams AgentTeams
+	// Workflows enables durable manual and scheduled team workflows.
+	Workflows AgentWorkflows
+	// Interactions enables the durable cross-user request API.
+	Interactions AgentInteractions
+	// Teamspaces enables the organization agent, member whisperers, shared
+	// team workspaces, and explicit specialist contributions.
+	Teamspaces Teamspaces
+	// OrganizationContext exposes the durable shared synthesis and proposed
+	// follow-ups produced by the singleton organization agent.
+	OrganizationContext OrganizationAgentContext
 }
 
 // Server serves the API.
 type Server struct {
-	directory      Directory
-	threads        Threads
-	allowedOrigins map[string]struct{}
-	runTimeout     time.Duration
-	unavailable    string
-	logger         *slog.Logger
-	mux            *http.ServeMux
-	patterns       []string
+	directory           Directory
+	threads             Threads
+	agents              ManagedAgents
+	teams               AgentTeams
+	workflows           AgentWorkflows
+	interactions        AgentInteractions
+	teamspaces          Teamspaces
+	organizationContext OrganizationAgentContext
+	allowedOrigins      map[string]struct{}
+	runTimeout          time.Duration
+	unavailable         string
+	logger              *slog.Logger
+	mux                 *http.ServeMux
+	patterns            []string
 }
 
 // New returns the server. directory and service may be nil only when
@@ -87,13 +183,19 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		logger = slog.New(slog.DiscardHandler)
 	}
 	server := &Server{
-		directory:      directory,
-		threads:        service,
-		allowedOrigins: map[string]struct{}{},
-		runTimeout:     config.RunTimeout,
-		unavailable:    config.Unavailable,
-		logger:         logger,
-		mux:            http.NewServeMux(),
+		directory:           directory,
+		threads:             service,
+		agents:              config.Agents,
+		teams:               config.Teams,
+		workflows:           config.Workflows,
+		interactions:        config.Interactions,
+		teamspaces:          config.Teamspaces,
+		organizationContext: config.OrganizationContext,
+		allowedOrigins:      map[string]struct{}{},
+		runTimeout:          config.RunTimeout,
+		unavailable:         config.Unavailable,
+		logger:              logger,
+		mux:                 http.NewServeMux(),
 	}
 	for _, origin := range config.AllowedOrigins {
 		if parsed, err := url.Parse(origin); err == nil && parsed.Scheme != "" && parsed.Host != "" {
@@ -110,7 +212,821 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("DELETE /v1/organizations/{organizationID}/threads/{threadID}", server.deleteThread)
 	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/runs", server.run)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}", server.artifact)
+	server.handle("GET /v1/organizations/{organizationID}/agents", server.listAgents)
+	server.handle("POST /v1/organizations/{organizationID}/agents", server.createAgent)
+	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}", server.getAgent)
+	server.handle("PATCH /v1/organizations/{organizationID}/agents/{agentID}", server.updateAgent)
+	server.handle("DELETE /v1/organizations/{organizationID}/agents/{agentID}", server.deleteAgent)
+	server.handle("POST /v1/organizations/{organizationID}/agents/{agentID}/runs", server.runAgent)
+	server.handle("GET /v1/organizations/{organizationID}/agent-teams", server.listAgentTeams)
+	server.handle("POST /v1/organizations/{organizationID}/agent-teams", server.createAgentTeam)
+	server.handle("GET /v1/organizations/{organizationID}/agent-teams/{teamID}", server.getAgentTeam)
+	server.handle("PATCH /v1/organizations/{organizationID}/agent-teams/{teamID}", server.updateAgentTeam)
+	server.handle("DELETE /v1/organizations/{organizationID}/agent-teams/{teamID}", server.deleteAgentTeam)
+	server.handle("GET /v1/organizations/{organizationID}/agent-workflows", server.listAgentWorkflows)
+	server.handle("POST /v1/organizations/{organizationID}/agent-workflows", server.createAgentWorkflow)
+	server.handle("GET /v1/organizations/{organizationID}/agent-workflows/{workflowID}", server.getAgentWorkflow)
+	server.handle("PATCH /v1/organizations/{organizationID}/agent-workflows/{workflowID}", server.updateAgentWorkflow)
+	server.handle("DELETE /v1/organizations/{organizationID}/agent-workflows/{workflowID}", server.deleteAgentWorkflow)
+	server.handle("POST /v1/organizations/{organizationID}/agent-workflows/{workflowID}/executions", server.startAgentWorkflow)
+	server.handle("GET /v1/organizations/{organizationID}/agent-workflows/{workflowID}/executions", server.listAgentWorkflowExecutions)
+	server.handle("GET /v1/organizations/{organizationID}/agent-workflow-executions/{executionID}", server.getAgentWorkflowExecution)
+	server.handle("POST /v1/organizations/{organizationID}/agent-requests", server.createInteraction)
+	server.handle("GET /v1/organizations/{organizationID}/agent-requests/inbox", server.interactionInbox)
+	server.handle("GET /v1/organizations/{organizationID}/agent-requests/sent", server.interactionSent)
+	server.handle("GET /v1/organizations/{organizationID}/agent-requests/{requestID}", server.getInteraction)
+	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/decision", server.decideInteraction)
+	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/response", server.respondInteraction)
+	server.handle("GET /v1/organizations/{organizationID}/organization-agent", server.getOrganizationAgent)
+	server.handle("PATCH /v1/organizations/{organizationID}/organization-agent", server.updateOrganizationAgent)
+	server.handle("GET /v1/organizations/{organizationID}/organization-agent/context", server.getOrganizationAgentContext)
+	server.handle("GET /v1/organizations/{organizationID}/organization-agent/follow-ups", server.listOrganizationAgentFollowUps)
+	server.handle("GET /v1/organizations/{organizationID}/teamspaces", server.listTeamspaces)
+	server.handle("POST /v1/organizations/{organizationID}/teamspaces", server.createTeamspace)
+	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}", server.getTeamspace)
+	server.handle("PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}", server.updateTeamspace)
+	server.handle("DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}", server.deleteTeamspace)
+	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents", server.addTeamspaceContribution)
+	server.handle("PATCH /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}", server.updateTeamspaceContribution)
+	server.handle("DELETE /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/agents/{agentID}", server.deleteTeamspaceContribution)
+	server.handle("GET /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.listTeamspaceEntries)
+	server.handle("POST /v1/organizations/{organizationID}/teamspaces/{teamspaceID}/entries", server.publishTeamspaceEntry)
 	return server
+}
+
+func scopeOf(member threads.Member) managedagents.Scope {
+	return managedagents.Scope{OrganizationID: member.OrganizationID, UserID: member.UserID}
+}
+
+func interactionActorOf(member threads.Member) primaryagents.InteractionActor {
+	return primaryagents.InteractionActor{
+		OrganizationID: member.OrganizationID, UserID: member.UserID,
+		AgentID: member.AgentID, AgentName: member.AgentName, AgentKind: member.AgentKind,
+	}
+}
+
+func teamspaceActorOf(member threads.Member) teamspaces.Actor {
+	return teamspaces.Actor{OrganizationID: member.OrganizationID, UserID: member.UserID, AccessToken: member.AccessToken}
+}
+
+func (server *Server) createInteraction(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.interactions == nil {
+		writeError(writer, http.StatusServiceUnavailable, "interactions_unavailable", "agent interactions are not configured")
+		return
+	}
+	var input primaryagents.InteractionCreateInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	created, err := server.interactions.Create(request.Context(), interactionActorOf(member), member.AccessToken, request.Header.Get("Idempotency-Key"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, created)
+}
+
+func (server *Server) interactionInbox(writer http.ResponseWriter, request *http.Request) {
+	server.listInteractions(writer, request, true)
+}
+
+func (server *Server) interactionSent(writer http.ResponseWriter, request *http.Request) {
+	server.listInteractions(writer, request, false)
+}
+
+func (server *Server) listInteractions(writer http.ResponseWriter, request *http.Request, inbox bool) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.interactions == nil {
+		writeError(writer, http.StatusServiceUnavailable, "interactions_unavailable", "agent interactions are not configured")
+		return
+	}
+	limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
+	var listed []primaryagents.Interaction
+	var err error
+	if inbox {
+		listed, err = server.interactions.Inbox(request.Context(), interactionActorOf(member), limit)
+	} else {
+		listed, err = server.interactions.Sent(request.Context(), interactionActorOf(member), limit)
+	}
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"requests": listed})
+}
+
+func (server *Server) getInteraction(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.interactions == nil {
+		writeError(writer, http.StatusServiceUnavailable, "interactions_unavailable", "agent interactions are not configured")
+		return
+	}
+	found, err := server.interactions.Get(request.Context(), interactionActorOf(member), request.PathValue("requestID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, found)
+}
+
+func (server *Server) decideInteraction(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.interactions == nil {
+		writeError(writer, http.StatusServiceUnavailable, "interactions_unavailable", "agent interactions are not configured")
+		return
+	}
+	var input primaryagents.InteractionDecisionInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	updated, err := server.interactions.Decide(request.Context(), interactionActorOf(member), request.PathValue("requestID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, updated)
+}
+
+func (server *Server) respondInteraction(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.interactions == nil {
+		writeError(writer, http.StatusServiceUnavailable, "interactions_unavailable", "agent interactions are not configured")
+		return
+	}
+	var input primaryagents.InteractionResponseInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	updated, err := server.interactions.Respond(request.Context(), interactionActorOf(member), request.PathValue("requestID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, updated)
+}
+
+func (server *Server) listAgents(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	listed, err := server.agents.List(request.Context(), scopeOf(member))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"agents": listed})
+}
+
+func (server *Server) createAgent(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	var input managedagents.CreateInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	created, err := server.agents.Create(request.Context(), scopeOf(member), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, created)
+}
+
+func (server *Server) getAgent(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	definition, err := server.agents.Get(request.Context(), scopeOf(member), request.PathValue("agentID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, definition)
+}
+
+func (server *Server) updateAgent(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	var input managedagents.UpdateInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	updated, err := server.agents.Update(request.Context(), scopeOf(member), request.PathValue("agentID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, updated)
+}
+
+func (server *Server) deleteAgent(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	if err := server.agents.Delete(request.Context(), scopeOf(member), request.PathValue("agentID")); err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (server *Server) runAgent(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	var body struct {
+		ThreadID      string `json:"thread_id"`
+		Message       string `json:"message"`
+		Confirmations []struct {
+			ID        string `json:"id"`
+			Confirmed *bool  `json:"confirmed"`
+		} `json:"confirmations"`
+	}
+	if !server.decode(writer, request, &body) {
+		return
+	}
+	input := threads.RunInput{Message: body.Message}
+	for _, answer := range body.Confirmations {
+		if answer.ID == "" || answer.Confirmed == nil {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "every confirmation needs an id and whether it is confirmed")
+			return
+		}
+		input.Confirmations = append(input.Confirmations, threads.Answer{ID: answer.ID, Confirmed: *answer.Confirmed})
+	}
+	started, err := server.agents.StartRun(request.Context(), member, request.PathValue("agentID"), body.ThreadID, input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writer.Header().Set("X-Oryxa-Thread", started.ThreadID)
+	server.streamRun(writer, request, started.Run)
+}
+
+func (server *Server) listAgentTeams(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teams == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_teams_unavailable", "agent teams are not configured")
+		return
+	}
+	listed, err := server.teams.List(request.Context(), scopeOf(member))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"teams": listed})
+}
+
+func (server *Server) createAgentTeam(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teams == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_teams_unavailable", "agent teams are not configured")
+		return
+	}
+	var input agentteams.CreateInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	created, err := server.teams.Create(request.Context(), scopeOf(member), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, created)
+}
+
+func (server *Server) getAgentTeam(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teams == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_teams_unavailable", "agent teams are not configured")
+		return
+	}
+	team, err := server.teams.Get(request.Context(), scopeOf(member), request.PathValue("teamID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, team)
+}
+
+func (server *Server) updateAgentTeam(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teams == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_teams_unavailable", "agent teams are not configured")
+		return
+	}
+	var input agentteams.UpdateInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	updated, err := server.teams.Update(request.Context(), scopeOf(member), request.PathValue("teamID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, updated)
+}
+
+func (server *Server) deleteAgentTeam(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teams == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_teams_unavailable", "agent teams are not configured")
+		return
+	}
+	if err := server.teams.Delete(request.Context(), scopeOf(member), request.PathValue("teamID")); err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (server *Server) listTeamspaces(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	spaces, err := server.teamspaces.List(request.Context(), teamspaceActorOf(member))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"teamspaces": spaces})
+}
+
+func (server *Server) getOrganizationAgent(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	agent, err := server.teamspaces.OrganizationAgent(request.Context(), teamspaceActorOf(member))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, agent)
+}
+
+func (server *Server) updateOrganizationAgent(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.OrganizationAgentUpdate
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	agent, err := server.teamspaces.UpdateOrganizationAgent(request.Context(), teamspaceActorOf(member), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, agent)
+}
+
+func (server *Server) getOrganizationAgentContext(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.organizationContext == nil {
+		writeError(writer, http.StatusServiceUnavailable, "organization_agent_unavailable", "organization-agent synthesis is not configured")
+		return
+	}
+	synthesis, err := server.organizationContext.Synthesis(request.Context(), member.OrganizationID)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, synthesis)
+}
+
+func (server *Server) listOrganizationAgentFollowUps(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.organizationContext == nil {
+		writeError(writer, http.StatusServiceUnavailable, "organization_agent_unavailable", "organization-agent synthesis is not configured")
+		return
+	}
+	limit := 0
+	if value := request.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	followUps, err := server.organizationContext.ListFollowUps(request.Context(), member.OrganizationID, limit)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"follow_ups": followUps})
+}
+
+func (server *Server) createTeamspace(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.CreateInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	created, err := server.teamspaces.Create(request.Context(), teamspaceActorOf(member), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, created)
+}
+
+func (server *Server) getTeamspace(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	space, err := server.teamspaces.Get(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, space)
+}
+
+func (server *Server) updateTeamspace(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.UpdateInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	space, err := server.teamspaces.Update(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, space)
+}
+
+func (server *Server) deleteTeamspace(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	if err := server.teamspaces.Delete(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID")); err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (server *Server) addTeamspaceContribution(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.ContributionInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	space, err := server.teamspaces.AddContribution(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, space)
+}
+
+func (server *Server) updateTeamspaceContribution(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.ContributionUpdate
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	space, err := server.teamspaces.UpdateContribution(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"), request.PathValue("agentID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, space)
+}
+
+func (server *Server) deleteTeamspaceContribution(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	space, err := server.teamspaces.DeleteContribution(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"), request.PathValue("agentID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, space)
+}
+
+func (server *Server) listTeamspaceEntries(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	limit := 0
+	if value := request.URL.Query().Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "limit must be a positive integer")
+			return
+		}
+		limit = parsed
+	}
+	entries, err := server.teamspaces.ListEntries(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"), limit)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"entries": entries})
+}
+
+func (server *Server) publishTeamspaceEntry(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamspaces == nil {
+		writeError(writer, http.StatusServiceUnavailable, "teamspaces_unavailable", "teamspaces are not configured")
+		return
+	}
+	var input teamspaces.PublishEntryInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	entry, err := server.teamspaces.PublishEntry(request.Context(), teamspaceActorOf(member), request.PathValue("teamspaceID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, entry)
+}
+
+func (server *Server) listAgentWorkflows(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.workflows == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_workflows_unavailable", "agent workflows are not configured")
+		return
+	}
+	listed, err := server.workflows.List(request.Context(), scopeOf(member))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"workflows": listed})
+}
+
+func (server *Server) createAgentWorkflow(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.workflows == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_workflows_unavailable", "agent workflows are not configured")
+		return
+	}
+	var input agentworkflows.CreateInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	created, err := server.workflows.Create(request.Context(), scopeOf(member), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, created)
+}
+
+func (server *Server) getAgentWorkflow(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.workflows == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_workflows_unavailable", "agent workflows are not configured")
+		return
+	}
+	workflow, err := server.workflows.Get(request.Context(), scopeOf(member), request.PathValue("workflowID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, workflow)
+}
+
+func (server *Server) updateAgentWorkflow(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.workflows == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_workflows_unavailable", "agent workflows are not configured")
+		return
+	}
+	var input agentworkflows.UpdateInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	updated, err := server.workflows.Update(request.Context(), scopeOf(member), request.PathValue("workflowID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, updated)
+}
+
+func (server *Server) deleteAgentWorkflow(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.workflows == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_workflows_unavailable", "agent workflows are not configured")
+		return
+	}
+	if err := server.workflows.Delete(request.Context(), scopeOf(member), request.PathValue("workflowID")); err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (server *Server) startAgentWorkflow(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.workflows == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_workflows_unavailable", "agent workflows are not configured")
+		return
+	}
+	var input struct{}
+	if request.ContentLength != 0 && !server.decode(writer, request, &input) {
+		return
+	}
+	execution, err := server.workflows.Start(request.Context(), scopeOf(member), request.PathValue("workflowID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusAccepted, execution)
+}
+
+func (server *Server) listAgentWorkflowExecutions(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.workflows == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_workflows_unavailable", "agent workflows are not configured")
+		return
+	}
+	limit, _ := strconv.Atoi(request.URL.Query().Get("limit"))
+	listed, err := server.workflows.ListExecutions(request.Context(), scopeOf(member), request.PathValue("workflowID"), limit)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"executions": listed})
+}
+
+func (server *Server) getAgentWorkflowExecution(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.workflows == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_workflows_unavailable", "agent workflows are not configured")
+		return
+	}
+	execution, err := server.workflows.GetExecution(request.Context(), scopeOf(member), request.PathValue("executionID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, execution)
 }
 
 // handle registers a route and remembers its pattern, so a host serving
@@ -276,6 +1192,10 @@ func (server *Server) run(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	server.streamRun(writer, request, started)
+}
+
+func (server *Server) streamRun(writer http.ResponseWriter, request *http.Request, started Run) {
 	controller := http.NewResponseController(writer)
 	// The host sets no write deadline for this service; a stream sets its
 	// own, just past the longest a run may take.
@@ -322,11 +1242,22 @@ func (server *Server) member(writer http.ResponseWriter, request *http.Request) 
 		writeError(writer, http.StatusForbidden, "forbidden", "an agent cannot hold a member's conversation")
 		return threads.Member{}, false
 	}
-	return threads.Member{
+	member := threads.Member{
 		UserID:         membership.UserID,
 		OrganizationID: organizationID,
 		AccessToken:    credentials.AccessToken(),
-	}, true
+	}
+	if server.agents != nil {
+		primary, err := server.agents.Primary(request.Context(), scopeOf(member))
+		if err != nil {
+			server.handleError(writer, request, err)
+			return threads.Member{}, false
+		}
+		member.AgentID = primary.ID
+		member.AgentName = primary.Name
+		member.AgentKind = string(primary.Kind)
+	}
+	return member, true
 }
 
 // credentials reads how the caller signs in. A cookie alone cannot change
@@ -367,6 +1298,56 @@ func (server *Server) decode(writer http.ResponseWriter, request *http.Request, 
 // ErrorCode names a failure the way the API does.
 func ErrorCode(err error) (int, string) {
 	switch {
+	case errors.Is(err, teamspaces.ErrInvalid):
+		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, teamspaces.ErrForbidden):
+		return http.StatusForbidden, "forbidden"
+	case errors.Is(err, teamspaces.ErrDisabled):
+		return http.StatusConflict, "teamspace_disabled"
+	case errors.Is(err, teamspaces.ErrConflict):
+		return http.StatusConflict, "teamspace_conflict"
+	case errors.Is(err, teamspaces.ErrNotFound):
+		return http.StatusNotFound, "not_found"
+	case errors.Is(err, agentworkflows.ErrInvalid):
+		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, agentworkflows.ErrDisabled):
+		return http.StatusConflict, "workflow_disabled"
+	case errors.Is(err, agentworkflows.ErrConflict):
+		return http.StatusConflict, "name_conflict"
+	case errors.Is(err, agentworkflows.ErrInProgress):
+		return http.StatusConflict, "workflow_in_progress"
+	case errors.Is(err, agentworkflows.ErrNotFound):
+		return http.StatusNotFound, "not_found"
+	case errors.Is(err, agentworkflows.ErrUnavailable):
+		return http.StatusServiceUnavailable, "agent_workflows_unavailable"
+	case errors.Is(err, agentteams.ErrInvalid):
+		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, agentteams.ErrForbidden):
+		return http.StatusForbidden, "forbidden"
+	case errors.Is(err, agentteams.ErrDisabled):
+		return http.StatusConflict, "team_disabled"
+	case errors.Is(err, agentteams.ErrConflict):
+		return http.StatusConflict, "name_conflict"
+	case errors.Is(err, agentteams.ErrNotFound):
+		return http.StatusNotFound, "not_found"
+	case errors.Is(err, interactions.ErrInvalid):
+		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, interactions.ErrForbidden):
+		return http.StatusForbidden, "forbidden"
+	case errors.Is(err, interactions.ErrExpired):
+		return http.StatusConflict, "request_expired"
+	case errors.Is(err, interactions.ErrConflict):
+		return http.StatusConflict, "invalid_state"
+	case errors.Is(err, interactions.ErrNotFound):
+		return http.StatusNotFound, "not_found"
+	case errors.Is(err, managedagents.ErrInvalid):
+		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, managedagents.ErrConflict):
+		return http.StatusConflict, "name_conflict"
+	case errors.Is(err, managedagents.ErrInUse):
+		return http.StatusConflict, "agent_in_use"
+	case errors.Is(err, managedagents.ErrDisabled):
+		return http.StatusConflict, "agent_disabled"
 	case errors.Is(err, threads.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, authclient.ErrUnauthorized):
@@ -374,6 +1355,8 @@ func ErrorCode(err error) (int, string) {
 	case errors.Is(err, authclient.ErrForbidden):
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, threads.ErrNotFound):
+		return http.StatusNotFound, "not_found"
+	case errors.Is(err, managedagents.ErrNotFound):
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, threads.ErrRunInProgress):
 		return http.StatusConflict, "run_in_progress"
@@ -398,6 +1381,10 @@ func message(err error) string {
 	case code == "invalid_request":
 		// The wording after the sentinel says what to fix.
 		text := strings.TrimPrefix(err.Error(), threads.ErrInvalid.Error()+": ")
+		text = strings.TrimPrefix(text, managedagents.ErrInvalid.Error()+": ")
+		text = strings.TrimPrefix(text, interactions.ErrInvalid.Error()+": ")
+		text = strings.TrimPrefix(text, agentworkflows.ErrInvalid.Error()+": ")
+		text = strings.TrimPrefix(text, teamspaces.ErrInvalid.Error()+": ")
 		return strings.TrimSpace(text)
 	default:
 		return err.Error()
