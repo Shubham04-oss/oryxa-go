@@ -13,7 +13,7 @@ import (
 
 const documentColumns = `id, organization_id, source_id, external_id, kind, title, url, mime,
 	content_hash, byte_size, original_bucket, original_key, original_size, metadata,
-	source_updated_at, extracted_at, last_seen_at, removed_at`
+	source_updated_at, extracted_at, last_seen_at, removed_at, excluded_reason, judged_policy, judgment`
 
 // UpsertDocument writes what a run read, and the event saying so only when the
 // content actually changed. It answers whether anything was published, so a
@@ -47,8 +47,8 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 			INSERT INTO knowledge_documents (
 				id, organization_id, source_id, external_id, kind, title, url, mime,
 				content_hash, body, byte_size, original_bucket, original_key, original_size,
-				metadata, source_updated_at, extracted_at, last_seen_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17)
+				metadata, source_updated_at, extracted_at, last_seen_at, excluded_reason, judged_policy, judgment
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17, '', $18, $19)
 			ON CONFLICT (source_id, external_id) DO UPDATE SET
 				kind = excluded.kind,
 				title = excluded.title,
@@ -64,11 +64,14 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 				source_updated_at = excluded.source_updated_at,
 				extracted_at = excluded.extracted_at,
 				last_seen_at = excluded.last_seen_at,
-				removed_at = NULL`,
+				removed_at = NULL,
+				excluded_reason = '',
+				judged_policy = excluded.judged_policy,
+				judgment = excluded.judgment`,
 			document.ID, document.OrganizationID, document.SourceID, document.ExternalID, document.Kind,
 			document.Title, document.URL, document.MIME, document.ContentHash, document.Body,
 			document.ByteSize, originalBucket, originalKey, originalSize, metadata,
-			document.SourceUpdatedAt, document.ExtractedAt); err != nil {
+			document.SourceUpdatedAt, document.ExtractedAt, document.JudgedPolicy, judgmentColumn(document.Judgment)); err != nil {
 			return mapWriteError("upsert document", err)
 		}
 		if !changed || event == nil {
@@ -151,6 +154,83 @@ func originalColumns(original *domain.Original) (bucket, key *string, size *int6
 		return nil, nil, nil
 	}
 	return &original.Bucket, &original.Key, &original.Size
+}
+
+// ExcludeDocument records a document judged not worth indexing. Its row is
+// written, text and judgment included, so the same content is not judged
+// again and a member who later chooses to index its kind can have it without
+// reading it from the source again; but without its original, and removed
+// with document.Excluded as the reason. One that was
+// live until now is retracted: event's removal is written in the same
+// transaction, and ExcludeDocument answers true so the caller can delete the
+// original it held once this commits.
+func (store *Store) ExcludeDocument(ctx context.Context, document domain.Document, now time.Time, event func(domain.Document) (domain.Event, error)) (bool, error) {
+	metadata, err := encodeMap(document.Metadata)
+	if err != nil {
+		return false, err
+	}
+	retracted := false
+	err = store.inTx(ctx, func(tx pgx.Tx) error {
+		var existingID string
+		var removedAt *time.Time
+		err := tx.QueryRow(ctx, `
+			SELECT id, removed_at
+			FROM knowledge_documents
+			WHERE source_id = $1 AND external_id = $2
+			FOR UPDATE`, document.SourceID, document.ExternalID).
+			Scan(&existingID, &removedAt)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("read document: %w", err)
+		}
+		live := existingID != "" && removedAt == nil
+		if existingID != "" {
+			document.ID = existingID
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO knowledge_documents (
+				id, organization_id, source_id, external_id, kind, title, url, mime,
+				content_hash, body, byte_size, metadata, source_updated_at, extracted_at,
+				last_seen_at, removed_at, excluded_reason, judged_policy, judgment
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $17, $10, $11, $12, $13, $14, $14, $15, $16, $18)
+			ON CONFLICT (source_id, external_id) DO UPDATE SET
+				kind = excluded.kind,
+				title = excluded.title,
+				url = excluded.url,
+				mime = excluded.mime,
+				content_hash = excluded.content_hash,
+				body = excluded.body,
+				byte_size = excluded.byte_size,
+				original_bucket = NULL,
+				original_key = NULL,
+				original_size = NULL,
+				metadata = excluded.metadata,
+				source_updated_at = excluded.source_updated_at,
+				extracted_at = excluded.extracted_at,
+				last_seen_at = excluded.last_seen_at,
+				removed_at = coalesce(knowledge_documents.removed_at, excluded.removed_at),
+				excluded_reason = excluded.excluded_reason,
+				judged_policy = excluded.judged_policy,
+				judgment = excluded.judgment`,
+			document.ID, document.OrganizationID, document.SourceID, document.ExternalID, document.Kind,
+			document.Title, document.URL, document.MIME, document.ContentHash, document.ByteSize, metadata,
+			document.SourceUpdatedAt, document.ExtractedAt, now, document.Excluded, document.JudgedPolicy,
+			document.Body, judgmentColumn(document.Judgment)); err != nil {
+			return mapWriteError("exclude document", err)
+		}
+		if !live || event == nil {
+			return nil
+		}
+		recorded, err := event(document)
+		if err != nil {
+			return err
+		}
+		if err := insertEvents(ctx, tx, recorded); err != nil {
+			return err
+		}
+		retracted = true
+		return nil
+	})
+	return retracted, err
 }
 
 // TouchDocument records that a run saw a document without re-reading it, so an
@@ -309,7 +389,8 @@ func scanDocument(rows pgx.Rows, withBody bool) (domain.Document, error) {
 	targets := []any{&document.ID, &document.OrganizationID, &document.SourceID, &document.ExternalID,
 		&document.Kind, &document.Title, &document.URL, &document.MIME, &document.ContentHash,
 		&document.ByteSize, &originalBucket, &originalKey, &originalSize, &metadata, &document.SourceUpdatedAt,
-		&document.ExtractedAt, &document.LastSeenAt, &document.RemovedAt}
+		&document.ExtractedAt, &document.LastSeenAt, &document.RemovedAt, &document.Excluded, &document.JudgedPolicy,
+		&document.Judgment}
 	if withBody {
 		targets = append(targets, &document.Body)
 	}
@@ -331,4 +412,41 @@ func scanDocument(rows pgx.Rows, withBody bool) (domain.Document, error) {
 		document.Original = &domain.Original{Bucket: *originalBucket, Key: *originalKey, Size: size, SHA256: document.ContentHash}
 	}
 	return document, nil
+}
+
+// judgmentColumn is a judgment as the jsonb column takes it: NULL for none.
+func judgmentColumn(judgment []byte) any {
+	if len(judgment) == 0 {
+		return nil
+	}
+	return string(judgment)
+}
+
+// DocumentsToRedecide pages through a source's documents that a judge
+// decided, live or excluded, with their text and judgments, after the one
+// named after.
+func (store *Store) DocumentsToRedecide(ctx context.Context, sourceID, after string, limit int) ([]domain.Document, error) {
+	rows, err := store.pool.Query(ctx, `
+		SELECT `+documentColumns+`, body
+		FROM knowledge_documents
+		WHERE source_id = $1 AND id > $2 AND judgment IS NOT NULL
+		  AND (removed_at IS NULL OR excluded_reason <> '')
+		ORDER BY id
+		LIMIT $3`, sourceID, after, limit)
+	if err != nil {
+		return nil, fmt.Errorf("read documents to decide again: %w", err)
+	}
+	defer rows.Close()
+	documents := []domain.Document{}
+	for rows.Next() {
+		document, err := scanDocument(rows, true)
+		if err != nil {
+			return nil, err
+		}
+		documents = append(documents, document)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read documents to decide again: %w", err)
+	}
+	return documents, nil
 }

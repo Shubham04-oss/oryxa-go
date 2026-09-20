@@ -336,6 +336,11 @@ func driveItem(file *driveFile, mimeType string, content []byte) Item {
 	if file.MD5Checksum != "" {
 		metadata["md5_checksum"] = file.MD5Checksum
 	}
+	if file.MimeType != "" {
+		// What Drive calls the file, which an export's plain text or CSV no
+		// longer says: a Google Doc, a Sheet, a scanned PDF.
+		metadata["drive_type"] = file.MimeType
+	}
 	var updated *time.Time
 	if parsed, err := time.Parse(time.RFC3339, file.ModifiedTime); err == nil {
 		parsed = parsed.UTC()

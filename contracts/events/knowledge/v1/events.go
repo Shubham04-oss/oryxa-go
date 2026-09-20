@@ -135,11 +135,14 @@ type SyncCompleted struct {
 	Provider       string `json:"provider"`
 	Kind           string `json:"kind"`
 	// DocumentsSeen is everything the run read; Published is what had changed.
-	DocumentsSeen      int       `json:"documents_seen"`
-	DocumentsPublished int       `json:"documents_published"`
-	DocumentsRemoved   int       `json:"documents_removed"`
-	StartedAt          time.Time `json:"started_at"`
-	CompletedAt        time.Time `json:"completed_at"`
+	DocumentsSeen      int `json:"documents_seen"`
+	DocumentsPublished int `json:"documents_published"`
+	DocumentsRemoved   int `json:"documents_removed"`
+	// DocumentsExcluded is what the run read and judged not worth indexing:
+	// noise such as promotions, notifications and empty files.
+	DocumentsExcluded int       `json:"documents_excluded"`
+	StartedAt         time.Time `json:"started_at"`
+	CompletedAt       time.Time `json:"completed_at"`
 }
 
 // SyncFailed is a run that stopped early. What it published before stopping
@@ -191,6 +194,10 @@ const (
 	// was dropped. It is tried again, with backoff, so it resumes once they
 	// grant.
 	SyncErrorGrantRequired = "grant_required"
+	// SyncErrorQualityCheckUnavailable: the model that judges whether a
+	// document is worth indexing could not be reached. Nothing is published
+	// unjudged; the run is tried again, with backoff.
+	SyncErrorQualityCheckUnavailable = "quality_check_unavailable"
 )
 
 // Removal reasons say why a document is gone.
@@ -207,6 +214,9 @@ const (
 	RemovedReasonMemberLeft          = "member_left"
 	RemovedReasonTeamDeleted         = "team_deleted"
 	RemovedReasonNoLongerReadable    = "no_longer_readable"
+	// RemovedReasonExcluded: the document was judged not worth indexing, such
+	// as a promotion, an automated notification or an empty file.
+	RemovedReasonExcluded = "excluded"
 )
 
 // Pause reasons say what stopped a source.

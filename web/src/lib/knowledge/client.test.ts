@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
 	availableSourceProviders,
 	defaultSourceIntervalSeconds,
+	effectiveKinds,
 	intervalLabel,
+	kindsSummary,
 	runStatusLabel,
+	runSummary,
 	sourceStatusLabel,
 	sourceStatusTone,
 	sourceTargetField,
@@ -187,5 +190,63 @@ describe("status labels", () => {
 		expect(runStatusLabel("running")).toBe("Running");
 		expect(runStatusLabel("completed")).toBe("Completed");
 		expect(runStatusLabel("failed")).toBe("Failed");
+	});
+});
+
+describe("runSummary", () => {
+	it("names what a run skipped as noise, when it skipped any", () => {
+		expect(
+			runSummary({
+				documents_excluded: 212,
+				documents_published: 40,
+				documents_removed: 3,
+				documents_seen: 255,
+			}),
+		).toBe("40 published · 212 skipped as noise · 3 removed of 255 seen");
+	});
+
+	it("reads as before for a run that skipped nothing, or predates skipping", () => {
+		const run = {
+			documents_published: 2,
+			documents_removed: 0,
+			documents_seen: 2,
+		};
+		expect(runSummary(run)).toBe("2 published · 0 removed of 2 seen");
+		expect(runSummary({ ...run, documents_excluded: 0 })).toBe(
+			"2 published · 0 removed of 2 seen",
+		);
+	});
+});
+
+describe("effectiveKinds / kindsSummary", () => {
+	const kinds = [
+		{ default: true, hint: "", label: "Conversations", name: "conversation" },
+		{ default: true, hint: "", label: "Support cases", name: "support_case" },
+		{ default: false, hint: "", label: "Event updates", name: "event_update" },
+		{ default: false, hint: "", label: "Promotions", name: "promotion" },
+	];
+
+	it("is the default kinds until a member chooses", () => {
+		expect(effectiveKinds(kinds, undefined)).toEqual([
+			"conversation",
+			"support_case",
+		]);
+		expect(kindsSummary(kinds, undefined)).toBe("Default kinds");
+	});
+
+	it("is the member's choice once they make one", () => {
+		expect(effectiveKinds(kinds, ["conversation", "event_update"])).toEqual([
+			"conversation",
+			"event_update",
+		]);
+	});
+
+	it("names what a choice adds to and takes from the default", () => {
+		expect(kindsSummary(kinds, ["conversation", "event_update"])).toBe(
+			"+ Event updates, − Support cases",
+		);
+		expect(kindsSummary(kinds, ["conversation", "support_case"])).toBe(
+			"Default kinds",
+		);
 	});
 });

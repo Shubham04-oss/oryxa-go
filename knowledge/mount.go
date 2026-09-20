@@ -22,6 +22,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/filesclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/httpserver"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/judge"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/originals"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/serviceconfig"
@@ -47,7 +48,7 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 // and KNOWLEDGE_SERVICE_KEY_ID give it a way to act as one; and a PDF or an
 // Office file is kept rather than skipped once KNOWLEDGE_ORIGINALS_BUCKET
 // names somewhere to keep it.
-func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
+func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	if platform.Database == nil {
 		return host.Service{}, host.ErrDatabaseRequired
 	}
@@ -101,6 +102,17 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("KNOWLEDGE_ORIGINALS_BUCKET is not set: a PDF or an Office file is skipped rather than kept")
 	}
 
+	// What a connected app yields is judged before it is published, once
+	// there is a model to judge with.
+	documentJudge, err := judgeFor(ctx, config, platform)
+	if err != nil {
+		return host.Service{}, err
+	}
+	if documentJudge == nil {
+		logger.Warn("KNOWLEDGE_JUDGE is off: documents from connected apps are indexed without judging whether they are worth it, " +
+			"so only Gmail's own Promotions and Social categories and empty documents are kept out")
+	}
+
 	// Files is the one source with nobody to act as: every route there wants
 	// a member's own credentials, and a scheduled pass has none.
 	switch {
@@ -144,6 +156,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		Sink:       events.NewPublisher(eventClient, platform.EventBusName),
 		Extractors: extractors,
 		Originals:  documentOriginals,
+		Judge:      documentJudge,
 		Logger:     logger,
 	}, Config{
 		AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval,
@@ -201,5 +214,44 @@ func (grants memberGrants) MemberToken(ctx context.Context, organizationID, memb
 		return "", err
 	default:
 		return "", fmt.Errorf("%w: %w", domain.ErrProviderUnavailable, err)
+	}
+}
+
+// judgeFor builds the judge KNOWLEDGE_JUDGE names: Jev, with the Gemini model,
+// when there is one, deciding what Jev is unsure of and what it cannot read;
+// or the Gemini model alone. Nil when judging is off.
+func judgeFor(ctx context.Context, config serviceconfig.Config, platform host.Platform) (application.Judge, error) {
+	var gemini *judge.Gemini
+	if config.Judge != serviceconfig.JudgeOff && config.JudgeModel != "" {
+		var err error
+		gemini, err = judge.New(ctx, judge.Config{
+			Project: config.GoogleCloudProject, Location: config.GoogleCloudLocation,
+			Model: config.JudgeModel, Credentials: platform.Google,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	switch config.Judge {
+	case serviceconfig.JudgeJev:
+		jevConfig := judge.JevConfig{
+			APIKey: config.TypeSafeAPIKey, BaseURL: config.TypeSafeBaseURL, Model: config.JudgeJevModel,
+			EscalateBelow: config.JudgeEscalateBelow,
+		}
+		if gemini != nil {
+			jevConfig.Escalate = gemini
+		}
+		jev, err := judge.NewJev(jevConfig)
+		if err != nil {
+			return nil, err
+		}
+		return jev, nil
+	case serviceconfig.JudgeGemini:
+		if gemini == nil {
+			return nil, nil
+		}
+		return gemini, nil
+	default:
+		return nil, nil
 	}
 }

@@ -36,6 +36,10 @@ var (
 	// give auth, and they have not given it or auth has dropped it. Only the
 	// member can fix that, so asking again changes nothing until they do.
 	ErrGrantRequired = errors.New("the member has not granted standing access")
+	// ErrQualityCheckUnavailable means the model that judges whether a
+	// document is worth indexing could not be reached. Nothing is published
+	// unjudged, so the run stops and is tried again.
+	ErrQualityCheckUnavailable = errors.New("the quality check is unavailable")
 )
 
 type OrgRole string
@@ -132,6 +136,12 @@ type Source struct {
 	// finished.
 	SyncAt       *time.Time `json:"sync_at,omitempty"`
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
+	// IncludeKinds is what the source indexes, by kind of document (see
+	// Kinds); nil is DefaultKinds.
+	IncludeKinds []string `json:"include_kinds,omitempty"`
+	// KindsPending says IncludeKinds changed since the source's documents
+	// were last decided, so its next pass decides them again.
+	KindsPending bool `json:"-"`
 	// FullSweepAt is when a pass last read this source from the beginning and
 	// retracted what it did not see. Nil means never: the source is due for
 	// one now, the same as if it had just been registered.
@@ -222,6 +232,17 @@ type Document struct {
 	// document a full pass did not see is one the source no longer holds.
 	LastSeenAt time.Time  `json:"last_seen_at"`
 	RemovedAt  *time.Time `json:"removed_at,omitempty"`
+	// Excluded says why this document was judged not worth indexing; empty
+	// for one that was not. An excluded document is removed like any other,
+	// but its row stays, so the same content is not judged twice.
+	Excluded string `json:"excluded,omitempty"`
+	// JudgedPolicy is the quality policy this document's content was last
+	// judged under; zero when it never was. A newer policy judges it again.
+	JudgedPolicy int `json:"-"`
+	// Judgment is the judge's own answer about this content, as JSON: what
+	// its verdict can be drawn from again when the source's choice of kinds
+	// changes. Nil for a document no judge was asked about.
+	Judgment []byte `json:"-"`
 }
 
 // Original names the object that holds a document's bytes as its provider
@@ -285,6 +306,7 @@ type SyncRun struct {
 	DocumentsSeen      int        `json:"documents_seen"`
 	DocumentsPublished int        `json:"documents_published"`
 	DocumentsRemoved   int        `json:"documents_removed"`
+	DocumentsExcluded  int        `json:"documents_excluded"`
 	Error              string     `json:"error,omitempty"`
 	Retryable          bool       `json:"retryable,omitempty"`
 	StartedAt          time.Time  `json:"started_at"`

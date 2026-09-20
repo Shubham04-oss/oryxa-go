@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -388,6 +390,126 @@ func (store *fakeStore) Document(_ context.Context, _, documentID string) (domai
 // DocumentByExternalID mirrors the real store: it answers a document
 // whatever its removed_at, the same lookup UpsertDocument's own internal
 // query makes.
+func (store *fakeStore) SetSourceKinds(_ context.Context, organizationID, sourceID string, include []string, at time.Time) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	source, ok := store.sources[sourceID]
+	if !ok || source.OrganizationID != organizationID || source.Status == domain.StatusRemoved {
+		return false, nil
+	}
+	source.IncludeKinds, source.KindsPending = include, true
+	if source.SyncAt == nil || at.Before(*source.SyncAt) {
+		source.SyncAt = &at
+	}
+	store.sources[sourceID] = source
+	return true, nil
+}
+
+func (store *fakeStore) ClearKindsPending(_ context.Context, sourceID, lease string) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if source, ok := store.sources[sourceID]; ok && store.lease[sourceID] == lease {
+		source.KindsPending = false
+		store.sources[sourceID] = source
+	}
+	return nil
+}
+
+func (store *fakeStore) DocumentsToRedecide(_ context.Context, sourceID, after string, limit int) ([]domain.Document, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	var documents []domain.Document
+	for _, document := range store.documents {
+		if document.SourceID != sourceID || document.ID <= after || document.Judgment == nil {
+			continue
+		}
+		if document.RemovedAt != nil && document.Excluded == "" {
+			continue
+		}
+		documents = append(documents, document)
+	}
+	slices.SortFunc(documents, func(a, b domain.Document) int { return strings.Compare(a.ID, b.ID) })
+	return documents[:min(limit, len(documents))], nil
+}
+
+func (store *fakeStore) TouchDocument(_ context.Context, sourceID, externalID string, seenAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := sourceID + "\x00" + externalID
+	if document, ok := store.documents[key]; ok {
+		document.LastSeenAt = seenAt
+		store.documents[key] = document
+	}
+	return nil
+}
+
+func (store *fakeStore) ExcludeDocument(_ context.Context, document domain.Document, now time.Time, event func(domain.Document) (domain.Event, error)) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := document.SourceID + "\x00" + document.ExternalID
+	existing, found := store.documents[key]
+	live := found && existing.RemovedAt == nil
+	removedAt := now
+	if found {
+		document.ID = existing.ID
+		if existing.RemovedAt != nil {
+			removedAt = *existing.RemovedAt
+		}
+	}
+	document.Original = nil
+	document.LastSeenAt = now
+	document.RemovedAt = &removedAt
+	store.documents[key] = document
+	if !live || event == nil {
+		return false, nil
+	}
+	recorded, err := event(document)
+	if err != nil {
+		return false, err
+	}
+	store.events = append(store.events, recorded)
+	return true, nil
+}
+
+// fakeJudge answers a verdict per title, keeping anything it was not told
+// about, and records every candidate it was shown. Its kept judgment is the
+// kind it decided by; Redecide keeps a document whose kind the source
+// includes, and cannot decide one kept as "unsure".
+type fakeJudge struct {
+	mu       sync.Mutex
+	verdicts map[string]domain.Verdict
+	err      error
+	calls    []domain.Candidate
+}
+
+func (judge *fakeJudge) Redecide(kept []byte, include []string) (domain.Verdict, bool) {
+	kind := string(kept)
+	if kind == "" || kind == "unsure" {
+		return domain.Verdict{}, false
+	}
+	keep := domain.IncludedKinds(include)[kind]
+	return domain.Verdict{Keep: keep, Reason: kind, Judgment: kept}, true
+}
+
+func (judge *fakeJudge) Judge(_ context.Context, candidate domain.Candidate) (domain.Verdict, error) {
+	judge.mu.Lock()
+	defer judge.mu.Unlock()
+	judge.calls = append(judge.calls, candidate)
+	if judge.err != nil {
+		return domain.Verdict{}, judge.err
+	}
+	if verdict, ok := judge.verdicts[candidate.Title]; ok {
+		return verdict, nil
+	}
+	return domain.Verdict{Keep: true, Reason: "worth keeping"}, nil
+}
+
+func (judge *fakeJudge) called() int {
+	judge.mu.Lock()
+	defer judge.mu.Unlock()
+	return len(judge.calls)
+}
+
 func (store *fakeStore) DocumentByExternalID(_ context.Context, sourceID, externalID string) (domain.Document, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

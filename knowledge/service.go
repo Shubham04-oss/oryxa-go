@@ -81,7 +81,11 @@ type Dependencies struct {
 	// KNOWLEDGE_ORIGINALS_BUCKET is configured, in which case such a document
 	// is skipped instead, as it always has been.
 	Originals application.Originals
-	Logger    *slog.Logger
+	// Judge decides whether a connected app's document is worth indexing.
+	// Nil unless KNOWLEDGE_JUDGE_MODEL is configured, in which case only the
+	// rules keep noise out.
+	Judge  application.Judge
+	Logger *slog.Logger
 }
 
 // Config is what a host tells knowledge about itself.
@@ -131,6 +135,7 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		Grants:     dependencies.Grants,
 		Extractors: extractors,
 		Originals:  dependencies.Originals,
+		Judge:      dependencies.Judge,
 		Logger:     logger,
 	}, application.Config{
 		ServiceName: Name, FullSweepInterval: config.FullSweepInterval, OriginalsBucket: config.OriginalsBucket,
