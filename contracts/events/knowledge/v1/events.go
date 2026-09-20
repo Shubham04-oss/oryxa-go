@@ -86,6 +86,12 @@ type DocumentPublished struct {
 	// says it did not, and the body must be read from knowledge instead.
 	Body        string `json:"body,omitempty"`
 	BodyOmitted bool   `json:"body_omitted,omitempty"`
+	// Original is where the document's own bytes are kept, for a document
+	// whose text knowledge does not read itself — a PDF, an Office file. A
+	// retrieval backend that parses such files, such as a Bedrock knowledge
+	// base, reads them from there. A document with an Original carries no
+	// Body, MIME says what the bytes are, and ContentHash is Original.SHA256.
+	Original *Original `json:"original,omitempty"`
 	// Metadata is what the provider said about the document beyond its text:
 	// an author, a label, a channel. Small, flat, and never a credential.
 	Metadata map[string]string `json:"metadata,omitempty"`
@@ -93,6 +99,18 @@ type DocumentPublished struct {
 	// says; ExtractedAt is when knowledge read it.
 	SourceUpdatedAt *time.Time `json:"source_updated_at,omitempty"`
 	ExtractedAt     time.Time  `json:"extracted_at"`
+}
+
+// Original names the S3 object that holds a document's bytes as its provider
+// gave them. Knowledge writes it and deletes it once the document is gone; a
+// consumer only reads it. Keys are content addressed, so a changed document
+// is a new object and a reader never sees one half written.
+type Original struct {
+	Bucket string `json:"bucket"`
+	Key    string `json:"key"`
+	Size   int64  `json:"size"`
+	// SHA256 is over the bytes, hex encoded.
+	SHA256 string `json:"sha256"`
 }
 
 // DocumentRemoved is a document a consumer should forget. It is published
