@@ -32,6 +32,7 @@ import {
 	OrganizationAgentDialog,
 	PublishEntryDialog,
 } from "@/components/teamspaces/teamspace-dialogs";
+import { TeamspaceRoom } from "@/components/teamspaces/teamspace-room";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { agentsQueryOptions, type ManagedAgent } from "@/lib/agents/client";
@@ -598,6 +599,12 @@ function TeamspaceDetail({
 					</p>
 				)}
 			</section>
+
+			<TeamspaceRoom
+				organizationId={organizationId}
+				teamspaceId={space.id}
+				userId={userId}
+			/>
 
 			<section className="teamspace-ledger" aria-labelledby="ledger-heading">
 				<header>
