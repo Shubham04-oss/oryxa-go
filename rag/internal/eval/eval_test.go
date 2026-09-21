@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -440,6 +442,9 @@ func measure(t *testing.T, ctx context.Context, retriever *retrieval.Retriever, 
 				// passage came from, so it is placed by its text.
 				var placed bool
 				if start, end, placed = locate(bodies[entry.Document], match.Chunk.Text); !placed {
+					if result.Unplaced == 0 {
+						t.Logf("%s %s: a passage from %s could not be placed: %.300q", label, entry.ID, entry.Document, match.Chunk.Text)
+					}
 					result.Unplaced++
 				}
 			}
@@ -528,35 +533,65 @@ func overlaps(start, end int, spans []span) bool {
 }
 
 // locate finds where a passage sits in the document it came from, for a
-// match that carries no byte range: a knowledge base's. It looks for the
-// passage whole, then for its longer lines in order, since a parser may
-// re-space or rejoin what it cut; the span runs from the first line found to
-// the end of the last.
+// match that carries no byte range: a knowledge base's. A parser may re-space
+// or rejoin what it cut, so the passage and the document are compared with
+// every run of whitespace squashed to one space. A passage found whole spans
+// what it covers; otherwise its opening and closing words are looked for on
+// their own, and it spans from the first to the end of the second.
 func locate(body, passage string) (int, int, bool) {
-	if index := strings.Index(body, passage); index >= 0 {
-		return index, index + len(passage), true
+	squashedBody, positions := squash(body)
+	squashedPassage, _ := squash(passage)
+	if squashedPassage == "" {
+		return 0, 0, false
 	}
-	start, end := -1, -1
-	for line := range strings.SplitSeq(passage, "\n") {
-		line = strings.TrimSpace(line)
-		if len(line) < 24 {
-			continue
-		}
-		from := max(end, 0)
-		index := strings.Index(body[from:], line)
-		if index < 0 {
-			continue
-		}
-		index += from
-		if start < 0 {
-			start = index
-		}
-		end = index + len(line)
+	if index := strings.Index(squashedBody, squashedPassage); index >= 0 {
+		return positions[index], positions[index+len(squashedPassage)-1] + 1, true
 	}
+	const edge = 120
+	if len(squashedPassage) < 2*edge {
+		return 0, 0, false
+	}
+	head, tail := squashedPassage[:edge], squashedPassage[len(squashedPassage)-edge:]
+	start := strings.Index(squashedBody, head)
 	if start < 0 {
 		return 0, 0, false
 	}
-	return start, end, true
+	end := strings.Index(squashedBody[start:], tail)
+	if end < 0 {
+		return 0, 0, false
+	}
+	end += start + len(tail) - 1
+	return positions[start], positions[end] + 1, true
+}
+
+// squash collapses every run of whitespace in text to one space, trimming
+// both ends, and reports for each byte it keeps where that byte was in text.
+func squash(text string) (string, []int) {
+	var squashed strings.Builder
+	positions := make([]int, 0, len(text))
+	pendingSpace := -1
+	for index, character := range text {
+		if unicode.IsSpace(character) {
+			if pendingSpace < 0 {
+				pendingSpace = index
+			}
+			continue
+		}
+		if pendingSpace >= 0 && squashed.Len() > 0 {
+			squashed.WriteByte(' ')
+			positions = append(positions, pendingSpace)
+		}
+		pendingSpace = -1
+		width := utf8.RuneLen(character)
+		if width < 0 {
+			width = 1
+		}
+		squashed.WriteRune(character)
+		for offset := range width {
+			positions = append(positions, index+offset)
+		}
+	}
+	return squashed.String(), positions
 }
 
 // waitForKnowledgeBase polls each submitted document through the pipeline,
