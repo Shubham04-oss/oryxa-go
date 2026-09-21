@@ -1,17 +1,35 @@
 # Retrieval's managed engine: a Bedrock knowledge base that parses (PDF and
-# Office included), chunks, embeds and retrieves, over an S3 Vectors index.
-# Rag pushes each document into it with the organization and corpus it
-# belongs to, and filters every retrieval by them; rag, not the knowledge
-# base, decides which corpora a caller may search.
+# Office included), chunks, embeds and retrieves. Rag pushes each document
+# into it with the organization and corpus it belongs to, and filters every
+# retrieval by them; rag, not the knowledge base, decides which corpora a
+# caller may search.
 #
-# The knowledge base is the standard (vector) kind with a custom data source.
-# A managed knowledge base needs no index at all, but it takes documents only
-# from connectors that sync whole sources on a schedule, not one pushed
-# document with its tenant's metadata, which is how rag indexes.
+# There are two while rag moves from one to the other; rag_knowledge_base
+# says which one rag uses.
+#
+# - managed: Bedrock's MANAGED kind. Bedrock keeps the index itself, searches
+#   it by keyword and by meaning together, and its parser, embedding model and
+#   reranker come with the retrieval price. Its custom connector takes one
+#   pushed document at a time with its tenant's metadata, which is how rag
+#   indexes.
+# - main: the VECTOR kind over an S3 Vectors index, which Bedrock searches by
+#   meaning only. It stays until the managed one has run a while, so going
+#   back is a variable, and is then removed.
 
 locals {
   knowledge_base_embedding_model = "arn:aws:bedrock:${var.aws_region}::foundation-model/amazon.titan-embed-text-v2:0"
   knowledge_base_documents       = "${local.name}-kb-documents-${local.account_id}"
+
+  # The knowledge base rag uses, in the words rag is configured with.
+  rag_knowledge_base = var.rag_knowledge_base == "managed" ? {
+    id             = aws_bedrockagent_knowledge_base.managed.id
+    data_source_id = aws_bedrockagent_data_source.managed.data_source_id
+    type           = "MANAGED"
+    } : {
+    id             = aws_bedrockagent_knowledge_base.main.id
+    data_source_id = aws_bedrockagent_data_source.main.data_source_id
+    type           = "VECTOR"
+  }
 }
 
 resource "aws_s3vectors_vector_bucket" "knowledge_base" {
@@ -190,6 +208,70 @@ resource "aws_bedrockagent_data_source" "main" {
         }
         overlap_tokens = 60
       }
+    }
+  }
+}
+
+# The managed knowledge base. It reads only what rag points it at by
+# location: originals knowledge stores (PDF, Office) and text rag stages. Its
+# embedding model and reranker are Bedrock's own, so it is granted no model.
+resource "aws_iam_role" "managed_knowledge_base" {
+  name = "${local.name}-managed-knowledge-base"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "bedrock.amazonaws.com" }
+      Action    = "sts:AssumeRole"
+      Condition = {
+        StringEquals = { "aws:SourceAccount" = local.account_id }
+        ArnLike      = { "aws:SourceArn" = "arn:aws:bedrock:${var.aws_region}:${local.account_id}:knowledge-base/*" }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "managed_knowledge_base" {
+  role = aws_iam_role.managed_knowledge_base.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "ReadDocuments"
+      Effect   = "Allow"
+      Action   = ["s3:GetObject", "s3:ListBucket"]
+      Resource = [aws_s3_bucket.knowledge_base_documents.arn, "${aws_s3_bucket.knowledge_base_documents.arn}/*"]
+    }]
+  })
+}
+
+resource "aws_bedrockagent_knowledge_base" "managed" {
+  name        = "${local.name}-managed"
+  description = "What rag indexes: every organization's corpora, told apart by metadata"
+  role_arn    = aws_iam_role.managed_knowledge_base.arn
+
+  knowledge_base_configuration {
+    type = "MANAGED"
+    managed_knowledge_base_configuration {
+      embedding_model_type = "MANAGED"
+    }
+  }
+
+  depends_on = [aws_iam_role_policy.managed_knowledge_base]
+}
+
+# Rag's documents, pushed one at a time; there is nothing to crawl. The
+# connector's own access lists stay off: they filter by an end user's email,
+# which Bedrock itself says is not a security boundary, and rag already scopes
+# every search by organization and corpus.
+resource "aws_bedrockagent_data_source" "managed" {
+  knowledge_base_id    = aws_bedrockagent_knowledge_base.managed.id
+  name                 = "rag"
+  data_deletion_policy = "DELETE"
+
+  data_source_configuration {
+    type = "MANAGED_KNOWLEDGE_BASE_CONNECTOR"
+    managed_knowledge_base_connector_configuration {
+      connector_parameters = jsonencode({ type = "CUSTOM", version = "1", aclEnabled = false })
     }
   }
 }

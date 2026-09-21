@@ -36,7 +36,12 @@ output "database_address" {
 }
 
 output "knowledge_base_id" {
-  value = aws_bedrockagent_knowledge_base.main.id
+  description = "The knowledge base rag uses."
+  value       = local.rag_knowledge_base.id
+}
+
+output "knowledge_base_data_source_id" {
+  value = local.rag_knowledge_base.data_source_id
 }
 
 output "hyperdrive_id" {
