@@ -170,32 +170,70 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 		AWS:          awsConfig,
 		Google:       google,
 		EventBusName: config.EventBusName,
-		EventAuth:    eventauth.NewRegistry(newKMSResolver(awsConfig, os.Getenv, selected), time.Now),
+		EventAuth:    eventRegistry(awsConfig, config.EnforceEventSignatures, eventSigningKeys(os.Getenv, selected), selected, logger),
 		Getenv:       Environment(os.Getenv, selected, self),
 	}
 	return platform, func() { database.Close() }, nil
 }
 
-// kmsResolver adapts the <SERVICE>_SERVICE_KEY_ID convention to eventauth:
-// a service that names a key signs and is verified through KMS, and a
-// service that does not gets a process-local key instead, so events are
-// signed and checked everywhere without configuration being required.
+// eventRegistry builds the process's event signing identities, and says at
+// boot how it treats an event whose signature does not check out: refused
+// when enforce is set, and otherwise logged and handled anyway.
+func eventRegistry(awsConfig aws.Config, enforce bool, keys map[string]string, selected []Definition, logger *slog.Logger) *eventauth.Registry {
+	registry := eventauth.NewRegistry(newKMSResolver(awsConfig, keys), time.Now)
+	var minted []string
+	for _, definition := range selected {
+		if keys[definition.Name] == "" {
+			minted = append(minted, definition.Name)
+		}
+	}
+	switch {
+	case !enforce:
+		registry.ReportOnly(func(source, detailType, eventID string, err error) {
+			logger.Warn("event signature did not check out; handled anyway, since ORYXA_EVENT_SIGNATURES is not enforce",
+				"source", source, "detail_type", detailType, "event_id", eventID, "error", err)
+		})
+		logger.Info("event signatures are checked and reported, not enforced", "keys_minted_at_boot", minted)
+	case len(minted) > 0:
+		logger.Warn("event signatures are enforced, but these services sign with keys minted at boot: "+
+			"whatever they published that is still queued when this process stops will be refused by the next one",
+			"services", minted)
+	default:
+		logger.Info("event signatures are enforced")
+	}
+	return registry
+}
+
+// eventSigningKeyVariable names the setting that gives a service a KMS key to
+// sign its events with: AGENTS_EVENT_SIGNING_KEY_ID for agents. It is not the
+// <SERVICE>_SERVICE_KEY_ID a service proves itself to another with, so the two
+// keys are provisioned, granted and replaced apart.
+func eventSigningKeyVariable(service string) string {
+	return strings.ToUpper(strings.ReplaceAll(service, "-", "_")) + "_EVENT_SIGNING_KEY_ID"
+}
+
+// eventSigningKeys maps each selected service that has one to its event
+// signing key.
+func eventSigningKeys(getenv func(string) string, selected []Definition) map[string]string {
+	keys := map[string]string{}
+	for _, definition := range selected {
+		if keyID := strings.TrimSpace(getenv(eventSigningKeyVariable(definition.Name))); keyID != "" {
+			keys[definition.Name] = keyID
+		}
+	}
+	return keys
+}
+
+// kmsResolver adapts the <SERVICE>_EVENT_SIGNING_KEY_ID settings to
+// eventauth: a service that names a key signs and is verified through KMS,
+// and a service that does not gets a process-local key instead, so events
+// are signed and checked everywhere without configuration being required.
 type kmsResolver struct {
 	client kms.Client
 	keys   map[string]string
 }
 
-func newKMSResolver(config aws.Config, getenv func(string) string, selected []Definition) eventauth.KMSResolver {
-	if len(selected) == 0 {
-		return nil
-	}
-	keys := map[string]string{}
-	for _, definition := range selected {
-		keyID := strings.TrimSpace(getenv(strings.ToUpper(definition.Name) + "_SERVICE_KEY_ID"))
-		if keyID != "" {
-			keys[definition.Name] = keyID
-		}
-	}
+func newKMSResolver(config aws.Config, keys map[string]string) eventauth.KMSResolver {
 	if len(keys) == 0 {
 		return nil
 	}

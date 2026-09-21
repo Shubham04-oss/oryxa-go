@@ -14,10 +14,15 @@
 // A signature never names its own key. The consumer resolves the key from
 // the source the event claims — the same source its subscription already
 // matched — so a signature made with one key cannot be replayed as another
-// service by editing the envelope. Production resolves those keys in KMS,
-// through each service's own key ID; a process that runs every service
-// together, like the chaos rig, mints local P-256 keys at boot instead, and
-// no deployment needs KMS to be reachable for events to flow.
+// service by editing the envelope. A service given a KMS key signs with it
+// and is verified through it. A service without one signs with a P-256 key
+// its process minted at boot, which every consumer in that process trusts —
+// and which dies with the process: an event still on a queue when the process
+// restarts, or published by the old task of a rolling deploy, cannot be
+// verified by the next one. So refusing what does not verify is for a
+// deployment whose every service has a KMS key; until then a registry is
+// report-only (ReportOnly), and every event is signed and checked while a
+// failure is reported rather than refused.
 //
 // External sources — SES's own feedback, published by AWS rather than by an
 // Oryxa service — are exempt: no Oryxa key could sign them, and their
@@ -324,12 +329,20 @@ type KMSKeys struct {
 // Verifier checks event signatures against the keys its process holds or
 // can reach. It is safe for concurrent use.
 type Verifier struct {
-	mu       sync.RWMutex
-	local    map[string]*ecdsa.PublicKey
+	mu    sync.RWMutex
+	local map[string]*ecdsa.PublicKey
+	// registry, for a verifier a registry handed out, is read at every check:
+	// for the keys it has minted since, and for whether it is report-only.
+	registry *Registry
 	kms      *KMSKeys
 	resolved map[string]*ecdsa.PublicKey
 	now      func() time.Time
 }
+
+// Report is told of each event a report-only verifier let through although
+// its signature did not check out: the source it claimed, its detail type,
+// its ID, and why it failed.
+type Report func(source, detailType, eventID string, err error)
 
 // NewVerifier returns a verifier that trusts the local keys given and, when
 // a source's key is not among them, the KMS keys named. Either may be empty.
@@ -343,7 +356,24 @@ func NewVerifier(local map[string]*ecdsa.PublicKey, kmsKeys *KMSKeys, now func()
 // Verify checks one event's signature against the key its source resolves
 // to. It answers ErrUnverified — and nothing else about the event is used —
 // when the signature is absent, malformed, stale, or not the source's own.
+// A verifier from a report-only registry tells the registry's Report instead
+// and answers nil, so the event is handled as it was before events were
+// signed.
 func (verifier *Verifier) Verify(source, detailType, eventID string, version int, occurredAt string, data []byte, sig string) error {
+	err := verifier.check(source, detailType, eventID, version, occurredAt, data, sig)
+	if err == nil {
+		return nil
+	}
+	if verifier.registry != nil {
+		if report := verifier.registry.reporter(); report != nil {
+			report(source, detailType, eventID, err)
+			return nil
+		}
+	}
+	return err
+}
+
+func (verifier *Verifier) check(source, detailType, eventID string, version int, occurredAt string, data []byte, sig string) error {
 	if IsExternal(source) {
 		return nil
 	}
@@ -384,15 +414,21 @@ func (verifier *Verifier) Verify(source, detailType, eventID string, version int
 	return nil
 }
 
-// key resolves the public key a service signs with. Local keys first, then
-// KMS, cached per service so a hot consumer path never waits on KMS after
-// its first event.
+// key resolves the public key a service signs with. Local keys first — the
+// ones this verifier was built with, then any its registry has minted,
+// however long after this verifier was handed out — then KMS, cached per
+// service so a hot consumer path never waits on KMS after its first event.
 func (verifier *Verifier) key(service string) (*ecdsa.PublicKey, error) {
 	verifier.mu.RLock()
 	key, ok := verifier.local[service]
 	verifier.mu.RUnlock()
 	if ok {
 		return key, nil
+	}
+	if verifier.registry != nil {
+		if key, ok := verifier.registry.localKey(service); ok {
+			return key, nil
+		}
 	}
 	verifier.mu.RLock()
 	key, ok = verifier.resolved[service]
@@ -435,6 +471,8 @@ type Registry struct {
 	signers map[string]*Signer
 	kms     KMSResolver
 	now     func() time.Time
+	// report, when set, makes the registry report-only: see ReportOnly.
+	report Report
 }
 
 // KMSResolver is how a split deployment names each service's signing key and
@@ -496,23 +534,53 @@ func (registry *Registry) Signer(service string) (*Signer, error) {
 	return signer, nil
 }
 
-// Verifier returns the verifier for everything this registry knows: the
-// local keys minted here, and the KMS keys of a split deployment. A nil
-// registry answers with a verifier that refuses everything, so a consumer
+// Verifier returns the verifier for everything this registry knows: every
+// local key it has minted or will mint, and the KMS keys of a split
+// deployment. Services mount one after another, each taking a verifier as it
+// goes, so a verifier that knew only the keys minted before it would refuse
+// every service mounted later; this one reads the registry at each check. A
+// nil registry answers with a verifier that refuses everything, so a consumer
 // built without identities fails closed.
 func (registry *Registry) Verifier() *Verifier {
 	if registry == nil {
 		return NewVerifier(nil, nil, time.Now)
 	}
-	registry.mu.Lock()
-	defer registry.mu.Unlock()
-	local := make(map[string]*ecdsa.PublicKey, len(registry.local))
-	for service, key := range registry.local {
-		local[service] = key
-	}
 	var keys *KMSKeys
 	if registry.kms != nil {
 		keys = registry.kms.Keys()
 	}
-	return NewVerifier(local, keys, registry.now)
+	verifier := NewVerifier(nil, keys, registry.now)
+	verifier.registry = registry
+	return verifier
+}
+
+// ReportOnly makes the registry's verifiers — those handed out already, and
+// those to come — let an event through when its signature does not check out,
+// telling report instead of refusing it. It is how signing is rolled out, and
+// what a process needs while any of its services signs with a key minted at
+// boot: every event is still signed and checked, and what enforcing would
+// refuse is visible before anything is refused.
+func (registry *Registry) ReportOnly(report Report) {
+	if registry == nil {
+		return
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	registry.report = report
+}
+
+// localKey returns the public half of the key this registry minted for
+// service, if it has minted one.
+func (registry *Registry) localKey(service string) (*ecdsa.PublicKey, bool) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	key, ok := registry.local[service]
+	return key, ok
+}
+
+// reporter returns the registry's Report, or nil when it enforces.
+func (registry *Registry) reporter() Report {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return registry.report
 }

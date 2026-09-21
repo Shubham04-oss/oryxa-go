@@ -348,6 +348,24 @@ README's position is that the database image or control plane owns
 extensions; until one does, the order in `cmd/oryxa/services.go` is
 load-bearing, and `TestTeamsMigratesBeforeRag` pins it.
 
+### Event signatures are checked, not enforced
+
+Every event is signed by the service that publishes it and checked before a
+consumer acts on it (`internal/eventauth`), but nothing is refused yet:
+`ORYXA_EVENT_SIGNATURES` defaults to `report`, which logs a signature that does
+not check out ("event signature did not check out") and handles the event
+anyway. No service has an event signing key, so each signs with one minted at
+boot, which dies with the process — enforcing now would refuse whatever was
+still queued across every restart and every rolling deploy. To enforce: give
+each of the ten services a KMS key (`ECC_NIST_P256`, `SIGN_VERIFY`) in
+`deploy/production`, set `<SERVICE>_EVENT_SIGNING_KEY_ID` for each and grant
+the task `kms:Sign` and `kms:GetPublicKey` on them; release; and once a
+release's logs show no failures, set `ORYXA_EVENT_SIGNATURES=enforce`. What
+enforcing buys today is small: the queues admit only their own EventBridge
+rules, and the one identity besides an administrator that can publish on the
+bus — the task — would hold the keys too. It guards against a queue policy
+opened too wide, and matters once services run apart.
+
 ## 6. Never run against the real dependency
 
 Fakes and stub servers prove the request this code builds and the response it

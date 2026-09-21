@@ -135,6 +135,14 @@ type Config struct {
 	// deployment environment (DEPLOYMENT_ENVIRONMENT, else ENVIRONMENT) is
 	// production, and ORYXA_REQUIRE_EVENT_QUEUES sets it either way.
 	RequireEventQueues bool
+	// EnforceEventSignatures refuses an event whose signature does not check
+	// out. Off, every event is still signed and checked, and a failure is
+	// logged while the event is handled as it was before events were signed.
+	// It waits for every service to sign with a KMS key: a key minted at boot
+	// dies with the process, so enforcing with one refuses whatever was in
+	// flight across each restart and each rolling deploy.
+	// ORYXA_EVENT_SIGNATURES=enforce turns it on; report, the default, is off.
+	EnforceEventSignatures bool
 	// ShutdownTimeout bounds each stage of the way down: draining requests,
 	// then waiting for workers.
 	ShutdownTimeout time.Duration
@@ -164,6 +172,13 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 	production := environment == "production" || environment == "prod"
 	if config.RequireEventQueues, err = boolValue(getenv, "ORYXA_REQUIRE_EVENT_QUEUES", production); err != nil {
 		return Config{}, err
+	}
+	switch signatures := strings.ToLower(strings.TrimSpace(getenv("ORYXA_EVENT_SIGNATURES"))); signatures {
+	case "", "report":
+	case "enforce":
+		config.EnforceEventSignatures = true
+	default:
+		return Config{}, fmt.Errorf("ORYXA_EVENT_SIGNATURES is %q; want report or enforce", signatures)
 	}
 	maxConns, err := intValue(getenv, "ORYXA_DATABASE_MAX_CONNS", 32)
 	if err != nil {
