@@ -3,6 +3,8 @@ package eventauth
 import (
 	"crypto/ecdsa"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -190,14 +192,15 @@ func TestRegistrySignsAndVerifiesAcrossServices(t *testing.T) {
 func TestCanonicalSeparatesEveryField(t *testing.T) {
 	// Two events that differ in exactly one place must canonicalize
 	// differently, whatever the differing field is.
-	base := canonical("oryxa.a", "x.v1", "e1", 1, "t1", []byte("d"))
+	base := canonical("oryxa.a", "x.v1", "e1", 1, "t1", 100, []byte("d"))
 	variants := [][]byte{
-		canonical("oryxa.b", "x.v1", "e1", 1, "t1", []byte("d")),
-		canonical("oryxa.a", "y.v1", "e1", 1, "t1", []byte("d")),
-		canonical("oryxa.a", "x.v1", "e2", 1, "t1", []byte("d")),
-		canonical("oryxa.a", "x.v1", "e1", 2, "t1", []byte("d")),
-		canonical("oryxa.a", "x.v1", "e1", 1, "t2", []byte("d")),
-		canonical("oryxa.a", "x.v1", "e1", 1, "t1", []byte("e")),
+		canonical("oryxa.b", "x.v1", "e1", 1, "t1", 100, []byte("d")),
+		canonical("oryxa.a", "y.v1", "e1", 1, "t1", 100, []byte("d")),
+		canonical("oryxa.a", "x.v1", "e2", 1, "t1", 100, []byte("d")),
+		canonical("oryxa.a", "x.v1", "e1", 2, "t1", 100, []byte("d")),
+		canonical("oryxa.a", "x.v1", "e1", 1, "t2", 100, []byte("d")),
+		canonical("oryxa.a", "x.v1", "e1", 1, "t1", 101, []byte("d")),
+		canonical("oryxa.a", "x.v1", "e1", 1, "t1", 100, []byte("e")),
 	}
 	for _, variant := range variants {
 		if string(base) == string(variant) {
@@ -206,9 +209,39 @@ func TestCanonicalSeparatesEveryField(t *testing.T) {
 	}
 	// And a crafted value cannot swallow a separator: the fields are
 	// length-delimited by NUL, which no JSON string can contain raw.
-	crafted := canonical("oryxa.a\x00x.v1", "", "", 0, "", nil)
-	if string(crafted) == string(canonical("oryxa.a", "x.v1", "", 0, "", nil)) {
+	crafted := canonical("oryxa.a\x00x.v1", "", "", 0, "", 0, nil)
+	if string(crafted) == string(canonical("oryxa.a", "x.v1", "", 0, "", 0, nil)) {
 		t.Fatal("a NUL in a source crossed a field boundary")
+	}
+}
+
+// TestTheSigningTimeCannotBeRewritten is the attack the age bound exists to
+// stop. A captured envelope goes stale on its own, but if the timestamp a
+// verifier ages it by were left outside the signature, an attacker could edit
+// that one field — touching nothing the signature covered — and hand the same
+// event back fresh, for ever. Signing over it makes the edit a mismatch.
+func TestTheSigningTimeCannotBeRewritten(t *testing.T) {
+	now := time.Now()
+	signer, key := newSigner(t, "auth", now)
+	clock := now
+	verifier := NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, func() time.Time { return clock })
+	sig := signed(t, signer)
+
+	// Two days on, the captured event is stale, as it should be.
+	clock = now.Add(2 * maxAge)
+	if err := verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), sig); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("a captured event did not go stale: %v", err)
+	}
+
+	// The attacker rewrites only the timestamp, leaving the signature bytes
+	// and every other field exactly as the publisher made them.
+	parts := strings.SplitN(sig, ".", 3)
+	if len(parts) != 3 {
+		t.Fatalf("unexpected signature form %q", sig)
+	}
+	refreshed := fmt.Sprintf("%s.%d.%s", parts[0], clock.Unix(), parts[2])
+	if err := verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), refreshed); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("rewriting the signing time revived a stale event: %v", err)
 	}
 }
 

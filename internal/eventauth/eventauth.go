@@ -70,16 +70,21 @@ func IsExternal(source string) bool { return source == "aws.ses" }
 
 // canonical is the string a signature is computed over: the whole decision
 // surface of an event — who says it (source), what it is (detail type), its
-// identity, its envelope version, when it happened, and what it carries.
-// The NUL separators mean no value can make two different events
-// canonicalize the same, whatever a JSON encoder does with either.
+// identity, its envelope version, when it happened, when it was signed, and
+// what it carries. The NUL separators mean no value can make two different
+// events canonicalize the same, whatever a JSON encoder does with either.
+//
+// signedAt is covered because a verifier bounds a signature's age by it. Left
+// outside, it would be the one field an attacker could edit freely: rewriting
+// it on a captured envelope would lift that bound and make a stale event fresh
+// again, with the signature still matching every field it did cover.
 //
 // The data is normalized first, because the bus is not a byte pipe:
 // EventBridge itself decodes and re-encodes an event's detail on the way
 // through, which reorders object keys. Two semantically equal JSON documents
 // are therefore the same data, and canonicalData makes both sides of a
 // signature agree on one encoding of it.
-func canonical(source, detailType, eventID string, version int, occurredAt string, data []byte) []byte {
+func canonical(source, detailType, eventID string, version int, occurredAt string, signedAt int64, data []byte) []byte {
 	out := make([]byte, 0, len(source)+len(detailType)+len(eventID)+len(occurredAt)+len(data)+64)
 	out = append(out, "oryxa.event.v1\x00"...)
 	out = append(out, source...)
@@ -91,6 +96,8 @@ func canonical(source, detailType, eventID string, version int, occurredAt strin
 	out = strconv.AppendInt(out, int64(version), 10)
 	out = append(out, '\x00')
 	out = append(out, occurredAt...)
+	out = append(out, '\x00')
+	out = strconv.AppendInt(out, signedAt, 10)
 	out = append(out, '\x00')
 	out = append(out, canonicalJSON(data)...)
 	return out
@@ -222,7 +229,10 @@ func NewKMSSigner(client SignAPI, keyID string, now func() time.Time) (*Signer, 
 // an ASN.1 DER signature; the JOSE r||s form this package writes is what a
 // verifier reads, so it is converted here.
 func (signer *KMSSigner) Sign(source, detailType, eventID string, version int, occurredAt string, data []byte) (string, error) {
-	sum := sha256.Sum256(canonical(source, detailType, eventID, version, occurredAt, data))
+	// The signing time is read once and both signed and written, so the field
+	// a verifier ages the signature by is the field the signature covers.
+	signedAt := signer.now().Unix()
+	sum := sha256.Sum256(canonical(source, detailType, eventID, version, occurredAt, signedAt, data))
 	output, err := signer.Client.Sign(context.Background(), &kms.SignInput{
 		KeyId:            &signer.KeyID,
 		Message:          sum[:],
@@ -239,7 +249,7 @@ func (signer *KMSSigner) Sign(source, detailType, eventID string, version int, o
 	signature := make([]byte, 64)
 	r.FillBytes(signature[:32])
 	s.FillBytes(signature[32:])
-	return fmt.Sprintf("%s.%d.%s", SignatureVersion, signer.now().Unix(),
+	return fmt.Sprintf("%s.%d.%s", SignatureVersion, signedAt,
 		base64.RawURLEncoding.EncodeToString(signature)), nil
 }
 
@@ -282,7 +292,10 @@ func (signer *Signer) Sign(source, detailType, eventID string, version int, occu
 	if signer.key == nil {
 		return "", fmt.Errorf("eventauth: %s has no signing key: %w", signer.service, ErrUnverified)
 	}
-	sum := sha256.Sum256(canonical(source, detailType, eventID, version, occurredAt, data))
+	// The signing time is read once and both signed and written, so the field
+	// a verifier ages the signature by is the field the signature covers.
+	signedAt := signer.now().Unix()
+	sum := sha256.Sum256(canonical(source, detailType, eventID, version, occurredAt, signedAt, data))
 	r, s, err := ecdsa.Sign(rand.Reader, signer.key, sum[:])
 	if err != nil {
 		return "", fmt.Errorf("eventauth: sign as %s: %w", signer.service, err)
@@ -290,7 +303,7 @@ func (signer *Signer) Sign(source, detailType, eventID string, version int, occu
 	signature := make([]byte, 64)
 	r.FillBytes(signature[:32])
 	s.FillBytes(signature[32:])
-	return fmt.Sprintf("%s.%d.%s", SignatureVersion, signer.now().Unix(),
+	return fmt.Sprintf("%s.%d.%s", SignatureVersion, signedAt,
 		base64.RawURLEncoding.EncodeToString(signature)), nil
 }
 
@@ -362,7 +375,9 @@ func (verifier *Verifier) Verify(source, detailType, eventID string, version int
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrUnverified, err)
 	}
-	digest := sha256.Sum256(canonical(source, detailType, eventID, version, occurredAt, data))
+	// seconds is the time the age was bounded by above; signing over it too
+	// means a rewritten timestamp fails here rather than buying a fresh window.
+	digest := sha256.Sum256(canonical(source, detailType, eventID, version, occurredAt, seconds, data))
 	if !ecdsa.Verify(key, digest[:], r, s) {
 		return fmt.Errorf("%w: the signature does not match", ErrUnverified)
 	}
