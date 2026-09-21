@@ -262,7 +262,9 @@ resource "aws_bedrockagent_knowledge_base" "managed" {
 # Rag's documents, pushed one at a time; there is nothing to crawl. The
 # connector's own access lists stay off: they filter by an end user's email,
 # which Bedrock itself says is not a security boundary, and rag already scopes
-# every search by organization and corpus.
+# every search by organization and corpus. The file size limit and reading
+# the pictures inside a document are Bedrock's defaults, written down because
+# the provider fails an apply whose result differs from what it asked for.
 resource "aws_bedrockagent_data_source" "managed" {
   knowledge_base_id    = aws_bedrockagent_knowledge_base.managed.id
   name                 = "rag"
@@ -271,7 +273,18 @@ resource "aws_bedrockagent_data_source" "managed" {
   data_source_configuration {
     type = "MANAGED_KNOWLEDGE_BASE_CONNECTOR"
     managed_knowledge_base_connector_configuration {
-      connector_parameters = jsonencode({ type = "CUSTOM", version = "1", aclEnabled = false })
+      connector_parameters = jsonencode({
+        type                = "CUSTOM"
+        version             = "1"
+        aclEnabled          = false
+        filterConfiguration = { maxFileSizeInMegaBytes = "500" }
+      })
+
+      media_extraction_configuration {
+        image_extraction_configuration {
+          image_extraction_status = "ENABLED"
+        }
+      }
     }
   }
 }
