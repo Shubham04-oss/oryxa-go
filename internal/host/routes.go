@@ -1,12 +1,15 @@
 package host
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
@@ -38,7 +41,7 @@ func routes(services []mounted) (http.Handler, error) {
 			continue
 		}
 		handler := withDeadlines(entry.service.Timeouts,
-			observability.HTTPHandler("oryxa-"+entry.name, entry.service.Handler))
+			observability.HTTPHandler("oryxa-"+entry.name, withCleanRequest(entry.service.Handler)))
 		claimed := map[string]bool{}
 		for _, route := range entry.service.Routes {
 			path, err := routePath(route)
@@ -104,6 +107,45 @@ func owner(owners map[string]string, path string) string {
 		}
 	}
 	return "another service"
+}
+
+// withCleanRequest refuses a request whose path or query holds a NUL byte or
+// bytes that are not UTF-8, before a service sees it. No client of ours sends
+// either, and PostgreSQL will not store them, so every service that put an id
+// or a search term into a query would otherwise answer 500, one route at a
+// time. It also covers the organization id in the path, which every service
+// forwards to auth. It sits inside the instrumentation, so a refusal is still
+// counted and logged as the service's own.
+func withCleanRequest(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !cleanURL(request.URL) {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.Header().Set("X-Content-Type-Options", "nosniff")
+			writer.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(writer).Encode(map[string]string{"error": "the request path or query is invalid: " + cleantext.ErrUnclean.Error()})
+			return
+		}
+		next.ServeHTTP(writer, request)
+	})
+}
+
+// cleanURL reports whether the decoded path, and every decoded query name and
+// value, is text the database will take.
+func cleanURL(target *url.URL) bool {
+	if !cleantext.Valid(target.Path) {
+		return false
+	}
+	for name, values := range target.Query() {
+		if !cleantext.Valid(name) {
+			return false
+		}
+		for _, value := range values {
+			if !cleantext.Valid(value) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // withDeadlines holds one request to the timeouts its service chose. The

@@ -594,6 +594,19 @@ func TestAgentTeamsCanBeComposedAndManagedInsideTheMemberBoundary(t *testing.T) 
 	}
 }
 
+// jsonNUL is how a JSON document spells a NUL inside a string.
+const jsonNUL = `\u` + `0000`
+
+func TestAgentTeamsRefuseANulInTheName(t *testing.T) {
+	server := New(member(), &fakeThreads{}, Config{
+		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Teams: &fakeAgentTeams{},
+	}, nil)
+	response := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-teams", `{"name":"Rev`+jsonNUL+`enue","members":[]}`, bearer)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid_request") {
+		t.Fatalf("status = %d, want 400 invalid_request: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestTeamspacesExposeOrganizationAgentWhisperersAndExplicitAgentContributions(t *testing.T) {
 	spaces := &fakeTeamspaces{}
 	server := New(member(), &fakeThreads{}, Config{

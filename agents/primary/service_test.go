@@ -19,9 +19,10 @@ import (
 // it would need Google's credentials.
 func platform(values map[string]string, database *postgreskit.Database) host.Platform {
 	return host.Platform{
-		Logger:   slog.New(slog.DiscardHandler),
-		Database: database,
-		Getenv:   func(name string) string { return values[name] },
+		EventAuth: host.TestRegistry(),
+		Logger:    slog.New(slog.DiscardHandler),
+		Database:  database,
+		Getenv:    func(name string) string { return values[name] },
 	}
 }
 

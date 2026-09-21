@@ -66,6 +66,7 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		Database:     database,
 		AWS:          aws.Config{Region: "ap-south-1", Credentials: aws.AnonymousCredentials{}},
 		EventBusName: "default",
+		EventAuth:    host.TestRegistry(),
 		Getenv:       host.Environment(func(name string) string { return environment[name] }, definitions, "http://127.0.0.1:1"),
 	}
 	handler, closeAll, err := host.Assemble(context.Background(), platform, definitions)

@@ -16,6 +16,7 @@ import (
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
@@ -57,12 +58,19 @@ type Consumer struct {
 	handlers map[string]subscription
 	logger   *slog.Logger
 	metrics  observability.ConsumerMetrics
+	// verifier proves who published each event. Nil is a build error caught
+	// at mount: a consumer that cannot check signatures would run any
+	// message a queue handed it.
+	verifier *eventauth.Verifier
 	// queueName is set once, at the top of Poll, before Poll's single
 	// goroutine starts calling handle; it is not touched concurrently.
 	queueName string
 }
 
-func NewConsumer(app application, logger *slog.Logger) *Consumer {
+func NewConsumer(app application, verifier *eventauth.Verifier, logger *slog.Logger) (*Consumer, error) {
+	if verifier == nil {
+		return nil, errors.New("files cannot consume unsigned events: a signature verifier is required")
+	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -78,9 +86,10 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 			autheventsv1.MemberRemovedDetailType:       {source: autheventsv1.Source, handle: decode(app.MemberRemoved)},
 			teamseventsv1.TeamDeletedDetailType:        {source: teamseventsv1.Source, handle: decode(app.TeamDeleted)},
 		},
-		logger:  logger,
-		metrics: metrics,
-	}
+		logger:   logger,
+		metrics:  metrics,
+		verifier: verifier,
+	}, nil
 }
 
 type eventBridgeEvent struct {
@@ -95,6 +104,10 @@ type receivedEnvelope struct {
 	Version    int             `json:"version"`
 	OccurredAt string          `json:"occurred_at"`
 	Data       json.RawMessage `json:"data"`
+	// Signature is the publisher's proof over the envelope's content. It is
+	// checked before any handler runs; a missing or wrong signature means
+	// the message never came from the service it claims.
+	Signature string `json:"sig"`
 	// TraceCarrier decodes the envelope's optional traceparent/tracestate
 	// fields; a message published before this rollout, or one that never
 	// carried one, decodes to the zero TraceCarrier, and handling continues
@@ -121,6 +134,12 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 	}
 	if detail.Version != 1 || detail.EventID == "" {
 		return fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, detail.Version, detail.EventID)
+	}
+	// The signature is checked before anything in the event is used, so a
+	// message that reached the queue without the named service having sent
+	// it is refused whatever its payload says.
+	if err := consumer.verifier.Verify(event.Source, event.DetailType, detail.EventID, detail.Version, detail.OccurredAt, detail.Data, detail.Signature); err != nil {
+		return fmt.Errorf("event %s: %w", detail.EventID, err)
 	}
 	occurredAt, _ := time.Parse(time.RFC3339Nano, detail.OccurredAt)
 

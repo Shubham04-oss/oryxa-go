@@ -14,6 +14,7 @@ import (
 	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
@@ -95,12 +96,20 @@ type Consumer struct {
 	handlers map[Subscription]handler
 	logger   *slog.Logger
 	metrics  observability.ConsumerMetrics
+	// verifier proves who published each domain event. Nil is a build error
+	// caught at mount: a consumer that cannot check signatures would mail
+	// whatever a queue handed it. SES's own feedback is exempt: AWS
+	// publishes it, and no Oryxa key could sign it.
+	verifier *eventauth.Verifier
 	// queueName is set once, at the top of Poll, before Poll's single
 	// goroutine starts calling handle; it is not touched concurrently.
 	queueName string
 }
 
-func NewConsumer(app application, logger *slog.Logger) *Consumer {
+func NewConsumer(app application, verifier *eventauth.Verifier, logger *slog.Logger) (*Consumer, error) {
+	if verifier == nil {
+		return nil, errors.New("email cannot consume unsigned events: a signature verifier is required")
+	}
 	metrics, err := observability.NewConsumerMetrics()
 	if err != nil {
 		logger.Warn("consumer metrics unavailable; handling continues without them", "error", err)
@@ -121,7 +130,7 @@ func NewConsumer(app application, logger *slog.Logger) *Consumer {
 	for _, detailType := range SESFeedbackDetailTypes() {
 		handlers[Subscription{Source: SESSource, DetailType: detailType}] = sesFeedback(app.SESFeedback)
 	}
-	return &Consumer{handlers: handlers, logger: logger, metrics: metrics}
+	return &Consumer{handlers: handlers, logger: logger, metrics: metrics, verifier: verifier}, nil
 }
 
 // eventBridgeEvent is the body of each message an EventBridge rule delivers to SQS.
@@ -138,6 +147,10 @@ type envelope struct {
 	Version    int             `json:"version"`
 	OccurredAt string          `json:"occurred_at"`
 	Data       json.RawMessage `json:"data"`
+	// Signature is the publisher's proof over the envelope's content. It is
+	// checked before any handler runs; a missing or wrong signature means
+	// the message never came from the service it claims.
+	Signature string `json:"sig"`
 	// TraceCarrier decodes the envelope's optional traceparent/tracestate
 	// fields; a message published before this rollout, or one that never
 	// carried one, decodes to the zero TraceCarrier, and handling continues
@@ -188,6 +201,13 @@ func (c *Consumer) handle(ctx context.Context, body string, receivedAt time.Time
 	// with none of this rollout's fields at all.
 	var detail envelope
 	_ = json.Unmarshal(event.Detail, &detail)
+	// The signature is checked before anything in the event is used, so a
+	// message that reached the queue without the named service having sent
+	// it is refused whatever its payload says. SES's own feedback carries no
+	// Oryxa signature and is exempt inside Verify itself.
+	if err := c.verifier.Verify(event.Source, event.DetailType, detail.EventID, detail.Version, detail.OccurredAt, detail.Data, detail.Signature); err != nil {
+		return fmt.Errorf("event %s: %w", event.ID, err)
+	}
 	occurredAt, _ := time.Parse(time.RFC3339Nano, detail.OccurredAt)
 	eventID := detail.EventID
 	if eventID == "" {

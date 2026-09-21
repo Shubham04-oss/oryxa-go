@@ -2,9 +2,11 @@ package inbound
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactiondelivery"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 )
 
 type fakeRecorder struct {
@@ -76,17 +79,70 @@ func (recorder *fakeRecorder) RecordBatch(_ context.Context, events []wakeups.Ev
 	return recorded, nil
 }
 
+// signingHarness holds one signer per source agents listens to — batching,
+// agents, auth, teams — and a verifier that trusts them, so a delivery is
+// signed the way the service it names would have signed it.
+var (
+	harnessOnce  sync.Once
+	harnessErr   error
+	harnessSigns = map[string]*eventauth.Signer{}
+	harnessVerif *eventauth.Verifier
+)
+
+func signingHarness() (*eventauth.Verifier, error) {
+	harnessOnce.Do(func() {
+		keys := map[string]*ecdsa.PublicKey{}
+		for _, source := range []string{
+			batchingv1.Source, agentsv1.Source, authv1.Source, teamsv1.Source, appsv1.Source,
+		} {
+			service, _ := strings.CutPrefix(source, "oryxa.")
+			signer, key, err := eventauth.NewLocalSigner(service, time.Now)
+			if err != nil {
+				harnessErr = err
+				return
+			}
+			harnessSigns[source] = signer
+			keys[service] = key
+		}
+		harnessVerif = eventauth.NewVerifier(keys, nil, time.Now)
+	})
+	return harnessVerif, harnessErr
+}
+
+// testVerifier is the verifier every consumer in this file mounts with.
+func testVerifier(t *testing.T) *eventauth.Verifier {
+	t.Helper()
+	verifier, err := signingHarness()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return verifier
+}
+
 func delivery(t *testing.T, source, detailType, eventID string, data any) string {
 	t.Helper()
 	encoded, err := json.Marshal(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	detail, err := json.Marshal(map[string]any{"event_id": eventID, "version": 1, "data": json.RawMessage(encoded)})
+	if _, err := signingHarness(); err != nil {
+		t.Fatal(err)
+	}
+	// A source no harness signer exists for — one nothing publishes as —
+	// stays unsigned, which is one more thing the consumer must refuse.
+	detail := map[string]any{"event_id": eventID, "version": 1, "data": json.RawMessage(encoded)}
+	if signer, ok := harnessSigns[source]; ok {
+		signature, err := signer.Sign(source, detailType, eventID, 1, "", encoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		detail["sig"] = signature
+	}
+	wrapped, err := json.Marshal(detail)
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := json.Marshal(map[string]any{"id": "eb-1", "source": source, "detail-type": detailType, "detail": json.RawMessage(detail)})
+	body, err := json.Marshal(map[string]any{"id": "eb-1", "source": source, "detail-type": detailType, "detail": json.RawMessage(wrapped)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +172,11 @@ func TestSubscriptionsCoverEveryHandledEvent(t *testing.T) {
 
 func TestTeamspacePublicationRoutesOnlyIdentityAndIsIdempotent(t *testing.T) {
 	recorder := &fakeOrganizationRecorder{}
-	consumer := NewConsumer(&fakeRecorder{}, nil, nil, nil).WithOrganizationSynthesisRecorder(recorder)
+	consumer, err := NewConsumer(&fakeRecorder{}, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer = consumer.WithOrganizationSynthesisRecorder(recorder)
 	publishedAt := time.Unix(300, 0).UTC()
 	published := agentsv1.TeamspaceEntryPublished{
 		EntryID: "tse_1", TeamspaceID: "tsp_1", OrganizationID: "org_1",
@@ -138,7 +198,10 @@ func TestTeamspacePublicationRoutesOnlyIdentityAndIsIdempotent(t *testing.T) {
 		t.Fatalf("delivery=%+v", got)
 	}
 
-	missing := NewConsumer(&fakeRecorder{}, nil, nil, nil)
+	missing, err := NewConsumer(&fakeRecorder{}, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := missing.Handle(context.Background(), body); err == nil {
 		t.Fatal("publication without an organization synthesis recorder was accepted")
 	}
@@ -146,7 +209,10 @@ func TestTeamspacePublicationRoutesOnlyIdentityAndIsIdempotent(t *testing.T) {
 
 func TestInteractionLifecycleRoutesOnlyIdentityAndState(t *testing.T) {
 	recorder := &fakeInteractionRecorder{}
-	consumer := NewConsumer(&fakeRecorder{}, recorder, nil, nil)
+	consumer, err := NewConsumer(&fakeRecorder{}, recorder, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	changed := agentsv1.InteractionChanged{
 		RequestID: "irq_1", OrganizationID: "org_1",
 		RequesterUserID: "user_a", RequesterAgentID: "agt_a",
@@ -215,7 +281,10 @@ func gmailTrigger(eventID, subject string) batchingv1.Trigger {
 // nothing.
 func TestABatchIsRecordedWholeAndOnce(t *testing.T) {
 	recorder := &fakeRecorder{}
-	consumer := NewConsumer(recorder, nil, nil, nil)
+	consumer, err := NewConsumer(recorder, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	batch := readyBatch("user_1", gmailTrigger("evt_apps_1", "Launch"), gmailTrigger("evt_apps_2", "Review"))
 	body := delivery(t, batchingv1.Source, batchingv1.TriggerBatchReadyDetailType, "evt_batch_1", batch)
 	for range 2 {
@@ -252,7 +321,10 @@ func TestABatchIsRecordedWholeAndOnce(t *testing.T) {
 // left alone, since batching hands it over in a batch.
 func TestATriggerStraightFromAppsIsLeftToBatching(t *testing.T) {
 	recorder := &fakeRecorder{}
-	consumer := NewConsumer(recorder, nil, nil, nil)
+	consumer, err := NewConsumer(recorder, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	trigger := appsv1.TriggerReceived{
 		TriggerID: "tr_1", OrganizationID: "org_1", MemberID: "user_1", Toolkit: "gmail", Trigger: "GMAIL_NEW_MESSAGE",
 		Data: json.RawMessage(`{"subject":"Launch"}`), ReceivedAt: time.Unix(100, 0).UTC(),
@@ -273,7 +345,10 @@ func TestAMemberLeavingOrAnOrganizationGoingIsForgottenEverywhere(t *testing.T) 
 			return fail
 		}
 	}
-	consumer := NewConsumer(&fakeRecorder{}, nil, []Forgetter{forgetter("threads", nil), forgetter("wakeups", nil)}, nil)
+	consumer, err := NewConsumer(&fakeRecorder{}, nil, []Forgetter{forgetter("threads", nil), forgetter("wakeups", nil)}, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := consumer.Handle(context.Background(), delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_1",
 		authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user_1"})); err != nil {
@@ -295,8 +370,11 @@ func TestAMemberLeavingOrAnOrganizationGoingIsForgottenEverywhere(t *testing.T) 
 	// comment on forgetAll and on interactiondelivery.Store.AffectedThreads),
 	// so running it anyway would let the retry silently miss work.
 	calls = nil
-	failing := NewConsumer(&fakeRecorder{}, nil, []Forgetter{forgetter("threads", errors.New("database down")), forgetter("wakeups", nil)}, nil)
-	err := failing.Handle(context.Background(), delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_3",
+	failing, err := NewConsumer(&fakeRecorder{}, nil, []Forgetter{forgetter("threads", errors.New("database down")), forgetter("wakeups", nil)}, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = failing.Handle(context.Background(), delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_3",
 		authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user_1"}))
 	if err == nil || !strings.Contains(err.Error(), "database down") || len(calls) != 1 {
 		t.Fatalf("failing forget = %v after %v, want only the failing forgetter to have run", err, calls)
@@ -309,7 +387,11 @@ func TestAMemberLeavingOrAnOrganizationGoingIsForgottenEverywhere(t *testing.T) 
 
 func TestADeletedHumanTeamRemovesItsTeamspace(t *testing.T) {
 	var organizationID, teamID string
-	consumer := NewConsumer(&fakeRecorder{}, nil, nil, nil).WithTeamForgetter(func(_ context.Context, organization, team string) error {
+	consumer, err := NewConsumer(&fakeRecorder{}, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer = consumer.WithTeamForgetter(func(_ context.Context, organization, team string) error {
 		organizationID, teamID = organization, team
 		return nil
 	})
@@ -321,7 +403,10 @@ func TestADeletedHumanTeamRemovesItsTeamspace(t *testing.T) {
 		t.Fatalf("cleanup organization=%q team=%q", organizationID, teamID)
 	}
 
-	missing := NewConsumer(&fakeRecorder{}, nil, nil, nil)
+	missing, err := NewConsumer(&fakeRecorder{}, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := missing.Handle(context.Background(), delivery(t, teamsv1.Source, teamsv1.TeamDeletedDetailType, "evt_missing_cleanup",
 		teamsv1.TeamDeleted{OrganizationID: "org_1", TeamID: "team_1"})); err == nil {
 		t.Fatal("team deletion without a teamspace cleanup handler was accepted")
@@ -330,7 +415,11 @@ func TestADeletedHumanTeamRemovesItsTeamspace(t *testing.T) {
 
 func TestALeavingTeamMemberWithdrawsPrivateAgentContributions(t *testing.T) {
 	var organizationID, teamID, userID string
-	consumer := NewConsumer(&fakeRecorder{}, nil, nil, nil).WithTeamMemberForgetter(func(_ context.Context, organization, team, user string) error {
+	consumer, err := NewConsumer(&fakeRecorder{}, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer = consumer.WithTeamMemberForgetter(func(_ context.Context, organization, team, user string) error {
 		organizationID, teamID, userID = organization, team, user
 		return nil
 	})

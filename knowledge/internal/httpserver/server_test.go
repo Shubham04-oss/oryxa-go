@@ -180,6 +180,18 @@ func TestACookieAuthenticatedChangeNeedsAKnownOrigin(t *testing.T) {
 	}
 }
 
+// jsonNUL is how a JSON document spells a NUL inside a string.
+const jsonNUL = `\u` + `0000`
+
+func TestRegisterSourceRefusesANulInATarget(t *testing.T) {
+	service := &fakeService{source: registered()}
+	recorder := send(testServer(t, service), http.MethodPost, "/v1/organizations/org_1/sources",
+		`{"provider":"files","target":{"team_id":"team`+jsonNUL+`_1"}}`, bearer())
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "invalid_request") {
+		t.Fatalf("status = %d, want 400 invalid_request: %s", recorder.Code, recorder.Body)
+	}
+}
+
 func TestRegisterSourceAnswersWhatWasCreated(t *testing.T) {
 	service := &fakeService{source: registered()}
 	recorder := send(testServer(t, service), http.MethodPost, "/v1/organizations/org_1/sources",

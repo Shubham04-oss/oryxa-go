@@ -21,6 +21,7 @@ func platform(values map[string]string) host.Platform {
 	// connection.
 	database := postgreskit.Detached(map[string]string{"vector": "0.8.6"})
 	return host.Platform{
+		EventAuth:    host.TestRegistry(),
 		Logger:       slog.New(slog.DiscardHandler),
 		Database:     database,
 		AWS:          aws.Config{Region: "ap-south-1"},

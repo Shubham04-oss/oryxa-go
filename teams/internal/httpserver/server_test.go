@@ -171,10 +171,11 @@ func TestAddMember(t *testing.T) {
 
 func TestMapsDomainErrors(t *testing.T) {
 	tests := map[error]int{
-		domain.ErrInvalid:   http.StatusBadRequest,
-		domain.ErrForbidden: http.StatusForbidden,
-		domain.ErrNotFound:  http.StatusNotFound,
-		domain.ErrConflict:  http.StatusConflict,
+		domain.ErrInvalid:         http.StatusBadRequest,
+		domain.ErrForbidden:       http.StatusForbidden,
+		domain.ErrNotFound:        http.StatusNotFound,
+		domain.ErrConflict:        http.StatusConflict,
+		domain.ErrTooManyRequests: http.StatusTooManyRequests,
 	}
 	for err, status := range tests {
 		service := &fakeService{err: err}
@@ -310,6 +311,20 @@ func TestCookieMutationRequiresOrigin(t *testing.T) {
 	New(&fakeService{}, Config{AllowedOrigins: []string{"http://localhost:3000"}}, nil).ServeHTTP(response, request)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want forbidden", response.Code)
+	}
+}
+
+// jsonNUL is how a JSON document spells a NUL inside a string.
+const jsonNUL = `\u` + `0000`
+
+func TestCreateTeamRefusesANulInTheName(t *testing.T) {
+	service := &fakeService{}
+	response := do(New(service, Config{}, nil), http.MethodPost, "/v1/organizations/org_1/teams", `{"name":"Eng`+jsonNUL+`ineering"}`)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", response.Code, response.Body.Bytes())
+	}
+	if service.created.Name != "" {
+		t.Fatalf("the service was asked to create %+v", service.created)
 	}
 }
 

@@ -78,8 +78,8 @@ Teams uses `/internal/postgreskit`: one instrumented native `pgxpool`, with sqlx
 | `POST` | `/v1/organizations/{organizationID}/tools/{name}` | Members | Call one of those three tools |
 | `GET` | `/v1/organizations/{organizationID}/teams` | Members | Organization admins see every team; others see teams they belong to |
 | `GET` | `/v1/organizations/{organizationID}/directory` | Members | Current organization roster plus the team tree and team memberships visible to the caller |
-| `GET` | `/v1/organizations/{organizationID}/members/search` | Members | Fuzzy people search: `?q=` required, `limit` optional. Each hit includes org `path` and `teams` (empty if they are on none the caller can see) |
-| `GET` | `/v1/organizations/{organizationID}/teams/search` | Members | Name search: `?q=` required, `limit` optional (default 20, max 100) |
+| `GET` | `/v1/organizations/{organizationID}/members/search` | Members | Fuzzy people search: `?q=` required (at most 256 characters), `limit` optional. Each hit includes org `path` and `teams` (empty if they are on none the caller can see) |
+| `GET` | `/v1/organizations/{organizationID}/teams/search` | Members | Name search: `?q=` required (at most 256 characters, since what a search costs grows with its length), `limit` optional (default 20, max 100) |
 | `POST` | `/v1/organizations/{organizationID}/teams/nearest` | Members | Nearest teams: `{"embedding":[…1536…],"limit":20}` |
 | `POST` | `/v1/organizations/{organizationID}/teams` | Organization admins; parent team admin when nesting | Create a team: `{"name": "Engineering"}` or `{"name": "Frontend", "parent_id": "team_…"}`; the caller becomes team admin |
 | `GET` | `/v1/organizations/{organizationID}/teams/{teamID}` | Organization admins or team members | Team, the caller's membership, and `can_manage` |

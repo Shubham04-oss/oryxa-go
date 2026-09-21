@@ -2,10 +2,12 @@ package events
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,9 +19,50 @@ import (
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
 	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 )
 
 var testClock = time.Date(2026, time.September, 17, 12, 0, 0, 0, time.UTC)
+
+// signingHarness holds one signer for each source knowledge listens to and
+// a verifier that trusts them, so a delivery is signed the way the service
+// it names would have signed it. testClock would freeze the signature's age,
+// so the verifier reads the real clock: only occurred_at is fixed.
+var (
+	harnessOnce   sync.Once
+	harnessKeys   map[string]*ecdsa.PublicKey
+	harnessVerif  *eventauth.Verifier
+	sourceSigners = map[string]*eventauth.Signer{}
+)
+
+func signingHarness() (*eventauth.Verifier, error) {
+	var harnessErr error
+	harnessOnce.Do(func() {
+		harnessKeys = map[string]*ecdsa.PublicKey{}
+		for _, source := range []string{"auth", "apps", "files", "teams"} {
+			signer, key, err := eventauth.NewLocalSigner(source, time.Now)
+			if err != nil {
+				harnessErr = err
+				return
+			}
+			sourceSigners["oryxa."+source] = signer
+			harnessKeys[source] = key
+		}
+		harnessVerif = eventauth.NewVerifier(harnessKeys, nil, time.Now)
+	})
+	return harnessVerif, harnessErr
+}
+
+// consumerFor builds the consumer the way mount does, with a verifier that
+// trusts the harness's signers.
+func consumerFor(app application) (*Consumer, error) {
+	verifier, err := signingHarness()
+	if err != nil {
+		return nil, err
+	}
+	return NewConsumer(app, verifier, nil)
+}
 
 // fakeApplication records what the consumer dispatched to it.
 type fakeApplication struct {
@@ -91,16 +134,28 @@ func (app *fakeApplication) MarkHandled(_ context.Context, eventID, _ string) er
 	return nil
 }
 
-// delivery is one message as EventBridge would put it on the queue.
+// delivery is one message as EventBridge would put it on the queue: the
+// envelope, signed the way the named source would have signed it.
 func delivery(t *testing.T, source, detailType, eventID string, data any) string {
 	t.Helper()
+	if _, err := signingHarness(); err != nil {
+		t.Fatal(err)
+	}
 	encoded, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, ok := sourceSigners[source]
+	if !ok {
+		t.Fatalf("no harness signer for source %s", source)
+	}
+	signature, err := signer.Sign(source, detailType, eventID, 1, testClock.Format(time.RFC3339Nano), encoded)
 	if err != nil {
 		t.Fatal(err)
 	}
 	detail, err := json.Marshal(map[string]any{
 		"event_id": eventID, "version": 1, "occurred_at": testClock.Format(time.RFC3339Nano),
-		"data": json.RawMessage(encoded),
+		"data": json.RawMessage(encoded), "sig": signature,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +176,10 @@ func TestEverySubscribedEventHasAHandler(t *testing.T) {
 	// something nothing acts on, and one handled but not listed means an
 	// event that never arrives. Neither shows up at runtime as anything but
 	// silence.
-	consumer := NewConsumer(newFakeApplication(), nil)
+	consumer, err := consumerFor(newFakeApplication())
+	if err != nil {
+		t.Fatal(err)
+	}
 	subscribed := []string{}
 	for _, detailTypes := range Subscriptions() {
 		subscribed = append(subscribed, detailTypes...)
@@ -139,7 +197,10 @@ func TestEverySubscribedEventHasAHandler(t *testing.T) {
 }
 
 func TestSubscriptionsNameTheSourceEachEventComesFrom(t *testing.T) {
-	consumer := NewConsumer(newFakeApplication(), nil)
+	consumer, err := consumerFor(newFakeApplication())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for source, detailTypes := range Subscriptions() {
 		for _, detailType := range detailTypes {
 			if got := consumer.handlers[detailType].source; got != source {
@@ -154,7 +215,10 @@ func TestHandleActsOnAnEventOnlyOnce(t *testing.T) {
 	// stopping an already-stopped subscription is, so a redelivery must not
 	// tell a retrieval pipeline to forget the same documents twice.
 	app := newFakeApplication()
-	consumer := NewConsumer(app, nil)
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := delivery(t, authv1.Source, authv1.OrganizationDeletedDetailType, "evt_1",
 		authv1.OrganizationDeleted{OrganizationID: "org_1"})
 
@@ -170,7 +234,10 @@ func TestHandleActsOnAnEventOnlyOnce(t *testing.T) {
 
 func TestHandleDispatchesEachEventToItsOwnHandler(t *testing.T) {
 	app := newFakeApplication()
-	consumer := NewConsumer(app, nil)
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for index, event := range []struct {
 		source     string
 		detailType string
@@ -193,18 +260,45 @@ func TestHandleDispatchesEachEventToItsOwnHandler(t *testing.T) {
 
 func TestHandleRefusesADetailTypeFromTheWrongSource(t *testing.T) {
 	// A detail type nobody else may claim: an event's name alone is not
-	// enough to say who sent it.
-	consumer := NewConsumer(newFakeApplication(), nil)
-	body := delivery(t, "oryxa.someone-else", authv1.OrganizationDeletedDetailType, "evt_1",
-		authv1.OrganizationDeleted{OrganizationID: "org_1"})
+	// enough to say who sent it. No harness signer exists for a source
+	// nothing publishes as, so this delivery stays unsigned — which is one
+	// more thing the consumer must refuse.
+	consumer, err := consumerFor(newFakeApplication())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := signingHarness(); err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(authv1.OrganizationDeleted{OrganizationID: "org_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := json.Marshal(map[string]any{
+		"event_id": "evt_1", "version": 1, "occurred_at": testClock.Format(time.RFC3339Nano),
+		"data": json.RawMessage(encoded),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(map[string]any{
+		"id": "aws-evt_1", "source": "oryxa.someone-else", "detail-type": authv1.OrganizationDeletedDetailType,
+		"detail": json.RawMessage(detail),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	if err := consumer.Handle(context.Background(), body); err == nil {
+	if err := consumer.Handle(context.Background(), string(body)); err == nil {
 		t.Fatal("Handle() error = nil, want a refusal")
 	}
 }
 
 func TestHandleRefusesAnEnvelopeFromAnotherVersion(t *testing.T) {
-	consumer := NewConsumer(newFakeApplication(), nil)
+	consumer, err := consumerFor(newFakeApplication())
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := `{"id":"aws-1","source":"` + authv1.Source + `","detail-type":"` +
 		authv1.OrganizationDeletedDetailType + `","detail":{"event_id":"evt_1","version":2,"data":{}}}`
 
@@ -218,7 +312,10 @@ func TestHandleLeavesAnEventUndeletedWhenActingOnItFailed(t *testing.T) {
 	// SQS redeliver rather than lose the event.
 	app := newFakeApplication()
 	app.err = errors.New("the store was unreachable")
-	consumer := NewConsumer(app, nil)
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_1",
 		authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-1"})
 
@@ -240,7 +337,10 @@ func TestHandleRecordsAnEventOnlyAfterItsHandlerSucceeds(t *testing.T) {
 	// handler has actually succeeded.
 	app := newFakeApplication()
 	app.failTimes = 1
-	consumer := NewConsumer(app, nil)
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_1",
 		authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-1"})
 
@@ -347,7 +447,10 @@ func waitPollReturns(t *testing.T, done <-chan struct{}) {
 
 func TestPollHandsEachMessageToHandleAndDeletesOnlyWhatSucceeded(t *testing.T) {
 	app := newFakeApplication()
-	consumer := NewConsumer(app, nil)
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	good := delivery(t, authv1.Source, authv1.MemberRemovedDetailType, "evt_1",
 		authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-1"})
 
@@ -376,7 +479,10 @@ func TestPollBacksOffAfterAReceiveErrorBeforeTryingAgain(t *testing.T) {
 	receiveBackoff = 30 * time.Millisecond
 	defer func() { receiveBackoff = original }()
 
-	consumer := NewConsumer(newFakeApplication(), nil)
+	consumer, err := consumerFor(newFakeApplication())
+	if err != nil {
+		t.Fatal(err)
+	}
 	queue := newFakeQueue(receiveResult{err: errors.New("the queue did not answer")})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -393,7 +499,10 @@ func TestPollBacksOffAfterAReceiveErrorBeforeTryingAgain(t *testing.T) {
 }
 
 func TestPollReturnsOnceItsContextIsCancelled(t *testing.T) {
-	consumer := NewConsumer(newFakeApplication(), nil)
+	consumer, err := consumerFor(newFakeApplication())
+	if err != nil {
+		t.Fatal(err)
+	}
 	queue := newFakeQueue() // no receive ever answers; a real long poll looks the same
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

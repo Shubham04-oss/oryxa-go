@@ -1,0 +1,234 @@
+package eventauth
+
+import (
+	"crypto/ecdsa"
+	"errors"
+	"testing"
+	"time"
+)
+
+func newSigner(t *testing.T, service string, now time.Time) (*Signer, *ecdsa.PublicKey) {
+	t.Helper()
+	signer, key, err := NewLocalSigner(service, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return signer, key
+}
+
+const (
+	goodSource   = "oryxa.auth"
+	goodDetail   = "auth.organization.deleted.v1"
+	goodID       = "evt_1"
+	goodVersion  = 1
+	goodOccurred = "2026-09-21T00:00:00Z"
+	goodData     = `{"organization_id":"org_1"}`
+)
+
+func signed(t *testing.T, signer *Signer) string {
+	t.Helper()
+	sig, err := signer.Sign(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sig
+}
+
+func TestASignedEventVerifies(t *testing.T) {
+	now := time.Now()
+	signer, key := newSigner(t, "auth", now)
+	verifier := NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, func() time.Time { return now })
+	if err := verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), signed(t, signer)); err != nil {
+		t.Fatalf("a signed event did not verify: %v", err)
+	}
+}
+
+func TestASignatureCannotBeMovedBetweenServices(t *testing.T) {
+	now := time.Now()
+	authSigner, authKey := newSigner(t, "auth", now)
+	teamsSigner, teamsKey := newSigner(t, "teams", now)
+	verifier := NewVerifier(map[string]*ecdsa.PublicKey{"auth": authKey, "teams": teamsKey}, nil, func() time.Time { return now })
+	sig := signed(t, authSigner)
+
+	if err := verifier.Verify("oryxa.teams", "teams.team.deleted.v1", goodID, goodVersion, goodOccurred, []byte(goodData), sig); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("auth's signature verified for teams: %v", err)
+	}
+	// And the same content signed by the service it claims.
+	teamsSig, err := teamsSigner.Sign("oryxa.teams", "teams.team.deleted.v1", goodID, goodVersion, goodOccurred, []byte(goodData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.Verify("oryxa.teams", "teams.team.deleted.v1", goodID, goodVersion, goodOccurred, []byte(goodData), teamsSig); err != nil {
+		t.Fatalf("teams' own signature did not verify: %v", err)
+	}
+}
+
+func TestEveryTamperedFormIsRefused(t *testing.T) {
+	now := time.Now()
+	signer, key := newSigner(t, "auth", now)
+	verifier := NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, func() time.Time { return now })
+	sig := signed(t, signer)
+
+	checks := map[string]struct {
+		source, detail, id string
+		version            int
+		occurred           string
+		data               string
+		sig                string
+	}{
+		"no signature":          {goodSource, goodDetail, goodID, goodVersion, goodOccurred, goodData, ""},
+		"other version":         {goodSource, goodDetail, goodID, goodVersion, goodOccurred, goodData, "v2" + sig[2:]},
+		"another detail type":   {goodSource, "auth.organization.created.v1", goodID, goodVersion, goodOccurred, goodData, sig},
+		"another event id":      {goodSource, goodDetail, "evt_2", goodVersion, goodOccurred, goodData, sig},
+		"another payload":       {goodSource, goodDetail, goodID, goodVersion, goodOccurred, `{"organization_id":"org_attacker"}`, sig},
+		"another occurred time": {goodSource, goodDetail, goodID, goodVersion, "2026-09-20T00:00:00Z", goodData, sig},
+		"garbage signature":     {goodSource, goodDetail, goodID, goodVersion, goodOccurred, goodData, "v1.0.bbb"},
+		"non-oryxa source":      {"evil.example", goodDetail, goodID, goodVersion, goodOccurred, goodData, sig},
+		"unknown service":       {"oryxa.unknown", goodDetail, goodID, goodVersion, goodOccurred, goodData, sig},
+	}
+	for name, check := range checks {
+		t.Run(name, func(t *testing.T) {
+			err := verifier.Verify(check.source, check.detail, check.id, check.version, check.occurred, []byte(check.data), check.sig)
+			if !errors.Is(err, ErrUnverified) {
+				t.Fatalf("tampered form verified: %v", err)
+			}
+		})
+	}
+}
+
+func TestAStaleSignatureIsRefused(t *testing.T) {
+	now := time.Now()
+	signer, key := newSigner(t, "auth", now)
+	clock := now
+	verifier := NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, func() time.Time { return clock })
+	sig := signed(t, signer)
+
+	clock = now.Add(maxAge + time.Minute)
+	if err := verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), sig); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("a stale signature verified: %v", err)
+	}
+}
+
+func TestASignatureFromTheFutureIsRefused(t *testing.T) {
+	now := time.Now()
+	_, key := newSigner(t, "auth", now)
+	verifier := NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, func() time.Time { return now })
+	future, _, err := NewLocalSigner("auth", func() time.Time { return now.Add(maxAge + time.Hour) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig, err := future.Sign(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), sig); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("a signature from the future verified: %v", err)
+	}
+}
+
+func TestAKeyOfAnotherServiceIsNotATrustedKey(t *testing.T) {
+	// The verifier holds the real auth key; an attacker holds a different
+	// one and signs as auth. The signature must not verify, because the
+	// key it was made with is not the key the source resolves to.
+	now := time.Now()
+	_, authKey := newSigner(t, "auth", now)
+	attacker, _ := newSigner(t, "attacker", now)
+	verifier := NewVerifier(map[string]*ecdsa.PublicKey{"auth": authKey}, nil, func() time.Time { return now })
+	sig, err := attacker.Sign(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), sig); !errors.Is(err, ErrUnverified) {
+		t.Fatal("a signature made with a key the verifier does not hold for that service verified")
+	}
+}
+
+func TestExternalSourcesAreExempt(t *testing.T) {
+	now := time.Now()
+	verifier := NewVerifier(nil, nil, func() time.Time { return now })
+	if err := verifier.Verify("aws.ses", "delivery", "evt_ses", 1, goodOccurred, []byte("{}"), ""); err != nil {
+		t.Fatalf("SES's own feedback was refused: %v", err)
+	}
+	if !IsExternal("aws.ses") || IsExternal("oryxa.auth") {
+		t.Fatal("the external-source list is wrong")
+	}
+}
+
+func TestRegistrySignsAndVerifiesAcrossServices(t *testing.T) {
+	now := time.Now()
+	registry := NewRegistry(nil, func() time.Time { return now })
+	authSigner, err := registry.Signer("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamsSigner, err := registry.Signer("teams")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authSigner == teamsSigner {
+		t.Fatal("each service must have its own signer")
+	}
+	verifier := registry.Verifier()
+	sig, err := authSigner.Sign("oryxa.auth", "auth.member.removed.v1", "evt_9", 1, goodOccurred, []byte(`{"user_id":"u"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.Verify("oryxa.auth", "auth.member.removed.v1", "evt_9", 1, goodOccurred, []byte(`{"user_id":"u"}`), sig); err != nil {
+		t.Fatalf("registry event did not verify: %v", err)
+	}
+	// And a consumer that only knows the registry cannot be fooled by a
+	// service that never signed, even with a real signature from another.
+	teamsSig, err := teamsSigner.Sign("oryxa.auth", "auth.member.removed.v1", "evt_9", 1, goodOccurred, []byte(`{"user_id":"u"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := verifier.Verify("oryxa.auth", "auth.member.removed.v1", "evt_9", 1, goodOccurred, []byte(`{"user_id":"u"}`), teamsSig); !errors.Is(err, ErrUnverified) {
+		t.Fatal("teams' signature verified for auth's source")
+	}
+}
+
+func TestCanonicalSeparatesEveryField(t *testing.T) {
+	// Two events that differ in exactly one place must canonicalize
+	// differently, whatever the differing field is.
+	base := canonical("oryxa.a", "x.v1", "e1", 1, "t1", []byte("d"))
+	variants := [][]byte{
+		canonical("oryxa.b", "x.v1", "e1", 1, "t1", []byte("d")),
+		canonical("oryxa.a", "y.v1", "e1", 1, "t1", []byte("d")),
+		canonical("oryxa.a", "x.v1", "e2", 1, "t1", []byte("d")),
+		canonical("oryxa.a", "x.v1", "e1", 2, "t1", []byte("d")),
+		canonical("oryxa.a", "x.v1", "e1", 1, "t2", []byte("d")),
+		canonical("oryxa.a", "x.v1", "e1", 1, "t1", []byte("e")),
+	}
+	for _, variant := range variants {
+		if string(base) == string(variant) {
+			t.Fatal("two different events canonicalized the same")
+		}
+	}
+	// And a crafted value cannot swallow a separator: the fields are
+	// length-delimited by NUL, which no JSON string can contain raw.
+	crafted := canonical("oryxa.a\x00x.v1", "", "", 0, "", nil)
+	if string(crafted) == string(canonical("oryxa.a", "x.v1", "", 0, "", nil)) {
+		t.Fatal("a NUL in a source crossed a field boundary")
+	}
+}
+
+func TestANonOryxaKeyCannotSign(t *testing.T) {
+	// A corrupted base64 signature is simply not the verifier's key's
+	// signature; the verifier answers ErrUnverified, never an error that
+	// says anything else about the event.
+	now := time.Now()
+	signer, key := newSigner(t, "auth", now)
+	verifier := NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, func() time.Time { return now })
+	sig := signed(t, signer)
+	flipped := []byte(sig)
+	// Flip one character deep inside the base64 payload.
+	for i := len(flipped) - 3; i > len(flipped)-40; i-- {
+		if flipped[i] != '.' && flipped[i] != 'A' {
+			flipped[i] = 'A'
+			break
+		}
+	}
+	if err := verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), string(flipped)); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("a corrupted signature verified: %v", err)
+	}
+}

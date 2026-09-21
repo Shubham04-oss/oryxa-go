@@ -281,6 +281,12 @@ that path needs no origin check.
 | `POST` | `.../corpora/{corpus}/search` | Per placement | `{query, top_k, mode, min_score, diversity, rerank, over_fetch, filter}` |
 | `POST` | `.../corpora/{corpus}/answer` | Per placement | The same body; returns the answer, its citations and the matches |
 
+A request that adds a document may be up to 24 MiB; every other request body,
+a corpus's settings or a query and its filters, at most 1 MiB. Past its limit
+a request is answered `413`. A document's body is read only once the caller
+is known to be allowed to add to that corpus, so a caller who is not gets their
+refusal without the document being read.
+
 A document source is `inline` (text in the request — what an upstream
 extract-and-transform step delivers), `file` (a files object id, fetched as the
 caller) or `external` (text with the URI it came from, kept so a citation can

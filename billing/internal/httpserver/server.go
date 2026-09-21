@@ -17,6 +17,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/catalog"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/dodo"
 	"github.com/Shubham04-oss/oryxa-go/billing/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 )
 
 const maxBodyBytes = 1 << 20
@@ -289,7 +290,7 @@ func readJSON(request *http.Request, target any) error {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.New("request body must contain one JSON object")
 	}
-	return nil
+	return cleantext.Check(target)
 }
 
 func writeError(writer http.ResponseWriter, status int, message string) {

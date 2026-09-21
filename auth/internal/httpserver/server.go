@@ -18,6 +18,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/oauthflow"
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/passwordflow"
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 )
 
 const (
@@ -831,7 +832,7 @@ func readJSON(request *http.Request, target any) error {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.New("request body must contain one JSON object")
 	}
-	return nil
+	return cleantext.Check(target)
 }
 
 func noStore(writer http.ResponseWriter) {

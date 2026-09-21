@@ -81,8 +81,17 @@ func New(store Store, blobs blob.Store, directory Directory, teams Teams, logger
 	return &Service{store: store, blobs: blobs, directory: directory, teams: teams, logger: logger, now: time.Now}
 }
 
-func (s *Service) Create(ctx context.Context, credentials authclient.Credentials, organizationID string, input CreateInput) (domain.Object, error) {
+// InputReader supplies a create's input once the caller is known. Reading an
+// upload's body is the costly part of it, so it waits until the caller has been
+// admitted: someone with no business here never has their body read.
+type InputReader func() (CreateInput, error)
+
+func (s *Service) Create(ctx context.Context, credentials authclient.Credentials, organizationID string, read InputReader) (domain.Object, error) {
 	org, err := s.caller(ctx, credentials, organizationID)
+	if err != nil {
+		return domain.Object{}, err
+	}
+	input, err := read()
 	if err != nil {
 		return domain.Object{}, err
 	}

@@ -13,7 +13,23 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
+
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 )
+
+// agentsPublisher builds a publisher with agents' own signing identity.
+func agentsPublisher(t *testing.T, client *fakePutEvents) *Publisher {
+	t.Helper()
+	signer, _, err := eventauth.NewLocalSigner("agents", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(client, "oryxa-local", signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publisher
+}
 
 type fakePutEvents struct {
 	input  *eventbridge.PutEventsInput
@@ -40,7 +56,7 @@ func testEvent(t *testing.T) Event {
 
 func TestPublisherPutsTheStandardEnvelope(t *testing.T) {
 	client := &fakePutEvents{output: &eventbridge.PutEventsOutput{}}
-	publisher := NewPublisher(client, "oryxa-local")
+	publisher := agentsPublisher(t, client)
 	event := testEvent(t)
 
 	if err := publisher.PublishEvent(context.Background(), event); err != nil {
@@ -75,7 +91,7 @@ func TestPublisherPutsTheStandardEnvelope(t *testing.T) {
 
 func TestPublisherRefusesAnIncompleteEvent(t *testing.T) {
 	client := &fakePutEvents{output: &eventbridge.PutEventsOutput{}}
-	publisher := NewPublisher(client, "oryxa-local")
+	publisher := agentsPublisher(t, client)
 
 	if err := publisher.PublishEvent(context.Background(), Event{DetailType: "agents.test.v1", OccurredAt: time.Now()}); err == nil {
 		t.Fatal("PublishEvent() error = nil without an id")
@@ -96,7 +112,7 @@ func TestPublisherReportsFailedEntries(t *testing.T) {
 			ErrorMessage: aws.String("slow down"),
 		}},
 	}}
-	publisher := NewPublisher(client, "oryxa-local")
+	publisher := agentsPublisher(t, client)
 
 	err := publisher.PublishEvent(context.Background(), testEvent(t))
 	if err == nil {
@@ -108,12 +124,18 @@ func TestPublisherReportsFailedEntries(t *testing.T) {
 }
 
 func TestPublisherReportsPutFailures(t *testing.T) {
-	publisher := NewPublisher(&fakePutEvents{err: errors.New("network down")}, "oryxa-local")
+	publisher := agentsPublisher(t, &fakePutEvents{err: errors.New("network down")})
 	if err := publisher.PublishEvent(context.Background(), testEvent(t)); err == nil {
 		t.Fatal("PublishEvent() error = nil when PutEvents fails")
 	}
-	publisher = NewPublisher(&fakePutEvents{output: nil}, "oryxa-local")
+	publisher = agentsPublisher(t, &fakePutEvents{output: nil})
 	if err := publisher.PublishEvent(context.Background(), testEvent(t)); err == nil {
 		t.Fatal("PublishEvent() error = nil when PutEvents returns nothing")
+	}
+}
+
+func TestPublisherRefusesToBuildWithoutASigningIdentity(t *testing.T) {
+	if _, err := NewPublisher(&fakePutEvents{output: &eventbridge.PutEventsOutput{}}, "oryxa-local", nil); err == nil {
+		t.Fatal("a publisher without a signer must not build")
 	}
 }

@@ -188,6 +188,17 @@ func call(server *Server, method, target string, body string, headers ...string)
 	return recorder
 }
 
+// jsonNUL is how a JSON document spells a NUL inside a string.
+const jsonNUL = `\u` + `0000`
+
+func TestConnectionsRefuseANulInTheToolkit(t *testing.T) {
+	recorder := call(newServer(t, &fakeService{}), http.MethodPost, "/v1/organizations/org_1/apps/connections",
+		`{"toolkit":"git`+jsonNUL+`hub"}`, "Authorization", "Bearer token")
+	if recorder.Code != http.StatusBadRequest || errorCode(t, recorder) != "invalid_request" {
+		t.Fatalf("status = %d code = %q, want 400 invalid_request: %s", recorder.Code, errorCode(t, recorder), recorder.Body)
+	}
+}
+
 func decodeBody(t *testing.T, recorder *httptest.ResponseRecorder) map[string]any {
 	t.Helper()
 	var body map[string]any

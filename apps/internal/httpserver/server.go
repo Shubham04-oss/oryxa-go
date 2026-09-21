@@ -21,6 +21,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 )
 
 const (
@@ -520,6 +521,10 @@ func (server *Server) decode(writer http.ResponseWriter, request *http.Request, 
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil || decoder.More() {
 		writeError(writer, http.StatusBadRequest, "invalid_request", "request body must be one JSON object with known fields")
+		return false
+	}
+	if err := cleantext.Check(target); err != nil {
+		writeError(writer, http.StatusBadRequest, "invalid_request", err.Error())
 		return false
 	}
 	return true

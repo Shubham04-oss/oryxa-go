@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"log"
 	"log/slog"
 	"os"
@@ -90,7 +91,14 @@ func main() {
 		eventClient := eventbridge.NewFromConfig(eventConfig, func(options *eventbridge.Options) {
 			options.BaseEndpoint = aws.String(settings.EventBridgeEndpoint)
 		})
-		publisher := events.NewPublisher(eventClient, settings.EventBusName)
+		signer, _, err := eventauth.NewLocalSigner("agents", time.Now)
+		if err != nil {
+			log.Fatalf("event signing identity: %v", err)
+		}
+		publisher, err := events.NewPublisher(eventClient, settings.EventBusName, signer)
+		if err != nil {
+			log.Fatalf("events publisher: %v", err)
+		}
 		table, err := sharedoutbox.NewTable(sessionStore.Database().Pool, "agents_primary.agents_outbox")
 		if err != nil {
 			log.Fatalf("events outbox table: %v", err)

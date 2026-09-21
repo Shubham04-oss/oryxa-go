@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -19,6 +20,8 @@ import (
 // fakeService records what the handler passed down and answers with whatever
 // a test set up.
 type fakeService struct {
+	// refused is a caller the service turns away before it asks for the body.
+	refused       error
 	corpus        domain.Corpus
 	corpora       []domain.Corpus
 	document      domain.Document
@@ -57,7 +60,15 @@ func (fake *fakeService) DeleteCorpus(context.Context, authclient.Credentials, s
 	return fake.err
 }
 
-func (fake *fakeService) AddDocument(_ context.Context, _ authclient.Credentials, _, _ string, input application.AddDocumentInput) (domain.Document, error) {
+func (fake *fakeService) AddDocument(_ context.Context, _ authclient.Credentials, _, _ string, read application.DocumentReader) (domain.Document, error) {
+	// Like the real service, the fake asks for the body only of a caller it admits.
+	if fake.refused != nil {
+		return domain.Document{}, fake.refused
+	}
+	input, err := read()
+	if err != nil {
+		return domain.Document{}, err
+	}
 	fake.addInput = input
 	return fake.document, fake.err
 }
@@ -192,6 +203,77 @@ func TestAddDocumentIsAcceptedNotCreated(t *testing.T) {
 	}
 	if document.Status != domain.StatusPending {
 		t.Fatalf("status = %q", document.Status)
+	}
+}
+
+// countingBody counts what a handler takes from a request body.
+type countingBody struct {
+	io.Reader
+	read int
+}
+
+func (body *countingBody) Read(buffer []byte) (int, error) {
+	count, err := body.Reader.Read(buffer)
+	body.read += count
+	return count, err
+}
+
+func TestAddDocumentReadsNoBodyForACallerTheServiceRefuses(t *testing.T) {
+	t.Parallel()
+	body := &countingBody{Reader: strings.NewReader(`{"text":"` + strings.Repeat("A", 4<<20) + `"}`)}
+	request := httptest.NewRequest(http.MethodPost, "/v1/organizations/org_1/corpora/cor_1/documents", body)
+	request.Header.Set("Authorization", "Bearer a-token-nobody-issued")
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	newServer(&fakeService{refused: domain.ErrNotFound}).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want not found: %s", recorder.Code, recorder.Body)
+	}
+	if body.read != 0 {
+		t.Fatalf("read %d bytes of the body of a caller the service refused, want none", body.read)
+	}
+}
+
+func TestBodiesArePastTheirLimitAre413(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		path  string
+		limit int
+	}{
+		// A document may be long; nothing else a caller sends is.
+		"document": {"/v1/organizations/org_1/corpora/cor_1/documents", maxDocumentRequestBytes},
+		"search":   {"/v1/organizations/org_1/corpora/cor_1/search", maxJSONBytes},
+		"answer":   {"/v1/organizations/org_1/corpora/cor_1/answer", maxJSONBytes},
+		"corpus":   {"/v1/organizations/org_1/corpora", maxJSONBytes},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			body := `{"query":"` + strings.Repeat("A", test.limit) + `"}`
+			recorder := do(t, newServer(&fakeService{}), http.MethodPost, test.path, body)
+			if recorder.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want 413: %.200s", recorder.Code, recorder.Body)
+			}
+			if !strings.Contains(recorder.Body.String(), "at most") {
+				t.Fatalf("body = %s, want the limit named", recorder.Body)
+			}
+		})
+	}
+}
+
+// jsonNUL is how a JSON document spells a NUL inside a string.
+const jsonNUL = `\u` + `0000`
+
+func TestAddDocumentRefusesANulInTheTitle(t *testing.T) {
+	t.Parallel()
+	fake := &fakeService{document: domain.Document{ID: "doc_1"}}
+	recorder := do(t, newServer(fake), http.MethodPost, "/v1/organizations/org_1/corpora/cor_1/documents",
+		`{"title":"Run`+jsonNUL+`book","text":"hello"}`)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", recorder.Code, recorder.Body)
+	}
+	if fake.addInput.Title != "" {
+		t.Fatalf("the service was asked to add %+v", fake.addInput)
 	}
 }
 

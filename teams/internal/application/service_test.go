@@ -351,6 +351,18 @@ func TestEmbeddingNearestAndSubtreeDelete(t *testing.T) {
 	}
 }
 
+func TestSearchRefusesAQueryTooLongToBeALookup(t *testing.T) {
+	service, _, _ := newService()
+	ctx := context.Background()
+	long := strings.Repeat("plat ", domain.MaxSearchQueryLength)
+	if _, err := service.SearchTeams(ctx, creds("user-owner"), "org_1", long, 10); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("team search error = %v, want invalid", err)
+	}
+	if _, err := service.SearchMembers(ctx, creds("user-owner"), "org_1", long, 10); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("member search error = %v, want invalid", err)
+	}
+}
+
 func TestSearchMembersReturnsTeamsAndHidesTheRest(t *testing.T) {
 	service, _, _ := newService()
 	ctx := context.Background()

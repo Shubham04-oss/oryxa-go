@@ -48,6 +48,16 @@ func TestDateFilterRange(t *testing.T) {
 	if _, _, err := (DateFilter{Year: 2026, Month: 2, Day: 31}).Range(); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("overflow day error = %v", err)
 	}
+	if _, _, err := (DateFilter{Year: 9999, Month: 12, Day: 31}).Range(); err != nil {
+		t.Fatalf("the last day of year 9999 error = %v", err)
+	}
+	// Past four digits, and far past what a timestamp holds: the database used
+	// to be the one to say so, with a 500.
+	for _, year := range []int{10000, 2147483648, 9223372036854775807} {
+		if _, _, err := (DateFilter{Year: year}).Range(); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("year %d error = %v, want invalid", year, err)
+		}
+	}
 }
 
 func TestPlace(t *testing.T) {

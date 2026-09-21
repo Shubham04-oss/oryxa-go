@@ -22,6 +22,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/httpserver"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/mcpserver"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/postgres"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 )
 
@@ -42,8 +43,12 @@ type Dependencies struct {
 	Composio application.Composio
 	// Sink is where published events go. Without one, apps still works and
 	// its outbox simply fills up, which a host should not choose to do.
-	Sink   events.Sink
-	Logger *slog.Logger
+	Sink events.Sink
+	// Verifier proves who published each event apps consumes. Required:
+	// a consumer that cannot check signatures would run any message a queue
+	// handed it, so New refuses to build without one.
+	Verifier *eventauth.Verifier
+	Logger   *slog.Logger
 }
 
 // Config is what a host tells apps about itself.
@@ -95,12 +100,16 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 	}
 
 	mcp := mcpserver.New(app, logger)
+	consumer, err := events.NewConsumer(app, dependencies.Verifier, logger)
+	if err != nil {
+		return nil, err
+	}
 	service := &Service{
 		app:      app,
 		store:    dependencies.Store,
 		mcp:      mcp,
 		handler:  httpserver.New(app, httpserver.Config{AllowedOrigins: config.AllowedOrigins, MCP: mcp}, logger),
-		consumer: events.NewConsumer(app, logger),
+		consumer: consumer,
 	}
 	if dependencies.Sink != nil {
 		// A trigger's payload is the app's own data — an email's body, an

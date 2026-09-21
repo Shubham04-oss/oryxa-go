@@ -29,9 +29,17 @@ func (s *Service) Tools(ctx context.Context, credentials authclient.Credentials,
 }
 
 // CallTool runs list_teams, call_team, or call_team_members.
+//
+// Every one of the three writes a MemberPinged event for each member the
+// call touched, and each of those can reach a member as email — so each is
+// budgeted per caller before anything is written rather than merely recorded
+// after the fact.
 func (s *Service) CallTool(ctx context.Context, credentials authclient.Credentials, organizationID, name string, arguments json.RawMessage) (any, error) {
 	teams, org, err := s.visibleTeams(ctx, credentials, organizationID)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.allowToolCall(organizationID, org.UserID); err != nil {
 		return nil, err
 	}
 	switch name {

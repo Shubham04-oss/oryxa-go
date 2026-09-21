@@ -349,9 +349,9 @@ func TestWriteAccessByScope(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			h := newHarness()
 			corpus := seedCorpus(h.store, test.corpus)
-			document, err := h.service.AddDocument(context.Background(), creds(test.user), testOrganization, corpus.ID, AddDocumentInput{
+			document, err := h.service.AddDocument(context.Background(), creds(test.user), testOrganization, corpus.ID, given(AddDocumentInput{
 				Source: domain.Source{Kind: domain.SourceInline}, Text: "some body text about rotation.", ContentType: "text/plain",
-			})
+			}))
 			wantErr(t, err, test.wantErr)
 			if test.wantErr == nil && document.CorpusID != corpus.ID {
 				t.Fatalf("document = %+v, want it filed under %s", document, corpus.ID)
@@ -365,9 +365,9 @@ func TestAddDocumentFetchesFromFilesAsTheCaller(t *testing.T) {
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})
 	h.files.content = domain.SourceContent{ID: "file_1", Filename: "notes.md", ContentType: "text/markdown", Body: "# Notes\n\nSome text."}
 
-	document, err := h.service.AddDocument(context.Background(), creds("user-creator"), testOrganization, corpus.ID, AddDocumentInput{
+	document, err := h.service.AddDocument(context.Background(), creds("user-creator"), testOrganization, corpus.ID, given(AddDocumentInput{
 		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_1"},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("AddDocument() error = %v", err)
 	}
@@ -388,10 +388,33 @@ func TestAddDocumentFromAFileNeedsFilesConfigured(t *testing.T) {
 	h := newHarness()
 	h.service = New(h.store, fakeDirectory{}, h.teams, nil, nil, h.vectors, h.retriever, h.generator, h.knowledgeBase, Defaults{}, nil)
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})
-	if _, err := h.service.AddDocument(context.Background(), creds("user-creator"), testOrganization, corpus.ID, AddDocumentInput{
+	if _, err := h.service.AddDocument(context.Background(), creds("user-creator"), testOrganization, corpus.ID, given(AddDocumentInput{
 		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_1"},
-	}); !errors.Is(err, domain.ErrInvalid) {
+	})); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("error = %v, want ErrInvalid", err)
+	}
+}
+
+// given is a document already in hand, as a caller with nothing to decode
+// would supply it.
+func given(input AddDocumentInput) DocumentReader {
+	return func() (AddDocumentInput, error) { return input, nil }
+}
+
+func TestAddDocumentDoesNotReadTheBodyOfACallerWhoMayNotWrite(t *testing.T) {
+	h := newHarness()
+	corpus := seedCorpus(h.store, domain.Corpus{Slug: "o1", Scope: domain.ScopeOrganization})
+	read := func() (AddDocumentInput, error) {
+		t.Fatal("the document was read for a caller who may not add to this corpus")
+		return AddDocumentInput{}, nil
+	}
+	// An ordinary member may see an organization corpus but not write to it.
+	if _, err := h.service.AddDocument(context.Background(), creds("user-teammate"), testOrganization, corpus.ID, read); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("error = %v, want forbidden", err)
+	}
+	// And a stranger to the organization is turned away just as early.
+	if _, err := h.service.AddDocument(context.Background(), creds("user-nobody"), testOrganization, corpus.ID, read); err == nil {
+		t.Fatal("a caller the directory does not know was admitted")
 	}
 }
 

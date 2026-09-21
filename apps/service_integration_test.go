@@ -2,6 +2,7 @@ package apps
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -33,6 +34,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/mcpserver"
 	"github.com/Shubham04-oss/oryxa-go/apps/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/internal/composio"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 )
 
 // TestConnectRunAndDeliverEndToEnd runs the whole service — its own Postgres
@@ -53,7 +55,7 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 
 	service, err := New(Dependencies{
 		Store: store, Directory: directoryClient(t, directory.URL), Composio: composioClient(t, composio.URL),
-		Sink: sink, Logger: slog.New(slog.DiscardHandler),
+		Sink: sink, Verifier: authHarness(t).Verifier(), Logger: slog.New(slog.DiscardHandler),
 	}, Config{
 		PublicBaseURL:  "https://apps.oryxa.test",
 		AllowedOrigins: []string{"https://app.oryxa.test"},
@@ -558,18 +560,63 @@ func outboxDetail(t *testing.T, store *postgres.Store, eventID string) string {
 	return strings.TrimSpace(*detail)
 }
 
-// busMessage is one SQS body carrying an EventBridge envelope.
+// authFixture is the signing identity the messages this test feeds the
+// consumer claim to be from: auth's, since a consumer verifies a signature
+// against the source the event claims, and this fixture's events claim
+// auth. One key for the whole test binary, as a running host mints one key
+// per service for its process's life.
+type authFixture struct {
+	signer   *eventauth.Signer
+	verifier *eventauth.Verifier
+}
+
+var testAuthFixture struct {
+	once sync.Once
+	auth authFixture
+}
+
+// authHarness returns auth's signing identity and the verifier that trusts
+// it: the signer the bus messages are built with, and the verifier the
+// service is mounted with.
+func authHarness(t *testing.T) *authFixture {
+	t.Helper()
+	testAuthFixture.once.Do(func() {
+		signer, key, err := eventauth.NewLocalSigner("auth", time.Now)
+		if err != nil {
+			panic(err)
+		}
+		testAuthFixture.auth = authFixture{
+			signer:   signer,
+			verifier: eventauth.NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, time.Now),
+		}
+	})
+	return &testAuthFixture.auth
+}
+
+func (fixture *authFixture) Signer() *eventauth.Signer { return fixture.signer }
+
+func (fixture *authFixture) Verifier() *eventauth.Verifier { return fixture.verifier }
+
+// busMessage is one SQS body carrying an EventBridge envelope, signed as
+// auth would have signed it.
 func busMessage(t *testing.T, source, detailType string, data any) string {
 	t.Helper()
 	encoded, err := json.Marshal(data)
 	if err != nil {
 		t.Fatal(err)
 	}
+	eventID := "evt_" + randomHex(6)
+	occurredAt := time.Now().UTC().Format(time.RFC3339Nano)
+	signature, err := authHarness(t).Signer().Sign(source, detailType, eventID, 1, occurredAt, encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
 	body, err := json.Marshal(map[string]any{
 		"source": source, "detail-type": detailType, "time": time.Now().UTC().Format(time.RFC3339),
 		"detail": map[string]any{
-			"event_id": "evt_" + randomHex(6), "version": 1,
-			"occurred_at": time.Now().UTC().Format(time.RFC3339Nano), "data": json.RawMessage(encoded),
+			"event_id": eventID, "version": 1,
+			"occurred_at": occurredAt, "data": json.RawMessage(encoded),
+			"sig": signature,
 		},
 	})
 	if err != nil {

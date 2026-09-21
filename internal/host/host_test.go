@@ -209,6 +209,52 @@ func TestRoutesSendEachPathToTheServiceThatServesIt(t *testing.T) {
 	}
 }
 
+func TestRoutesRefuseTextTheDatabaseWillNotStore(t *testing.T) {
+	handler, err := routes([]mounted{
+		fakeService("teams", "GET /v1/organizations/{organizationID}/teams/{teamID}", "GET /v1/organizations/{organizationID}/teams/search"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{
+		"NUL in an id":             "/v1/organizations/org-1/teams/a%00b",
+		"NUL in the organization":  "/v1/organizations/org%00/teams/team-1",
+		"invalid UTF-8 in an id":   "/v1/organizations/org-1/teams/%ff%fe",
+		"a truncated sequence":     "/v1/organizations/org-1/teams/abc%e2%82",
+		"NUL in a query value":     "/v1/organizations/org-1/teams/search?q=a%00b",
+		"invalid UTF-8 in a query": "/v1/organizations/org-1/teams/search?limit=5&q=%ff",
+		"NUL in a query name":      "/v1/organizations/org-1/teams/search?q%00=x",
+		"one bad value of several": "/v1/organizations/org-1/teams/search?q=ok&q=%00",
+	} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", name, recorder.Code)
+		}
+		if recorder.Header().Get("X-Served-By") != "" {
+			t.Errorf("%s: the request reached the service", name)
+		}
+		if !strings.Contains(recorder.Body.String(), `"error"`) {
+			t.Errorf("%s: body = %q, want a JSON error", name, recorder.Body.String())
+		}
+	}
+	// What a real client sends is untouched: percent-encoded UTF-8 is text.
+	for name, target := range map[string]string{
+		"plain":               "/v1/organizations/org-1/teams/team-1",
+		"accented":            "/v1/organizations/org-1/teams/caf%C3%A9",
+		"CJK and emoji":       "/v1/organizations/org-1/teams/%E5%B9%B3%E5%8F%B0%F0%9F%99%82",
+		"encoded space":       "/v1/organizations/org-1/teams/a%20b",
+		"query with UTF-8":    "/v1/organizations/org-1/teams/search?q=%C3%89quipe+plateforme&limit=5",
+		"malformed query key": "/v1/organizations/org-1/teams/search?%zz=1&q=ok",
+	} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+		if recorder.Code != http.StatusOK || recorder.Header().Get("X-Served-By") != "teams" {
+			t.Errorf("%s: status = %d served by %q, want 200 by teams", name, recorder.Code, recorder.Header().Get("X-Served-By"))
+		}
+	}
+}
+
 func TestRoutesRefuseTwoServicesClaimingOnePath(t *testing.T) {
 	_, err := routes([]mounted{
 		fakeService("connections", "GET /v1/providers"),

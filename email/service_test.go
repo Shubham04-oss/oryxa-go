@@ -14,9 +14,10 @@ import (
 // must not need one.
 func platform(values map[string]string) host.Platform {
 	return host.Platform{
-		Logger: slog.New(slog.DiscardHandler),
-		AWS:    aws.Config{Region: "ap-south-1"},
-		Getenv: func(name string) string { return values[name] },
+		EventAuth: host.TestRegistry(),
+		Logger:    slog.New(slog.DiscardHandler),
+		AWS:       aws.Config{Region: "ap-south-1"},
+		Getenv:    func(name string) string { return values[name] },
 	}
 }
 

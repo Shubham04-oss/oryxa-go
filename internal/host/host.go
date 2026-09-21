@@ -27,6 +27,7 @@ import (
 	"cloud.google.com/go/auth"
 	"github.com/aws/aws-sdk-go-v2/aws"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
@@ -99,6 +100,11 @@ type Platform struct {
 	// Credentials. The services share it, so its token is exchanged once.
 	Google       *auth.Credentials
 	EventBusName string
+	// EventAuth holds the event signing identities: each mounted service's
+	// signer and the verifier that trusts them all. A publisher without a
+	// signing key cannot publish; a consumer never runs a handler on an
+	// unsigned or wrongly-signed event.
+	EventAuth *eventauth.Registry
 	// Getenv reads configuration. A URL variable naming a service that runs
 	// in this process defaults to this process.
 	Getenv func(string) string

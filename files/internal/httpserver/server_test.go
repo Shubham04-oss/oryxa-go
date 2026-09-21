@@ -1,11 +1,13 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -18,6 +20,8 @@ import (
 )
 
 type fakeService struct {
+	// refused is a caller the service turns away before it asks for the body.
+	refused error
 	created application.CreateInput
 	filter  application.ListFilter
 	object  domain.Object
@@ -26,7 +30,15 @@ type fakeService struct {
 	err     error
 }
 
-func (fake *fakeService) Create(_ context.Context, _ authclient.Credentials, _ string, input application.CreateInput) (domain.Object, error) {
+func (fake *fakeService) Create(_ context.Context, _ authclient.Credentials, _ string, read application.InputReader) (domain.Object, error) {
+	// Like the real service, the fake asks for the body only of a caller it admits.
+	if fake.refused != nil {
+		return domain.Object{}, fake.refused
+	}
+	input, err := read()
+	if err != nil {
+		return domain.Object{}, err
+	}
 	fake.created = input
 	if fake.err != nil {
 		return domain.Object{}, fake.err
@@ -99,6 +111,95 @@ func TestCreateJSON(t *testing.T) {
 	}
 }
 
+func TestCreateMultipart(t *testing.T) {
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	for name, value := range map[string]string{"scope": "team", "team_id": "team_eng", "retention_days": "7", "purpose": "upload"} {
+		_ = form.WriteField(name, value)
+	}
+	part, _ := form.CreateFormFile("file", "notes.txt")
+	_, _ = part.Write([]byte("hello"))
+	_ = form.Close()
+
+	service := &fakeService{object: domain.Object{ID: "file_1"}}
+	request := httptest.NewRequest(http.MethodPost, "/v1/organizations/org_1/files", &body)
+	request.Header.Set("Authorization", "Bearer token")
+	request.Header.Set("Content-Type", form.FormDataContentType())
+	response := httptest.NewRecorder()
+	New(service, Config{}, nil).ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
+	}
+	if service.created.Filename != "notes.txt" || string(service.created.Content) != "hello" || service.created.Scope != domain.ScopeTeam ||
+		service.created.TeamID != "team_eng" || service.created.RetentionDays != 7 {
+		t.Fatalf("created = %+v", service.created)
+	}
+}
+
+// countingBody counts what a handler takes from a request body.
+type countingBody struct {
+	io.Reader
+	read int
+}
+
+func (body *countingBody) Read(buffer []byte) (int, error) {
+	count, err := body.Reader.Read(buffer)
+	body.read += count
+	return count, err
+}
+
+func TestCreateReadsNoBodyForACallerTheServiceRefuses(t *testing.T) {
+	for name, contentType := range map[string]string{"json": "application/json", "multipart": "multipart/form-data; boundary=x"} {
+		t.Run(name, func(t *testing.T) {
+			body := &countingBody{Reader: strings.NewReader(strings.Repeat("A", 4<<20))}
+			request := httptest.NewRequest(http.MethodPost, "/v1/organizations/org_1/files", body)
+			request.Header.Set("Authorization", "Bearer a-token-nobody-issued")
+			request.Header.Set("Content-Type", contentType)
+			response := httptest.NewRecorder()
+			New(&fakeService{refused: domain.ErrNotFound}, Config{}, nil).ServeHTTP(response, request)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want not found", response.Code)
+			}
+			if body.read != 0 {
+				t.Fatalf("read %d bytes of the body of a caller the service refused, want none", body.read)
+			}
+		})
+	}
+}
+
+func TestCreateRefusesAnUploadPastTheLimit(t *testing.T) {
+	json := `{"filename":"a.txt","content":"` + strings.Repeat("A", int(maxUploadBytes)) + `"}`
+
+	var multipartBody bytes.Buffer
+	form := multipart.NewWriter(&multipartBody)
+	part, _ := form.CreateFormFile("file", "big.bin")
+	_, _ = part.Write(bytes.Repeat([]byte("A"), int(maxUploadBytes)+1))
+	_ = form.Close()
+
+	for name, upload := range map[string]struct{ contentType, body string }{
+		"json":      {"application/json", json},
+		"multipart": {form.FormDataContentType(), multipartBody.String()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := &fakeService{}
+			request := httptest.NewRequest(http.MethodPost, "/v1/organizations/org_1/files", strings.NewReader(upload.body))
+			request.Header.Set("Authorization", "Bearer token")
+			request.Header.Set("Content-Type", upload.contentType)
+			response := httptest.NewRecorder()
+			New(service, Config{}, nil).ServeHTTP(response, request)
+			if response.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d body = %.200s, want 413", response.Code, response.Body.Bytes())
+			}
+			if !strings.Contains(response.Body.String(), "at most") {
+				t.Fatalf("body = %s, want the limit named", response.Body.Bytes())
+			}
+			if service.created.Filename != "" {
+				t.Fatalf("an oversize upload reached the service: %+v", service.created)
+			}
+		})
+	}
+}
+
 func TestListQuery(t *testing.T) {
 	service := &fakeService{object: domain.Object{ID: "file_1"}}
 	response := do(New(service, Config{}, nil), http.MethodGet, "/v1/organizations/org_1/files?scope=team&team_id=team_eng&purpose=upload&year=2026&month=9&day=14", "")
@@ -127,6 +228,7 @@ func TestMapsDomainErrors(t *testing.T) {
 		domain.ErrForbidden: http.StatusForbidden,
 		domain.ErrNotFound:  http.StatusNotFound,
 		domain.ErrConflict:  http.StatusConflict,
+		domain.ErrTooLarge:  http.StatusRequestEntityTooLarge,
 	}
 	for err, status := range tests {
 		service := &fakeService{err: err}
@@ -156,6 +258,24 @@ func TestDownloadURL(t *testing.T) {
 	var body application.DownloadURL
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.URL != "https://s3.example/obj" {
 		t.Fatalf("body = %s", response.Body.Bytes())
+	}
+}
+
+// jsonNUL is how a JSON document spells a NUL inside a string.
+const jsonNUL = `\u` + `0000`
+
+func TestCreateRefusesANulInAFieldButNotInTheFile(t *testing.T) {
+	service := &fakeService{object: domain.Object{ID: "file_1"}}
+	content := base64.StdEncoding.EncodeToString([]byte("a" + string(rune(0)) + "b")) // content is bytes: anything goes
+	response := do(New(service, Config{}, nil), http.MethodPost, "/v1/organizations/org_1/files",
+		`{"filename":"notes.txt","scope":"team","team_id":"team`+jsonNUL+`_eng","content":"`+content+`"}`)
+	if response.Code != http.StatusBadRequest || service.created.TeamID != "" {
+		t.Fatalf("status = %d created = %+v, want a 400 and nothing created: %s", response.Code, service.created, response.Body.Bytes())
+	}
+	response = do(New(service, Config{}, nil), http.MethodPost, "/v1/organizations/org_1/files",
+		`{"filename":"notes.txt","content":"`+content+`"}`)
+	if response.Code != http.StatusCreated || string(service.created.Content) != "a"+string(rune(0))+"b" {
+		t.Fatalf("a file holding a NUL: status = %d created = %q", response.Code, service.created.Content)
 	}
 }
 

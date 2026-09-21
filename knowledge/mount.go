@@ -148,12 +148,25 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
 		}
 	})
+	signer, err := platform.EventAuth.Signer(Name)
+	if err != nil {
+		return host.Service{}, err
+	}
+	publisher, err := events.NewPublisher(eventClient, platform.EventBusName, signer)
+	if err != nil {
+		return host.Service{}, err
+	}
 	service, err := New(Dependencies{
-		Store:      postgres.New(platform.Database),
-		Directory:  authclient.New(config.AuthURL),
-		Apps:       apps,
-		Grants:     grants,
-		Sink:       events.NewPublisher(eventClient, platform.EventBusName),
+		Store:     postgres.New(platform.Database),
+		Directory: authclient.New(config.AuthURL),
+		Apps:      apps,
+		Grants:    grants,
+		Sink:      publisher,
+		// One verifier covers every source knowledge hears from: it
+		// resolves the signing key from the source an event names, so a
+		// signature made with one service's key cannot be replayed as
+		// another's by editing the envelope.
+		Verifier:   platform.EventAuth.Verifier(),
 		Extractors: extractors,
 		Originals:  documentOriginals,
 		Judge:      documentJudge,

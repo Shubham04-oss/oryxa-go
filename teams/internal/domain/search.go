@@ -1,6 +1,29 @@
 package domain
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+)
+
+// MaxSearchQueryLength bounds a search query, in characters. A team's name runs
+// to 120 and an email address to 254, so nothing longer can be looked for; and
+// what a search costs grows with the length of the query, over every row it is
+// scored against, so an unbounded one lets any member make the database work
+// for seconds at a time.
+const MaxSearchQueryLength = 256
+
+// SearchQuery trims a search query and refuses one that is empty or too long.
+func SearchQuery(query string) (string, error) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", fmt.Errorf("search query is required: %w", ErrInvalid)
+	}
+	if utf8.RuneCountInString(query) > MaxSearchQueryLength {
+		return "", fmt.Errorf("search query must be at most %d characters: %w", MaxSearchQueryLength, ErrInvalid)
+	}
+	return query, nil
+}
 
 func ClampSearchLimit(limit int) int {
 	if limit <= 0 {

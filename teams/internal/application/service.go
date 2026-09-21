@@ -112,13 +112,19 @@ type Service struct {
 	directory Directory
 	logger    *slog.Logger
 	now       func() time.Time
+	// toolCalls bounds the ping-bearing tools per member per organization.
+	toolCalls *toolRateLimiter
 }
 
 func New(store Store, directory Directory, logger *slog.Logger) *Service {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Service{store: store, directory: directory, logger: logger, now: time.Now}
+	service := &Service{store: store, directory: directory, logger: logger, now: time.Now}
+	// The limiter reads the service's clock through the field rather than
+	// capturing the function value, so a test that moves the clock moves it.
+	service.toolCalls = newToolRateLimiter(func() time.Time { return service.now() })
+	return service
 }
 
 func (s *Service) CreateTeam(ctx context.Context, credentials authclient.Credentials, organizationID string, input CreateTeamInput) (domain.Team, error) {
@@ -205,11 +211,15 @@ func (s *Service) Teams(ctx context.Context, credentials authclient.Credentials,
 }
 
 func (s *Service) SearchTeams(ctx context.Context, credentials authclient.Credentials, organizationID, query string, limit int) ([]TeamSummary, error) {
+	query, err := domain.SearchQuery(query)
+	if err != nil {
+		return nil, err
+	}
 	org, teamIDs, err := s.searchScope(ctx, credentials, organizationID)
 	if err != nil {
 		return nil, err
 	}
-	teams, err := s.store.SearchTeams(ctx, organizationID, strings.TrimSpace(query), limit, teamIDs)
+	teams, err := s.store.SearchTeams(ctx, organizationID, query, limit, teamIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -261,9 +271,9 @@ func (s *Service) SetTeamEmbedding(ctx context.Context, credentials authclient.C
 }
 
 func (s *Service) SearchMembers(ctx context.Context, credentials authclient.Credentials, organizationID, query string, limit int) ([]MemberSearchHit, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return nil, fmt.Errorf("search query is required: %w", domain.ErrInvalid)
+	query, err := domain.SearchQuery(query)
+	if err != nil {
+		return nil, err
 	}
 	limit = domain.ClampSearchLimit(limit)
 	directory, err := s.OrganizationDirectory(ctx, credentials, organizationID)
@@ -856,11 +866,7 @@ func conceal(err error) error {
 }
 
 func teamName(raw string) (string, error) {
-	name := strings.TrimSpace(raw)
-	if name == "" || len(name) > 120 {
-		return "", fmt.Errorf("team name must be between 1 and 120 characters: %w", domain.ErrInvalid)
-	}
-	return name, nil
+	return domain.CleanTeamName(raw)
 }
 
 func randomID(prefix string, size int) (string, error) {
