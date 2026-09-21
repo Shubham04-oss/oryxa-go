@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -186,6 +187,73 @@ func TestRegistrySignsAndVerifiesAcrossServices(t *testing.T) {
 	}
 	if err := verifier.Verify("oryxa.auth", "auth.member.removed.v1", "evt_9", 1, goodOccurred, []byte(`{"user_id":"u"}`), teamsSig); !errors.Is(err, ErrUnverified) {
 		t.Fatal("teams' signature verified for auth's source")
+	}
+}
+
+// Services mount one after another, each taking a verifier as it goes, and
+// auth — mounted first — hears billing, mounted third. A verifier that knew
+// only the keys minted before it would refuse billing for as long as the
+// process ran.
+func TestARegistryVerifierTrustsServicesMountedAfterIt(t *testing.T) {
+	now := time.Now()
+	registry := NewRegistry(nil, func() time.Time { return now })
+	if _, err := registry.Signer("auth"); err != nil {
+		t.Fatal(err)
+	}
+	authConsumer := registry.Verifier()
+	billingSigner, err := registry.Signer("billing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const source, detailType = "oryxa.billing", "billing.entitlements.changed.v1"
+	sig, err := billingSigner.Sign(source, detailType, goodID, goodVersion, goodOccurred, []byte(goodData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authConsumer.Verify(source, detailType, goodID, goodVersion, goodOccurred, []byte(goodData), sig); err != nil {
+		t.Fatalf("a verifier taken before billing mounted refused billing's event: %v", err)
+	}
+}
+
+func TestAReportOnlyRegistryLetsAFailureThroughAndSaysWhy(t *testing.T) {
+	now := time.Now()
+	registry := NewRegistry(nil, func() time.Time { return now })
+	signer, err := registry.Signer("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Taken while the registry still enforced: it follows the registry.
+	verifier := registry.Verifier()
+	unsigned := func() error {
+		return verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), "")
+	}
+	if err := unsigned(); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("an enforcing registry's verifier let an unsigned event through: %v", err)
+	}
+
+	var reported []string
+	registry.ReportOnly(func(source, detailType, eventID string, err error) {
+		if !errors.Is(err, ErrUnverified) {
+			t.Errorf("reported %v, want ErrUnverified", err)
+		}
+		reported = append(reported, source+" "+detailType+" "+eventID)
+	})
+	if err := unsigned(); err != nil {
+		t.Fatalf("a report-only verifier refused an unsigned event: %v", err)
+	}
+	if want := []string{goodSource + " " + goodDetail + " " + goodID}; !slices.Equal(reported, want) {
+		t.Fatalf("reported %v, want %v", reported, want)
+	}
+	if err := verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), signed(t, signer)); err != nil || len(reported) != 1 {
+		t.Fatalf("a good signature: err = %v, reported %v", err, reported)
+	}
+
+	// Without a registry there is nothing to report to, so nothing is let
+	// through: a consumer built without identities still fails closed.
+	var none *Registry
+	none.ReportOnly(func(string, string, string, error) {})
+	if err := none.Verifier().Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), ""); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("a nil registry's verifier let an unsigned event through: %v", err)
 	}
 }
 

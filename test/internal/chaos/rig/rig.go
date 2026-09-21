@@ -380,6 +380,9 @@ func (rig *Rig) oryxaEnv() []string {
 		"DATABASE_URL":        state.DatabaseURL, "AUTH_URL": state.StubURL,
 		"DEPLOYMENT_ENVIRONMENT": "chaos", "LOG_LEVEL": "info",
 		"EVENT_BUS_NAME": state.Bus, "AWS_REGION": "ap-south-1",
+		// A run lives and dies with one process, so its minted keys cover every
+		// event it sees, and a forged one must be refused rather than reported.
+		"ORYXA_EVENT_SIGNATURES": "enforce",
 
 		// Emulators only. Real credentials are unreachable: the config files are
 		// /dev/null, HOME is empty, and the egress proxy refuses the rest.
