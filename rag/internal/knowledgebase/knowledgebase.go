@@ -11,6 +11,11 @@
 // same id again replaces it rather than duplicating it, and deleting it needs
 // nothing but that id.
 //
+// Nothing here depends on which kind of knowledge base it is. A VECTOR one
+// with a CUSTOM data source and a MANAGED one with its custom connector take,
+// report on and delete documents through the same three calls; only
+// searching them differs, and that is rag/internal/retrieval's.
+//
 // This package only submits, polls and deletes whole documents. It never
 // searches: retrieving from a knowledge base is a different shape of call
 // (bedrockagentruntime.Retrieve, not this package's bedrockagent client) and
@@ -62,8 +67,9 @@ const inlineLimit = 512 << 10
 // Config is what this package needs to reach one knowledge base.
 type Config struct {
 	// KnowledgeBaseID and DataSourceID name what OpenTofu created: one
-	// knowledge base per deployment, of type VECTOR, and its one data source
-	// of type CUSTOM. Rag never creates or configures either.
+	// knowledge base per deployment, VECTOR or MANAGED, and its one data
+	// source that takes documents directly (CUSTOM, or a managed knowledge
+	// base's custom connector). Rag never creates or configures either.
 	KnowledgeBaseID string
 	DataSourceID    string
 	// Bucket is where text too large for inlineLimit is staged before it is

@@ -97,6 +97,10 @@ func TestBadDefaultsFailTheDeploy(t *testing.T) {
 		},
 		wantErr: "knowledge base's own embedding spec",
 	}, {
+		name:    "a knowledge base type Bedrock does not have",
+		env:     map[string]string{"RAG_KNOWLEDGE_BASE_TYPE": "KENDRA"},
+		wantErr: "RAG_KNOWLEDGE_BASE_TYPE",
+	}, {
 		name:    "a knowledge base data source id with no knowledge base id",
 		env:     map[string]string{"RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID": "ds-1"},
 		wantErr: "must be set together",
@@ -210,6 +214,26 @@ func TestAWorkableBedrockKBConfiguration(t *testing.T) {
 	}
 	if config.KnowledgeBaseID != "kb-1" || config.KnowledgeBaseDataSourceID != "ds-1" || config.KnowledgeBaseBucket != "oryxa-rag-staging" {
 		t.Fatalf("config = %+v", config)
+	}
+	if config.KnowledgeBaseManaged {
+		t.Fatal("a knowledge base with no type was taken for a managed one; VECTOR is the default")
+	}
+}
+
+func TestAManagedKnowledgeBase(t *testing.T) {
+	for _, value := range []string{"MANAGED", "managed", " Managed "} {
+		config, err := FromEnv(env(minimal(map[string]string{
+			"RAG_DEFAULT_BACKEND":               "bedrock-kb",
+			"RAG_KNOWLEDGE_BASE_ID":             "kb-1",
+			"RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID": "ds-1",
+			"RAG_KNOWLEDGE_BASE_TYPE":           value,
+		})))
+		if err != nil {
+			t.Fatalf("%q: FromEnv: %v", value, err)
+		}
+		if !config.KnowledgeBaseManaged {
+			t.Fatalf("%q was not read as a managed knowledge base", value)
+		}
 	}
 }
 
