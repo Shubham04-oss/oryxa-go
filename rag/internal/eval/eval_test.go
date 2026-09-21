@@ -114,7 +114,7 @@ const topK = 8
 func TestRetrievalQuality(t *testing.T) {
 	databaseURL, project := os.Getenv("RAG_EVAL_DATABASE_URL"), os.Getenv("GOOGLE_CLOUD_PROJECT")
 	onKnowledgeBase := os.Getenv("RAG_EVAL_BACKEND") == string(domain.BackendBedrockKB)
-	knowledgeBaseType := strings.ToUpper(os.Getenv("RAG_EVAL_KNOWLEDGE_BASE_TYPE"))
+	var knowledgeBaseType string
 	// A knowledge base embeds with its own model, and a bedrock-kb corpus is
 	// recorded with Titan v2's spec, so it needs no Google Cloud project.
 	onBedrock := os.Getenv("RAG_EVAL_EMBEDDING") == "bedrock" || onKnowledgeBase
@@ -186,29 +186,8 @@ func TestRetrievalQuality(t *testing.T) {
 		knowledgeBaseReranks   bool
 	)
 	if onKnowledgeBase {
-		knowledgeBaseID, dataSourceID := os.Getenv("RAG_EVAL_KNOWLEDGE_BASE_ID"), os.Getenv("RAG_EVAL_KNOWLEDGE_BASE_DATA_SOURCE_ID")
-		if knowledgeBaseID == "" || dataSourceID == "" {
-			t.Fatal("RAG_EVAL_BACKEND=bedrock-kb needs RAG_EVAL_KNOWLEDGE_BASE_ID and RAG_EVAL_KNOWLEDGE_BASE_DATA_SOURCE_ID")
-		}
 		loadAWS()
-		knowledgeBaseDocuments, err = knowledgebase.New(bedrockagent.NewFromConfig(awsConfig), nil, knowledgebase.Config{
-			KnowledgeBaseID: knowledgeBaseID, DataSourceID: dataSourceID,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		runtime := bedrockagentruntime.NewFromConfig(awsConfig)
-		if knowledgeBaseType == "MANAGED" {
-			knowledgeBase, err = retrieval.NewManagedKnowledgeBase(runtime, knowledgeBaseID)
-			knowledgeBaseReranks = true
-		} else {
-			knowledgeBaseType = "VECTOR"
-			knowledgeBase, err = retrieval.NewKnowledgeBase(runtime, knowledgeBaseID, rerankARN)
-			knowledgeBaseReranks = rerankARN != ""
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
+		knowledgeBaseDocuments, knowledgeBase, knowledgeBaseType, knowledgeBaseReranks = knowledgeBaseFromEnv(t, awsConfig, rerankARN)
 		ingestKnowledgeBase = knowledgeBaseDocuments
 		stores = append(stores, vectorstore.BedrockKnowledgeBase{})
 		backend = domain.BackendBedrockKB
@@ -530,6 +509,38 @@ func sectionSpans(body, title string) []span {
 
 func overlaps(start, end int, spans []span) bool {
 	return slices.ContainsFunc(spans, func(section span) bool { return start < section.end && end > section.start })
+}
+
+// knowledgeBaseFromEnv builds the two clients the service reaches a
+// knowledge base through, from RAG_EVAL_KNOWLEDGE_BASE_ID,
+// RAG_EVAL_KNOWLEDGE_BASE_DATA_SOURCE_ID and RAG_EVAL_KNOWLEDGE_BASE_TYPE,
+// and says which kind it is and whether a query asking to rerank is
+// reranked.
+func knowledgeBaseFromEnv(t *testing.T, awsConfig aws.Config, rerankARN string) (*knowledgebase.Client, *retrieval.KnowledgeBase, string, bool) {
+	t.Helper()
+	knowledgeBaseID, dataSourceID := os.Getenv("RAG_EVAL_KNOWLEDGE_BASE_ID"), os.Getenv("RAG_EVAL_KNOWLEDGE_BASE_DATA_SOURCE_ID")
+	if knowledgeBaseID == "" || dataSourceID == "" {
+		t.Fatal("RAG_EVAL_BACKEND=bedrock-kb needs RAG_EVAL_KNOWLEDGE_BASE_ID and RAG_EVAL_KNOWLEDGE_BASE_DATA_SOURCE_ID")
+	}
+	documents, err := knowledgebase.New(bedrockagent.NewFromConfig(awsConfig), nil, knowledgebase.Config{
+		KnowledgeBaseID: knowledgeBaseID, DataSourceID: dataSourceID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := bedrockagentruntime.NewFromConfig(awsConfig)
+	if strings.EqualFold(os.Getenv("RAG_EVAL_KNOWLEDGE_BASE_TYPE"), "MANAGED") {
+		searcher, err := retrieval.NewManagedKnowledgeBase(runtime, knowledgeBaseID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return documents, searcher, "MANAGED", true
+	}
+	searcher, err := retrieval.NewKnowledgeBase(runtime, knowledgeBaseID, rerankARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return documents, searcher, "VECTOR", rerankARN != ""
 }
 
 // locate finds where a passage sits in the document it came from, for a
