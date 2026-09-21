@@ -11,6 +11,7 @@ import (
 
 var (
 	ErrInvalid      = errors.New("invalid input")
+	ErrTooLarge     = errors.New("too large")
 	ErrNotFound     = errors.New("not found")
 	ErrConflict     = errors.New("conflict")
 	ErrForbidden    = errors.New("forbidden")
@@ -193,6 +194,11 @@ func (filter DateFilter) Range() (time.Time, time.Time, error) {
 	}
 	if filter.Year < 1 {
 		return time.Time{}, time.Time{}, fmt.Errorf("year is required when filtering by month or day: %w", ErrInvalid)
+	}
+	// Past four digits it is not a year anyone means, and the database cannot
+	// hold a timestamp that far out: it would answer with an error of its own.
+	if filter.Year > 9999 {
+		return time.Time{}, time.Time{}, fmt.Errorf("year must be between 1 and 9999: %w", ErrInvalid)
 	}
 	if filter.Day != 0 && filter.Month == 0 {
 		return time.Time{}, time.Time{}, fmt.Errorf("month is required when filtering by day: %w", ErrInvalid)

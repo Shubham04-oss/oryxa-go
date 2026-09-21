@@ -68,12 +68,21 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
 		}
 	})
+	signer, err := platform.EventAuth.Signer(Name)
+	if err != nil {
+		return host.Service{}, err
+	}
+	publisher, err := events.NewPublisher(eventClient, platform.EventBusName, signer)
+	if err != nil {
+		return host.Service{}, err
+	}
 
 	service, err := New(Dependencies{
 		Store:     postgres.New(platform.Database),
 		Directory: authclient.New(config.AuthURL),
 		Composio:  client,
-		Sink:      events.NewPublisher(eventClient, platform.EventBusName),
+		Sink:      publisher,
+		Verifier:  platform.EventAuth.Verifier(),
 		Logger:    logger,
 	}, Config{
 		PublicBaseURL:   config.PublicBaseURL,

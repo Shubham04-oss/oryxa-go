@@ -2,12 +2,15 @@ package events
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	lambdaevents "github.com/aws/aws-lambda-go/events"
 
@@ -15,7 +18,68 @@ import (
 	billingeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/billing/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 	"github.com/Shubham04-oss/oryxa-go/email/internal/delivery"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 )
+
+// signingHarness holds one signer per Oryxa source email listens to — auth,
+// billing, teams — and a verifier that trusts them, so a domain event's
+// envelope is signed the way the service it names would have signed it. SES's
+// own feedback is exempt: AWS publishes it, and no Oryxa key could sign it.
+var (
+	harnessOnce   sync.Once
+	harnessErr    error
+	harnessSigns  = map[string]*eventauth.Signer{}
+	harnessVerif  *eventauth.Verifier
+	harnessSource = map[string]string{
+		autheventsv1.Source:    "auth",
+		billingeventsv1.Source: "billing",
+		teamseventsv1.Source:   "teams",
+	}
+)
+
+func signingHarness() (*eventauth.Verifier, error) {
+	harnessOnce.Do(func() {
+		keys := map[string]*ecdsa.PublicKey{}
+		for source, service := range harnessSource {
+			signer, key, err := eventauth.NewLocalSigner(service, time.Now)
+			if err != nil {
+				harnessErr = err
+				return
+			}
+			harnessSigns[source] = signer
+			keys[service] = key
+		}
+		harnessVerif = eventauth.NewVerifier(keys, nil, time.Now)
+	})
+	return harnessVerif, harnessErr
+}
+
+// consumerFor builds the consumer the way mount does, with a verifier that
+// trusts the harness's signers.
+func consumerFor(app application) (*Consumer, error) {
+	verifier, err := signingHarness()
+	if err != nil {
+		return nil, err
+	}
+	return NewConsumer(app, verifier, slog.New(slog.DiscardHandler))
+}
+
+// signedEnvelope wraps an envelope's fields the way the named source's
+// publisher would: with a signature over exactly what the envelope holds.
+func signedEnvelope(source, detailType, eventID string, version int, occurredAt, data string) string {
+	if _, err := signingHarness(); err != nil {
+		panic(err)
+	}
+	signer, ok := harnessSigns[source]
+	if !ok {
+		return fmt.Sprintf(`{"event_id":%q,"version":%d,"occurred_at":%q,"data":%s}`, eventID, version, occurredAt, data)
+	}
+	signature, err := signer.Sign(source, detailType, eventID, version, occurredAt, []byte(data))
+	if err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf(`{"event_id":%q,"version":%d,"occurred_at":%q,"data":%s,"sig":%q}`, eventID, version, occurredAt, data, signature)
+}
 
 // The data auth writes for each subscribed event, field for field.
 const (
@@ -73,16 +137,19 @@ func (f *fakeApplication) SubscriptionRenewalUpcoming(_ context.Context, ref del
 
 func TestHandleSQSDispatchesBillingEvents(t *testing.T) {
 	app := &fakeApplication{}
-	consumer := NewConsumer(app, slog.New(slog.DiscardHandler))
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	billingBody := func(detailType, data string) string {
-		return eventBody(billingeventsv1.Source, detailType, `{"event_id":"evt_billing_1","version":1,"occurred_at":"2026-09-13T12:00:00Z","data":`+data+`}`)
+		return eventBody(billingeventsv1.Source, detailType, signedEnvelope(billingeventsv1.Source, detailType, "evt_billing_1", 1, "2026-09-13T12:00:00Z", data))
 	}
 
 	response, err := consumer.HandleSQS(context.Background(), batchOf(map[string]string{
 		"1-failed":  billingBody(billingeventsv1.SubscriptionPaymentFailedDetailType, paymentFailedData),
 		"2-ended":   billingBody(billingeventsv1.SubscriptionEndedDetailType, endedData),
 		"3-renewal": billingBody(billingeventsv1.SubscriptionRenewalUpcomingDetailType, renewalUpcomingData),
-		"4-auth":    eventBody(autheventsv1.Source, billingeventsv1.SubscriptionEndedDetailType, `{"event_id":"evt_x","version":1,"data":`+endedData+`}`),
+		"4-auth":    eventBody(autheventsv1.Source, billingeventsv1.SubscriptionEndedDetailType, signedEnvelope(autheventsv1.Source, billingeventsv1.SubscriptionEndedDetailType, "evt_x", 1, "2026-09-13T12:00:00Z", endedData)),
 	}))
 	if err != nil {
 		t.Fatalf("HandleSQS() error = %v", err)
@@ -102,9 +169,12 @@ func TestHandleSQSDispatchesBillingEvents(t *testing.T) {
 
 func TestHandleSQSDispatchesTeamEvents(t *testing.T) {
 	app := &fakeApplication{}
-	consumer := NewConsumer(app, slog.New(slog.DiscardHandler))
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	response, err := consumer.HandleSQS(context.Background(), batchOf(map[string]string{
-		"1-ping": eventBody(teamseventsv1.Source, teamseventsv1.MemberPingedDetailType, `{"event_id":"evt_teams_1","version":1,"occurred_at":"2026-09-13T12:00:00Z","data":`+memberPingedData+`}`),
+		"1-ping": eventBody(teamseventsv1.Source, teamseventsv1.MemberPingedDetailType, signedEnvelope(teamseventsv1.Source, teamseventsv1.MemberPingedDetailType, "evt_teams_1", 1, "2026-09-13T12:00:00Z", memberPingedData)),
 	}))
 	if err != nil {
 		t.Fatalf("HandleSQS() error = %v", err)
@@ -172,7 +242,10 @@ func (f *fakeApplication) SESFeedback(_ context.Context, feedback delivery.Feedb
 
 func TestHandleSQSDispatchesAuthEvents(t *testing.T) {
 	app := &fakeApplication{}
-	consumer := NewConsumer(app, slog.New(slog.DiscardHandler))
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	response, err := consumer.HandleSQS(context.Background(), batchOf(map[string]string{
 		"1-verification": domainBody(autheventsv1.EmailVerificationDeliveryRequestedDetailType, 1, verificationData),
@@ -227,7 +300,10 @@ func TestHandleSQSDispatchesAuthEvents(t *testing.T) {
 
 func TestHandleSQSDispatchesSESFeedback(t *testing.T) {
 	app := &fakeApplication{}
-	consumer := NewConsumer(app, slog.New(slog.DiscardHandler))
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 	record := `{"eventType":"Bounce","bounce":{"bounceType":"Permanent","bounceSubType":"General","bouncedRecipients":[{"emailAddress":"asha@example.com"}],"timestamp":"2026-09-13T12:00:05.000Z"},` + sesMail + `}`
 
 	response, err := consumer.HandleSQS(context.Background(), batchOf(map[string]string{
@@ -246,7 +322,10 @@ func TestHandleSQSDispatchesSESFeedback(t *testing.T) {
 
 func TestHandleSQSReportsOnlyFailedRecords(t *testing.T) {
 	app := &fakeApplication{}
-	consumer := NewConsumer(app, slog.New(slog.DiscardHandler))
+	consumer, err := consumerFor(app)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	response, err := consumer.HandleSQS(context.Background(), batchOf(map[string]string{
 		"handled":          domainBody(autheventsv1.PasswordResetDeliveryRequestedDetailType, 1, resetData),
@@ -280,7 +359,10 @@ func TestHandleSQSReportsOnlyFailedRecords(t *testing.T) {
 
 func TestHandleSQSReportsApplicationError(t *testing.T) {
 	for _, appErr := range []error{errors.New("ses throttled"), fmt.Errorf("delivery d-1: %w", delivery.ErrInProgress)} {
-		consumer := NewConsumer(&fakeApplication{err: appErr}, slog.New(slog.DiscardHandler))
+		consumer, err := consumerFor(&fakeApplication{err: appErr})
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		response, err := consumer.HandleSQS(context.Background(), batchOf(map[string]string{
 			"message-1": domainBody(autheventsv1.MemberInvitedDetailType, 1, invitedData),
@@ -295,7 +377,10 @@ func TestHandleSQSReportsApplicationError(t *testing.T) {
 }
 
 func TestConsumerHandlesEverySubscription(t *testing.T) {
-	consumer := NewConsumer(&fakeApplication{}, slog.New(slog.DiscardHandler))
+	consumer, err := consumerFor(&fakeApplication{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	want := Subscriptions()
 	for _, detailType := range SESFeedbackDetailTypes() {
@@ -314,7 +399,7 @@ func TestConsumerHandlesEverySubscription(t *testing.T) {
 // domainBody is an SQS message body as an EventBridge rule delivers an auth
 // event, around the envelope auth's publisher puts in detail.
 func domainBody(detailType string, version int, data string) string {
-	return eventBody(autheventsv1.Source, detailType, fmt.Sprintf(`{"event_id":"evt_1","version":%d,"occurred_at":"2026-09-13T12:00:00Z","data":%s}`, version, data))
+	return eventBody(autheventsv1.Source, detailType, signedEnvelope(autheventsv1.Source, detailType, "evt_1", version, "2026-09-13T12:00:00Z", data))
 }
 
 func eventBody(source, detailType, detail string) string {

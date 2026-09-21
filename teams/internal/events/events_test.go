@@ -15,6 +15,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
+	"crypto/ecdsa"
+	"sync"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -23,6 +26,7 @@ import (
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	teamseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/domain"
 )
@@ -57,11 +61,25 @@ func (fake *fakeEventBridge) PutEvents(_ context.Context, input *eventbridge.Put
 	return fake.output, nil
 }
 
+func teamsPublisher(t *testing.T) *Publisher {
+	t.Helper()
+	signer, _, err := eventauth.NewLocalSigner("teams", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(&fakeEventBridge{output: &eventbridge.PutEventsOutput{}}, "oryxa", signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publisher
+}
+
 func TestPublisherWrapsEventsInTheEnvelope(t *testing.T) {
-	client := &fakeEventBridge{output: &eventbridge.PutEventsOutput{}}
+	publisher := teamsPublisher(t)
+	client := publisher.client.(*fakeEventBridge)
 	occurredAt := time.Date(2026, time.September, 13, 12, 0, 0, 0, time.UTC)
 
-	err := NewPublisher(client, "oryxa").PublishEvent(context.Background(), domain.Event{
+	err := publisher.PublishEvent(context.Background(), domain.Event{
 		ID:         "evt_1",
 		DetailType: "teams.x.v1",
 		OccurredAt: occurredAt,
@@ -90,20 +108,40 @@ func TestPublisherWrapsEventsInTheEnvelope(t *testing.T) {
 }
 
 func TestPublisherReportsRejectedEntries(t *testing.T) {
+	signer, _, err := eventauth.NewLocalSigner("teams", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
 	client := &fakeEventBridge{output: &eventbridge.PutEventsOutput{
 		FailedEntryCount: 1,
 		Entries:          []eventbridgetypes.PutEventsResultEntry{{ErrorCode: aws.String("InternalFailure"), ErrorMessage: aws.String("rejected")}},
 	}}
-	err := NewPublisher(client, "default").PublishEvent(context.Background(), domain.Event{ID: "evt_1", DetailType: "teams.x.v1", OccurredAt: time.Now(), Data: json.RawMessage(`{}`)})
-	if err == nil {
+	publisher, err := NewPublisher(client, "default", signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.PublishEvent(context.Background(), domain.Event{ID: "evt_1", DetailType: "teams.x.v1", OccurredAt: time.Now(), Data: json.RawMessage(`{}`)}); err == nil {
 		t.Fatal("PublishEvent() error = nil for a rejected entry")
 	}
 }
 
 func TestPublisherRejectsIncompleteEvents(t *testing.T) {
-	client := &fakeEventBridge{output: &eventbridge.PutEventsOutput{}}
-	if err := NewPublisher(client, "default").PublishEvent(context.Background(), domain.Event{}); err == nil {
+	signer, _, err := eventauth.NewLocalSigner("teams", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(&fakeEventBridge{output: &eventbridge.PutEventsOutput{}}, "default", signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.PublishEvent(context.Background(), domain.Event{}); err == nil {
 		t.Fatal("PublishEvent() error = nil for an empty event")
+	}
+}
+
+func TestPublisherRefusesToBuildWithoutASigningIdentity(t *testing.T) {
+	if _, err := NewPublisher(&fakeEventBridge{output: &eventbridge.PutEventsOutput{}}, "default", nil); err == nil {
+		t.Fatal("a publisher without a signer must not build")
 	}
 }
 
@@ -112,8 +150,9 @@ func TestPublisherAddsTraceparentToTheEnvelopeAndEndsAProducerSpan(t *testing.T)
 	ctx, writeSpan := observability.Tracer().Start(context.Background(), "write")
 	writtenTraceID := writeSpan.SpanContext().TraceID()
 
-	client := &fakeEventBridge{output: &eventbridge.PutEventsOutput{}}
-	err := NewPublisher(client, "oryxa").PublishEvent(ctx, domain.Event{
+	publisher := teamsPublisher(t)
+	client := publisher.client.(*fakeEventBridge)
+	err := publisher.PublishEvent(ctx, domain.Event{
 		ID: "evt_1", DetailType: "teams.x.v1", OccurredAt: time.Now(), Data: json.RawMessage(`{}`),
 		// TraceContext round-trips what Table.Claim would have read back from
 		// the outbox row; observability.CaptureTraceCarrier(ctx).Encode() is
@@ -189,13 +228,44 @@ func (fake *fakeApplication) MemberRemoved(_ context.Context, data autheventsv1.
 	return fake.err
 }
 
+// authEvent builds a signed auth event the way the mounted publisher would:
+// the envelope, then the signature over exactly what it holds.
+var (
+	testAuthSigner *eventauth.Signer
+	testVerifier   *eventauth.Verifier
+	testAuthOnce   sync.Once
+)
+
+func authHarness() (*eventauth.Signer, *eventauth.Verifier) {
+	testAuthOnce.Do(func() {
+		signer, key, err := eventauth.NewLocalSigner("auth", time.Now)
+		if err != nil {
+			panic(err)
+		}
+		testAuthSigner = signer
+		testVerifier = eventauth.NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, time.Now)
+	})
+	return testAuthSigner, testVerifier
+}
+
 func authEvent(detailType string, version int, data string) string {
-	return fmt.Sprintf(`{"version":"0","id":"eb-1","detail-type":%q,"source":"oryxa.auth","detail":{"event_id":"evt_auth_1","version":%d,"occurred_at":"2026-09-13T12:00:00Z","data":%s}}`, detailType, version, data)
+	signer, _ := authHarness()
+	occurredAt := "2026-09-13T12:00:00Z"
+	signature, err := signer.Sign(autheventsv1.Source, detailType, "evt_auth_1", version, occurredAt, []byte(data))
+	if err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf(`{"version":"0","id":"eb-1","detail-type":%q,"source":"oryxa.auth","detail":{"event_id":"evt_auth_1","version":%d,"occurred_at":%q,"data":%s,"sig":%q}}`,
+		detailType, version, occurredAt, data, signature)
 }
 
 func TestConsumerDispatchesOrganizationEvents(t *testing.T) {
 	app := &fakeApplication{}
-	consumer := NewConsumer(app, slog.New(slog.DiscardHandler))
+	_, verifier := authHarness()
+	consumer, err := NewConsumer(app, verifier, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 
 	must(t, consumer.Handle(ctx, authEvent(autheventsv1.OrganizationCreatedDetailType, 1, `{"organization_id":"org_1","name":"Acme","slug":"acme","created_by":"user-1","created_at":"2026-09-13T12:00:00Z"}`)))
@@ -212,7 +282,11 @@ func TestConsumerDispatchesOrganizationEvents(t *testing.T) {
 }
 
 func TestConsumerRejectsWhatItCannotHandle(t *testing.T) {
-	consumer := NewConsumer(&fakeApplication{err: errors.New("database down")}, slog.New(slog.DiscardHandler))
+	_, verifier := authHarness()
+	consumer, err := NewConsumer(&fakeApplication{err: errors.New("database down")}, verifier, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := map[string]string{
 		"not json":          "{",
 		"unsubscribed type": authEvent(autheventsv1.MemberJoinedDetailType, 1, `{}`),
@@ -237,11 +311,21 @@ func TestConsumerBecomesAChildOfThePublishedTrace(t *testing.T) {
 	carrier := observability.CaptureTraceCarrier(ctx)
 	producerSpan.End()
 
+	data := `{"organization_id":"org_1","name":"Acme","slug":"acme","created_by":"user-1","created_at":"2026-09-13T12:00:00Z"}`
+	signer, _ := authHarness()
+	signature, err := signer.Sign(autheventsv1.Source, autheventsv1.OrganizationCreatedDetailType, "evt_auth_1", 1, "2026-09-13T12:00:00Z", []byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := fmt.Sprintf(
-		`{"id":"eb-1","detail-type":%q,"source":"oryxa.auth","detail":{"event_id":"evt_auth_1","version":1,"occurred_at":"2026-09-13T12:00:00Z","data":{"organization_id":"org_1","name":"Acme","slug":"acme","created_by":"user-1","created_at":"2026-09-13T12:00:00Z"},"traceparent":%q}}`,
-		autheventsv1.OrganizationCreatedDetailType, carrier.TraceParent)
+		`{"id":"eb-1","detail-type":%q,"source":"oryxa.auth","detail":{"event_id":"evt_auth_1","version":1,"occurred_at":"2026-09-13T12:00:00Z","data":%s,"sig":%q,"traceparent":%q}}`,
+		autheventsv1.OrganizationCreatedDetailType, data, signature, carrier.TraceParent)
 
-	consumer := NewConsumer(&fakeApplication{}, slog.New(slog.DiscardHandler))
+	_, verifier := authHarness()
+	consumer, err := NewConsumer(&fakeApplication{}, verifier, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := consumer.Handle(context.Background(), body); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +338,11 @@ func TestConsumerBecomesAChildOfThePublishedTrace(t *testing.T) {
 
 func TestConsumerProcessesAMessageWithNoCarrierUnderAFreshSpan(t *testing.T) {
 	recorder := withTracing(t)
-	consumer := NewConsumer(&fakeApplication{}, slog.New(slog.DiscardHandler))
+	_, verifier := authHarness()
+	consumer, err := NewConsumer(&fakeApplication{}, verifier, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
 	// authEvent (defined above) carries no traceparent: this is the ordinary
 	// shape for a message published before this rollout, or from an
 	// AWS-native source.
@@ -299,7 +387,12 @@ func TestPollDeletesOnlyHandledMessages(t *testing.T) {
 		{MessageId: aws.String("failed"), ReceiptHandle: aws.String("receipt-failed"), Body: aws.String("{")},
 	}}}
 
-	NewConsumer(&fakeApplication{}, slog.New(slog.DiscardHandler)).Poll(ctx, queue, "http://localhost:4566/000000000000/teams-events")
+	_, verifier := authHarness()
+	consumer, err := NewConsumer(&fakeApplication{}, verifier, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer.Poll(ctx, queue, "http://localhost:4566/000000000000/teams-events")
 
 	if len(queue.deleted) != 1 || aws.ToString(queue.deleted[0].ReceiptHandle) != "receipt-handled" {
 		t.Fatalf("deleted = %+v, want only receipt-handled", queue.deleted)

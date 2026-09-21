@@ -451,8 +451,8 @@ Apps mounts into `internal/host` like every other service. `apps.Definition`
 names it; `apps.Migrate` installs its schema; `apps.Mount` reads apps' own
 variables through the host's environment, borrows the shared Postgres pool and
 AWS configuration, builds the Composio client, the auth client and the event
-publisher, and hands back its handler, its routes, its timeouts and its
-workers:
+publisher — signed with apps' own key, as every Oryxa publisher is — and hands
+back its handler, its routes, its timeouts and its workers:
 
 ```go
 var definitions = []host.Definition{
@@ -465,11 +465,17 @@ Underneath, `apps.New` assembles it and touches nothing itself — no query, no
 goroutine, no listener:
 
 ```go
+signer, err := registry.Signer(apps.Name) // the host's event signing identities
+if err != nil { return err }
+publisher, err := events.NewPublisher(eventBridge, busName, signer)
+if err != nil { return err }
+
 service, err := apps.New(apps.Dependencies{
 	Store:     postgres.New(database),
 	Directory: authclient.New(config.AuthURL),
 	Composio:  composioClient,
-	Sink:      events.NewPublisher(eventBridge, busName),
+	Sink:      publisher,
+	Verifier:  registry.Verifier(),
 	Logger:    logger,
 }, apps.Config{
 	PublicBaseURL:  config.PublicBaseURL,

@@ -72,7 +72,14 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
 		}
 	})
-	publisher := events.NewPublisher(eventClient, platform.EventBusName)
+	signer, err := platform.EventAuth.Signer(Name)
+	if err != nil {
+		return host.Service{}, err
+	}
+	publisher, err := events.NewPublisher(eventClient, platform.EventBusName, signer)
+	if err != nil {
+		return host.Service{}, err
+	}
 	// A published batch carries every trigger's app payload — mail bodies,
 	// messages — so once it is on the bus its copy here is blanked rather
 	// than kept for the outbox's retention, as apps does with its own.
@@ -94,7 +101,10 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 				options.BaseEndpoint = aws.String(config.SQSEndpoint)
 			}
 		})
-		consumer := events.NewConsumer(service, logger)
+		consumer, err := events.NewConsumer(service, platform.EventAuth.Verifier(), logger)
+		if err != nil {
+			return host.Service{}, err
+		}
 		workers = append(workers, func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) })
 	} else {
 		logger.Warn("BATCHING_EVENTS_QUEUE_URL is not set: batching will publish no app-trigger batches")

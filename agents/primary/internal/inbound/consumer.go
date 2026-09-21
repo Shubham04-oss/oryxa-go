@@ -26,7 +26,9 @@ import (
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
 	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
+
 	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactiondelivery"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
@@ -94,6 +96,10 @@ type Consumer struct {
 	forgetTeamMember     TeamMemberForgetter
 	logger               *slog.Logger
 	metrics              observability.ConsumerMetrics
+	// verifier proves who published each event. Nil is a build error caught
+	// at mount: a consumer that cannot check signatures would run any
+	// message a queue handed it.
+	verifier *eventauth.Verifier
 	// queueName is set once, at the top of Poll, before Poll's single
 	// goroutine starts calling handle; it is not touched concurrently.
 	queueName string
@@ -122,7 +128,10 @@ func (consumer *Consumer) WithTeamMemberForgetter(forget TeamMemberForgetter) *C
 
 // NewConsumer returns a consumer that records triggers with recorder and,
 // when a member or an organization is gone, runs every forgetter.
-func NewConsumer(recorder Recorder, interactionRecorder InteractionRecorder, forget []Forgetter, logger *slog.Logger) *Consumer {
+func NewConsumer(recorder Recorder, interactionRecorder InteractionRecorder, forget []Forgetter, verifier *eventauth.Verifier, logger *slog.Logger) (*Consumer, error) {
+	if verifier == nil {
+		return nil, errors.New("agents cannot consume unsigned events: a signature verifier is required")
+	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
@@ -130,7 +139,7 @@ func NewConsumer(recorder Recorder, interactionRecorder InteractionRecorder, for
 	if err != nil {
 		logger.Warn("consumer metrics unavailable; handling continues without them", "error", err)
 	}
-	return &Consumer{recorder: recorder, interactionRecorder: interactionRecorder, forget: forget, logger: logger, metrics: metrics}
+	return &Consumer{recorder: recorder, interactionRecorder: interactionRecorder, forget: forget, logger: logger, metrics: metrics, verifier: verifier}, nil
 }
 
 type eventBridgeEvent struct {
@@ -145,6 +154,10 @@ type receivedEnvelope struct {
 	Version    int             `json:"version"`
 	OccurredAt string          `json:"occurred_at"`
 	Data       json.RawMessage `json:"data"`
+	// Signature is the publisher's proof over the envelope's content. It is
+	// checked before any handler runs; a missing or wrong signature means
+	// the message never came from the service it claims.
+	Signature string `json:"sig"`
 	// TraceCarrier decodes the envelope's optional traceparent/tracestate
 	// fields; a message published before this rollout, or one that never
 	// carried one, decodes to the zero TraceCarrier, and handling continues
@@ -171,6 +184,12 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 	}
 	if envelope.Version != 1 || envelope.EventID == "" {
 		return fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, envelope.Version, envelope.EventID)
+	}
+	// The signature is checked before anything in the event is used, so a
+	// message that reached the queue without the named service having sent
+	// it is refused whatever its payload says.
+	if err := consumer.verifier.Verify(event.Source, event.DetailType, envelope.EventID, envelope.Version, envelope.OccurredAt, envelope.Data, envelope.Signature); err != nil {
+		return fmt.Errorf("event %s: %w", envelope.EventID, err)
 	}
 	occurredAt, _ := time.Parse(time.RFC3339Nano, envelope.OccurredAt)
 

@@ -493,13 +493,18 @@ nothing itself — no query, no goroutine, no listener — which is what
 `knowledge.Mount` calls:
 
 ```go
+signer, err := registry.Signer(knowledge.Name) // the host's eventauth registry
+if err != nil { return err }
+sink, err := events.NewPublisher(eventBridge, config.EventBusName, signer)
+if err != nil { return err }
 service, err := knowledge.New(knowledge.Dependencies{
 	Store:      store,
 	Directory:  authclient.New(config.AuthURL),
 	Apps:       appsclient.New(config.AppsURL), // nil unless COMPOSIO_API_KEY is set
 	Grants:     grants,
-	Sink:       events.NewPublisher(eventBridge, config.EventBusName),
-	Extractors: extractors,                     // knowledge.Builtin(composioClient), or nil
+	Sink:       sink,
+	Verifier:   registry.Verifier(), // proves who published each event the consumer handles
+	Extractors: extractors,          // knowledge.Builtin(composioClient), or nil
 	Logger:     logger,
 }, knowledge.Config{AllowedOrigins: config.AllowedOrigins, FullSweepInterval: config.FullSweepInterval})
 if err != nil { return err }

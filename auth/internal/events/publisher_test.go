@@ -11,7 +11,22 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 )
+
+// authPublisher builds a publisher with auth's own signing identity.
+func authPublisher(t *testing.T, client *fakeEventBridge) *Publisher {
+	t.Helper()
+	signer, _, err := eventauth.NewLocalSigner("auth", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(client, "default", "oryxa.auth", signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publisher
+}
 
 type fakeEventBridge struct {
 	input  *eventbridge.PutEventsInput
@@ -26,7 +41,7 @@ func (fake *fakeEventBridge) PutEvents(_ context.Context, input *eventbridge.Put
 
 func TestPublishEventPreservesDomainEventIdentity(t *testing.T) {
 	client := &fakeEventBridge{output: &eventbridge.PutEventsOutput{}}
-	publisher := NewPublisher(client, "default", "oryxa.auth")
+	publisher := authPublisher(t, client)
 	occurredAt := time.Date(2026, time.September, 13, 12, 0, 0, 0, time.UTC)
 
 	err := publisher.PublishEvent(context.Background(), domain.Event{
@@ -50,6 +65,15 @@ func TestPublishEventPreservesDomainEventIdentity(t *testing.T) {
 	if detail.EventID != "evt_1" || detail.OccurredAt != "2026-09-13T12:00:00Z" {
 		t.Fatalf("unexpected event envelope: %+v", detail)
 	}
+	if detail.Signature == "" {
+		t.Fatal("published envelope carries no signature")
+	}
+}
+
+func TestPublishEventRefusesToBuildWithoutASigningIdentity(t *testing.T) {
+	if _, err := NewPublisher(&fakeEventBridge{output: &eventbridge.PutEventsOutput{}}, "default", "oryxa.auth", nil); err == nil {
+		t.Fatal("a publisher without a signer must not build")
+	}
 }
 
 func TestPublishEventReportsRejectedEntry(t *testing.T) {
@@ -60,7 +84,7 @@ func TestPublishEventReportsRejectedEntry(t *testing.T) {
 			ErrorMessage: aws.String("rejected"),
 		}},
 	}}
-	publisher := NewPublisher(client, "default", "oryxa.auth")
+	publisher := authPublisher(t, client)
 
 	err := publisher.PublishEvent(context.Background(), domain.Event{
 		ID:         "evt_1",

@@ -15,7 +15,8 @@ import (
 
 func platform(values map[string]string) host.Platform {
 	return host.Platform{
-		Logger: slog.New(slog.DiscardHandler),
+		EventAuth: host.TestRegistry(),
+		Logger:    slog.New(slog.DiscardHandler),
 		// Mounting builds the store but never queries it: the pool just has to
 		// be non-nil, for building the outbox table, which pgxpool.New leaves
 		// true without dialing anything (it only dials lazily, on first use).

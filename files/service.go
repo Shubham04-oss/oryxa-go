@@ -56,7 +56,14 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}
 	service := application.New(store, blobs, authclient.New(config.AuthURL), teams, logger)
 
-	publisher := events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName)
+	signer, err := platform.EventAuth.Signer(Name)
+	if err != nil {
+		return host.Service{}, err
+	}
+	publisher, err := events.NewPublisher(eventbridge.NewFromConfig(platform.AWS), platform.EventBusName, signer)
+	if err != nil {
+		return host.Service{}, err
+	}
 	table, err := outbox.NewTable(store.Pool(), "files_outbox")
 	if err != nil {
 		return host.Service{}, err
@@ -69,7 +76,10 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}), logger)
 	workers := []host.Worker{dispatcher.Run}
 	if config.EventsQueueURL != "" {
-		consumer := events.NewConsumer(service, logger)
+		consumer, err := events.NewConsumer(service, platform.EventAuth.Verifier(), logger)
+		if err != nil {
+			return host.Service{}, err
+		}
 		queue := sqs.NewFromConfig(platform.AWS)
 		workers = append(workers, func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) })
 	} else {

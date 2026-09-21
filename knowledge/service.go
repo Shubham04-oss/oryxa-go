@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/outbox"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -73,6 +74,12 @@ type Dependencies struct {
 	// EventBridge publisher; a host that also runs the retrieval pipeline can
 	// pass that instead, and nothing inside changes.
 	Sink events.Sink
+	// Verifier proves who published each event the consumer handles: it
+	// resolves the signing key from the source an event names, so one
+	// verifier covers every source knowledge hears from. Nil is refused,
+	// because a consumer that cannot check signatures would run any message
+	// a queue handed it.
+	Verifier *eventauth.Verifier
 	// Extractors is what this build can read. None is built in: a host
 	// supplies each one with the client it reads through.
 	Extractors sources.Registry
@@ -116,8 +123,9 @@ type Service struct {
 
 // New assembles the service. It does not touch the database, start anything,
 // or listen: a host decides when each of those happens. It errors only if
-// Store's pool is nil or knowledge_outbox is not a name internal/outbox
-// accepts, neither of which a real host can trigger.
+// Store's pool is nil, knowledge_outbox is not a name internal/outbox
+// accepts, or the consumer has no signature verifier — none of which a real
+// host can trigger.
 func New(dependencies Dependencies, config Config) (*Service, error) {
 	logger := dependencies.Logger
 	if logger == nil {
@@ -141,13 +149,17 @@ func New(dependencies Dependencies, config Config) (*Service, error) {
 		ServiceName: Name, FullSweepInterval: config.FullSweepInterval, OriginalsBucket: config.OriginalsBucket,
 	})
 
+	consumer, err := events.NewConsumer(app, dependencies.Verifier, logger)
+	if err != nil {
+		return nil, err
+	}
 	service := &Service{
 		app:   app,
 		store: dependencies.Store,
 		handler: httpserver.New(app, httpserver.Config{
 			AllowedOrigins: config.AllowedOrigins, Services: config.Services,
 		}, logger),
-		consumer: events.NewConsumer(app, logger),
+		consumer: consumer,
 	}
 	if dependencies.Sink != nil {
 		table, err := outbox.NewTable(dependencies.Store.Pool(), "knowledge_outbox")

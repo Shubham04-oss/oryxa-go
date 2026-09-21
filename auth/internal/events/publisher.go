@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge/types"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
@@ -23,6 +24,9 @@ type Publisher struct {
 	client  putEventsAPI
 	busName string
 	source  string
+	// signer is auth's event signing identity. Nil is a build error caught
+	// at mount: an unsigned event cannot pass any consumer that checks.
+	signer *eventauth.Signer
 }
 
 type envelope struct {
@@ -30,6 +34,11 @@ type envelope struct {
 	Version    int    `json:"version"`
 	OccurredAt string `json:"occurred_at"`
 	Data       any    `json:"data"`
+	// Signature proves the service this envelope names as its source: the
+	// consumer verifies it over the envelope's content before any handler
+	// runs, so a message that reached the queue without this service having
+	// sent it is refused no matter how well formed it is.
+	Signature string `json:"sig,omitempty"`
 	// TraceCarrier adds this envelope's optional traceparent/tracestate
 	// fields: the producer span's context, for a consumer to become a child
 	// of. Additive and backward compatible - a consumer built before this
@@ -37,12 +46,16 @@ type envelope struct {
 	observability.TraceCarrier
 }
 
-func NewPublisher(client putEventsAPI, busName, source string) *Publisher {
+func NewPublisher(client putEventsAPI, busName, source string, signer *eventauth.Signer) (*Publisher, error) {
+	if signer == nil {
+		return nil, errors.New("auth cannot publish unsigned events: a signing identity is required")
+	}
 	return &Publisher{
 		client:  client,
 		busName: busName,
 		source:  source,
-	}
+		signer:  signer,
+	}, nil
 }
 
 func (p *Publisher) PublishEvent(ctx context.Context, event domain.Event) (resultErr error) {
@@ -56,11 +69,25 @@ func (p *Publisher) PublishEvent(ctx context.Context, event domain.Event) (resul
 	defer func() { observability.EndSpan(span, resultErr) }()
 
 	now := event.OccurredAt.UTC()
+	// The data is marshaled once, before the envelope, so the signature is
+	// over exactly the bytes the consumer will read: an `any` payload does
+	// not give the signer a stable form to sign otherwise.
+	data, err := json.Marshal(event.Data)
+	if err != nil {
+		resultErr = fmt.Errorf("encode event data: %w", err)
+		return resultErr
+	}
+	signature, err := p.signer.Sign(p.source, event.DetailType, event.ID, 1, now.Format(time.RFC3339Nano), data)
+	if err != nil {
+		resultErr = fmt.Errorf("sign event: %w", err)
+		return resultErr
+	}
 	detail, err := json.Marshal(envelope{
 		EventID:      event.ID,
 		Version:      1,
 		OccurredAt:   now.Format(time.RFC3339Nano),
-		Data:         event.Data,
+		Data:         json.RawMessage(data),
+		Signature:    signature,
 		TraceCarrier: observability.CaptureTraceCarrier(ctx),
 	})
 	if err != nil {

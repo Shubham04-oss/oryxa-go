@@ -11,6 +11,8 @@ import (
 
 	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
+
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
 )
 
@@ -54,17 +56,29 @@ func trigger(eventID, toolkit, name, payload string) batchingv1.Trigger {
 // does in production.
 func batchFor(t *testing.T, eventID string, triggers ...batchingv1.Trigger) string {
 	t.Helper()
+	occurredAt := time.Date(2026, time.September, 17, 12, 5, 0, 0, time.UTC)
+	data, err := json.Marshal(batchingv1.TriggerBatchReady{
+		BatchID: "tbatch_" + eventID, OrganizationID: "org_1", MemberID: "user-1", Lane: batchingv1.LaneDigest,
+		EventCount: len(triggers), FlushReason: "target", Triggers: triggers,
+		ReadyAt: occurredAt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := batchingSigner().Sign(batchingv1.Source, batchingv1.TriggerBatchReadyDetailType, eventID, 1,
+		occurredAt.Format(time.RFC3339Nano), data)
+	if err != nil {
+		t.Fatal(err)
+	}
 	detail, err := json.Marshal(struct {
-		EventID string                       `json:"event_id"`
-		Version int                          `json:"version"`
-		Data    batchingv1.TriggerBatchReady `json:"data"`
+		EventID    string `json:"event_id"`
+		Version    int    `json:"version"`
+		OccurredAt string `json:"occurred_at"`
+		Data       any    `json:"data"`
+		Signature  string `json:"sig"`
 	}{
-		EventID: eventID, Version: 1,
-		Data: batchingv1.TriggerBatchReady{
-			BatchID: "tbatch_" + eventID, OrganizationID: "org_1", MemberID: "user-1", Lane: batchingv1.LaneDigest,
-			EventCount: len(triggers), FlushReason: "target", Triggers: triggers,
-			ReadyAt: time.Date(2026, time.September, 17, 12, 5, 0, 0, time.UTC),
-		},
+		EventID: eventID, Version: 1, OccurredAt: occurredAt.Format(time.RFC3339Nano),
+		Data: json.RawMessage(data), Signature: signature,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +91,16 @@ func batchFor(t *testing.T, eventID string, triggers ...batchingv1.Trigger) stri
 		t.Fatal(err)
 	}
 	return string(body)
+}
+
+// batchingSigner signs the way batching would: the same signer the
+// consumer_test harness (which testVerifier comes from) trusts, so the
+// signatures this file builds are the ones that verifier accepts. The
+// harness is initialized here too, since batchFor may run before any
+// testVerifier call in this file.
+func batchingSigner() *eventauth.Signer {
+	_, _ = signingHarness()
+	return harnessSigns[batchingv1.Source]
 }
 
 // eventFor is one payload in a batch of its own, as batching sends an
@@ -96,7 +120,10 @@ func TestEveryPayloadShapeReachesAWakeUp(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			recorder := &recordingRecorder{}
-			consumer := NewConsumer(recorder, nil, nil, nil)
+			consumer, err := NewConsumer(recorder, nil, nil, testVerifier(t), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if err := consumer.Handle(context.Background(),
 				eventFor(t, "evt_1", "github", "GITHUB_COMMIT_EVENT", payload)); err != nil {
@@ -140,7 +167,10 @@ func TestEveryPayloadShapeReachesAWakeUp(t *testing.T) {
 func TestAWakeUpNamesTheAppEvenWhenAPayloadIsLeftOut(t *testing.T) {
 	t.Parallel()
 	recorder := &recordingRecorder{}
-	consumer := NewConsumer(recorder, nil, nil, nil)
+	consumer, err := NewConsumer(recorder, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	omitted := trigger("evt_1", "gmail", "GMAIL_NEW_GMAIL_MESSAGE", "")
 	omitted.DataOmitted = true
 	if err := consumer.Handle(context.Background(), batchFor(t, "evt_batch_1", omitted)); err != nil {
@@ -161,7 +191,10 @@ func TestAWakeUpNamesTheAppEvenWhenAPayloadIsLeftOut(t *testing.T) {
 func TestABurstOfEveryShapeMakesOneReadableWakeUp(t *testing.T) {
 	t.Parallel()
 	recorder := &recordingRecorder{}
-	consumer := NewConsumer(recorder, nil, nil, nil)
+	consumer, err := NewConsumer(recorder, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	shapes := payloads()
 
 	var triggers []batchingv1.Trigger
@@ -194,7 +227,10 @@ func TestABurstOfEveryShapeMakesOneReadableWakeUp(t *testing.T) {
 func TestTheBusDeliveringTwiceRecordsOneWakeUp(t *testing.T) {
 	t.Parallel()
 	recorder := &recordingRecorder{seen: map[string]bool{}}
-	consumer := NewConsumer(recorder, nil, nil, nil)
+	consumer, err := NewConsumer(recorder, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	body := eventFor(t, "evt_1", "slack", "SLACK_RECEIVE_MESSAGE", `{"text":"ship it"}`)
 
 	for range 3 {

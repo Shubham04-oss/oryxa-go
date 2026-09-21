@@ -58,7 +58,10 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		logger.Info("sending mail through SES", "region", cmp.Or(config.SESRegion, platform.AWS.Region))
 		deliveries = delivery.New(storeClient, mail.NewSESSender(sesClient, config.From, config.ConfigurationSet), logger)
 	}
-	consumer := events.NewConsumer(application.New(templates, deliveries), logger)
+	consumer, err := events.NewConsumer(application.New(templates, deliveries), platform.EventAuth.Verifier(), logger)
+	if err != nil {
+		return host.Service{}, err
+	}
 
 	queue := sqs.NewFromConfig(platform.AWS)
 	return host.Service{

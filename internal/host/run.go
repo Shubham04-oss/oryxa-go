@@ -9,12 +9,16 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/gcpauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
@@ -166,9 +170,54 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 		AWS:          awsConfig,
 		Google:       google,
 		EventBusName: config.EventBusName,
+		EventAuth:    eventauth.NewRegistry(newKMSResolver(awsConfig, os.Getenv, selected), time.Now),
 		Getenv:       Environment(os.Getenv, selected, self),
 	}
 	return platform, func() { database.Close() }, nil
+}
+
+// kmsResolver adapts the <SERVICE>_SERVICE_KEY_ID convention to eventauth:
+// a service that names a key signs and is verified through KMS, and a
+// service that does not gets a process-local key instead, so events are
+// signed and checked everywhere without configuration being required.
+type kmsResolver struct {
+	client kms.Client
+	keys   map[string]string
+}
+
+func newKMSResolver(config aws.Config, getenv func(string) string, selected []Definition) eventauth.KMSResolver {
+	if len(selected) == 0 {
+		return nil
+	}
+	keys := map[string]string{}
+	for _, definition := range selected {
+		keyID := strings.TrimSpace(getenv(strings.ToUpper(definition.Name) + "_SERVICE_KEY_ID"))
+		if keyID != "" {
+			keys[definition.Name] = keyID
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return &kmsResolver{client: *kms.NewFromConfig(config), keys: keys}
+}
+
+// Signer returns the service's KMS signer, or that none is configured.
+func (resolver *kmsResolver) Signer(service string) (*eventauth.Signer, bool, error) {
+	keyID, ok := resolver.keys[service]
+	if !ok {
+		return nil, false, nil
+	}
+	signer, err := eventauth.NewKMSSigner(&resolver.client, keyID, time.Now)
+	if err != nil {
+		return nil, false, err
+	}
+	return signer, true, nil
+}
+
+// Keys is what a verifier resolves the configured services' keys with.
+func (resolver *kmsResolver) Keys() *eventauth.KMSKeys {
+	return &eventauth.KMSKeys{Client: &resolver.client, KeyIDs: resolver.keys}
 }
 
 // Assemble mounts the definitions on platform and builds the handler Run

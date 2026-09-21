@@ -22,14 +22,20 @@ func testService(store Store, blobs blob.Store) *Service {
 	return service
 }
 
+// given is a create's input already in hand, as a caller that has nothing to
+// decode would supply it.
+func given(input CreateInput) InputReader {
+	return func() (CreateInput, error) { return input, nil }
+}
+
 func TestCreateStoresObjectAndEvent(t *testing.T) {
 	store := newFakeStore()
 	blobs := blob.NewMemory()
 	service := testService(store, blobs)
 
-	object, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+	object, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
 		Filename: "notes.txt", ContentType: "text/plain", Content: []byte("hello"),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -56,7 +62,7 @@ func TestCreateStoresObjectAndEvent(t *testing.T) {
 
 func TestMemberFileIsPrivateToOwner(t *testing.T) {
 	service := testService(newFakeStore(), blob.NewMemory())
-	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,9 +89,9 @@ func TestMemberFileIsPrivateToOwner(t *testing.T) {
 
 func TestOrgFileIsVisibleToMembers(t *testing.T) {
 	service := testService(newFakeStore(), blob.NewMemory())
-	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
 		Filename: "handbook.pdf", ContentType: "application/pdf", Scope: domain.ScopeOrganization, Content: []byte("org"),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,20 +107,32 @@ func TestOrgFileIsVisibleToMembers(t *testing.T) {
 	}
 }
 
+func TestCreateDoesNotReadTheInputOfACallerWhoIsNotAMember(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	read := func() (CreateInput, error) {
+		t.Fatal("the input was read for a caller the directory does not know")
+		return CreateInput{}, nil
+	}
+	// "user-stranger" belongs to no organization the fake directory knows.
+	if _, err := service.Create(context.Background(), creds("user-stranger"), "org_1", read); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("stranger create error = %v, want not found", err)
+	}
+}
+
 func TestMemberCannotCreateOrgFile(t *testing.T) {
 	service := testService(newFakeStore(), blob.NewMemory())
-	if _, err := service.Create(context.Background(), creds("user-member"), "org_1", CreateInput{
+	if _, err := service.Create(context.Background(), creds("user-member"), "org_1", given(CreateInput{
 		Filename: "a.txt", ContentType: "text/plain", Scope: domain.ScopeOrganization, Content: []byte("a"),
-	}); !errors.Is(err, domain.ErrForbidden) {
+	})); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("member org create error = %v, want forbidden", err)
 	}
 }
 
 func TestTeamFileFollowsTeamsACL(t *testing.T) {
 	service := testService(newFakeStore(), blob.NewMemory())
-	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
 		Filename: "spec.md", ContentType: "text/markdown", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("spec"),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,9 +145,9 @@ func TestTeamFileFollowsTeamsACL(t *testing.T) {
 	if _, err := service.Get(context.Background(), creds("user-outsider"), "org_1", created.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("outsider get error = %v, want not found", err)
 	}
-	if _, err := service.Create(context.Background(), creds("user-outsider"), "org_1", CreateInput{
+	if _, err := service.Create(context.Background(), creds("user-outsider"), "org_1", given(CreateInput{
 		Filename: "nope.txt", ContentType: "text/plain", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("nope"),
-	}); !errors.Is(err, domain.ErrNotFound) {
+	})); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("outsider team create error = %v, want not found", err)
 	}
 	listed, err := service.List(context.Background(), creds("user-member"), "org_1", ListFilter{TeamID: "team_eng"})
@@ -143,14 +161,14 @@ func TestTeamFileFollowsTeamsACL(t *testing.T) {
 
 func TestBillingAttachmentIsAdminOnly(t *testing.T) {
 	service := testService(newFakeStore(), blob.NewMemory())
-	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
 		Filename: "invoice.pdf", ContentType: "application/pdf", Purpose: domain.PurposeBillingAttachment, Scope: domain.ScopeMember, Content: []byte("inv"),
-	}); !errors.Is(err, domain.ErrInvalid) {
+	})); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("billing on member error = %v, want invalid", err)
 	}
-	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
 		Filename: "invoice.pdf", ContentType: "application/pdf", Purpose: domain.PurposeBillingAttachment, Scope: domain.ScopeOrganization, Content: []byte("inv"),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +189,7 @@ func TestBillingAttachmentIsAdminOnly(t *testing.T) {
 
 func TestDeleteIsCreatorOrAdmin(t *testing.T) {
 	service := testService(newFakeStore(), blob.NewMemory())
-	created, err := service.Create(context.Background(), creds("user-member"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	created, err := service.Create(context.Background(), creds("user-member"), "org_1", given(CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,10 +206,10 @@ func TestDeleteIsCreatorOrAdmin(t *testing.T) {
 
 func TestRejectsDisallowedPurposeAndType(t *testing.T) {
 	service := testService(newFakeStore(), blob.NewMemory())
-	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.exe", ContentType: "application/x-msdownload", Content: []byte("a")}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{Filename: "a.exe", ContentType: "application/x-msdownload", Content: []byte("a")})); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("exe error = %v", err)
 	}
-	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Purpose: "other", Content: []byte("a")}); !errors.Is(err, domain.ErrInvalid) {
+	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{Filename: "a.txt", ContentType: "text/plain", Purpose: "other", Content: []byte("a")})); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("purpose error = %v", err)
 	}
 }
@@ -207,7 +225,7 @@ func TestOrganizationDeletedWipesPrefix(t *testing.T) {
 	store := newFakeStore()
 	blobs := blob.NewMemory()
 	service := testService(store, blobs)
-	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,13 +240,13 @@ func TestOrganizationDeletedWipesPrefix(t *testing.T) {
 func TestMemberRemovedDeletesOnlyMemberFiles(t *testing.T) {
 	store := newFakeStore()
 	service := testService(store, blob.NewMemory())
-	personal, err := service.Create(context.Background(), creds("user-member"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	personal, err := service.Create(context.Background(), creds("user-member"), "org_1", given(CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	teamFile, err := service.Create(context.Background(), creds("user-member"), "org_1", CreateInput{
+	teamFile, err := service.Create(context.Background(), creds("user-member"), "org_1", given(CreateInput{
 		Filename: "team.txt", ContentType: "text/plain", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("t"),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,13 +265,13 @@ func TestTeamDeletedWipesTeamFiles(t *testing.T) {
 	store := newFakeStore()
 	blobs := blob.NewMemory()
 	service := testService(store, blobs)
-	teamFile, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{
+	teamFile, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
 		Filename: "spec.md", ContentType: "text/markdown", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("spec"),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	personal, err := service.Create(context.Background(), creds("user-owner"), "org_1", CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")})
+	personal, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")}))
 	if err != nil {
 		t.Fatal(err)
 	}

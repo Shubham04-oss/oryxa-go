@@ -3,7 +3,11 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var (
@@ -12,6 +16,9 @@ var (
 	ErrConflict     = errors.New("conflict")
 	ErrForbidden    = errors.New("forbidden")
 	ErrUnauthorized = errors.New("unauthorized")
+	// ErrTooManyRequests means the caller has asked for more than their share
+	// of something that fans out, and may ask again once the window passes.
+	ErrTooManyRequests = errors.New("too many requests")
 )
 
 // OrgRole is the caller's place in the organization, as auth reports it.
@@ -74,6 +81,29 @@ type Team struct {
 	CreatedBy      string    `json:"created_by" db:"created_by"`
 	CreatedAt      time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// MaxTeamNameLength bounds a team's name, in characters.
+const MaxTeamNameLength = 120
+
+// CleanTeamName trims a name a member chose and refuses one that is empty,
+// too long, or holds control characters. A name travels far — into email
+// subjects and bodies, event envelopes, and other members' listings — and a
+// newline or an escape in it is never a name anyone meant: it is an attempt to
+// make one of those places read something its sender did not write.
+func CleanTeamName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" || utf8.RuneCountInString(name) > MaxTeamNameLength {
+		return "", fmt.Errorf("team name must be between 1 and %d characters: %w", MaxTeamNameLength, ErrInvalid)
+	}
+	for _, r := range name {
+		// Control characters, including the CR and LF of header injection and
+		// the bidi marks that reorder text, have no place in a name.
+		if r < 0x20 || r == 0x7f || unicode.Is(unicode.Cf, r) {
+			return "", fmt.Errorf("team name may not hold control characters: %w", ErrInvalid)
+		}
+	}
+	return name, nil
 }
 
 type Membership struct {

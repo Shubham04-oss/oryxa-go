@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -18,15 +17,21 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/retrieval"
 )
 
-// maxJSONBytes bounds a request body. A document's own limit is larger and is
-// checked in the domain; this is the outer guard on the envelope.
-const maxJSONBytes = 24 << 20
+// maxJSONBytes bounds the body of every request but a document's: corpus
+// settings, and a query with its filters, are small.
+const maxJSONBytes = 1 << 20
+
+// maxDocumentRequestBytes bounds the request that carries a document. Its own
+// limit is checked in the domain; this is the outer guard on the envelope, and
+// the body is read only once the caller is known to be allowed to add it.
+const maxDocumentRequestBytes = 24 << 20
 
 type ragService interface {
 	CreateCorpus(context.Context, authclient.Credentials, string, application.CreateCorpusInput) (domain.Corpus, error)
@@ -34,7 +39,7 @@ type ragService interface {
 	Corpus(context.Context, authclient.Credentials, string, string) (domain.Corpus, error)
 	DeleteCorpus(context.Context, authclient.Credentials, string, string) error
 
-	AddDocument(context.Context, authclient.Credentials, string, string, application.AddDocumentInput) (domain.Document, error)
+	AddDocument(context.Context, authclient.Credentials, string, string, application.DocumentReader) (domain.Document, error)
 	Documents(context.Context, authclient.Credentials, string, string, domain.IngestStatus, string, int) (application.DocumentPage, error)
 	Document(context.Context, authclient.Credentials, string, string, string) (domain.Document, error)
 	DeleteDocument(context.Context, authclient.Credentials, string, string, string) error
@@ -257,22 +262,30 @@ func (server *Server) addDocument(writer http.ResponseWriter, request *http.Requ
 	if !ok {
 		return
 	}
-	var body documentRequest
-	if !readJSON(writer, request, &body) {
+	if !isJSON(writer, request) {
 		return
 	}
-	kind := domain.SourceKind(strings.TrimSpace(body.Source.Kind))
-	if kind == "" {
-		kind = domain.SourceInline
-	}
+	// The service asks for the body only once it has admitted the caller to
+	// this corpus, so a token nobody issued costs a refusal and not a decode of
+	// up to 24 MiB.
 	document, err := server.service.AddDocument(request.Context(), credentials,
 		request.PathValue("organizationID"), request.PathValue("corpusID"),
-		application.AddDocumentInput{
-			Source:      domain.Source{Kind: kind, Ref: strings.TrimSpace(body.Source.Ref)},
-			Title:       body.Title,
-			ContentType: body.ContentType,
-			Text:        body.Text,
-			Metadata:    domain.Metadata(body.Metadata),
+		func() (application.AddDocumentInput, error) {
+			var body documentRequest
+			if err := decodeJSON(writer, request, &body, maxDocumentRequestBytes); err != nil {
+				return application.AddDocumentInput{}, err
+			}
+			kind := domain.SourceKind(strings.TrimSpace(body.Source.Kind))
+			if kind == "" {
+				kind = domain.SourceInline
+			}
+			return application.AddDocumentInput{
+				Source:      domain.Source{Kind: kind, Ref: strings.TrimSpace(body.Source.Ref)},
+				Title:       body.Title,
+				ContentType: body.ContentType,
+				Text:        body.Text,
+				Metadata:    domain.Metadata(body.Metadata),
+			}, nil
 		})
 	if err != nil {
 		server.handleError(writer, request, err)
@@ -462,6 +475,8 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusConflict, message(err))
 	case errors.Is(err, domain.ErrInvalid):
 		writeError(writer, http.StatusBadRequest, message(err))
+	case errors.Is(err, domain.ErrTooLarge):
+		writeError(writer, http.StatusRequestEntityTooLarge, message(err))
 	default:
 		// An unexpected error can quote a provider, a statement or an
 		// organization's own text. It goes to the log, not to the caller.
@@ -474,27 +489,60 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 // message strips the sentinel suffix so the reason reads as a sentence.
 func message(err error) string {
 	text := err.Error()
-	for _, sentinel := range []error{domain.ErrInvalid, domain.ErrConflict} {
+	for _, sentinel := range []error{domain.ErrInvalid, domain.ErrConflict, domain.ErrTooLarge} {
 		text = strings.TrimSuffix(text, ": "+sentinel.Error())
 	}
 	return text
 }
 
 func readJSON(writer http.ResponseWriter, request *http.Request, target any) bool {
+	if !isJSON(writer, request) {
+		return false
+	}
+	if err := decodeJSON(writer, request, target, maxJSONBytes); err != nil {
+		writeInvalidOrTooLarge(writer, err)
+		return false
+	}
+	return true
+}
+
+// isJSON answers 415 to a body that says it is something else, before any of it
+// is read.
+func isJSON(writer http.ResponseWriter, request *http.Request) bool {
 	if contentType := request.Header.Get("Content-Type"); contentType != "" &&
 		!strings.HasPrefix(strings.ToLower(contentType), "application/json") {
 		writeError(writer, http.StatusUnsupportedMediaType, "send application/json")
 		return false
 	}
-	decoder := json.NewDecoder(io.LimitReader(request.Body, maxJSONBytes))
+	return true
+}
+
+// decodeJSON reads one JSON object of at most limit bytes. A body past the
+// limit is ErrTooLarge and one that is not what it should be is ErrInvalid.
+func decodeJSON(writer http.ResponseWriter, request *http.Request, target any, limit int64) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(writer, request.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		var over *http.MaxBytesError
+		if errors.As(err, &over) {
+			return fmt.Errorf("the request body must be at most %d bytes: %w", over.Limit, domain.ErrTooLarge)
+		}
 		// Naming the unexpected field is the difference between a caller
 		// fixing a typo in a minute and guessing at it for an afternoon.
-		writeError(writer, http.StatusBadRequest, fmt.Sprintf("the request body could not be read: %v", err))
-		return false
+		return fmt.Errorf("the request body could not be read: %v: %w", err, domain.ErrInvalid)
 	}
-	return true
+	if err := cleantext.Check(target); err != nil {
+		return fmt.Errorf("the request body could not be read: %v: %w", err, domain.ErrInvalid)
+	}
+	return nil
+}
+
+func writeInvalidOrTooLarge(writer http.ResponseWriter, err error) {
+	if errors.Is(err, domain.ErrTooLarge) {
+		writeError(writer, http.StatusRequestEntityTooLarge, message(err))
+		return
+	}
+	writeInvalid(writer, err)
 }
 
 func writeJSON(writer http.ResponseWriter, status int, payload any) {

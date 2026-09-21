@@ -2,7 +2,6 @@ package events
 
 import (
 	"context"
-	"log/slog"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -48,7 +47,10 @@ func TestPollDeletesOnlyHandledMessages(t *testing.T) {
 			Body:          aws.String("{"),
 		},
 	}}}
-	consumer := NewConsumer(&fakeApplication{}, slog.New(slog.DiscardHandler))
+	consumer, err := consumerFor(&fakeApplication{})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	consumer.Poll(ctx, queue, "http://localhost:4566/000000000000/email-events")
 

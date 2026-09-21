@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 
 	"github.com/Shubham04-oss/oryxa-go/auth/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 )
 
 func TestPublisherWithEventBridge(t *testing.T) {
@@ -33,7 +34,14 @@ func TestPublisherWithEventBridge(t *testing.T) {
 	client := eventbridge.NewFromConfig(config, func(options *eventbridge.Options) {
 		options.BaseEndpoint = aws.String(endpoint)
 	})
-	publisher := NewPublisher(client, "default", "oryxa.auth")
+	signer, _, err := eventauth.NewLocalSigner("auth", time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher, err := NewPublisher(client, "default", "oryxa.auth", signer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	detail, _ := json.Marshal(map[string]string{"integration_test": "true"})
 
 	err = publisher.PublishEvent(ctx, domain.Event{

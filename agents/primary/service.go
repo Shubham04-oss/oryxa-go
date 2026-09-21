@@ -424,7 +424,16 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			options.BaseEndpoint = aws.String(settings.EventBridgeEndpoint)
 		}
 	})
-	publisher := events.NewPublisher(eventClient, platform.EventBusName)
+	signer, err := platform.EventAuth.Signer(Name)
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
+	publisher, err := events.NewPublisher(eventClient, platform.EventBusName, signer)
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
 	dispatcher := outbox.NewDispatcher(table, outbox.PublisherFunc(func(ctx context.Context, event outbox.Event) error {
 		return publisher.PublishEvent(ctx, events.Event{
 			ID: event.ID, DetailType: event.DetailType, OccurredAt: event.OccurredAt, Data: event.Data,
@@ -454,7 +463,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		store := wakeups.NewStore(platform.Database)
 		deliveryStore := interactiondelivery.NewStore(platform.Database)
 		deliveryCleaner := interactiondelivery.NewCleaner(deliveryStore, agentRegistry)
-		consumer := inbound.NewConsumer(store, deliveryStore, []inbound.Forgetter{
+		consumer, err := inbound.NewConsumer(store, deliveryStore, []inbound.Forgetter{
 			func(ctx context.Context, organizationID, memberID string) error {
 				_, err := service.Forget(ctx, organizationID, memberID)
 				return err
@@ -468,7 +477,12 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			workflowService.Forget,
 			teamStore.Forget,
 			registryStore.Forget,
-		}, logger).WithTeamForgetter(teamspaceStore.ForgetTeam).
+		}, platform.EventAuth.Verifier(), logger)
+		if err != nil {
+			closeAll()
+			return host.Service{}, err
+		}
+		consumer.WithTeamForgetter(teamspaceStore.ForgetTeam).
 			WithTeamMemberForgetter(teamspaceStore.ForgetTeamMember).
 			WithOrganizationSynthesisRecorder(organizationStore)
 		queue := sqs.NewFromConfig(platform.AWS, func(options *sqs.Options) {

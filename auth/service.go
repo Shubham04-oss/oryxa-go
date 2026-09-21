@@ -106,7 +106,14 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			options.BaseEndpoint = aws.String(config.EventBridgeEndpoint)
 		}
 	})
-	publisher := authevents.NewPublisher(eventBridge, platform.EventBusName, autheventsv1.Source)
+	signer, err := platform.EventAuth.Signer(Name)
+	if err != nil {
+		return host.Service{}, err
+	}
+	publisher, err := authevents.NewPublisher(eventBridge, platform.EventBusName, autheventsv1.Source, signer)
+	if err != nil {
+		return host.Service{}, err
+	}
 	table, err := store.OutboxTable()
 	if err != nil {
 		return host.Service{}, err
@@ -129,7 +136,10 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 				options.BaseEndpoint = aws.String(config.SQSEndpoint)
 			}
 		})
-		consumer := billingevents.NewConsumer(service, logger)
+		consumer, err := billingevents.NewConsumer(service, platform.EventAuth.Verifier(), logger)
+		if err != nil {
+			return host.Service{}, err
+		}
 		workers = append(workers, func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) })
 	} else {
 		logger.Warn("billing entitlement events are disabled", "reason", "AUTH_EVENTS_QUEUE_URL is not set")

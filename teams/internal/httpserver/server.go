@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/teams/internal/domain"
@@ -484,6 +485,9 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 		writeError(writer, http.StatusNotFound, "resource not found")
 	case errors.Is(err, domain.ErrConflict):
 		writeError(writer, http.StatusConflict, "resource state conflicts with the request")
+	case errors.Is(err, domain.ErrTooManyRequests):
+		writer.Header().Set("Retry-After", "60")
+		writeError(writer, http.StatusTooManyRequests, "too many tool calls; try again in a minute")
 	default:
 		server.logger.ErrorContext(request.Context(), "teams request failed", "method", request.Method, "path", request.URL.Path, "error", err)
 		writeError(writer, http.StatusInternalServerError, "internal server error")
@@ -516,7 +520,7 @@ func readJSON(request *http.Request, target any) error {
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return errors.New("request body must contain one JSON object")
 	}
-	return nil
+	return cleantext.Check(target)
 }
 
 func readOptionalJSON(request *http.Request) (json.RawMessage, error) {

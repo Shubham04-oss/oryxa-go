@@ -67,6 +67,13 @@ Allowed content types: `application/octet-stream`, `application/json`,
 `text/markdown`, `image/png`, `image/jpeg`, `image/gif`, `image/webp`. Size
 limit is 8 MiB. Filenames are a single path segment, 1–255 characters.
 
+An upload request, in either encoding, may not exceed 9 MiB as a whole (the
+file and the small fields with it, and a JSON upload's base64 counts). Past
+that the answer is `413`. The body is read only after the caller has been
+admitted to the organization, so a token nobody issued, or someone who is not a
+member, is refused without a byte of the upload being read. A `year` filter is
+limited to 1–9999.
+
 ## API
 
 Cookie-authenticated mutations must come from an origin in `FILES_ALLOWED_ORIGINS`.

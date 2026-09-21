@@ -357,17 +357,27 @@ type AddDocumentInput struct {
 	Metadata domain.Metadata
 }
 
+// DocumentReader supplies the document once the caller is known to be allowed
+// to add it, so a request that is not theirs to make never has its body read.
+type DocumentReader func() (AddDocumentInput, error)
+
 // AddDocument accepts a document and queues it for indexing.
 //
 // It returns as soon as the text is safely stored, rather than waiting on an
 // embedding provider. The same bytes offered again are recognised and cost
 // nothing, which is what lets an upstream pipeline re-deliver freely.
-func (service *Service) AddDocument(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, input AddDocumentInput) (domain.Document, error) {
+func (service *Service) AddDocument(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, read DocumentReader) (domain.Document, error) {
 	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return domain.Document{}, err
 	}
 	if err := service.mayWrite(ctx, credentials, member, corpus); err != nil {
+		return domain.Document{}, err
+	}
+	// Only now, with the caller known and allowed to write here: a document can
+	// be megabytes, and nobody else has theirs read.
+	input, err := read()
+	if err != nil {
 		return domain.Document{}, err
 	}
 	if err := input.Source.Validate(); err != nil {

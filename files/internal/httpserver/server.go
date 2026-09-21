@@ -18,12 +18,18 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/files/internal/application"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 )
 
 const maxJSONBytes = 1 << 20
 
+// maxUploadBytes bounds one upload request as a whole, in either encoding: the
+// largest file and the small fields that travel with it. It is read only after
+// the caller is known, and never past this.
+const maxUploadBytes = maxJSONBytes + int64(domain.MaxBytes)
+
 type filesService interface {
-	Create(context.Context, authclient.Credentials, string, application.CreateInput) (domain.Object, error)
+	Create(context.Context, authclient.Credentials, string, application.InputReader) (domain.Object, error)
 	List(context.Context, authclient.Credentials, string, application.ListFilter) ([]domain.Object, error)
 	Get(context.Context, authclient.Credentials, string, string) (domain.Object, error)
 	Content(context.Context, authclient.Credentials, string, string) (domain.Object, []byte, error)
@@ -93,12 +99,10 @@ func (server *Server) create(writer http.ResponseWriter, request *http.Request) 
 	if !ok {
 		return
 	}
-	input, err := readCreateInput(request)
-	if err != nil {
-		writeError(writer, http.StatusBadRequest, strings.TrimSuffix(err.Error(), ": "+domain.ErrInvalid.Error()))
-		return
-	}
-	object, err := server.service.Create(request.Context(), credentials, request.PathValue("organizationID"), input)
+	// The service asks for the body only after it has admitted the caller, so a
+	// token nobody issued costs a refusal and not a megabyte-sized decode.
+	object, err := server.service.Create(request.Context(), credentials, request.PathValue("organizationID"),
+		func() (application.CreateInput, error) { return readCreateInput(writer, request) })
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -207,6 +211,8 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 	switch {
 	case errors.Is(err, domain.ErrInvalid):
 		writeError(writer, http.StatusBadRequest, strings.TrimSuffix(err.Error(), ": "+domain.ErrInvalid.Error()))
+	case errors.Is(err, domain.ErrTooLarge):
+		writeError(writer, http.StatusRequestEntityTooLarge, strings.TrimSuffix(err.Error(), ": "+domain.ErrTooLarge.Error()))
 	case errors.Is(err, domain.ErrUnauthorized):
 		writeError(writer, http.StatusUnauthorized, "authentication failed")
 	case errors.Is(err, domain.ErrForbidden):
@@ -221,12 +227,22 @@ func (server *Server) handleError(writer http.ResponseWriter, request *http.Requ
 	}
 }
 
-func readCreateInput(request *http.Request) (application.CreateInput, error) {
-	mediaType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type"))
-	if strings.HasPrefix(mediaType, "multipart/") {
-		return readMultipart(request)
+func readCreateInput(writer http.ResponseWriter, request *http.Request) (application.CreateInput, error) {
+	request.Body = http.MaxBytesReader(writer, request.Body, maxUploadBytes)
+	read := readJSONCreate
+	if mediaType, _, _ := mime.ParseMediaType(request.Header.Get("Content-Type")); strings.HasPrefix(mediaType, "multipart/") {
+		read = readMultipart
 	}
-	return readJSONCreate(request)
+	input, err := read(request)
+	if err != nil {
+		return application.CreateInput{}, err
+	}
+	// A file's bytes may hold anything; its name, team and the rest are text
+	// the database will not take a NUL in.
+	if err := cleantext.Check(input); err != nil {
+		return application.CreateInput{}, fmt.Errorf("%v: %w", err, domain.ErrInvalid)
+	}
+	return input, nil
 }
 
 func readJSONCreate(request *http.Request) (application.CreateInput, error) {
@@ -239,10 +255,10 @@ func readJSONCreate(request *http.Request) (application.CreateInput, error) {
 		RetentionDays int    `json:"retention_days"`
 		Content       string `json:"content"`
 	}
-	decoder := json.NewDecoder(io.LimitReader(request.Body, maxJSONBytes+int64(domain.MaxBytes)))
+	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&body); err != nil {
-		return application.CreateInput{}, fmt.Errorf("invalid request body: %w", domain.ErrInvalid)
+		return application.CreateInput{}, unreadable(err, "invalid request body")
 	}
 	content, err := base64.StdEncoding.DecodeString(strings.TrimSpace(body.Content))
 	if err != nil {
@@ -267,8 +283,8 @@ func readJSONCreate(request *http.Request) (application.CreateInput, error) {
 }
 
 func readMultipart(request *http.Request) (application.CreateInput, error) {
-	if err := request.ParseMultipartForm(int64(domain.MaxBytes) + maxJSONBytes); err != nil {
-		return application.CreateInput{}, fmt.Errorf("invalid multipart body: %w", domain.ErrInvalid)
+	if err := request.ParseMultipartForm(maxUploadBytes); err != nil {
+		return application.CreateInput{}, unreadable(err, "invalid multipart body")
 	}
 	file, header, err := request.FormFile("file")
 	if err != nil {
@@ -308,6 +324,16 @@ func readMultipart(request *http.Request) (application.CreateInput, error) {
 		RetentionDays: days,
 		Content:       content,
 	}, nil
+}
+
+// unreadable says why a body could not be read: it ran past its limit, which is
+// a 413, or it was not what it claimed to be, which is a 400.
+func unreadable(err error, invalid string) error {
+	var over *http.MaxBytesError
+	if errors.As(err, &over) {
+		return fmt.Errorf("the upload must be at most %d bytes: %w", over.Limit, domain.ErrTooLarge)
+	}
+	return fmt.Errorf("%s: %w", invalid, domain.ErrInvalid)
 }
 
 func readListFilter(request *http.Request) (application.ListFilter, error) {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/batching/internal/domain"
 	batchingv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/batching/v1"
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 )
 
@@ -24,6 +25,9 @@ type putEventsAPI interface {
 type Publisher struct {
 	client  putEventsAPI
 	busName string
+	// signer is batching's event signing identity. Nil is a build error
+	// caught at mount: an unsigned event cannot pass any consumer that checks.
+	signer *eventauth.Signer
 }
 
 type publishedEnvelope struct {
@@ -31,6 +35,11 @@ type publishedEnvelope struct {
 	Version    int             `json:"version"`
 	OccurredAt string          `json:"occurred_at"`
 	Data       json.RawMessage `json:"data"`
+	// Signature proves the service this envelope names as its source: the
+	// consumer verifies it over the envelope's content before any handler
+	// runs, so a message that reached the queue without this service having
+	// sent it is refused no matter how well formed it is.
+	Signature string `json:"sig,omitempty"`
 	// TraceCarrier adds this envelope's optional traceparent/tracestate
 	// fields: the producer span's context, for a consumer to become a child
 	// of. Additive and backward compatible - a consumer built before this
@@ -38,8 +47,11 @@ type publishedEnvelope struct {
 	observability.TraceCarrier
 }
 
-func NewPublisher(client putEventsAPI, busName string) *Publisher {
-	return &Publisher{client: client, busName: busName}
+func NewPublisher(client putEventsAPI, busName string, signer *eventauth.Signer) (*Publisher, error) {
+	if signer == nil {
+		return nil, errors.New("batching cannot publish unsigned events: a signing identity is required")
+	}
+	return &Publisher{client: client, busName: busName, signer: signer}, nil
 }
 
 func (publisher *Publisher) PublishEvent(ctx context.Context, event domain.Event) (resultErr error) {
@@ -50,8 +62,17 @@ func (publisher *Publisher) PublishEvent(ctx context.Context, event domain.Event
 	defer func() { observability.EndSpan(span, resultErr) }()
 
 	occurredAt := event.OccurredAt.UTC()
+	// Signed over the exact content the consumer reads: what the event is,
+	// which one it is, when it happened, and what it carries.
+	signature, err := publisher.signer.Sign(batchingv1.Source, event.DetailType, event.ID, 1,
+		occurredAt.Format(time.RFC3339Nano), event.Data)
+	if err != nil {
+		resultErr = fmt.Errorf("sign event: %w", err)
+		return resultErr
+	}
 	detail, err := json.Marshal(publishedEnvelope{
 		EventID: event.ID, Version: 1, OccurredAt: occurredAt.Format(time.RFC3339Nano), Data: event.Data,
+		Signature:    signature,
 		TraceCarrier: observability.CaptureTraceCarrier(ctx),
 	})
 	if err != nil {
