@@ -1,0 +1,19 @@
+{
+  "name": "Oryxa",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "oryxa",
+      "command": "set -a; . ./.env; set +a; ORYXA_SERVICES=teams,files,billing,email go run ./cmd/oryxa",
+      "description": "The oryxa binary serving the no-AWS-account services (teams, files, billing, email) on :8080. Health check: curl -i http://localhost:8080/healthz"
+    }
+  ],
+  "ports": [
+    { "name": "oryxa", "port": 8080 },
+    { "name": "mailpit", "port": 8025 },
+    { "name": "localstack", "port": 4566 },
+    { "name": "moto-ses", "port": 4567 },
+    { "name": "postgres", "port": 5435 }
+  ]
+}

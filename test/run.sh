@@ -48,7 +48,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-STACK_BIN="$(mktemp -t oryxa-stack)"
+STACK_BIN="$(mktemp "${TMPDIR:-/tmp}/oryxa-stack.XXXXXX")"
 echo "building stack harness"
 go build -o "${STACK_BIN}" ./test/cmd/stack
 
