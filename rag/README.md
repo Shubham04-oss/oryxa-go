@@ -695,8 +695,6 @@ shape it reads, and proves nothing about whether the provider agrees:
 | Vertex answering (`generateContent`) | An `httptest` server | The same, plus ADC auth |
 | Bedrock reranking | Nothing beyond construction | The whole call. This is the least exercised code in the service |
 | S3 Vectors | A fake client | Index creation, metadata filters, batch limits, the real 3–63 character index name rules |
-| Bedrock knowledge base ingest, status and delete | Fakes over `bedrockagent`'s `IngestKnowledgeBaseDocuments`, `GetKnowledgeBaseDocuments` and `DeleteKnowledgeBaseDocuments` | Whether a real knowledge base agrees with the request shapes this builds and the status words it branches on |
-| Bedrock knowledge base retrieve | A fake over `bedrockagentruntime.Retrieve` | The tenant filter's shape is asserted exactly; whether Bedrock actually honours it, and the reranking call inside Retrieve, have not run here |
 | The provisioner | Unit tests on its pattern and policy | It has never created anything, on AWS or on LocalStack |
 
 S3 Vectors has no local emulation available: the LocalStack container in the
@@ -708,20 +706,17 @@ not run. The first live run of each should be a small corpus end to end —
 create, add one document, wait for `rag.document.indexed.v1`, search, answer.
 Expect the model ids and the Bedrock reranker to be where it goes wrong first.
 
-The `bedrock-kb` backend's request and response shapes — content and metadata
-attribute structures, the document status vocabulary, the tenant filter's
-`AndAll`/`Equals`/`In` shape — follow a live test against a real knowledge
-base in `us-west-2` that indexed three documents, one a PDF, in about nine
-seconds and confirmed org_b never saw org_a's documents through the same
-filter this package builds. What has not run is this code itself against
-that or any knowledge base: the ingest worker's status-polling loop, the
-staging path, and the Retrieve call's own reranking are all new here and
-covered only by the fakes above. The first live run of this backend should
-follow the same small-corpus-end-to-end path as Vertex and Bedrock answering,
-with particular attention to the `METADATA_PARTIALLY_INDEXED` and `IGNORED`
-statuses: this package's read of what they mean (see [Knowledge base
-corpora](#knowledge-base-corpora) and `rag/internal/ingest/ingest.go`) is a
-judgment call from their documentation, not something the live test exercised.
+The `bedrock-kb` backend has run against real knowledge bases in
+`us-west-2`. Production has indexed members' Drive and Gmail documents
+through it since 2026-09-19. On 2026-09-21 `rag/internal/eval` put its
+corpus through this code into both kinds, a `VECTOR` one over S3 Vectors and
+a `MANAGED` one: submitting, polling each document's status until it was
+indexed, searching with the tenant filter, reranking inside Retrieve (Amazon
+Rerank 1.0 on the first, Bedrock's own reranker on the second), searching the
+same corpus as another organization and finding nothing, and deleting the
+documents again. The eval did not exercise the `METADATA_PARTIALLY_INDEXED`
+status, whose handling is a judgment call from its documentation (see
+`rag/internal/ingest/ingest.go`).
 
 ## Known limits
 

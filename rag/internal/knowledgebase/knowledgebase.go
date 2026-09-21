@@ -243,7 +243,8 @@ type DocumentStatus struct {
 	// Code is one of Bedrock's own status words: STARTING, PENDING,
 	// IN_PROGRESS, INDEXED, PARTIALLY_INDEXED, METADATA_PARTIALLY_INDEXED,
 	// METADATA_UPDATE_FAILED, FAILED, NOT_FOUND, IGNORED, DELETING or
-	// DELETE_IN_PROGRESS.
+	// DELETE_IN_PROGRESS, or TEXT_INDEXED, which a managed knowledge base
+	// reports on the way to INDEXED and Bedrock does not document.
 	Code string
 	// Reason is set alongside IGNORED, and sometimes alongside FAILED.
 	Reason string
