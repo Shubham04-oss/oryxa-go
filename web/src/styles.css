@@ -5313,3 +5313,62 @@ a[data-variant][data-size="lg"] {
     transition: none;
   }
 }
+
+/* An agent's mark: the shape is who it is, the motion is what it is doing. */
+.agent-mark {
+  color: #ededed;
+  transform-origin: 50% 50%;
+}
+
+.agent-mark-idle {
+  opacity: 0.62;
+}
+
+.agent-mark-thinking {
+  animation: agent-mark-turn var(--mark-revolution, 10s) linear infinite;
+}
+
+.agent-mark-working {
+  animation:
+    agent-mark-turn 3.2s linear infinite,
+    agent-mark-pulse 1.9s ease-in-out infinite;
+}
+
+.agent-mark-waiting {
+  animation: agent-mark-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes agent-mark-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes agent-mark-pulse {
+  0%,
+  100% {
+    opacity: 0.8;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes agent-mark-breathe {
+  0%,
+  100% {
+    opacity: 0.6;
+    transform: scale(0.93);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+}
+
+/* The shape and the sentence beside it carry the state on their own. */
+@media (prefers-reduced-motion: reduce) {
+  .agent-mark {
+    animation: none;
+  }
+}
