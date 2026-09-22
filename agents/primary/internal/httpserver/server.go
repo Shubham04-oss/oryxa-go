@@ -28,7 +28,6 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/specialistonboarding"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
@@ -79,10 +78,6 @@ type ManagedAgents interface {
 	ListThreads(context.Context, threads.Member, string) ([]threads.Thread, error)
 	GetThread(context.Context, threads.Member, string, string) (threads.Detail, error)
 	StartRun(context.Context, threads.Member, string, string, threads.RunInput) (managedagents.StartedRun, error)
-}
-
-type SpecialistPlanner interface {
-	Draft(context.Context, specialistonboarding.Input) (specialistonboarding.Plan, error)
 }
 
 // AgentTeams is the member-owned primary-plus-specialists team catalogue.
@@ -178,8 +173,6 @@ type Config struct {
 	// when Unavailable is set or in a host that intentionally exposes only the
 	// legacy primary-thread API.
 	Agents ManagedAgents
-	// SpecialistPlanner proposes a setup for review; it never creates an agent.
-	SpecialistPlanner SpecialistPlanner
 	// Teams enables persistent single-user multi-agent team routes.
 	Teams AgentTeams
 	// TeamRooms is the shared conversation for each member-owned agent team.
@@ -204,7 +197,6 @@ type Server struct {
 	directory           Directory
 	threads             Threads
 	agents              ManagedAgents
-	specialistPlanner   SpecialistPlanner
 	teams               AgentTeams
 	teamRooms           AgentTeamRooms
 	workflows           AgentWorkflows
@@ -231,7 +223,6 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		directory:           directory,
 		threads:             service,
 		agents:              config.Agents,
-		specialistPlanner:   config.SpecialistPlanner,
 		teams:               config.Teams,
 		teamRooms:           config.TeamRooms,
 		workflows:           config.Workflows,
@@ -262,7 +253,6 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/runs", server.run)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}", server.artifact)
 	server.handle("GET /v1/organizations/{organizationID}/agents", server.listAgents)
-	server.handle("POST /v1/organizations/{organizationID}/agents/onboarding-draft", server.draftSpecialist)
 	server.handle("POST /v1/organizations/{organizationID}/agents", server.createAgent)
 	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}", server.getAgent)
 	server.handle("PATCH /v1/organizations/{organizationID}/agents/{agentID}", server.updateAgent)
@@ -532,33 +522,6 @@ func (server *Server) createAgent(writer http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(writer, http.StatusCreated, created)
-}
-
-func (server *Server) draftSpecialist(writer http.ResponseWriter, request *http.Request) {
-	if _, ok := server.member(writer, request); !ok {
-		return
-	}
-	var input specialistonboarding.Input
-	if !server.decode(writer, request, &input) {
-		return
-	}
-	if server.specialistPlanner == nil {
-		writeError(writer, http.StatusServiceUnavailable, "planner_unavailable", "specialist onboarding is not configured")
-		return
-	}
-	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
-	defer cancel()
-	plan, err := server.specialistPlanner.Draft(ctx, input)
-	if errors.Is(err, specialistonboarding.ErrInvalid) {
-		writeError(writer, http.StatusBadRequest, "invalid_request", "name and bounded context are required")
-		return
-	}
-	if err != nil {
-		server.logger.WarnContext(ctx, "draft specialist onboarding", "error", err)
-		writeError(writer, http.StatusBadGateway, "draft_failed", "Could not prepare the specialist proposal. Try again.")
-		return
-	}
-	writeJSON(writer, http.StatusOK, plan)
 }
 
 func (server *Server) getAgent(writer http.ResponseWriter, request *http.Request) {

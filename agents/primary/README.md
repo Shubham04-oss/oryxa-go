@@ -386,7 +386,6 @@ scoped by both organization and owner.
 | Route | What it does |
 | --- | --- |
 | `GET /v1/organizations/{org}/agents` | Ensures the member's primary definition exists, then lists their primary and specialists |
-| `POST /v1/organizations/{org}/agents/onboarding-draft` | Uses the lite model and member-visible workspace metadata to propose a purpose, instructions, working cycle, integrations, and opening question for review; it does not create an agent or grant access |
 | `POST /v1/organizations/{org}/agents` | Creates a specialist from `name`, optional `description`, and required `instructions` |
 | `GET /v1/organizations/{org}/agents/{agent}` | Reads one of the member's definitions |
 | `PATCH /v1/organizations/{org}/agents/{agent}` | Renames it, changes description/instructions, or sets `status` to `active` or `disabled` |
@@ -395,13 +394,17 @@ scoped by both organization and owner.
 | `GET /v1/organizations/{org}/agents/{agent}/threads/{thread}` | Reads one specialist conversation and its pending confirmations |
 | `POST /v1/organizations/{org}/agents/{agent}/runs` | Starts or continues that agent and streams the run |
 
-The web onboarding flow gathers only context the member can already see:
-their name, organization synthesis, primary agent name, active knowledge-source
-labels, and connected-app labels. The proposal is editable before the member
-creates a specialist. Its working cycle and opening question are compiled into
-the persisted instructions. Suggested integrations never connect an app or
-expand permissions. If model drafting is unavailable, the UI labels and shows
-a deterministic starter plan instead.
+The web specialist creation dialog starts a design conversation with Krude.
+Before proposing an agent, Krude lists the member's existing specialists,
+checks their connected apps, and uses relevant indexed workspace context. It
+asks a small set of domain-specific questions about the outcome, audience,
+workflow, inputs, tools, outputs, cadence, boundaries, and success criteria.
+It can recommend relevant unconnected tools, but labels them as recommendations
+and never claims access or connects them itself. Once the important choices
+are resolved, Krude presents a working checklist and complete operating model,
+then calls `agent_system_create_agent`. The member reviews the exact tool
+arguments and confirms before the specialist is persisted. The conversation
+remains available in the member's primary threads.
 
 An agent run accepts the same `message` or `confirmations` fields as a primary
 thread run, plus optional `thread_id`. Omit it on the first turn; the response

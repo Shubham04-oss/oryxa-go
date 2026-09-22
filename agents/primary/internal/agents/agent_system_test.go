@@ -3,12 +3,31 @@ package agents
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/session"
 	"google.golang.org/adk/v2/tool"
 )
+
+func TestAgentSystemInstructionsRequireAdaptiveDiscoveryBeforeCreation(t *testing.T) {
+	for _, guidance := range []string{
+		"apps_connections",
+		"Before the first member-facing discovery response",
+		"three to six",
+		"market and ICP",
+		"Clay, Apollo or Luma",
+		"`agent_system_create_agent`",
+		"first response to a broad request",
+		"never turn it into a snake_case",
+		"working checklist",
+	} {
+		if !strings.Contains(agentSystemInstructions, guidance) {
+			t.Fatalf("agent system creation guidance is missing %q", guidance)
+		}
+	}
+}
 
 func TestAgentSystemToolboxConfirmsEveryPersistentMutation(t *testing.T) {
 	box, err := AgentSystemToolbox(NewAgentSystemBinding())
