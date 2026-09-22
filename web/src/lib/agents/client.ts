@@ -31,30 +31,6 @@ export interface AgentInput {
 	name: string;
 }
 
-export interface SpecialistDraftContext {
-	member_name: string;
-	organization_name: string;
-	organization_brief?: string;
-	primary_agent_name?: string;
-	knowledge_sources: string[];
-	connected_apps: string[];
-}
-
-export interface SpecialistDraftInput {
-	name: string;
-	purpose?: string;
-	focus?: string;
-	context: SpecialistDraftContext;
-}
-
-export interface SpecialistDraft {
-	purpose: string;
-	instructions: string;
-	cycle: { title: string; detail: string }[];
-	integrations: string[];
-	first_message: string;
-}
-
 export interface AgentUpdateInput {
 	description?: string;
 	instructions?: string;
@@ -294,23 +270,6 @@ export async function listAgents(
 		agentsPath(organizationId),
 	);
 	return agents;
-}
-
-export function createAgent(
-	organizationId: string,
-	input: AgentInput,
-): Promise<ManagedAgent> {
-	return apiRequest<ManagedAgent>(agentsPath(organizationId), { body: input });
-}
-
-export function draftSpecialist(
-	organizationId: string,
-	input: SpecialistDraftInput,
-): Promise<SpecialistDraft> {
-	return apiRequest<SpecialistDraft>(
-		`${agentsPath(organizationId)}/onboarding-draft`,
-		{ body: input },
-	);
 }
 
 /** A specialist run owns its own durable thread, separate from the primary. */

@@ -38,7 +38,6 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/specialistonboarding"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
@@ -416,7 +415,6 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		AllowedOrigins:      settings.AllowedOrigins,
 		RunTimeout:          settings.RunTimeout,
 		Agents:              agentRegistry,
-		SpecialistPlanner:   specialistonboarding.New(krude.Compact),
 		Teams:               teamService,
 		TeamRooms:           teamRoomService,
 		Workflows:           workflowService,

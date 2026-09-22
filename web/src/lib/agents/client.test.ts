@@ -6,10 +6,8 @@ import {
 	agentTeamsQueryKey,
 	agentTeamThreadsQueryKey,
 	agentWorkflowsQueryKey,
-	createAgent,
 	createAgentTeam,
 	decideAgentRequest,
-	draftSpecialist,
 	getAgentTeamThreads,
 	listAgentRequests,
 	listAgents,
@@ -41,49 +39,6 @@ describe("agent API paths", () => {
 		expect(fetchMock).toHaveBeenCalledWith(
 			"/v1/organizations/org%20%2F%20one/agents",
 			expect.objectContaining({ credentials: "include", method: "GET" }),
-		);
-	});
-
-	it("creates specialists with the strict persisted fields", async () => {
-		const fetchMock = vi.fn().mockResolvedValue(json(201, { id: "agt_1" }));
-		vi.stubGlobal("fetch", fetchMock);
-
-		await createAgent("org_1", {
-			description: "Reviews launch risk",
-			instructions: "Return two bounded findings.",
-			name: "Launch reviewer",
-		});
-
-		expect(fetchMock).toHaveBeenCalledWith(
-			"/v1/organizations/org_1/agents",
-			expect.objectContaining({
-				body: JSON.stringify({
-					description: "Reviews launch risk",
-					instructions: "Return two bounded findings.",
-					name: "Launch reviewer",
-				}),
-				method: "POST",
-			}),
-		);
-	});
-
-	it("requests a reviewable onboarding draft without creating an agent", async () => {
-		const fetchMock = vi
-			.fn()
-			.mockResolvedValue(json(200, { purpose: "Research" }));
-		vi.stubGlobal("fetch", fetchMock);
-		await draftSpecialist("org_1", {
-			name: "Researcher",
-			context: {
-				member_name: "Shubham",
-				organization_name: "Odd Works",
-				knowledge_sources: [],
-				connected_apps: [],
-			},
-		});
-		expect(fetchMock).toHaveBeenCalledWith(
-			"/v1/organizations/org_1/agents/onboarding-draft",
-			expect.objectContaining({ method: "POST" }),
 		);
 	});
 
