@@ -4,10 +4,13 @@ import {
 	deleteAgent,
 	deleteAgentTeam,
 	deleteAgentWorkflow,
+	getSpecialistThread,
 	listAgentTeams,
 	listAgentWorkflows,
+	listSpecialistThreads,
 	listWorkflowExecutions,
 	respondToAgentRequest,
+	startSpecialistRun,
 	updateAgent,
 	updateAgentTeam,
 	updateAgentWorkflow,
@@ -23,6 +26,66 @@ function json(body: unknown): Response {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("remaining agent API contracts", () => {
+	it("loads only the selected specialist's stored conversation", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(
+				json({ threads: [{ id: "thread_1", title: "Research" }] }),
+			)
+			.mockResolvedValueOnce(
+				json({
+					id: "thread_1",
+					title: "Research",
+					items: [],
+					pending_confirmations: [],
+				}),
+			);
+		vi.stubGlobal("fetch", fetchMock);
+		await expect(
+			listSpecialistThreads("org_1", "agent_1"),
+		).resolves.toHaveLength(1);
+		await expect(
+			getSpecialistThread("org_1", "agent_1", "thread_1"),
+		).resolves.toMatchObject({ id: "thread_1" });
+		expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+			"/v1/organizations/org_1/agents/agent_1/threads",
+			"/v1/organizations/org_1/agents/agent_1/threads/thread_1",
+		]);
+	});
+
+	it("streams a specialist answer and exposes its durable thread id", async () => {
+		const fetchMock = vi.fn().mockResolvedValue(
+			new Response(
+				'event: message\ndata: {"type":"message","text":"Done"}\n\n',
+				{
+					headers: {
+						"Content-Type": "text/event-stream",
+						"X-Oryxa-Thread": "thread_1",
+					},
+					status: 200,
+				},
+			),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const threads: string[] = [];
+		const items: string[] = [];
+		await startSpecialistRun(
+			"org_1",
+			"agent_1",
+			{ message: "Hello" },
+			{
+				onThread: (id) => threads.push(id),
+				onItem: (item) => items.push(item.text || ""),
+			},
+		);
+		expect(threads).toEqual(["thread_1"]);
+		expect(items).toEqual(["Done"]);
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/organizations/org_1/agents/agent_1/runs",
+			expect.objectContaining({ method: "POST" }),
+		);
+	});
+
 	it("preserves every mutation and collection endpoint", async () => {
 		const fetchMock = vi.fn().mockImplementation(() =>
 			Promise.resolve(

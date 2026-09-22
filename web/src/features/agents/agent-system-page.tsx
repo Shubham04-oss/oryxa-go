@@ -10,6 +10,7 @@ import {
 	Clock3,
 	GitBranch,
 	Inbox,
+	MessageCircle,
 	Network,
 	Pencil,
 	Play,
@@ -27,7 +28,11 @@ import {
 	AgentDialog,
 	AgentTeamDialog,
 	AgentWorkflowDialog,
+	SpecialistProfileDialog,
 } from "@/components/agents/agent-dialogs";
+import { AgentTeamRoom } from "@/components/agents/agent-team-room";
+import { SpecialistConversationDialog } from "@/components/agents/specialist-conversation-dialog";
+import { SpecialistAvatar } from "@/components/agents/specialist-identity";
 import { AppAlert, QueryError } from "@/components/app/app-alert";
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import { EmptyState } from "@/components/app/empty-state";
@@ -320,6 +325,8 @@ function SpecialistsTab() {
 	const { organization } = useWorkspace();
 	const queryClient = useQueryClient();
 	const agents = useQuery(agentsQueryOptions(organization.id));
+	const teams = useQuery(agentTeamsQueryOptions(organization.id));
+	const workflows = useQuery(agentWorkflowsQueryOptions(organization.id));
 	const specialists =
 		agents.data?.filter((agent) => agent.kind === "specialist") ?? [];
 	const status = useMutation({
@@ -360,99 +367,190 @@ function SpecialistsTab() {
 				/>
 			) : null}
 			{agents.data && specialists.length === 0 ? (
-				<Card className="workspace-panel">
-					<EmptyState
-						action={
-							<AgentDialog
-								organizationId={organization.id}
-								trigger={
-									<Button type="button">
-										<Plus data-icon="inline-start" />
-										Create specialist
-									</Button>
-								}
-							/>
+				<Card className="specialist-empty-card">
+					<div className="specialist-empty-avatars" aria-hidden="true">
+						<SpecialistAvatar name="Research" seed="research" size="large" />
+						<SpecialistAvatar name="Analysis" seed="analysis" size="large" />
+						<SpecialistAvatar name="Writing" seed="writing" size="large" />
+					</div>
+					<h3>Give a specialist a clear responsibility</h3>
+					<p>
+						Choose a focus, name the work they own, and refine their guidance as
+						they become part of your team.
+					</p>
+					<AgentDialog
+						organizationId={organization.id}
+						trigger={
+							<Button type="button">
+								<Plus data-icon="inline-start" />
+								Create specialist
+							</Button>
 						}
-						description="Give a reusable responsibility to a sales, engineering, legal, or other specialist."
-						icon={Bot}
-						title="No specialists yet"
 					/>
 				</Card>
 			) : null}
+			{status.isError ? (
+				<AppAlert>
+					{apiErrorMessage(status.error, "Could not update specialist")}
+				</AppAlert>
+			) : null}
 			{specialists.length ? (
-				<div className="agent-card-grid">
-					{specialists.map((agent) => (
-						<Card className="agent-entity-card" key={agent.id}>
-							<header>
-								<span className="agent-entity-icon" aria-hidden="true">
-									<Bot />
-								</span>
-								<Status status={agent.status} />
-							</header>
-							<div className="agent-entity-copy">
-								<h3>{agent.name}</h3>
-								<p>{agent.description}</p>
-							</div>
-							<div className="agent-instruction-preview">
-								<span>Operating instructions</span>
-								<p>{agent.instructions}</p>
-							</div>
-							<footer>
-								<div className="agent-toggle">
-									<Switch
-										aria-label={`${agent.status === "active" ? "Pause" : "Activate"} ${agent.name}`}
-										checked={agent.status === "active"}
-										disabled={status.isPending}
-										onCheckedChange={(checked) =>
-											status.mutate({
-												agent,
-												next: checked ? "active" : "disabled",
-											})
-										}
+				<div className="agent-card-grid specialist-card-grid">
+					{specialists.map((agent) => {
+						const memberships = (teams.data ?? []).flatMap((team) => [
+							...(team.coordinator_agent_id === agent.id
+								? [{ team, role: "Coordinator" }]
+								: []),
+							...team.members
+								.filter((member) => member.agent_id === agent.id)
+								.map((member) => ({ team, role: member.role })),
+						]);
+						const assignments = (workflows.data ?? []).filter((workflow) =>
+							workflow.assignments.some(
+								(assignment) => assignment.agent_id === agent.id,
+							),
+						);
+						return (
+							<Card
+								className="agent-entity-card specialist-card"
+								key={agent.id}
+							>
+								<header>
+									<SpecialistAvatar
+										name={agent.name}
+										seed={agent.id}
+										size="large"
 									/>
-									<span>{agent.status === "active" ? "Active" : "Paused"}</span>
+									<Status status={agent.status} />
+								</header>
+								<div className="agent-entity-copy">
+									<h3>{agent.name}</h3>
+									<p>{agent.description || "Purpose not set yet"}</p>
 								</div>
-								<div>
-									<AgentDialog
-										agent={agent}
-										organizationId={organization.id}
-										trigger={
-											<Button
-												aria-label={`Edit ${agent.name}`}
-												size="icon-sm"
-												type="button"
-												variant="ghost"
-											>
-												<Pencil />
-											</Button>
-										}
-									/>
-									<ConfirmDialog
-										confirmLabel="Delete specialist"
-										confirmation={agent.name}
-										description="Its durable identity and future availability are removed. Delete any teams using it first."
-										onConfirm={async () => {
-											await deleteAgent(organization.id, agent.id);
-											await queryClient.invalidateQueries({
-												queryKey: agentsQueryKey(organization.id),
-											});
-										}}
-										title={`Delete ${agent.name}?`}
-										trigger={
-											<Button
-												aria-label={`Delete ${agent.name}`}
-												size="icon-sm"
-												type="button"
-												variant="ghost"
-											>
-												<Trash2 />
-											</Button>
-										}
-									/>
+								<div className="specialist-card-context">
+									<div>
+										<span>Team</span>
+										<strong>
+											{teams.data
+												? memberships.length
+													? memberships.map(({ team }) => team.name).join(", ")
+													: "Independent"
+												: teams.isError
+													? "Unavailable"
+													: "Loading…"}
+										</strong>
+									</div>
+									<div>
+										<span>Workflows</span>
+										<strong>
+											{workflows.data
+												? assignments.length
+												: workflows.isError
+													? "Unavailable"
+													: "—"}
+										</strong>
+									</div>
 								</div>
-							</footer>
-						</Card>
-					))}
+								<div className="specialist-card-updated">
+									Updated {relativeTime(agent.updated_at)}
+								</div>
+								<footer>
+									<div className="agent-toggle">
+										<Switch
+											aria-label={`${agent.status === "active" ? "Pause" : "Activate"} ${agent.name}`}
+											checked={agent.status === "active"}
+											disabled={status.isPending}
+											onCheckedChange={(checked) =>
+												status.mutate({
+													agent,
+													next: checked ? "active" : "disabled",
+												})
+											}
+										/>
+										<span>
+											{agent.status === "active" ? "Active" : "Paused"}
+										</span>
+									</div>
+									<div className="specialist-card-actions">
+										<SpecialistConversationDialog
+											agent={agent}
+											organizationId={organization.id}
+											trigger={
+												<Button
+													disabled={agent.status !== "active"}
+													size="sm"
+													type="button"
+												>
+													<MessageCircle data-icon="inline-start" />
+													Talk
+												</Button>
+											}
+										/>
+										<SpecialistProfileDialog
+											agent={agent}
+											memberships={memberships}
+											teamDataState={
+												teams.isError
+													? "error"
+													: teams.data
+														? "ready"
+														: "loading"
+											}
+											workflows={assignments}
+											workflowDataState={
+												workflows.isError
+													? "error"
+													: workflows.data
+														? "ready"
+														: "loading"
+											}
+											trigger={
+												<Button size="sm" type="button" variant="outline">
+													View profile
+												</Button>
+											}
+										/>
+										<AgentDialog
+											agent={agent}
+											organizationId={organization.id}
+											trigger={
+												<Button
+													aria-label={`Edit ${agent.name}`}
+													size="icon-sm"
+													type="button"
+													variant="ghost"
+												>
+													<Pencil />
+												</Button>
+											}
+										/>
+										<ConfirmDialog
+											confirmLabel="Delete specialist"
+											confirmation={agent.name}
+											description="Its durable identity and future availability are removed. Delete any teams using it first."
+											onConfirm={async () => {
+												await deleteAgent(organization.id, agent.id);
+												await queryClient.invalidateQueries({
+													queryKey: agentsQueryKey(organization.id),
+												});
+											}}
+											title={`Delete ${agent.name}?`}
+											trigger={
+												<Button
+													aria-label={`Delete ${agent.name}`}
+													size="icon-sm"
+													type="button"
+													variant="ghost"
+												>
+													<Trash2 />
+												</Button>
+											}
+										/>
+									</div>
+								</footer>
+							</Card>
+						);
+					})}
 				</div>
 			) : null}
 		</TabSection>
@@ -464,6 +562,9 @@ function TeamsTab() {
 	const queryClient = useQueryClient();
 	const agents = useQuery(agentsQueryOptions(organization.id));
 	const teams = useQuery(agentTeamsQueryOptions(organization.id));
+	const [selectedTeamId, setSelectedTeamId] = useState("");
+	const selectedTeam =
+		teams.data?.find((team) => team.id === selectedTeamId) ?? teams.data?.[0];
 	const toggle = useMutation({
 		mutationFn: ({ team, active }: { active: boolean; team: AgentTeam }) =>
 			updateAgentTeam(organization.id, team.id, {
@@ -519,70 +620,119 @@ function TeamsTab() {
 				</Card>
 			) : null}
 			{teams.data?.length ? (
-				<div className="agent-team-list">
-					{teams.data.map((team) => (
-						<Card className="workspace-panel agent-team-card" key={team.id}>
-							<header>
-								<div>
-									<span className="agent-eyebrow">
-										Coordinated by {team.coordinator_name}
-									</span>
-									<h3>{team.name}</h3>
-									<p>{team.description}</p>
-								</div>
-								<Status status={team.status} />
-							</header>
-							<div className="agent-team-members">
-								{team.members.map((member, index) => (
-									<div key={member.agent_id}>
-										<span>{index + 1}</span>
-										<div>
-											<strong>{member.name}</strong>
-											<small>{member.role}</small>
-										</div>
-										<Status status={member.status} />
+				<div className="agent-team-workspace">
+					<div className="agent-team-list">
+						{teams.data.map((team) => (
+							<Card
+								className="workspace-panel agent-team-card"
+								data-selected={selectedTeam?.id === team.id}
+								key={team.id}
+							>
+								<header>
+									<div>
+										<span className="agent-eyebrow">
+											Coordinated by {team.coordinator_name}
+										</span>
+										<h3>{team.name}</h3>
+										<p>{team.description}</p>
 									</div>
-								))}
-							</div>
-							<footer>
-								<div className="agent-toggle">
-									<Switch
-										aria-label={`${team.status === "active" ? "Pause" : "Activate"} ${team.name}`}
-										checked={team.status === "active"}
-										disabled={toggle.isPending}
-										onCheckedChange={(active) =>
-											toggle.mutate({ active, team })
+									<Status status={team.status} />
+								</header>
+								<div className="agent-team-members">
+									{team.members.map((member) => (
+										<div key={member.agent_id}>
+											<SpecialistAvatar
+												name={member.name}
+												seed={member.agent_id}
+												size="small"
+											/>
+											<div>
+												<strong>{member.name}</strong>
+												<small>{member.role}</small>
+											</div>
+											<Status status={member.status} />
+										</div>
+									))}
+								</div>
+								<footer>
+									<Button
+										aria-current={
+											selectedTeam?.id === team.id ? "true" : undefined
+										}
+										onClick={() => setSelectedTeamId(team.id)}
+										size="sm"
+										type="button"
+										variant={
+											selectedTeam?.id === team.id ? "secondary" : "outline"
+										}
+									>
+										<MessageCircle aria-hidden />
+										{selectedTeam?.id === team.id
+											? "Open workroom"
+											: "Open chat"}
+									</Button>
+									<div className="agent-toggle">
+										<Switch
+											aria-label={`${team.status === "active" ? "Pause" : "Activate"} ${team.name}`}
+											checked={team.status === "active"}
+											disabled={toggle.isPending}
+											onCheckedChange={(active) =>
+												toggle.mutate({ active, team })
+											}
+										/>
+										<span>
+											{team.status === "active" ? "Accepting work" : "Paused"}
+										</span>
+									</div>
+									<AgentTeamDialog
+										agents={agents.data ?? []}
+										organizationId={organization.id}
+										team={team}
+										trigger={
+											<Button
+												aria-label={`Edit ${team.name}`}
+												size="icon-sm"
+												type="button"
+												variant="ghost"
+											>
+												<Pencil aria-hidden />
+											</Button>
 										}
 									/>
-									<span>
-										{team.status === "active" ? "Accepting work" : "Paused"}
-									</span>
-								</div>
-								<ConfirmDialog
-									confirmLabel="Delete team"
-									confirmation={team.name}
-									description="The team is removed. Its specialists remain available."
-									onConfirm={async () => {
-										await deleteAgentTeam(organization.id, team.id);
-										await queryClient.invalidateQueries({
-											queryKey: agentTeamsQueryKey(organization.id),
-										});
-									}}
-									title={`Delete ${team.name}?`}
-									trigger={
-										<Button
-											aria-label={`Delete ${team.name}`}
-											size="icon-sm"
-											type="button"
-											variant="ghost"
-										>
-											<Trash2 />
-										</Button>
-									}
-								/>
-							</footer>
-						</Card>
-					))}
+									<ConfirmDialog
+										confirmLabel="Delete team"
+										confirmation={team.name}
+										description="The team is removed. Its specialists remain available."
+										onConfirm={async () => {
+											await deleteAgentTeam(organization.id, team.id);
+											await queryClient.invalidateQueries({
+												queryKey: agentTeamsQueryKey(organization.id),
+											});
+										}}
+										title={`Delete ${team.name}?`}
+										trigger={
+											<Button
+												aria-label={`Delete ${team.name}`}
+												size="icon-sm"
+												type="button"
+												variant="ghost"
+											>
+												<Trash2 />
+											</Button>
+										}
+									/>
+								</footer>
+							</Card>
+						))}
+					</div>
+					{selectedTeam ? (
+						<AgentTeamRoom
+							agents={agents.data ?? []}
+							key={selectedTeam.id}
+							organizationId={organization.id}
+							team={selectedTeam}
+						/>
+					) : null}
 				</div>
 			) : null}
 		</TabSection>
@@ -656,6 +806,7 @@ function WorkflowsTab() {
 							key={workflow.id}
 							onToggle={(active) => toggle.mutate({ active, workflow })}
 							organizationId={organization.id}
+							team={teams.data?.find((team) => team.id === workflow.team_id)}
 							workflow={workflow}
 						/>
 					))}
@@ -668,10 +819,12 @@ function WorkflowsTab() {
 function WorkflowCard({
 	onToggle,
 	organizationId,
+	team,
 	workflow,
 }: {
 	onToggle: (active: boolean) => void;
 	organizationId: string;
+	team?: AgentTeam;
 	workflow: AgentWorkflow;
 }) {
 	const queryClient = useQueryClient();
@@ -716,9 +869,27 @@ function WorkflowCard({
 				</span>
 			</div>
 			<div className="agent-workflow-assignments">
-				{workflow.assignments.map((assignment) => (
-					<span key={assignment.agent_id}>{assignment.task}</span>
-				))}
+				{workflow.assignments.map((assignment) => {
+					const member = team?.members.find(
+						(candidate) => candidate.agent_id === assignment.agent_id,
+					);
+					return (
+						<div
+							className="agent-workflow-assignment"
+							key={assignment.agent_id}
+						>
+							<SpecialistAvatar
+								name={member?.name ?? "Specialist"}
+								seed={assignment.agent_id}
+								size="small"
+							/>
+							<span>
+								<strong>{member?.name ?? "Specialist"}</strong>
+								<small>{assignment.task}</small>
+							</span>
+						</div>
+					);
+				})}
 			</div>
 			{start.isError ? (
 				<div className="agent-inline-alert">

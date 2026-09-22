@@ -7,8 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteamrooms"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/specialistonboarding"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
 // This file is the authorization sweep for every route the multi-agent
@@ -53,6 +57,7 @@ type authHarness struct {
 	threadsSvc   *fakeThreads
 	agents       *fakeManagedAgents
 	teams        *fakeAgentTeams
+	teamRooms    *fakeAgentTeamRooms
 	workflows    *fakeAgentWorkflows
 	interactions *fakeInteractions
 	teamspaces   *fakeTeamspaces
@@ -71,6 +76,7 @@ func newAuthHarness() *authHarness {
 			run:         &fakeRun{},
 		},
 		teams:        &fakeAgentTeams{},
+		teamRooms:    &fakeAgentTeamRooms{},
 		workflows:    &fakeAgentWorkflows{},
 		interactions: &fakeInteractions{},
 		teamspaces:   &fakeTeamspaces{},
@@ -82,7 +88,9 @@ func newAuthHarness() *authHarness {
 		AllowedOrigins:      []string{"https://app.oryxa.test"},
 		RunTimeout:          time.Minute,
 		Agents:              h.agents,
+		SpecialistPlanner:   specialistonboarding.New(nil),
 		Teams:               h.teams,
+		TeamRooms:           h.teamRooms,
 		Workflows:           h.workflows,
 		Interactions:        h.interactions,
 		Teamspaces:          h.teamspaces,
@@ -91,6 +99,23 @@ func newAuthHarness() *authHarness {
 		Preferences:         h.preferences,
 	}, nil)
 	return h
+}
+
+type fakeAgentTeamRooms struct{ scopes []agentteams.Scope }
+
+func (fake *fakeAgentTeamRooms) Read(_ context.Context, scope agentteams.Scope, _ string, _ int64, _ int) ([]agentteamrooms.Message, error) {
+	fake.scopes = append(fake.scopes, scope)
+	return []agentteamrooms.Message{}, nil
+}
+
+func (fake *fakeAgentTeamRooms) Threads(_ context.Context, scope agentteams.Scope, _ string) (map[string]string, error) {
+	fake.scopes = append(fake.scopes, scope)
+	return map[string]string{}, nil
+}
+
+func (fake *fakeAgentTeamRooms) Post(_ context.Context, member threads.Member, _, _ string) ([]agentteamrooms.Message, error) {
+	fake.scopes = append(fake.scopes, agentteams.Scope{OrganizationID: member.OrganizationID, UserID: member.UserID})
+	return []agentteamrooms.Message{}, nil
 }
 
 // authzRoute is one route's authorization contract.
@@ -142,6 +167,11 @@ func lastManagedMember(h *authHarness) (string, string) {
 
 func lastTeamScope(h *authHarness) (string, string) {
 	s := h.teams.seenScopes[len(h.teams.seenScopes)-1]
+	return s.OrganizationID, s.UserID
+}
+
+func lastTeamRoomScope(h *authHarness) (string, string) {
+	s := h.teamRooms.scopes[len(h.teamRooms.scopes)-1]
 	return s.OrganizationID, s.UserID
 }
 
@@ -209,6 +239,10 @@ var authzRoutes = []authzRoute{
 		path: "/v1/organizations/org_1/agents", identity: lastManagedScope,
 	},
 	{
+		pattern: "POST /v1/organizations/{organizationID}/agents/onboarding-draft", method: http.MethodPost,
+		path: "/v1/organizations/org_1/agents/onboarding-draft", body: "{}", malformedBody: unknownField, identity: lastManagedScope,
+	},
+	{
 		pattern: "POST /v1/organizations/{organizationID}/agents", method: http.MethodPost,
 		path: "/v1/organizations/org_1/agents", body: "{}", malformedBody: unknownField, identity: lastManagedScope,
 	},
@@ -223,6 +257,14 @@ var authzRoutes = []authzRoute{
 	{
 		pattern: "DELETE /v1/organizations/{organizationID}/agents/{agentID}", method: http.MethodDelete,
 		path: "/v1/organizations/org_1/agents/agt_other", identity: lastManagedScope,
+	},
+	{
+		pattern: "GET /v1/organizations/{organizationID}/agents/{agentID}/threads", method: http.MethodGet,
+		path: "/v1/organizations/org_1/agents/agt_other/threads", identity: lastManagedMember,
+	},
+	{
+		pattern: "GET /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", method: http.MethodGet,
+		path: "/v1/organizations/org_1/agents/agt_other/threads/thread_other", identity: lastManagedMember,
 	},
 	{
 		pattern: "POST /v1/organizations/{organizationID}/agents/{agentID}/runs", method: http.MethodPost,
@@ -248,6 +290,18 @@ var authzRoutes = []authzRoute{
 	{
 		pattern: "DELETE /v1/organizations/{organizationID}/agent-teams/{teamID}", method: http.MethodDelete,
 		path: "/v1/organizations/org_1/agent-teams/atm_other", identity: lastTeamScope,
+	},
+	{
+		pattern: "GET /v1/organizations/{organizationID}/agent-teams/{teamID}/messages", method: http.MethodGet,
+		path: "/v1/organizations/org_1/agent-teams/atm_other/messages", malformedQuery: "?after_seq=bad", identity: lastTeamRoomScope,
+	},
+	{
+		pattern: "GET /v1/organizations/{organizationID}/agent-teams/{teamID}/agent-threads", method: http.MethodGet,
+		path: "/v1/organizations/org_1/agent-teams/atm_other/agent-threads", identity: lastTeamRoomScope,
+	},
+	{
+		pattern: "POST /v1/organizations/{organizationID}/agent-teams/{teamID}/messages", method: http.MethodPost,
+		path: "/v1/organizations/org_1/agent-teams/atm_other/messages", body: `{"body":"Hello"}`, malformedBody: unknownField, identity: lastTeamRoomScope,
 	},
 	// -- agent workflows --------------------------------------------------
 	{
@@ -401,8 +455,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 50 {
-		t.Fatalf("authzRoutes has %d entries, want 50 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 56 {
+		t.Fatalf("authzRoutes has %d entries, want 56 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -494,8 +548,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 27 {
-		t.Fatalf("tested %d state-changing routes, want 27 - a route's method changed without updating this expectation", tested)
+	if tested != 29 {
+		t.Fatalf("tested %d state-changing routes, want 29 - a route's method changed without updating this expectation", tested)
 	}
 }
 
@@ -553,8 +607,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 29 {
-		t.Fatalf("tested %d routes for malformed input, want 29 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 32 {
+		t.Fatalf("tested %d routes for malformed input, want 32 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 

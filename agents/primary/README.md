@@ -229,7 +229,8 @@ against a provisioned Cognito agent client.
 organization's own documents in rag — what the member and their organization
 indexed, including what knowledge extracts from their connected apps — so
 Krude answers from them and cites them. Its skill is
-`internal/agents/toolboxes/knowledge.md`. It has two native tools:
+`internal/agents/toolboxes/knowledge.md`. It has two search tools, and a
+read-only indexing-status tool when `KNOWLEDGE_URL` is configured:
 
 - `knowledge_collections` lists the corpora rag lets the member read by
   default: their own and their organization's.
@@ -239,6 +240,15 @@ Krude answers from them and cites them. Its skill is
   (a link when the document has one), the section it sits in, and at most
   1,500 characters of text; collections that could not be read come back
   under `unsearched` with the reason.
+- `knowledge_sources` lists the sources the member is allowed to inspect,
+  optionally narrowed by provider or connection. It reports each registered
+  target, status and last completed extraction so Krude can distinguish a
+  stale or absent index from evidence that nothing happened. It does not
+  register sources or trigger indexing; only knowledge's authorized
+  member/connection lifecycle does that.
+- `knowledge_sync_source` is available in attended runs only and asks for
+  confirmation before moving an existing source's next sweep forward. It
+  cannot register arbitrary targets and does not claim ingestion finished.
 
 Both call rag's API (`internal/ragclient`) as the member, with
 `memberauth.Bearer`: the member's own token when the run carries it,
@@ -246,6 +256,12 @@ otherwise an agent token under their grant, so rag decides what they may
 read exactly as it does for them. The service and `cmd/devui` build it when
 `RAG_URL` is set, which in the binary defaults to this process when it runs
 rag. A team's corpus is searched only when named.
+
+For work about a recent event or an object's full history, Krude uses the
+indexed passages for background and reads the pointed-at object through the
+apps toolbox for current state. The index is not a live event log: supported
+connections register at most ten targets automatically, scheduled sweeps and
+trigger-driven sweeps may lag, and other toolkits remain live-read only.
 
 ### Organization directory toolbox
 
@@ -370,11 +386,22 @@ scoped by both organization and owner.
 | Route | What it does |
 | --- | --- |
 | `GET /v1/organizations/{org}/agents` | Ensures the member's primary definition exists, then lists their primary and specialists |
+| `POST /v1/organizations/{org}/agents/onboarding-draft` | Uses the lite model and member-visible workspace metadata to propose a purpose, instructions, working cycle, integrations, and opening question for review; it does not create an agent or grant access |
 | `POST /v1/organizations/{org}/agents` | Creates a specialist from `name`, optional `description`, and required `instructions` |
 | `GET /v1/organizations/{org}/agents/{agent}` | Reads one of the member's definitions |
 | `PATCH /v1/organizations/{org}/agents/{agent}` | Renames it, changes description/instructions, or sets `status` to `active` or `disabled` |
 | `DELETE /v1/organizations/{org}/agents/{agent}` | Deletes a specialist. The primary identity cannot be deleted |
+| `GET /v1/organizations/{org}/agents/{agent}/threads` | Lists the member's conversations with that specialist |
+| `GET /v1/organizations/{org}/agents/{agent}/threads/{thread}` | Reads one specialist conversation and its pending confirmations |
 | `POST /v1/organizations/{org}/agents/{agent}/runs` | Starts or continues that agent and streams the run |
+
+The web onboarding flow gathers only context the member can already see:
+their name, organization synthesis, primary agent name, active knowledge-source
+labels, and connected-app labels. The proposal is editable before the member
+creates a specialist. Its working cycle and opening question are compiled into
+the persisted instructions. Suggested integrations never connect an app or
+expand permissions. If model drafting is unavailable, the UI labels and shows
+a deterministic starter plan instead.
 
 An agent run accepts the same `message` or `confirmations` fields as a primary
 thread run, plus optional `thread_id`. Omit it on the first turn; the response
@@ -382,9 +409,11 @@ returns the allocated conversation in `X-Oryxa-Thread`, which later turns and
 confirmation answers send back. `X-Oryxa-Run` still identifies the individual
 run. Specialists use an ADK output schema and finish with a JSON work result:
 `status`, `summary`, `tools_used`, `artifacts`, and proposed `handoffs`.
-Handoffs remain output suggestions until an agent deliberately turns one into
-an `interactions_create` request. The target still decides what it accepts and
-what it returns.
+In standalone specialist runs, handoffs remain output suggestions until an
+agent deliberately turns one into an `interactions_create` request. The target
+still decides what it accepts and what it returns. A member-initiated team
+workroom (below) can route a handoff to another member-owned teammate without
+using the cross-user interaction API.
 
 ### Single-user multi-agent teams
 
@@ -412,6 +441,24 @@ the registry, or coordinate a team.
 | `GET /v1/organizations/{org}/agent-teams/{team}` | Reads one team inside the member boundary |
 | `PATCH /v1/organizations/{org}/agent-teams/{team}` | Changes its name, description, status, or complete ordered membership |
 | `DELETE /v1/organizations/{org}/agent-teams/{team}` | Deletes the team but leaves its agents intact |
+| `GET /v1/organizations/{org}/agent-teams/{team}/messages` | Reads the latest 200 group-chat lines, or lines after `after_seq` for incremental catch-up |
+| `POST /v1/organizations/{org}/agent-teams/{team}/messages` | Posts `{ "body": "..." }` as the member and returns their line plus any agent replies |
+| `GET /v1/organizations/{org}/agent-teams/{team}/agent-threads` | Returns this team's agent-to-thread pointers for opening the exact teammate conversation and reviewing pending confirmations |
+
+The workroom is distinct from the human Teamspaces room. An unaddressed member
+message goes to the primary coordinator; `@primary` or a specialist's displayed
+`@handle` directs it to that agent. A coordinator's explicit handoff line, or
+a specialist's structured handoff to a teammate on the live roster, appears in
+the transcript and wakes that teammate. Relay is limited to four agent turns
+per member message and 90 seconds; unknown or outside-team targets never run.
+When the coordinator requests a teammate's contribution, it takes one final
+turn to synthesize what was actually said instead of presenting a handoff as a
+finished answer.
+Each agent keeps a separate durable thread for this team, and its ordinary
+member-scoped tools and confirmation rules still apply. An action awaiting
+confirmation is **not** auto-approved in group chat: the member reviews it in
+that agent's direct conversation. Deleting a team removes its group-chat
+messages and team-thread pointers, but not the agents themselves.
 
 An agent that still belongs to a team cannot be deleted; remove it from every
 team first. This preserves an explicit team revision and lifecycle event for
@@ -1271,6 +1318,7 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `GOOGLE_SERVICE_ACCOUNT` | unset | On AWS: the service account the federated role acts as, which holds the Vertex AI roles |
 | `APPS_URL` | unset | The apps service's own URL; when set, Krude gets the apps toolbox (see Acting for a member) |
 | `RAG_URL` | unset | Rag's own URL; when set, Krude gets the knowledge toolbox (see Knowledge toolbox). In the binary it defaults to this process when it runs rag |
+| `KNOWLEDGE_URL` | unset | Knowledge's own URL; with `RAG_URL`, enables source coverage/freshness and confirmed refresh of existing sources. In the binary it defaults to this process when it runs knowledge |
 | `AGENTS_PRIMARY_KNOWLEDGE_MIN_RELEVANCE` | `0` (off) | Reranker relevance below which a knowledge passage is left out, so a question the documents cannot answer comes back empty. On the scale of the reranker rag runs: 0.2 was measured for Google's `semantic-ranker-default`; calibrate before using it with another. No effect without a reranker |
 | `AUTH_URL` | unset | Auth's own URL; where a member-absent run exchanges the member's standing grant for an agent token |
 | `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |

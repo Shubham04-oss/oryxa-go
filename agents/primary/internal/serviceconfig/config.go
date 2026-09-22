@@ -69,6 +69,9 @@ type Config struct {
 	// RagURL is rag's own URL. When set, Krude gets the knowledge toolbox,
 	// which searches the member's and their organization's collections.
 	RagURL string
+	// KnowledgeURL is knowledge's own URL, for the read-only status of
+	// indexing sources. The host defaults it to itself when knowledge runs.
+	KnowledgeURL string
 	// TeamsURL is Teams' own URL. When set, primary and specialist agents get
 	// a read-only organization directory toolbox.
 	TeamsURL string
@@ -252,6 +255,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		ModelPrices:              modelPrices,
 		AppsURL:                  strings.TrimSpace(getenv("APPS_URL")),
 		RagURL:                   strings.TrimSpace(getenv("RAG_URL")),
+		KnowledgeURL:             strings.TrimRight(strings.TrimSpace(getenv("KNOWLEDGE_URL")), "/"),
 		TeamsURL:                 strings.TrimRight(strings.TrimSpace(getenv("TEAMS_URL")), "/"),
 		KnowledgeMinRelevance:    knowledgeMinRelevance,
 		MemoryAgentEngine:        strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),

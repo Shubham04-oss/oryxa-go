@@ -1,5 +1,12 @@
 import { queryOptions } from "@tanstack/react-query";
-import { apiPath, apiRequest } from "../api/client";
+import { apiFetch, apiPath, apiRequest, requestError } from "../api/client";
+import type {
+	ConfirmationAnswer,
+	Item,
+	Thread,
+	ThreadDetail,
+} from "../threads/client";
+import { createEventStreamReader } from "../threads/event-stream";
 
 export type AgentKind = "primary" | "specialist";
 export type AgentStatus = "active" | "disabled";
@@ -22,6 +29,30 @@ export interface AgentInput {
 	description: string;
 	instructions: string;
 	name: string;
+}
+
+export interface SpecialistDraftContext {
+	member_name: string;
+	organization_name: string;
+	organization_brief?: string;
+	primary_agent_name?: string;
+	knowledge_sources: string[];
+	connected_apps: string[];
+}
+
+export interface SpecialistDraftInput {
+	name: string;
+	purpose?: string;
+	focus?: string;
+	context: SpecialistDraftContext;
+}
+
+export interface SpecialistDraft {
+	purpose: string;
+	instructions: string;
+	cycle: { title: string; detail: string }[];
+	integrations: string[];
+	first_message: string;
 }
 
 export interface AgentUpdateInput {
@@ -53,6 +84,18 @@ export interface AgentTeam {
 	revision: number;
 	status: AgentStatus;
 	updated_at: string;
+}
+
+export interface AgentTeamMessage {
+	id: string;
+	team_id: string;
+	seq: number;
+	kind: "member" | "agent";
+	author_name: string;
+	author_agent_id?: string;
+	body: string;
+	in_reply_to_seq?: number;
+	created_at: string;
 }
 
 export interface AgentTeamMemberInput {
@@ -260,6 +303,80 @@ export function createAgent(
 	return apiRequest<ManagedAgent>(agentsPath(organizationId), { body: input });
 }
 
+export function draftSpecialist(
+	organizationId: string,
+	input: SpecialistDraftInput,
+): Promise<SpecialistDraft> {
+	return apiRequest<SpecialistDraft>(
+		`${agentsPath(organizationId)}/onboarding-draft`,
+		{ body: input },
+	);
+}
+
+/** A specialist run owns its own durable thread, separate from the primary. */
+export async function startSpecialistRun(
+	organizationId: string,
+	agentId: string,
+	input: {
+		thread_id?: string;
+		message?: string;
+		confirmations?: ConfirmationAnswer[];
+	},
+	options: {
+		onThread: (id: string) => void;
+		onItem: (item: Item) => void;
+		signal?: AbortSignal;
+	},
+): Promise<void> {
+	const response = await apiFetch(
+		`${agentsPath(organizationId)}${apiPath`/${agentId}`}/runs`,
+		{ body: input, method: "POST", signal: options.signal },
+	);
+	if (!response.ok) {
+		throw await requestError(response);
+	}
+	const threadId = response.headers.get("X-Oryxa-Thread");
+	if (threadId) options.onThread(threadId);
+	if (!response.body) return;
+	const reader = response.body.getReader();
+	const parser = createEventStreamReader();
+	const deliver = (data: string) => {
+		if (data) options.onItem(JSON.parse(data) as Item);
+	};
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) {
+				for (const event of parser.end()) deliver(event.data);
+				return;
+			}
+			for (const event of parser.push(value)) deliver(event.data);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+export async function listSpecialistThreads(
+	organizationId: string,
+	agentId: string,
+): Promise<Thread[]> {
+	const { threads } = await apiRequest<{ threads: Thread[] }>(
+		`${agentsPath(organizationId)}${apiPath`/${agentId}`}/threads`,
+	);
+	return threads;
+}
+
+export function getSpecialistThread(
+	organizationId: string,
+	agentId: string,
+	threadId: string,
+): Promise<ThreadDetail> {
+	return apiRequest<ThreadDetail>(
+		`${agentsPath(organizationId)}${apiPath`/${agentId}`}/threads${apiPath`/${threadId}`}`,
+	);
+}
+
 export function updateAgent(
 	organizationId: string,
 	agentId: string,
@@ -314,6 +431,38 @@ export async function deleteAgentTeam(
 	await apiRequest(`${teamsPath(organizationId)}${apiPath`/${teamId}`}`, {
 		method: "DELETE",
 	});
+}
+
+export async function listAgentTeamMessages(
+	organizationId: string,
+	teamId: string,
+): Promise<AgentTeamMessage[]> {
+	const { messages } = await apiRequest<{ messages: AgentTeamMessage[] }>(
+		`${teamsPath(organizationId)}${apiPath`/${teamId}`}/messages`,
+	);
+	return messages;
+}
+
+export async function getAgentTeamThreads(
+	organizationId: string,
+	teamId: string,
+): Promise<Record<string, string>> {
+	const { threads } = await apiRequest<{ threads: Record<string, string> }>(
+		`${teamsPath(organizationId)}${apiPath`/${teamId}`}/agent-threads`,
+	);
+	return threads;
+}
+
+export async function postAgentTeamMessage(
+	organizationId: string,
+	teamId: string,
+	body: string,
+): Promise<AgentTeamMessage[]> {
+	const { messages } = await apiRequest<{ messages: AgentTeamMessage[] }>(
+		`${teamsPath(organizationId)}${apiPath`/${teamId}`}/messages`,
+		{ body: { body }, method: "POST" },
+	);
+	return messages;
 }
 
 export async function listAgentWorkflows(
@@ -428,6 +577,46 @@ export function agentTeamsQueryOptions(organizationId: string) {
 	return queryOptions({
 		queryFn: () => listAgentTeams(organizationId),
 		queryKey: agentTeamsQueryKey(organizationId),
+	});
+}
+
+export function agentTeamMessagesQueryKey(
+	organizationId: string,
+	teamId: string,
+) {
+	return [...agentTeamsQueryKey(organizationId), teamId, "messages"] as const;
+}
+
+export function agentTeamMessagesQueryOptions(
+	organizationId: string,
+	teamId: string,
+) {
+	return queryOptions({
+		queryFn: () => listAgentTeamMessages(organizationId, teamId),
+		queryKey: agentTeamMessagesQueryKey(organizationId, teamId),
+		refetchInterval: 5_000,
+	});
+}
+
+export function agentTeamThreadsQueryKey(
+	organizationId: string,
+	teamId: string,
+) {
+	return [
+		...agentTeamsQueryKey(organizationId),
+		teamId,
+		"agent-threads",
+	] as const;
+}
+
+export function agentTeamThreadsQueryOptions(
+	organizationId: string,
+	teamId: string,
+) {
+	return queryOptions({
+		queryFn: () => getAgentTeamThreads(organizationId, teamId),
+		queryKey: agentTeamThreadsQueryKey(organizationId, teamId),
+		refetchInterval: 5_000,
 	});
 }
 

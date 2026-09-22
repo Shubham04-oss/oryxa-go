@@ -42,8 +42,10 @@ func Run(ctx context.Context, client *cognitoidentityprovider.Client, config Con
 	if err := ensureDomain(ctx, client, poolID, config.DomainPrefix); err != nil {
 		return Output{}, err
 	}
-	if err := ensureGoogleProvider(ctx, client, poolID, config); err != nil {
-		return Output{}, err
+	if !config.DemoPasswordOnly {
+		if err := ensureGoogleProvider(ctx, client, poolID, config); err != nil {
+			return Output{}, err
+		}
 	}
 	clientID, err := ensureAppClient(ctx, client, poolID, config)
 	if err != nil {
@@ -55,12 +57,14 @@ func Run(ctx context.Context, client *cognitoidentityprovider.Client, config Con
 
 	domain := fmt.Sprintf("https://%s.auth.%s.amazoncognito.com", config.DomainPrefix, config.Region)
 	output := Output{
-		Region:            config.Region,
-		UserPoolID:        poolID,
-		AppClientID:       clientID,
-		CognitoDomain:     domain,
-		Issuer:            fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", config.Region, poolID),
-		GoogleRedirectURI: domain + "/oauth2/idpresponse",
+		Region:        config.Region,
+		UserPoolID:    poolID,
+		AppClientID:   clientID,
+		CognitoDomain: domain,
+		Issuer:        fmt.Sprintf("https://cognito-idp.%s.amazonaws.com/%s", config.Region, poolID),
+	}
+	if !config.DemoPasswordOnly {
+		output.GoogleRedirectURI = domain + "/oauth2/idpresponse"
 	}
 
 	if config.AgentCallbackURL == "" {
@@ -285,6 +289,10 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 	}
 
 	base := appClientSettings(config)
+	providers := []string{"COGNITO"}
+	if !config.DemoPasswordOnly {
+		providers = append(providers, googleProviderName)
+	}
 	if existingID == "" {
 		output, err := client.CreateUserPoolClient(ctx, &cognitoidentityprovider.CreateUserPoolClientInput{
 			UserPoolId:                      aws.String(poolID),
@@ -309,7 +317,7 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 				IdToken:      types.TimeUnitsTypeMinutes,
 				RefreshToken: types.TimeUnitsTypeDays,
 			},
-			SupportedIdentityProviders: []string{"COGNITO", googleProviderName},
+			SupportedIdentityProviders: providers,
 			WriteAttributes:            base.writeAttributes,
 		})
 		if err != nil {
@@ -341,7 +349,7 @@ func ensureAppClient(ctx context.Context, client *cognitoidentityprovider.Client
 			IdToken:      types.TimeUnitsTypeMinutes,
 			RefreshToken: types.TimeUnitsTypeDays,
 		},
-		SupportedIdentityProviders: []string{"COGNITO", googleProviderName},
+		SupportedIdentityProviders: providers,
 		WriteAttributes:            base.writeAttributes,
 	})
 	if err != nil {

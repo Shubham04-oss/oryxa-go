@@ -20,6 +20,7 @@ import (
 	"time"
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteamrooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentworkflows"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
@@ -27,6 +28,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/organizationagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/specialistonboarding"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
@@ -74,7 +76,13 @@ type ManagedAgents interface {
 	Create(context.Context, managedagents.Scope, managedagents.CreateInput) (managedagents.Definition, error)
 	Update(context.Context, managedagents.Scope, string, managedagents.UpdateInput) (managedagents.Definition, error)
 	Delete(context.Context, managedagents.Scope, string) error
+	ListThreads(context.Context, threads.Member, string) ([]threads.Thread, error)
+	GetThread(context.Context, threads.Member, string, string) (threads.Detail, error)
 	StartRun(context.Context, threads.Member, string, string, threads.RunInput) (managedagents.StartedRun, error)
+}
+
+type SpecialistPlanner interface {
+	Draft(context.Context, specialistonboarding.Input) (specialistonboarding.Plan, error)
 }
 
 // AgentTeams is the member-owned primary-plus-specialists team catalogue.
@@ -84,6 +92,12 @@ type AgentTeams interface {
 	Create(context.Context, agentteams.Scope, agentteams.CreateInput) (agentteams.Team, error)
 	Update(context.Context, agentteams.Scope, string, agentteams.UpdateInput) (agentteams.Team, error)
 	Delete(context.Context, agentteams.Scope, string) error
+}
+
+type AgentTeamRooms interface {
+	Read(context.Context, agentteams.Scope, string, int64, int) ([]agentteamrooms.Message, error)
+	Threads(context.Context, agentteams.Scope, string) (map[string]string, error)
+	Post(context.Context, threads.Member, string, string) ([]agentteamrooms.Message, error)
 }
 
 // AgentWorkflows is the durable Step Functions-backed workflow catalogue and
@@ -164,8 +178,12 @@ type Config struct {
 	// when Unavailable is set or in a host that intentionally exposes only the
 	// legacy primary-thread API.
 	Agents ManagedAgents
+	// SpecialistPlanner proposes a setup for review; it never creates an agent.
+	SpecialistPlanner SpecialistPlanner
 	// Teams enables persistent single-user multi-agent team routes.
 	Teams AgentTeams
+	// TeamRooms is the shared conversation for each member-owned agent team.
+	TeamRooms AgentTeamRooms
 	// Workflows enables durable manual and scheduled team workflows.
 	Workflows AgentWorkflows
 	// Interactions enables the durable cross-user request API.
@@ -186,7 +204,9 @@ type Server struct {
 	directory           Directory
 	threads             Threads
 	agents              ManagedAgents
+	specialistPlanner   SpecialistPlanner
 	teams               AgentTeams
+	teamRooms           AgentTeamRooms
 	workflows           AgentWorkflows
 	interactions        AgentInteractions
 	teamspaces          Teamspaces
@@ -211,7 +231,9 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 		directory:           directory,
 		threads:             service,
 		agents:              config.Agents,
+		specialistPlanner:   config.SpecialistPlanner,
 		teams:               config.Teams,
+		teamRooms:           config.TeamRooms,
 		workflows:           config.Workflows,
 		interactions:        config.Interactions,
 		teamspaces:          config.Teamspaces,
@@ -240,16 +262,22 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("POST /v1/organizations/{organizationID}/threads/{threadID}/runs", server.run)
 	server.handle("GET /v1/organizations/{organizationID}/threads/{threadID}/artifacts/{name}", server.artifact)
 	server.handle("GET /v1/organizations/{organizationID}/agents", server.listAgents)
+	server.handle("POST /v1/organizations/{organizationID}/agents/onboarding-draft", server.draftSpecialist)
 	server.handle("POST /v1/organizations/{organizationID}/agents", server.createAgent)
 	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}", server.getAgent)
 	server.handle("PATCH /v1/organizations/{organizationID}/agents/{agentID}", server.updateAgent)
 	server.handle("DELETE /v1/organizations/{organizationID}/agents/{agentID}", server.deleteAgent)
+	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}/threads", server.listAgentThreads)
+	server.handle("GET /v1/organizations/{organizationID}/agents/{agentID}/threads/{threadID}", server.getAgentThread)
 	server.handle("POST /v1/organizations/{organizationID}/agents/{agentID}/runs", server.runAgent)
 	server.handle("GET /v1/organizations/{organizationID}/agent-teams", server.listAgentTeams)
 	server.handle("POST /v1/organizations/{organizationID}/agent-teams", server.createAgentTeam)
 	server.handle("GET /v1/organizations/{organizationID}/agent-teams/{teamID}", server.getAgentTeam)
 	server.handle("PATCH /v1/organizations/{organizationID}/agent-teams/{teamID}", server.updateAgentTeam)
 	server.handle("DELETE /v1/organizations/{organizationID}/agent-teams/{teamID}", server.deleteAgentTeam)
+	server.handle("GET /v1/organizations/{organizationID}/agent-teams/{teamID}/messages", server.readAgentTeamRoom)
+	server.handle("GET /v1/organizations/{organizationID}/agent-teams/{teamID}/agent-threads", server.agentTeamRoomThreads)
+	server.handle("POST /v1/organizations/{organizationID}/agent-teams/{teamID}/messages", server.postAgentTeamRoom)
 	server.handle("GET /v1/organizations/{organizationID}/agent-workflows", server.listAgentWorkflows)
 	server.handle("POST /v1/organizations/{organizationID}/agent-workflows", server.createAgentWorkflow)
 	server.handle("GET /v1/organizations/{organizationID}/agent-workflows/{workflowID}", server.getAgentWorkflow)
@@ -506,6 +534,33 @@ func (server *Server) createAgent(writer http.ResponseWriter, request *http.Requ
 	writeJSON(writer, http.StatusCreated, created)
 }
 
+func (server *Server) draftSpecialist(writer http.ResponseWriter, request *http.Request) {
+	if _, ok := server.member(writer, request); !ok {
+		return
+	}
+	var input specialistonboarding.Input
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	if server.specialistPlanner == nil {
+		writeError(writer, http.StatusServiceUnavailable, "planner_unavailable", "specialist onboarding is not configured")
+		return
+	}
+	ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
+	defer cancel()
+	plan, err := server.specialistPlanner.Draft(ctx, input)
+	if errors.Is(err, specialistonboarding.ErrInvalid) {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "name and bounded context are required")
+		return
+	}
+	if err != nil {
+		server.logger.WarnContext(ctx, "draft specialist onboarding", "error", err)
+		writeError(writer, http.StatusBadGateway, "draft_failed", "Could not prepare the specialist proposal. Try again.")
+		return
+	}
+	writeJSON(writer, http.StatusOK, plan)
+}
+
 func (server *Server) getAgent(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.member(writer, request)
 	if !ok {
@@ -595,6 +650,40 @@ func (server *Server) runAgent(writer http.ResponseWriter, request *http.Request
 	}
 	writer.Header().Set("X-Oryxa-Thread", started.ThreadID)
 	server.streamRun(writer, request, started.Run)
+}
+
+func (server *Server) listAgentThreads(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	listed, err := server.agents.ListThreads(request.Context(), member, request.PathValue("agentID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"threads": listed})
+}
+
+func (server *Server) getAgentThread(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.agents == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agents_unavailable", "managed agents are not configured")
+		return
+	}
+	detail, err := server.agents.GetThread(request.Context(), member, request.PathValue("agentID"), request.PathValue("threadID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, detail)
 }
 
 func (server *Server) listAgentTeams(writer http.ResponseWriter, request *http.Request) {
@@ -687,6 +776,72 @@ func (server *Server) deleteAgentTeam(writer http.ResponseWriter, request *http.
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (server *Server) readAgentTeamRoom(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamRooms == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_team_rooms_unavailable", "agent team rooms are not configured")
+		return
+	}
+	after, err := strconv.ParseInt(request.URL.Query().Get("after_seq"), 10, 64)
+	if request.URL.Query().Get("after_seq") == "" {
+		after = 0
+		err = nil
+	}
+	if err != nil || after < 0 {
+		writeError(writer, http.StatusBadRequest, "invalid_request", "after_seq must be nonnegative")
+		return
+	}
+	listed, err := server.teamRooms.Read(request.Context(), scopeOf(member), request.PathValue("teamID"), after, 200)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"messages": listed})
+}
+
+func (server *Server) agentTeamRoomThreads(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamRooms == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_team_rooms_unavailable", "agent team rooms are not configured")
+		return
+	}
+	listed, err := server.teamRooms.Threads(request.Context(), scopeOf(member), request.PathValue("teamID"))
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, map[string]any{"threads": listed})
+}
+
+func (server *Server) postAgentTeamRoom(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.member(writer, request)
+	if !ok {
+		return
+	}
+	if server.teamRooms == nil {
+		writeError(writer, http.StatusServiceUnavailable, "agent_team_rooms_unavailable", "agent team rooms are not configured")
+		return
+	}
+	var input struct {
+		Body string `json:"body"`
+	}
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	added, err := server.teamRooms.Post(request.Context(), member, request.PathValue("teamID"), input.Body)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, map[string]any{"messages": added})
 }
 
 func (server *Server) listTeamspaces(writer http.ResponseWriter, request *http.Request) {
@@ -1537,6 +1692,8 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, rooms.ErrInvalid):
 		return http.StatusBadRequest, "invalid_request"
+	case errors.Is(err, agentteamrooms.ErrInvalid):
+		return http.StatusBadRequest, "invalid_request"
 	case errors.Is(err, rooms.ErrForbidden):
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, rooms.ErrNotFound):
@@ -1621,6 +1778,7 @@ func message(err error) string {
 		text = strings.TrimPrefix(text, agentworkflows.ErrInvalid.Error()+": ")
 		text = strings.TrimPrefix(text, teamspaces.ErrInvalid.Error()+": ")
 		text = strings.TrimPrefix(text, rooms.ErrInvalid.Error()+": ")
+		text = strings.TrimPrefix(text, agentteamrooms.ErrInvalid.Error()+": ")
 		return strings.TrimSpace(text)
 	default:
 		return err.Error()

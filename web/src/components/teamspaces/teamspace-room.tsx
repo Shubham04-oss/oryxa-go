@@ -1,7 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bot, MessagesSquare, Sparkles } from "lucide-react";
 import { type UIEvent, useEffect, useRef, useState } from "react";
+import { SpecialistAvatar } from "@/components/agents/specialist-identity";
+import { initials } from "@/components/app/identity";
 import { ThreadComposer } from "@/components/app/thread-composer";
+import { MessageMarkdown } from "@/components/threads/message-markdown";
 import { Button } from "@/components/ui/button";
 import { apiErrorMessage } from "@/lib/api/client";
 import { relativeTime } from "@/lib/format";
@@ -18,6 +21,7 @@ import {
 import { teamspacesQueryKey } from "@/lib/teamspaces/client";
 
 interface TeamspaceRoomProps {
+	active: boolean;
 	organizationId: string;
 	teamspaceId: string;
 	/** The reader, so their own lines are shown as theirs. */
@@ -31,21 +35,30 @@ interface TeamspaceRoomProps {
  * saying so is better than an optimistic line that is not the whole reply.
  */
 export function TeamspaceRoom({
+	active,
 	organizationId,
 	teamspaceId,
 	userId,
 }: TeamspaceRoomProps) {
 	const queryClient = useQueryClient();
-	const room = useQuery(roomQueryOptions(organizationId, teamspaceId));
+	const room = useQuery({
+		...roomQueryOptions(organizationId, teamspaceId),
+		enabled: active,
+	});
 	const [draft, setDraft] = useState("");
 	const [brief, setBrief] = useState<RoomBrief | undefined>(undefined);
 	const transcript = useRef<HTMLOListElement>(null);
+	const composer = useRef<HTMLTextAreaElement>(null);
 	// Follows the conversation while the reader is at the end of it, and stops
 	// the moment they scroll back to read something — being yanked away from
 	// what you are reading is worse than missing the newest line.
 	const [following, setFollowing] = useState(true);
 	const messages = room.data?.messages ?? [];
 	const seats = room.data?.seats ?? [];
+	const peopleHere = seats.filter(
+		(seat) => seat.kind === "person" && seat.present,
+	).length;
+	const agentCount = seats.filter((seat) => seat.kind === "agent").length;
 	const latestSeq = messages.at(-1)?.seq ?? 0;
 
 	const lastLine = messages.at(-1)?.id;
@@ -61,7 +74,7 @@ export function TeamspaceRoom({
 			queryClient.setQueryData<RoomRead>(
 				roomQueryKey(organizationId, teamspaceId),
 				(previous) => ({
-					messages: merge(previous?.messages ?? [], said),
+					messages: mergeRoomMessages(previous?.messages ?? [], said),
 					seats: previous?.seats ?? [],
 				}),
 			);
@@ -80,7 +93,19 @@ export function TeamspaceRoom({
 
 	const catchUp = useMutation({
 		mutationFn: () => catchUpOnRoom(organizationId, teamspaceId, latestSeq),
-		onSuccess: (caught) => setBrief(caught.brief),
+		onSuccess: (caught) => {
+			setBrief(caught.brief);
+			queryClient.setQueryData<RoomRead>(
+				roomQueryKey(organizationId, teamspaceId),
+				(previous) => ({
+					messages: mergeRoomMessages(
+						previous?.messages ?? [],
+						caught.messages,
+					),
+					seats: previous?.seats ?? [],
+				}),
+			);
+		},
 	});
 
 	function follow(event: UIEvent<HTMLOListElement>) {
@@ -89,67 +114,105 @@ export function TeamspaceRoom({
 	}
 
 	function send(body: string) {
+		if (!active || say.isPending || !body.trim()) return;
 		setDraft("");
-		say.mutate(body, { onError: () => setDraft(body) });
+		say.mutate(body.trim(), { onError: () => setDraft(body) });
 	}
 
 	return (
-		<section aria-labelledby="room-heading" className="teamspace-room">
+		<section
+			aria-labelledby="room-heading"
+			className="teamspace-room"
+			data-active={active}
+		>
 			<header>
 				<div>
-					<h3 id="room-heading">Conversation</h3>
+					<span className="teamspace-room-kicker">Group conversation</span>
+					<h3 id="room-heading">The room</h3>
 					<p>
-						Everyone on this team and their agents. Name somebody with @handle;
-						anyone else answers only when the work is plainly theirs.
+						People and agents work together here. Mention a teammate to route a
+						request; otherwise the room decides who should answer.
 					</p>
 				</div>
-				<Button
-					disabled={catchUp.isPending}
-					onClick={() => catchUp.mutate()}
-					size="sm"
-					variant="ghost"
-				>
-					<Sparkles aria-hidden="true" />
-					{catchUp.isPending ? "Catching up…" : "Where this has got to"}
-				</Button>
+				<div className="teamspace-room-header-actions">
+					<span className="teamspace-room-live">
+						<span aria-hidden="true" />
+						{peopleHere} here · {agentCount} agents
+					</span>
+					<Button
+						disabled={catchUp.isPending || !active}
+						onClick={() => catchUp.mutate()}
+						size="sm"
+						variant="ghost"
+					>
+						<Sparkles aria-hidden="true" />
+						{catchUp.isPending ? "Catching up…" : "Catch me up"}
+					</Button>
+				</div>
 			</header>
 
 			{seats.length > 0 ? (
 				<div className="teamspace-room-seats">
 					{seats.map((seat) => (
 						<button
+							aria-label={`Mention @${seat.handle}, ${seat.display_name}${seat.role ? `, ${seat.role}` : ""}`}
 							className="teamspace-room-seat"
 							data-kind={seat.kind}
 							data-present={seat.present}
+							disabled={!active}
 							key={seat.handle}
-							onClick={() => setDraft((value) => mention(value, seat.handle))}
+							onClick={() => {
+								setDraft((value) => mentionRoomSeat(value, seat.handle));
+								composer.current?.focus();
+							}}
 							title={seatTitle(seat)}
 							type="button"
 						>
-							{seat.kind === "agent" ? <Bot aria-hidden="true" /> : null}@
-							{seat.handle}
+							<RoomAvatar seat={seat} />
+							<span>
+								<strong>{seat.display_name}</strong>
+								<small>@{seat.handle}</small>
+							</span>
+							{seat.kind === "person" && seat.present ? (
+								<span
+									aria-hidden="true"
+									className="teamspace-room-seat-presence"
+								/>
+							) : null}
 						</button>
 					))}
 				</div>
 			) : null}
 
 			{brief ? <RoomBriefPanel brief={brief} /> : null}
+			{catchUp.isError ? (
+				<p className="teamspace-section-error">
+					{apiErrorMessage(catchUp.error, "Could not catch up on this room")}
+				</p>
+			) : null}
 
-			{room.isError ? (
+			{!active ? (
+				<div className="teamspace-room-paused">
+					<strong>This room is paused</strong>
+					<span>Resume the Teamspace to read or send new messages.</span>
+				</div>
+			) : null}
+			{active && room.isError ? (
 				<p className="teamspace-section-error">
 					{apiErrorMessage(room.error, "Could not load this conversation")}
 				</p>
 			) : null}
-			{room.isPending ? (
+			{active && room.isPending ? (
 				<p className="teamspace-section-empty">Opening the room…</p>
 			) : null}
-			{!room.isPending && !room.isError && messages.length === 0 ? (
+			{active && !room.isPending && !room.isError && messages.length === 0 ? (
 				<div className="teamspace-ledger-empty">
 					<MessagesSquare aria-hidden="true" />
 					<div>
 						<strong>Nobody has said anything yet</strong>
 						<span>
-							Say something here and the agent whose work it is will answer.
+							Start with a question, decision, or update. The right teammate can
+							answer in this shared chat.
 						</span>
 					</div>
 				</div>
@@ -165,6 +228,7 @@ export function TeamspaceRoom({
 						<RoomLine
 							key={message.id}
 							message={message}
+							seat={seats.find((seat) => seat.handle === message.author_handle)}
 							mine={
 								message.author_kind === "person" &&
 								message.author_user_id === userId
@@ -175,20 +239,33 @@ export function TeamspaceRoom({
 				</ol>
 			) : null}
 
+			{say.isPending ? (
+				<div aria-live="polite" className="teamspace-room-thinking">
+					<Sparkles aria-hidden="true" />
+					<span>
+						<strong>The room is working together…</strong>
+						<small>Your message and any agent replies will appear here.</small>
+					</span>
+				</div>
+			) : null}
+
 			<div className="teamspace-room-composer">
 				<ThreadComposer
-					disabled={say.isPending}
+					disabled={say.isPending || !active}
 					label="Say something to the room"
+					inputRef={composer}
 					hint={
-						say.isPending
-							? "The room is answering…"
-							: say.isError
-								? apiErrorMessage(say.error, "That did not get said")
-								: undefined
+						!active
+							? "This Teamspace is paused. Resume it to send messages."
+							: say.isPending
+								? "The room is answering…"
+								: say.isError
+									? apiErrorMessage(say.error, "That did not get said")
+									: undefined
 					}
 					onChange={setDraft}
 					onSubmit={send}
-					placeholder="Say something to the room…"
+					placeholder="Message the room or @mention a teammate…"
 					value={draft}
 				/>
 			</div>
@@ -199,10 +276,12 @@ export function TeamspaceRoom({
 function RoomLine({
 	message,
 	mine,
+	seat,
 	speakingFor,
 }: {
 	message: RoomMessage;
 	mine: boolean;
+	seat?: RoomSeat;
 	/** The colleague whose own agent said this, when one did. */
 	speakingFor?: { away: boolean; person: RoomSeat };
 }) {
@@ -212,22 +291,51 @@ function RoomLine({
 			data-kind={message.author_kind}
 			data-mine={mine}
 		>
-			<div className="teamspace-room-line-who">
-				{message.author_kind === "agent" ? <Bot aria-hidden="true" /> : null}
-				<strong>@{message.author_handle}</strong>
-				{message.author_kind === "agent" ? <span>agent</span> : null}
-				{speakingFor ? (
-					<em>
-						{speakingFor.away ? "standing in for" : "for"} @
-						{speakingFor.person.handle}
-					</em>
-				) : null}
-				<time dateTime={message.created_at}>
-					{relativeTime(message.created_at)}
-				</time>
+			<span className="teamspace-room-line-avatar">
+				{seat ? (
+					<RoomAvatar seat={seat} />
+				) : message.author_kind === "agent" ? (
+					<Bot aria-hidden="true" />
+				) : (
+					<span aria-hidden="true">{initials(message.author_handle)}</span>
+				)}
+			</span>
+			<div className="teamspace-room-line-main">
+				<div className="teamspace-room-line-who">
+					<strong>{seat?.display_name ?? `@${message.author_handle}`}</strong>
+					<small>@{message.author_handle}</small>
+					{message.author_kind === "agent" ? <span>agent</span> : null}
+					{speakingFor ? (
+						<em>
+							{speakingFor.away ? "standing in for" : "for"} @
+							{speakingFor.person.handle}
+						</em>
+					) : null}
+					<time dateTime={message.created_at}>
+						{relativeTime(message.created_at)}
+					</time>
+				</div>
+				{message.author_kind === "agent" ? (
+					<MessageMarkdown text={message.body} />
+				) : (
+					<p>{message.body}</p>
+				)}
 			</div>
-			<p>{message.body}</p>
 		</li>
+	);
+}
+
+function RoomAvatar({ seat }: { seat: RoomSeat }) {
+	return seat.kind === "agent" ? (
+		<SpecialistAvatar
+			name={seat.agent_name ?? seat.display_name}
+			seed={seat.agent_id ?? seat.handle}
+			size="small"
+		/>
+	) : (
+		<span aria-hidden="true" className="teamspace-person-avatar">
+			{initials(seat.display_name)}
+		</span>
 	);
 }
 
@@ -285,14 +393,17 @@ function RoomBriefPanel({ brief }: { brief: RoomBrief }) {
 }
 
 /** Newest wins, and the room's own sequence decides the order. */
-function merge(held: RoomMessage[], arrived: RoomMessage[]): RoomMessage[] {
+export function mergeRoomMessages(
+	held: RoomMessage[],
+	arrived: RoomMessage[],
+): RoomMessage[] {
 	const bySeq = new Map(held.map((message) => [message.seq, message]));
 	for (const message of arrived) bySeq.set(message.seq, message);
 	return [...bySeq.values()].sort((left, right) => left.seq - right.seq);
 }
 
 /** Names a seat in the draft without doubling an @mention already there. */
-function mention(draft: string, handle: string): string {
+export function mentionRoomSeat(draft: string, handle: string): string {
 	if (draft.toLowerCase().includes(`@${handle.toLowerCase()}`)) return draft;
 	return draft.trim() === "" ? `@${handle} ` : `${draft.trimEnd()} @${handle} `;
 }
@@ -300,7 +411,7 @@ function mention(draft: string, handle: string): string {
 function seatTitle(seat: RoomSeat): string {
 	const who =
 		seat.kind === "agent"
-			? `${seat.agent_name ?? seat.display_name}, ${seat.display_name}'s agent`
+			? `${seat.agent_name ?? seat.display_name}${seat.speaks_for ? ", primary agent" : ", shared specialist"}`
 			: seat.display_name;
 	const doing = seat.role ? ` — ${seat.role}` : "";
 	if (seat.kind === "agent") return `${who}${doing}`;

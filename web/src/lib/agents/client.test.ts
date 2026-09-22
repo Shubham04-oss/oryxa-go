@@ -2,13 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	agentRequestsQueryKey,
 	agentsQueryKey,
+	agentTeamMessagesQueryKey,
 	agentTeamsQueryKey,
+	agentTeamThreadsQueryKey,
 	agentWorkflowsQueryKey,
 	createAgent,
 	createAgentTeam,
 	decideAgentRequest,
+	draftSpecialist,
+	getAgentTeamThreads,
 	listAgentRequests,
 	listAgents,
+	listAgentTeamMessages,
+	postAgentTeamMessage,
 	scheduleLabel,
 	startAgentWorkflow,
 	titleCaseStatus,
@@ -61,6 +67,26 @@ describe("agent API paths", () => {
 		);
 	});
 
+	it("requests a reviewable onboarding draft without creating an agent", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(json(200, { purpose: "Research" }));
+		vi.stubGlobal("fetch", fetchMock);
+		await draftSpecialist("org_1", {
+			name: "Researcher",
+			context: {
+				member_name: "Shubham",
+				organization_name: "Odd Works",
+				knowledge_sources: [],
+				connected_apps: [],
+			},
+		});
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/organizations/org_1/agents/onboarding-draft",
+			expect.objectContaining({ method: "POST" }),
+		);
+	});
+
 	it("creates teams from stable agent ids", async () => {
 		const fetchMock = vi.fn().mockResolvedValue(json(201, { id: "atm_1" }));
 		vi.stubGlobal("fetch", fetchMock);
@@ -75,6 +101,50 @@ describe("agent API paths", () => {
 			"/v1/organizations/org_1/agent-teams",
 			expect.objectContaining({ method: "POST" }),
 		);
+	});
+
+	it("reads and posts to a team-scoped group chat", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(json(200, { messages: [] }))
+			.mockResolvedValueOnce(json(201, { messages: [{ id: "message_1" }] }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(listAgentTeamMessages("org_1", "team_1")).resolves.toEqual([]);
+		await expect(
+			postAgentTeamMessage("org_1", "team_1", "@primary please help"),
+		).resolves.toHaveLength(1);
+		expect(
+			fetchMock.mock.calls.map(([url, init]) => [url, init.method]),
+		).toEqual([
+			["/v1/organizations/org_1/agent-teams/team_1/messages", "GET"],
+			["/v1/organizations/org_1/agent-teams/team_1/messages", "POST"],
+		]);
+		expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(
+			JSON.stringify({ body: "@primary please help" }),
+		);
+	});
+
+	it("reads only the selected team's agent conversation pointers", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(json(200, { threads: { agt_1: "thread_1" } }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(getAgentTeamThreads("org_1", "team_1")).resolves.toEqual({
+			agt_1: "thread_1",
+		});
+		expect(fetchMock).toHaveBeenCalledWith(
+			"/v1/organizations/org_1/agent-teams/team_1/agent-threads",
+			expect.objectContaining({ method: "GET" }),
+		);
+		expect(agentTeamThreadsQueryKey("org_1", "team_1")).toEqual([
+			"agents",
+			"org_1",
+			"teams",
+			"team_1",
+			"agent-threads",
+		]);
 	});
 
 	it("starts a workflow through its execution collection", async () => {
@@ -119,6 +189,13 @@ describe("agent UI helpers", () => {
 	it("keeps every organization cache below one agent prefix", () => {
 		expect(agentsQueryKey("org_1")).toEqual(["agents", "org_1"]);
 		expect(agentTeamsQueryKey("org_1")).toEqual(["agents", "org_1", "teams"]);
+		expect(agentTeamMessagesQueryKey("org_1", "team_1")).toEqual([
+			"agents",
+			"org_1",
+			"teams",
+			"team_1",
+			"messages",
+		]);
 		expect(agentWorkflowsQueryKey("org_1")).toEqual([
 			"agents",
 			"org_1",

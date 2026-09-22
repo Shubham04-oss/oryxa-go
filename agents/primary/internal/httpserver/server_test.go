@@ -531,6 +531,14 @@ func (agents *fakeManagedAgents) Delete(_ context.Context, scope managedagents.S
 	}
 	return nil
 }
+func (agents *fakeManagedAgents) ListThreads(_ context.Context, member threads.Member, _ string) ([]threads.Thread, error) {
+	agents.members = append(agents.members, member)
+	return []threads.Thread{{ID: "agent_thread_1", Title: "Specialist work"}}, nil
+}
+func (agents *fakeManagedAgents) GetThread(_ context.Context, member threads.Member, _, _ string) (threads.Detail, error) {
+	agents.members = append(agents.members, member)
+	return threads.Detail{Thread: threads.Thread{ID: "agent_thread_1", Title: "Specialist work"}}, nil
+}
 func (agents *fakeManagedAgents) StartRun(_ context.Context, member threads.Member, _ string, threadID string, input threads.RunInput) (managedagents.StartedRun, error) {
 	agents.members = append(agents.members, member)
 	agents.lastInput = input
@@ -583,7 +591,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 51 {
+	if len(patterns) != 57 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)

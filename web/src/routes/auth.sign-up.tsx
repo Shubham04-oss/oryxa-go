@@ -6,6 +6,7 @@ import { GoogleButton } from "../components/auth/google-button";
 import { Alert, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { authErrorMessage, signUp } from "../lib/auth/client";
+import { passwordOnlyDemo } from "../lib/auth/demo";
 import {
 	fieldErrors,
 	type SignUpInput,
@@ -71,20 +72,42 @@ function SignUpPage() {
 			<p className="auth-subheading">
 				{invited
 					? "Use the email address your invitation was sent to."
-					: "Start with your work email."}
+					: passwordOnlyDemo
+						? "Create a demo account with your email and password."
+						: "Start with your work email."}
 			</p>
 
 			{submittedEmail ? (
 				<Alert className="auth-success">
 					<AlertDescription>
-						Check {submittedEmail} to verify your account.
+						{passwordOnlyDemo
+							? "Open the local demo inbox"
+							: `Check ${submittedEmail}`}{" "}
+						to verify your account.
 						{invited ? " Then sign in to accept your invitation." : ""}
+						{passwordOnlyDemo ? (
+							<>
+								{" "}
+								<a
+									className="auth-link"
+									href="http://localhost:8025"
+									rel="noreferrer"
+									target="_blank"
+								>
+									Open inbox
+								</a>
+							</>
+						) : null}
 					</AlertDescription>
 				</Alert>
 			) : (
 				<>
-					<GoogleButton returnTo={redirect ?? "/app"} />
-					<div className="auth-divider">or</div>
+					{!passwordOnlyDemo ? (
+						<>
+							<GoogleButton returnTo={redirect ?? "/app"} />
+							<div className="auth-divider">or</div>
+						</>
+					) : null}
 
 					{formError ? (
 						<Alert className="auth-alert" variant="destructive">

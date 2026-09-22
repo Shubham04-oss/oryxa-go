@@ -21,6 +21,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentsystem"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteamrooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentworkflows"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/assembly"
@@ -37,6 +38,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/specialistonboarding"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/wakeups"
@@ -94,6 +96,9 @@ func Migrate(ctx context.Context, platform host.Platform) error {
 	}
 	if err := agentworkflows.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
+	}
+	if err := agentteamrooms.NewStore(platform.Database).Migrate(ctx); err != nil {
+		return fmt.Errorf("migrate agent team rooms: %w", err)
 	}
 	if err := agentinteractions.NewStore(platform.Database).Migrate(ctx); err != nil {
 		return err
@@ -197,6 +202,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	var teamspaceService *teamspaces.Service
 	teamspaceStore := teamspaces.NewStore(platform.Database)
 	roomStore := rooms.NewStore(platform.Database)
+	teamRoomStore := agentteamrooms.NewStore(platform.Database)
 	if organizationDirectory != nil {
 		teamspaceService, err = teamspaces.New(teamspaceStore, organizationDirectory)
 		if err != nil {
@@ -400,12 +406,19 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 		logger.Info("teamspaces are rooms: people and their agents talk in them", "decider", deciderName(settings))
 	}
+	teamRoomService, err := agentteamrooms.New(teamRoomStore, teamService, agentRegistry, logger)
+	if err != nil {
+		closeAll()
+		return host.Service{}, err
+	}
 
 	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpserver.Config{
 		AllowedOrigins:      settings.AllowedOrigins,
 		RunTimeout:          settings.RunTimeout,
 		Agents:              agentRegistry,
+		SpecialistPlanner:   specialistonboarding.New(krude.Compact),
 		Teams:               teamService,
+		TeamRooms:           teamRoomService,
 		Workflows:           workflowService,
 		Interactions:        interactionService,
 		Teamspaces:          teamspaceService,

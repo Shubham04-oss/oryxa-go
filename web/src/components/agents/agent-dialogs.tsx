@@ -1,5 +1,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { ChevronDown, Sparkles, UsersRound } from "lucide-react";
 import { type ReactElement, useId, useMemo, useState } from "react";
+import {
+	SpecialistAvatar,
+	type SpecialistFocus,
+	specialistFocuses,
+	suggestedSpecialistInstructions,
+} from "@/components/agents/specialist-identity";
+import { SpecialistOnboardingDialog } from "@/components/agents/specialist-onboarding-dialog";
 import { AppAlert } from "@/components/app/app-alert";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -27,6 +36,7 @@ import {
 	type AgentInput,
 	type AgentTeam,
 	type AgentTeamInput,
+	type AgentWorkflow,
 	type AgentWorkflowInput,
 	agentsQueryKey,
 	agentTeamsQueryKey,
@@ -35,9 +45,12 @@ import {
 	createAgentTeam,
 	createAgentWorkflow,
 	type ManagedAgent,
+	scheduleLabel,
 	updateAgent,
+	updateAgentTeam,
 } from "@/lib/agents/client";
 import { apiErrorMessage } from "@/lib/api/client";
+import { relativeTime } from "@/lib/format";
 
 interface AgentDialogProps {
 	agent?: ManagedAgent;
@@ -45,7 +58,157 @@ interface AgentDialogProps {
 	trigger: ReactElement;
 }
 
+export function SpecialistProfileDialog({
+	agent,
+	memberships,
+	teamDataState,
+	trigger,
+	workflows,
+	workflowDataState,
+}: {
+	agent: ManagedAgent;
+	memberships: { role: string; team: AgentTeam }[];
+	teamDataState: "loading" | "error" | "ready";
+	trigger: ReactElement;
+	workflows: AgentWorkflow[];
+	workflowDataState: "loading" | "error" | "ready";
+}) {
+	return (
+		<Dialog>
+			<DialogTrigger asChild>{trigger}</DialogTrigger>
+			<DialogContent className="agent-dialog-wide specialist-profile-dialog">
+				<DialogHeader>
+					<DialogTitle className="sr-only">{agent.name} profile</DialogTitle>
+					<DialogDescription className="sr-only">
+						Specialist identity, assignments, and operating instructions
+					</DialogDescription>
+				</DialogHeader>
+				<div className="specialist-profile-hero">
+					<SpecialistAvatar name={agent.name} seed={agent.id} size="large" />
+					<div>
+						<span className="specialist-preview-eyebrow">
+							Specialist profile
+						</span>
+						<h2>{agent.name}</h2>
+						<p>{agent.description || "No purpose has been added yet."}</p>
+					</div>
+					<span
+						className="specialist-profile-status"
+						data-status={agent.status}
+					>
+						{agent.status === "active" ? "Active" : "Paused"}
+					</span>
+				</div>
+				<div className="specialist-profile-facts">
+					<div>
+						<span>Created</span>
+						<strong>{relativeTime(agent.created_at)}</strong>
+					</div>
+					<div>
+						<span>Last updated</span>
+						<strong>{relativeTime(agent.updated_at)}</strong>
+					</div>
+					<div>
+						<span>Teams</span>
+						<strong>
+							{teamDataState === "ready" ? memberships.length : "—"}
+						</strong>
+					</div>
+					<div>
+						<span>Workflows</span>
+						<strong>
+							{workflowDataState === "ready" ? workflows.length : "—"}
+						</strong>
+					</div>
+				</div>
+				<div className="specialist-profile-sections">
+					<section>
+						<h3>Team roles</h3>
+						{teamDataState !== "ready" ? (
+							<p>
+								{teamDataState === "error"
+									? "Team assignments could not be loaded."
+									: "Loading team assignments…"}
+							</p>
+						) : memberships.length ? (
+							memberships.map(({ team, role }) => (
+								<div className="specialist-profile-row" key={team.id}>
+									<strong>{team.name}</strong>
+									<span>{role}</span>
+								</div>
+							))
+						) : (
+							<p>No team assignments yet.</p>
+						)}
+					</section>
+					<section>
+						<h3>Workflow participation</h3>
+						{workflowDataState !== "ready" ? (
+							<p>
+								{workflowDataState === "error"
+									? "Workflow assignments could not be loaded."
+									: "Loading workflow assignments…"}
+							</p>
+						) : workflows.length ? (
+							workflows.map((workflow) => (
+								<div className="specialist-profile-row" key={workflow.id}>
+									<strong>{workflow.name}</strong>
+									<span>
+										{workflow.schedule
+											? scheduleLabel(workflow.schedule)
+											: "On demand"}
+									</span>
+								</div>
+							))
+						) : (
+							<p>Not assigned to a workflow yet.</p>
+						)}
+					</section>
+					<section className="specialist-profile-instructions">
+						<h3>Operating instructions</h3>
+						<p>{agent.instructions || "No instructions are set."}</p>
+					</section>
+					<section className="specialist-profile-integrations">
+						<h3>Make them part of your work</h3>
+						<p>
+							Talk directly from the specialist card, or give them grounded
+							sources and a coordinated role. These choices do not grant new
+							access by themselves.
+						</p>
+						<div>
+							<Link to="/app/knowledge">Review knowledge</Link>
+							<Link to="/app/connections">Review connected apps</Link>
+							<Link search={{ box: "inbox", tab: "teams" }} to="/app/agents">
+								Compose a team
+							</Link>
+						</div>
+					</section>
+				</div>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
 export function AgentDialog({
+	agent,
+	organizationId,
+	trigger,
+}: AgentDialogProps) {
+	return agent ? (
+		<ExistingAgentDialog
+			agent={agent}
+			organizationId={organizationId}
+			trigger={trigger}
+		/>
+	) : (
+		<SpecialistOnboardingDialog
+			organizationId={organizationId}
+			trigger={trigger}
+		/>
+	);
+}
+
+function ExistingAgentDialog({
 	agent,
 	organizationId,
 	trigger,
@@ -58,7 +221,10 @@ export function AgentDialog({
 	const [name, setName] = useState(agent?.name ?? "");
 	const [description, setDescription] = useState(agent?.description ?? "");
 	const [instructions, setInstructions] = useState(agent?.instructions ?? "");
+	const [focus, setFocus] = useState<SpecialistFocus | null>(null);
+	const [advanced, setAdvanced] = useState(Boolean(agent));
 	const [error, setError] = useState("");
+	const isPrimary = agent?.kind === "primary";
 	const save = useMutation({
 		mutationFn: (input: AgentInput) =>
 			agent
@@ -78,6 +244,8 @@ export function AgentDialog({
 			setName(agent?.name ?? "");
 			setDescription(agent?.description ?? "");
 			setInstructions(agent?.instructions ?? "");
+			setFocus(null);
+			setAdvanced(Boolean(agent));
 			setError("");
 			save.reset();
 		}
@@ -85,14 +253,26 @@ export function AgentDialog({
 
 	function submit(event: React.FormEvent<HTMLFormElement>) {
 		event.preventDefault();
-		if (!name.trim() || !description.trim() || !instructions.trim()) {
-			setError("Name, purpose, and operating instructions are required.");
+		if (!name.trim() || !description.trim()) {
+			setError("Give this agent a name and a clear purpose.");
+			return;
+		}
+		if (agent && !instructions.trim()) {
+			setError("Operating instructions are required for an existing agent.");
+			return;
+		}
+		if (!agent && !focus) {
+			setError("Choose the kind of work this specialist will own.");
 			return;
 		}
 		setError("");
 		save.mutate({
 			description: description.trim(),
-			instructions: instructions.trim(),
+			instructions:
+				instructions.trim() ||
+				(!agent && focus
+					? suggestedSpecialistInstructions(focus, description)
+					: ""),
 			name: name.trim(),
 		});
 	}
@@ -100,55 +280,129 @@ export function AgentDialog({
 	return (
 		<Dialog onOpenChange={changeOpen} open={open}>
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
-			<DialogContent className="agent-dialog-wide">
+			<DialogContent className="agent-dialog-wide specialist-dialog">
 				<DialogHeader>
 					<DialogTitle>
-						{agent ? `Edit ${agent.name}` : "New specialist"}
+						{agent ? `Edit ${agent.name}` : "Create a specialist"}
 					</DialogTitle>
 					<DialogDescription>
-						Give this agent one stable responsibility. It inherits your
-						connected apps but remains inside these instructions.
+						{isPrimary
+							? "Update the identity your team and collaborators see."
+							: "Start with the work this agent owns. You can refine its operating guidance whenever needed."}
 					</DialogDescription>
 				</DialogHeader>
-				<form className="dialog-form" onSubmit={submit}>
+				<form className="specialist-dialog-form" onSubmit={submit}>
 					{error ? <AppAlert>{error}</AppAlert> : null}
 					{save.isError ? (
 						<AppAlert>
 							{apiErrorMessage(save.error, "Could not save agent")}
 						</AppAlert>
 					) : null}
-					<div className="dialog-field">
-						<Label htmlFor={nameId}>Name</Label>
-						<Input
-							autoComplete="off"
-							id={nameId}
-							onChange={(event) => setName(event.target.value)}
-							placeholder="Revenue analyst"
-							value={name}
-						/>
-					</div>
-					<div className="dialog-field">
-						<Label htmlFor={descriptionId}>Purpose</Label>
-						<Input
-							id={descriptionId}
-							onChange={(event) => setDescription(event.target.value)}
-							placeholder="Qualifies inbound opportunities and summarizes account risk."
-							value={description}
-						/>
-					</div>
-					<div className="dialog-field">
-						<Label htmlFor={instructionsId}>Operating instructions</Label>
-						<Textarea
-							className="agent-instructions-field"
-							id={instructionsId}
-							onChange={(event) => setInstructions(event.target.value)}
-							placeholder="Define responsibilities, boundaries, expected inputs, tool use, and the exact result this specialist should return."
-							value={instructions}
-						/>
-						<p className="dialog-note">
-							Be explicit about what it must not do and when it should stop or
-							ask.
-						</p>
+					<div className="specialist-dialog-layout">
+						<div className="specialist-dialog-fields">
+							{!agent ? (
+								<fieldset className="specialist-focus-fieldset">
+									<legend>What will they focus on?</legend>
+									<div className="specialist-focus-grid">
+										{specialistFocuses.map((option) => {
+											const Icon = option.icon;
+											return (
+												<button
+													aria-pressed={focus === option.key}
+													className="specialist-focus-option"
+													data-selected={focus === option.key}
+													key={option.key}
+													onClick={() => setFocus(option.key)}
+													type="button"
+												>
+													<Icon aria-hidden />
+													<strong>{option.label}</strong>
+													<small>{option.caption}</small>
+												</button>
+											);
+										})}
+									</div>
+								</fieldset>
+							) : null}
+							<div className="dialog-field">
+								<Label htmlFor={nameId}>Name</Label>
+								<Input
+									autoComplete="off"
+									id={nameId}
+									onChange={(event) => setName(event.target.value)}
+									placeholder="e.g. Revenue analyst"
+									value={name}
+								/>
+							</div>
+							<div className="dialog-field">
+								<Label htmlFor={descriptionId}>
+									{isPrimary ? "Description" : "One clear purpose"}
+								</Label>
+								<Input
+									id={descriptionId}
+									onChange={(event) => setDescription(event.target.value)}
+									placeholder="Qualify inbound opportunities and surface account risks"
+									value={description}
+								/>
+							</div>
+							<div className="specialist-guidance">
+								<button
+									aria-expanded={advanced}
+									aria-controls={instructionsId}
+									className="specialist-guidance-toggle"
+									onClick={() => setAdvanced((value) => !value)}
+									type="button"
+								>
+									<span>
+										{agent
+											? "Operating instructions"
+											: "Customize operating guidance"}
+									</span>
+									<ChevronDown aria-hidden="true" />
+								</button>
+								{advanced ? (
+									<div className="specialist-guidance-body" id={instructionsId}>
+										<Label htmlFor={`${instructionsId}-text`}>
+											Instructions {agent ? "" : "(optional)"}
+										</Label>
+										<Textarea
+											className="agent-instructions-field"
+											id={`${instructionsId}-text`}
+											onChange={(event) => setInstructions(event.target.value)}
+											placeholder="Add specific boundaries, preferred tools, and what a finished result should contain."
+											value={instructions}
+										/>
+										<p className="dialog-note">
+											{agent
+												? "Changes take effect on future runs."
+												: "Leave blank for a bounded starting instruction based on the focus and purpose above."}
+										</p>
+									</div>
+								) : null}
+							</div>
+						</div>
+						{!isPrimary ? (
+							<aside className="specialist-dialog-preview">
+								<span className="specialist-preview-eyebrow">
+									<Sparkles aria-hidden="true" /> Identity preview
+								</span>
+								<SpecialistAvatar
+									name={name || "New specialist"}
+									seed={agent?.id ?? "new-specialist"}
+									size="large"
+								/>
+								<strong>{name.trim() || "Your specialist"}</strong>
+								<p>
+									{description.trim() ||
+										"One focused responsibility, ready to be shaped."}
+								</p>
+								<small>
+									{agent
+										? "Identity stays with this specialist across its runs."
+										: "A unique avatar is assigned when the specialist is created."}
+								</small>
+							</aside>
+						) : null}
 					</div>
 					<DialogFooter>
 						<DialogClose asChild>
@@ -173,12 +427,14 @@ export function AgentDialog({
 interface AgentTeamDialogProps {
 	agents: ManagedAgent[];
 	organizationId: string;
+	team?: AgentTeam;
 	trigger: ReactElement;
 }
 
 export function AgentTeamDialog({
 	agents,
 	organizationId,
+	team,
 	trigger,
 }: AgentTeamDialogProps) {
 	const queryClient = useQueryClient();
@@ -190,9 +446,11 @@ export function AgentTeamDialog({
 	const [roles, setRoles] = useState<Record<string, string>>({});
 	const [error, setError] = useState("");
 	const specialists = agents.filter((agent) => agent.kind === "specialist");
-	const create = useMutation({
+	const save = useMutation({
 		mutationFn: (input: AgentTeamInput) =>
-			createAgentTeam(organizationId, input),
+			team
+				? updateAgentTeam(organizationId, team.id, input)
+				: createAgentTeam(organizationId, input),
 		onSuccess: async () => {
 			await queryClient.invalidateQueries({
 				queryKey: agentTeamsQueryKey(organizationId),
@@ -204,18 +462,25 @@ export function AgentTeamDialog({
 	function changeOpen(next: boolean) {
 		setOpen(next);
 		if (next) {
-			setName("");
-			setDescription("");
-			setRoles({});
+			setName(team?.name ?? "");
+			setDescription(team?.description ?? "");
+			setRoles(
+				Object.fromEntries(
+					team?.members.map((member) => [member.agent_id, member.role]) ?? [],
+				),
+			);
 			setError("");
-			create.reset();
+			save.reset();
 		}
 	}
 
 	function toggle(agent: ManagedAgent, checked: boolean) {
 		setRoles((current) => {
 			const next = { ...current };
-			if (checked) next[agent.id] = agent.description;
+			if (checked)
+				next[agent.id] =
+					agent.description.trim().slice(0, 280) ||
+					`Contribute ${agent.name}'s expertise`;
 			else delete next[agent.id];
 			return next;
 		});
@@ -235,7 +500,7 @@ export function AgentTeamDialog({
 			return;
 		}
 		setError("");
-		create.mutate({
+		save.mutate({
 			description: description.trim(),
 			members,
 			name: name.trim(),
@@ -245,80 +510,151 @@ export function AgentTeamDialog({
 	return (
 		<Dialog onOpenChange={changeOpen} open={open}>
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
-			<DialogContent className="agent-dialog-wide">
+			<DialogContent className="agent-team-builder-dialog">
 				<DialogHeader>
-					<DialogTitle>New agent team</DialogTitle>
+					<DialogTitle>
+						{team ? "Edit agent team" : "Build an agent team"}
+					</DialogTitle>
 					<DialogDescription>
-						Your primary agent coordinates the specialists you select here.
+						Choose a shared mission and the specialists who will work together
+						in its group chat.
 					</DialogDescription>
 				</DialogHeader>
-				<form className="dialog-form" onSubmit={submit}>
+				<form className="agent-team-builder" onSubmit={submit}>
 					{error ? <AppAlert>{error}</AppAlert> : null}
-					{create.isError ? (
+					{save.isError ? (
 						<AppAlert>
-							{apiErrorMessage(create.error, "Could not create team")}
+							{apiErrorMessage(save.error, "Could not save team")}
 						</AppAlert>
 					) : null}
-					<div className="agent-dialog-grid">
-						<div className="dialog-field">
-							<Label htmlFor={nameId}>Name</Label>
-							<Input
-								id={nameId}
-								onChange={(event) => setName(event.target.value)}
-								placeholder="Go to market"
-								value={name}
-							/>
+					<div className="agent-team-builder-layout">
+						<div className="agent-team-builder-main">
+							<div className="agent-team-builder-intro">
+								<span className="agent-team-builder-icon">
+									<UsersRound aria-hidden />
+								</span>
+								<div>
+									<strong>Shared mission</strong>
+									<p>
+										Give the group one outcome. The primary agent coordinates;
+										each specialist keeps their own instructions.
+									</p>
+								</div>
+							</div>
+							<div className="agent-dialog-grid">
+								<div className="dialog-field">
+									<Label htmlFor={nameId}>Name</Label>
+									<Input
+										id={nameId}
+										onChange={(event) => setName(event.target.value)}
+										placeholder="Go to market"
+										value={name}
+									/>
+								</div>
+								<div className="dialog-field">
+									<Label htmlFor={descriptionId}>Purpose</Label>
+									<Input
+										id={descriptionId}
+										onChange={(event) => setDescription(event.target.value)}
+										placeholder="Prepare and review product launches."
+										value={description}
+									/>
+								</div>
+							</div>
+							<div className="dialog-field">
+								<Label>Choose collaborators</Label>
+								<small className="agent-team-builder-help">
+									Select specialists and clarify what each one owns. You can
+									change the roster later.
+								</small>
+								<div className="agent-picker agent-team-builder-picker">
+									{specialists.length === 0 ? (
+										<p className="dialog-note">
+											Create a specialist before composing a team.
+										</p>
+									) : (
+										specialists.map((agent) => {
+											const selected = roles[agent.id] !== undefined;
+											return (
+												<div
+													className="agent-picker-row"
+													data-selected={selected}
+													key={agent.id}
+												>
+													<Checkbox
+														aria-label={`Include ${agent.name}`}
+														checked={selected}
+														onCheckedChange={(value) =>
+															toggle(agent, value === true)
+														}
+													/>
+													<div className="agent-picker-identity">
+														<SpecialistAvatar
+															name={agent.name}
+															seed={agent.id}
+															size="small"
+														/>
+														<span>
+															<strong>{agent.name}</strong>
+															<small>{agent.description}</small>
+														</span>
+													</div>
+													<Input
+														aria-label={`${agent.name} role`}
+														disabled={!selected}
+														onChange={(event) =>
+															setRoles((current) => ({
+																...current,
+																[agent.id]: event.target.value,
+															}))
+														}
+														placeholder="What this specialist owns"
+														value={roles[agent.id] ?? ""}
+													/>
+												</div>
+											);
+										})
+									)}
+								</div>
+							</div>
 						</div>
-						<div className="dialog-field">
-							<Label htmlFor={descriptionId}>Purpose</Label>
-							<Input
-								id={descriptionId}
-								onChange={(event) => setDescription(event.target.value)}
-								placeholder="Prepare and review product launches."
-								value={description}
-							/>
-						</div>
-					</div>
-					<div className="dialog-field">
-						<Label>Specialists and roles</Label>
-						<div className="agent-picker">
-							{specialists.length === 0 ? (
-								<p className="dialog-note">
-									Create a specialist before composing a team.
-								</p>
-							) : (
-								specialists.map((agent) => {
-									const selected = roles[agent.id] !== undefined;
-									return (
-										<div className="agent-picker-row" key={agent.id}>
-											<Checkbox
-												aria-label={`Include ${agent.name}`}
-												checked={selected}
-												onCheckedChange={(value) =>
-													toggle(agent, value === true)
-												}
+						<aside className="agent-team-builder-preview">
+							<span className="agent-eyebrow">Live preview</span>
+							<h3>{name.trim() || "Your team"}</h3>
+							<p>
+								{description.trim() || "The shared purpose will appear here."}
+							</p>
+							<div className="agent-team-builder-preview-roster">
+								<span>Group chat participants</span>
+								<div>
+									<span className="agent-team-builder-preview-primary">
+										<Sparkles aria-hidden />
+									</span>
+									<strong>Primary agent</strong>
+									<small>Coordinator</small>
+								</div>
+								{specialists
+									.filter((agent) => roles[agent.id] !== undefined)
+									.map((agent) => (
+										<div key={agent.id}>
+											<SpecialistAvatar
+												name={agent.name}
+												seed={agent.id}
+												size="small"
 											/>
-											<div>
-												<strong>{agent.name}</strong>
-												<small>{agent.description}</small>
-											</div>
-											<Input
-												aria-label={`${agent.name} role`}
-												disabled={!selected}
-												onChange={(event) =>
-													setRoles((current) => ({
-														...current,
-														[agent.id]: event.target.value,
-													}))
-												}
-												placeholder="What this specialist owns"
-												value={roles[agent.id] ?? ""}
-											/>
+											<strong>{agent.name}</strong>
+											<small>{roles[agent.id] || "Role needed"}</small>
 										</div>
-									);
-								})
-							)}
-						</div>
+									))}
+								{!Object.keys(roles).length ? (
+									<p>Select a specialist to see the group take shape.</p>
+								) : null}
+							</div>
+							<small>
+								In chat, @mention a teammate directly or let the primary agent
+								route the request.
+							</small>
+						</aside>
 					</div>
 					<DialogFooter>
 						<DialogClose asChild>
@@ -327,10 +663,10 @@ export function AgentTeamDialog({
 							</Button>
 						</DialogClose>
 						<Button
-							disabled={create.isPending || specialists.length === 0}
+							disabled={save.isPending || specialists.length === 0}
 							type="submit"
 						>
-							{create.isPending ? "Creating…" : "Create team"}
+							{save.isPending ? "Saving…" : team ? "Save team" : "Create team"}
 						</Button>
 					</DialogFooter>
 				</form>
@@ -492,9 +828,16 @@ export function AgentWorkflowDialog({
 						<div className="agent-assignment-list">
 							{team?.members.map((member) => (
 								<div className="agent-assignment-row" key={member.agent_id}>
-									<div>
-										<strong>{member.name}</strong>
-										<small>{member.role}</small>
+									<div className="agent-picker-identity">
+										<SpecialistAvatar
+											name={member.name}
+											seed={member.agent_id}
+											size="small"
+										/>
+										<span>
+											<strong>{member.name}</strong>
+											<small>{member.role}</small>
+										</span>
 									</div>
 									<Textarea
 										aria-label={`${member.name} assignment`}

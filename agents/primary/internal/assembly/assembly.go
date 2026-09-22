@@ -25,6 +25,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentcoresandbox"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/guardrail"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/knowledgeclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelcache"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/modelrouter"
@@ -285,8 +286,13 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 	}
 	if settings.RagURL != "" {
+		var sources agents.KnowledgeSources
+		if settings.KnowledgeURL != "" {
+			sources = knowledgeclient.New(settings.KnowledgeURL, nil)
+		}
 		knowledgeToolbox, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
 			Rag:          ragclient.New(settings.RagURL, nil),
+			Sources:      sources,
 			Tokens:       tokens,
 			MinRelevance: settings.KnowledgeMinRelevance,
 		})
@@ -294,8 +300,18 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 			logger.WarnContext(ctx, "knowledge toolbox unavailable, running without it", "error", err)
 		} else {
 			toolboxes = append(toolboxes, knowledgeToolbox)
-			unattended = append(unattended, knowledgeToolbox)
-			unattendedQuiet = append(unattendedQuiet, knowledgeToolbox)
+			readOnlyKnowledge, err := agents.KnowledgeToolbox(agents.KnowledgeConfig{
+				Rag:          ragclient.New(settings.RagURL, nil),
+				Sources:      sources,
+				ReadOnly:     true,
+				Tokens:       tokens,
+				MinRelevance: settings.KnowledgeMinRelevance,
+			})
+			if err != nil {
+				return fail("read-only knowledge toolbox", err)
+			}
+			unattended = append(unattended, readOnlyKnowledge)
+			unattendedQuiet = append(unattendedQuiet, readOnlyKnowledge)
 			logger.InfoContext(ctx, "knowledge toolbox", "url", settings.RagURL)
 		}
 	}
