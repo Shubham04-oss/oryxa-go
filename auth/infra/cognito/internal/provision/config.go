@@ -18,6 +18,7 @@ type Config struct {
 	DomainPrefix       string
 	GoogleClientID     string
 	GoogleClientSecret string
+	DemoPasswordOnly   bool
 	CallbackURLs       []string
 	LogoutURLs         []string
 	// AgentCallbackURL is COGNITO_AGENT_CALLBACK_URL: {auth public
@@ -34,13 +35,21 @@ func FromEnv() (Config, error) {
 		DomainPrefix:       strings.TrimSpace(os.Getenv("COGNITO_DOMAIN_PREFIX")),
 		GoogleClientID:     strings.TrimSpace(os.Getenv("GOOGLE_OAUTH_CLIENT_ID")),
 		GoogleClientSecret: strings.TrimSpace(os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET")),
+		DemoPasswordOnly:   strings.EqualFold(strings.TrimSpace(os.Getenv("COGNITO_DEMO_PASSWORD_ONLY")), "true"),
 		CallbackURLs:       splitList(os.Getenv("COGNITO_CALLBACK_URLS")),
 		LogoutURLs:         splitList(os.Getenv("COGNITO_LOGOUT_URLS")),
 		AgentCallbackURL:   strings.TrimSpace(os.Getenv("COGNITO_AGENT_CALLBACK_URL")),
 	}
 
-	if config.DomainPrefix == "" || config.GoogleClientID == "" || config.GoogleClientSecret == "" {
-		return Config{}, errors.New("COGNITO_DOMAIN_PREFIX, GOOGLE_OAUTH_CLIENT_ID, and GOOGLE_OAUTH_CLIENT_SECRET are required")
+	if config.DomainPrefix == "" {
+		return Config{}, errors.New("COGNITO_DOMAIN_PREFIX is required")
+	}
+	if config.DemoPasswordOnly {
+		if config.GoogleClientID != "" || config.GoogleClientSecret != "" {
+			return Config{}, errors.New("COGNITO_DEMO_PASSWORD_ONLY cannot be used with Google OAuth credentials")
+		}
+	} else if config.GoogleClientID == "" || config.GoogleClientSecret == "" {
+		return Config{}, errors.New("GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET are required unless COGNITO_DEMO_PASSWORD_ONLY=true")
 	}
 	if !domainPrefixPattern.MatchString(config.DomainPrefix) {
 		return Config{}, errors.New("COGNITO_DOMAIN_PREFIX must use 1-63 lowercase letters, numbers, or interior hyphens")

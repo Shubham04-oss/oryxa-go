@@ -198,6 +198,35 @@ func (service *Service) Delete(ctx context.Context, scope Scope, id string) erro
 	return service.repository.Delete(ctx, scope, id)
 }
 
+// ListThreads returns this member's conversations with one specialist. The
+// agent's stable ID selects a separate session namespace from the primary.
+func (service *Service) ListThreads(ctx context.Context, member threads.Member, id string) ([]threads.Thread, error) {
+	definition, err := service.repository.Get(ctx, Scope{OrganizationID: member.OrganizationID, UserID: member.UserID}, id)
+	if err != nil {
+		return nil, err
+	}
+	engine, err := service.engine(definition, UnattendedReads)
+	if err != nil {
+		return nil, err
+	}
+	member.AgentID, member.AgentName, member.AgentKind = definition.ID, definition.Name, string(definition.Kind)
+	return engine.List(ctx, member)
+}
+
+// GetThread reads durable history in the same ownership boundary as runs.
+func (service *Service) GetThread(ctx context.Context, member threads.Member, id, threadID string) (threads.Detail, error) {
+	definition, err := service.repository.Get(ctx, Scope{OrganizationID: member.OrganizationID, UserID: member.UserID}, id)
+	if err != nil {
+		return threads.Detail{}, err
+	}
+	engine, err := service.engine(definition, UnattendedReads)
+	if err != nil {
+		return threads.Detail{}, err
+	}
+	member.AgentID, member.AgentName, member.AgentKind = definition.ID, definition.Name, string(definition.Kind)
+	return engine.Get(ctx, member, threadID)
+}
+
 // StartRun starts or continues one agent-owned conversation. An empty
 // threadID allocates it; a later call uses the returned ID for follow-ups or
 // tool confirmation answers.

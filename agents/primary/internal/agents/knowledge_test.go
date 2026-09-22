@@ -11,8 +11,12 @@ import (
 
 	"google.golang.org/genai"
 
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/model"
+	"google.golang.org/adk/v2/session"
+	"google.golang.org/adk/v2/tool"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/knowledgeclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/ragclient"
 )
@@ -75,6 +79,22 @@ func match(title, source, text string, score float64, headings ...string) ragcli
 
 type fakeTokens struct{ token string }
 
+type fakeKnowledgeSources struct {
+	listed []knowledgeclient.Source
+	called string
+}
+
+type syncableKnowledgeSources struct{ fakeKnowledgeSources }
+
+func (*syncableKnowledgeSources) SyncSource(context.Context, string, string, string) (knowledgeclient.Source, error) {
+	return knowledgeclient.Source{ID: "s1", Status: "active"}, nil
+}
+
+func (source *fakeKnowledgeSources) Sources(_ context.Context, org, token, provider, connection string) ([]knowledgeclient.Source, error) {
+	source.called = org + " " + token + " " + provider + " " + connection
+	return source.listed, nil
+}
+
 func (tokens fakeTokens) AgentToken(context.Context, string) (string, time.Time, error) {
 	return tokens.token, time.Now().Add(time.Hour), nil
 }
@@ -115,6 +135,72 @@ func TestKnowledgeToolboxNeedsRag(t *testing.T) {
 	}
 	if _, err := newToolCatalog([]Toolbox{box}); err != nil {
 		t.Fatalf("newToolCatalog() error = %v", err)
+	}
+}
+
+func TestKnowledgeSourcesReportsIndexedCoverageAsMember(t *testing.T) {
+	last := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	source := &fakeKnowledgeSources{listed: []knowledgeclient.Source{{ID: "s1", Provider: "github", ConnectionID: "c1", Target: map[string]string{"repository": "acme/app"}, Status: "active", LastSyncedAt: &last}}}
+	box, err := KnowledgeToolbox(KnowledgeConfig{Rag: &fakeRag{}, Sources: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		switch {
+		case functionResponse(request, "knowledge_sources") != "":
+			return genai.NewContentFromText(functionResponse(request, "knowledge_sources"), genai.RoleModel)
+		case functionResponse(request, "load_tools") != "":
+			return functionCalls(&genai.FunctionCall{ID: "status", Name: "knowledge_sources", Args: map[string]any{"provider": "github", "connection_id": "c1"}})
+		default:
+			return functionCalls(&genai.FunctionCall{ID: "load", Name: "load_tools", Args: map[string]any{"names": []any{"knowledge"}}})
+		}
+	})
+	h := newHarness(t, llm, box)
+	answer := h.turnWith(memberauth.WithAccessToken(context.Background(), "own-token"), "user-1", map[string]any{OrganizationIDKey: "org-1"}, "What is indexed?")
+	if source.called != "org-1 own-token github c1" || !strings.Contains(answer, "2026-09-20T10:00:00Z") || !strings.Contains(answer, "acme/app") {
+		t.Fatalf("called=%q answer=%q", source.called, answer)
+	}
+}
+
+func TestKnowledgeRefreshNeedsConfirmationAndIsAbsentUnattended(t *testing.T) {
+	sources := &syncableKnowledgeSources{}
+	for _, readonly := range []bool{false, true} {
+		box, err := KnowledgeToolbox(KnowledgeConfig{Rag: &fakeRag{}, Sources: sources, ReadOnly: readonly})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sessions := session.InMemoryService()
+		created, err := sessions.Create(context.Background(), &session.CreateRequest{AppName: "test", UserID: "u", State: map[string]any{OrganizationIDKey: "o"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		invocation := &fakeInvocationContext{base: context.Background(), session: created.Session}
+		available, err := box.Toolset.Tools(agent.NewContext(invocation))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var refresh tool.Tool
+		for _, candidate := range available {
+			if candidate.Name() == "knowledge_sync_source" {
+				refresh = candidate
+			}
+		}
+		if readonly {
+			if refresh != nil {
+				t.Fatal("unattended knowledge can schedule indexing")
+			}
+			continue
+		}
+		if refresh == nil {
+			t.Fatal("attended knowledge cannot schedule indexing")
+		}
+		runnable := refresh.(interface {
+			Run(agent.Context, any) (map[string]any, error)
+		})
+		ctx := agent.NewToolContext(invocation, "call", &session.EventActions{StateDelta: map[string]any{}}, nil)
+		if _, err := runnable.Run(ctx, map[string]any{"source_id": "s1"}); !errors.Is(err, tool.ErrConfirmationRequired) {
+			t.Fatalf("sync before confirmation = %v", err)
+		}
 	}
 }
 
@@ -203,6 +289,19 @@ func TestKnowledgeSearchReportsWhatItCouldNotRead(t *testing.T) {
 	answer := h.turnWith(ctx, "user-1", map[string]any{OrganizationIDKey: "org-1"}, "Search.")
 	if !strings.Contains(answer, "found it") || !strings.Contains(answer, "corpus_b") || !strings.Contains(answer, ragclient.ErrDenied.Error()) {
 		t.Fatalf("answer = %q, want the passage found and why the other collection was not read", answer)
+	}
+}
+
+func TestKnowledgeSearchDisclosesCollectionsBeyondItsCap(t *testing.T) {
+	ids := []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9"}
+	box, err := KnowledgeToolbox(KnowledgeConfig{Rag: &fakeRag{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newHarness(t, searchesKnowledgeLLM("launch", ids...), box)
+	answer := h.turnWith(memberauth.WithAccessToken(context.Background(), "t"), "user-1", map[string]any{OrganizationIDKey: "org-1"}, "Search.")
+	if !strings.Contains(answer, "c9") || !strings.Contains(answer, "collection limit reached") {
+		t.Fatalf("answer = %q, want to disclose the collection not searched", answer)
 	}
 }
 

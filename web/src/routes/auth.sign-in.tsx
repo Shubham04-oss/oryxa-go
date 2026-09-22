@@ -8,6 +8,7 @@ import { Alert, AlertDescription } from "../components/ui/alert";
 import { Button } from "../components/ui/button";
 import { ApiError } from "../lib/api/client";
 import { authErrorMessage, signIn } from "../lib/auth/client";
+import { passwordOnlyDemo } from "../lib/auth/demo";
 import {
 	fieldErrors,
 	type SignInInput,
@@ -76,11 +77,17 @@ function SignInPage() {
 			<p className="auth-subheading">
 				{isInvitationRedirect(redirect)
 					? "Sign in with the email address your invitation was sent to."
-					: "Sign in to The Weirdly ODD."}
+					: passwordOnlyDemo
+						? "Demo sign-in uses email and password. New here? Create an account below."
+						: "Sign in to The Weirdly ODD."}
 			</p>
 
-			<GoogleButton returnTo={destination} />
-			<div className="auth-divider">or</div>
+			{!passwordOnlyDemo ? (
+				<>
+					<GoogleButton returnTo={destination} />
+					<div className="auth-divider">or</div>
+				</>
+			) : null}
 
 			{formError ? (
 				<Alert className="auth-alert" variant="destructive">

@@ -64,6 +64,11 @@ Copy the root `.env.example` to the ignored `.env`, fill in auth's section with 
 
 The repeatable provisioner creates or updates an Essentials-tier user pool in `ap-south-1`, enables deletion protection, registers Google, and creates a public client with authorization-code, password-auth, 15-minute access tokens, and refresh-token rotation support. Direct Cognito self-signup remains disabled: auth creates password users administratively with Cognito delivery suppressed. Add the provisioner's `google_redirect_uri` output to the Google OAuth client's authorized redirect URIs. Google credentials are provisioning inputs and must not be passed to the auth container.
 
+For a local email/password-only demo without Google OAuth credentials, set
+`COGNITO_DEMO_PASSWORD_ONLY=true` only for the provisioner run. This skips the
+Google identity provider, restricts the app client to `COGNITO`, and returns no
+`google_redirect_uri`. Do not use this flag for production provisioning.
+
 ## PostgreSQL and local runtime
 
 The embedded migrations are in `internal/postgres/migrations/` and are applied in name order automatically at start unless `ORYXA_AUTO_MIGRATE=false`, in which case install them explicitly with `go run ./cmd/oryxa migrate`; each is safe to run again. To apply them directly to the existing mini container instead:

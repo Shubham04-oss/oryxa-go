@@ -9,12 +9,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/tool"
 	"google.golang.org/adk/v2/tool/functiontool"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/knowledgeclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/ragclient"
 )
@@ -45,9 +47,23 @@ type Knowledge interface {
 	Search(ctx context.Context, organizationID, corpusID, token, query string, topK int, minScore float64) ([]ragclient.Match, error)
 }
 
+// KnowledgeSources is the member-scoped read-only view of what knowledge is
+// indexing. It is separate from RAG, which owns searching, not extraction.
+type KnowledgeSources interface {
+	Sources(ctx context.Context, organizationID, token, provider, connectionID string) ([]knowledgeclient.Source, error)
+}
+
+type KnowledgeSyncer interface {
+	SyncSource(ctx context.Context, organizationID, sourceID, token string) (knowledgeclient.Source, error)
+}
+
 // KnowledgeConfig configures KnowledgeToolbox.
 type KnowledgeConfig struct {
 	Rag Knowledge
+	// Sources is optional when the knowledge service is not configured.
+	Sources KnowledgeSources
+	// ReadOnly excludes scheduling an extraction in unattended runs.
+	ReadOnly bool
 	// Tokens mints an agent token for a session's user when a run carries no
 	// member access token of its own. See memberauth.TokenSource.
 	Tokens memberauth.TokenSource
@@ -74,7 +90,7 @@ func KnowledgeToolbox(config KnowledgeConfig) (Toolbox, error) {
 	if config.Rag == nil {
 		return Toolbox{}, errors.New("agents: KnowledgeToolbox requires rag")
 	}
-	knowledge := knowledgeTools{rag: config.Rag, tokens: config.Tokens, minRelevance: config.MinRelevance}
+	knowledge := knowledgeTools{rag: config.Rag, sources: config.Sources, tokens: config.Tokens, minRelevance: config.MinRelevance}
 	collections, err := functiontool.New(functiontool.Config{
 		Name:        "knowledge_collections",
 		Description: "Lists the collections of documents the member can search: their own and their organization's, with how many documents each holds.",
@@ -89,18 +105,109 @@ func KnowledgeToolbox(config KnowledgeConfig) (Toolbox, error) {
 	if err != nil {
 		return Toolbox{}, err
 	}
+	tools := []tool.Tool{collections, search}
+	if config.Sources != nil {
+		status, err := functiontool.New(functiontool.Config{
+			Name:        "knowledge_sources",
+			Description: "Lists connected-app targets and files registered for indexing, with each source's status and last completed extraction. Read this to assess coverage and freshness before relying on the index for recent events.",
+		}, knowledge.sourcesStatus)
+		if err != nil {
+			return Toolbox{}, err
+		}
+		tools = append(tools, status)
+		if syncer, ok := config.Sources.(KnowledgeSyncer); ok && !config.ReadOnly {
+			knowledge.syncer = syncer
+			syncTool, err := functiontool.New(functiontool.Config{
+				Name: "knowledge_sync_source", RequireConfirmation: true,
+				Description: "After member confirmation, schedules a new extraction for one existing source the member may manage; does not wait for extraction or RAG ingestion.",
+			}, knowledge.syncSource)
+			if err != nil {
+				return Toolbox{}, err
+			}
+			tools = append(tools, syncTool)
+		}
+	}
 	return Toolbox{
 		Name:         "knowledge",
 		Description:  "The organization's own documents — the member's and their organization's collections, including what their connected apps hold — searched for passages to answer from and cite.",
 		Instructions: knowledgeInstructions,
-		Toolset:      fixedTools{name: "knowledge", tools: []tool.Tool{collections, search}},
+		Toolset:      fixedTools{name: "knowledge", tools: tools},
 	}, nil
 }
 
 type knowledgeTools struct {
 	rag          Knowledge
+	sources      KnowledgeSources
+	syncer       KnowledgeSyncer
 	tokens       memberauth.TokenSource
 	minRelevance float64
+}
+
+const maxSourcesListed = 50
+
+type sourcesArgs struct {
+	Provider     string `json:"provider,omitempty" jsonschema:"Optional source provider, such as github, notion, slack, googledrive, gmail or files."`
+	ConnectionID string `json:"connection_id,omitempty" jsonschema:"Optional connection ID, when checking coverage for a particular connected app."`
+}
+
+type sourceStatus struct {
+	ID           string            `json:"id"`
+	Provider     string            `json:"provider"`
+	ConnectionID string            `json:"connection_id,omitempty"`
+	Target       map[string]string `json:"target"`
+	Status       string            `json:"status"`
+	Reason       string            `json:"reason,omitempty"`
+	SyncAt       *time.Time        `json:"sync_at,omitempty"`
+	LastSyncedAt *time.Time        `json:"last_synced_at,omitempty"`
+}
+
+type sourcesResult struct {
+	Sources   []sourceStatus `json:"sources"`
+	Total     int            `json:"total"`
+	Truncated bool           `json:"truncated"`
+}
+
+type syncSourceArgs struct {
+	SourceID string `json:"source_id" jsonschema:"The existing indexing source ID returned by knowledge_sources."`
+}
+
+func (knowledge knowledgeTools) syncSource(ctx agent.Context, args syncSourceArgs) (sourceStatus, error) {
+	if strings.TrimSpace(args.SourceID) == "" {
+		return sourceStatus{}, errors.New("name a source returned by knowledge_sources")
+	}
+	member, token, err := memberauth.Bearer(ctx, knowledge.tokens)
+	if err != nil {
+		return sourceStatus{}, explained(err)
+	}
+	source, err := knowledge.syncer.SyncSource(ctx, member.OrganizationID, strings.TrimSpace(args.SourceID), token)
+	if err != nil {
+		return sourceStatus{}, explained(err)
+	}
+	return statusOf(source), nil
+}
+
+func (knowledge knowledgeTools) sourcesStatus(ctx agent.Context, args sourcesArgs) (sourcesResult, error) {
+	member, token, err := memberauth.Bearer(ctx, knowledge.tokens)
+	if err != nil {
+		return sourcesResult{}, explained(err)
+	}
+	listed, err := knowledge.sources.Sources(ctx, member.OrganizationID, token, strings.TrimSpace(args.Provider), strings.TrimSpace(args.ConnectionID))
+	if err != nil {
+		return sourcesResult{}, explained(err)
+	}
+	result := sourcesResult{Sources: make([]sourceStatus, 0, min(len(listed), maxSourcesListed)), Total: len(listed), Truncated: len(listed) > maxSourcesListed}
+	for _, source := range listed[:min(len(listed), maxSourcesListed)] {
+		result.Sources = append(result.Sources, statusOf(source))
+	}
+	return result, nil
+}
+
+func statusOf(source knowledgeclient.Source) sourceStatus {
+	return sourceStatus{
+		ID: source.ID, Provider: source.Provider, ConnectionID: source.ConnectionID,
+		Target: source.Target, Status: source.Status, Reason: source.Reason,
+		SyncAt: source.SyncAt, LastSyncedAt: source.LastSyncedAt,
+	}
 }
 
 type collectionsArgs struct{}
@@ -195,7 +302,13 @@ func (knowledge knowledgeTools) search(ctx agent.Context, args searchArgs) (sear
 			return searchResult{Passages: []Passage{}}, nil
 		}
 	}
+	var result searchResult
 	if len(collectionIDs) > maxCollectionsSearched {
+		for _, id := range collectionIDs[maxCollectionsSearched:] {
+			// A cap is not proof that these collections held no answer.
+			// Surface it to the agent so it can narrow and search again.
+			result.Unsearched = append(result.Unsearched, Unsearched{CollectionID: id, Reason: "collection limit reached; search this collection explicitly"})
+		}
 		collectionIDs = collectionIDs[:maxCollectionsSearched]
 	}
 
@@ -214,7 +327,6 @@ func (knowledge knowledgeTools) search(ctx agent.Context, args searchArgs) (sear
 	}
 	group.Wait()
 
-	var result searchResult
 	var firstErr error
 	for _, searched := range results {
 		if searched.err != nil {
@@ -269,7 +381,7 @@ func explained(err error) error {
 	if known := memberauth.Explain(err); known != nil {
 		return known
 	}
-	for _, known := range []error{ragclient.ErrDenied, ragclient.ErrNotFound, ragclient.ErrUnavailable, context.DeadlineExceeded, context.Canceled} {
+	for _, known := range []error{ragclient.ErrDenied, ragclient.ErrNotFound, ragclient.ErrUnavailable, knowledgeclient.ErrDenied, knowledgeclient.ErrUnavailable, knowledgeclient.ErrNeedsReconnect, knowledgeclient.ErrNotFound, knowledgeclient.ErrConflict, context.DeadlineExceeded, context.Canceled} {
 		if errors.Is(err, known) {
 			return known
 		}

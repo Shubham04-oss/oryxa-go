@@ -149,13 +149,6 @@ export function TeamspacesPage({ selectedId }: { selectedId?: string }) {
 			description="Where teammates’ primary agents collaborate quietly, and only intentional work becomes shared context."
 			title="Teamspaces"
 		>
-			<OrganizationPulse
-				agent={organizationAgent.data}
-				context={context.data}
-				contextMissing={contextMissing}
-				followUps={followUps.data ?? []}
-				organizationId={organization.id}
-			/>
 			{context.isError && !contextMissing ? (
 				<QueryError
 					error={context.error}
@@ -186,7 +179,7 @@ export function TeamspacesPage({ selectedId }: { selectedId?: string }) {
 				</Card>
 			) : null}
 			{spaces.data?.length === 0 ? (
-				<Card className="workspace-panel">
+				<Card className="workspace-panel teamspace-first-space">
 					<EmptyState
 						action={
 							canCreate && teams.data ? (
@@ -198,12 +191,22 @@ export function TeamspacesPage({ selectedId }: { selectedId?: string }) {
 									teams={teams.data}
 									trigger={<Button type="button">Create Teamspace</Button>}
 								/>
-							) : undefined
+							) : teams.data?.length === 0 ? (
+								<Button asChild type="button">
+									<Link to="/app/teams">Create a human team</Link>
+								</Button>
+							) : (
+								<Button asChild type="button" variant="outline">
+									<Link to="/app/teams">Open People &amp; teams</Link>
+								</Button>
+							)
 						}
 						description={
 							canCreate
-								? "Choose a human team and give its agents a deliberate shared-work surface."
-								: "A team manager can create a Teamspace for a team you belong to."
+								? "Choose a human team to open its group conversation, agent roster, and shared work."
+								: teams.data?.length === 0
+									? "Teamspaces belong to human teams. Create a team first, then open its shared room."
+									: "A team manager can create a Teamspace for a team you belong to."
 						}
 						icon={Network}
 						title="No shared spaces yet"
@@ -211,8 +214,13 @@ export function TeamspacesPage({ selectedId }: { selectedId?: string }) {
 				</Card>
 			) : null}
 			{spaces.data && spaces.data.length > 0 ? (
-				<div className="teamspace-cockpit">
-					<TeamspaceList selectedId={selected?.id} spaces={spaces.data} />
+				<div
+					className="teamspace-cockpit"
+					data-single={spaces.data.length === 1}
+				>
+					{spaces.data.length > 1 ? (
+						<TeamspaceList selectedId={selected?.id} spaces={spaces.data} />
+					) : null}
 					{selectedQuery.isError ? (
 						<Card className="workspace-panel teams-panel-empty">
 							<QueryError
@@ -240,6 +248,13 @@ export function TeamspacesPage({ selectedId }: { selectedId?: string }) {
 					)}
 				</div>
 			) : null}
+			<OrganizationPulse
+				agent={organizationAgent.data}
+				context={context.data}
+				contextMissing={contextMissing}
+				followUps={followUps.data ?? []}
+				organizationId={organization.id}
+			/>
 		</WorkspacePage>
 	);
 }
@@ -512,19 +527,38 @@ function TeamspaceDetail({
 				</div>
 			</header>
 
+			{space.is_member ? (
+				<TeamspaceRoom
+					active={space.status === "active"}
+					organizationId={organizationId}
+					teamspaceId={space.id}
+					userId={userId}
+				/>
+			) : (
+				<div className="teamspace-room teamspace-room-unavailable">
+					<Network aria-hidden="true" />
+					<strong>This conversation belongs to the team</strong>
+					<p>Join {space.team_name} to read and participate in its room.</p>
+					<Button asChild size="sm" variant="outline">
+						<Link to="/app/teams">Open People &amp; teams</Link>
+					</Button>
+				</div>
+			)}
+
 			<div className="teamspace-boundary">
 				<ShieldCheck aria-hidden="true" />
 				<div>
-					<strong>Whisperer presence, deliberate sharing</strong>
+					<strong>Shared room, private boundaries</strong>
 					<span>
-						Primary agents advise their owners privately. Only a published
-						summary, its attribution, and declared tool use enter this ledger.
+						Agents can speak in this room, but their private instructions,
+						conversations, and connections stay with their owners. Room
+						decisions can enter the shared ledger.
 					</span>
 				</div>
 			</div>
 
 			<section
-				className="teamspace-roster"
+				className="teamspace-roster teamspace-whisperers"
 				aria-labelledby="whisperers-heading"
 			>
 				<header>
@@ -559,7 +593,7 @@ function TeamspaceDetail({
 			</section>
 
 			<section
-				className="teamspace-roster"
+				className="teamspace-roster teamspace-specialists"
 				aria-labelledby="specialists-heading"
 			>
 				<header>
@@ -599,12 +633,6 @@ function TeamspaceDetail({
 					</p>
 				)}
 			</section>
-
-			<TeamspaceRoom
-				organizationId={organizationId}
-				teamspaceId={space.id}
-				userId={userId}
-			/>
 
 			<section className="teamspace-ledger" aria-labelledby="ledger-heading">
 				<header>

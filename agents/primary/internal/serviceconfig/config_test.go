@@ -34,7 +34,7 @@ func TestFromEnvDefaults(t *testing.T) {
 	if config.GuardrailIdentifier != "" || config.GuardrailVersion != "" || config.GuardrailFailClosed || config.ModelPrices != "" {
 		t.Fatalf("guardrail/pricing config = %+v", config)
 	}
-	if config.AppsURL != "" || config.RagURL != "" || config.TeamsURL != "" || config.AuthURL != "" || config.ServiceKeyID != "" {
+	if config.AppsURL != "" || config.RagURL != "" || config.KnowledgeURL != "" || config.TeamsURL != "" || config.AuthURL != "" || config.ServiceKeyID != "" {
 		t.Fatalf("apps config = %+v", config)
 	}
 	if len(config.AllowedOrigins) != 0 || config.RunTimeout != 10*time.Minute || config.DatabaseMaxConns != 8 {
@@ -60,6 +60,13 @@ func TestFromEnvReadsTeamsURL(t *testing.T) {
 	}
 	if config.TeamsURL != "https://teams.example.test" {
 		t.Fatalf("TeamsURL = %q", config.TeamsURL)
+	}
+}
+
+func TestFromEnvReadsKnowledgeURL(t *testing.T) {
+	config, err := FromEnv(env(map[string]string{"KNOWLEDGE_URL": " https://knowledge.example.test/ "}))
+	if err != nil || config.KnowledgeURL != "https://knowledge.example.test" {
+		t.Fatalf("KnowledgeURL = %q, error = %v", config.KnowledgeURL, err)
 	}
 }
 
