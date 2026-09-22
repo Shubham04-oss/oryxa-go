@@ -1,9 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import {
-	SpecialistAvatar,
-	suggestedSpecialistInstructions,
-} from "./specialist-identity";
+import { SpecialistAvatar } from "./specialist-identity";
 
 describe("specialist identity", () => {
 	it("keeps an avatar stable for the same specialist ID", () => {
@@ -13,23 +10,14 @@ describe("specialist identity", () => {
 		const renamed = renderToStaticMarkup(
 			<SpecialistAvatar name="Growth Analyst" seed="specialist-42" />,
 		);
-		expect(before).toContain("RA");
-		expect(renamed).toContain("GA");
-		expect(before.match(/data-tone="(\d)"/)?.[1]).toBe(
-			renamed.match(/data-tone="(\d)"/)?.[1],
+		const other = renderToStaticMarkup(
+			<SpecialistAvatar name="Research Analyst" seed="specialist-99" />,
 		);
-	});
+		const generatedFace = (markup: string) =>
+			markup.slice(markup.indexOf("<svg"));
 
-	it("grounds starter guidance in the chosen focus and purpose", () => {
-		const instructions = suggestedSpecialistInstructions(
-			"research",
-			"  Verify account claims  ",
-		);
-		expect(instructions).toContain(
-			"Your responsibility: Verify account claims",
-		);
-		expect(instructions).toContain("distinguish evidence from inference");
-		expect(instructions).toContain("never assume a connected app");
-		expect(instructions).toContain("A handoff is not completed work");
+		expect(generatedFace(before)).toContain("<svg");
+		expect(generatedFace(before)).toBe(generatedFace(renamed));
+		expect(generatedFace(before)).not.toBe(generatedFace(other));
 	});
 });

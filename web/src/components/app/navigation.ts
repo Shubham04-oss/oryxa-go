@@ -41,7 +41,7 @@ export interface NavigationItem {
 
 export const soloNavigation: NavigationItem[] = [
 	{ href: "/app", icon: LayoutDashboard, label: "Overview", match: "exact" },
-	{ href: "/app/agents", icon: Bot, label: "Agent system" },
+	{ href: "/app/agents", icon: Bot, label: "Agents" },
 ];
 
 export const collaborationNavigation: NavigationItem[] = [

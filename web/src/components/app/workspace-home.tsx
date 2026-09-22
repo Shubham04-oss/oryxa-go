@@ -210,7 +210,7 @@ function WorkModes() {
 							? "Unavailable"
 							: countPair(teams.data?.length, activeWorkflows?.length)
 					}
-					title="Agent system"
+					title="Agents"
 				/>
 				<WorkModeCard
 					description="Collaborate with teammates through attributed summaries, bounded specialists, and organization context."

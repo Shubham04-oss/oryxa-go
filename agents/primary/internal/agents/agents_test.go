@@ -89,6 +89,11 @@ func TestKrudeAnswersATurn(t *testing.T) {
 			t.Fatalf("primary research guidance is missing %q", guidance)
 		}
 	}
+	for _, guidance := range []string{"design conversation, not a form", "always load apps", "apps_connections", "domain-specific questions", "confirmation its mutation tool requires"} {
+		if !strings.Contains(instruction, guidance) {
+			t.Fatalf("specialist design guidance is missing %q", guidance)
+		}
+	}
 	declared := declaredFunctions(llm.requestsFor(RootName)[0])
 	for _, name := range []string{plannerName, researcherName, "list_tools", "load_tools", "get_user_details", "list_helpers", "spawn_helper", "create_subagent", "list_subagents", "remove_subagent", "load_artifacts"} {
 		if !slices.Contains(declared, name) {

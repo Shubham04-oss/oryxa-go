@@ -11,7 +11,6 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/rooms"
-	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/specialistonboarding"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 )
 
@@ -88,7 +87,6 @@ func newAuthHarness() *authHarness {
 		AllowedOrigins:      []string{"https://app.oryxa.test"},
 		RunTimeout:          time.Minute,
 		Agents:              h.agents,
-		SpecialistPlanner:   specialistonboarding.New(nil),
 		Teams:               h.teams,
 		TeamRooms:           h.teamRooms,
 		Workflows:           h.workflows,
@@ -237,10 +235,6 @@ var authzRoutes = []authzRoute{
 	{
 		pattern: "GET /v1/organizations/{organizationID}/agents", method: http.MethodGet,
 		path: "/v1/organizations/org_1/agents", identity: lastManagedScope,
-	},
-	{
-		pattern: "POST /v1/organizations/{organizationID}/agents/onboarding-draft", method: http.MethodPost,
-		path: "/v1/organizations/org_1/agents/onboarding-draft", body: "{}", malformedBody: unknownField, identity: lastManagedScope,
 	},
 	{
 		pattern: "POST /v1/organizations/{organizationID}/agents", method: http.MethodPost,
@@ -455,8 +449,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 56 {
-		t.Fatalf("authzRoutes has %d entries, want 56 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 55 {
+		t.Fatalf("authzRoutes has %d entries, want 55 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -548,8 +542,8 @@ func TestEveryStateChangingRouteRefusesACrossSiteCookie(t *testing.T) {
 			}
 		})
 	}
-	if tested != 29 {
-		t.Fatalf("tested %d state-changing routes, want 29 - a route's method changed without updating this expectation", tested)
+	if tested != 28 {
+		t.Fatalf("tested %d state-changing routes, want 28 - a route's method changed without updating this expectation", tested)
 	}
 }
 
@@ -607,8 +601,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 32 {
-		t.Fatalf("tested %d routes for malformed input, want 32 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 31 {
+		t.Fatalf("tested %d routes for malformed input, want 31 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 

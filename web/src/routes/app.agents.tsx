@@ -23,7 +23,7 @@ export const Route = createFileRoute("/app/agents")({
 		tab: validTab(search.tab),
 	}),
 	component: AgentsRoute,
-	head: () => ({ meta: [{ title: "Agent system · The Weirdly ODD" }] }),
+	head: () => ({ meta: [{ title: "Agents · The Weirdly ODD" }] }),
 });
 
 function AgentsRoute() {
