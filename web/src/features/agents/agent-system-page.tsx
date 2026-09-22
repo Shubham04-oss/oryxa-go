@@ -11,6 +11,7 @@ import {
 	GitBranch,
 	Inbox,
 	MessageCircle,
+	MoreHorizontal,
 	Network,
 	Pencil,
 	Play,
@@ -121,8 +122,9 @@ export function AgentSystemPage({
 }) {
 	return (
 		<WorkspacePage
+			actions={tab === "specialists" ? <SpecialistPageAction /> : undefined}
 			description="Create specialists, compose teams, run durable workflows, and supervise agent-to-agent requests."
-			title="Agent system"
+			title="Agents"
 		>
 			<Tabs
 				onValueChange={(value) =>
@@ -165,6 +167,21 @@ export function AgentSystemPage({
 				</TabsContent>
 			</Tabs>
 		</WorkspacePage>
+	);
+}
+
+function SpecialistPageAction() {
+	const { organization } = useWorkspace();
+	return (
+		<AgentDialog
+			organizationId={organization.id}
+			trigger={
+				<Button type="button">
+					<Plus data-icon="inline-start" />
+					Create specialist
+				</Button>
+			}
+		/>
 	);
 }
 
@@ -382,21 +399,7 @@ function SpecialistsTab() {
 	});
 
 	return (
-		<TabSection
-			action={
-				<AgentDialog
-					organizationId={organization.id}
-					trigger={
-						<Button type="button">
-							<Plus data-icon="inline-start" />
-							New specialist
-						</Button>
-					}
-				/>
-			}
-			description="Describe the outcome. Krude inspects your setup, asks focused questions, and designs the specialist with you."
-			title="Specialists"
-		>
+		<div className="agent-specialists">
 			{agents.isPending ? (
 				<Card className="workspace-panel">
 					<SettingsListSkeleton />
@@ -422,15 +425,6 @@ function SpecialistsTab() {
 						tools, ask focused questions, and show the exact setup before
 						creating it.
 					</p>
-					<AgentDialog
-						organizationId={organization.id}
-						trigger={
-							<Button type="button">
-								<Plus data-icon="inline-start" />
-								Create specialist
-							</Button>
-						}
-					/>
 				</Card>
 			) : null}
 			{status.isError ? (
@@ -442,10 +436,6 @@ function SpecialistsTab() {
 				<div className="specialist-workbench">
 					<Card className="workspace-panel specialist-directory">
 						<div className="specialist-directory-header">
-							<div>
-								<strong>All specialists</strong>
-								<span>{specialists.length}</span>
-							</div>
 							<label className="specialist-search" htmlFor={searchId}>
 								<Search aria-hidden="true" />
 								<span className="sr-only">Search specialists</span>
@@ -493,107 +483,109 @@ function SpecialistsTab() {
 					{selectedSpecialist ? (
 						<Card className="workspace-panel specialist-inspector">
 							<header className="specialist-inspector-hero">
-								<SpecialistAvatar
-									name={selectedSpecialist.name}
-									seed={selectedSpecialist.id}
-									size="large"
-								/>
-								<div>
-									<div className="specialist-inspector-title">
+								<div className="specialist-inspector-identity">
+									<SpecialistAvatar
+										name={selectedSpecialist.name}
+										seed={selectedSpecialist.id}
+										size="large"
+									/>
+									<div>
+										<div className="specialist-inspector-badges">
+											<div className="specialist-status-control">
+												<Switch
+													aria-label={`${selectedSpecialist.status === "active" ? "Pause" : "Activate"} ${selectedSpecialist.name}`}
+													checked={selectedSpecialist.status === "active"}
+													disabled={status.isPending}
+													onCheckedChange={(checked) =>
+														status.mutate({
+															agent: selectedSpecialist,
+															next: checked ? "active" : "disabled",
+														})
+													}
+												/>
+												<span>
+													{selectedSpecialist.status === "active"
+														? "Active"
+														: "Paused"}
+												</span>
+											</div>
+											<span className="specialist-team-badge">
+												{teams.data
+													? memberships[0]?.team.name || "Independent"
+													: teams.isError
+														? "Team unavailable"
+														: "Loading team…"}
+											</span>
+										</div>
 										<h3>{selectedSpecialist.name}</h3>
-										<Status status={selectedSpecialist.status} />
+										<p>
+											{selectedSpecialist.description || "Purpose not set yet"}
+										</p>
 									</div>
-									<p>
-										{selectedSpecialist.description || "Purpose not set yet"}
-									</p>
+								</div>
+								<div className="specialist-inspector-actions">
+									<SpecialistConversationDialog
+										agent={selectedSpecialist}
+										organizationId={organization.id}
+										trigger={
+											<Button
+												disabled={selectedSpecialist.status !== "active"}
+												size="sm"
+												type="button"
+											>
+												<MessageCircle data-icon="inline-start" />
+												Talk
+											</Button>
+										}
+									/>
+									<AgentDialog
+										agent={selectedSpecialist}
+										organizationId={organization.id}
+										trigger={
+											<Button size="sm" type="button" variant="outline">
+												<Pencil data-icon="inline-start" />
+												Edit
+											</Button>
+										}
+									/>
+									<ConfirmDialog
+										confirmLabel="Delete specialist"
+										confirmation={selectedSpecialist.name}
+										description="Its durable identity and future availability are removed. Delete any teams using it first."
+										onConfirm={async () => {
+											await deleteAgent(organization.id, selectedSpecialist.id);
+											await queryClient.invalidateQueries({
+												queryKey: agentsQueryKey(organization.id),
+											});
+										}}
+										title={`Delete ${selectedSpecialist.name}?`}
+										trigger={
+											<Button
+												aria-label={`Delete ${selectedSpecialist.name}`}
+												className="specialist-inspector-delete"
+												size="icon-sm"
+												type="button"
+												variant="outline"
+											>
+												<MoreHorizontal />
+											</Button>
+										}
+									/>
 								</div>
 							</header>
 
-							<div className="specialist-inspector-toolbar">
-								<SpecialistConversationDialog
-									agent={selectedSpecialist}
-									organizationId={organization.id}
-									trigger={
-										<Button
-											disabled={selectedSpecialist.status !== "active"}
-											size="sm"
-											type="button"
-										>
-											<MessageCircle data-icon="inline-start" />
-											Talk to specialist
-										</Button>
-									}
-								/>
-								<AgentDialog
-									agent={selectedSpecialist}
-									organizationId={organization.id}
-									trigger={
-										<Button size="sm" type="button" variant="outline">
-											<Pencil data-icon="inline-start" />
-											Edit
-										</Button>
-									}
-								/>
-								<div className="agent-toggle specialist-inspector-toggle">
-									<Switch
-										aria-label={`${selectedSpecialist.status === "active" ? "Pause" : "Activate"} ${selectedSpecialist.name}`}
-										checked={selectedSpecialist.status === "active"}
-										disabled={status.isPending}
-										onCheckedChange={(checked) =>
-											status.mutate({
-												agent: selectedSpecialist,
-												next: checked ? "active" : "disabled",
-											})
-										}
-									/>
-									<span>
-										{selectedSpecialist.status === "active"
-											? "Active"
-											: "Paused"}
-									</span>
-								</div>
-								<ConfirmDialog
-									confirmLabel="Delete specialist"
-									confirmation={selectedSpecialist.name}
-									description="Its durable identity and future availability are removed. Delete any teams using it first."
-									onConfirm={async () => {
-										await deleteAgent(organization.id, selectedSpecialist.id);
-										await queryClient.invalidateQueries({
-											queryKey: agentsQueryKey(organization.id),
-										});
-									}}
-									title={`Delete ${selectedSpecialist.name}?`}
-									trigger={
-										<Button
-											aria-label={`Delete ${selectedSpecialist.name}`}
-											className="specialist-inspector-delete"
-											size="icon-sm"
-											type="button"
-											variant="ghost"
-										>
-											<Trash2 />
-										</Button>
-									}
-								/>
-							</div>
-
 							<div className="specialist-inspector-facts">
 								<div>
-									<span>Teams</span>
-									<strong>
-										{teams.data
-											? memberships.length || "Independent"
-											: teams.isError
-												? "Unavailable"
-												: "Loading…"}
-									</strong>
+									<span>Status</span>
+									<strong>{titleCaseStatus(selectedSpecialist.status)}</strong>
 								</div>
 								<div>
-									<span>Workflows</span>
+									<span>Team</span>
 									<strong>
-										{workflows.data
-											? assignments.length
-											: workflows.isError
+										{teams.data
+											? memberships.map(({ team }) => team.name).join(", ") ||
+												"Independent"
+											: teams.isError
 												? "Unavailable"
 												: "Loading…"}
 									</strong>
@@ -605,59 +597,67 @@ function SpecialistsTab() {
 							</div>
 
 							<div className="specialist-inspector-sections">
-								<section>
+								<section className="specialist-instructions-section">
 									<h4>Operating instructions</h4>
 									<p className="specialist-instructions">
 										{selectedSpecialist.instructions ||
 											"No operating instructions have been added yet."}
 									</p>
 								</section>
-								<section>
-									<h4>Team roles</h4>
-									{teams.isError ? (
-										<p>Team data is currently unavailable.</p>
-									) : memberships.length ? (
-										<div className="specialist-detail-list">
-											{memberships.map(({ role, team }) => (
-												<div key={`${team.id}-${role}`}>
-													<strong>{team.name}</strong>
-													<span>{role}</span>
-												</div>
-											))}
-										</div>
-									) : (
-										<p>This specialist currently works independently.</p>
-									)}
-								</section>
-								<section>
-									<h4>Workflow assignments</h4>
-									{workflows.isError ? (
-										<p>Workflow data is currently unavailable.</p>
-									) : assignments.length ? (
-										<div className="specialist-detail-list">
-											{assignments.map((workflow) => {
-												const task = workflow.assignments.find(
-													(assignment) =>
-														assignment.agent_id === selectedSpecialist.id,
-												)?.task;
-												return (
-													<div key={workflow.id}>
-														<strong>{workflow.name}</strong>
-														<span>{task || "Assigned"}</span>
+								<div className="specialist-related-grid">
+									<section>
+										<h4>
+											<UsersRound aria-hidden="true" />
+											Team membership
+										</h4>
+										{teams.isError ? (
+											<p>Team data is currently unavailable.</p>
+										) : memberships.length ? (
+											<div className="specialist-detail-list">
+												{memberships.map(({ role, team }) => (
+													<div key={`${team.id}-${role}`}>
+														<strong>{team.name}</strong>
+														<span>{role}</span>
 													</div>
-												);
-											})}
-										</div>
-									) : (
-										<p>No workflow assignments yet.</p>
-									)}
-								</section>
+												))}
+											</div>
+										) : (
+											<p>This specialist currently works independently.</p>
+										)}
+									</section>
+									<section>
+										<h4>
+											<GitBranch aria-hidden="true" />
+											Workflow assignments
+										</h4>
+										{workflows.isError ? (
+											<p>Workflow data is currently unavailable.</p>
+										) : assignments.length ? (
+											<div className="specialist-detail-list">
+												{assignments.map((workflow) => {
+													const task = workflow.assignments.find(
+														(assignment) =>
+															assignment.agent_id === selectedSpecialist.id,
+													)?.task;
+													return (
+														<div key={workflow.id}>
+															<strong>{workflow.name}</strong>
+															<span>{task || "Assigned"}</span>
+														</div>
+													);
+												})}
+											</div>
+										) : (
+											<p>No workflow assignments yet.</p>
+										)}
+									</section>
+								</div>
 							</div>
 						</Card>
 					) : null}
 				</div>
 			) : null}
-		</TabSection>
+		</div>
 	);
 }
 
