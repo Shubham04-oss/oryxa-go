@@ -59,6 +59,13 @@
   --status-active: #343431;
   --status-admin: #52524e;
   --status-neutral: #74746f;
+  /* State, said in one dot. Green is the only hue the product spends on a
+     thing working; the word beside the dot stays in plain ink. */
+  --state-active: #3f7d52;
+  --state-warning: #9a6a1e;
+  --state-danger: var(--danger);
+  --state-neutral: #8a8a84;
+  --state-muted: #b6b6b0;
   --workspace-warm: #555551;
   --workspace-rose: #555551;
   --workspace-sage: #555551;
@@ -76,6 +83,7 @@
   --stroke-soft: #ababa5;
   --danger-border: #edc7c2;
   --hover-tint: rgb(24 24 23 / 4%);
+  --surface-lit: rgb(255 255 255 / 75%);
   --shadow-hairline: 0 1px 2px rgb(24 24 23 / 5%);
   --shadow-thumb: 0 1px 2px rgb(24 24 23 / 18%);
   --switch-off: #d9d9d5;
@@ -755,6 +763,35 @@ a:focus-visible {
   padding: 1rem 0.75rem 0.75rem;
 }
 
+/* The brand (or the settings chip) and the collapse control share a row.
+   In the icon rail they stack instead, so the way back out of the rail is
+   still on screen once the labels are gone. */
+.sidebar-brand-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.sidebar-brand-row > :first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar-collapse {
+  flex: 0 0 auto;
+  color: var(--ink-hint);
+}
+
+.sidebar-collapse:hover {
+  color: var(--ink);
+}
+
+[data-collapsible="icon"] .sidebar-brand-row {
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
 .product-wordmark {
   display: flex;
   height: 2rem;
@@ -872,30 +909,6 @@ a:focus-visible {
   white-space: nowrap;
 }
 
-.app-new-thread {
-  height: 2.25rem;
-  color: var(--primary-foreground);
-  background: var(--primary);
-  border: 1px solid var(--primary);
-  border-radius: 8px;
-  box-shadow: none;
-  font-size: 0.8125rem;
-  font-weight: 520;
-}
-
-.app-new-thread:hover {
-  color: var(--primary-foreground);
-  background: #30302d;
-  border-color: #30302d;
-}
-
-.app-new-thread kbd {
-  margin-left: auto;
-  color: rgb(255 255 255 / 62%);
-  font-family: inherit;
-  font-size: 0.625rem;
-}
-
 .product-sidebar [data-sidebar="group-label"] {
   height: 1.75rem;
   color: var(--ink-faint);
@@ -950,20 +963,47 @@ a:focus-visible {
   gap: 0.125rem;
 }
 
+/* The card is the only way into settings and out of the session, so it is
+   built as something to press: a lit top edge, a hairline shadow under it,
+   and a millimetre of travel when it goes down. */
 .sidebar-account-button {
   width: 100%;
   color: var(--ink);
   text-align: left;
-  background: transparent;
-  border: 0;
+  background: linear-gradient(
+    180deg,
+    var(--surface) 0%,
+    var(--surface-strong) 100%
+  );
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
+  box-shadow:
+    inset 0 1px 0 var(--surface-lit),
+    var(--shadow-hairline);
   cursor: pointer;
-  transition: background-color 140ms ease;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    transform 90ms ease;
 }
 
 .sidebar-account-button:hover,
 .sidebar-account-button[data-state="open"] {
-  background: var(--sidebar-accent);
+  border-color: var(--border-hover);
+  box-shadow:
+    inset 0 1px 0 var(--surface-lit),
+    0 2px 5px rgb(24 24 23 / 9%);
+}
+
+.sidebar-account-button:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 2px rgb(24 24 23 / 12%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-account-button:active {
+    transform: none;
+  }
 }
 
 .sidebar-account-copy {
@@ -980,36 +1020,127 @@ a:focus-visible {
   color: var(--ink-muted);
 }
 
+/* --- Conversations, as a section of the sidebar --- */
+
+/* The chevron points at what it will do: right when closed, down when open. */
+.sidebar-disclosure {
+  margin-left: auto;
+  color: var(--ink-hint);
+  transition: transform 140ms ease;
+}
+
+.sidebar-disclosure[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+[data-collapsible="icon"] .sidebar-disclosure {
+  display: none;
+}
+
+.sidebar-sub-empty {
+  margin: 0;
+  padding: 0.25rem 0.5rem;
+  color: var(--ink-hint);
+  font-size: 0.6875rem;
+}
+
+.sidebar-see-all {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  color: var(--ink-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-control);
+  cursor: pointer;
+  font-size: 0.6875rem;
+  font-weight: 540;
+  text-align: left;
+}
+
+.sidebar-see-all:hover {
+  color: var(--ink);
+  background: var(--sidebar-accent);
+}
+
+.sidebar-see-all kbd {
+  margin-left: auto;
+  padding: 0.0625rem 0.25rem;
+  color: var(--ink-hint);
+  background: var(--surface-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.5625rem;
+}
+
+/* A conversation's title is the whole of it; let it wrap rather than
+   truncate two words in. */
+.sidebar-see-all,
+[data-sidebar="menu-sub-button"] > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-search-meta {
+  margin-left: auto;
+  color: var(--ink-hint);
+  font-size: 0.6875rem;
+}
+
+/* An action that reads as the link it replaced. */
+.workspace-section-action {
+  padding: 0;
+  color: var(--ink-muted);
+  background: none;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+}
+
+.workspace-section-action:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
 .settings-sidebar-header {
   gap: 1.125rem;
   padding: 0.75rem;
   border-bottom: 1px solid var(--border-strong);
 }
 
-.settings-back-button {
-  height: 2.25rem;
-  color: var(--ink-muted);
-  border: 1px solid transparent;
-}
-
-.settings-back-button:hover {
-  color: var(--ink);
-  background: var(--surface);
-  border-color: var(--border-strong);
-}
-
+/* Where you are and the way out of it, in one control: the chevron says it
+   goes back, the mark and the name say back from what. */
+/* Tight on purpose: the collapse control shares this row, and "Organization
+   settings" has to fit beside it without an ellipsis. */
 .settings-sidebar-scope {
   display: flex;
+  height: auto;
   min-width: 0;
   align-items: center;
-  gap: 0.625rem;
-  padding: 0.25rem 0.5rem 0.375rem;
+  gap: 0.375rem;
+  padding: 0.5rem 0.25rem;
 }
 
-.settings-sidebar-scope > span {
+.settings-scope-back {
+  flex: 0 0 auto;
+  color: var(--ink-hint);
+  transition: transform 140ms ease;
+}
+
+.settings-sidebar-scope:hover .settings-scope-back {
+  color: var(--ink);
+  transform: translateX(-2px);
+}
+
+.settings-scope-mark {
   display: grid;
-  width: 2rem;
-  height: 2rem;
+  width: 1.75rem;
+  height: 1.75rem;
   flex: 0 0 auto;
   place-items: center;
   color: var(--accent-ink);
@@ -1019,7 +1150,7 @@ a:focus-visible {
   font-weight: 720;
 }
 
-.settings-sidebar-scope > div {
+.settings-scope-copy {
   display: grid;
   min-width: 0;
   gap: 0.125rem;
@@ -1044,21 +1175,6 @@ a:focus-visible {
   gap: 0.875rem;
 }
 
-.settings-admin-account > span svg {
-  width: 0.875rem;
-  height: 0.875rem;
-}
-
-.settings-admin-account > span,
-.settings-admin-account strong {
-  color: var(--status-admin);
-}
-
-.settings-admin-account[data-manages="false"] > span,
-.settings-admin-account[data-manages="false"] strong {
-  color: var(--ink);
-}
-
 [data-collapsible="icon"] .product-wordmark {
   justify-content: center;
   padding: 0;
@@ -1067,8 +1183,8 @@ a:focus-visible {
 [data-collapsible="icon"] .product-wordmark strong,
 [data-collapsible="icon"] .organization-copy,
 [data-collapsible="icon"] .organization-switcher-icon,
-[data-collapsible="icon"] .app-new-thread kbd,
-[data-collapsible="icon"] .settings-sidebar-scope > div,
+[data-collapsible="icon"] .settings-scope-back,
+[data-collapsible="icon"] .settings-scope-copy,
 [data-collapsible="icon"] .sidebar-account > div,
 [data-collapsible="icon"] .sidebar-account-copy,
 [data-collapsible="icon"] .sidebar-account-icon {
@@ -2602,25 +2718,6 @@ a:focus-visible {
   margin-bottom: 1.25rem;
 }
 
-.segmented {
-  display: inline-flex;
-  gap: 0.125rem;
-  margin: 0;
-  padding: 0.1875rem;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-control);
-}
-
-.segmented [data-slot="button"] {
-  color: var(--ink-muted);
-}
-
-.segmented [data-slot="button"][data-active="true"] {
-  color: var(--ink);
-  background: var(--surface-strong);
-}
-
 .page-toolbar-select {
   min-width: 12rem;
 }
@@ -3086,24 +3183,230 @@ a[data-variant][data-size="lg"] {
 
 /* === Apps: connections, triggers, knowledge sources === */
 
-.apps-connections {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.apps-connection-details {
-  display: grid;
-  gap: 1.25rem;
-  padding: 1.25rem;
-  border-top: 1px solid var(--border-strong);
-  background: color-mix(in srgb, var(--surface-strong) 40%, transparent);
-}
-
 .apps-toolkit-icon img {
   width: 1.25rem;
   height: 1.25rem;
   border-radius: 4px;
   object-fit: contain;
+}
+
+.apps-toolkit-icon[data-size="lg"] {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 10px;
+}
+
+.apps-toolkit-icon[data-size="lg"] img {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.apps-toolkit-icon[data-size="lg"] svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+/* --- State, as an orb of dots --- */
+
+.status-orb {
+  flex: 0 0 auto;
+  color: var(--state-neutral);
+}
+
+.status-orb[data-tone="active"] {
+  color: var(--state-active);
+}
+
+.status-orb[data-tone="warning"] {
+  color: var(--state-warning);
+}
+
+.status-orb[data-tone="danger"] {
+  color: var(--state-danger);
+}
+
+.status-orb[data-tone="muted"] {
+  color: var(--state-muted);
+}
+
+.connection-state {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+  color: var(--ink-muted);
+  font-size: 0.6875rem;
+  font-weight: 540;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+}
+
+/* --- Connected apps, as a grid --- */
+
+.apps-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+  gap: 0.875rem;
+}
+
+/* Flex, not grid: it is what lets the footer sit on the floor of every card
+   in a row, however much copy the one beside it carries. */
+.apps-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.125rem 1.25rem 0.875rem;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
+}
+
+.apps-card:has(.apps-card-open:hover),
+.apps-card:has(.apps-card-open:focus-visible) {
+  border-color: var(--action-border-hover);
+}
+
+.apps-card[data-open="true"] {
+  border-color: color-mix(in srgb, var(--brand-accent) 40%, var(--border-strong));
+  box-shadow: var(--shadow-hairline);
+}
+
+/* A removed connection is history: legible, but it stops competing with the
+   apps that still work. */
+.apps-card[data-tone="removed"] {
+  background: var(--surface-subtle);
+}
+
+.apps-card[data-tone="removed"] .apps-toolkit-icon {
+  opacity: 0.6;
+}
+
+.apps-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.apps-card-name,
+.apps-card-open {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 620;
+  letter-spacing: -0.005em;
+  text-align: start;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The name opens the panel, and its hit area is the whole card — the actions
+   in the footer lift themselves back above it. */
+.apps-card-open {
+  padding: 0;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.apps-card-open::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* The Card's own rounding, tracked through the token it comes from, so the
+     focus ring traces the card rather than boxing it. */
+  border-radius: calc(var(--radius) + 4px);
+}
+
+.apps-card-open:focus-visible {
+  outline: none;
+}
+
+/* A ring drawn inward: the card clips its own overflow, so an outline with a
+   positive offset would be cropped away before anyone saw it. */
+.apps-card-open:focus-visible::after {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--focus) 60%, transparent);
+}
+
+.apps-card-line {
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Our own words about a state, rather than the app's: quieter than a label,
+   and they wrap, because they are sentences. */
+.apps-card-hint {
+  color: var(--ink-faint);
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+.apps-card-problem {
+  color: var(--danger);
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+.apps-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: auto;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-strong);
+}
+
+.apps-card-actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+/* --- One connection, opened under the grid --- */
+
+.apps-panel-card {
+  display: grid;
+  overflow: hidden;
+  scroll-margin-block: 1rem;
+  border-color: color-mix(in srgb, var(--brand-accent) 40%, var(--border-strong));
+}
+
+.apps-panel-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-strong);
+}
+
+.apps-panel-title {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 0.1875rem;
+}
+
+.apps-panel-title strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apps-panel-body {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1.25rem;
+  background: color-mix(in srgb, var(--surface-strong) 40%, transparent);
 }
 
 .apps-panel {
@@ -3125,27 +3428,79 @@ a[data-variant][data-size="lg"] {
   line-height: 1.45;
 }
 
-.apps-catalog-list {
+/* Wider than a plain dialog: a grid of apps needs at least two columns to be
+   worth being a grid at all. */
+.apps-catalog-dialog {
+  max-width: min(44rem, calc(100% - 2rem));
+}
+
+.apps-catalog-grid {
   display: grid;
-  gap: 0;
-  max-height: 20rem;
+  grid-template-columns: repeat(auto-fill, minmax(12.5rem, 1fr));
+  gap: 0.5rem;
+  max-height: 24rem;
   margin: 0;
-  padding: 0;
+  padding: 0.125rem;
   overflow-y: auto;
   list-style: none;
 }
 
-.apps-catalog-row {
+.apps-catalog-tile {
   display: flex;
   min-width: 0;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.625rem 0.25rem;
-  border-bottom: 1px solid var(--border-strong);
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0.875rem 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease;
 }
 
-.apps-catalog-row:last-child {
-  border-bottom: 0;
+.apps-catalog-tile:hover {
+  border-color: var(--action-border-hover);
+}
+
+.apps-catalog-tile-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.1875rem;
+}
+
+.apps-catalog-tile-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Two lines of the app's own blurb: enough to tell two similar apps apart,
+   not so much that the tiles stop being scannable. */
+.apps-catalog-tile-copy small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink-muted);
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* Every tile's action sits on the same line, whatever the blurb above it did. */
+.apps-catalog-tile [data-slot="button"] {
+  align-self: start;
+  margin-top: auto;
+}
+
+.apps-catalog-tile-note {
+  margin-top: auto;
+  color: var(--ink-faint);
+  font-size: 0.6875rem;
+  line-height: 1.4;
 }
 
 .apps-trigger-add-row {
@@ -4637,58 +4992,91 @@ a[data-variant][data-size="lg"] {
 
 /* === Persistent agents workspace === */
 
-.agent-tabs {
-  position: sticky;
-  top: 4.25rem;
-  z-index: 6;
+/* --- One switcher: a row of labels, marked underneath --- */
+
+.tab-nav {
   display: flex;
-  width: fit-content;
   max-width: 100%;
-  gap: 0.1875rem;
-  margin-bottom: 2rem;
-  padding: 0.25rem;
+  gap: 1.25rem;
   overflow-x: auto;
   scrollbar-width: none;
-  background: var(--agent-material);
-  border: 1px solid var(--agent-material-border);
-  border-radius: 12px;
-  box-shadow: none;
+  border-bottom: 1px solid var(--border-strong);
 }
 
-.agent-tabs::-webkit-scrollbar {
+.tab-nav::-webkit-scrollbar {
   display: none;
 }
 
-.agent-tab {
-  min-height: 2rem;
-  padding: 0.375rem 0.75rem;
+.tab-nav[data-size="default"] {
+  position: sticky;
+  top: 4.25rem;
+  z-index: 6;
+  margin-bottom: 1.75rem;
+  background: var(--canvas);
+}
+
+.tab-nav[data-size="compact"] {
+  gap: 0.875rem;
+}
+
+.tab-nav-item {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.5rem 0.0625rem 0.625rem;
   color: var(--ink-muted);
-  background: transparent;
+  background: none;
   border: 0;
-  border-radius: 8px;
-  font-size: 0.75rem;
-  font-weight: 450;
   cursor: pointer;
-  transition:
-    color 140ms ease,
-    background-color 140ms ease,
-    box-shadow 140ms ease;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: color 140ms ease;
 }
 
-.agent-tab:hover {
+.tab-nav[data-size="compact"] .tab-nav-item {
+  padding-block: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.tab-nav-item svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.tab-nav-item:hover {
   color: var(--ink);
-  background: var(--hover-tint);
 }
 
-.agent-tab[data-state="active"] {
+/* The mark sits on the row's own rule, so the two read as one line. */
+.tab-nav-item::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: var(--brand-accent);
+  border-radius: 1px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.tab-nav-item[aria-selected="true"] {
   color: var(--ink);
-  background: var(--surface-strong);
-  box-shadow: none;
+  font-weight: 560;
 }
 
-.agent-tab:focus-visible {
+.tab-nav-item[aria-selected="true"]::after {
+  opacity: 1;
+}
+
+.tab-nav-item:focus-visible {
   outline: 3px solid color-mix(in srgb, var(--focus) 36%, transparent);
-  outline-offset: 1px;
+  outline-offset: -2px;
+  border-radius: 4px;
 }
 
 .agent-tab-content,
@@ -5664,10 +6052,6 @@ a[data-variant][data-size="lg"] {
   color: var(--danger);
 }
 
-.agent-request-box {
-  width: fit-content;
-}
-
 .agent-request-card > header {
   align-items: center;
 }
@@ -6133,29 +6517,27 @@ a[data-variant][data-size="lg"] {
   font-size: 1rem;
 }
 
-.specialist-avatar[data-tone="1"] { --avatar-ground: #e9e1d9; --avatar-ink: #6b4537; }
-.specialist-avatar[data-tone="2"] { --avatar-ground: #dce6e7; --avatar-ink: #2f5a63; }
-.specialist-avatar[data-tone="3"] { --avatar-ground: #e6e0ed; --avatar-ink: #574b70; }
-.specialist-avatar[data-tone="4"] { --avatar-ground: #e5e9d9; --avatar-ink: #56603b; }
-.specialist-avatar[data-tone="5"] { --avatar-ground: #eee2df; --avatar-ink: #764d55; }
-
-.specialist-avatar-orbit {
-  position: absolute;
-  right: -18%;
-  bottom: -40%;
-  width: 110%;
-  aspect-ratio: 1;
-  border: 1px solid color-mix(in srgb, var(--avatar-ink) 16%, transparent);
-  border-radius: 50%;
-  transform: rotate(-25deg) scaleX(1.4);
+/* The generated face fills the box, so the size lives in CSS and one avatar
+   works at every one of them. The ground behind it is what shows for the
+   instant before the svg paints. */
+.specialist-avatar svg {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
-.specialist-avatar-initials {
-  position: relative;
-  z-index: 1;
-  font-size: inherit;
-  font-weight: 690;
-  letter-spacing: -0.055em;
+/* An agent's face sits on the byline at text size, so the name it belongs to
+   stays the thing you read. */
+.teamspace-entry-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.teamspace-entry-author .specialist-avatar {
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 6px;
 }
 
 .specialist-empty-card {
@@ -6971,14 +7353,9 @@ a[data-variant][data-size="lg"] {
 }
 
 @media (max-width: 760px) {
-  .agent-tabs {
+  .tab-nav[data-size="default"] {
     position: static;
-    width: 100%;
     margin-bottom: 1.5rem;
-  }
-
-  .agent-tab {
-    flex: 1 0 auto;
   }
 
   .agent-section > header,
@@ -7070,7 +7447,9 @@ a[data-variant][data-size="lg"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-tab,
+  .settings-scope-back,
+  .tab-nav-item,
+  .tab-nav-item::after,
   .specialist-focus-option,
   .specialist-guidance-toggle svg {
     transition: none;

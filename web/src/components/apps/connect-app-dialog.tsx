@@ -81,9 +81,9 @@ export function ConnectAppDialog({
 	} else {
 		body = (
 			<>
-				<ul className="apps-catalog-list">
+				<ul className="apps-catalog-grid">
 					{catalog.data.toolkits.map((item) => (
-						<CatalogRow
+						<CatalogTile
 							connecting={
 								connecting.isPending && connecting.variables === item.toolkit
 							}
@@ -106,7 +106,7 @@ export function ConnectAppDialog({
 	return (
 		<Dialog onOpenChange={changeOpen} open={open}>
 			<DialogTrigger asChild>{trigger}</DialogTrigger>
-			<DialogContent>
+			<DialogContent className="apps-catalog-dialog">
 				<DialogHeader>
 					<DialogTitle>Connect an app</DialogTitle>
 					<DialogDescription>
@@ -133,32 +133,38 @@ export function ConnectAppDialog({
 	);
 }
 
-interface CatalogRowProps {
+interface CatalogTileProps {
 	connecting: boolean;
 	disabled: boolean;
 	onConnect: () => void;
 	toolkit: Toolkit;
 }
 
-function CatalogRow({
+function CatalogTile({
 	connecting,
 	disabled,
 	onConnect,
 	toolkit,
-}: CatalogRowProps) {
+}: CatalogTileProps) {
 	const reason = nonConnectableReason(toolkit);
 
 	return (
-		<li className="apps-catalog-row">
+		<li className="apps-catalog-tile">
 			<ToolkitIcon logo={toolkit.logo} />
-			<div className="settings-list-copy">
+			<div className="apps-catalog-tile-copy">
 				<strong>{toolkit.name}</strong>
 				<small>{toolkit.description}</small>
 			</div>
 			{reason ? (
-				<small className="settings-list-note">{reason}</small>
+				<small className="apps-catalog-tile-note">{reason}</small>
 			) : (
-				<Button disabled={disabled} onClick={onConnect} size="sm" type="button">
+				<Button
+					disabled={disabled}
+					onClick={onConnect}
+					size="sm"
+					type="button"
+					variant="outline"
+				>
 					{connecting ? "Connecting…" : "Connect"}
 				</Button>
 			)}

@@ -257,7 +257,7 @@ function ThreadConversationPage() {
 						await queryClient.invalidateQueries({
 							queryKey: threadsQueryKey(organization.id),
 						});
-						await navigate({ to: "/app/threads" });
+						await navigate({ to: "/app" });
 					}}
 					title="Delete this conversation?"
 					trigger={

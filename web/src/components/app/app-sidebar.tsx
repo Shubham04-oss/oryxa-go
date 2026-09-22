@@ -1,16 +1,17 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import {
-	ArrowLeft,
+	ChevronLeft,
+	ChevronRight,
 	ChevronsUpDown,
-	CircleUserRound,
 	LogOut,
+	MessageSquareText,
 	Plus,
-	ShieldCheck,
 } from "lucide-react";
+import { Fragment, type ReactNode, useState } from "react";
 import { displayName, initials, roleLabel } from "@/components/app/identity";
 import {
-	accountSettingsNavigation,
+	type AppPath,
 	collaborationNavigation,
 	type NavigationItem,
 	organizationAdminNavigation,
@@ -19,6 +20,7 @@ import {
 	settingsNavigation,
 	soloNavigation,
 } from "@/components/app/navigation";
+import { useWorkspaceSearch } from "@/components/app/workspace-search";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -38,17 +40,30 @@ import {
 	SidebarGroupLabel,
 	SidebarHeader,
 	SidebarMenu,
+	SidebarMenuAction,
 	SidebarMenuButton,
 	SidebarMenuItem,
+	SidebarMenuSub,
+	SidebarMenuSubButton,
+	SidebarMenuSubItem,
 	SidebarRail,
+	SidebarTrigger,
 	useSidebar,
 } from "@/components/ui/sidebar";
-import { type Role, signOut } from "@/lib/auth/client";
+import { signOut } from "@/lib/auth/client";
 import {
 	selectOrganization,
 	useMembership,
 	useWorkspace,
 } from "@/lib/auth/session";
+import {
+	createThread,
+	recentThreads,
+	SIDEBAR_THREAD_LIMIT,
+	threadsQueryKey,
+	threadsQueryOptions,
+	threadTitle,
+} from "@/lib/threads/client";
 
 export function AppSidebar() {
 	const pathname = useLocation({ select: (location) => location.pathname });
@@ -72,40 +87,34 @@ function WorkspaceSidebar({ pathname }: { pathname: string }) {
 	return (
 		<>
 			<SidebarHeader className="product-sidebar-header">
-				<Link className="product-wordmark" to="/app">
-					<span aria-hidden="true">O</span>
-					<strong>The Weirdly ODD</strong>
-				</Link>
+				<div className="sidebar-brand-row">
+					<Link className="product-wordmark" to="/app">
+						<span aria-hidden="true">O</span>
+						<strong>The Weirdly ODD</strong>
+					</Link>
+					<SidebarTrigger
+						aria-label="Toggle navigation"
+						className="sidebar-collapse"
+						size="icon-xs"
+					/>
+				</div>
 
 				<SidebarMenu>
 					<SidebarMenuItem>
 						<OrganizationSwitcher />
 					</SidebarMenuItem>
 				</SidebarMenu>
-
-				<SidebarMenu>
-					<SidebarMenuItem>
-						<SidebarMenuButton
-							asChild
-							className="app-new-thread"
-							tooltip="New conversation"
-						>
-							<Link to="/app">
-								<Plus />
-								<span>New conversation</span>
-								<kbd>N</kbd>
-							</Link>
-						</SidebarMenuButton>
-					</SidebarMenuItem>
-				</SidebarMenu>
 			</SidebarHeader>
 
 			<SidebarContent>
 				<NavigationGroup
+					childrenAfter="/app"
 					items={soloNavigation}
 					label="Solo workspace"
 					pathname={pathname}
-				/>
+				>
+					<ConversationsMenu pathname={pathname} />
+				</NavigationGroup>
 				<NavigationGroup
 					items={collaborationNavigation}
 					label="Collaborate"
@@ -119,17 +128,6 @@ function WorkspaceSidebar({ pathname }: { pathname: string }) {
 			</SidebarContent>
 
 			<SidebarFooter className="product-sidebar-footer">
-				<SidebarMenu>
-					{settingsNavigation
-						.filter((item) => item.href !== accountSettingsNavigation.href)
-						.map((item) => (
-							<NavigationMenuItem
-								item={item}
-								key={item.href}
-								pathname={pathname}
-							/>
-						))}
-				</SidebarMenu>
 				<AccountMenu />
 			</SidebarFooter>
 		</>
@@ -230,12 +228,19 @@ function AccountMenu() {
 			>
 				<DropdownMenuLabel>{user.email}</DropdownMenuLabel>
 				<DropdownMenuSeparator />
-				<DropdownMenuItem
-					onSelect={() => navigate({ to: accountSettingsNavigation.href })}
-				>
-					<CircleUserRound />
-					Account settings
-				</DropdownMenuItem>
+				{settingsNavigation.map((item) => {
+					const Icon = item.icon;
+					return (
+						<DropdownMenuItem
+							key={item.href}
+							onSelect={() => navigate({ to: item.href })}
+						>
+							<Icon />
+							{item.label}
+						</DropdownMenuItem>
+					);
+				})}
+				<DropdownMenuSeparator />
 				<DropdownMenuItem onSelect={leave}>
 					<LogOut />
 					Sign out
@@ -251,27 +256,33 @@ function OrganizationSettingsSidebar({ pathname }: { pathname: string }) {
 	return (
 		<>
 			<SidebarHeader className="settings-sidebar-header">
-				<SidebarMenu>
-					<SidebarMenuItem>
-						<SidebarMenuButton
-							asChild
-							className="settings-back-button"
-							tooltip="Back to workspace"
-						>
-							<Link to="/app">
-								<ArrowLeft />
-								<span>Back to workspace</span>
-							</Link>
-						</SidebarMenuButton>
-					</SidebarMenuItem>
-				</SidebarMenu>
-
-				<div className="settings-sidebar-scope">
-					<span aria-hidden="true">{initials(organization.name)}</span>
-					<div>
-						<strong>Organization settings</strong>
-						<small>{organization.name}</small>
-					</div>
+				<div className="sidebar-brand-row">
+					<SidebarMenu>
+						<SidebarMenuItem>
+							<SidebarMenuButton
+								asChild
+								className="settings-sidebar-scope"
+								size="lg"
+								tooltip="Back to workspace"
+							>
+								<Link to="/app">
+									<ChevronLeft className="settings-scope-back" />
+									<span aria-hidden="true" className="settings-scope-mark">
+										{initials(organization.name)}
+									</span>
+									<span className="settings-scope-copy">
+										<strong>Organization settings</strong>
+										<small>{organization.name}</small>
+									</span>
+								</Link>
+							</SidebarMenuButton>
+						</SidebarMenuItem>
+					</SidebarMenu>
+					<SidebarTrigger
+						aria-label="Toggle navigation"
+						className="sidebar-collapse"
+						size="icon-xs"
+					/>
 				</div>
 			</SidebarHeader>
 
@@ -289,69 +300,131 @@ function OrganizationSettingsSidebar({ pathname }: { pathname: string }) {
 			</SidebarContent>
 
 			<SidebarFooter className="product-sidebar-footer settings-sidebar-footer">
-				<SidebarMenu>
-					<NavigationMenuItem
-						item={accountSettingsNavigation}
-						pathname={pathname}
-					/>
-				</SidebarMenu>
-				<OrganizationAccess />
+				<AccountMenu />
 			</SidebarFooter>
 		</>
 	);
 }
 
-const accessSummaries: Record<Role, string> = {
-	admin: "Manages members and teams",
-	member: "Organization member",
-	owner: "Full organization access",
-};
-
-function OrganizationAccess() {
+/**
+ * Conversations, as a section of the sidebar rather than a page of its own.
+ *
+ * It shows the few you were most recently in and hands the rest to search:
+ * past a handful, a list you scroll is slower than a name you type. The
+ * section stays open once you open it, and opens itself whenever you are
+ * reading a conversation, so the one you are in is always on screen.
+ */
+function ConversationsMenu({ pathname }: { pathname: string }) {
 	const { organization } = useWorkspace();
-	const membership = useMembership(organization.id);
-	const manages = membership?.role === "owner" || membership?.role === "admin";
-	const Icon = manages ? ShieldCheck : CircleUserRound;
+	const navigate = useNavigate();
+	const queryClient = useQueryClient();
+	const search = useWorkspaceSearch();
+	const readingId = pathname.match(/^\/app\/threads\/([^/]+)/)?.[1];
+	const reading = readingId !== undefined;
+	const [opened, setOpened] = useState(false);
+	const expanded = opened || reading;
+	const threads = useQuery(threadsQueryOptions(organization.id));
+	const recent = recentThreads(threads.data, SIDEBAR_THREAD_LIMIT, readingId);
+
+	const start = useMutation({
+		mutationFn: () => createThread(organization.id),
+		onSuccess: async (thread) => {
+			await queryClient.invalidateQueries({
+				queryKey: threadsQueryKey(organization.id),
+			});
+			setOpened(true);
+			await navigate({
+				params: { threadId: thread.id },
+				to: "/app/threads/$threadId",
+			});
+		},
+	});
 
 	return (
-		<div
-			className="sidebar-account settings-admin-account"
-			data-manages={manages}
-		>
-			<span aria-hidden="true">
-				<Icon />
-			</span>
-			<div>
-				<strong>
-					{membership ? roleLabel(membership.role) : "Organization access"}
-				</strong>
-				<small>
-					{membership ? accessSummaries[membership.role] : organization.name}
-				</small>
-			</div>
-		</div>
+		<SidebarMenuItem>
+			<SidebarMenuButton
+				aria-expanded={expanded}
+				isActive={reading}
+				onClick={() => setOpened(!expanded)}
+				tooltip="Conversations"
+			>
+				<MessageSquareText />
+				<span>Conversations</span>
+				<ChevronRight className="sidebar-disclosure" data-open={expanded} />
+			</SidebarMenuButton>
+			<SidebarMenuAction
+				aria-label="New conversation"
+				disabled={start.isPending}
+				onClick={() => start.mutate()}
+			>
+				<Plus />
+			</SidebarMenuAction>
+			{expanded ? (
+				<SidebarMenuSub>
+					{recent.map((thread) => (
+						<SidebarMenuSubItem key={thread.id}>
+							<SidebarMenuSubButton asChild isActive={thread.id === readingId}>
+								<Link
+									params={{ threadId: thread.id }}
+									to="/app/threads/$threadId"
+								>
+									<span>{threadTitle(thread)}</span>
+								</Link>
+							</SidebarMenuSubButton>
+						</SidebarMenuSubItem>
+					))}
+					{recent.length === 0 ? (
+						<SidebarMenuSubItem>
+							<p className="sidebar-sub-empty">
+								{threads.isPending ? "Loading…" : "Nothing yet."}
+							</p>
+						</SidebarMenuSubItem>
+					) : null}
+					<SidebarMenuSubItem>
+						<button
+							className="sidebar-see-all"
+							onClick={() => search.open("conversations")}
+							type="button"
+						>
+							See all
+							<kbd>⌘K</kbd>
+						</button>
+					</SidebarMenuSubItem>
+				</SidebarMenuSub>
+			) : null}
+		</SidebarMenuItem>
 	);
 }
 
 interface NavigationGroupProps {
+	/** A section with children of its own, such as Conversations. */
+	children?: ReactNode;
+	/** Which link `children` follows; without it they go last. */
+	childrenAfter?: AppPath;
 	items: NavigationItem[];
 	label: string;
 	pathname: string;
 }
 
-function NavigationGroup({ items, label, pathname }: NavigationGroupProps) {
+function NavigationGroup({
+	children,
+	childrenAfter,
+	items,
+	label,
+	pathname,
+}: NavigationGroupProps) {
 	return (
 		<SidebarGroup>
 			<SidebarGroupLabel>{label}</SidebarGroupLabel>
 			<SidebarGroupContent>
 				<SidebarMenu>
 					{items.map((item) => (
-						<NavigationMenuItem
-							item={item}
-							key={item.href}
-							pathname={pathname}
-						/>
+						<Fragment key={item.href}>
+							<NavigationMenuItem item={item} pathname={pathname} />
+							{item.href === childrenAfter ? children : null}
+						</Fragment>
 					))}
+					{childrenAfter ? null : children}
 				</SidebarMenu>
 			</SidebarGroupContent>
 		</SidebarGroup>

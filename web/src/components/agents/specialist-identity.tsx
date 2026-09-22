@@ -1,3 +1,4 @@
+import Avatar from "boring-avatars";
 import {
 	ChartNoAxesCombined,
 	Compass,
@@ -79,14 +80,28 @@ export function suggestedSpecialistInstructions(
 		.join("\n\n");
 }
 
-function avatarTone(seed: string): number {
-	let value = 0;
-	for (const character of seed) {
-		value = (value * 31 + (character.codePointAt(0) ?? 0)) >>> 0;
-	}
-	return value % 6;
-}
+/**
+ * The colours an agent's face is drawn from: the green the product already
+ * spends on a thing working, the amber it warns with, and three warm
+ * neutrals either side of them. Nothing here is pale enough to wash an agent
+ * out at 28px, and nothing is louder than the product's own palette.
+ */
+export const AVATAR_COLOURS = [
+	"#2f3b33",
+	"#3f7d52",
+	"#9a6a1e",
+	"#7d5b4f",
+	"#b08968",
+];
 
+/**
+ * An agent's face, generated from `seed` rather than stored as an asset.
+ *
+ * The seed is the agent's id, never its name, so a face survives renaming —
+ * it is how you recognise a specialist across a roster without reading. The
+ * shape stays a rounded square, which is what separates an agent from a
+ * person (a circle) at a glance.
+ */
 export function SpecialistAvatar({
 	name,
 	seed,
@@ -96,25 +111,15 @@ export function SpecialistAvatar({
 	seed: string;
 	size?: "default" | "small" | "large";
 }) {
-	const initials =
-		name
-			.trim()
-			.split(/\s+/)
-			.slice(0, 2)
-			.map((part) => part[0]?.toLocaleUpperCase() ?? "")
-			.join("") || "✦";
 	return (
 		<span
 			aria-label={`${name || "New specialist"} avatar`}
 			className="specialist-avatar"
 			data-size={size}
-			data-tone={avatarTone(seed)}
 			role="img"
 		>
-			<span aria-hidden="true" className="specialist-avatar-orbit" />
-			<span aria-hidden="true" className="specialist-avatar-initials">
-				{initials}
-			</span>
+			{/* CSS sizes the box; the svg fills it, so one face works at every size. */}
+			<Avatar colors={AVATAR_COLOURS} name={seed} square variant="marble" />
 		</span>
 	);
 }

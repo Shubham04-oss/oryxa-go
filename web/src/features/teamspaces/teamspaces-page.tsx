@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
 	ArrowUpRight,
-	Bot,
 	BrainCircuit,
 	CheckCircle2,
 	CircleAlert,
@@ -20,6 +19,7 @@ import {
 	Trash2,
 	WandSparkles,
 } from "lucide-react";
+import { SpecialistAvatar } from "@/components/agents/specialist-identity";
 import { QueryError } from "@/components/app/app-alert";
 import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import { EmptyState } from "@/components/app/empty-state";
@@ -575,9 +575,11 @@ function TeamspaceDetail({
 							data-owned={whisperer.user_id === userId}
 							key={whisperer.user_id}
 						>
-							<span aria-hidden="true">
-								<Bot />
-							</span>
+							<SpecialistAvatar
+								name={whisperer.agent_name}
+								seed={whisperer.agent_id}
+								size="small"
+							/>
 							<div>
 								<strong>{whisperer.agent_name}</strong>
 								<small>
@@ -738,9 +740,11 @@ function ContributionRow({
 
 	return (
 		<div className="teamspace-contribution">
-			<span className="teamspace-list-icon" aria-hidden="true">
-				<Sparkles />
-			</span>
+			<SpecialistAvatar
+				name={contribution.name}
+				seed={contribution.agent_id}
+				size="small"
+			/>
 			<div>
 				<strong>{contribution.name}</strong>
 				<small>{contribution.role}</small>
@@ -844,8 +848,13 @@ function LedgerEntry({ entry }: { entry: TeamspaceEntry }) {
 				</header>
 				<p>{entry.summary}</p>
 				<footer>
-					<span>
-						<Bot aria-hidden="true" /> {entry.author_agent_name}
+					<span className="teamspace-entry-author">
+						<SpecialistAvatar
+							name={entry.author_agent_name}
+							seed={entry.author_agent_id}
+							size="small"
+						/>
+						{entry.author_agent_name}
 					</span>
 					{entry.tools_used.length > 0 ? (
 						<span>{entry.tools_used.length} tools declared</span>

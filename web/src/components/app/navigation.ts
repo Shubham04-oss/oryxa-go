@@ -9,7 +9,6 @@ import {
 	LayoutDashboard,
 	type LucideIcon,
 	Mail,
-	MessageSquareText,
 	Network,
 	Plug,
 	Settings2,
@@ -19,7 +18,6 @@ import {
 
 export type AppPath =
 	| "/app"
-	| "/app/threads"
 	| "/app/knowledge"
 	| "/app/agents"
 	| "/app/teamspaces"
@@ -43,7 +41,6 @@ export interface NavigationItem {
 
 export const soloNavigation: NavigationItem[] = [
 	{ href: "/app", icon: LayoutDashboard, label: "Overview", match: "exact" },
-	{ href: "/app/threads", icon: MessageSquareText, label: "Conversations" },
 	{ href: "/app/agents", icon: Bot, label: "Agent system" },
 ];
 

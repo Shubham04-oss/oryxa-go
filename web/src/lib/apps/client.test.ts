@@ -4,17 +4,21 @@ import {
 	appsErrorMessage,
 	type Connection,
 	canReconnect,
+	connectionGroupState,
 	connectionQueryOptions,
+	connectionStatusHint,
 	connectionStatusLabel,
 	connectionStatusTone,
 	connectReturnNotice,
 	connectReturnTo,
 	groupConnectionsByToolkit,
+	hasConnectionDetails,
 	listConnectionTargets,
 	nonConnectableReason,
 	parseConnectReturn,
 	type Toolkit,
 	type TriggerConfigField,
+	toolkitName,
 	triggerConfigCapability,
 	triggerConfigFieldSubmission,
 } from "./client";
@@ -107,12 +111,49 @@ describe("connection status", () => {
 		expect(connectionStatusTone("active")).toBe("active");
 	});
 
+	it("gives a removed connection a tone of its own", () => {
+		expect(connectionStatusTone("removed")).toBe("muted");
+		expect(connectionStatusTone("pending")).toBe("neutral");
+	});
+
+	it("says what to do about every status a member can act on", () => {
+		const statuses = ["expired", "failed", "pending", "removed"] as const;
+		for (const status of statuses) {
+			expect(connectionStatusHint(status)).not.toBe("");
+		}
+	});
+
+	it("stays quiet about a connection that works", () => {
+		expect(connectionStatusHint("active")).toBe("");
+	});
+
 	it("only offers a plain reconnect once a connection has expired", () => {
 		expect(canReconnect("expired")).toBe(true);
 		expect(canReconnect("active")).toBe(false);
 		expect(canReconnect("failed")).toBe(false);
 		expect(canReconnect("removed")).toBe(false);
 		expect(canReconnect("pending")).toBe(false);
+	});
+
+	it("only opens details for a connection that works", () => {
+		expect(hasConnectionDetails("active")).toBe(true);
+		expect(hasConnectionDetails("expired")).toBe(false);
+		expect(hasConnectionDetails("failed")).toBe(false);
+		expect(hasConnectionDetails("pending")).toBe(false);
+		expect(hasConnectionDetails("removed")).toBe(false);
+	});
+});
+
+describe("toolkitName", () => {
+	it("reads a slug as a name", () => {
+		expect(toolkitName("google_calendar")).toBe("Google Calendar");
+		expect(toolkitName("hubspot")).toBe("Hubspot");
+		expect(toolkitName("microsoft-teams")).toBe("Microsoft Teams");
+	});
+
+	it("survives a slug with empty parts", () => {
+		expect(toolkitName("__gmail__")).toBe("Gmail");
+		expect(toolkitName("")).toBe("");
 	});
 });
 
@@ -162,6 +203,36 @@ describe("groupConnectionsByToolkit", () => {
 			connection({ id: "1", status: "removed", toolkit: "github" }),
 		]);
 		expect(groups).toEqual([]);
+	});
+});
+
+describe("connectionGroupState", () => {
+	const group = (activeCount: number, attentionCount: number) => ({
+		activeCount,
+		attentionCount,
+		connections: [],
+		toolkit: "gmail",
+	});
+
+	it("calls a working app connected", () => {
+		expect(connectionGroupState(group(2, 0))).toEqual({
+			label: "All connected",
+			tone: "active",
+		});
+	});
+
+	it("raises a hand for an app with a broken connection", () => {
+		expect(connectionGroupState(group(1, 1))).toEqual({
+			label: "Needs attention",
+			tone: "warning",
+		});
+	});
+
+	it("never calls an app connected while nothing about it is", () => {
+		expect(connectionGroupState(group(0, 0))).toEqual({
+			label: "Connecting…",
+			tone: "neutral",
+		});
 	});
 });
 
