@@ -19,4 +19,12 @@
 // with RAG_EVAL_VECTOR_BUCKET keeps the vectors in S3 Vectors, and
 // RAG_EVAL_RERANK_ARN reranks with a Bedrock model; AWS_REGION says where. The corpus is indexed
 // into an organization of its own, which is deleted when the run ends.
+//
+// A Bedrock knowledge base is measured the same way, through the clients the
+// service uses: RAG_EVAL_BACKEND=bedrock-kb with RAG_EVAL_KNOWLEDGE_BASE_ID,
+// RAG_EVAL_KNOWLEDGE_BASE_DATA_SOURCE_ID and RAG_EVAL_KNOWLEDGE_BASE_TYPE
+// (VECTOR, the default, or MANAGED). The run's documents are deleted from it
+// when the run ends, and searching the corpus as another organization must
+// find nothing. Its passages carry no byte range, so each is placed in its
+// document by its text before it can count as a section hit.
 package eval

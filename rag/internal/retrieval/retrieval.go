@@ -231,7 +231,7 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 	// Bedrock's own reranking, when it ran, already reordered and scored
 	// these; the cross-encoder Reranker below is never invoked for a
 	// knowledge base corpus, since it has nothing here of its own to send it.
-	reranked := query.Rerank && retriever.knowledgeBase.rerankModelARN != ""
+	reranked := query.Rerank && retriever.knowledgeBase.reranks()
 	return Results{Matches: retriever.finalize(matches, query), Reranked: reranked}, nil
 }
 

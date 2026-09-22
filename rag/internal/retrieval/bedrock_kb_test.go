@@ -209,6 +209,104 @@ func TestKnowledgeBaseRetrieveConfiguresRerankingWhenAsked(t *testing.T) {
 	}
 }
 
+// TestManagedKnowledgeBaseSearchesThroughManagedSearch: a MANAGED knowledge
+// base refuses a vector search configuration, so its request must carry the
+// same tenant filter and the same clamped number of results in a managed
+// search configuration instead, and nothing in the vector one.
+func TestManagedKnowledgeBaseSearchesThroughManagedSearch(t *testing.T) {
+	t.Parallel()
+	api := &fakeKnowledgeBaseAPI{output: &bedrockagentruntime.RetrieveOutput{RetrievalResults: []agenttypes.KnowledgeBaseRetrievalResult{
+		textResult("doc_1", "invoice INV-2026-48213 is due on the first", 0.7),
+	}}}
+	knowledgeBase, err := NewManagedKnowledgeBase(api, "kb-managed")
+	if err != nil {
+		t.Fatalf("NewManagedKnowledgeBase: %v", err)
+	}
+	passages, err := knowledgeBase.retrieve(context.Background(), "org_1", []string{"cor_1"}, domain.Query{Text: "INV-2026-48213"}, 400)
+	if err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+	if len(passages) != 1 || passages[0].documentID != "doc_1" {
+		t.Fatalf("passages = %+v, want doc_1's", passages)
+	}
+	configuration := api.lastInput.RetrievalConfiguration
+	if configuration.VectorSearchConfiguration != nil {
+		t.Fatal("a managed knowledge base was sent a vector search configuration")
+	}
+	managed := configuration.ManagedSearchConfiguration
+	if managed == nil {
+		t.Fatal("a managed knowledge base was sent no managed search configuration")
+	}
+	if got := aws.ToInt32(managed.NumberOfResults); got != retrieveLimit {
+		t.Fatalf("number of results = %d, want it clamped to %d", got, retrieveLimit)
+	}
+	andAll, ok := managed.Filter.(*agenttypes.RetrievalFilterMemberAndAll)
+	if !ok || len(andAll.Value) != 2 {
+		t.Fatalf("filter = %#v, want the tenant filter", managed.Filter)
+	}
+	org, ok := andAll.Value[0].(*agenttypes.RetrievalFilterMemberEquals)
+	if !ok || aws.ToString(org.Value.Key) != "organization_id" || filterValue(t, org.Value.Value) != "org_1" {
+		t.Fatalf("first condition = %#v, want Equals(organization_id, org_1)", andAll.Value[0])
+	}
+	corpus, ok := andAll.Value[1].(*agenttypes.RetrievalFilterMemberEquals)
+	if !ok || aws.ToString(corpus.Value.Key) != "corpus_id" || filterValue(t, corpus.Value.Value) != "cor_1" {
+		t.Fatalf("second condition = %#v, want Equals(corpus_id, cor_1)", andAll.Value[1])
+	}
+	// Not asked to rerank, so reranking is turned off by name rather than
+	// left to whatever the service would choose.
+	if managed.RerankingModelType != agenttypes.RerankingModelTypeNone || managed.RerankingConfiguration != nil {
+		t.Fatalf("reranking = %q %+v, want NONE", managed.RerankingModelType, managed.RerankingConfiguration)
+	}
+}
+
+func TestManagedKnowledgeBaseReranksWithItsOwnModelWhenAsked(t *testing.T) {
+	t.Parallel()
+	api := &fakeKnowledgeBaseAPI{}
+	knowledgeBase, err := NewManagedKnowledgeBase(api, "kb-managed")
+	if err != nil {
+		t.Fatalf("NewManagedKnowledgeBase: %v", err)
+	}
+	if _, err := knowledgeBase.retrieve(context.Background(), "org_1", []string{"cor_1"}, domain.Query{Text: "q", Rerank: true}, 10); err != nil {
+		t.Fatalf("retrieve: %v", err)
+	}
+	managed := api.lastInput.RetrievalConfiguration.ManagedSearchConfiguration
+	if managed == nil || managed.RerankingModelType != agenttypes.RerankingModelTypeManaged {
+		t.Fatalf("managed search = %+v, want the managed reranker", managed)
+	}
+	if managed.RerankingConfiguration != nil {
+		t.Fatal("a managed reranker was given a model configuration of its own")
+	}
+}
+
+// TestSearchManagedKnowledgeBaseReportsReranking: a managed knowledge base
+// reranks with no RAG_RERANK_MODEL_ARN at all, so a search that asked to
+// rerank is reported as reranked, and one that did not is not.
+func TestSearchManagedKnowledgeBaseReportsReranking(t *testing.T) {
+	t.Parallel()
+	api := &fakeKnowledgeBaseAPI{output: &bedrockagentruntime.RetrieveOutput{RetrievalResults: []agenttypes.KnowledgeBaseRetrievalResult{
+		textResult("doc_1", "first passage", 0.9),
+	}}}
+	knowledgeBase, err := NewManagedKnowledgeBase(api, "kb-managed")
+	if err != nil {
+		t.Fatalf("NewManagedKnowledgeBase: %v", err)
+	}
+	retriever := New(&fakeChunks{}, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil, knowledgeBase, nil)
+	corpus := testCorpus()
+	corpus.Backend = domain.BackendBedrockKB
+	for _, rerank := range []bool{true, false} {
+		results, err := retriever.Search(context.Background(), corpus, domain.Query{Text: "q", Rerank: rerank})
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if results.Reranked != rerank {
+			t.Fatalf("rerank %v: Reranked = %v", rerank, results.Reranked)
+		}
+		if len(results.Matches) != 1 {
+			t.Fatalf("rerank %v: got %d matches, want 1", rerank, len(results.Matches))
+		}
+	}
+}
+
 // TestSearchKnowledgeBaseHydratesFromPostgresAndHonoursTopK exercises the
 // whole path Retriever.Search takes for a bedrock-kb corpus: it must not
 // touch the dense or lexical retrievers at all, and it must still apply

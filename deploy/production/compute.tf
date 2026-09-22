@@ -105,10 +105,11 @@ locals {
       RAG_ANSWER_PROVIDER    = "vertex"
       RAG_ANSWER_MODEL       = var.model
       RAG_RERANK_MODEL_ARN   = "arn:aws:bedrock:${var.aws_region}::foundation-model/${var.rerank_model}"
-      # The Bedrock knowledge base new corpora are indexed in, once the image
-      # knows it (rag_default_backend).
-      RAG_KNOWLEDGE_BASE_ID             = aws_bedrockagent_knowledge_base.main.id
-      RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID = aws_bedrockagent_data_source.main.data_source_id
+      # The Bedrock knowledge base rag indexes into and searches
+      # (rag_knowledge_base), where new corpora go (rag_default_backend).
+      RAG_KNOWLEDGE_BASE_ID             = local.rag_knowledge_base.id
+      RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID = local.rag_knowledge_base.data_source_id
+      RAG_KNOWLEDGE_BASE_TYPE           = local.rag_knowledge_base.type
       RAG_KNOWLEDGE_BASE_BUCKET         = aws_s3_bucket.knowledge_base_documents.bucket
       RAG_DEFAULT_BACKEND               = var.rag_default_backend
       KNOWLEDGE_ORIGINALS_BUCKET        = aws_s3_bucket.knowledge_base_documents.bucket
@@ -253,7 +254,9 @@ resource "aws_iam_role_policy" "task" {
           "bedrock:Retrieve", "bedrock:IngestKnowledgeBaseDocuments", "bedrock:GetKnowledgeBaseDocuments",
           "bedrock:DeleteKnowledgeBaseDocuments", "bedrock:ListKnowledgeBaseDocuments", "bedrock:StartIngestionJob",
         ]
-        Resource = aws_bedrockagent_knowledge_base.main.arn
+        # Both knowledge bases, so rag_knowledge_base can move between them
+        # without an IAM change racing the task that needs it.
+        Resource = [aws_bedrockagent_knowledge_base.main.arn, aws_bedrockagent_knowledge_base.managed.arn]
       },
       {
         # Actions with no resource type, which a statement matches only with

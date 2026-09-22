@@ -37,12 +37,23 @@ const retrieveLimit = 100
 // Retriever.searchKnowledgeBase, is the same diversity, top_k and min_score
 // handling every other corpus gets, so a caller sees one contract regardless
 // of which backend a corpus happened to be created on.
+//
+// It speaks to either kind of knowledge base Bedrock has. A VECTOR one
+// searches the index it was created over — S3 Vectors here, which Bedrock
+// searches by meaning only — and reranks with RAG_RERANK_MODEL_ARN when
+// asked. A MANAGED one keeps its own index, searches it by keyword and by
+// meaning together on every query, and reranks with a model of its own that
+// its retrieval price already covers. Both take documents the same way (see
+// rag/internal/knowledgebase); only the search request differs.
 type KnowledgeBase struct {
 	client          KnowledgeBaseAPI
 	knowledgeBaseID string
+	// managed is a MANAGED knowledge base rather than a VECTOR one.
+	managed bool
 	// rerankModelARN reuses RAG_RERANK_MODEL_ARN, the same model the
 	// cross-encoder Reranker uses for pgvector and S3 Vectors, so an operator
-	// configures reranking once rather than once per backend.
+	// configures reranking once rather than once per backend. A managed
+	// knowledge base never uses it.
 	rerankModelARN string
 }
 
@@ -59,6 +70,24 @@ func NewKnowledgeBase(client KnowledgeBaseAPI, knowledgeBaseID, rerankModelARN s
 	return &KnowledgeBase{
 		client: client, knowledgeBaseID: strings.TrimSpace(knowledgeBaseID), rerankModelARN: strings.TrimSpace(rerankModelARN),
 	}, nil
+}
+
+// NewManagedKnowledgeBase builds a retriever over one MANAGED Bedrock
+// knowledge base. It takes no reranking model: a managed knowledge base
+// reranks with its own when a query asks it to.
+func NewManagedKnowledgeBase(client KnowledgeBaseAPI, knowledgeBaseID string) (*KnowledgeBase, error) {
+	knowledgeBase, err := NewKnowledgeBase(client, knowledgeBaseID, "")
+	if err != nil {
+		return nil, err
+	}
+	knowledgeBase.managed = true
+	return knowledgeBase, nil
+}
+
+// reranks says whether a query that asks to rerank is reranked: always by a
+// managed knowledge base, and by a vector one only when it was given a model.
+func (knowledgeBase *KnowledgeBase) reranks() bool {
+	return knowledgeBase.managed || knowledgeBase.rerankModelARN != ""
 }
 
 // tenantConditions is the metadata conditions that keep one organization's
@@ -151,25 +180,10 @@ func (knowledgeBase *KnowledgeBase) retrieve(ctx context.Context, organizationID
 	if err != nil {
 		return nil, err
 	}
-	vectorSearch := &agenttypes.KnowledgeBaseVectorSearchConfiguration{
-		NumberOfResults: aws.Int32(int32(numberOfResults)),
-		Filter:          filter,
-	}
-	if query.Rerank && knowledgeBase.rerankModelARN != "" {
-		vectorSearch.RerankingConfiguration = &agenttypes.VectorSearchRerankingConfiguration{
-			Type: agenttypes.VectorSearchRerankingConfigurationTypeBedrockRerankingModel,
-			BedrockRerankingConfiguration: &agenttypes.VectorSearchBedrockRerankingConfiguration{
-				ModelConfiguration:      &agenttypes.VectorSearchBedrockRerankingModelConfiguration{ModelArn: aws.String(knowledgeBase.rerankModelARN)},
-				NumberOfRerankedResults: aws.Int32(int32(numberOfResults)),
-			},
-		}
-	}
 	output, err := knowledgeBase.client.Retrieve(ctx, &bedrockagentruntime.RetrieveInput{
-		KnowledgeBaseId: aws.String(knowledgeBase.knowledgeBaseID),
-		RetrievalQuery:  &agenttypes.KnowledgeBaseQuery{Text: aws.String(query.Text)},
-		RetrievalConfiguration: &agenttypes.KnowledgeBaseRetrievalConfiguration{
-			VectorSearchConfiguration: vectorSearch,
-		},
+		KnowledgeBaseId:        aws.String(knowledgeBase.knowledgeBaseID),
+		RetrievalQuery:         &agenttypes.KnowledgeBaseQuery{Text: aws.String(query.Text)},
+		RetrievalConfiguration: knowledgeBase.retrievalConfiguration(filter, numberOfResults, query.Rerank),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("retrieve from the knowledge base: %w", err)
@@ -201,6 +215,43 @@ func (knowledgeBase *KnowledgeBase) retrieve(ctx context.Context, organizationID
 		})
 	}
 	return passages, nil
+}
+
+// retrievalConfiguration is the one part of a Retrieve request that differs
+// between the two kinds of knowledge base: both get the same tenant filter
+// and the same number of results, and only the configuration they travel in,
+// and how reranking is asked for, changes.
+func (knowledgeBase *KnowledgeBase) retrievalConfiguration(filter agenttypes.RetrievalFilter, numberOfResults int, rerank bool) *agenttypes.KnowledgeBaseRetrievalConfiguration {
+	if knowledgeBase.managed {
+		// Reranking is named either way rather than left to the service's
+		// default, so a query that did not ask to rerank does not wait on the
+		// reranker: the same contract every other backend keeps.
+		reranking := agenttypes.RerankingModelTypeNone
+		if rerank {
+			reranking = agenttypes.RerankingModelTypeManaged
+		}
+		return &agenttypes.KnowledgeBaseRetrievalConfiguration{
+			ManagedSearchConfiguration: &agenttypes.ManagedSearchConfiguration{
+				NumberOfResults:    aws.Int32(int32(numberOfResults)),
+				Filter:             filter,
+				RerankingModelType: reranking,
+			},
+		}
+	}
+	vectorSearch := &agenttypes.KnowledgeBaseVectorSearchConfiguration{
+		NumberOfResults: aws.Int32(int32(numberOfResults)),
+		Filter:          filter,
+	}
+	if rerank && knowledgeBase.rerankModelARN != "" {
+		vectorSearch.RerankingConfiguration = &agenttypes.VectorSearchRerankingConfiguration{
+			Type: agenttypes.VectorSearchRerankingConfigurationTypeBedrockRerankingModel,
+			BedrockRerankingConfiguration: &agenttypes.VectorSearchBedrockRerankingConfiguration{
+				ModelConfiguration:      &agenttypes.VectorSearchBedrockRerankingModelConfiguration{ModelArn: aws.String(knowledgeBase.rerankModelARN)},
+				NumberOfRerankedResults: aws.Int32(int32(numberOfResults)),
+			},
+		}
+	}
+	return &agenttypes.KnowledgeBaseRetrievalConfiguration{VectorSearchConfiguration: vectorSearch}
 }
 
 // kbChunkID derives a stable id for a passage that never had a row in

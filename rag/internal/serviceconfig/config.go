@@ -48,6 +48,13 @@ type Config struct {
 	KnowledgeBaseID           string
 	KnowledgeBaseDataSourceID string
 	KnowledgeBaseBucket       string
+	// KnowledgeBaseManaged says the knowledge base is Bedrock's MANAGED kind,
+	// which keeps its own index and searches it by keyword and meaning
+	// together, rather than the VECTOR kind searching an index the deployment
+	// made for it. Both take documents the same way; they are searched with
+	// different requests. RAG_KNOWLEDGE_BASE_TYPE names it in Bedrock's own
+	// words: VECTOR, the default, or MANAGED.
+	KnowledgeBaseManaged bool
 
 	// GoogleCloudProject and GoogleCloudLocation are where Vertex AI serves
 	// the models, matching how the agents service is configured.
@@ -113,6 +120,11 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	knowledgeBaseType := strings.ToUpper(strings.TrimSpace(getenv("RAG_KNOWLEDGE_BASE_TYPE")))
+	if knowledgeBaseType != "" && knowledgeBaseType != "VECTOR" && knowledgeBaseType != "MANAGED" {
+		return Config{}, errors.New(`RAG_KNOWLEDGE_BASE_TYPE must be "VECTOR" or "MANAGED"`)
+	}
+
 	genericEndpoint := endpoint(getenv, "AWS_ENDPOINT_URL")
 	config := Config{
 		AuthURL:        trimURL(getenv("AUTH_URL")),
@@ -129,6 +141,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		KnowledgeBaseID:           strings.TrimSpace(getenv("RAG_KNOWLEDGE_BASE_ID")),
 		KnowledgeBaseDataSourceID: strings.TrimSpace(getenv("RAG_KNOWLEDGE_BASE_DATA_SOURCE_ID")),
 		KnowledgeBaseBucket:       strings.TrimSpace(getenv("RAG_KNOWLEDGE_BASE_BUCKET")),
+		KnowledgeBaseManaged:      knowledgeBaseType == "MANAGED",
 
 		GoogleCloudProject:  strings.TrimSpace(getenv("GOOGLE_CLOUD_PROJECT")),
 		GoogleCloudLocation: valueOrDefault(getenv, "GOOGLE_CLOUD_LOCATION", "global"),

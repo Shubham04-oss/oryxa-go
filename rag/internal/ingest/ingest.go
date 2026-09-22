@@ -411,7 +411,9 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 	default:
 		// STARTING, PENDING, IN_PROGRESS and PARTIALLY_INDEXED all mean
 		// "still working": leave the document ingesting and ask again
-		// shortly.
+		// shortly. So does TEXT_INDEXED, which a managed knowledge base
+		// reports, undocumented, between taking a document's text and
+		// finishing with it: seen live, it becomes INDEXED minutes later.
 		return Result{}, pipeline.store.RecheckDocumentAt(ctx, document.ID, at.Add(knowledgeBaseRecheck))
 	}
 }

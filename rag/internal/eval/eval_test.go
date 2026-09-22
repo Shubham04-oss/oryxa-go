@@ -14,9 +14,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockagent"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockagentruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/s3vectors"
@@ -26,6 +29,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/embedding"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/ingest"
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/knowledgebase"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/postgres"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/retrieval"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/vectorstore"
@@ -74,6 +78,10 @@ type modeResult struct {
 	RetrievedTokens float64 `json:"retrieved_tokens_mean"`
 	// Misses are the questions whose section no retrieved chunk touched.
 	Misses []string `json:"misses"`
+	// Unplaced counts a knowledge base's passages whose text could not be
+	// found in the document they came from, so they could not count as a
+	// section hit whatever they said.
+	Unplaced int `json:"unplaced_passages,omitempty"`
 	// Empty counts answerable questions that came back with nothing, and
 	// TurnedAway unanswerable ones that did: with a score floor, the first is
 	// a wrong refusal and the second a right one.
@@ -89,6 +97,7 @@ type modeResult struct {
 type report struct {
 	Embedding       string             `json:"embedding"`
 	Backend         domain.Backend     `json:"backend"`
+	KnowledgeBase   string             `json:"knowledge_base_type,omitempty"`
 	Policy          domain.ChunkPolicy `json:"policy"`
 	Documents       int                `json:"documents"`
 	Chunks          int                `json:"chunks"`
@@ -104,7 +113,11 @@ const topK = 8
 
 func TestRetrievalQuality(t *testing.T) {
 	databaseURL, project := os.Getenv("RAG_EVAL_DATABASE_URL"), os.Getenv("GOOGLE_CLOUD_PROJECT")
-	onBedrock := os.Getenv("RAG_EVAL_EMBEDDING") == "bedrock"
+	onKnowledgeBase := os.Getenv("RAG_EVAL_BACKEND") == string(domain.BackendBedrockKB)
+	var knowledgeBaseType string
+	// A knowledge base embeds with its own model, and a bedrock-kb corpus is
+	// recorded with Titan v2's spec, so it needs no Google Cloud project.
+	onBedrock := os.Getenv("RAG_EVAL_EMBEDDING") == "bedrock" || onKnowledgeBase
 	if databaseURL == "" || (!onBedrock && project == "") {
 		t.Skip("RAG_EVAL_DATABASE_URL, and GOOGLE_CLOUD_PROJECT for Vertex embeddings, are not set")
 	}
@@ -156,7 +169,6 @@ func TestRetrievalQuality(t *testing.T) {
 		}
 		stores = append(stores, s3Store)
 	}
-	vectors := vectorstore.NewRouter(stores...)
 	backend := domain.BackendPgvector
 	if os.Getenv("RAG_EVAL_BACKEND") == string(domain.BackendS3Vectors) {
 		if bucket == "" {
@@ -164,6 +176,23 @@ func TestRetrievalQuality(t *testing.T) {
 		}
 		backend = domain.BackendS3Vectors
 	}
+	// A knowledge base chunks, embeds and searches for itself, so it is
+	// reached through the clients the service uses for it rather than
+	// through a vector store.
+	var (
+		knowledgeBaseDocuments *knowledgebase.Client
+		knowledgeBase          *retrieval.KnowledgeBase
+		ingestKnowledgeBase    ingest.KnowledgeBase
+		knowledgeBaseReranks   bool
+	)
+	if onKnowledgeBase {
+		loadAWS()
+		knowledgeBaseDocuments, knowledgeBase, knowledgeBaseType, knowledgeBaseReranks = knowledgeBaseFromEnv(t, awsConfig, rerankARN)
+		ingestKnowledgeBase = knowledgeBaseDocuments
+		stores = append(stores, vectorstore.BedrockKnowledgeBase{})
+		backend = domain.BackendBedrockKB
+	}
+	vectors := vectorstore.NewRouter(stores...)
 
 	// counter counts the calls that reach the embedding provider, whichever
 	// it is.
@@ -200,8 +229,12 @@ func TestRetrievalQuality(t *testing.T) {
 	defer cleanup(t, store, organizationID)
 	corpus := createCorpus(t, ctx, store, organizationID, spec, backend, policy)
 	// The rows cascade when the organization goes; an S3 Vectors index does
-	// not, so it is dropped first.
+	// not, so it is dropped first. A knowledge base's documents go by id,
+	// below, once they are known.
 	defer func() {
+		if backend == domain.BackendBedrockKB {
+			return
+		}
 		if vectorStore, err := vectors.For(corpus); err == nil {
 			if err := vectorStore.DropCorpus(context.Background(), corpus); err != nil {
 				t.Errorf("drop the corpus's vectors: %v", err)
@@ -213,10 +246,22 @@ func TestRetrievalQuality(t *testing.T) {
 	// then run the ingest pipeline over each document.
 	paths, _ := filepath.Glob("testdata/corpus/*.md")
 	sort.Strings(paths)
-	pipeline := ingest.New(store, vectors, embedders, nil, ingest.Options{}, logger)
+	pipeline := ingest.New(store, vectors, embedders, ingestKnowledgeBase, ingest.Options{}, logger)
 	documentIDs := map[string]string{}
 	bodies := map[string]string{}
-	result := report{Embedding: spec.Model, Backend: backend, Policy: policy, Documents: len(paths)}
+	result := report{Embedding: spec.Model, Backend: backend, KnowledgeBase: knowledgeBaseType, Policy: policy, Documents: len(paths)}
+	if onKnowledgeBase {
+		result.Embedding = "the knowledge base's own"
+		defer func() {
+			ids := make([]string, 0, len(documentIDs))
+			for _, id := range documentIDs {
+				ids = append(ids, id)
+			}
+			if err := knowledgeBaseDocuments.Delete(context.Background(), ids); err != nil {
+				t.Errorf("delete the run's documents from the knowledge base: %v", err)
+			}
+		}()
+	}
 	var chunkTokens, chunkBytes int
 	callsBefore := counter.calls.Load()
 	started := time.Now()
@@ -240,6 +285,9 @@ func TestRetrievalQuality(t *testing.T) {
 			chunkBytes += len(chunk.Text)
 		}
 	}
+	if onKnowledgeBase {
+		waitForKnowledgeBase(t, ctx, store, pipeline, organizationID, documentIDs)
+	}
 	result.IngestSeconds = time.Since(started).Seconds()
 	result.IngestCalls = counter.calls.Load() - callsBefore
 	result.ChunkTokensMean = float64(chunkTokens) / float64(max(result.Chunks, 1))
@@ -257,22 +305,44 @@ func TestRetrievalQuality(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reranker: %v", err)
 	}
-	retriever := retrieval.New(store, vectors, embedders, reranker, nil, logger)
-	for _, mode := range []domain.SearchMode{domain.ModeHybrid, domain.ModeDense, domain.ModeLexical} {
+	retriever := retrieval.New(store, vectors, embedders, reranker, knowledgeBase, logger)
+	modes, reranks := []domain.SearchMode{domain.ModeHybrid, domain.ModeDense, domain.ModeLexical}, reranker != nil
+	if onKnowledgeBase {
+		// Bedrock runs its own search whichever mode is asked for.
+		modes, reranks = []domain.SearchMode{domain.ModeHybrid}, knowledgeBaseReranks
+	}
+	for _, mode := range modes {
 		result.Modes = append(result.Modes, measure(t, ctx, retriever, counter, corpus, mode, false, questions, documentIDs, bodies))
 	}
-	if reranker != nil {
+	if reranks {
 		result.Modes = append(result.Modes, measure(t, ctx, retriever, counter, corpus, domain.ModeHybrid, true, questions, documentIDs, bodies))
 	}
+	if onKnowledgeBase {
+		// Tenant isolation against the real knowledge base: the same corpus,
+		// searched as another organization, must find none of this one's
+		// passages.
+		stranger := corpus
+		stranger.OrganizationID = organizationID + "-stranger"
+		for _, entry := range questions[:5] {
+			found, err := retriever.Search(ctx, stranger, domain.Query{Text: entry.Question, TopK: topK})
+			if err != nil {
+				t.Fatalf("search as another organization: %v", err)
+			}
+			if len(found.Matches) > 0 {
+				t.Errorf("%s searched as another organization found %d of this organization's passages", entry.ID, len(found.Matches))
+			}
+		}
+	}
 
-	t.Logf("%s on %s, policy %+v: %d documents, %d chunks, %.0f estimated tokens and %.0f bytes a chunk",
-		result.Embedding, result.Backend, policy, result.Documents, result.Chunks, result.ChunkTokensMean, result.ChunkBytesMean)
+	t.Logf("%s on %s %s, policy %+v: %d documents, %d chunks, %.0f estimated tokens and %.0f bytes a chunk",
+		result.Embedding, result.Backend, result.KnowledgeBase, policy, result.Documents, result.Chunks, result.ChunkTokensMean, result.ChunkBytesMean)
 	t.Logf("ingest: %d embedding tokens, %d provider calls, %.1fs", result.EmbeddingTokens, result.IngestCalls, result.IngestSeconds)
 	for _, mode := range result.Modes {
 		t.Logf("%-7s section hit@1 %.2f @3 %.2f @8 %.2f MRR %.3f | document hit@1 %.2f @8 %.2f MRR %.3f | %.0f tokens retrieved | p50 %.0fms p95 %.0fms, %d calls",
 			mode.Mode, mode.SectionHit["1"], mode.SectionHit["3"], mode.SectionHit["8"], mode.SectionMRR,
 			mode.DocumentHit["1"], mode.DocumentHit["8"], mode.DocumentMRR, mode.RetrievedTokens, mode.LatencyP50, mode.LatencyP95, mode.ProviderCalls)
-		t.Logf("        misses: %s; answerable came back empty %d, unanswerable turned away %d", strings.Join(mode.Misses, ", "), mode.Empty, mode.TurnedAway)
+		t.Logf("        misses: %s; answerable came back empty %d, unanswerable turned away %d, passages not placed %d",
+			strings.Join(mode.Misses, ", "), mode.Empty, mode.TurnedAway, mode.Unplaced)
 		t.Logf("        top score answerable median %.3f, unanswerable median %.3f max %.3f",
 			median(mode.AnswerableTop), median(mode.UnanswerableTop), maximum(mode.UnanswerableTop))
 	}
@@ -345,7 +415,19 @@ func measure(t *testing.T, ctx context.Context, retriever *retrieval.Retriever, 
 			if documentRank == 0 {
 				documentRank = index + 1
 			}
-			if sectionRank == 0 && overlaps(match.Chunk.StartByte, match.Chunk.EndByte, sections) {
+			start, end := match.Chunk.StartByte, match.Chunk.EndByte
+			if end == 0 {
+				// A knowledge base does not say where in the document its
+				// passage came from, so it is placed by its text.
+				var placed bool
+				if start, end, placed = locate(bodies[entry.Document], match.Chunk.Text); !placed {
+					if result.Unplaced == 0 {
+						t.Logf("%s %s: a passage from %s could not be placed: %.300q", label, entry.ID, entry.Document, match.Chunk.Text)
+					}
+					result.Unplaced++
+				}
+			}
+			if sectionRank == 0 && overlaps(start, end, sections) {
 				sectionRank = index + 1
 			}
 		}
@@ -427,6 +509,134 @@ func sectionSpans(body, title string) []span {
 
 func overlaps(start, end int, spans []span) bool {
 	return slices.ContainsFunc(spans, func(section span) bool { return start < section.end && end > section.start })
+}
+
+// knowledgeBaseFromEnv builds the two clients the service reaches a
+// knowledge base through, from RAG_EVAL_KNOWLEDGE_BASE_ID,
+// RAG_EVAL_KNOWLEDGE_BASE_DATA_SOURCE_ID and RAG_EVAL_KNOWLEDGE_BASE_TYPE,
+// and says which kind it is and whether a query asking to rerank is
+// reranked.
+func knowledgeBaseFromEnv(t *testing.T, awsConfig aws.Config, rerankARN string) (*knowledgebase.Client, *retrieval.KnowledgeBase, string, bool) {
+	t.Helper()
+	knowledgeBaseID, dataSourceID := os.Getenv("RAG_EVAL_KNOWLEDGE_BASE_ID"), os.Getenv("RAG_EVAL_KNOWLEDGE_BASE_DATA_SOURCE_ID")
+	if knowledgeBaseID == "" || dataSourceID == "" {
+		t.Fatal("RAG_EVAL_BACKEND=bedrock-kb needs RAG_EVAL_KNOWLEDGE_BASE_ID and RAG_EVAL_KNOWLEDGE_BASE_DATA_SOURCE_ID")
+	}
+	documents, err := knowledgebase.New(bedrockagent.NewFromConfig(awsConfig), nil, knowledgebase.Config{
+		KnowledgeBaseID: knowledgeBaseID, DataSourceID: dataSourceID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := bedrockagentruntime.NewFromConfig(awsConfig)
+	if strings.EqualFold(os.Getenv("RAG_EVAL_KNOWLEDGE_BASE_TYPE"), "MANAGED") {
+		searcher, err := retrieval.NewManagedKnowledgeBase(runtime, knowledgeBaseID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return documents, searcher, "MANAGED", true
+	}
+	searcher, err := retrieval.NewKnowledgeBase(runtime, knowledgeBaseID, rerankARN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return documents, searcher, "VECTOR", rerankARN != ""
+}
+
+// locate finds where a passage sits in the document it came from, for a
+// match that carries no byte range: a knowledge base's. A parser may re-space
+// or rejoin what it cut, so the passage and the document are compared with
+// every run of whitespace squashed to one space. A passage found whole spans
+// what it covers; otherwise its opening and closing words are looked for on
+// their own, and it spans from the first to the end of the second.
+func locate(body, passage string) (int, int, bool) {
+	squashedBody, positions := squash(body)
+	squashedPassage, _ := squash(passage)
+	if squashedPassage == "" {
+		return 0, 0, false
+	}
+	if index := strings.Index(squashedBody, squashedPassage); index >= 0 {
+		return positions[index], positions[index+len(squashedPassage)-1] + 1, true
+	}
+	const edge = 120
+	if len(squashedPassage) < 2*edge {
+		return 0, 0, false
+	}
+	head, tail := squashedPassage[:edge], squashedPassage[len(squashedPassage)-edge:]
+	start := strings.Index(squashedBody, head)
+	if start < 0 {
+		return 0, 0, false
+	}
+	end := strings.Index(squashedBody[start:], tail)
+	if end < 0 {
+		return 0, 0, false
+	}
+	end += start + len(tail) - 1
+	return positions[start], positions[end] + 1, true
+}
+
+// squash collapses every run of whitespace in text to one space, trimming
+// both ends, and reports for each byte it keeps where that byte was in text.
+func squash(text string) (string, []int) {
+	var squashed strings.Builder
+	positions := make([]int, 0, len(text))
+	pendingSpace := -1
+	for index, character := range text {
+		if unicode.IsSpace(character) {
+			if pendingSpace < 0 {
+				pendingSpace = index
+			}
+			continue
+		}
+		if pendingSpace >= 0 && squashed.Len() > 0 {
+			squashed.WriteByte(' ')
+			positions = append(positions, pendingSpace)
+		}
+		pendingSpace = -1
+		width := utf8.RuneLen(character)
+		if width < 0 {
+			width = 1
+		}
+		squashed.WriteRune(character)
+		for offset := range width {
+			positions = append(positions, index+offset)
+		}
+	}
+	return squashed.String(), positions
+}
+
+// waitForKnowledgeBase polls each submitted document through the pipeline,
+// as the ingest worker's later claims would, until the knowledge base has
+// indexed them all. A document it rejects fails the run.
+func waitForKnowledgeBase(t *testing.T, ctx context.Context, store *postgres.Store, pipeline *ingest.Pipeline, organizationID string, documentIDs map[string]string) {
+	t.Helper()
+	for {
+		waiting := 0
+		for name, id := range documentIDs {
+			document, err := store.Document(ctx, organizationID, id)
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			switch document.Status {
+			case domain.StatusReady:
+				continue
+			case domain.StatusFailed:
+				t.Fatalf("the knowledge base did not index %s: %s", name, document.FailureReason)
+			}
+			waiting++
+			if _, err := pipeline.Index(ctx, document); err != nil {
+				t.Logf("%s: %v", name, err)
+			}
+		}
+		if waiting == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("%d documents were still being indexed when the run ran out of time", waiting)
+		case <-time.After(10 * time.Second):
+		}
+	}
 }
 
 func createCorpus(t *testing.T, ctx context.Context, store *postgres.Store, organizationID string, spec domain.EmbeddingSpec, backend domain.Backend, policy domain.ChunkPolicy) domain.Corpus {

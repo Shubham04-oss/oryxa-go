@@ -146,7 +146,11 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		if err != nil {
 			return host.Service{}, err
 		}
-		knowledgeBaseRetriever, err = retrieval.NewKnowledgeBase(bedrockAgentRuntimeClient, config.KnowledgeBaseID, config.RerankModelARN)
+		if config.KnowledgeBaseManaged {
+			knowledgeBaseRetriever, err = retrieval.NewManagedKnowledgeBase(bedrockAgentRuntimeClient, config.KnowledgeBaseID)
+		} else {
+			knowledgeBaseRetriever, err = retrieval.NewKnowledgeBase(bedrockAgentRuntimeClient, config.KnowledgeBaseID, config.RerankModelARN)
+		}
 		if err != nil {
 			return host.Service{}, err
 		}
@@ -304,7 +308,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	logger.Info("rag mounted",
 		"backends", vectors.Backends(),
 		"embedding_providers", embedders.Providers(),
-		"answering", generator != nil)
+		"answering", generator != nil,
+		"knowledge_base", config.KnowledgeBaseID,
+		"knowledge_base_managed", config.KnowledgeBaseManaged)
 
 	return host.Service{
 		Handler: server,

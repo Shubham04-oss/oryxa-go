@@ -59,6 +59,17 @@ variable "rag_default_backend" {
   default     = "bedrock-kb"
 }
 
+variable "rag_knowledge_base" {
+  description = "The Bedrock knowledge base rag uses: managed (Bedrock keeps the index and searches it by keyword and meaning) or vector (the S3 Vectors one, until it is removed). Moving between them re-indexes every bedrock-kb document; see rag/README.md."
+  type        = string
+  default     = "managed"
+
+  validation {
+    condition     = contains(["managed", "vector"], var.rag_knowledge_base)
+    error_message = "rag_knowledge_base is managed or vector."
+  }
+}
+
 variable "rerank_model" {
   description = "The Bedrock model rag reranks with, in-region. Amazon Rerank needs no Marketplace subscription."
   type        = string
