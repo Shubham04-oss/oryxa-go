@@ -7,17 +7,19 @@ import {
 	SettingsListSkeleton,
 	SettingsPageBody,
 	SettingsSection,
-	StatusBadge,
 } from "@/components/app/organization-settings";
 import { WorkspacePage } from "@/components/app/workspace-page";
 import { ToolkitIcon } from "@/components/apps/toolkit-icon";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { StatusOrb } from "@/components/ui/status-orb";
 import { useToolkitCatalog } from "@/hooks/use-toolkit-catalog";
 import {
 	type ConnectionGroup,
+	connectionGroupState,
 	connectionsQueryOptions,
 	groupConnectionsByToolkit,
+	toolkitName,
 } from "@/lib/apps/client";
 import { managesMembers } from "@/lib/auth/client";
 import { useMembership, useWorkspace } from "@/lib/auth/session";
@@ -26,14 +28,6 @@ export const Route = createFileRoute("/app/settings/organization/tools")({
 	component: OrganizationToolsPage,
 	head: () => ({ meta: [{ title: "Tool access · The Weirdly ODD" }] }),
 });
-
-function toolkitName(toolkit: string): string {
-	return toolkit
-		.split(/[_-]/)
-		.filter(Boolean)
-		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-		.join(" ");
-}
 
 function OrganizationToolsPage() {
 	const { organization } = useWorkspace();
@@ -151,6 +145,7 @@ interface AppGroupRowProps {
 }
 
 function AppGroupRow({ group, logo, name }: AppGroupRowProps) {
+	const state = connectionGroupState(group);
 	const total = group.connections.length;
 	const detail =
 		group.attentionCount > 0
@@ -166,9 +161,10 @@ function AppGroupRow({ group, logo, name }: AppGroupRowProps) {
 					{total} {total === 1 ? "member" : "members"} connected · {detail}
 				</small>
 			</div>
-			<StatusBadge tone={group.attentionCount > 0 ? "warning" : "active"}>
-				{group.attentionCount > 0 ? "Needs attention" : "All connected"}
-			</StatusBadge>
+			<span className="connection-state">
+				<StatusOrb tone={state.tone} />
+				{state.label}
+			</span>
 		</div>
 	);
 }

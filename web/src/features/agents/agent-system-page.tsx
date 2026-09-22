@@ -57,7 +57,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TabNav, type TabNavItem } from "@/components/ui/tab-nav";
 import { Textarea } from "@/components/ui/textarea";
 import {
 	type AgentInteraction,
@@ -101,15 +101,20 @@ export const agentTabs = [
 	"requests",
 ] as const;
 export type AgentTab = (typeof agentTabs)[number];
+
+const agentTabItems: TabNavItem<AgentTab>[] = [
+	{ icon: Activity, label: "Overview", value: "overview" },
+	{ icon: Bot, label: "Specialists", value: "specialists" },
+	{ icon: UsersRound, label: "Teams", value: "teams" },
+	{ icon: GitBranch, label: "Workflows", value: "workflows" },
+	{ icon: Inbox, label: "Requests", value: "requests" },
+];
 export type RequestBox = "inbox" | "sent";
 
-const agentTabMeta: Record<AgentTab, { icon: typeof Bot; label: string }> = {
-	overview: { icon: Activity, label: "Overview" },
-	specialists: { icon: Bot, label: "Specialists" },
-	teams: { icon: UsersRound, label: "Teams" },
-	workflows: { icon: GitBranch, label: "Workflows" },
-	requests: { icon: Inbox, label: "Requests" },
-};
+const requestBoxes: TabNavItem<RequestBox>[] = [
+	{ icon: Inbox, label: "Inbox", value: "inbox" },
+	{ icon: Send, label: "Sent", value: "sent" },
+];
 
 export function AgentSystemPage({
 	box,
@@ -126,46 +131,30 @@ export function AgentSystemPage({
 			description="Create specialists, compose teams, run durable workflows, and supervise agent-to-agent requests."
 			title="Agents"
 		>
-			<Tabs
-				onValueChange={(value) =>
-					onSearchChange({ box, tab: value as AgentTab })
-				}
+			<TabNav
+				controls="agent-system-panel"
+				items={agentTabItems}
+				label="Agent workspace sections"
+				onChange={(value) => onSearchChange({ box, tab: value })}
 				value={tab}
+			/>
+			<div
+				aria-live="polite"
+				className="agent-tab-content"
+				id="agent-system-panel"
+				role="tabpanel"
 			>
-				<TabsList aria-label="Agent system sections" className="agent-tabs">
-					{agentTabs.map((candidate) => {
-						const { icon: Icon, label } = agentTabMeta[candidate];
-						return (
-							<TabsTrigger
-								className="agent-tab"
-								key={candidate}
-								value={candidate}
-							>
-								<Icon aria-hidden="true" />
-								<span>{label}</span>
-							</TabsTrigger>
-						);
-					})}
-				</TabsList>
-				<TabsContent className="agent-tab-content" value="overview">
-					<OverviewTab />
-				</TabsContent>
-				<TabsContent className="agent-tab-content" value="specialists">
-					<SpecialistsTab />
-				</TabsContent>
-				<TabsContent className="agent-tab-content" value="teams">
-					<TeamsTab />
-				</TabsContent>
-				<TabsContent className="agent-tab-content" value="workflows">
-					<WorkflowsTab />
-				</TabsContent>
-				<TabsContent className="agent-tab-content" value="requests">
+				{tab === "overview" ? <OverviewTab /> : null}
+				{tab === "specialists" ? <SpecialistsTab /> : null}
+				{tab === "teams" ? <TeamsTab /> : null}
+				{tab === "workflows" ? <WorkflowsTab /> : null}
+				{tab === "requests" ? (
 					<RequestsTab
 						box={box}
 						onBoxChange={(nextBox) => onSearchChange({ box: nextBox, tab })}
 					/>
-				</TabsContent>
-			</Tabs>
+				) : null}
+			</div>
 		</WorkspacePage>
 	);
 }
@@ -1140,29 +1129,13 @@ function RequestsTab({
 			description="Every cross-user agent request stays scoped, reviewed, and auditable."
 			title="Requests"
 		>
-			<fieldset className="segmented agent-request-box">
-				<legend className="sr-only">Request mailbox</legend>
-				<Button
-					data-active={box === "inbox"}
-					onClick={() => onBoxChange("inbox")}
-					size="sm"
-					type="button"
-					variant="ghost"
-				>
-					<Inbox data-icon="inline-start" />
-					Inbox
-				</Button>
-				<Button
-					data-active={box === "sent"}
-					onClick={() => onBoxChange("sent")}
-					size="sm"
-					type="button"
-					variant="ghost"
-				>
-					<Send data-icon="inline-start" />
-					Sent
-				</Button>
-			</fieldset>
+			<TabNav
+				items={requestBoxes}
+				label="Request mailbox"
+				onChange={onBoxChange}
+				size="compact"
+				value={box}
+			/>
 			{requests.isPending ? (
 				<Card className="workspace-panel">
 					<SettingsListSkeleton />

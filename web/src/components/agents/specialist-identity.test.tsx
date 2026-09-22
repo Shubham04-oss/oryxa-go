@@ -10,10 +10,14 @@ describe("specialist identity", () => {
 		const renamed = renderToStaticMarkup(
 			<SpecialistAvatar name="Growth Analyst" seed="specialist-42" />,
 		);
-		expect(before).toContain("RA");
-		expect(renamed).toContain("GA");
-		expect(before.match(/data-tone="(\d)"/)?.[1]).toBe(
-			renamed.match(/data-tone="(\d)"/)?.[1],
+		const other = renderToStaticMarkup(
+			<SpecialistAvatar name="Research Analyst" seed="specialist-99" />,
 		);
+		const generatedFace = (markup: string) =>
+			markup.slice(markup.indexOf("<svg"));
+
+		expect(generatedFace(before)).toContain("<svg");
+		expect(generatedFace(before)).toBe(generatedFace(renamed));
+		expect(generatedFace(before)).not.toBe(generatedFace(other));
 	});
 });

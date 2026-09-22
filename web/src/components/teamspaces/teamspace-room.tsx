@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, MessagesSquare, Sparkles } from "lucide-react";
+import { MessagesSquare, Sparkles } from "lucide-react";
 import { type UIEvent, useEffect, useRef, useState } from "react";
 import { SpecialistAvatar } from "@/components/agents/specialist-identity";
 import { initials } from "@/components/app/identity";
@@ -295,7 +295,13 @@ function RoomLine({
 				{seat ? (
 					<RoomAvatar seat={seat} />
 				) : message.author_kind === "agent" ? (
-					<Bot aria-hidden="true" />
+					// No seat means no agent id to go on; the handle is the only
+					// stable thing left, and it is what RoomAvatar falls back to too.
+					<SpecialistAvatar
+						name={message.author_handle}
+						seed={message.author_handle}
+						size="small"
+					/>
 				) : (
 					<span aria-hidden="true">{initials(message.author_handle)}</span>
 				)}

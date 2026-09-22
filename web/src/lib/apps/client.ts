@@ -1,4 +1,5 @@
 import { queryOptions } from "@tanstack/react-query";
+import type { OrbTone } from "@/components/ui/status-orb";
 import { ApiError, apiErrorMessage, apiPath, apiRequest } from "../api/client";
 
 export interface CatalogCategory {
@@ -440,9 +441,12 @@ export function connectionStatusLabel(status: ConnectionStatus): string {
 	}
 }
 
-export function connectionStatusTone(
-	status: ConnectionStatus,
-): "active" | "danger" | "neutral" | "warning" {
+/**
+ * How a status reads as an orb. Every status gets its own tone: a removed
+ * connection is spent rather than merely quiet, and saying so is the
+ * difference between a page you can scan and one you have to read.
+ */
+export function connectionStatusTone(status: ConnectionStatus): OrbTone {
 	switch (status) {
 		case "active":
 			return "active";
@@ -450,9 +454,54 @@ export function connectionStatusTone(
 			return "warning";
 		case "failed":
 			return "danger";
+		case "removed":
+			return "muted";
 		default:
 			return "neutral";
 	}
+}
+
+/**
+ * What the member can do about a status, in a few words, for the line under
+ * a connection that has no `status_reason` of its own. A working connection
+ * says nothing: the green orb beside it has already said it.
+ */
+export function connectionStatusHint(status: ConnectionStatus): string {
+	switch (status) {
+		case "active":
+			return "";
+		case "pending":
+			return "Waiting for the app to confirm the connection.";
+		case "expired":
+			return "Reconnect to let your agents use it again.";
+		case "failed":
+			return "Connecting did not finish. Try again.";
+		case "removed":
+			return "Disconnected. Connect it again to bring it back.";
+		default:
+			return "";
+	}
+}
+
+/**
+ * A readable name for an app the catalog has not told us about yet, built
+ * from its slug: `google_calendar` reads as "Google Calendar".
+ */
+export function toolkitName(toolkit: string): string {
+	return toolkit
+		.split(/[_-]/)
+		.filter(Boolean)
+		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+		.join(" ");
+}
+
+/**
+ * Whether a connection has triggers and sources worth opening. Only a live
+ * one does: the rest have nothing to subscribe to or search until they work
+ * again.
+ */
+export function hasConnectionDetails(status: ConnectionStatus): boolean {
+	return status === "active";
 }
 
 /** Only an expired connection is offered a plain reconnect: the others need no action, or none that starting over fixes. */
@@ -506,6 +555,24 @@ export function groupConnectionsByToolkit(
 			toolkit,
 		}))
 		.sort((a, b) => a.toolkit.localeCompare(b.toolkit));
+}
+
+/**
+ * How a whole app reads in the admin summary. A group with nothing active and
+ * nothing broken is still settling — saying "All connected" over a connection
+ * that has not connected yet is the one thing this summary must not do.
+ */
+export function connectionGroupState(group: ConnectionGroup): {
+	label: string;
+	tone: OrbTone;
+} {
+	if (group.attentionCount > 0) {
+		return { label: "Needs attention", tone: "warning" };
+	}
+	if (group.activeCount === 0) {
+		return { label: "Connecting…", tone: "neutral" };
+	}
+	return { label: "All connected", tone: "active" };
 }
 
 /** One choice in an enum, keeping the JSON value it sends alongside what a member reads. */

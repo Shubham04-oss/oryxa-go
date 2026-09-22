@@ -6,7 +6,6 @@ import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import {
 	SettingsListEmpty,
 	SettingsListSkeleton,
-	StatusBadge,
 } from "@/components/app/organization-settings";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -27,6 +26,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { StatusOrb } from "@/components/ui/status-orb";
 import { Textarea } from "@/components/ui/textarea";
 import {
 	appsErrorMessage,
@@ -148,11 +148,12 @@ function TriggerRow({
 				{type?.description ? <small>{type.description}</small> : null}
 			</div>
 			{trigger.status !== "active" ? (
-				<StatusBadge
-					tone={trigger.status === "disabled" ? "warning" : "neutral"}
-				>
+				<span className="connection-state">
+					<StatusOrb
+						tone={trigger.status === "disabled" ? "warning" : "muted"}
+					/>
 					{trigger.status === "disabled" ? "Disabled" : "Removed"}
-				</StatusBadge>
+				</span>
 			) : null}
 			<ConfirmDialog
 				confirmLabel="Stop"

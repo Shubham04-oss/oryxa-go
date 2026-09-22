@@ -29,6 +29,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { TabNav, type TabNavItem } from "@/components/ui/tab-nav";
 import { apiErrorMessage } from "@/lib/api/client";
 import { managesMembers } from "@/lib/auth/client";
 import { useMembership, useWorkspace } from "@/lib/auth/session";
@@ -49,7 +50,7 @@ import { teamsQueryOptions, teamTrails } from "@/lib/teams/client";
 
 type FilesView = "all" | "member" | "team" | "organization";
 
-const views: { label: string; value: FilesView }[] = [
+const views: TabNavItem<FilesView>[] = [
 	{ label: "Everything", value: "all" },
 	{ label: "Mine", value: "member" },
 	{ label: "Teams", value: "team" },
@@ -173,29 +174,21 @@ function FilesPage() {
 			title="Files"
 		>
 			<div className="page-toolbar">
-				<fieldset className="segmented">
-					<legend className="sr-only">Show</legend>
-					{views.map((option) => (
-						<Button
-							aria-pressed={view === option.value}
-							data-active={view === option.value}
-							key={option.value}
-							onClick={() =>
-								navigate({
-									search: {
-										team: option.value === "team" ? chosenTeam?.id : undefined,
-										view: option.value === "all" ? undefined : option.value,
-									},
-								})
-							}
-							size="sm"
-							type="button"
-							variant="ghost"
-						>
-							{option.label}
-						</Button>
-					))}
-				</fieldset>
+				<TabNav
+					controls="files-listing"
+					items={views}
+					label="Show"
+					onChange={(next) =>
+						navigate({
+							search: {
+								team: next === "team" ? chosenTeam?.id : undefined,
+								view: next === "all" ? undefined : next,
+							},
+						})
+					}
+					size="compact"
+					value={view}
+				/>
 				{view === "team" && visibleTeams.length > 0 ? (
 					<Select
 						onValueChange={(value) =>
@@ -220,7 +213,9 @@ function FilesPage() {
 					</Select>
 				) : null}
 			</div>
-			<Card className="workspace-panel">{content}</Card>
+			<Card className="workspace-panel" id="files-listing" role="tabpanel">
+				{content}
+			</Card>
 		</WorkspacePage>
 	);
 }

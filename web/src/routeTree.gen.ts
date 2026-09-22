@@ -33,7 +33,6 @@ import { Route as AppKnowledgeIndexRouteImport } from './routes/app.knowledge.in
 import { Route as AppKnowledgeCorpusIdRouteImport } from './routes/app.knowledge.$corpusId'
 import { Route as AppSettingsOrganizationRouteImport } from './routes/app.settings.organization'
 import { Route as AppSettingsProfileRouteImport } from './routes/app.settings.profile'
-import { Route as AppThreadsIndexRouteImport } from './routes/app.threads.index'
 import { Route as AppThreadsThreadIdRouteImport } from './routes/app.threads.$threadId'
 import { Route as AppSettingsOrganizationIndexRouteImport } from './routes/app.settings.organization.index'
 import { Route as AppSettingsOrganizationBillingRouteImport } from './routes/app.settings.organization.billing'
@@ -162,11 +161,6 @@ const AppSettingsProfileRoute = AppSettingsProfileRouteImport.update({
   path: '/profile',
   getParentRoute: () => AppSettingsRoute,
 } as any)
-const AppThreadsIndexRoute = AppThreadsIndexRouteImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => AppThreadsRoute,
-} as any)
 const AppThreadsThreadIdRoute = AppThreadsThreadIdRouteImport.update({
   id: '/$threadId',
   path: '/$threadId',
@@ -235,7 +229,6 @@ export interface FileRoutesByFullPath {
   '/app/settings/profile': typeof AppSettingsProfileRoute
   '/app/threads/$threadId': typeof AppThreadsThreadIdRoute
   '/app/knowledge/': typeof AppKnowledgeIndexRoute
-  '/app/threads/': typeof AppThreadsIndexRoute
   '/app/settings/organization/billing': typeof AppSettingsOrganizationBillingRoute
   '/app/settings/organization/email': typeof AppSettingsOrganizationEmailRoute
   '/app/settings/organization/members': typeof AppSettingsOrganizationMembersRoute
@@ -252,6 +245,7 @@ export interface FileRoutesByTo {
   '/app/settings': typeof AppSettingsRouteWithChildren
   '/app/teams': typeof AppTeamsRoute
   '/app/teamspaces': typeof AppTeamspacesRoute
+  '/app/threads': typeof AppThreadsRouteWithChildren
   '/auth/forgot-password': typeof AuthForgotPasswordRoute
   '/auth/reset-password': typeof AuthResetPasswordRoute
   '/auth/sign-in': typeof AuthSignInRoute
@@ -265,7 +259,6 @@ export interface FileRoutesByTo {
   '/app/settings/profile': typeof AppSettingsProfileRoute
   '/app/threads/$threadId': typeof AppThreadsThreadIdRoute
   '/app/knowledge': typeof AppKnowledgeIndexRoute
-  '/app/threads': typeof AppThreadsIndexRoute
   '/app/settings/organization/billing': typeof AppSettingsOrganizationBillingRoute
   '/app/settings/organization/email': typeof AppSettingsOrganizationEmailRoute
   '/app/settings/organization/members': typeof AppSettingsOrganizationMembersRoute
@@ -300,7 +293,6 @@ export interface FileRoutesById {
   '/app/settings/profile': typeof AppSettingsProfileRoute
   '/app/threads/$threadId': typeof AppThreadsThreadIdRoute
   '/app/knowledge/': typeof AppKnowledgeIndexRoute
-  '/app/threads/': typeof AppThreadsIndexRoute
   '/app/settings/organization/billing': typeof AppSettingsOrganizationBillingRoute
   '/app/settings/organization/email': typeof AppSettingsOrganizationEmailRoute
   '/app/settings/organization/members': typeof AppSettingsOrganizationMembersRoute
@@ -336,7 +328,6 @@ export interface FileRouteTypes {
     | '/app/settings/profile'
     | '/app/threads/$threadId'
     | '/app/knowledge/'
-    | '/app/threads/'
     | '/app/settings/organization/billing'
     | '/app/settings/organization/email'
     | '/app/settings/organization/members'
@@ -353,6 +344,7 @@ export interface FileRouteTypes {
     | '/app/settings'
     | '/app/teams'
     | '/app/teamspaces'
+    | '/app/threads'
     | '/auth/forgot-password'
     | '/auth/reset-password'
     | '/auth/sign-in'
@@ -366,7 +358,6 @@ export interface FileRouteTypes {
     | '/app/settings/profile'
     | '/app/threads/$threadId'
     | '/app/knowledge'
-    | '/app/threads'
     | '/app/settings/organization/billing'
     | '/app/settings/organization/email'
     | '/app/settings/organization/members'
@@ -400,7 +391,6 @@ export interface FileRouteTypes {
     | '/app/settings/profile'
     | '/app/threads/$threadId'
     | '/app/knowledge/'
-    | '/app/threads/'
     | '/app/settings/organization/billing'
     | '/app/settings/organization/email'
     | '/app/settings/organization/members'
@@ -593,13 +583,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppSettingsProfileRouteImport
       parentRoute: typeof AppSettingsRoute
     }
-    '/app/threads/': {
-      id: '/app/threads/'
-      path: '/'
-      fullPath: '/app/threads/'
-      preLoaderRoute: typeof AppThreadsIndexRouteImport
-      parentRoute: typeof AppThreadsRoute
-    }
     '/app/threads/$threadId': {
       id: '/app/threads/$threadId'
       path: '/$threadId'
@@ -706,12 +689,10 @@ const AppSettingsRouteWithChildren = AppSettingsRoute._addFileChildren(
 
 interface AppThreadsRouteChildren {
   AppThreadsThreadIdRoute: typeof AppThreadsThreadIdRoute
-  AppThreadsIndexRoute: typeof AppThreadsIndexRoute
 }
 
 const AppThreadsRouteChildren: AppThreadsRouteChildren = {
   AppThreadsThreadIdRoute: AppThreadsThreadIdRoute,
-  AppThreadsIndexRoute: AppThreadsIndexRoute,
 }
 
 const AppThreadsRouteWithChildren = AppThreadsRoute._addFileChildren(

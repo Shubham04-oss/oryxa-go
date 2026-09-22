@@ -130,6 +130,40 @@ export async function deleteThread(
 	await apiRequest(threadPath(organizationId, threadId), { method: "DELETE" });
 }
 
+/** How many conversations the sidebar shows before it defers to search. */
+export const SIDEBAR_THREAD_LIMIT = 3;
+
+/**
+ * The most recently touched conversations, newest first, capped at `limit`.
+ *
+ * `keepId` is the conversation being read: an older one you opened from
+ * search would otherwise fall outside the cap, and a sidebar that cannot show
+ * you where you are is worse than one showing a conversation less. It takes
+ * the last slot rather than the first, so the recency order above it holds
+ * still while you read.
+ */
+export function recentThreads(
+	threads: readonly Thread[] | undefined,
+	limit = SIDEBAR_THREAD_LIMIT,
+	keepId?: string,
+): Thread[] {
+	const room = Math.max(0, limit);
+	const newest = [...(threads ?? [])].sort((a, b) =>
+		b.updated_at.localeCompare(a.updated_at),
+	);
+	const shown = newest.slice(0, room);
+	if (!keepId || room === 0 || shown.some((item) => item.id === keepId)) {
+		return shown;
+	}
+	const reading = newest.find((item) => item.id === keepId);
+	return reading ? [...shown.slice(0, room - 1), reading] : shown;
+}
+
+/** What a conversation is called when it has not earned a title yet. */
+export function threadTitle(thread: Pick<Thread, "title">): string {
+	return thread.title.trim() || "New conversation";
+}
+
 export function threadsQueryKey(organizationId: string) {
 	return ["threads", organizationId] as const;
 }

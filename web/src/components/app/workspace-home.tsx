@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useRef, useState } from "react";
 import { ThreadComposer } from "@/components/app/thread-composer";
+import { useWorkspaceSearch } from "@/components/app/workspace-search";
 import { WorkspaceSection } from "@/components/app/workspace-section";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -60,6 +61,7 @@ export function WorkspaceHome() {
 	const queryClient = useQueryClient();
 	const navigate = useNavigate();
 	const composerRef = useRef<HTMLTextAreaElement>(null);
+	const search = useWorkspaceSearch();
 	const [draft, setDraft] = useState("");
 	const [error, setError] = useState("");
 
@@ -144,7 +146,15 @@ export function WorkspaceHome() {
 				</WorkspaceSection>
 
 				<WorkspaceSection
-					action={<Link to="/app/threads">View all</Link>}
+					action={
+						<button
+							className="workspace-section-action"
+							onClick={() => search.open("conversations")}
+							type="button"
+						>
+							View all
+						</button>
+					}
 					title="Recent"
 				>
 					<RecentThreads />
@@ -156,6 +166,7 @@ export function WorkspaceHome() {
 
 function WorkModes() {
 	const { organization } = useWorkspace();
+	const search = useWorkspaceSearch();
 	const agents = useQuery(agentsQueryOptions(organization.id));
 	const teams = useQuery(agentTeamsQueryOptions(organization.id));
 	const workflows = useQuery(agentWorkflowsQueryOptions(organization.id));
@@ -180,7 +191,7 @@ function WorkModes() {
 				<WorkModeCard
 					description="Talk directly with your primary agent. Its conversations and working context remain yours."
 					eyebrow="Single user"
-					href="/app/threads"
+					onSelect={() => search.open("conversations")}
 					icon={Bot}
 					metric={
 						agents.isError
@@ -199,7 +210,7 @@ function WorkModes() {
 							? "Unavailable"
 							: countPair(teams.data?.length, activeWorkflows?.length)
 					}
-					title="Agent system"
+					title="Agents"
 				/>
 				<WorkModeCard
 					description="Collaborate with teammates through attributed summaries, bounded specialists, and organization context."
@@ -224,17 +235,20 @@ function WorkModeCard({
 	href,
 	icon: Icon,
 	metric,
+	onSelect,
 	title,
 }: {
 	description: string;
 	eyebrow: string;
-	href: "/app/agents" | "/app/teamspaces" | "/app/threads";
+	href?: "/app/agents" | "/app/teamspaces";
 	icon: typeof Bot;
 	metric: string;
+	/** For a mode with no page of its own, such as conversations. */
+	onSelect?: () => void;
 	title: string;
 }) {
-	return (
-		<Link className="workspace-mode-card" to={href}>
+	const inside = (
+		<>
 			<span className="workspace-mode-icon" aria-hidden="true">
 				<Icon />
 			</span>
@@ -247,7 +261,20 @@ function WorkModeCard({
 				<span>{metric}</span>
 				<ArrowRight aria-hidden="true" />
 			</footer>
-		</Link>
+		</>
+	);
+
+	if (href) {
+		return (
+			<Link className="workspace-mode-card" to={href}>
+				{inside}
+			</Link>
+		);
+	}
+	return (
+		<button className="workspace-mode-card" onClick={onSelect} type="button">
+			{inside}
+		</button>
 	);
 }
 

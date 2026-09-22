@@ -6,7 +6,6 @@ import { ConfirmDialog } from "@/components/app/confirm-dialog";
 import {
 	SettingsListEmpty,
 	SettingsListSkeleton,
-	StatusBadge,
 } from "@/components/app/organization-settings";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,6 +28,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { StatusOrb } from "@/components/ui/status-orb";
 import { apiErrorMessage } from "@/lib/api/client";
 import { connectionTargetsQueryOptions } from "@/lib/apps/client";
 import { relativeTime } from "@/lib/format";
@@ -151,9 +151,10 @@ function SourceRow({ onRemoved, organizationId, source }: SourceRowProps) {
 					<small className="settings-list-error">{source.reason}</small>
 				) : null}
 			</div>
-			<StatusBadge tone={sourceStatusTone(source.status)}>
+			<span className="connection-state">
+				<StatusOrb tone={sourceStatusTone(source.status)} />
 				{sourceStatusLabel(source.status)}
-			</StatusBadge>
+			</span>
 			{source.provider !== "files" ? (
 				<KindsDialog
 					onSaved={onRemoved}
