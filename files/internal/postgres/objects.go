@@ -10,7 +10,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
 )
 
-const objectColumns = `id, organization_id, scope, COALESCE(team_id, '') AS team_id, COALESCE(member_id, '') AS member_id, filename, content_type, purpose, size_bytes, sha256, created_by, created_at, expires_at`
+const objectColumns = `id, organization_id, scope, COALESCE(team_id, '') AS team_id, COALESCE(member_id, '') AS member_id, filename, content_type, purpose, access, size_bytes, sha256, created_by, created_at, expires_at`
 
 func (store *Store) UpsertOrganization(ctx context.Context, organizationID, name string, at time.Time) error {
 	if organizationID == "" {
@@ -59,11 +59,11 @@ func (store *Store) CreateObject(ctx context.Context, organizationName string, o
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO files_objects (
-			    id, organization_id, scope, team_id, member_id, filename, content_type, purpose,
+			    id, organization_id, scope, team_id, member_id, filename, content_type, purpose, access,
 			    size_bytes, sha256, created_by, created_at, expires_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
 			object.ID, object.OrganizationID, object.Scope, nullableString(object.TeamID), nullableString(object.MemberID),
-			object.Filename, object.ContentType, object.Purpose, object.SizeBytes, object.SHA256,
+			object.Filename, object.ContentType, object.Purpose, object.EffectiveAccess(), object.SizeBytes, object.SHA256,
 			object.CreatedBy, object.CreatedAt, object.ExpiresAt,
 		); err != nil {
 			return mapWriteError("create object", err)
@@ -130,7 +130,7 @@ func listQuery(organizationID string, now time.Time, query domain.ObjectQuery) (
 	case domain.ScopeOrganization:
 		sql += ` AND scope = 'organization'`
 		if !query.Admin {
-			sql += ` AND purpose <> 'billing.attachment'`
+			sql += ` AND access = 'members'`
 		}
 	default:
 		sql += ` AND ((scope = 'member'`
@@ -140,7 +140,7 @@ func listQuery(organizationID string, now time.Time, query domain.ObjectQuery) (
 		}
 		sql += `) OR (scope = 'organization'`
 		if !query.Admin {
-			sql += ` AND purpose <> 'billing.attachment'`
+			sql += ` AND access = 'members'`
 		}
 		sql += `))`
 	}

@@ -546,11 +546,9 @@ func TestTheFirstSharedFileIndexesTheOrganizationsOwn(t *testing.T) {
 	}
 }
 
-// TestOnlyASharedFileStartsIndexing is the privacy rule at the other end: a
-// member's private upload must not make the organization's files searchable
-// on their behalf, and a team's is a scope nothing produces yet.
-func TestOnlyASharedFileStartsIndexing(t *testing.T) {
-	for _, scope := range []string{"member", "team", ""} {
+// Unknown scopes start nothing.
+func TestOnlySupportedFileScopesStartIndexing(t *testing.T) {
+	for _, scope := range []string{"", "unknown"} {
 		t.Run("scope "+scope, func(t *testing.T) {
 			store := newFakeStore()
 			service, grants := filesService(t, store)
@@ -565,6 +563,115 @@ func TestOnlyASharedFileStartsIndexing(t *testing.T) {
 				t.Fatalf("minted a token for %v", grants.members)
 			}
 		})
+	}
+}
+
+func TestFirstTeamFileStartsOnlyThatTeamsSource(t *testing.T) {
+	store := newFakeStore()
+	service, grants := filesService(t, store)
+	event := storedFile("team")
+	event.TeamID = "team_eng"
+	for range 3 {
+		if err := service.FileStored(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(store.sources) != 1 || len(grants.members) != 1 {
+		t.Fatalf("team upload made %d sources and %d grants", len(store.sources), len(grants.members))
+	}
+	for _, source := range store.sources {
+		if source.Scope != domain.ScopeTeam || source.TeamID != "team_eng" ||
+			source.MemberID != "" || source.Target["team"] != "team_eng" {
+			t.Fatalf("team source = %+v", source)
+		}
+	}
+	other := event
+	other.TeamID = "team_design"
+	if err := service.FileStored(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 2 {
+		t.Fatalf("two teams got %d sources", len(store.sources))
+	}
+}
+
+func TestTeamFileEventWithoutTeamIDStartsNothing(t *testing.T) {
+	store := newFakeStore()
+	service, grants := filesService(t, store)
+	if err := service.FileStored(context.Background(), storedFile("team")); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 0 || len(grants.members) != 0 {
+		t.Fatal("team event without team id caused indexing")
+	}
+}
+
+func TestTeamFilesSourceRetiredWithItsUploaderCanBeReplaced(t *testing.T) {
+	store := newFakeStore()
+	service, _ := filesService(t, store)
+	store.sources["src_departed"] = domain.Source{
+		ID: "src_departed", OrganizationID: "org_1", Provider: "files",
+		Target: map[string]string{"team": "team_eng"}, Scope: domain.ScopeTeam,
+		TeamID: "team_eng", CreatedBy: "user-departed",
+		Status: domain.StatusRemoved, Reason: knowledgev1.RemovedReasonMemberLeft,
+	}
+	event := storedFile("team")
+	event.TeamID = "team_eng"
+	if err := service.FileStored(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 2 {
+		t.Fatalf("team source was not replaced after its uploader left: %+v", store.sources)
+	}
+}
+
+func TestFirstPrivateFileStartsOnlyItsOwnersSource(t *testing.T) {
+	store := newFakeStore()
+	service, grants := filesService(t, store)
+	event := storedFile("member")
+	event.MemberID = "user-1"
+	for range 3 {
+		if err := service.FileStored(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(store.sources) != 1 || len(grants.members) != 1 {
+		t.Fatalf("private upload made %d sources and %d grants", len(store.sources), len(grants.members))
+	}
+	for _, source := range store.sources {
+		if source.Scope != domain.ScopeMember || source.MemberID != "user-1" ||
+			source.Target["member"] != "self" {
+			t.Fatalf("private source = %+v", source)
+		}
+	}
+	other := event
+	other.MemberID, other.CreatedBy = "user-2", "user-2"
+	service.directory.(*fakeDirectory).membership.UserID = "user-2"
+	if err := service.FileStored(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 2 {
+		t.Fatalf("two members got %d sources", len(store.sources))
+	}
+	owners := map[string]bool{}
+	for _, source := range store.sources {
+		owners[source.MemberID] = true
+	}
+	if !owners["user-1"] || !owners["user-2"] {
+		t.Fatalf("private source owners = %v", owners)
+	}
+}
+
+func TestMemberFileEventRejectsMismatchedUploader(t *testing.T) {
+	store := newFakeStore()
+	service, grants := filesService(t, store)
+	event := storedFile("member")
+	event.MemberID = "user-2"
+	if err := service.FileStored(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 0 || len(grants.members) != 0 {
+		t.Fatal("mismatched member event caused indexing")
 	}
 }
 
@@ -584,6 +691,29 @@ func TestEveryUploadAfterTheFirstCostsOneLookup(t *testing.T) {
 	}
 	if len(grants.members) != 1 {
 		t.Fatalf("minted %d tokens, want one: the rest found the source already there", len(grants.members))
+	}
+}
+
+func TestNewPrivateFileSchedulesAnExistingMemberSourceNow(t *testing.T) {
+	store := newFakeStore()
+	service, _ := filesService(t, store)
+	event := storedFile("member")
+	event.MemberID = "user-1"
+	if err := service.FileStored(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	var source domain.Source
+	for _, found := range store.sources {
+		source = found
+	}
+	later := testClock.Add(24 * time.Hour)
+	source.SyncAt = &later
+	store.sources[source.ID] = source
+	if err := service.FileStored(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.sources[source.ID].SyncAt; got == nil || !got.Equal(testClock) {
+		t.Fatalf("next private file sync at %v, want now", got)
 	}
 }
 

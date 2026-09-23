@@ -103,7 +103,10 @@ func (s *Service) register(ctx context.Context, credentials authclient.Credentia
 		// organization, whoever registered the source: files would answer a
 		// team member their team's files, and publishing those organization-
 		// wide would share them further than anyone who stored them chose.
-		if team := strings.TrimSpace(target["team"]); team != "" {
+		if target["member"] == "self" {
+			source.Scope = domain.ScopeMember
+			source.MemberID = caller.UserID
+		} else if team := strings.TrimSpace(target["team"]); team != "" {
 			source.Scope = domain.ScopeTeam
 			source.TeamID = team
 		}

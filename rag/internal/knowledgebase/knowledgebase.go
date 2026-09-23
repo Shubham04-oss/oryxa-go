@@ -125,6 +125,12 @@ func StagingKey(organizationID, corpusID, documentID, contentSHA256 string) stri
 // true, meaning the document has no extracted text at all and its own bytes
 // — a PDF, an Office file — are what the knowledge base must parse instead.
 func (client *Client) Submit(ctx context.Context, corpus domain.Corpus, document domain.Document, text string) error {
+	if document.Access == "" {
+		document.Access = domain.AccessMembers
+	}
+	if !document.Access.Valid() {
+		return fmt.Errorf("document access is not allowed: %w", domain.ErrInvalid)
+	}
 	content, err := client.documentContent(ctx, corpus, document, text)
 	if err != nil {
 		return err
@@ -133,6 +139,7 @@ func (client *Client) Submit(ctx context.Context, corpus domain.Corpus, document
 		stringAttribute("organization_id", corpus.OrganizationID),
 		stringAttribute("corpus_id", corpus.ID),
 		stringAttribute("document_id", document.ID),
+		stringAttribute("access", string(document.Access)),
 		stringAttribute("source_kind", string(document.Source.Kind)),
 	}
 	if document.Title != "" {
@@ -140,6 +147,14 @@ func (client *Client) Submit(ctx context.Context, corpus domain.Corpus, document
 	}
 	if document.Source.Ref != "" {
 		attributes = append(attributes, stringAttribute("source_ref", document.Source.Ref))
+	}
+	// These are stable, bounded classification fields supplied by Knowledge.
+	// Provider-specific details such as Gmail addresses and labels stay in
+	// Knowledge; they are not copied into the shared Bedrock index.
+	for _, key := range []string{"provider", "knowledge_source_id", "document_kind", "category"} {
+		if value := document.Metadata[key]; value != "" {
+			attributes = append(attributes, stringAttribute(key, value))
+		}
 	}
 	_, err = client.ingest.IngestKnowledgeBaseDocuments(ctx, &bedrockagent.IngestKnowledgeBaseDocumentsInput{
 		KnowledgeBaseId: aws.String(client.config.KnowledgeBaseID),

@@ -220,7 +220,7 @@ func TestHandleDispatchesEachSubscribedEventToItsOwnMethod(t *testing.T) {
 	must(t, consumer.Handle(context.Background(), delivery(fileseventsv1.Source, fileseventsv1.ObjectDeletedDetailType, 1,
 		`{"file_id":"file_1","organization_id":"org_1","reason":"deleted","deleted_at":"2026-09-14T17:00:00Z"}`)))
 	must(t, consumer.Handle(context.Background(), delivery(knowledgeeventsv1.Source, knowledgeeventsv1.DocumentPublishedDetailType, 1,
-		`{"document_id":"doc_1","organization_id":"org_1","source_id":"src_1","provider":"github","scope":"member","member_id":"user-1","external_id":"42","kind":"issue","mime":"text/plain","content_hash":"abc","body":"hello","extracted_at":"2026-09-14T18:00:00Z"}`)))
+		`{"document_id":"doc_1","organization_id":"org_1","source_id":"src_1","provider":"github","scope":"member","member_id":"user-1","access":"members","external_id":"42","kind":"issue","mime":"text/plain","content_hash":"abc","body":"hello","metadata":{"knowledge_category":"work_material"},"extracted_at":"2026-09-14T18:00:00Z"}`)))
 	must(t, consumer.Handle(context.Background(), delivery(knowledgeeventsv1.Source, knowledgeeventsv1.DocumentRemovedDetailType, 1,
 		`{"document_id":"doc_1","organization_id":"org_1","source_id":"src_1","provider":"github","external_id":"42","reason":"deleted","removed_at":"2026-09-14T19:00:00Z"}`)))
 
@@ -242,7 +242,8 @@ func TestHandleDispatchesEachSubscribedEventToItsOwnMethod(t *testing.T) {
 	if len(app.objects) != 1 || app.objects[0].FileID != "file_1" {
 		t.Fatalf("ObjectDeleted = %+v", app.objects)
 	}
-	if len(app.published) != 1 || app.published[0].DocumentID != "doc_1" || app.published[0].MemberID != "user-1" {
+	if len(app.published) != 1 || app.published[0].DocumentID != "doc_1" || app.published[0].MemberID != "user-1" ||
+		app.published[0].Access != "members" || app.published[0].Metadata["knowledge_category"] != "work_material" {
 		t.Fatalf("DocumentPublished = %+v", app.published)
 	}
 	if len(app.forgotten) != 1 || app.forgotten[0].DocumentID != "doc_1" {

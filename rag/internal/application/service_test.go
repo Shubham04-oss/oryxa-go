@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/generation"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/retrieval"
@@ -36,6 +37,21 @@ func TestCallerOutsideTheOrganizationIsNotFound(t *testing.T) {
 	// organizations exist, and rag conceals the same way.
 	if _, err := h.service.Corpus(context.Background(), creds("user-stranger"), testOrganization, corpus.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("error = %v, want ErrNotFound", err)
+	}
+}
+
+type wrongOrganizationDirectory struct{}
+
+func (wrongOrganizationDirectory) Membership(context.Context, string, authclient.Credentials) (domain.OrgMembership, error) {
+	return domain.OrgMembership{OrganizationID: "org_2", UserID: "user-other", Role: domain.OrgRoleAdmin}, nil
+}
+
+func TestMembershipForAnotherOrganizationCannotReadACorpus(t *testing.T) {
+	h := newHarness()
+	corpus := seedCorpus(h.store, domain.Corpus{Slug: "org-a", Scope: domain.ScopeOrganization})
+	h.service.directory = wrongOrganizationDirectory{}
+	if _, err := h.service.Corpus(context.Background(), creds("user-other"), testOrganization, corpus.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("foreign organization's member read = %v, want ErrNotFound", err)
 	}
 }
 
@@ -207,6 +223,25 @@ func TestCorpusReadAccessByScope(t *testing.T) {
 	}
 }
 
+func TestOrganizationAdminReadsTeamCorpusWithoutTeamMembershipLookup(t *testing.T) {
+	h := newHarness()
+	corpus := seedCorpus(h.store, domain.Corpus{Slug: "team-eng", Scope: domain.ScopeTeam, TeamID: "team_eng"})
+	h.service.teams = nil
+	if _, err := h.service.Corpus(context.Background(), creds("user-admin"), testOrganization, corpus.ID); err != nil {
+		t.Fatalf("org admin read team corpus = %v", err)
+	}
+	listed, err := h.service.Corpora(context.Background(), creds("user-admin"), testOrganization,
+		ListFilter{Scope: domain.ScopeTeam, TeamID: "team_eng"})
+	if err != nil || len(listed) != 1 || listed[0].ID != corpus.ID {
+		t.Fatalf("org admin list team corpus = %+v, %v", listed, err)
+	}
+	h.retriever.results = retrieval.Results{Matches: []domain.Match{{Chunk: domain.Chunk{ID: "chk_team"}, Score: 0.9}}}
+	results, err := h.service.Search(context.Background(), creds("user-admin"), testOrganization, corpus.ID, domain.Query{Text: "team notes"})
+	if err != nil || len(results.Matches) != 1 {
+		t.Fatalf("org admin search team corpus = %+v, %v", results, err)
+	}
+}
+
 // TestSearchAndAnswerHonorTheReadGate spot-checks that Search and Answer
 // apply the same gate TestCorpusReadAccessByScope proved for Corpus, rather
 // than each re-deriving it.
@@ -363,7 +398,7 @@ func TestWriteAccessByScope(t *testing.T) {
 func TestAddDocumentFetchesFromFilesAsTheCaller(t *testing.T) {
 	h := newHarness()
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})
-	h.files.content = domain.SourceContent{ID: "file_1", Filename: "notes.md", ContentType: "text/markdown", Body: "# Notes\n\nSome text."}
+	h.files.content = domain.SourceContent{ID: "file_1", Filename: "notes.md", ContentType: "text/markdown", Body: "# Notes\n\nSome text.", Scope: domain.ScopeMember, MemberID: "user-creator"}
 
 	document, err := h.service.AddDocument(context.Background(), creds("user-creator"), testOrganization, corpus.ID, given(AddDocumentInput{
 		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_1"},
@@ -381,6 +416,74 @@ func TestAddDocumentFetchesFromFilesAsTheCaller(t *testing.T) {
 	}
 	if document.Title != "notes.md" || document.ContentType != "text/markdown" {
 		t.Fatalf("document = %+v, want the title and type files reported", document)
+	}
+}
+
+func TestOrganizationDocumentACL(t *testing.T) {
+	h := newHarness()
+	corpus := seedCorpus(h.store, domain.Corpus{Slug: "org-acl", Scope: domain.ScopeOrganization})
+	adminDocument, err := h.service.AddDocument(context.Background(), creds("user-admin"), testOrganization, corpus.ID, given(AddDocumentInput{
+		Source: domain.Source{Kind: domain.SourceInline}, Text: "Payroll numbers", ContentType: "text/plain", Access: domain.AccessAdmins,
+	}))
+	if err != nil || adminDocument.Access != domain.AccessAdmins {
+		t.Fatalf("admin document = %+v, %v", adminDocument, err)
+	}
+	generalDocument, err := h.service.AddDocument(context.Background(), creds("user-admin"), testOrganization, corpus.ID, given(AddDocumentInput{
+		Source: domain.Source{Kind: domain.SourceInline}, Text: "Public handbook", ContentType: "text/plain",
+	}))
+	if err != nil || generalDocument.Access != domain.AccessMembers {
+		t.Fatalf("general document = %+v, %v", generalDocument, err)
+	}
+	if _, err := h.service.Document(context.Background(), creds("user-teammate"), testOrganization, corpus.ID, adminDocument.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("member read admin document = %v", err)
+	}
+	if _, err := h.service.Document(context.Background(), creds("user-teammate"), testOrganization, corpus.ID, generalDocument.ID); err != nil {
+		t.Fatalf("member read general document = %v", err)
+	}
+	if _, err := h.service.Document(context.Background(), creds("user-admin"), testOrganization, corpus.ID, adminDocument.ID); err != nil {
+		t.Fatalf("admin read admin document = %v", err)
+	}
+	if _, err := h.service.Search(context.Background(), creds("user-teammate"), testOrganization, corpus.ID, domain.Query{Text: "payroll", IncludeAdminOnly: true}); err != nil || h.retriever.seen.query.IncludeAdminOnly {
+		t.Fatalf("member search accepted admin access: %v, %+v", err, h.retriever.seen.query)
+	}
+	if _, err := h.service.Search(context.Background(), creds("user-admin"), testOrganization, corpus.ID, domain.Query{Text: "payroll"}); err != nil || !h.retriever.seen.query.IncludeAdminOnly {
+		t.Fatalf("admin search lost admin access: %v, %+v", err, h.retriever.seen.query)
+	}
+	if _, err := h.service.AddDocument(context.Background(), creds("user-teammate"), testOrganization, corpus.ID, given(AddDocumentInput{
+		Source: domain.Source{Kind: domain.SourceInline}, Text: "hidden", ContentType: "text/plain", Access: domain.AccessAdmins,
+	})); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("member creating admin document = %v", err)
+	}
+}
+
+func TestFileCannotBeCopiedIntoWiderCorpus(t *testing.T) {
+	h := newHarness()
+	corpus := seedCorpus(h.store, domain.Corpus{Slug: "org-files", Scope: domain.ScopeOrganization})
+	h.files.content = domain.SourceContent{ID: "file_private", Scope: domain.ScopeMember, MemberID: "user-admin", Body: "private notes", ContentType: "text/plain"}
+	if _, err := h.service.AddDocument(context.Background(), creds("user-admin"), testOrganization, corpus.ID, given(AddDocumentInput{
+		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_private"},
+	})); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("private file copied to org corpus = %v", err)
+	}
+	h.files.content = domain.SourceContent{ID: "file_invoice", Scope: domain.ScopeOrganization, Purpose: "billing.attachment", Body: "amount due", ContentType: "text/plain"}
+	document, err := h.service.AddDocument(context.Background(), creds("user-admin"), testOrganization, corpus.ID, given(AddDocumentInput{
+		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_invoice"}, Access: domain.AccessMembers,
+	}))
+	if err != nil || document.Access != domain.AccessAdmins {
+		t.Fatalf("billing file access = %+v, %v", document, err)
+	}
+	h.files.content = domain.SourceContent{ID: "file_general", Scope: domain.ScopeOrganization, Purpose: "upload", Access: domain.AccessMembers, Body: "general", ContentType: "text/plain"}
+	if _, err := h.service.AddDocument(context.Background(), creds("user-admin"), testOrganization, corpus.ID, given(AddDocumentInput{
+		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_general"}, Access: domain.AccessAdmins,
+	})); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("RAG tried to restrict a general file = %v", err)
+	}
+	h.files.content = domain.SourceContent{ID: "file_restricted", Scope: domain.ScopeOrganization, Purpose: "upload", Access: domain.AccessAdmins, Body: "restricted", ContentType: "text/plain"}
+	document, err = h.service.AddDocument(context.Background(), creds("user-admin"), testOrganization, corpus.ID, given(AddDocumentInput{
+		Source: domain.Source{Kind: domain.SourceFile, Ref: "file_restricted"}, Access: domain.AccessMembers,
+	}))
+	if err != nil || document.Access != domain.AccessAdmins {
+		t.Fatalf("restricted file access = %+v, %v", document, err)
 	}
 }
 

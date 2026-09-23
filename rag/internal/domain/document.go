@@ -165,23 +165,24 @@ func Hash(text string) string {
 
 // Document is one source item inside a corpus.
 type Document struct {
-	ID             string       `json:"id"`
-	CorpusID       string       `json:"corpus_id"`
-	OrganizationID string       `json:"organization_id"`
-	Source         Source       `json:"source"`
-	Title          string       `json:"title,omitempty"`
-	ContentType    string       `json:"content_type"`
-	ContentSHA256  string       `json:"content_sha256"`
-	ByteSize       int64        `json:"byte_size"`
-	Metadata       Metadata     `json:"metadata,omitempty"`
-	Status         IngestStatus `json:"status"`
-	FailureReason  string       `json:"failure_reason,omitempty"`
-	ChunkCount     int          `json:"chunk_count"`
-	Attempts       int          `json:"attempts"`
-	CreatedBy      string       `json:"created_by"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
-	IngestedAt     *time.Time   `json:"ingested_at,omitempty"`
+	ID             string         `json:"id"`
+	CorpusID       string         `json:"corpus_id"`
+	OrganizationID string         `json:"organization_id"`
+	Access         DocumentAccess `json:"access"`
+	Source         Source         `json:"source"`
+	Title          string         `json:"title,omitempty"`
+	ContentType    string         `json:"content_type"`
+	ContentSHA256  string         `json:"content_sha256"`
+	ByteSize       int64          `json:"byte_size"`
+	Metadata       Metadata       `json:"metadata,omitempty"`
+	Status         IngestStatus   `json:"status"`
+	FailureReason  string         `json:"failure_reason,omitempty"`
+	ChunkCount     int            `json:"chunk_count"`
+	Attempts       int            `json:"attempts"`
+	CreatedBy      string         `json:"created_by"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	IngestedAt     *time.Time     `json:"ingested_at,omitempty"`
 
 	// OriginalBucket and OriginalKey locate a document's own bytes in S3, for
 	// a document indexed with no extracted text of its own — a PDF, an
@@ -205,6 +206,22 @@ type Document struct {
 	// worker can tell a submission the knowledge base is still working on
 	// from one it will never finish. Nil when nothing is outstanding.
 	KBSubmittedAt *time.Time `json:"-"`
+}
+
+// DocumentAccess is the organization-level ACL on an individual document.
+// Corpus placement still applies first; an admins document is visible only
+// to organization owners and admins within that placement.
+type DocumentAccess string
+
+const (
+	AccessMembers DocumentAccess = "members"
+	AccessAdmins  DocumentAccess = "admins"
+)
+
+func (access DocumentAccess) Valid() bool { return access == AccessMembers || access == AccessAdmins }
+
+func (document Document) VisibleTo(role OrgRole) bool {
+	return document.Access == "" || document.Access == AccessMembers || (document.Access == AccessAdmins && role.IsOrgAdmin())
 }
 
 // HasOriginal reports whether a document was indexed with no extracted text
@@ -323,4 +340,9 @@ type SourceContent struct {
 	Filename    string
 	ContentType string
 	Body        string
+	Scope       Scope
+	TeamID      string
+	MemberID    string
+	Purpose     string
+	Access      DocumentAccess
 }

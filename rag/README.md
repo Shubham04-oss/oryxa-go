@@ -36,12 +36,29 @@ comes from auth, and from teams for a team corpus.
 | Scope | Who may create | Who may search | Who may add or remove documents | Who may delete the corpus |
 | --- | --- | --- | --- | --- |
 | `member` (default) | Any org member; hangs under the caller | Owner or org admin | Owner or org admin | Owner or org admin |
-| `team` | Anyone who can **see** the team | Anyone who can see the team | Anyone who can see the team | Creator, team `can_manage`, or org admin |
+| `team` | Anyone who can **see** the team | Team member or org admin | Anyone who can see the team | Creator, team `can_manage`, or org admin |
 | `organization` | Org admin | Any org member | Org admin | Org admin |
 
 A caller who is not in the organization gets `404`, as auth conceals which
 organizations exist. A team the caller cannot see is `404`, as teams conceals
 it. A corpus the caller may not search is `404` for the same reason.
+
+Documents in an organization corpus also have an ACL. `access: members` is
+the default and is visible to every member allowed into that corpus.
+`access: admins` is visible only to organization owners and admins. An admin
+can set this field when adding an inline or external document. A Files
+document uses its scope and access from Files: it cannot be copied into a
+wider corpus or be reclassified in RAG. Admin-only shared files must be
+uploaded with `access: admins` in Files; a `billing.attachment` is always
+admin-only. Knowledge carries that label into its publication event. The ACL applies
+to document lists and reads, and to matches before reranking or generation.
+Bedrock Knowledge Base retrieval also filters member queries on `access` in
+the managed index; PostgreSQL checks the document ACL again before returning
+a passage. Older organization file documents are marked admin-only by
+migration until re-ingested from Files, since RAG did not previously store
+their purpose. The same migration requeues existing Bedrock documents to add
+`access` to the managed index; member searches may omit them while that work
+completes.
 
 ## Where the vectors live
 
@@ -58,9 +75,18 @@ still on disk.
 
 `RAG_DEFAULT_BACKEND` overrides either default, and a corpus keeps the backend
 it was created on, so changing the default moves only corpora made after it.
-Unlike S3 Vectors, naming a knowledge base does not make it the default on its
-own: `bedrock-kb` corpora are opt-in even once configured, because parsing,
-chunking and lexical search all work differently there and a deployment
+The production deployment sets `RAG_DEFAULT_BACKEND=bedrock-kb` and selects the
+`MANAGED` knowledge base. It retrieves passages with Bedrock and sends them to
+Gemini on Vertex AI for grounded answers. Direct S3 Vectors and Bedrock
+Converse remain configurable alternatives; their live smoke tests do not mean
+production sends requests through them. Local `.env` uses pgvector. Existing
+corpora retain their recorded backend until explicitly reindexed. Terraform
+still provisions the older VECTOR knowledge base as a rollback option; that
+resource is separate from the active MANAGED knowledge base.
+
+Naming a knowledge base does not make it the default on its own:
+`RAG_DEFAULT_BACKEND` selects the backend for new corpora. Parsing, chunking
+and lexical search all work differently on `bedrock-kb`, and a deployment
 should choose that trade deliberately rather than inherit it from which
 environment variables happen to be set.
 
@@ -262,6 +288,9 @@ retrieves and says why it cannot answer.
 
 ## API
 
+The machine-readable search and answer contract is
+[`contracts/http/rag/v1/openapi.yaml`](../contracts/http/rag/v1/openapi.yaml).
+
 Cookie-authenticated mutations must come from an origin in
 `RAG_ALLOWED_ORIGINS`. A bearer token is not sent by a browser on its own, so
 that path needs no origin check.
@@ -275,11 +304,23 @@ that path needs no origin check.
 | `GET` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | One corpus, with its document and chunk counts. `{corpus}` may be an id or the slug |
 | `DELETE` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | Delete the corpus, its documents and its vectors |
 | `GET` | `.../corpora/{corpus}/documents` | Per placement | List. Query `status`, `limit`, `cursor`. Answers `{documents, next_cursor}`; `next_cursor` is absent on the last page |
-| `POST` | `.../corpora/{corpus}/documents` | Per placement | Add. `{source:{kind,ref}, title, content_type, text, metadata}`. Answers `202`: it is queued, not yet searchable |
+| `POST` | `.../corpora/{corpus}/documents` | Per placement | Add. `{source:{kind,ref}, title, content_type, text, metadata, access}`. `access` is `members` by default; an org admin may set `admins` in an organization corpus. Answers `202`: it is queued, not yet searchable |
 | `GET` | `.../corpora/{corpus}/documents/{document}` | Per placement | One document and its ingest status |
 | `DELETE` | `.../corpora/{corpus}/documents/{document}` | Per placement | Remove it and its vectors |
 | `POST` | `.../corpora/{corpus}/search` | Per placement | `{query, top_k, mode, min_score, diversity, rerank, over_fetch, filter}` |
 | `POST` | `.../corpora/{corpus}/answer` | Per placement | The same body; returns the answer, its citations and the matches |
+
+The search and answer request field is `query` (a string), with optional
+`filter: {document_ids: [...], conditions: [{key, operator, values}]}`.
+Search returns `{matches, usage, reranked}`. Each match has `chunk`,
+`document` and `score`; Knowledge documents carry `provider` and
+`knowledge_source_id` in `document.metadata`, plus `document_kind` when the
+source names one and `category` when judged. Answer returns `{answer, matches}`;
+`answer` contains
+`text`, `citations`, `model`, `usage` and `grounded`. Each citation carries
+the same document metadata so a caller can identify its origin without a
+second lookup. Scope and admin access are derived from the caller's token;
+neither can be supplied in the request body.
 
 A request that adds a document may be up to 24 MiB; every other request body,
 a corpus's settings or a query and its filters, at most 1 MiB. Past its limit
@@ -301,13 +342,14 @@ added mid-walk cannot make a later page repeat or skip one already seen.
 `limit` defaults to, and is capped at, 200.
 
 Filters narrow on document ids and on metadata, with `eq`, `ne`, `in` and
-`nin`. That set is deliberately small: every operator maps onto both a
-PostgreSQL `jsonb` predicate and an S3 Vectors metadata filter, so a filtered
-query means the same thing whichever backend the corpus was written into. A
-`bedrock-kb` corpus only honours `document_ids`: the knowledge base was never
-handed a caller's own metadata to filter on (see [Knowledge base
-corpora](#knowledge-base-corpora)), so a `conditions` filter against one is
-refused rather than silently answered as though it narrowed anything.
+`nin`. PostgreSQL and S3 Vectors can filter on stored document metadata. A
+`bedrock-kb` corpus can filter on `source_kind`, `provider`,
+`knowledge_source_id`, `document_kind`, and `category`, which RAG writes into
+the managed index. Other metadata conditions are refused rather than silently
+widening the search. Organization, corpus, and document ACL filters are always
+applied separately from caller supplied conditions.
+For example, `{"query":"September invoices","filter":{"conditions":[{"key":"provider","operator":"eq","values":["gmail"]},{"key":"category","operator":"eq","values":["financial_record"]}]}}`
+searches Gmail financial records in the corpora the caller may access.
 Metadata is bounded to 16 keys and 2 KiB total, which is the tighter of the two
 backends' budgets, so a corpus indexed on one is portable to the other. Keys
 the pipeline writes itself — `chunk_id`, `document_id`, `corpus_id`,
@@ -371,15 +413,14 @@ corpus the first time it is needed, at rag's own default embedding model,
 backend and chunking — the same defaults a member's own corpus gets when they
 name none — named "Knowledge from connected apps" and marked
 `origin: knowledge` in its metadata so it reads as what it is. The slug is
-deterministic — `knowledge-member-<member_id>`, `knowledge-team-<team_id>`,
-`knowledge-organization` — with any character a rag slug refuses turned into a
-hyphen (auth and teams mint ids that can hold underscores and uppercase
-letters, which a slug does not accept), so the same owner always resolves to
-the same slug. Two replicas racing to create it both land on rag's own
-unique-slug conflict rather than a race of their own: the loser reads back
-what the winner just created. A corpus a member or admin already created by
-hand at that exact slug is adopted rather than treated as a collision — the
-slug is deliberately the only thing that decides this.
+deterministic: `knowledge-member-<owner-hash>` or
+`knowledge-team-<owner-hash>`, with a hash of the complete owner ID;
+organization scope uses `knowledge-organization`. This keeps IDs that differ
+only by case, punctuation or a long suffix in separate corpora. Existing
+corpora with the earlier readable slug are reused when their stored scope,
+owner and `origin: knowledge` match. A matching slug with another owner or
+origin is never adopted. Two replicas racing to create the same corpus use
+rag's unique-slug conflict, and the loser checks the winner's placement.
 
 A team- or organization-scoped document names no member — knowledge ties a
 member id to a member-scoped document alone — so the corpus this bridge
@@ -394,18 +435,25 @@ is a valid, absolute URI of at most 2048 characters, so a citation can point
 back at it; otherwise `knowledge:<document_id>`. Title comes from the event,
 falling back to its external id; content type comes from the event's MIME
 when rag accepts it, otherwise `text/plain`. Metadata carries
-`knowledge_document_id`, `knowledge_source_id` and `provider`.
+`knowledge_document_id`, `knowledge_source_id`, `provider`, and the extractor's
+`document_kind`; when Knowledge's judge supplies a semantic category, RAG
+also stores it as `category`. For example, a Gmail message has
+`provider: gmail` and `document_kind: message`; its content may be classified
+as `financial_record`.
 
 **Idempotency and removal.** `rag_knowledge_documents` maps a knowledge
 document id to the organization, corpus and rag document it became, with the
-content hash and extraction time of the version it reflects. A published
-event whose hash matches the mapped one does nothing. A new hash replaces the
-text in place, on the same rag document, unless the event's reference changed
-— its URL moved — in which case the old document is deleted and a new one
-created under the new reference, since the unique key a document is matched
-on is its corpus and its ref together. An event older, by its own extraction
-time, than what is already mapped is ignored rather than regressing a newer
-version: delivery is at least once and not necessarily in order.
+content hash and extraction time of the version it reflects. An unchanged
+hash, title, content type, metadata, access label, owner and reference needs no
+work. Changed content or metadata requeues the document for indexing. If the
+owner or reference changes, the old document and its
+vectors are removed before a new document is indexed at the new placement.
+An event older than what is already mapped is ignored. Removal timestamps
+are kept in `rag_knowledge_removals`, including when no document was indexed
+yet, so an older publish cannot resurrect a removed document and an older
+removal cannot delete a newer version. Publish and removal handlers for the
+same Knowledge document are serialized with a PostgreSQL advisory lock across
+rag replicas.
 `knowledge.document.removed.v1` deletes the mapped rag document through rag's
 normal delete path and the mapping row with it. A corpus left with no
 documents after that is left alone — an empty corpus is harmless and will be
@@ -414,13 +462,12 @@ team or a member wiped — takes its mapping row with it by cascade, so nothing
 here has to notice separately.
 
 **Omitted bodies.** A published event whose body was too large to carry
-(`body_omitted: true`, over knowledge's 128 KiB event budget) is not indexed:
-rag has no way to fetch it back, since knowledge's body endpoint answers only
-the source's creator or an org admin, never a service. A version already
-indexed from an earlier, smaller-bodied event is removed rather than left
-answering from text that no longer matches the source. The real fix — an
-internal, service-authenticated body route in knowledge — is not built; see
-docs/REMAINING-WORK.md.
+(`body_omitted: true`, over knowledge's 128 KiB event budget) is read back
+through Knowledge's internal, service-authenticated body route. Rag checks
+the returned content hash against the event before indexing it. If the body
+cannot be read or no longer matches and a prior version is indexed, rag
+removes that stale version. A temporary read failure leaves the event for
+retry.
 
 **Scope safety.** A document missing the id its scope needs — no member id at
 member scope, no team id at team scope — is refused and logged rather than
@@ -446,13 +493,13 @@ creates, configures or deletes either. It is one of Bedrock's two kinds, and
 | Kind | What Bedrock does | Searched by |
 | --- | --- | --- |
 | `MANAGED` | Keeps the index itself. Its own parser (PDF, Office, images), embedding model and reranker, all in the retrieval price | Keyword and meaning together, on every query |
-| `VECTOR` (the default) | Embeds with Titan v2 at 1024 dimensions into an S3 Vectors index the deployment made; data source of type `CUSTOM` | Meaning only: Bedrock mixes in keywords only on Aurora, OpenSearch or MongoDB |
+| `VECTOR` (when the type is unset) | Embeds with Titan v2 at 1024 dimensions into an S3 Vectors index the deployment made; data source of type `CUSTOM` | Meaning only: Bedrock mixes in keywords only on Aurora, OpenSearch or MongoDB |
 
 Both take, report on and delete documents through the same calls, so
 nothing about ingestion below differs between them; only the search request
 does. Every corpus on this backend in a
 deployment shares that one knowledge base; what tells their documents apart
-inside it is metadata (`organization_id`, `corpus_id`), not separate
+inside it is metadata (`organization_id`, `corpus_id`, `access`), not separate
 infrastructure, the same way tenancy is metadata rather than infrastructure
 in the rest of Bedrock's multi-tenant surface.
 
@@ -528,18 +575,23 @@ backends: with its own reranker on a `MANAGED` knowledge base, and with
 A query that does not ask to rerank is not reranked on either. `top_k`, `min_score` and
 `diversity` are applied afterward exactly as they are for pgvector and S3
 Vectors, so a caller sees one contract regardless of which backend answered.
-A query's own `filter.document_ids` narrows further, inside that same tenant
-filter; `filter.conditions` is refused, since the knowledge base was never
-given a caller's own metadata to test one against — see [Filters](#api).
+A query's own `filter.document_ids` and supported `filter.conditions` narrow
+further inside the tenant and access filters. RAG submits provider, Knowledge
+source ID, document kind and category as selected metadata attributes; it
+does not copy provider specific details such as email addresses into the
+shared index. A migration requeues existing Knowledge documents once to add
+the new filterable attributes. Older documents acquire semantic categories
+when Knowledge judges them again on a subsequent source sweep.
 
 Each returned passage becomes a `Match` whose `Chunk` is synthesized rather
 than read from `rag_chunks`, since there is no row: its id is derived from the
 document id and a hash of the passage text, stable so the same passage cites
 the same way twice, and its byte range is left at zero, since nothing here
-knows where in the document Bedrock found it. Its document's title and source
-still come from PostgreSQL, which holds a row for every document whichever
-backend indexed it — and a passage whose document PostgreSQL no longer holds
-is left out, with a warning naming it. Rag removes a document's row once the
+knows where in the document Bedrock found it. Its document's title, source,
+and selected metadata come from PostgreSQL, which holds a row for every
+document whichever backend indexed it. The metadata travels with the match
+and any citation built from it. A passage whose document PostgreSQL no longer
+holds is left out, with a warning naming it. Rag removes a document's row once the
 knowledge base accepts the delete, and the knowledge base finishes that delete
 in its own time, so without this a removed document went on answering
 questions, untitled, for as long as the delete took — or for good, if it
@@ -699,22 +751,24 @@ shape it reads, and proves nothing about whether the provider agrees:
 
 | Path | What stands in for it | What is unverified |
 | --- | --- | --- |
-| Bedrock embedding (Titan, Cohere) | A fake `InvokeModel` | Request bodies, response shapes, throttling behaviour, real model ids |
+| Bedrock embedding (Titan, Cohere) | A fake `InvokeModel` and a small live Titan v2 run | Cohere and throttling behaviour |
 | Vertex embedding | An `httptest` server, and one small live run | Per-model batch limits, which six chunks never approached; the other two Vertex models |
-| Bedrock answering (`Converse`) | A fake `Converse` | Whether the grounding prompt holds, real model ids, guardrail behaviour |
-| Vertex answering (`generateContent`) | An `httptest` server | The same, plus ADC auth |
+| Bedrock answering (`Converse`) | A fake `Converse` and a small live Nova Micro run | Broader grounding quality and guardrail behaviour |
+| Vertex answering (`generateContent`) | An `httptest` server and one synthetic live run | Grounding and citation quality beyond the smoke test |
 | Bedrock reranking | Nothing beyond construction | The whole call. This is the least exercised code in the service |
-| S3 Vectors | A fake client | Index creation, metadata filters, batch limits, the real 3–63 character index name rules |
+| S3 Vectors | A fake client and a small live index | Batch limits and larger corpora |
 | The provisioner | Unit tests on its pattern and policy | It has never created anything, on AWS or on LocalStack |
 
 S3 Vectors has no local emulation available: the LocalStack container in the
 root `docker-compose.yml` runs `events,sqs,dynamodb,s3`, and S3 Vectors is not
 among them. Exercising that backend means a real AWS account.
 
-Vertex has gone as far as search; its answers, and every Bedrock path, have
-not run. The first live run of each should be a small corpus end to end —
-create, add one document, wait for `rag.document.indexed.v1`, search, answer.
-Expect the model ids and the Bedrock reranker to be where it goes wrong first.
+Vertex generation answered a synthetic invoice through `gemini-3.5-flash-lite`
+on 2026-09-23, using the real passages returned from the managed knowledge
+base; the answer contained the amount and a valid source citation. A second
+live run used Titan v2 to embed two synthetic documents into a temporary S3
+Vectors index, then Nova Micro through Converse to answer from the retrieved
+passage with a citation. The index was deleted after the run.
 
 The `bedrock-kb` backend has run against real knowledge bases in
 `us-west-2`. Production has indexed members' Drive and Gmail documents
@@ -727,6 +781,15 @@ same corpus as another organization and finding nothing, and deleting the
 documents again. The eval did not exercise the `METADATA_PARTIALLY_INDEXED`
 status, whose handling is a judgment call from its documentation (see
 `rag/internal/ingest/ingest.go`).
+
+On 2026-09-23 the opt-in `TestLiveManagedProvenance` ingested two synthetic
+documents into the `MANAGED` knowledge base and removed them afterward. It
+verified provider and category filters, organization isolation, admin-only
+document access, a cited Gemini answer, and a metadata-only category change:
+the new category found the document and the old category no longer did.
+The opt-in `TestLiveS3VectorsConverse` repeated the provider/category,
+organization, admin-only and metadata-update checks against S3 Vectors with
+real Titan embeddings. Its Converse answer cited the retrieved invoice.
 
 ## Known limits
 

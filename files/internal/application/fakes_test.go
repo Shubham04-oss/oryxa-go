@@ -141,13 +141,13 @@ func matchesQuery(object domain.Object, query domain.ObjectQuery) bool {
 		if object.Scope != domain.ScopeOrganization {
 			return false
 		}
-		return query.Admin || object.Purpose != domain.PurposeBillingAttachment
+		return query.Admin || object.EffectiveAccess() == domain.AccessMembers
 	default:
 		switch object.Scope {
 		case domain.ScopeMember:
 			return query.Admin || object.MemberID == query.MemberID
 		case domain.ScopeOrganization:
-			return query.Admin || object.Purpose != domain.PurposeBillingAttachment
+			return query.Admin || object.EffectiveAccess() == domain.AccessMembers
 		default:
 			return false
 		}

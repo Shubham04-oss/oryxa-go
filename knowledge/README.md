@@ -37,36 +37,40 @@ apps ── connection expired, connection removed ──▶ knowledge-events qu
 teams ── team deleted ──▶ knowledge-events queue
 ```
 
-## The organization's own files index themselves
+## Shared, team and private files index themselves
 
-Files has no connection to announce it, so nothing ever said "start indexing
-these". The first **organization-scoped** upload does: knowledge hears
-`files.object.created.v1`, and registers the organization's files source once.
-Every upload after that finds it already there, so the cost is one lookup and
-no token.
+Files has no connection to announce it. The first organization-scoped upload
+starts a shared Files source; the first team-scoped upload starts one for that
+team; the first member-scoped upload starts one for that member. Knowledge
+hears `files.object.created.v1` and registers each source through the
+uploader's standing grant. Later uploads
+schedule the existing source to sync promptly.
 
 A deletion is heard the same way: `files.object.deleted.v1` retracts the
 file's document from every files source in the organization at once, and
 deletes its original, instead of leaving it searchable until the next full
 sweep notices it missing, up to a week later.
 
-Only a shared upload counts. A member's private file and a team's do not start
-it, and the source itself asks files for the organization's own scope alone —
-which matters more than it looks. A source here is organization-scoped, so
-everything it publishes is searchable by the whole organization; files asked
-with no scope answers the caller's own private files alongside the shared
-ones, which would put one member's private files in front of everybody. It is
-read as whoever stored the file, and only an admin can share a file with the
-whole organization, so that view is an admin's: it carries the organization's
-billing attachments, which files shows admins alone. The source never
-publishes those, and refuses a target that asks for them.
+The shared source asks Files for organization scope alone. A private source
+asks for member scope and checks every returned object's member ID against
+its own recorded owner before reading its bytes. A team source asks for that
+team alone and checks every returned object's team ID. These checks also
+protect a source reading with an admin's broader Files view. Only an admin
+can share a file with the whole organization, so the shared
+source reads an admin's view: it carries billing attachments and other files
+explicitly marked `access: admins`.
+The source carries Files' access label into the document event; RAG keeps
+restricted files out of member listings and search results. An admin's source
+may also target only billing attachments.
 
 A files source registered for a team (`{"team": "<id>"}`) is the team's: what
-it reads is searchable by that team, not by the whole organization.
+it reads is searchable by that team's members and organization admins.
+A member can register `{"member": "self"}` to index their own private
+files; a target cannot name another member.
 
-A source a member removed is not registered again. Removing it is them saying
-their organization's files should not be indexed, and someone uploading
-another file does not undo that.
+A source explicitly removed by a member is not registered again by another
+upload. A source retired because its registering member left can be replaced
+by the next uploader.
 
 ## Connecting an app indexes what it holds
 
@@ -190,11 +194,13 @@ start the next incremental pass, moved only once a pass drains — so a source
 with a token behind it is exactly as "already read through" as one with a
 watermark for deciding whether the next pass is full or incremental.
 
-A document is published when it is first seen and whenever its content hash
-changes, and not otherwise, so a pass over an unchanged source publishes
-nothing. Normalizing before hashing is what makes that true: a provider that
-re-serializes a document, changes its line endings or pads it differently has
-not changed it.
+A document is published when it is first seen, when its normalized content
+changes, or when its title, URL, kind, MIME type, or source metadata changes.
+A pass over a truly unchanged source publishes nothing. Normalizing before
+hashing avoids republishing a provider's harmless serialization or line-ending
+changes. When the judge is enabled, Knowledge also records its semantic
+category as `knowledge_category` in document metadata; that category describes
+the content and does not grant access to it.
 
 **Leases.** A pass can outlast any window worth leasing for, so the lease is
 renewed between pages rather than held for the whole walk, and every write
@@ -300,9 +306,9 @@ fails their own source with `grant_required` rather than the pass falling back
 to anything wider, and it is tried again, with backoff, so it resumes once
 they grant.
 
-A files source reads the organization's files, or one team's when its target
-names one, and publishes under that same scope. Billing attachments are never
-read, whoever the source reads as.
+A files source reads the organization's files, one team's files, or its
+member's private files and publishes under that same scope. Billing
+attachments are published with admin-only access.
 
 Only text is indexed. A media type holding none is refused rather than stored
 as though bytes were words — unless it is a PDF or an Office file and
@@ -358,6 +364,9 @@ service reads or writes it directly. `AWS_ENDPOINT_URL_S3` (or the generic
 `AWS_ENDPOINT_URL`) points it at a local emulator instead of AWS.
 
 ## API
+
+The internal body-fetch contract used by RAG is
+[`contracts/http/knowledge/v1/openapi.yaml`](../contracts/http/knowledge/v1/openapi.yaml).
 
 Members authenticate with a bearer token or the `oryxa_access` cookie; a
 cookie-authenticated change must come from an origin in `ALLOWED_ORIGINS`. A
@@ -456,7 +465,7 @@ Knowledge uses `/internal/postgreskit`. Other services never read these tables.
 | Table | Holds |
 | --- | --- |
 | `knowledge_sources` | What to index, its placement and owner, the connection and Composio account a provider source reads through, its schedule, when it was last swept in full, and the lease one replica claims it under |
-| `knowledge_documents` | What came back, with the content hash that is its version and when a pass last saw it |
+| `knowledge_documents` | What came back, with its content hash, searchable provenance, and when a pass last saw it |
 | `knowledge_cursors` | Where the last pass stopped, and the newest change a completed pass saw |
 | `knowledge_sync_runs` | What each pass did, so a member can see why nothing new arrived |
 | `knowledge_handled_events` | Envelope ids already acted on, since the bus delivers at least once |
@@ -587,4 +596,3 @@ KNOWLEDGE_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/
 ```
 
 ## Later
-

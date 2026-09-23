@@ -97,3 +97,52 @@ func (store *Store) DeleteKnowledgeDocumentMapping(ctx context.Context, organiza
 	}
 	return nil
 }
+
+func (store *Store) KnowledgeDocumentRemovedAt(ctx context.Context, organizationID, knowledgeDocumentID string) (time.Time, error) {
+	var removedAt time.Time
+	err := store.db.GetContext(ctx, &removedAt, `
+		SELECT removed_at FROM rag_knowledge_removals
+		WHERE organization_id = $1 AND knowledge_document_id = $2`, organizationID, knowledgeDocumentID)
+	if isNoRows(err) {
+		return time.Time{}, domain.ErrNotFound
+	}
+	if err != nil {
+		return time.Time{}, fmt.Errorf("read knowledge document removal: %w", err)
+	}
+	return removedAt, nil
+}
+
+func (store *Store) RecordKnowledgeDocumentRemoval(ctx context.Context, organizationID, knowledgeDocumentID string, removedAt time.Time) error {
+	_, err := store.db.ExecContext(ctx, `
+		INSERT INTO rag_knowledge_removals (organization_id, knowledge_document_id, removed_at)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (organization_id, knowledge_document_id) DO UPDATE
+		SET removed_at = GREATEST(rag_knowledge_removals.removed_at, EXCLUDED.removed_at)`,
+		organizationID, knowledgeDocumentID, removedAt)
+	if err != nil {
+		return fmt.Errorf("record knowledge document removal: %w", err)
+	}
+	return nil
+}
+
+// WithKnowledgeDocumentLock serializes publishes and removals of the same
+// Knowledge document across rag replicas. The lock is transaction-scoped and
+// released on commit or rollback; the work itself uses normal store calls.
+func (store *Store) WithKnowledgeDocumentLock(ctx context.Context, organizationID, knowledgeDocumentID string, run func() error) error {
+	tx, err := store.db.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin knowledge document lock: %w", err)
+	}
+	defer tx.Rollback()
+	key := organizationID + "/" + knowledgeDocumentID
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
+		return fmt.Errorf("lock knowledge document: %w", err)
+	}
+	if err := run(); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("release knowledge document lock: %w", err)
+	}
+	return nil
+}

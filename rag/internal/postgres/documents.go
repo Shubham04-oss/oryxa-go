@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ const documentColumns = `
 	id, corpus_id, organization_id, source_kind, source_ref, title, content_type,
 	content_sha256, byte_size, metadata, status, failure_reason, chunk_count,
 	attempts, created_by, created_at, updated_at, ingested_at,
-	original_bucket, original_key, kb_synced_hash, kb_submitted_at`
+	original_bucket, original_key, kb_synced_hash, kb_submitted_at, access`
 
 // documentColumnsQualified is the same list for a statement that also has
 // another relation in scope, where a bare "id" is ambiguous.
@@ -27,12 +28,13 @@ const documentColumnsQualified = `
 	document.chunk_count, document.attempts, document.created_by, document.created_at,
 	document.updated_at, document.ingested_at,
 	document.original_bucket, document.original_key, document.kb_synced_hash,
-	document.kb_submitted_at`
+	document.kb_submitted_at, document.access`
 
 type documentRow struct {
 	ID             string     `db:"id"`
 	CorpusID       string     `db:"corpus_id"`
 	OrganizationID string     `db:"organization_id"`
+	Access         string     `db:"access"`
 	SourceKind     string     `db:"source_kind"`
 	SourceRef      string     `db:"source_ref"`
 	Title          string     `db:"title"`
@@ -63,6 +65,7 @@ func (row documentRow) document() (domain.Document, error) {
 		ID:             row.ID,
 		CorpusID:       row.CorpusID,
 		OrganizationID: row.OrganizationID,
+		Access:         domain.DocumentAccess(row.Access),
 		Source:         domain.Source{Kind: domain.SourceKind(row.SourceKind), Ref: row.SourceRef},
 		Title:          row.Title,
 		ContentType:    row.ContentType,
@@ -105,6 +108,12 @@ const (
 // byte range of it. Recording the row and the event together means a document
 // cannot exist without the ingest work having been announced.
 func (store *Store) UpsertDocument(ctx context.Context, document domain.Document, body string, event domain.Event) (domain.Document, Upsert, error) {
+	if document.Access == "" {
+		document.Access = domain.AccessMembers
+	}
+	if !document.Access.Valid() {
+		return domain.Document{}, 0, fmt.Errorf("document access is not allowed: %w", domain.ErrInvalid)
+	}
 	metadata, err := encodeMetadata(document.Metadata)
 	if err != nil {
 		return domain.Document{}, 0, err
@@ -114,12 +123,26 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 		outcome Upsert
 	)
 	err = store.inTx(ctx, func(tx *sqlx.Tx) error {
+		var corpusOrganization string
+		if err := tx.GetContext(ctx, &corpusOrganization, `
+			SELECT organization_id FROM rag_corpora WHERE id = $1 FOR KEY SHARE`, document.CorpusID); err != nil {
+			if isNoRows(err) {
+				return domain.ErrConflict
+			}
+			return fmt.Errorf("read document's corpus: %w", err)
+		}
+		if corpusOrganization != document.OrganizationID {
+			return domain.ErrConflict
+		}
 		existing, found, err := findDocument(ctx, tx, document.CorpusID, document.Source, document.ContentSHA256)
 		if err != nil {
 			return err
 		}
+		attributesChanged := found && (existing.Title != document.Title || existing.ContentType != document.ContentType ||
+			!maps.Equal(existing.Metadata, document.Metadata))
 		switch {
-		case found && existing.ContentSHA256 == document.ContentSHA256 && existing.Status == domain.StatusReady:
+		case found && existing.ContentSHA256 == document.ContentSHA256 && existing.Access == document.Access &&
+			!attributesChanged && existing.Status == domain.StatusReady:
 			stored, outcome = existing, UpsertUnchanged
 			return nil
 		case found:
@@ -134,12 +157,14 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 				SET title = $2, content_type = $3, content_sha256 = $4, byte_size = $5,
 				    body = $6, metadata = $7, status = 'pending', failure_reason = '',
 				    attempts = 0, locked_until = NULL, updated_at = $8, ingested_at = NULL,
-				    original_bucket = $9, original_key = $10
+				    original_bucket = $9, original_key = $10, access = $11,
+				    kb_synced_hash = CASE WHEN access = $11 AND NOT $12 THEN kb_synced_hash ELSE '' END,
+				    kb_submitted_at = CASE WHEN access = $11 AND NOT $12 THEN kb_submitted_at ELSE NULL END
 				WHERE id = $1
 				RETURNING `+documentColumns,
 				existing.ID, document.Title, document.ContentType, document.ContentSHA256,
 				document.ByteSize, body, metadata, document.UpdatedAt,
-				document.OriginalBucket, document.OriginalKey); err != nil {
+				document.OriginalBucket, document.OriginalKey, document.Access, attributesChanged); err != nil {
 				return mapWriteError("update document", err)
 			}
 			stored, err = row.document()
@@ -153,14 +178,14 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 				INSERT INTO rag_documents (
 					id, corpus_id, organization_id, source_kind, source_ref, title,
 					content_type, content_sha256, byte_size, body, metadata, status,
-					created_by, created_at, updated_at, original_bucket, original_key)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13, $13, $14, $15)
+					created_by, created_at, updated_at, original_bucket, original_key, access)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13, $13, $14, $15, $16)
 				RETURNING `+documentColumns,
 				document.ID, document.CorpusID, document.OrganizationID,
 				document.Source.Kind, document.Source.Ref, document.Title,
 				document.ContentType, document.ContentSHA256, document.ByteSize, body, metadata,
 				document.CreatedBy, document.CreatedAt,
-				document.OriginalBucket, document.OriginalKey); err != nil {
+				document.OriginalBucket, document.OriginalKey, document.Access); err != nil {
 				return mapWriteError("insert document", err)
 			}
 			stored, err = row.document()
@@ -280,9 +305,9 @@ func decodeDocumentCursor(cursor string) (documentCursor, error) {
 // the listing from exactly where that page ended; the returned cursor is
 // empty once there is nothing more to read, which is what tells a caller to
 // stop asking.
-func (store *Store) Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) ([]domain.Document, string, error) {
-	statement := `SELECT ` + documentColumns + ` FROM rag_documents WHERE organization_id = $1 AND corpus_id = $2`
-	arguments := []any{organizationID, corpusID}
+func (store *Store) Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, includeAdminOnly bool) ([]domain.Document, string, error) {
+	statement := `SELECT ` + documentColumns + ` FROM rag_documents WHERE organization_id = $1 AND corpus_id = $2 AND ($3 OR access = 'members')`
+	arguments := []any{organizationID, corpusID, includeAdminOnly}
 	if status != "" {
 		arguments = append(arguments, string(status))
 		statement += fmt.Sprintf(` AND status = $%d`, len(arguments))

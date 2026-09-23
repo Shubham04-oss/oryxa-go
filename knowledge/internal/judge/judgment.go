@@ -18,9 +18,10 @@ type judgment struct {
 }
 
 type geminiVerdict struct {
-	Keep   bool   `json:"keep"`
-	Reason string `json:"reason"`
-	Model  string `json:"model,omitempty"`
+	Keep     bool   `json:"keep"`
+	Reason   string `json:"reason"`
+	Category string `json:"category,omitempty"`
+	Model    string `json:"model,omitempty"`
 }
 
 func (j judgment) encode() []byte {
@@ -46,5 +47,5 @@ func (j judgment) gemini(kept []byte) (domain.Verdict, bool) {
 	if j.Gemini == nil {
 		return domain.Verdict{}, false
 	}
-	return domain.Verdict{Keep: j.Gemini.Keep, Reason: j.Gemini.Reason, Judgment: kept}, true
+	return domain.Verdict{Keep: j.Gemini.Keep, Reason: j.Gemini.Reason, Category: j.Gemini.Category, Judgment: kept}, true
 }

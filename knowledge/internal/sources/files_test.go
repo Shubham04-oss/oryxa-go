@@ -64,6 +64,74 @@ func filesRequest() Request {
 	}
 }
 
+func TestFilesMemberSourceFetchesOnlyItsOwnersObjects(t *testing.T) {
+	own := storedFile("file_own", "own.md", "text/markdown")
+	own.Scope, own.MemberID = string(domain.ScopeMember), "user-1"
+	other := storedFile("file_other", "other.md", "text/markdown")
+	other.Scope, other.MemberID = string(domain.ScopeMember), "user-2"
+	shared := storedFile("file_shared", "shared.md", "text/markdown")
+	files := &fakeFiles{
+		objects: []filesclient.Object{own, other, shared},
+		bodies: map[string]string{
+			"file_own": "mine", "file_other": "private to someone else", "file_shared": "shared",
+		},
+	}
+	request := filesRequest()
+	request.Source.Scope = domain.ScopeMember
+	request.Source.MemberID = "user-1"
+	request.Source.Target = map[string]string{"member": "self"}
+	page, err := NewFiles(files).Fetch(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files.listedAs.Scope != string(domain.ScopeMember) {
+		t.Fatalf("listed scope = %q", files.listedAs.Scope)
+	}
+	if len(page.Items) != 1 || page.Items[0].ExternalID != own.ID {
+		t.Fatalf("member source published %+v", page.Items)
+	}
+	if len(files.fetched) != 1 || files.fetched[0] != own.ID {
+		t.Fatalf("member source fetched %v", files.fetched)
+	}
+}
+
+func TestFilesMemberTargetCannotNameAnotherMember(t *testing.T) {
+	source := NewFiles(&fakeFiles{})
+	if err := source.Target(map[string]string{"member": "user-2"}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("arbitrary member target = %v", err)
+	}
+	if err := source.Target(map[string]string{"member": "self", "team": "team-1"}); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("member and team target = %v", err)
+	}
+}
+
+func TestFilesMemberSourceWithoutOwnerFailsClosed(t *testing.T) {
+	files := &fakeFiles{}
+	request := filesRequest()
+	request.Source.Scope = domain.ScopeMember
+	request.Source.Target = map[string]string{"member": "self"}
+	if _, err := NewFiles(files).Fetch(context.Background(), request); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("member source without an owner = %v", err)
+	}
+	if files.listedAs.Scope != "" {
+		t.Fatal("queried Files before validating the member owner")
+	}
+}
+
+func TestFilesTeamSourceWithMismatchedTargetFailsClosed(t *testing.T) {
+	files := &fakeFiles{}
+	request := filesRequest()
+	request.Source.Scope = domain.ScopeTeam
+	request.Source.TeamID = "team_1"
+	request.Source.Target = map[string]string{"team": "team_2"}
+	if _, err := NewFiles(files).Fetch(context.Background(), request); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("team source with mismatched target = %v", err)
+	}
+	if files.listedAs.Scope != "" {
+		t.Fatal("queried Files before validating the team placement")
+	}
+}
+
 func TestFilesReadsWhatItCanAndSkipsWhatItCannot(t *testing.T) {
 	files := &fakeFiles{
 		objects: []filesclient.Object{
@@ -214,11 +282,9 @@ func TestFilesAsksForOrganizationFilesAndNeverTheMembersOwn(t *testing.T) {
 	}
 }
 
-// TestFilesNeverPublishesABillingAttachment is a privacy rule. Only an admin
-// can share a file with the whole organization, so the member a files source
-// reads as is usually an admin — and an admin's listing carries the
-// organization's invoices and receipts, which files shows to admins alone.
-func TestFilesNeverPublishesABillingAttachment(t *testing.T) {
+// TestFilesCarriesBillingPurpose is a privacy rule: RAG uses the trusted
+// Files purpose to keep a billing attachment admin-only after indexing.
+func TestFilesCarriesBillingPurpose(t *testing.T) {
 	invoice := storedFile("file_1", "invoice.csv", "text/csv")
 	invoice.Purpose = "billing.attachment"
 	files := &fakeFiles{
@@ -229,16 +295,11 @@ func TestFilesNeverPublishesABillingAttachment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
-	if len(page.Items) != 1 || page.Items[0].ExternalID != "file_2" {
-		t.Fatalf("Fetch() = %+v, want only the handbook", page.Items)
+	if len(page.Items) != 2 || page.Items[0].Metadata["purpose"] != "billing.attachment" {
+		t.Fatalf("Fetch() = %+v, want the invoice labeled for admin-only indexing", page.Items)
 	}
-	for _, fetched := range files.fetched {
-		if fetched == "file_1" {
-			t.Fatal("read the bytes of a billing attachment")
-		}
-	}
-	if err := NewFiles(files).Target(map[string]string{"purpose": "billing.attachment"}); !errors.Is(err, domain.ErrInvalid) {
-		t.Fatalf("Target(billing attachments) error = %v, want ErrInvalid", err)
+	if err := NewFiles(files).Target(map[string]string{"purpose": "billing.attachment"}); err != nil {
+		t.Fatalf("Target(billing attachments) error = %v", err)
 	}
 }
 

@@ -12,11 +12,13 @@
 // who may read that document; a consumer that retrieves across an
 // organization must honour it.
 //
-// A document is published whenever its content hash changes, and not
-// otherwise, so an extraction run that finds nothing new publishes nothing.
+// A document is published when its content hash or searchable provenance
+// changes (title, URL, kind, MIME or metadata). An extraction run that finds
+// none of those changes publishes nothing.
 // Delivery is at least once, as everywhere on the bus: deduplicate on the
-// envelope's event_id, or treat ContentHash as the version it is. Events
-// never carry a token, a secret or a credential.
+// envelope's event_id. ContentHash alone is not an event version because
+// provenance may change without a content change. Events never carry a
+// token, a secret or a credential.
 package v1
 
 import "time"
@@ -55,8 +57,8 @@ const (
 )
 
 // DocumentPublished is one document a source holds, as knowledge last read
-// it. It is published when the document is first seen and whenever its
-// ContentHash changes, so a consumer upserts on (SourceID, ExternalID).
+// it. It is published when first seen and whenever its content or searchable
+// provenance changes, so a consumer upserts on (SourceID, ExternalID).
 type DocumentPublished struct {
 	DocumentID     string `json:"document_id"`
 	OrganizationID string `json:"organization_id"`
@@ -66,10 +68,14 @@ type DocumentPublished struct {
 	ConnectionID string `json:"connection_id,omitempty"`
 	Provider     string `json:"provider"`
 	// Scope, TeamID and MemberID are who may read this document, taken from
-	// the connection behind its source.
+	// its source (and the connection behind an external source).
 	Scope    string `json:"scope"`
 	TeamID   string `json:"team_id,omitempty"`
 	MemberID string `json:"member_id,omitempty"`
+	// Access is the document ACL within its scope: members (the default) or
+	// admins. Knowledge derives it from the trusted Files ACL for internal
+	// files; arbitrary provider metadata cannot grant or revoke access.
+	Access string `json:"access,omitempty"`
 	// ExternalID is the provider's own identifier, stable across runs. It is
 	// what makes a document the same document.
 	ExternalID string `json:"external_id"`
@@ -79,8 +85,9 @@ type DocumentPublished struct {
 	// citation to point at.
 	URL  string `json:"url,omitempty"`
 	MIME string `json:"mime"`
-	// ContentHash is over the normalized body. It is the version: equal
-	// hashes mean nothing changed, whatever else moved.
+	// ContentHash is over the normalized body (or Original bytes). Equal
+	// hashes mean the content did not change; title, URL, kind, MIME, access
+	// and metadata can still require a new indexed version.
 	ContentHash string `json:"content_hash"`
 	// Body is the normalized text, when it fits MaxBodyBytes. BodyOmitted
 	// says it did not, and the body must be read from knowledge instead.
@@ -92,8 +99,9 @@ type DocumentPublished struct {
 	// base, reads them from there. A document with an Original carries no
 	// Body, MIME says what the bytes are, and ContentHash is Original.SHA256.
 	Original *Original `json:"original,omitempty"`
-	// Metadata is what the provider said about the document beyond its text:
-	// an author, a label, a channel. Small, flat, and never a credential.
+	// Metadata includes provider attributes (author, label, channel) and
+	// Knowledge's semantic knowledge_category when judged. It is small,
+	// flat, and never a credential or an authority for access decisions.
 	Metadata map[string]string `json:"metadata,omitempty"`
 	// SourceUpdatedAt is when the provider last changed the document, when it
 	// says; ExtractedAt is when knowledge read it.

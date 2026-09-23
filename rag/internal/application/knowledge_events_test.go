@@ -50,6 +50,54 @@ func newHarnessWithBedrockKBDefault(t *testing.T) *harness {
 	return h
 }
 
+func TestKnowledgeBillingDocumentCannotDowngradeItsACL(t *testing.T) {
+	h := newHarness()
+	event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.Provider = "files"
+		event.Scope = "organization"
+		event.MemberID = ""
+		event.Kind = "file"
+		event.ExternalID = "file_invoice"
+		event.Metadata = map[string]string{"purpose": "billing.attachment"}
+		event.Access = "members" // even a malformed event cannot downgrade Files
+	})
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, event.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID)
+	if err != nil || document.Access != domain.AccessAdmins {
+		t.Fatalf("billing access = %+v, %v", document, err)
+	}
+}
+
+func TestKnowledgeRestrictedSharedFileCannotDowngradeItsACL(t *testing.T) {
+	h := newHarness()
+	event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.Provider = "files"
+		event.Scope = "organization"
+		event.MemberID = ""
+		event.Kind = "file"
+		event.ExternalID = "file_restricted"
+		event.Metadata = map[string]string{"purpose": "upload", "access": "admins"}
+		event.Access = "members"
+	})
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, event.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID)
+	if err != nil || document.Access != domain.AccessAdmins {
+		t.Fatalf("restricted access = %+v, %v", document, err)
+	}
+}
+
 // TestDocumentPublishedWithAnOriginalIndexesItOnABedrockKBCorpus: a document
 // with no extracted text — a PDF, an Office file — is still recorded, with
 // no body and the location of its own bytes instead, so the ingest worker
@@ -158,7 +206,11 @@ func TestDocumentPublishedCreatesTheOwnersCorpusAndIndexesTheDocument(t *testing
 		t.Fatalf("DocumentPublished() error = %v", err)
 	}
 
-	corpus, err := h.store.CorpusBySlug(context.Background(), testOrganization, "knowledge-member-user-1")
+	slug, err := knowledgeCorpusSlug(domain.ScopeMember, "", "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpus, err := h.store.CorpusBySlug(context.Background(), testOrganization, slug)
 	if err != nil {
 		t.Fatalf("the member's corpus was not created: %v", err)
 	}
@@ -199,7 +251,8 @@ func TestDocumentPublishedCreatesTheOwnersCorpusAndIndexesTheDocument(t *testing
 	if document.ContentType != "text/markdown" {
 		t.Fatalf("document content type = %q", document.ContentType)
 	}
-	if document.Metadata["knowledge_document_id"] != "doc_1" || document.Metadata["knowledge_source_id"] != "src_1" || document.Metadata["provider"] != "github" {
+	if document.Metadata["knowledge_document_id"] != "doc_1" || document.Metadata["knowledge_source_id"] != "src_1" ||
+		document.Metadata["provider"] != "github" || document.Metadata["document_kind"] != "issue" {
 		t.Fatalf("document metadata = %v", document.Metadata)
 	}
 	if document.CreatedBy != "user-1" {
@@ -207,6 +260,34 @@ func TestDocumentPublishedCreatesTheOwnersCorpusAndIndexesTheDocument(t *testing
 	}
 	if document.Status != domain.StatusPending {
 		t.Fatalf("document status = %q, want pending: the ingest worker, not this handler, does the rest", document.Status)
+	}
+}
+
+func TestKnowledgeCategoryChangeUpdatesSameContent(t *testing.T) {
+	h := newHarness()
+	first := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.Metadata = map[string]string{"knowledge_category": "work_material"}
+	})
+	if err := h.service.DocumentPublished(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := first
+	updated.ExtractedAt = first.ExtractedAt.Add(time.Minute)
+	updated.Metadata = map[string]string{"knowledge_category": "support_case"}
+	if err := h.service.DocumentPublished(context.Background(), updated); err != nil {
+		t.Fatal(err)
+	}
+	after, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID)
+	if err != nil || after.Metadata["category"] != "support_case" || after.ContentSHA256 != before.ContentSHA256 {
+		t.Fatalf("same-content category update = %+v, %v", after, err)
 	}
 }
 
@@ -233,6 +314,26 @@ func TestDocumentPublishedWithTheSameHashDoesNothing(t *testing.T) {
 	again, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, "doc_1")
 	if err != nil || again.DocumentID != mapping.DocumentID {
 		t.Fatalf("mapping changed on a re-delivery of the same content: %+v (was %+v), err=%v", again, mapping, err)
+	}
+}
+
+func TestSameContentAtALaterExtractionAdvancesTheMappedVersion(t *testing.T) {
+	h := newHarness()
+	first := testDocumentPublished(nil)
+	if err := h.service.DocumentPublished(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	later := first
+	later.ExtractedAt = first.ExtractedAt.Add(time.Hour)
+	if err := h.service.DocumentPublished(context.Background(), later); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+	if err != nil || !mapping.ExtractedAt.Equal(later.ExtractedAt) {
+		t.Fatalf("mapped version = %+v, %v", mapping, err)
+	}
+	if len(h.store.documents) != 1 {
+		t.Fatalf("same content created %d documents", len(h.store.documents))
 	}
 }
 
@@ -455,11 +556,19 @@ func TestDocumentPublishedGivesEachMemberTheirOwnCorpus(t *testing.T) {
 	if len(h.store.corpora) != 2 {
 		t.Fatalf("two different members produced %d corpora, want 2", len(h.store.corpora))
 	}
-	corpusOne, err := h.store.CorpusBySlug(context.Background(), testOrganization, "knowledge-member-user-1")
+	slugOne, err := knowledgeCorpusSlug(domain.ScopeMember, "", "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	slugTwo, err := knowledgeCorpusSlug(domain.ScopeMember, "", "user-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpusOne, err := h.store.CorpusBySlug(context.Background(), testOrganization, slugOne)
 	if err != nil {
 		t.Fatalf("user-1's corpus: %v", err)
 	}
-	corpusTwo, err := h.store.CorpusBySlug(context.Background(), testOrganization, "knowledge-member-user-2")
+	corpusTwo, err := h.store.CorpusBySlug(context.Background(), testOrganization, slugTwo)
 	if err != nil {
 		t.Fatalf("user-2's corpus: %v", err)
 	}
@@ -471,6 +580,180 @@ func TestDocumentPublishedGivesEachMemberTheirOwnCorpus(t *testing.T) {
 	}
 }
 
+func TestKnowledgeCorpusKeepsCollidingMemberIDsSeparate(t *testing.T) {
+	h := newHarness()
+	first := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.DocumentID, event.MemberID = "doc_upper", "user_A"
+	})
+	second := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.DocumentID, event.MemberID = "doc_lower", "user-a"
+	})
+	for _, event := range []knowledgeeventsv1.DocumentPublished{first, second} {
+		if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	firstMapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondMapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, second.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstMapping.CorpusID == secondMapping.CorpusID {
+		t.Fatal("member ids that collide after slug conversion shared a corpus")
+	}
+	for _, tc := range []struct{ id, corpusID string }{{first.MemberID, firstMapping.CorpusID}, {second.MemberID, secondMapping.CorpusID}} {
+		corpus, err := h.store.Corpus(context.Background(), testOrganization, tc.corpusID)
+		if err != nil || corpus.MemberID != tc.id {
+			t.Fatalf("member %s corpus = %+v, %v", tc.id, corpus, err)
+		}
+	}
+}
+
+func TestKnowledgeCorpusKeepsCollidingTeamIDsSeparate(t *testing.T) {
+	h := newHarness()
+	first := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.DocumentID, event.Scope, event.MemberID, event.TeamID = "doc_upper", "team", "", "team_A"
+	})
+	second := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.DocumentID, event.Scope, event.MemberID, event.TeamID = "doc_lower", "team", "", "team-a"
+	})
+	for _, event := range []knowledgeeventsv1.DocumentPublished{first, second} {
+		if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	firstMapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondMapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, second.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstMapping.CorpusID == secondMapping.CorpusID {
+		t.Fatal("team ids that collide after slug conversion shared a corpus")
+	}
+	for _, tc := range []struct{ id, corpusID string }{{first.TeamID, firstMapping.CorpusID}, {second.TeamID, secondMapping.CorpusID}} {
+		corpus, err := h.store.Corpus(context.Background(), testOrganization, tc.corpusID)
+		if err != nil || corpus.TeamID != tc.id {
+			t.Fatalf("team %s corpus = %+v, %v", tc.id, corpus, err)
+		}
+	}
+}
+
+func TestKnowledgeCorpusReusesOnlyMatchingLegacyOwner(t *testing.T) {
+	h := newHarness()
+	legacySlug, err := legacyKnowledgeCorpusSlug(domain.ScopeMember, "", "user_A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := seedCorpus(h.store, domain.Corpus{
+		ID: "cor_legacy", Slug: legacySlug, Scope: domain.ScopeMember,
+		MemberID: "user_A", Metadata: domain.Metadata{"origin": knowledgeCorpusOrigin},
+	})
+	for _, tc := range []struct{ id, member string }{{"doc_upper", "user_A"}, {"doc_lower", "user-a"}} {
+		event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+			event.DocumentID, event.MemberID = tc.id, tc.member
+		})
+		if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upper, _ := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, "doc_upper")
+	lower, _ := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, "doc_lower")
+	if upper.CorpusID != legacy.ID || lower.CorpusID == legacy.ID {
+		t.Fatalf("legacy corpus reused across owners: upper=%s lower=%s legacy=%s", upper.CorpusID, lower.CorpusID, legacy.ID)
+	}
+}
+
+func TestKnowledgeCorpusRefusesAnOccupiedSlugWithoutKnowledgeOrigin(t *testing.T) {
+	h := newHarness()
+	slug, err := knowledgeCorpusSlug(domain.ScopeMember, "", "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedCorpus(h.store, domain.Corpus{ID: "cor_handmade", Slug: slug, Scope: domain.ScopeMember, MemberID: "user-1"})
+	if err := h.service.DocumentPublished(context.Background(), testDocumentPublished(nil)); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("publish into a member-created corpus = %v, want conflict", err)
+	}
+	if len(h.store.documents) != 0 {
+		t.Fatal("a knowledge document was indexed into a corpus it did not create")
+	}
+}
+
+func TestDocumentPublishedMovesSameContentToNewMember(t *testing.T) {
+	h := newHarness()
+	first := testDocumentPublished(nil)
+	if err := h.service.DocumentPublished(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	before, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.store.chunkIDs[before.DocumentID] = []string{"chk_old"}
+	moved := first
+	moved.MemberID = "user-2"
+	moved.ExtractedAt = first.ExtractedAt.Add(time.Hour)
+	if err := h.service.DocumentPublished(context.Background(), moved); err != nil {
+		t.Fatal(err)
+	}
+	after, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.CorpusID == before.CorpusID || after.DocumentID == before.DocumentID {
+		t.Fatalf("document did not move to the new member: before=%+v after=%+v", before, after)
+	}
+	if _, err := h.store.Document(context.Background(), testOrganization, before.DocumentID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatal("old member's indexed document survived the move")
+	}
+	if got := h.vectors.store.deleted[before.CorpusID]; len(got) != 1 || got[0] != "chk_old" {
+		t.Fatalf("old member's vectors were not removed: %v", got)
+	}
+	newCorpus, err := h.store.Corpus(context.Background(), testOrganization, after.CorpusID)
+	if err != nil || newCorpus.MemberID != "user-2" {
+		t.Fatalf("new corpus = %+v, %v", newCorpus, err)
+	}
+}
+
+func TestDocumentPublishedMovesSameContentToNewTeam(t *testing.T) {
+	h := newHarness()
+	first := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.Scope, event.MemberID, event.TeamID = "team", "", "team_eng"
+	})
+	if err := h.service.DocumentPublished(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	before, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := first
+	moved.TeamID = "team_design"
+	moved.ExtractedAt = first.ExtractedAt.Add(time.Hour)
+	if err := h.service.DocumentPublished(context.Background(), moved); err != nil {
+		t.Fatal(err)
+	}
+	after, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.CorpusID == before.CorpusID || after.DocumentID == before.DocumentID {
+		t.Fatalf("team document did not move: before=%+v after=%+v", before, after)
+	}
+	if _, err := h.store.Document(context.Background(), testOrganization, before.DocumentID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatal("old team's indexed document survived the move")
+	}
+	newCorpus, err := h.store.Corpus(context.Background(), testOrganization, after.CorpusID)
+	if err != nil || newCorpus.TeamID != "team_design" {
+		t.Fatalf("new team corpus = %+v, %v", newCorpus, err)
+	}
+}
+
 func TestDocumentPublishedTeamAndOrganizationScopes(t *testing.T) {
 	h := newHarness()
 	team := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
@@ -479,7 +762,11 @@ func TestDocumentPublishedTeamAndOrganizationScopes(t *testing.T) {
 	if err := h.service.DocumentPublished(context.Background(), team); err != nil {
 		t.Fatalf("DocumentPublished(team) error = %v", err)
 	}
-	teamCorpus, err := h.store.CorpusBySlug(context.Background(), testOrganization, "knowledge-team-team-eng")
+	teamSlug, err := knowledgeCorpusSlug(domain.ScopeTeam, "team_eng", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	teamCorpus, err := h.store.CorpusBySlug(context.Background(), testOrganization, teamSlug)
 	if err != nil {
 		t.Fatalf("the team's corpus was not created: %v", err)
 	}
@@ -586,6 +873,64 @@ func TestDocumentRemovedForADocumentNeverIndexedIsANoOp(t *testing.T) {
 	}
 	if len(h.store.corpora) != 0 || len(h.store.documents) != 0 {
 		t.Fatal("DocumentRemoved for an unknown document touched the store")
+	}
+}
+
+func TestRemovedKnowledgeDocumentCannotBeResurrectedByAnOlderPublish(t *testing.T) {
+	h := newHarness()
+	removal := knowledgeeventsv1.DocumentRemoved{
+		DocumentID: "doc_1", OrganizationID: testOrganization, SourceID: "src_1",
+		RemovedAt: testClock.Add(time.Hour),
+	}
+	if err := h.service.DocumentRemoved(context.Background(), removal); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.DocumentPublished(context.Background(), testDocumentPublished(nil)); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.store.documents) != 0 || len(h.store.corpora) != 0 {
+		t.Fatal("an older publish recreated a removed member document")
+	}
+
+	newer := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.ExtractedAt = removal.RemovedAt.Add(time.Hour)
+	})
+	if err := h.service.DocumentPublished(context.Background(), newer); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.store.documents) != 1 {
+		t.Fatal("a genuinely newer publish was not indexed")
+	}
+}
+
+func TestOlderRemovalDoesNotDeleteNewerMemberDocument(t *testing.T) {
+	h := newHarness()
+	newer := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.ExtractedAt = testClock.Add(2 * time.Hour)
+	})
+	if err := h.service.DocumentPublished(context.Background(), newer); err != nil {
+		t.Fatal(err)
+	}
+	before, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, newer.DocumentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removal := knowledgeeventsv1.DocumentRemoved{
+		DocumentID: newer.DocumentID, OrganizationID: testOrganization, SourceID: newer.SourceID,
+		RemovedAt: testClock.Add(time.Hour),
+	}
+	if err := h.service.DocumentRemoved(context.Background(), removal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.Document(context.Background(), testOrganization, before.DocumentID); err != nil {
+		t.Fatalf("older removal deleted newer document: %v", err)
+	}
+	if err := h.service.DocumentPublished(context.Background(), testDocumentPublished(nil)); err != nil {
+		t.Fatal(err)
+	}
+	after, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, newer.DocumentID)
+	if err != nil || after.DocumentID != before.DocumentID {
+		t.Fatalf("older publish displaced newer member document: %+v, %v", after, err)
 	}
 }
 

@@ -131,6 +131,11 @@ func (store *Pgvector) Search(ctx context.Context, corpus domain.Corpus, search 
 	}
 	arguments := []any{embeddingValue(corpus.Spec.Dimensions, search.Vector), corpus.ID, corpus.OrganizationID}
 	where := []string{"corpus_id = $2", "organization_id = $3"}
+	if !search.IncludeAdminOnly {
+		where = append(where, `EXISTS (SELECT 1 FROM rag_chunks AS acl_chunk
+			JOIN rag_documents AS acl_document ON acl_document.id = acl_chunk.document_id
+			WHERE acl_chunk.id = chunk_id AND acl_document.access = 'members')`)
+	}
 	where, arguments, err = appendFilter(where, arguments, search.Filter)
 	if err != nil {
 		return nil, err

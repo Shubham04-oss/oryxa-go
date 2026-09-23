@@ -77,16 +77,84 @@ func TestKnowledgeDocumentMappingNotFound(t *testing.T) {
 	}
 }
 
+func TestKnowledgeDocumentRemovalTimestampIsScopedAndMonotonic(t *testing.T) {
+	store, ctx := openTestStore(t)
+	org := uniqueOrganization()
+	id := "kdoc_removed_" + org
+	first := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := store.KnowledgeDocumentRemovedAt(ctx, org, id); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing removal = %v", err)
+	}
+	for _, at := range []time.Time{first, first.Add(-time.Hour), first.Add(time.Hour)} {
+		if err := store.RecordKnowledgeDocumentRemoval(ctx, org, id, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.KnowledgeDocumentRemovedAt(ctx, org, id)
+	if err != nil || !got.Equal(first.Add(time.Hour)) {
+		t.Fatalf("removal timestamp = %v, %v", got, err)
+	}
+	if _, err := store.KnowledgeDocumentRemovedAt(ctx, org+"other", id); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("another organization's removal = %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM rag_knowledge_removals WHERE organization_id = $1 AND knowledge_document_id = $2`, org, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestKnowledgeDocumentLockSerializesTheSameDocument(t *testing.T) {
+	store, ctx := openTestStore(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- store.WithKnowledgeDocumentLock(ctx, "org_lock", "doc_1", func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("first document lock was not acquired")
+	}
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+
+	// A different document can progress while this one is held.
+	if err := store.WithKnowledgeDocumentLock(ctx, "org_lock", "doc_2", func() error { return nil }); err != nil {
+		t.Fatalf("another document was blocked: %v", err)
+	}
+	blocked, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+	if err := store.WithKnowledgeDocumentLock(blocked, "org_lock", "doc_1", func() error {
+		t.Error("same document entered the critical section while locked")
+		return nil
+	}); err == nil {
+		t.Fatal("same document did not wait for the first handler")
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUpsertKnowledgeDocumentMappingUpdatesInPlace(t *testing.T) {
 	store, ctx := openTestStore(t)
 	organizationID := uniqueOrganization()
-	_, firstDocument := testKnowledgeDocument(t, store, ctx, organizationID)
+	firstCorpus, firstDocument := testKnowledgeDocument(t, store, ctx, organizationID)
 	secondCorpus, secondDocument := testKnowledgeDocument(t, store, ctx, organizationID)
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	first := domain.KnowledgeDocumentMapping{
 		KnowledgeDocumentID: "kdoc_1", OrganizationID: organizationID,
-		CorpusID: secondCorpus.ID, DocumentID: firstDocument.ID,
+		CorpusID: firstCorpus.ID, DocumentID: firstDocument.ID,
 		ContentHash: "hash-1", ExtractedAt: now, UpdatedAt: now,
 	}
 	if err := store.UpsertKnowledgeDocumentMapping(ctx, first); err != nil {

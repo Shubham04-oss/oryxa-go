@@ -54,24 +54,25 @@ func promotion() domain.Candidate {
 }
 
 func TestJudgeReadsTheModelsVerdict(t *testing.T) {
-	models := &fakeModels{responses: []*genai.GenerateContentResponse{answer(`{"reason":"promotional mail","keep":false}`)}}
-	judge := newGemini(models, "gemini-test")
+	models := &fakeModels{responses: []*genai.GenerateContentResponse{answer(`{"reason":"promotional mail","category":"promotion","keep":false}`)}}
+	judge := newGemini(models, "gemini-3.5-flash-lite")
 
 	verdict, err := judge.Judge(context.Background(), promotion())
 	if err != nil {
 		t.Fatalf("Judge() error = %v", err)
 	}
-	if verdict.Keep || verdict.Reason != "promotional mail" {
+	if verdict.Keep || verdict.Reason != "promotional mail" || verdict.Category != "promotion" {
 		t.Fatalf("verdict = %+v, want excluded as promotional mail", verdict)
 	}
 
 	asked := models.requests[0]
-	if asked.model != "gemini-test" {
+	if asked.model != "gemini-3.5-flash-lite" {
 		t.Fatalf("model = %q", asked.model)
 	}
 	config := asked.config
 	if config.ResponseMIMEType != "application/json" || config.ResponseSchema == nil ||
-		config.ResponseSchema.Properties["keep"] == nil || config.ResponseSchema.Properties["reason"] == nil {
+		config.ResponseSchema.Properties["keep"] == nil || config.ResponseSchema.Properties["reason"] == nil ||
+		config.ResponseSchema.Properties["category"] == nil {
 		t.Fatalf("the answer is not asked for as keep and reason: %+v", config.ResponseSchema)
 	}
 	if config.SystemInstruction == nil || !strings.Contains(config.SystemInstruction.Parts[0].Text, "Exclude noise") {
@@ -93,6 +94,14 @@ func TestJudgeReadsTheModelsVerdict(t *testing.T) {
 	}
 	if strings.Contains(shown, "thread_id") {
 		t.Fatalf("an internal id was shown to the model:\n%s", shown)
+	}
+}
+
+func TestGemini25OmitsUnsupportedThinkingLevel(t *testing.T) {
+	t.Parallel()
+	judge := newGemini(&fakeModels{}, "gemini-2.5-flash")
+	if judge.config.ThinkingConfig != nil {
+		t.Fatalf("Gemini 2.5 thinking config = %+v, want none", judge.config.ThinkingConfig)
 	}
 }
 

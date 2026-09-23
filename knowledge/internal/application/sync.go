@@ -237,7 +237,7 @@ func (s *Service) keepOriginal(ctx context.Context, source domain.Source, e *ent
 	if e.existing != nil {
 		existing = *e.existing
 	}
-	document := e.document
+	document := withCategory(e.document, e.verdict)
 	document.JudgedPolicy, document.Judgment = e.policy(), e.judgment()
 	document.ID = existing.ID
 	if document.ID == "" {

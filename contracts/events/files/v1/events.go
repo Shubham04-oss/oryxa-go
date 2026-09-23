@@ -19,6 +19,7 @@ type ObjectCreated struct {
 	Filename       string    `json:"filename"`
 	ContentType    string    `json:"content_type"`
 	Purpose        string    `json:"purpose"`
+	Access         string    `json:"access,omitempty"`
 	SizeBytes      int64     `json:"size_bytes"`
 	SHA256         string    `json:"sha256"`
 	CreatedBy      string    `json:"created_by"`

@@ -37,9 +37,9 @@ const MaxRerankPassages = 100
 // Chunks is what retrieval needs from PostgreSQL: the lexical half of the
 // search, and the text and provenance of whatever either half found.
 type Chunks interface {
-	LexicalSearch(ctx context.Context, corpus domain.Corpus, text string, limit int, filter domain.Filter) ([]domain.ScoredChunk, error)
+	LexicalSearch(ctx context.Context, corpus domain.Corpus, text string, limit int, filter domain.Filter, includeAdminOnly bool) ([]domain.ScoredChunk, error)
 	Chunks(ctx context.Context, organizationID, corpusID string, ids []string) ([]domain.Chunk, error)
-	DocumentRefs(ctx context.Context, organizationID string, ids []string) (map[string]domain.Ref, error)
+	DocumentRefs(ctx context.Context, organizationID, corpusID string, ids []string, includeAdminOnly bool) (map[string]domain.Ref, error)
 }
 
 // Vectors routes a corpus to the store holding its vectors.
@@ -115,7 +115,7 @@ func (retriever *Retriever) Search(ctx context.Context, corpus domain.Corpus, qu
 		lists = append(lists, ranked{name: denseRetriever, hits: hits})
 	}
 	if query.Mode.UsesLexical() {
-		hits, err := retriever.chunks.LexicalSearch(ctx, corpus, query.Text, candidates, query.Filter)
+		hits, err := retriever.chunks.LexicalSearch(ctx, corpus, query.Text, candidates, query.Filter, query.IncludeAdminOnly)
 		if err != nil {
 			return Results{}, err
 		}
@@ -139,7 +139,7 @@ func (retriever *Retriever) Search(ctx context.Context, corpus domain.Corpus, qu
 		sortFused(combined)
 	}
 
-	matches, err := retriever.hydrate(ctx, corpus, combined)
+	matches, err := retriever.hydrate(ctx, corpus, combined, query.IncludeAdminOnly)
 	if err != nil {
 		return Results{}, err
 	}
@@ -214,7 +214,7 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 			documentIDs = append(documentIDs, passage.documentID)
 		}
 	}
-	refs, err := retriever.chunks.DocumentRefs(ctx, corpus.OrganizationID, documentIDs)
+	refs, err := retriever.chunks.DocumentRefs(ctx, corpus.OrganizationID, corpus.ID, documentIDs, query.IncludeAdminOnly)
 	if err != nil {
 		return Results{}, err
 	}
@@ -238,7 +238,7 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 			Chunk: domain.Chunk{
 				ID: kbChunkID(passage.documentID, passage.text), DocumentID: passage.documentID,
 				CorpusID: corpus.ID, OrganizationID: corpus.OrganizationID,
-				Text: passage.text, SHA256: domain.Hash(passage.text),
+				Text: passage.text, SHA256: domain.Hash(passage.text), Metadata: ref.Metadata,
 			},
 			Document: ref,
 			Score:    passage.score,
@@ -275,7 +275,7 @@ func (retriever *Retriever) dense(ctx context.Context, corpus domain.Corpus, que
 		return nil, usage, err
 	}
 	hits, err := store.Search(ctx, corpus, vectorstore.Search{
-		Vector: vector, TopK: candidates, Filter: query.Filter,
+		Vector: vector, TopK: candidates, Filter: query.Filter, IncludeAdminOnly: query.IncludeAdminOnly,
 	})
 	if err != nil {
 		return nil, usage, err
@@ -293,7 +293,7 @@ func (retriever *Retriever) dense(ctx context.Context, corpus domain.Corpus, que
 // than reported. That happens when a document was deleted between the index
 // answering and this read, and an index that is briefly ahead of the source of
 // truth should not turn into an error for the person asking a question.
-func (retriever *Retriever) hydrate(ctx context.Context, corpus domain.Corpus, combined []fused) ([]domain.Match, error) {
+func (retriever *Retriever) hydrate(ctx context.Context, corpus domain.Corpus, combined []fused, includeAdminOnly bool) ([]domain.Match, error) {
 	ids := make([]string, 0, len(combined))
 	for _, entry := range combined {
 		ids = append(ids, entry.chunkID)
@@ -312,7 +312,7 @@ func (retriever *Retriever) hydrate(ctx context.Context, corpus domain.Corpus, c
 			documentIDs = append(documentIDs, chunk.DocumentID)
 		}
 	}
-	refs, err := retriever.chunks.DocumentRefs(ctx, corpus.OrganizationID, documentIDs)
+	refs, err := retriever.chunks.DocumentRefs(ctx, corpus.OrganizationID, corpus.ID, documentIDs, includeAdminOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -323,9 +323,13 @@ func (retriever *Retriever) hydrate(ctx context.Context, corpus domain.Corpus, c
 		if !found {
 			continue
 		}
+		ref, allowed := refs[chunk.DocumentID]
+		if !allowed {
+			continue
+		}
 		matches = append(matches, domain.Match{
 			Chunk:       chunk,
-			Document:    refs[chunk.DocumentID],
+			Document:    ref,
 			Score:       entry.score,
 			Dense:       entry.dense,
 			Lexical:     entry.lexical,

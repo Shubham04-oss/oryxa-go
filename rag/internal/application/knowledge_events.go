@@ -2,8 +2,11 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"strings"
 
@@ -60,6 +63,27 @@ const knowledgeServiceCreator = "svc_knowledge"
 // genuinely new hash replaces the indexed text, and an event older than what
 // is already recorded is ignored rather than regressing it.
 func (service *Service) DocumentPublished(ctx context.Context, event knowledgeeventsv1.DocumentPublished) error {
+	return service.store.WithKnowledgeDocumentLock(ctx, event.OrganizationID, event.DocumentID, func() error {
+		return service.documentPublished(ctx, event)
+	})
+}
+
+func (service *Service) documentPublished(ctx context.Context, event knowledgeeventsv1.DocumentPublished) error {
+	access := domain.DocumentAccess(event.Access)
+	if access == "" {
+		access = domain.AccessMembers
+	}
+	if event.Provider == "files" && (event.Metadata["purpose"] == "billing.attachment" || event.Metadata["access"] == "admins") {
+		access = domain.AccessAdmins
+	}
+	if !access.Valid() {
+		return fmt.Errorf("knowledge document %s has invalid access: %w", event.DocumentID, domain.ErrInvalid)
+	}
+	if access == domain.AccessAdmins && (event.Provider != "files" ||
+		(event.Metadata["purpose"] != "billing.attachment" && event.Metadata["access"] != "admins") ||
+		event.Scope != string(domain.ScopeOrganization)) {
+		return fmt.Errorf("knowledge document %s has unsupported admin access: %w", event.DocumentID, domain.ErrInvalid)
+	}
 	scope, err := domain.ParseScope(event.Scope)
 	if err != nil {
 		return fmt.Errorf("knowledge document %s: %w", event.DocumentID, err)
@@ -73,6 +97,15 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 			"document_id", event.DocumentID, "source_id", event.SourceID, "scope", string(scope), "error", err)
 		return nil
 	}
+	removedAt, err := service.store.KnowledgeDocumentRemovedAt(ctx, event.OrganizationID, event.DocumentID)
+	if err == nil && !event.ExtractedAt.After(removedAt) {
+		service.logger.InfoContext(ctx, "ignoring a knowledge publish older than its removal",
+			"document_id", event.DocumentID, "extracted_at", event.ExtractedAt, "removed_at", removedAt)
+		return nil
+	}
+	if err != nil && !isMissing(err) {
+		return err
+	}
 
 	mapping, found, err := service.knowledgeMapping(ctx, event.OrganizationID, event.DocumentID)
 	if err != nil {
@@ -82,9 +115,6 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 		if event.ExtractedAt.Before(mapping.ExtractedAt) {
 			service.logger.InfoContext(ctx, "an out-of-order knowledge document event arrived; ignoring it",
 				"document_id", event.DocumentID, "event_extracted_at", event.ExtractedAt, "mapped_extracted_at", mapping.ExtractedAt)
-			return nil
-		}
-		if event.ContentHash == mapping.ContentHash {
 			return nil
 		}
 	}
@@ -159,23 +189,6 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 	}
 
 	ref := knowledgeDocumentRef(event)
-	if found {
-		previous, previousErr := service.store.Document(ctx, event.OrganizationID, mapping.DocumentID)
-		switch {
-		case previousErr == nil && previous.Source.Ref != ref:
-			// The document changed what it points at — its URL moved. The
-			// unique key UpsertDocument matches on is (corpus, ref), so
-			// leaving the old row behind would orphan it: never updated,
-			// never removed, indexed forever under a ref nothing points to
-			// any more.
-			if err := service.removeIndexedDocument(ctx, event.OrganizationID, corpus, previous); err != nil {
-				return fmt.Errorf("remove the document a changed reference replaces: %w", err)
-			}
-		case previousErr != nil && !isMissing(previousErr):
-			return previousErr
-		}
-	}
-
 	title := strings.TrimSpace(event.Title)
 	if title == "" {
 		title = event.ExternalID
@@ -189,8 +202,41 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 		"knowledge_source_id":   event.SourceID,
 		"provider":              event.Provider,
 	}
+	if event.Kind != "" {
+		metadata["document_kind"] = event.Kind
+	}
+	if category := event.Metadata["knowledge_category"]; category != "" {
+		metadata["category"] = category
+	}
 	if err := metadata.Validate(); err != nil {
 		return err
+	}
+	if found {
+		previous, previousErr := service.store.Document(ctx, event.OrganizationID, mapping.DocumentID)
+		switch {
+		case previousErr == nil && mapping.CorpusID == corpus.ID && previous.Source.Ref == ref &&
+			event.ContentHash == mapping.ContentHash && previous.Access == access &&
+			previous.Title == title && previous.ContentType == contentType && maps.Equal(previous.Metadata, metadata):
+			if event.ExtractedAt.After(mapping.ExtractedAt) {
+				mapping.ExtractedAt = event.ExtractedAt
+				mapping.UpdatedAt = service.now().UTC()
+				return service.store.UpsertKnowledgeDocumentMapping(ctx, mapping)
+			}
+			return nil
+		case previousErr == nil && (mapping.CorpusID != corpus.ID || previous.Source.Ref != ref):
+			// A moved owner or reference must lose its old indexed copy
+			// before the new placement is written. The mapping cascades
+			// when the old document is deleted.
+			if err := service.removeKnowledgeDocument(ctx, event.OrganizationID, mapping); err != nil {
+				return fmt.Errorf("remove the document a changed placement replaces: %w", err)
+			}
+		case isMissing(previousErr):
+			if err := service.forgetKnowledgeMapping(ctx, event.OrganizationID, event.DocumentID); err != nil {
+				return err
+			}
+		case previousErr != nil && !isMissing(previousErr):
+			return previousErr
+		}
 	}
 
 	id, err := domain.NewID(domain.DocumentIDPrefix)
@@ -202,7 +248,7 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 		ID: id, CorpusID: corpus.ID, OrganizationID: event.OrganizationID,
 		Source: domain.Source{Kind: domain.SourceExternal, Ref: ref},
 		Title:  title, ContentType: contentType, ContentSHA256: contentHash, ByteSize: byteSize,
-		Metadata: metadata, Status: domain.StatusPending,
+		Metadata: metadata, Access: access, Status: domain.StatusPending,
 		OriginalBucket: originalBucket, OriginalKey: originalKey,
 		CreatedBy: creator, CreatedAt: now, UpdatedAt: now,
 	}
@@ -234,6 +280,18 @@ func (service *Service) DocumentPublished(ctx context.Context, event knowledgeev
 // carry, or it was refused for its scope — has no mapping to find, which is
 // correct rather than a missed removal: there was nothing here to remove.
 func (service *Service) DocumentRemoved(ctx context.Context, event knowledgeeventsv1.DocumentRemoved) error {
+	return service.store.WithKnowledgeDocumentLock(ctx, event.OrganizationID, event.DocumentID, func() error {
+		return service.documentRemoved(ctx, event)
+	})
+}
+
+func (service *Service) documentRemoved(ctx context.Context, event knowledgeeventsv1.DocumentRemoved) error {
+	// A removal may overtake a publish on the bus. Keep its timestamp even
+	// when there is no mapped document yet, so that earlier publish cannot
+	// recreate content that Knowledge has already removed.
+	if err := service.store.RecordKnowledgeDocumentRemoval(ctx, event.OrganizationID, event.DocumentID, event.RemovedAt); err != nil {
+		return err
+	}
 	mapping, found, err := service.knowledgeMapping(ctx, event.OrganizationID, event.DocumentID)
 	if err != nil {
 		return err
@@ -241,6 +299,11 @@ func (service *Service) DocumentRemoved(ctx context.Context, event knowledgeeven
 	if !found {
 		service.logger.InfoContext(ctx, "a removed knowledge document was never indexed; nothing to do",
 			"document_id", event.DocumentID, "source_id", event.SourceID)
+		return nil
+	}
+	if event.RemovedAt.Before(mapping.ExtractedAt) {
+		service.logger.InfoContext(ctx, "ignoring a knowledge removal older than the indexed version",
+			"document_id", event.DocumentID, "removed_at", event.RemovedAt, "extracted_at", mapping.ExtractedAt)
 		return nil
 	}
 	if err := service.removeKnowledgeDocument(ctx, event.OrganizationID, mapping); err != nil {
@@ -343,6 +406,25 @@ func (service *Service) forgetKnowledgeMapping(ctx context.Context, organization
 // unique index rather than on anything of this bridge's own making: the
 // loser reads back what the winner just created.
 func (service *Service) knowledgeCorpus(ctx context.Context, organizationID string, scope domain.Scope, teamID, memberID, creator string) (domain.Corpus, error) {
+	placedTeamID, placedMemberID, err := domain.Place(scope, teamID, memberID)
+	if err != nil {
+		return domain.Corpus{}, err
+	}
+	// Reuse an older corpus only when its recorded placement and origin match.
+	// The old slug conversion was lossy, so another owner may have inherited
+	// the same slug. Never index into that corpus.
+	legacySlug, err := legacyKnowledgeCorpusSlug(scope, teamID, memberID)
+	if err != nil {
+		return domain.Corpus{}, err
+	}
+	legacy, err := service.store.CorpusBySlug(ctx, organizationID, legacySlug)
+	switch {
+	case err == nil && knowledgeCorpusMatches(legacy, organizationID, scope, placedTeamID, placedMemberID):
+		return legacy, nil
+	case err != nil && !errors.Is(err, domain.ErrNotFound):
+		return domain.Corpus{}, err
+	}
+
 	slug, err := knowledgeCorpusSlug(scope, teamID, memberID)
 	if err != nil {
 		return domain.Corpus{}, err
@@ -350,15 +432,11 @@ func (service *Service) knowledgeCorpus(ctx context.Context, organizationID stri
 	existing, err := service.store.CorpusBySlug(ctx, organizationID, slug)
 	switch {
 	case err == nil:
-		return existing, nil
+		return checkedKnowledgeCorpus(existing, organizationID, scope, placedTeamID, placedMemberID)
 	case !errors.Is(err, domain.ErrNotFound):
 		return domain.Corpus{}, err
 	}
 
-	placedTeamID, placedMemberID, err := domain.Place(scope, teamID, memberID)
-	if err != nil {
-		return domain.Corpus{}, err
-	}
 	// The same defaults a member's own corpus gets when they name none: see
 	// Service.CreateCorpus. Nothing here invents a model of its own.
 	spec, err := domain.ResolveSpec(service.defaults.Provider, service.defaults.Model, 0, service.defaults.Metric)
@@ -408,9 +486,26 @@ func (service *Service) knowledgeCorpus(ctx context.Context, organizationID stri
 	if err := service.store.CreateCorpus(ctx, corpus, event); err != nil {
 		if errors.Is(err, domain.ErrConflict) {
 			// Another replica created it between our lookup and our insert.
-			return service.store.CorpusBySlug(ctx, organizationID, slug)
+			existing, err := service.store.CorpusBySlug(ctx, organizationID, slug)
+			if err != nil {
+				return domain.Corpus{}, err
+			}
+			return checkedKnowledgeCorpus(existing, organizationID, scope, placedTeamID, placedMemberID)
 		}
 		return domain.Corpus{}, err
+	}
+	return corpus, nil
+}
+
+func knowledgeCorpusMatches(corpus domain.Corpus, organizationID string, scope domain.Scope, teamID, memberID string) bool {
+	return corpus.OrganizationID == organizationID && corpus.Scope == scope &&
+		corpus.TeamID == teamID && corpus.MemberID == memberID &&
+		corpus.Metadata["origin"] == knowledgeCorpusOrigin
+}
+
+func checkedKnowledgeCorpus(corpus domain.Corpus, organizationID string, scope domain.Scope, teamID, memberID string) (domain.Corpus, error) {
+	if !knowledgeCorpusMatches(corpus, organizationID, scope, teamID, memberID) {
+		return domain.Corpus{}, fmt.Errorf("knowledge corpus slug is occupied by another owner or origin: %w", domain.ErrConflict)
 	}
 	return corpus, nil
 }
@@ -446,18 +541,28 @@ func knowledgeCreator(scope domain.Scope, memberID string) string {
 	return knowledgeServiceCreator
 }
 
-// knowledgeCorpusSlug is deterministic per owner: same scope and owner always
-// yields the same slug, which is what lets a corpus be found rather than
-// re-created on every event.
-//
-// auth mints member ids, and teams mints team ids, as a prefix plus
-// unpadded-base64 (see auth's and teams' randomID), which can hold
-// underscores and uppercase letters that a rag slug refuses — domain.Slug
-// allows only lowercase letters, digits and hyphens. slugSafe lowercases and
-// turns anything else into a hyphen, which keeps the result deterministic and
-// still readable, at the cost of no longer being reversible in the rare case
-// where two different ids collide once transformed.
+// knowledgeCorpusSlug hashes the full owner id. A readable slug conversion
+// loses case, punctuation and long suffixes, which can merge different owners.
 func knowledgeCorpusSlug(scope domain.Scope, teamID, memberID string) (string, error) {
+	var prefix, owner string
+	switch scope {
+	case domain.ScopeMember:
+		prefix, owner = "knowledge-member-", memberID
+	case domain.ScopeTeam:
+		prefix, owner = "knowledge-team-", teamID
+	case domain.ScopeOrganization:
+		return domain.Slug("knowledge-organization")
+	default:
+		return "", fmt.Errorf("a knowledge document must be member, team or organization scoped, not %q: %w", scope, domain.ErrInvalid)
+	}
+	digest := sha256.Sum256([]byte(string(scope) + "\x00" + owner))
+	return domain.Slug(prefix + hex.EncodeToString(digest[:16]))
+}
+
+// legacyKnowledgeCorpusSlug preserves lookup of corpora created before
+// collision-resistant slugs were introduced. It is never trusted without
+// checking the corpus's stored owner and origin.
+func legacyKnowledgeCorpusSlug(scope domain.Scope, teamID, memberID string) (string, error) {
 	var raw string
 	switch scope {
 	case domain.ScopeMember:

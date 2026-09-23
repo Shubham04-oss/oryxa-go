@@ -238,6 +238,7 @@ func (jev *Jev) Judge(ctx context.Context, candidate domain.Candidate) (domain.V
 		kept := decodeJudgment(verdict.Judgment)
 		kept.Jev = &result
 		verdict.Judgment = kept.encode()
+		verdict.Category = result.Kind
 		return verdict, nil
 	}
 	if certainty < jev.escalateBelow {
@@ -247,6 +248,7 @@ func (jev *Jev) Judge(ctx context.Context, candidate domain.Candidate) (domain.V
 	}
 	return domain.Verdict{
 		Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", reason, result.Model, certainty*100),
+		Category: result.Kind,
 		Judgment: judgment{Jev: &result}.encode(),
 	}, nil
 }
@@ -264,7 +266,7 @@ func (jev *Jev) Redecide(kept []byte, include []string) (domain.Verdict, bool) {
 				keep = true
 			}
 			return domain.Verdict{
-				Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", reason, given.Jev.Model, certainty*100), Judgment: kept,
+				Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", reason, given.Jev.Model, certainty*100), Category: given.Jev.Kind, Judgment: kept,
 			}, true
 		}
 	}

@@ -108,6 +108,29 @@ func TestSearchFilterRefusesMetadataConditions(t *testing.T) {
 	}
 }
 
+func TestSearchFilterNarrowsByKnowledgeProvenance(t *testing.T) {
+	t.Parallel()
+	filter, err := searchFilter("org_1", []string{"cor_1"}, domain.Filter{Conditions: []domain.Condition{
+		{Key: "provider", Operator: domain.OperatorEqual, Values: []string{"gmail"}},
+		{Key: "category", Operator: domain.OperatorIn, Values: []string{"booking", "financial_record"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := filter.(*agenttypes.RetrievalFilterMemberAndAll).Value
+	if len(all) != 4 {
+		t.Fatalf("conditions = %d, want tenant pair and provenance pair", len(all))
+	}
+	provider, ok := all[2].(*agenttypes.RetrievalFilterMemberEquals)
+	if !ok || aws.ToString(provider.Value.Key) != "provider" || filterValue(t, provider.Value.Value) != "gmail" {
+		t.Fatalf("provider filter = %#v", all[2])
+	}
+	category, ok := all[3].(*agenttypes.RetrievalFilterMemberIn)
+	if !ok || aws.ToString(category.Value.Key) != "category" {
+		t.Fatalf("category filter = %#v", all[3])
+	}
+}
+
 // fakeKnowledgeBaseAPI stands in for Bedrock Agent Runtime's Retrieve call.
 type fakeKnowledgeBaseAPI struct {
 	lastInput *bedrockagentruntime.RetrieveInput
@@ -241,8 +264,8 @@ func TestManagedKnowledgeBaseSearchesThroughManagedSearch(t *testing.T) {
 		t.Fatalf("number of results = %d, want it clamped to %d", got, retrieveLimit)
 	}
 	andAll, ok := managed.Filter.(*agenttypes.RetrievalFilterMemberAndAll)
-	if !ok || len(andAll.Value) != 2 {
-		t.Fatalf("filter = %#v, want the tenant filter", managed.Filter)
+	if !ok || len(andAll.Value) != 3 {
+		t.Fatalf("filter = %#v, want tenant and member ACL filters", managed.Filter)
 	}
 	org, ok := andAll.Value[0].(*agenttypes.RetrievalFilterMemberEquals)
 	if !ok || aws.ToString(org.Value.Key) != "organization_id" || filterValue(t, org.Value.Value) != "org_1" {
@@ -252,10 +275,31 @@ func TestManagedKnowledgeBaseSearchesThroughManagedSearch(t *testing.T) {
 	if !ok || aws.ToString(corpus.Value.Key) != "corpus_id" || filterValue(t, corpus.Value.Value) != "cor_1" {
 		t.Fatalf("second condition = %#v, want Equals(corpus_id, cor_1)", andAll.Value[1])
 	}
+	access, ok := andAll.Value[2].(*agenttypes.RetrievalFilterMemberEquals)
+	if !ok || aws.ToString(access.Value.Key) != "access" || filterValue(t, access.Value.Value) != "members" {
+		t.Fatalf("third condition = %#v, want Equals(access, members)", andAll.Value[2])
+	}
 	// Not asked to rerank, so reranking is turned off by name rather than
 	// left to whatever the service would choose.
 	if managed.RerankingModelType != agenttypes.RerankingModelTypeNone || managed.RerankingConfiguration != nil {
 		t.Fatalf("reranking = %q %+v, want NONE", managed.RerankingModelType, managed.RerankingConfiguration)
+	}
+}
+
+func TestManagedKnowledgeBaseAdminQueryIncludesRestrictedDocuments(t *testing.T) {
+	api := &fakeKnowledgeBaseAPI{}
+	knowledgeBase, err := NewManagedKnowledgeBase(api, "kb-managed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = knowledgeBase.retrieve(context.Background(), "org_1", []string{"cor_1"}, domain.Query{Text: "payroll", IncludeAdminOnly: true}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter := api.lastInput.RetrievalConfiguration.ManagedSearchConfiguration.Filter
+	andAll, ok := filter.(*agenttypes.RetrievalFilterMemberAndAll)
+	if !ok || len(andAll.Value) != 2 {
+		t.Fatalf("admin filter = %#v, want only org and corpus", filter)
 	}
 }
 
@@ -322,7 +366,7 @@ func TestSearchKnowledgeBaseHydratesFromPostgresAndHonoursTopK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKnowledgeBase: %v", err)
 	}
-	chunks := &fakeChunks{}
+	chunks := &fakeChunks{metadata: map[string]domain.Metadata{"doc_1": {"provider": "gmail", "category": "financial_record"}}}
 	vectors := &fakeVectorStore{}
 	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, knowledgeBase, nil)
 
@@ -345,6 +389,10 @@ func TestSearchKnowledgeBaseHydratesFromPostgresAndHonoursTopK(t *testing.T) {
 	}
 	if results.Matches[0].Chunk.DocumentID != "doc_1" || results.Matches[0].Document.Title != "Title doc_1" {
 		t.Fatalf("first match = %+v, want it hydrated from PostgreSQL's document refs", results.Matches[0])
+	}
+	if results.Matches[0].Document.Metadata["provider"] != "gmail" || results.Matches[0].Chunk.Metadata["category"] != "financial_record" ||
+		domain.Citations(results.Matches)[0].Metadata["provider"] != "gmail" {
+		t.Fatalf("provenance was not returned with match and citation: %+v", results.Matches[0])
 	}
 	// The chunk id is derived, not random, so the same passage cites the
 	// same way if it is retrieved again.

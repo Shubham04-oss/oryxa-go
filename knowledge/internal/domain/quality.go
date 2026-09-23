@@ -27,6 +27,9 @@ type Candidate struct {
 // Verdict is what a judge decided about a Candidate.
 type Verdict struct {
 	Keep bool
+	// Category is the document's semantic kind, when the judge supplied one.
+	// It is classification for search, never an access-control decision.
+	Category string
 	// Reason is a few words on why, which an excluded document keeps so a
 	// member or an operator can see what was left out and on what grounds.
 	Reason string

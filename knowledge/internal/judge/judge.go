@@ -40,7 +40,8 @@ Exclude noise:
 - spam and scams;
 - empty, untitled or placeholder files, test or scratch files, and automatic copies.
 
-When you are unsure, keep it. Judge only from what you are shown. Give a reason of at most ten words.`
+When you are unsure, keep it. Judge only from what you are shown. Give a reason of at most ten words.
+Also choose one category for the document from the supplied category list. The category describes its content; it does not decide who may read it.`
 
 const (
 	// textBudget is how much of a document's text the model reads: enough to
@@ -106,23 +107,29 @@ func newGemini(models models, model string) *Gemini {
 		// generated: nothing in them is the model's to refuse to read.
 		safety = append(safety, &genai.SafetySetting{Category: category, Threshold: genai.HarmBlockThresholdOff})
 	}
-	return &Gemini{models: models, model: model, config: &genai.GenerateContentConfig{
+	config := &genai.GenerateContentConfig{
 		SystemInstruction: &genai.Content{Parts: []*genai.Part{{Text: instructions}}},
 		ResponseMIMEType:  "application/json",
 		ResponseSchema: &genai.Schema{
 			Type: genai.TypeObject,
 			Properties: map[string]*genai.Schema{
-				"reason": {Type: genai.TypeString, Description: "Why, in at most ten words."},
-				"keep":   {Type: genai.TypeBoolean, Description: "Whether the document is worth indexing."},
+				"reason":   {Type: genai.TypeString, Description: "Why, in at most ten words."},
+				"keep":     {Type: genai.TypeBoolean, Description: "Whether the document is worth indexing."},
+				"category": {Type: genai.TypeString, Description: "The document's semantic kind.", Enum: categoryNames()},
 			},
 			// The reason first, so the decision follows from it.
-			PropertyOrdering: []string{"reason", "keep"},
-			Required:         []string{"reason", "keep"},
+			PropertyOrdering: []string{"reason", "category", "keep"},
+			Required:         []string{"reason", "category", "keep"},
 		},
-		ThinkingConfig:  &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelLow},
 		SafetySettings:  safety,
 		MaxOutputTokens: 2048,
-	}}
+	}
+	// Gemini 2.5 rejects thinking_level. Gemini 3 accepts it and low keeps
+	// a document classification inexpensive. Other models use their default.
+	if strings.HasPrefix(model, "gemini-3") {
+		config.ThinkingConfig = &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelLow}
+	}
+	return &Gemini{models: models, model: model, config: config}
 }
 
 // Judge decides one document. It fails only when the model cannot be reached
@@ -154,7 +161,7 @@ func (judge *Gemini) ask(ctx context.Context, candidate domain.Candidate, withPD
 		return domain.Verdict{}, fmt.Errorf("%w: %w", domain.ErrQualityCheckUnavailable, err)
 	}
 	verdict := verdictOf(response)
-	verdict.Judgment = judgment{Gemini: &geminiVerdict{Keep: verdict.Keep, Reason: verdict.Reason, Model: judge.model}}.encode()
+	verdict.Judgment = judgment{Gemini: &geminiVerdict{Keep: verdict.Keep, Reason: verdict.Reason, Category: verdict.Category, Model: judge.model}}.encode()
 	return verdict, nil
 }
 
@@ -182,13 +189,26 @@ func verdictOf(response *genai.GenerateContentResponse) domain.Verdict {
 		}
 	}
 	var answer struct {
-		Keep   *bool  `json:"keep"`
-		Reason string `json:"reason"`
+		Keep     *bool  `json:"keep"`
+		Reason   string `json:"reason"`
+		Category string `json:"category"`
 	}
 	if err := json.Unmarshal([]byte(response.Text()), &answer); err != nil || answer.Keep == nil {
 		return domain.Verdict{Keep: true, Reason: "the quality check gave no clear answer"}
 	}
-	return domain.Verdict{Keep: *answer.Keep, Reason: strings.TrimSpace(answer.Reason)}
+	category := strings.TrimSpace(answer.Category)
+	if !slices.Contains(categoryNames(), category) {
+		category = ""
+	}
+	return domain.Verdict{Keep: *answer.Keep, Reason: strings.TrimSpace(answer.Reason), Category: category}
+}
+
+func categoryNames() []string {
+	names := make([]string, 0, len(domain.Kinds)+3)
+	for _, kind := range domain.Kinds {
+		names = append(names, kind.Name)
+	}
+	return append(names, "spam", "empty", "other")
 }
 
 // describe is what the model reads about a document: where it comes from,

@@ -159,11 +159,39 @@ func TestSubmitSendsTextInline(t *testing.T) {
 		t.Fatalf("metadata type = %q, want IN_LINE_ATTRIBUTE", metadata.Type)
 	}
 	for key, want := range map[string]string{
-		"organization_id": "org_1", "corpus_id": "cor_1", "document_id": "doc_1", "title": "Runbook",
+		"organization_id": "org_1", "corpus_id": "cor_1", "document_id": "doc_1", "title": "Runbook", "access": "members",
 	} {
 		if got, ok := attribute(metadata.InlineAttributes, key); !ok || got != want {
 			t.Fatalf("attribute %q = %q, %v; want %q", key, got, ok, want)
 		}
+	}
+}
+
+func TestSubmitIndexesKnowledgeProvenanceWithoutProviderDetails(t *testing.T) {
+	t.Parallel()
+	ingest := &fakeIngest{}
+	client, err := New(ingest, nil, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := testDocument()
+	document.Metadata = domain.Metadata{
+		"provider": "gmail", "knowledge_source_id": "src_1", "document_kind": "message",
+		"category": "financial_record", "from": "private@example.com",
+	}
+	if err := client.Submit(context.Background(), testCorpus(), document, "invoice details"); err != nil {
+		t.Fatal(err)
+	}
+	attributes := ingest.lastIngest.Documents[0].Metadata.InlineAttributes
+	for key, want := range map[string]string{
+		"provider": "gmail", "knowledge_source_id": "src_1", "document_kind": "message", "category": "financial_record",
+	} {
+		if got, ok := attribute(attributes, key); !ok || got != want {
+			t.Fatalf("%s = %q, %v; want %q", key, got, ok, want)
+		}
+	}
+	if _, ok := attribute(attributes, "from"); ok {
+		t.Fatal("a Gmail address was copied to Bedrock metadata")
 	}
 }
 

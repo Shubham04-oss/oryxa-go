@@ -226,7 +226,16 @@ func (s *Service) caller(ctx context.Context, credentials authclient.Credentials
 	if strings.TrimSpace(organizationID) == "" {
 		return domain.OrgMembership{}, fmt.Errorf("an organization is required: %w", domain.ErrInvalid)
 	}
-	return s.directory.Membership(ctx, organizationID, credentials)
+	member, err := s.directory.Membership(ctx, organizationID, credentials)
+	if err != nil {
+		return domain.OrgMembership{}, err
+	}
+	if member.OrganizationID != organizationID || member.UserID == "" {
+		// A membership for another organization must never authorize this
+		// organization's sources or document bodies.
+		return domain.OrgMembership{}, domain.ErrNotFound
+	}
+	return member, nil
 }
 
 var idEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
@@ -262,6 +271,7 @@ func (s *Service) documentPublished(source domain.Source, document domain.Docume
 		DocumentID: document.ID, OrganizationID: source.OrganizationID, SourceID: source.ID,
 		ConnectionID: source.ConnectionID, Provider: source.Provider,
 		Scope: string(source.Scope), TeamID: source.TeamID, MemberID: source.MemberID,
+		Access:     documentAccess(source, document),
 		ExternalID: document.ExternalID, Kind: document.Kind, Title: document.Title,
 		URL: document.URL, MIME: document.MIME, ContentHash: document.ContentHash,
 		Metadata: document.Metadata, SourceUpdatedAt: document.SourceUpdatedAt,
@@ -280,6 +290,15 @@ func (s *Service) documentPublished(source domain.Source, document domain.Docume
 		}
 	}
 	return s.event(knowledgev1.DocumentPublishedDetailType, published)
+}
+
+func documentAccess(source domain.Source, document domain.Document) string {
+	if source.Provider == "files" {
+		if document.Metadata["purpose"] == "billing.attachment" || document.Metadata["access"] == "admins" {
+			return "admins"
+		}
+	}
+	return "members"
 }
 
 func (s *Service) documentRemoved(source domain.Source, document domain.Document, reason string) (domain.Event, error) {

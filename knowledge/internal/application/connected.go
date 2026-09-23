@@ -258,12 +258,8 @@ func (s *Service) FileDeleted(ctx context.Context, event filesv1.ObjectDeleted) 
 	return nil
 }
 
-// FileStored indexes the organization's own files, once it has any.
-//
-// Only an organization-scoped upload counts. A member's private file and a
-// team's are not what this source reads — it asks files for the
-// organization's own, precisely so that what it publishes, which the whole
-// organization can search, is what the whole organization could already see.
+// FileStored starts indexing shared, team or private files when the first
+// such file is uploaded. Each placement has its own source.
 //
 // Every upload after the first finds the source already registered, so this
 // costs one cheap lookup per upload and mints no token.
@@ -271,7 +267,10 @@ func (s *Service) FileStored(ctx context.Context, event filesv1.ObjectCreated) e
 	if s.grants == nil {
 		return nil
 	}
-	if event.OrganizationID == "" || event.Scope != string(domain.ScopeOrganization) {
+	if event.OrganizationID == "" ||
+		(event.Scope != string(domain.ScopeOrganization) &&
+			event.Scope != string(domain.ScopeTeam) &&
+			event.Scope != string(domain.ScopeMember)) {
 		return nil
 	}
 	if _, mounted := s.extractors[filesProvider]; !mounted {
@@ -283,39 +282,71 @@ func (s *Service) FileStored(ctx context.Context, event filesv1.ObjectCreated) e
 	if err != nil {
 		return fmt.Errorf("look for the organization's files source: %w", err)
 	}
+	member := event.CreatedBy
+	target := map[string]string(nil)
+	switch event.Scope {
+	case string(domain.ScopeMember):
+		member = event.MemberID
+		if member == "" || (event.CreatedBy != "" && event.CreatedBy != member) {
+			return nil
+		}
+		target = map[string]string{"member": "self"}
+	case string(domain.ScopeTeam):
+		if event.TeamID == "" || member == "" {
+			return nil
+		}
+		target = map[string]string{"team": event.TeamID}
+	}
+	removed := false
 	for _, source := range existing {
-		if source.Scope == domain.ScopeOrganization {
-			// Already indexed — or removed, which is a member saying their
-			// organization's files should not be. Neither is undone by
-			// someone uploading another file, so registering again is only
-			// ever the member's own doing.
+		matches := string(source.Scope) == event.Scope && maps.Equal(source.Target, target) &&
+			(event.Scope != string(domain.ScopeMember) || source.MemberID == member) &&
+			(event.Scope != string(domain.ScopeTeam) || source.TeamID == event.TeamID)
+		if !matches {
+			continue
+		}
+		switch source.Status {
+		case domain.StatusActive:
+			// A new file should be indexed on the next worker pass, not wait
+			// for the source's normal polling interval.
+			_, err := s.store.HastenSource(ctx, event.OrganizationID, source.ID, s.now())
+			return err
+		case domain.StatusRemoved:
+			// A source retired because its registering member left can be
+			// replaced by the next uploader. An explicit removal remains a
+			// choice to stop indexing this placement.
+			if source.Reason != knowledgev1.RemovedReasonMemberLeft {
+				removed = true
+			}
+		default:
 			return nil
 		}
 	}
-
-	member := event.CreatedBy
-	if member == "" {
-		member = event.MemberID
+	if removed {
+		// A member explicitly removed this source. Another upload does not
+		// reverse that choice.
+		return nil
 	}
+
 	if member == "" {
 		return nil
 	}
 	token, err := s.grants.MemberToken(ctx, event.OrganizationID, member)
 	if err != nil {
 		return withoutGrant(ctx, s.logger.With("organization_id", event.OrganizationID),
-			"the organization's files are not indexed", err)
+			"the files are not indexed", err)
 	}
 	// Read as whoever stored the file. Only an admin can share a file with
 	// the whole organization, so that is an admin, whose view also carries
-	// billing attachments; the files source never publishes those.
+	// billing attachments; those are published with admin-only access.
 	credentials := authclient.Credentials{Authorization: "Bearer " + token}
 	source, err := s.registerFor(ctx, credentials, event.OrganizationID, member, RegisterInput{
-		Provider: filesProvider, Interval: autoRegisterInterval,
+		Provider: filesProvider, Target: target, Interval: autoRegisterInterval,
 	})
 	switch {
 	case err == nil:
-		s.logger.InfoContext(ctx, "the organization's own files are now indexed",
-			"organization_id", event.OrganizationID, "source_id", source.ID)
+		s.logger.InfoContext(ctx, "files are now indexed",
+			"organization_id", event.OrganizationID, "source_id", source.ID, "scope", event.Scope)
 		return nil
 	case errors.Is(err, domain.ErrConflict):
 		// Two uploads at once, and the other won.

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,8 @@ type fakeStore struct {
 	orgs              map[string]string
 	events            []domain.Event
 	knowledgeMappings map[string]domain.KnowledgeDocumentMapping
+	knowledgeRemovals map[string]time.Time
+	knowledgeLocks    map[string]*sync.Mutex
 
 	lastDocumentsCall documentsCall
 	documentsPage     []domain.Document
@@ -118,6 +121,8 @@ func newFakeStore() *fakeStore {
 		chunkIDs:          map[string][]string{},
 		orgs:              map[string]string{},
 		knowledgeMappings: map[string]domain.KnowledgeDocumentMapping{},
+		knowledgeRemovals: map[string]time.Time{},
+		knowledgeLocks:    map[string]*sync.Mutex{},
 	}
 }
 
@@ -198,12 +203,12 @@ func (store *fakeStore) Corpora(_ context.Context, organizationID string, query 
 	return result, nil
 }
 
-func (store *fakeStore) CorpusCounts(_ context.Context, corpusID string) (int64, int64, error) {
+func (store *fakeStore) CorpusCounts(_ context.Context, corpusID string, includeAdminOnly bool) (int64, int64, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	var documents int64
 	for _, document := range store.documents {
-		if document.CorpusID == corpusID {
+		if document.CorpusID == corpusID && (includeAdminOnly || document.Access != domain.AccessAdmins) {
 			documents++
 		}
 	}
@@ -257,7 +262,9 @@ func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Docume
 		if !sameSource && !sameInline {
 			continue
 		}
-		if existing.ContentSHA256 == document.ContentSHA256 && existing.Status == domain.StatusReady {
+		if existing.ContentSHA256 == document.ContentSHA256 && existing.Access == document.Access &&
+			existing.Title == document.Title && existing.ContentType == document.ContentType &&
+			maps.Equal(existing.Metadata, document.Metadata) && existing.Status == domain.StatusReady {
 			return existing, postgres.UpsertUnchanged, nil
 		}
 		document.ID = existing.ID
@@ -286,14 +293,23 @@ func (store *fakeStore) Document(_ context.Context, organizationID, documentID s
 // store_integration_test.go; what this layer must prove instead is that the
 // service applies the access gate first and forwards status, cursor and a
 // clamped limit unchanged.
-func (store *fakeStore) Documents(_ context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) ([]domain.Document, string, error) {
+func (store *fakeStore) Documents(_ context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, includeAdminOnly bool) ([]domain.Document, string, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.lastDocumentsCall = documentsCall{organizationID, corpusID, status, cursor, limit}
 	if store.documentsErr != nil {
 		return nil, "", store.documentsErr
 	}
-	return store.documentsPage, store.documentsNext, nil
+	if includeAdminOnly {
+		return store.documentsPage, store.documentsNext, nil
+	}
+	visible := make([]domain.Document, 0, len(store.documentsPage))
+	for _, document := range store.documentsPage {
+		if document.Access != domain.AccessAdmins {
+			visible = append(visible, document)
+		}
+	}
+	return visible, store.documentsNext, nil
 }
 
 func (store *fakeStore) DocumentsBySource(_ context.Context, organizationID string, kind domain.SourceKind, ref string) ([]domain.Document, error) {
@@ -380,6 +396,40 @@ func (store *fakeStore) DeleteKnowledgeDocumentMapping(_ context.Context, organi
 	}
 	delete(store.knowledgeMappings, knowledgeDocumentID)
 	return nil
+}
+
+func (store *fakeStore) KnowledgeDocumentRemovedAt(_ context.Context, organizationID, knowledgeDocumentID string) (time.Time, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	removedAt, ok := store.knowledgeRemovals[organizationID+"/"+knowledgeDocumentID]
+	if !ok {
+		return time.Time{}, domain.ErrNotFound
+	}
+	return removedAt, nil
+}
+
+func (store *fakeStore) RecordKnowledgeDocumentRemoval(_ context.Context, organizationID, knowledgeDocumentID string, removedAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := organizationID + "/" + knowledgeDocumentID
+	if removedAt.After(store.knowledgeRemovals[key]) {
+		store.knowledgeRemovals[key] = removedAt
+	}
+	return nil
+}
+
+func (store *fakeStore) WithKnowledgeDocumentLock(_ context.Context, organizationID, knowledgeDocumentID string, run func() error) error {
+	key := organizationID + "/" + knowledgeDocumentID
+	store.mu.Lock()
+	lock := store.knowledgeLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		store.knowledgeLocks[key] = lock
+	}
+	store.mu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
+	return run()
 }
 
 // seedCorpus writes a corpus directly into the store, bypassing CreateCorpus

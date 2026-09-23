@@ -52,9 +52,10 @@ type Match struct {
 		HeadingPath []string `json:"heading_path"`
 	} `json:"chunk"`
 	Document struct {
-		ID     string `json:"id"`
-		Title  string `json:"title"`
-		Source struct {
+		ID       string            `json:"id"`
+		Title    string            `json:"title"`
+		Metadata map[string]string `json:"metadata,omitempty"`
+		Source   struct {
 			Kind string `json:"kind"`
 			Ref  string `json:"ref"`
 		} `json:"source"`

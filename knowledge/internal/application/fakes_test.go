@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -63,6 +64,10 @@ func (store *fakeStore) CreateSource(_ context.Context, source domain.Source, ev
 		}
 		if existing.OrganizationID == source.OrganizationID && existing.Provider == source.Provider &&
 			existing.ConnectionID == source.ConnectionID && sameTarget(existing.Target, source.Target) {
+			if source.Provider == filesProvider &&
+				(existing.Scope != source.Scope || existing.TeamID != source.TeamID || existing.MemberID != source.MemberID) {
+				continue
+			}
 			return domain.ErrConflict
 		}
 	}
@@ -333,7 +338,9 @@ func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Docume
 	defer store.mu.Unlock()
 	key := document.SourceID + "\x00" + document.ExternalID
 	existing, found := store.documents[key]
-	changed := !found || existing.ContentHash != document.ContentHash || existing.RemovedAt != nil
+	changed := !found || existing.ContentHash != document.ContentHash || existing.RemovedAt != nil ||
+		existing.Title != document.Title || existing.URL != document.URL || existing.Kind != document.Kind ||
+		existing.MIME != document.MIME || !maps.Equal(existing.Metadata, document.Metadata)
 	if found {
 		document.ID = existing.ID
 	}

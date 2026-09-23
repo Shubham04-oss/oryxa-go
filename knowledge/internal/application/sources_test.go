@@ -32,6 +32,19 @@ func member() domain.OrgMembership {
 	return domain.OrgMembership{OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember}
 }
 
+func TestMembershipForAnotherOrganizationCannotReadASourceOrDocument(t *testing.T) {
+	store := newFakeStore()
+	foreignMember := domain.OrgMembership{OrganizationID: "org_2", UserID: "user-1", Role: domain.OrgRoleAdmin}
+	service := registrar(t, store, foreignMember)
+	credentials := authclient.Credentials{Authorization: "Bearer user-1"}
+	if _, err := service.Source(context.Background(), credentials, "org_1", "src_1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("foreign organization's member read a source: %v", err)
+	}
+	if _, err := service.Document(context.Background(), credentials, "org_1", "doc_1"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("foreign organization's member read a document: %v", err)
+	}
+}
+
 func organizationDeleted(organizationID string) authv1.OrganizationDeleted {
 	return authv1.OrganizationDeleted{OrganizationID: organizationID, DeletedAt: testClock}
 }
@@ -91,6 +104,20 @@ func TestAFilesSourceForATeamIsTheTeams(t *testing.T) {
 	}
 	if organization.Scope != domain.ScopeOrganization || organization.TeamID != "" {
 		t.Fatalf("organization source = %+v, want it organization-scoped", organization)
+	}
+}
+
+func TestAFilesSourceForAMemberUsesOnlyTheCaller(t *testing.T) {
+	store := newFakeStore()
+	service := registrar(t, store, member())
+	credentials := authclient.Credentials{Authorization: "Bearer t"}
+	source, err := service.RegisterSource(context.Background(), credentials, "org_1",
+		RegisterInput{Provider: "files", Target: map[string]string{"member": "self"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source.Scope != domain.ScopeMember || source.MemberID != "user-1" || source.CreatedBy != "user-1" || source.TeamID != "" {
+		t.Fatalf("member Files source = %+v", source)
 	}
 }
 

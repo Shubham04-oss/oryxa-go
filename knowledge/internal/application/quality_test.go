@@ -82,6 +82,20 @@ func completedRuns(t *testing.T, store *fakeStore) []knowledgev1.SyncCompleted {
 	return completed
 }
 
+func TestClassificationKeepsProviderMetadataAndDetectsLabelChanges(t *testing.T) {
+	provider := map[string]string{"labels": "INBOX"}
+	classified := withCategory(domain.Document{Metadata: provider}, &domain.Verdict{Category: "financial_record"})
+	if classified.Metadata[categoryMetadataKey] != "financial_record" || provider[categoryMetadataKey] != "" {
+		t.Fatalf("classification = %v, provider metadata = %v", classified.Metadata, provider)
+	}
+	if !sourceMetadataEqual(classified.Metadata, provider) {
+		t.Fatal("the generated category made unchanged provider metadata look different")
+	}
+	if sourceMetadataEqual(classified.Metadata, map[string]string{"labels": "IMPORTANT"}) {
+		t.Fatal("a changed Gmail label was treated as unchanged")
+	}
+}
+
 func TestSyncExcludesWhatTheJudgeCallsNoiseAndPublishesTheRest(t *testing.T) {
 	store := newFakeStore()
 	judge := &fakeJudge{verdicts: map[string]domain.Verdict{

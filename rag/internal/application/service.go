@@ -35,13 +35,13 @@ type Store interface {
 	Corpus(ctx context.Context, organizationID, corpusID string) (domain.Corpus, error)
 	CorpusBySlug(ctx context.Context, organizationID, slug string) (domain.Corpus, error)
 	Corpora(ctx context.Context, organizationID string, query postgres.CorpusQuery) ([]domain.Corpus, error)
-	CorpusCounts(ctx context.Context, corpusID string) (int64, int64, error)
+	CorpusCounts(ctx context.Context, corpusID string, includeAdminOnly bool) (int64, int64, error)
 	CorporaForWipe(ctx context.Context, organizationID string, scope domain.Scope, ownerID string) ([]domain.Corpus, error)
 	DeleteCorpus(ctx context.Context, organizationID, corpusID string, event domain.Event) error
 
 	UpsertDocument(ctx context.Context, document domain.Document, body string, event domain.Event) (domain.Document, postgres.Upsert, error)
 	Document(ctx context.Context, organizationID, documentID string) (domain.Document, error)
-	Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) ([]domain.Document, string, error)
+	Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, includeAdminOnly bool) ([]domain.Document, string, error)
 	DocumentsBySource(ctx context.Context, organizationID string, kind domain.SourceKind, ref string) ([]domain.Document, error)
 	ChunkIDs(ctx context.Context, organizationID, documentID string) ([]string, error)
 	// DocumentIDsForCorpus is used only to remove a bedrock-kb corpus's
@@ -58,6 +58,9 @@ type Store interface {
 	KnowledgeDocumentMapping(ctx context.Context, organizationID, knowledgeDocumentID string) (domain.KnowledgeDocumentMapping, error)
 	UpsertKnowledgeDocumentMapping(ctx context.Context, mapping domain.KnowledgeDocumentMapping) error
 	DeleteKnowledgeDocumentMapping(ctx context.Context, organizationID, knowledgeDocumentID string) error
+	KnowledgeDocumentRemovedAt(ctx context.Context, organizationID, knowledgeDocumentID string) (time.Time, error)
+	RecordKnowledgeDocumentRemoval(ctx context.Context, organizationID, knowledgeDocumentID string, removedAt time.Time) error
+	WithKnowledgeDocumentLock(ctx context.Context, organizationID, knowledgeDocumentID string, run func() error) error
 }
 
 // Directory is auth: who the caller is in an organization.
@@ -297,22 +300,26 @@ func (service *Service) Corpora(ctx context.Context, credentials authclient.Cred
 	}
 	query := postgres.CorpusQuery{Scope: filter.Scope, MemberID: member.UserID, Admin: member.Role.IsOrgAdmin()}
 	if filter.Scope == domain.ScopeTeam {
-		access, err := service.teamAccess(ctx, credentials, organizationID, filter.TeamID)
-		if err != nil {
-			return nil, err
+		if member.Role.IsOrgAdmin() {
+			query.TeamID = filter.TeamID
+		} else {
+			access, err := service.teamAccess(ctx, credentials, organizationID, filter.TeamID)
+			if err != nil {
+				return nil, err
+			}
+			query.TeamID = access.TeamID
 		}
-		query.TeamID = access.TeamID
 	}
 	return service.store.Corpora(ctx, organizationID, query)
 }
 
 // Corpus reads one corpus, with its counts, if the caller may see it.
 func (service *Service) Corpus(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string) (domain.Corpus, error) {
-	corpus, _, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return domain.Corpus{}, err
 	}
-	documents, chunks, err := service.store.CorpusCounts(ctx, corpus.ID)
+	documents, chunks, err := service.store.CorpusCounts(ctx, corpus.ID, member.Role.IsOrgAdmin())
 	if err != nil {
 		return domain.Corpus{}, err
 	}
@@ -350,6 +357,7 @@ type AddDocumentInput struct {
 	Source      domain.Source
 	Title       string
 	ContentType string
+	Access      domain.DocumentAccess
 	// Text is the document body for an inline or external source. A file
 	// source leaves it empty and rag fetches the bytes from files as the
 	// caller.
@@ -386,6 +394,16 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 	if err := input.Metadata.Validate(); err != nil {
 		return domain.Document{}, err
 	}
+	access := input.Access
+	if access == "" {
+		access = domain.AccessMembers
+	}
+	if !access.Valid() {
+		return domain.Document{}, fmt.Errorf("document access is not allowed: %w", domain.ErrInvalid)
+	}
+	if access == domain.AccessAdmins && (corpus.Scope != domain.ScopeOrganization || !member.Role.IsOrgAdmin()) {
+		return domain.Document{}, domain.ErrForbidden
+	}
 	title, err := domain.Title(input.Title)
 	if err != nil {
 		return domain.Document{}, err
@@ -402,6 +420,25 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 		if err != nil {
 			return domain.Document{}, err
 		}
+		// A readable private file must never be copied into a wider corpus.
+		if object.Scope != corpus.Scope || (corpus.Scope == domain.ScopeTeam && object.TeamID != corpus.TeamID) ||
+			(corpus.Scope == domain.ScopeMember && object.MemberID != corpus.MemberID) {
+			return domain.Document{}, domain.ErrNotFound
+		}
+		fileAccess := object.Access
+		if fileAccess == "" {
+			fileAccess = domain.AccessMembers
+		}
+		if object.Purpose == "billing.attachment" {
+			fileAccess = domain.AccessAdmins
+		}
+		if !fileAccess.Valid() {
+			return domain.Document{}, fmt.Errorf("file access is invalid: %w", domain.ErrConflict)
+		}
+		if input.Access == domain.AccessAdmins && fileAccess == domain.AccessMembers {
+			return domain.Document{}, fmt.Errorf("set admin access on the file in Files first: %w", domain.ErrInvalid)
+		}
+		access = fileAccess
 		text = object.Body
 		if strings.TrimSpace(contentType) == "" {
 			contentType = object.ContentType
@@ -433,7 +470,7 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 		ID: id, CorpusID: corpus.ID, OrganizationID: organizationID,
 		Source: input.Source, Title: title, ContentType: contentType,
 		ContentSHA256: domain.Hash(body), ByteSize: int64(len(body)),
-		Metadata: input.Metadata, Status: domain.StatusPending,
+		Metadata: input.Metadata, Access: access, Status: domain.StatusPending,
 		CreatedBy: member.UserID, CreatedAt: now, UpdatedAt: now,
 	}
 	event, err := service.event(rageventsv1.DocumentReceivedDetailType, rageventsv1.DocumentReceived{
@@ -468,7 +505,7 @@ type DocumentPage struct {
 // first page, exactly as it does today; passing back the cursor a page
 // returned continues from where that page left off.
 func (service *Service) Documents(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) (DocumentPage, error) {
-	corpus, _, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return DocumentPage{}, err
 	}
@@ -478,7 +515,7 @@ func (service *Service) Documents(ctx context.Context, credentials authclient.Cr
 	if limit <= 0 || limit > MaxDocumentsPerPage {
 		limit = MaxDocumentsPerPage
 	}
-	documents, nextCursor, err := service.store.Documents(ctx, organizationID, corpus.ID, status, cursor, limit)
+	documents, nextCursor, err := service.store.Documents(ctx, organizationID, corpus.ID, status, cursor, limit, member.Role.IsOrgAdmin())
 	if err != nil {
 		return DocumentPage{}, err
 	}
@@ -486,7 +523,7 @@ func (service *Service) Documents(ctx context.Context, credentials authclient.Cr
 }
 
 func (service *Service) Document(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID, documentID string) (domain.Document, error) {
-	corpus, _, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return domain.Document{}, err
 	}
@@ -495,6 +532,9 @@ func (service *Service) Document(ctx context.Context, credentials authclient.Cre
 		return domain.Document{}, err
 	}
 	if document.CorpusID != corpus.ID {
+		return domain.Document{}, domain.ErrNotFound
+	}
+	if !document.VisibleTo(member.Role) {
 		return domain.Document{}, domain.ErrNotFound
 	}
 	return document, nil
@@ -536,10 +576,11 @@ func (service *Service) DeleteDocument(ctx context.Context, credentials authclie
 
 // Search returns the passages a question matches, without writing an answer.
 func (service *Service) Search(ctx context.Context, credentials authclient.Credentials, organizationID, corpusID string, query domain.Query) (retrieval.Results, error) {
-	corpus, _, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return retrieval.Results{}, err
 	}
+	query.IncludeAdminOnly = member.Role.IsOrgAdmin()
 	return service.retriever.Search(ctx, corpus, query)
 }
 
@@ -555,10 +596,11 @@ func (service *Service) Answer(ctx context.Context, credentials authclient.Crede
 	if service.generator == nil {
 		return Answered{}, fmt.Errorf("this deployment has no answering model configured: %w", domain.ErrInvalid)
 	}
-	corpus, _, err := service.readable(ctx, credentials, organizationID, corpusID)
+	corpus, member, err := service.readable(ctx, credentials, organizationID, corpusID)
 	if err != nil {
 		return Answered{}, err
 	}
+	query.IncludeAdminOnly = member.Role.IsOrgAdmin()
 	results, err := service.retriever.Search(ctx, corpus, query)
 	if err != nil {
 		return Answered{}, err
@@ -580,6 +622,11 @@ func (service *Service) caller(ctx context.Context, credentials authclient.Crede
 	member, err := service.directory.Membership(ctx, organizationID, credentials)
 	if err != nil {
 		return domain.OrgMembership{}, err
+	}
+	if member.OrganizationID != organizationID || member.UserID == "" {
+		// Never turn an answer for another organization into authority over
+		// the organization named in the request.
+		return domain.OrgMembership{}, domain.ErrNotFound
 	}
 	if !member.Role.Valid() {
 		return domain.OrgMembership{}, domain.ErrForbidden
@@ -622,6 +669,9 @@ func (service *Service) mayRead(ctx context.Context, credentials authclient.Cred
 		}
 		return domain.ErrNotFound
 	case domain.ScopeTeam:
+		if member.Role.IsOrgAdmin() {
+			return nil
+		}
 		if _, err := service.teamAccess(ctx, credentials, corpus.OrganizationID, corpus.TeamID); err != nil {
 			return err
 		}

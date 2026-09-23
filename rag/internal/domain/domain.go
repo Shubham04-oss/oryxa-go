@@ -144,7 +144,7 @@ var metadataKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 // reservedMetadataKeys are the keys the pipeline writes itself. A caller that
 // set them could shadow provenance and make a citation lie about its source.
 var reservedMetadataKeys = []string{
-	"chunk_id", "chunk_ordinal", "corpus_id", "document_id", "heading_path",
+	"access", "chunk_id", "chunk_ordinal", "corpus_id", "document_id", "heading_path",
 	"organization_id", "source_kind", "source_ref", "title",
 }
 

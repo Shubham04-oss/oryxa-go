@@ -241,6 +241,32 @@ func TestPgvectorFiltersNarrowTheSearch(t *testing.T) {
 	}
 }
 
+func TestPgvectorExcludesAdminOnlyDocumentsBeforeRanking(t *testing.T) {
+	fixture, ctx := setup(t, 768, domain.MetricCosine)
+	if err := fixture.vector.Upsert(ctx, fixture.corpus, fixture.vectors()); err != nil {
+		t.Fatal(err)
+	}
+	document, err := fixture.store.Document(ctx, fixture.corpus.OrganizationID, fixture.docID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.Access = domain.AccessAdmins
+	document.UpdatedAt = time.Now().UTC()
+	if _, _, err := fixture.store.UpsertDocument(ctx, document, "body", domain.Event{
+		ID: "evt_acl", DetailType: "rag.document.received.v1", OccurredAt: time.Now().UTC(), Data: json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	member, err := fixture.vector.Search(ctx, fixture.corpus, Search{Vector: probe(768), TopK: 10})
+	if err != nil || len(member) != 0 {
+		t.Fatalf("member hits = %+v, %v", member, err)
+	}
+	admin, err := fixture.vector.Search(ctx, fixture.corpus, Search{Vector: probe(768), TopK: 10, IncludeAdminOnly: true})
+	if err != nil || len(admin) != 5 {
+		t.Fatalf("admin hits = %+v, %v", admin, err)
+	}
+}
+
 func TestPgvectorScopesToTheCorpusAndOrganization(t *testing.T) {
 	fixture, ctx := setup(t, 768, domain.MetricCosine)
 	if err := fixture.vector.Upsert(ctx, fixture.corpus, fixture.vectors()); err != nil {

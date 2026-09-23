@@ -159,6 +159,50 @@ func TestCreateSourceRefusesTheSameTargetTwice(t *testing.T) {
 	}
 }
 
+func TestFilesSourcesAreUniquePerPlacement(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	first := domain.Source{
+		ID: "src_" + randomHex(8), OrganizationID: "org_1", Provider: "files",
+		Target: map[string]string{"member": "self"}, Scope: domain.ScopeMember,
+		MemberID: "user-1", CreatedBy: "user-1", Status: domain.StatusActive,
+		Interval: time.Hour, SyncAt: &testClock, CreatedAt: testClock,
+	}
+	if err := store.CreateSource(ctx, first, nil); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := first
+	duplicate.ID = "src_" + randomHex(8)
+	if err := store.CreateSource(ctx, duplicate, nil); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("duplicate member Files source = %v, want conflict", err)
+	}
+	other := first
+	other.ID = "src_" + randomHex(8)
+	other.MemberID, other.CreatedBy = "user-2", "user-2"
+	if err := store.CreateSource(ctx, other, nil); err != nil {
+		t.Fatalf("another member's Files source = %v", err)
+	}
+	team := first
+	team.ID = "src_" + randomHex(8)
+	team.Scope, team.MemberID, team.TeamID = domain.ScopeTeam, "", "team_eng"
+	team.Target = map[string]string{"team": "team_eng"}
+	if err := store.CreateSource(ctx, team, nil); err != nil {
+		t.Fatalf("first team Files source = %v", err)
+	}
+	teamDuplicate := team
+	teamDuplicate.ID = "src_" + randomHex(8)
+	if err := store.CreateSource(ctx, teamDuplicate, nil); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("duplicate team Files source = %v, want conflict", err)
+	}
+	otherTeam := team
+	otherTeam.ID = "src_" + randomHex(8)
+	otherTeam.TeamID = "team_design"
+	otherTeam.Target = map[string]string{"team": "team_design"}
+	if err := store.CreateSource(ctx, otherTeam, nil); err != nil {
+		t.Fatalf("another team's Files source = %v", err)
+	}
+}
+
 func TestSourcesShowAMemberOnlyTheirOwn(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
@@ -220,6 +264,66 @@ func TestUpsertDocumentPublishesOnlyWhatChanged(t *testing.T) {
 	var outboxCount int
 	if err := store.pool.QueryRow(ctx, `SELECT count(*) FROM knowledge_outbox`).Scan(&outboxCount); err != nil || outboxCount != 2 {
 		t.Fatalf("outbox events = %d, error = %v, want 2", outboxCount, err)
+	}
+}
+
+func TestUpsertDocumentPublishesMetadataOnlyChanges(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "mail-1", strings.Repeat("a", 64))
+	document.Metadata = map[string]string{"labels": "INBOX"}
+	publish := func(domain.Document) (domain.Event, error) {
+		return testEvent(t, "knowledge.document.published.v1"), nil
+	}
+	if published, err := store.UpsertDocument(ctx, document, publish); err != nil || !published {
+		t.Fatalf("initial publish = %v, %v", published, err)
+	}
+	document.Metadata = map[string]string{"labels": "IMPORTANT"}
+	if published, err := store.UpsertDocument(ctx, document, publish); err != nil || !published {
+		t.Fatalf("label-only publish = %v, %v", published, err)
+	}
+	if published, err := store.UpsertDocument(ctx, document, publish); err != nil || published {
+		t.Fatalf("repeated metadata = %v, %v, want no event", published, err)
+	}
+}
+
+func TestDocumentsAndRunsBelongToTheirSourcesOrganization(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "foreign-issue", strings.Repeat("a", 64))
+	document.OrganizationID = "org_2"
+	if _, err := store.UpsertDocument(ctx, document, nil); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("document under a foreign organization = %v, want ErrNotFound", err)
+	}
+	run := domain.SyncRun{
+		ID: "run_" + randomHex(8), OrganizationID: "org_2", SourceID: source.ID,
+		Kind: "backfill", StartedAt: testClock,
+	}
+	if err := store.StartRun(ctx, run); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("sync run under a foreign organization = %v, want ErrNotFound", err)
+	}
+	document.OrganizationID = source.OrganizationID
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatalf("write the source's own document: %v", err)
+	}
+	wrongUpdate := document
+	wrongUpdate.OrganizationID = "org_2"
+	wrongUpdate.ContentHash = strings.Repeat("b", 64)
+	wrongUpdate.Body = "changed by foreign organization"
+	if _, err := store.UpsertDocument(ctx, wrongUpdate, nil); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("document update under a foreign organization = %v, want ErrNotFound", err)
+	}
+	if _, err := store.ExcludeDocument(ctx, wrongUpdate, testClock, nil); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("document exclusion under a foreign organization = %v, want ErrNotFound", err)
+	}
+	unchanged, err := store.Document(ctx, "org_1", document.ID)
+	if err != nil || unchanged.ContentHash != document.ContentHash {
+		t.Fatalf("foreign update changed the source's document: %+v, %v", unchanged, err)
+	}
+	if _, err := store.Document(ctx, "org_2", document.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("foreign document read = %v, want ErrNotFound", err)
 	}
 }
 

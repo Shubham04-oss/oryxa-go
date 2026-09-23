@@ -130,22 +130,49 @@ func TenantFilter(organizationID string, corpusIDs []string) agenttypes.Retrieva
 // searchFilter narrows TenantFilter further by a caller's own query filter,
 // when it named one.
 //
-// Only document_id is honoured: it is the one metadata key rag always writes
-// onto a document in the knowledge base (see knowledgebase.Client.Submit),
-// so it is the only one a filter here can mean anything by. A condition on
-// any other key is refused rather than silently dropped — a caller who asked
-// for a narrower search getting a wider one back, unannounced, is a worse
-// failure than an error naming exactly what this backend cannot do.
+// Only fields actually written by knowledgebase.Client.Submit are accepted.
+// A condition on anything else is refused rather than silently widening a
+// search. Tenant and access filters are always added independently.
 func searchFilter(organizationID string, corpusIDs []string, filter domain.Filter) (agenttypes.RetrievalFilter, error) {
-	conditions := tenantConditions(organizationID, corpusIDs)
-	if len(filter.Conditions) > 0 {
-		return nil, fmt.Errorf("a bedrock-kb corpus can only filter by document id, not metadata key %q: %w",
-			filter.Conditions[0].Key, domain.ErrInvalid)
+	if err := filter.Validate(); err != nil {
+		return nil, err
 	}
+	conditions := tenantConditions(organizationID, corpusIDs)
 	if len(filter.DocumentIDs) > 0 {
 		conditions = append(conditions, documentIDCondition(filter.DocumentIDs))
 	}
+	for _, condition := range filter.Conditions {
+		if !kbFilterable(condition.Key) {
+			return nil, fmt.Errorf("a bedrock-kb corpus cannot filter by metadata key %q: %w", condition.Key, domain.ErrInvalid)
+		}
+		attribute := agenttypes.FilterAttribute{Key: aws.String(condition.Key)}
+		switch condition.Operator {
+		case domain.OperatorEqual:
+			attribute.Value = kbdoc.NewLazyDocument(condition.Values[0])
+			conditions = append(conditions, &agenttypes.RetrievalFilterMemberEquals{Value: attribute})
+		case domain.OperatorNotEqual:
+			attribute.Value = kbdoc.NewLazyDocument(condition.Values[0])
+			conditions = append(conditions, &agenttypes.RetrievalFilterMemberNotEquals{Value: attribute})
+		case domain.OperatorIn:
+			attribute.Value = kbdoc.NewLazyDocument(condition.Values)
+			conditions = append(conditions, &agenttypes.RetrievalFilterMemberIn{Value: attribute})
+		case domain.OperatorNotIn:
+			attribute.Value = kbdoc.NewLazyDocument(condition.Values)
+			conditions = append(conditions, &agenttypes.RetrievalFilterMemberNotIn{Value: attribute})
+		default:
+			return nil, fmt.Errorf("a bedrock-kb corpus cannot use operator %q: %w", condition.Operator, domain.ErrInvalid)
+		}
+	}
 	return &agenttypes.RetrievalFilterMemberAndAll{Value: conditions}, nil
+}
+
+func kbFilterable(key string) bool {
+	switch key {
+	case "source_kind", "provider", "knowledge_source_id", "document_kind", "category":
+		return true
+	default:
+		return false
+	}
 }
 
 func documentIDCondition(documentIDs []string) agenttypes.RetrievalFilter {
@@ -179,6 +206,14 @@ func (knowledgeBase *KnowledgeBase) retrieve(ctx context.Context, organizationID
 	filter, err := searchFilter(organizationID, corpusIDs, query.Filter)
 	if err != nil {
 		return nil, err
+	}
+	if !query.IncludeAdminOnly {
+		filter.(*agenttypes.RetrievalFilterMemberAndAll).Value = append(
+			filter.(*agenttypes.RetrievalFilterMemberAndAll).Value,
+			&agenttypes.RetrievalFilterMemberEquals{Value: agenttypes.FilterAttribute{
+				Key: aws.String("access"), Value: kbdoc.NewLazyDocument(string(domain.AccessMembers)),
+			}},
+		)
 	}
 	output, err := knowledgeBase.client.Retrieve(ctx, &bedrockagentruntime.RetrieveInput{
 		KnowledgeBaseId:        aws.String(knowledgeBase.knowledgeBaseID),
