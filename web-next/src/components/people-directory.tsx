@@ -1,6 +1,6 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
-import { ArrowRight, Search, Send } from "lucide-react"
+import { ArrowRight, ArrowUp, Search } from "lucide-react"
 import type { Teamspace } from "./teamspaces-management"
 import { IdentityAvatar } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
@@ -69,7 +69,10 @@ export function PeopleDirectory({
               </p>
             )}
           </div>
-          <form className="workspace-dm-composer" onSubmit={sendMessage}>
+          <form
+            className="workspace-composer workspace-dm-composer"
+            onSubmit={sendMessage}
+          >
             <input
               aria-label={`Message ${selectedPerson.name}`}
               placeholder={
@@ -82,11 +85,12 @@ export function PeopleDirectory({
               disabled={!preview}
             />
             <button
+              className="workspace-composer-send"
               type="submit"
               aria-label="Send message"
               disabled={!preview || !draft.trim()}
             >
-              <Send size={17} strokeWidth={1.8} />
+              <ArrowUp size={16} strokeWidth={2} />
             </button>
           </form>
           {preview && (

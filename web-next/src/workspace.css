@@ -275,6 +275,74 @@
 .workspace-avatar .workspace-planet-fallback { overflow: hidden; padding: 0; }
 .workspace-planet-art { display: block; width: 100%; height: 100%; border-radius: 50%; }
 
+/* Shared chat composer: a pill-shaped field with a circular icon send
+   button. Reused by the focused-work composer, the DM composer, and the
+   agent panel composer so all three share one look (see DESIGN.md §1). */
+.workspace-composer {
+  --composer-send-size: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 6px 6px 16px;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  background: #242424;
+  transition: border-radius 160ms ease, border-color 160ms ease;
+}
+.workspace-composer:focus-within { border-color: #777; }
+.workspace-composer:has(input:disabled),
+.workspace-composer:has(textarea:disabled) {
+  border-color: #303030;
+  background: #1e1e1e;
+}
+/* Softens to a large radius once the field grows past one line, so wrapped
+   text doesn't look squeezed into a full pill. */
+.workspace-composer[data-multiline="true"] {
+  align-items: flex-end;
+  border-radius: 22px;
+}
+.workspace-composer-attach {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: #8f8f8f;
+}
+.workspace-composer input,
+.workspace-composer textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #f1f1f1;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+.workspace-composer textarea { resize: none; }
+.workspace-composer input::placeholder,
+.workspace-composer textarea::placeholder { color: #8a8a8a; }
+.workspace-composer input:disabled,
+.workspace-composer textarea:disabled { cursor: not-allowed; }
+.workspace-shell .workspace-composer input:focus-visible,
+.workspace-shell .workspace-composer textarea:focus-visible { outline: none; }
+.workspace-composer-send {
+  display: grid;
+  flex: none;
+  width: var(--composer-send-size);
+  height: var(--composer-send-size);
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #e9e9e9;
+  color: #1e1e1e;
+}
+.workspace-composer-send:hover:not(:disabled) { background: #fff; }
+.workspace-composer-send:disabled { cursor: default; opacity: .45; }
+
 .workspace-middle { display: flex; flex-direction: column; background: var(--workspace-base); }
 .workspace-header {
   position: relative;
@@ -567,34 +635,8 @@
 .workspace-message-meta strong { overflow: hidden; color: #eee; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-message-meta time { flex: none; color: #858585; font-size: 10px; }
 .workspace-message-body p { margin: 3px 0 0; color: #dedede; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-.workspace-message-composer { position: relative; display: flex; align-items: center; gap: 10px; min-height: 36px; }
-.workspace-message-composer > svg { position: absolute; margin-left: 12px; color: #888; pointer-events: none; }
-.workspace-message-composer input {
-  flex: 1;
-  min-width: 0;
-  height: 36px;
-  padding: 0 12px 0 37px;
-  border: 1px solid #353535;
-  border-radius: 999px;
-  outline: none;
-  background: #1e1e1e;
-  color: #f1f1f1;
-  font: inherit;
-  font-size: 12px;
-}
-.workspace-message-composer input::placeholder { color: #8e8e8e; }
-.workspace-message-composer input:focus-visible { border-color: #777; }
-.workspace-message-composer button {
-  height: 32px;
-  padding: 0 13px;
-  border: 0;
-  border-radius: 9px;
-  background: #eee;
-  color: #1e1e1e;
-  font-size: 11px;
-  font-weight: 600;
-}
-.workspace-message-composer button:disabled { cursor: default; opacity: .5; }
+/* Container/field/button look now comes from the shared .workspace-composer
+   classes; this class is kept only as a semantic hook on the form. */
 
 .workspace-work-column {
   position: relative;
@@ -613,6 +655,9 @@
   border-radius: 17px;
   background: #1e1e1e;
 }
+/* Pinned to sit directly above the work panel, in the header's own 56px
+   band, so the tabs land on its centre row (y=28) like the back button and
+   title — not a separate strip with its own offset. */
 .workspace-work-tabs {
   position: absolute;
   right: 0;
@@ -621,7 +666,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 76px;
+  height: 56px;
   padding: 0 24px;
 }
 .workspace-work-tab {
@@ -720,46 +765,8 @@
 .workspace-agent-error { margin: 0; color: #e4aaa6; font-size: 12px; line-height: 1.45; }
 
 .workspace-agent-composer { display: flex; flex-direction: column; gap: 7px; padding-top: 12px; }
-.workspace-agent-composer-field {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 6px 6px 6px 14px;
-  border: 1px solid #3a3a3a;
-  border-radius: 18px;
-  background: #242424;
-}
-.workspace-agent-composer-field:focus-within { border-color: #777; }
-.workspace-agent-composer-field:has(textarea:disabled) { border-color: #303030; background: #1e1e1e; }
-.workspace-agent-composer-field textarea {
-  flex: 1;
-  min-width: 0;
-  padding: 5px 0;
-  resize: none;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: #f2f2f2;
-  font: inherit;
-  font-size: 13px;
-  line-height: 20px;
-}
-.workspace-shell .workspace-agent-composer-field textarea:focus-visible { outline: none; }
-.workspace-agent-composer-field textarea::placeholder { color: #858585; }
-.workspace-agent-composer-field textarea:disabled { cursor: not-allowed; }
-.workspace-agent-composer-field button {
-  display: grid;
-  flex: none;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 0;
-  border-radius: 50%;
-  background: #e9e9e9;
-  color: #1e1e1e;
-}
-.workspace-agent-composer-field button:hover:not(:disabled) { background: #fff; }
-.workspace-agent-composer-field button:disabled { cursor: default; opacity: .45; }
+/* Field/button look now comes from the shared .workspace-composer classes;
+   this class is kept as a semantic hook and for the data-multiline toggle. */
 .workspace-agent-composer-status { margin: 0 14px; color: #858585; font-size: 11px; line-height: 1.4; }
 
 @media (min-width: 801px) and (max-width: 1250px) {
@@ -852,7 +859,8 @@
     box-shadow: -12px 0 40px #0009;
   }
   /* iOS zooms into a field under 16px when it gains focus. */
-  .workspace-agent-composer-field textarea { font-size: 16px; line-height: 22px; }
+  .workspace-composer input,
+  .workspace-composer textarea { font-size: 16px; line-height: 22px; }
   .workspace-header {
     min-height: 56px;
     padding: 8px 56px;

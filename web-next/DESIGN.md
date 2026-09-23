@@ -33,6 +33,11 @@ not permission to copy every incidental value into a new component.
   cards and pill controls are welcome; avoid ornamental gradients, broad
   shadows, glass effects, or divider lines between shell regions. Borders may
   group content *inside* a surface. Shadows are for overlays, not page depth.
+- A chat composer (message to a person, room, or agent) is a pill-shaped
+  field — full pill at one line, softening to a large radius once its
+  content wraps past one line — with a circular icon send button inside,
+  never a rectangular field with a text "Send" button. Share one set of CSS
+  across composers instead of copying the pattern per screen.
 - Use Lucide for general UI icons. Use actual brand marks for integrations.
   Icons should express an action or entity, never fill empty space.
 - Every interactive state must be visible: hover, active/selected, keyboard
@@ -85,6 +90,10 @@ not permission to copy every incidental value into a new component.
   and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
   sit **above** the work panel. The panel's top area belongs to the selected
   view's heading and state, not the tab strip.
+- Header-row controls — work tabs, panel tabs, panel toggles — sit on the
+  header's own centre row (y=28 in its 56px band), vertically level with the
+  back button and title, even when (like the work tabs) they are positioned
+  over a region below the header rather than inside the `<header>` itself.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header

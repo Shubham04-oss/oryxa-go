@@ -1,6 +1,12 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
-import { ArrowLeft, ArrowUpRight, FileText, Paperclip } from "lucide-react"
+import {
+  ArrowLeft,
+  ArrowUp,
+  ArrowUpRight,
+  FileText,
+  Paperclip,
+} from "lucide-react"
 import {
   agents,
   IdentityAvatar,
@@ -251,8 +257,13 @@ export function WorkspaceFocus({
             ))}
           </div>
 
-          <form className="workspace-message-composer" onSubmit={sendMessage}>
-            <Paperclip size={17} strokeWidth={1.7} aria-hidden="true" />
+          <form
+            className="workspace-composer workspace-message-composer"
+            onSubmit={sendMessage}
+          >
+            <span className="workspace-composer-attach" aria-hidden="true">
+              <Paperclip size={17} strokeWidth={1.7} />
+            </span>
             <label className="sr-only" htmlFor="workspace-message-draft">
               Message {work.title}
             </label>
@@ -264,8 +275,13 @@ export function WorkspaceFocus({
               onBlur={() => setIsComposing(false)}
               placeholder="Add a message..."
             />
-            <button type="submit" disabled={!draft.trim()}>
-              Send
+            <button
+              className="workspace-composer-send"
+              type="submit"
+              aria-label="Send message"
+              disabled={!draft.trim()}
+            >
+              <ArrowUp size={16} strokeWidth={2} />
             </button>
           </form>
         </section>

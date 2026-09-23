@@ -254,7 +254,8 @@ describe("WorkspaceShell navigation", () => {
         target: { value: "The checklist is ready." },
       }
     )
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }))
     expect(screen.getByText("The checklist is ready.")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Back to workspace" }))
