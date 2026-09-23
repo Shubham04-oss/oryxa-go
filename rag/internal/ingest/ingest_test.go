@@ -667,15 +667,21 @@ func TestIndexKnowledgeBaseNeverResubmitsAlreadySyncedContent(t *testing.T) {
 	}
 }
 
-// TestIndexKnowledgeBaseMarksReadyOnIndexedOrIgnored covers both statuses
-// this pipeline treats as a finished, searchable document.
-func TestIndexKnowledgeBaseMarksReadyOnIndexedOrIgnored(t *testing.T) {
+// TestIndexKnowledgeBaseMarksReadyWhenTheKnowledgeBaseIsDone covers every
+// status this pipeline treats as a finished, searchable document.
+// PARTIALLY_INDEXED is among them: it is where a document ends up, not a step
+// on the way, and waiting on it polled the document forever.
+func TestIndexKnowledgeBaseMarksReadyWhenTheKnowledgeBaseIsDone(t *testing.T) {
 	t.Parallel()
-	for _, code := range []string{"INDEXED", "IGNORED"} {
-		t.Run(code, func(t *testing.T) {
+	for _, status := range []knowledgebase.DocumentStatus{
+		{Code: "INDEXED"},
+		{Code: "IGNORED", Reason: "the document content is unchanged"},
+		{Code: "PARTIALLY_INDEXED", Reason: "some pages could not be parsed"},
+	} {
+		t.Run(status.Code, func(t *testing.T) {
 			t.Parallel()
 			store := &fakeStore{corpus: testKBCorpus(), body: "text"}
-			knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": {Code: code}}}
+			knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": status}}
 			pipeline := newKBPipeline(store, knowledgeBase)
 
 			document := testKBDocument()
@@ -751,27 +757,77 @@ func TestIndexKnowledgeBaseResubmitsOnPartialMetadata(t *testing.T) {
 
 // TestIndexKnowledgeBaseWaitsOnStillWorkingStatuses: a status that means the
 // knowledge base has not finished yet leaves the document exactly as it was
-// claimed, for the next pass to check again.
+// claimed, for the next pass to check again — while the submission is inside
+// knowledgeBaseStall, or has no time recorded to measure it by.
 func TestIndexKnowledgeBaseWaitsOnStillWorkingStatuses(t *testing.T) {
 	t.Parallel()
-	for _, code := range []string{"STARTING", "PENDING", "IN_PROGRESS", "PARTIALLY_INDEXED"} {
-		t.Run(code, func(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	recent := now.Add(-knowledgeBaseStall + time.Minute)
+	for _, code := range []string{"STARTING", "PENDING", "IN_PROGRESS", "TEXT_INDEXED"} {
+		for name, submittedAt := range map[string]*time.Time{"within the stall": &recent, "no submission time": nil} {
+			t.Run(code+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				store := &fakeStore{corpus: testKBCorpus(), body: "text"}
+				knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": {Code: code}}}
+				pipeline := newKBPipeline(store, knowledgeBase)
+				pipeline.now = func() time.Time { return now }
+
+				document := testKBDocument()
+				document.KBSyncedHash = document.ContentSHA256
+				document.KBSubmittedAt = submittedAt
+				if _, err := pipeline.Index(context.Background(), document); err != nil {
+					t.Fatalf("Index: %v", err)
+				}
+				if len(store.ready) != 0 || len(store.failed) != 0 || len(store.released) != 0 || len(store.kbSynced) != 0 {
+					t.Fatalf("a still-working status changed something: ready=%v failed=%v released=%v kbSynced=%v",
+						store.ready, store.failed, store.released, store.kbSynced)
+				}
+				if _, ok := store.rechecks["doc_1"]; !ok {
+					t.Fatal("a still-working document was not scheduled to be asked about again")
+				}
+			})
+		}
+	}
+}
+
+// TestIndexKnowledgeBaseResubmitsASubmissionThatNeverFinishes: a document
+// still unfinished knowledgeBaseStall after its submission is given up on and
+// submitted again, and that claim counts as an attempt, so one the knowledge
+// base never finishes ends up failed instead of polled forever.
+func TestIndexKnowledgeBaseResubmitsASubmissionThatNeverFinishes(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	stalled := now.Add(-knowledgeBaseStall - time.Minute)
+	for _, attempts := range []int{1, MaxAttempts} {
+		t.Run(fmt.Sprintf("attempt %d", attempts), func(t *testing.T) {
 			t.Parallel()
 			store := &fakeStore{corpus: testKBCorpus(), body: "text"}
-			knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": {Code: code}}}
+			knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": {Code: "IN_PROGRESS"}}}
 			pipeline := newKBPipeline(store, knowledgeBase)
+			pipeline.now = func() time.Time { return now }
 
 			document := testKBDocument()
+			document.Attempts = attempts
 			document.KBSyncedHash = document.ContentSHA256
-			if _, err := pipeline.Index(context.Background(), document); err != nil {
-				t.Fatalf("Index: %v", err)
+			document.KBSubmittedAt = &stalled
+			if _, err := pipeline.Index(context.Background(), document); err == nil {
+				t.Fatal("Index succeeded on a submission the knowledge base never finished")
 			}
-			if len(store.ready) != 0 || len(store.failed) != 0 || len(store.released) != 0 || len(store.kbSynced) != 0 {
-				t.Fatalf("a still-working status changed something: ready=%v failed=%v released=%v kbSynced=%v",
-					store.ready, store.failed, store.released, store.kbSynced)
+			if len(knowledgeBase.submitted) != 0 {
+				t.Fatalf("resubmitted within the same claim: %+v", knowledgeBase.submitted)
 			}
-			if _, ok := store.rechecks["doc_1"]; !ok {
-				t.Fatal("a still-working document was not scheduled to be asked about again")
+			if len(store.kbSynced) != 1 || store.kbSynced[0] != "doc_1:" {
+				t.Fatalf("kb_synced_hash was not reset so the next claim resubmits: %v", store.kbSynced)
+			}
+			if _, rechecked := store.rechecks["doc_1"]; rechecked {
+				t.Fatal("a stalled submission was handed back as a poll, which never counts as an attempt")
+			}
+			_, retried := store.retries["doc_1"]
+			if attempts < MaxAttempts && (!retried || len(store.failed) != 0) {
+				t.Fatalf("retries = %v, failed = %v; want the document put back to resubmit", store.retries, store.failed)
+			}
+			if attempts == MaxAttempts && (retried || len(store.failed) != 1) {
+				t.Fatalf("retries = %v, failed = %v; want the last attempt to leave the document failed", store.retries, store.failed)
 			}
 		})
 	}

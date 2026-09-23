@@ -140,7 +140,9 @@ func TestConnectRunAndDeliverEndToEnd(t *testing.T) {
 	// nothing, so the bus stays quiet.
 	agent := mcpSession(t, api.URL)
 	listed := callTool(t, agent, mcpserver.ToolConnections, map[string]any{})
-	if !strings.Contains(listed, connectionID) {
+	// A connection is listed by its app and status: the agent acts through
+	// an app, and is not shown the connection's id.
+	if !strings.Contains(listed, `"toolkit":"github"`) || !strings.Contains(listed, `"status":"active"`) {
 		t.Fatalf("connections = %s", listed)
 	}
 	read := callTool(t, agent, mcpserver.ToolRunRead, map[string]any{

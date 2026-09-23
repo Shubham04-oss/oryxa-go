@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
@@ -192,7 +193,8 @@ func (retriever *Retriever) finalize(matches []domain.Match, query domain.Query)
 // scoped by TenantFilter, then hydrates each with its document's title and
 // source the same way the pgvector and S3 Vectors path does — from
 // PostgreSQL, which still holds every document's row for a bedrock-kb corpus
-// even though it holds no chunks for one.
+// even though it holds no chunks for one — and leaves out any passage whose
+// document PostgreSQL no longer holds.
 func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus domain.Corpus, query domain.Query) (Results, error) {
 	if retriever.knowledgeBase == nil {
 		return Results{}, fmt.Errorf("this deployment cannot reach its knowledge base: %w", domain.ErrInvalid)
@@ -217,16 +219,37 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 		return Results{}, err
 	}
 	matches := make([]domain.Match, 0, len(passages))
+	var gone []string
 	for _, passage := range passages {
+		ref, found := refs[passage.documentID]
+		if !found {
+			// A passage from a document PostgreSQL no longer holds is left
+			// out, as hydrate leaves out a chunk it no longer holds. Rag
+			// removes its row once the knowledge base accepts a delete, and
+			// the knowledge base finishes that delete in its own time — or,
+			// if it fails, never — so without this a document someone
+			// removed kept answering questions, untitled.
+			if !slices.Contains(gone, passage.documentID) {
+				gone = append(gone, passage.documentID)
+			}
+			continue
+		}
 		matches = append(matches, domain.Match{
 			Chunk: domain.Chunk{
 				ID: kbChunkID(passage.documentID, passage.text), DocumentID: passage.documentID,
 				CorpusID: corpus.ID, OrganizationID: corpus.OrganizationID,
 				Text: passage.text, SHA256: domain.Hash(passage.text),
 			},
-			Document: refs[passage.documentID],
+			Document: ref,
 			Score:    passage.score,
 		})
+	}
+	if len(gone) > 0 {
+		// A delete still finishing shows up here for a moment after each
+		// removal. The same document showing up for long is one whose delete
+		// failed, and whose content is still in the knowledge base.
+		retriever.logger.WarnContext(ctx, "the knowledge base answered with documents rag no longer holds; leaving them out",
+			"corpus_id", corpus.ID, "document_ids", gone)
 	}
 	// Bedrock's own reranking, when it ran, already reordered and scored
 	// these; the cross-encoder Reranker below is never invoked for a

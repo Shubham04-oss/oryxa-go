@@ -1,0 +1,124 @@
+# Every pull request, and every push to main, builds and tests what a release
+# would ship: the Go services (with their PostgreSQL integration tests), the
+# web app as the production Worker, and the image the Dockerfile makes.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # The same pgvector image docker-compose.yml runs locally.
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg17
+        env:
+          POSTGRES_USER: oryxa
+          POSTGRES_PASSWORD: oryxa
+          POSTGRES_DB: oryxa
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U oryxa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go'))
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt would change these files:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Database
+        # Each service's integration tests run when their database is named,
+        # and skip otherwise; here they share one, as they do on a laptop,
+        # with the extensions infra/postgres/init gives a fresh local volume.
+        run: |
+          for service in AGENTS_PRIMARY APPS AUTH BATCHING BILLING POSTGRESKIT RAG TEAMS; do
+            echo "${service}_TEST_DATABASE_URL=postgres://oryxa:oryxa@localhost:5432/oryxa?sslmode=disable" >> "$GITHUB_ENV"
+          done
+          docker exec -i "${{ job.services.postgres.id }}" psql -U oryxa -d oryxa -v ON_ERROR_STOP=1 < infra/postgres/init/001_extensions.sql
+      - name: Auth's schema
+        # agents' session tests read auth's tables, which a laptop's database
+        # already has; auth's own tests migrate them into this fresh one.
+        run: go test -count=1 ./auth/internal/postgres/
+      - name: Test
+        run: go test -count=1 ./...
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: pnpm
+        # The version deploy/scripts/web.sh deploys with.
+        run: npm install --global pnpm@12.4.2
+      - run: pnpm install --frozen-lockfile
+      - name: Biome
+        run: pnpm check
+      - name: Types
+        run: pnpm typecheck
+      - name: Tests
+        run: pnpm test
+      - name: Build the production Worker
+        run: pnpm build
+        env:
+          CLOUDFLARE_ENV: production
+      - name: Wrangler dry run
+        # Validates the built Worker's configuration and bindings, including
+        # the Durable Object and its migration, without uploading anything.
+        run: pnpm exec wrangler deploy --dry-run
+        env:
+          WRANGLER_SEND_METRICS: "false"
+
+  image:
+    name: Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build
+        run: docker build --tag oryxa:ci .
+
+  tofu:
+    name: OpenTofu
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: opentofu/setup-opentofu@v1
+      - name: Validate deploy/production
+        # Without the S3 backend: this checks the configuration, not the state.
+        run: |
+          tofu -chdir=deploy/production init -backend=false -input=false
+          tofu -chdir=deploy/production validate

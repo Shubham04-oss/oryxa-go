@@ -201,6 +201,10 @@ type Document struct {
 	// a submission already running. Meaningless outside a bedrock-kb corpus,
 	// and not part of the public API.
 	KBSyncedHash string `json:"-"`
+	// KBSubmittedAt is when KBSyncedHash was handed over, so the ingest
+	// worker can tell a submission the knowledge base is still working on
+	// from one it will never finish. Nil when nothing is outstanding.
+	KBSubmittedAt *time.Time `json:"-"`
 }
 
 // HasOriginal reports whether a document was indexed with no extracted text

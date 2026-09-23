@@ -357,6 +357,42 @@ func TestSearchKnowledgeBaseHydratesFromPostgresAndHonoursTopK(t *testing.T) {
 	}
 }
 
+// TestSearchKnowledgeBaseLeavesOutDocumentsRagNoLongerHolds: the knowledge
+// base finishes a delete in its own time, after rag has already removed the
+// document's row, so a search in between must not hand back the removed
+// document's text — and top_k is still filled from what remains.
+func TestSearchKnowledgeBaseLeavesOutDocumentsRagNoLongerHolds(t *testing.T) {
+	t.Parallel()
+	api := &fakeKnowledgeBaseAPI{output: &bedrockagentruntime.RetrieveOutput{RetrievalResults: []agenttypes.KnowledgeBaseRetrievalResult{
+		textResult("doc_1", "first passage", 0.95),
+		textResult("doc_removed", "a passage from a removed document", 0.90),
+		textResult("doc_removed", "another passage from it", 0.85),
+		textResult("doc_3", "third passage", 0.80),
+	}}}
+	knowledgeBase, err := NewManagedKnowledgeBase(api, "kb-managed")
+	if err != nil {
+		t.Fatalf("NewManagedKnowledgeBase: %v", err)
+	}
+	chunks := &fakeChunks{goneDocuments: map[string]bool{"doc_removed": true}}
+	retriever := New(chunks, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil, knowledgeBase, nil)
+	corpus := testCorpus()
+	corpus.Backend = domain.BackendBedrockKB
+
+	results, err := retriever.Search(context.Background(), corpus, domain.Query{Text: "q", TopK: 2, Rerank: true})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results.Matches) != 2 {
+		t.Fatalf("got %d matches, want 2", len(results.Matches))
+	}
+	for index, want := range []string{"doc_1", "doc_3"} {
+		match := results.Matches[index]
+		if match.Chunk.DocumentID != want || match.Document.ID != want {
+			t.Fatalf("match %d = %+v, want %s with its document ref", index, match, want)
+		}
+	}
+}
+
 // TestSearchKnowledgeBaseRefusesAMetadataFilter is the same refusal, exercised
 // through Retriever.Search end to end rather than searchFilter directly.
 func TestSearchKnowledgeBaseRefusesAMetadataFilter(t *testing.T) {

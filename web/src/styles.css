@@ -1631,6 +1631,49 @@ a:focus-visible {
 	white-space: nowrap;
 }
 
+.thread-conversation-identity {
+	display: flex;
+	min-width: 0;
+	align-items: center;
+	gap: 0.75rem;
+}
+
+.thread-connection-status {
+	display: inline-flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: 0.375rem;
+	color: var(--ink-muted);
+	font-size: 0.6875rem;
+	font-weight: 540;
+}
+
+.thread-connection-dot {
+	width: 0.375rem;
+	height: 0.375rem;
+	border-radius: 50%;
+	background: var(--state-muted);
+}
+
+.thread-connection-status[data-state="live"] .thread-connection-dot {
+	background: var(--state-active);
+}
+
+.thread-connection-status[data-state="working"] .thread-connection-dot {
+	background: var(--state-warning);
+	animation: thread-working-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes thread-working-pulse {
+	50% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.thread-connection-status[data-state="working"] .thread-connection-dot {
+		animation: none;
+	}
+}
+
 .thread-conversation-timeline {
 	flex: 1 1 auto;
 	overflow-y: auto;

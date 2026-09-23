@@ -48,6 +48,8 @@ export interface Item {
 	author?: string;
 	/** tool_call/tool_result pairing; on a confirmation, the id an answer must name. */
 	call_id?: string;
+	/** run_failed from the chat Durable Object: what the page should do about it ("session_expired"). Go never sets it. */
+	code?: string;
 	/** On a message: why the model stopped without answering. On tool_result: the tool's error. On run_failed: what to tell the member. */
 	error?: string;
 	failed?: boolean;
@@ -127,7 +129,10 @@ export async function deleteThread(
 	organizationId: string,
 	threadId: string,
 ): Promise<void> {
-	await apiRequest(threadPath(organizationId, threadId), { method: "DELETE" });
+	await apiRequest(
+		`/agents/thread-chat-agent/${encodeURIComponent(`${organizationId}~${threadId}`)}`,
+		{ method: "DELETE" },
+	);
 }
 
 /** How many conversations the sidebar shows before it defers to search. */

@@ -498,7 +498,12 @@ knowledge base whole rather than cutting it into `rag_chunks` rows:
   reusing the same lease a claim already holds rather than a timer of its own,
   until it reports the document indexed or failed with a reason. A live test
   indexed three documents, one of them a PDF, in about nine seconds; nothing
-  here assumes that number.
+  here assumes that number. `PARTIALLY_INDEXED` counts as finished — what did
+  index is searchable, and the shortfall is logged. A submission still
+  unfinished an hour after it was made (`kb_submitted_at`, migration `008`) is
+  given up on and submitted again, which counts as an attempt, so a document
+  the knowledge base never finishes ends up `failed` rather than polled
+  forever.
 - A knowledge base document has no chunks of rag's own to count, so its
   `chunk_count` stays `0` — an honest answer, not a guess, once it is `ready`.
 - Removing a document, or the whole corpus, deletes it from the knowledge base
@@ -533,7 +538,12 @@ document id and a hash of the passage text, stable so the same passage cites
 the same way twice, and its byte range is left at zero, since nothing here
 knows where in the document Bedrock found it. Its document's title and source
 still come from PostgreSQL, which holds a row for every document whichever
-backend indexed it. A query naming both `bedrock-kb` and other corpora — the
+backend indexed it — and a passage whose document PostgreSQL no longer holds
+is left out, with a warning naming it. Rag removes a document's row once the
+knowledge base accepts the delete, and the knowledge base finishes that delete
+in its own time, so without this a removed document went on answering
+questions, untitled, for as long as the delete took — or for good, if it
+failed. A query naming both `bedrock-kb` and other corpora — the
 knowledge toolbox's own multi-collection search, for one — runs each corpus
 through whichever path it needs and merges the results the way it always has;
 nothing about mixing them needed to change here, because a `bedrock-kb`

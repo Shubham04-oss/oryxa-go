@@ -1,0 +1,154 @@
+# Releases main to production once CI has passed on it, after an approval: the
+# job waits on the repository's production environment until its reviewer
+# approves. It builds the image for Fargate, rolls ECS onto it, records the
+# release on main and deploys the web Worker. Infrastructure changes stay a
+# manual `tofu apply`; see deploy/README.md for this workflow's one-time setup.
+
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  # Releases main's head on demand, such as a redeploy.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-west-2
+  # deploy/production/github.tf, in the account the state bucket is named for.
+  AWS_DEPLOY_ROLE: arn:aws:iam::226236025533:role/oryxa-production-github-deploy
+  REPOSITORY: 226236025533.dkr.ecr.us-west-2.amazonaws.com/oryxa
+  CLUSTER: oryxa-production
+  SERVICE: oryxa
+  # cloudflare_account_id in deploy/production/variables.tf.
+  CLOUDFLARE_ACCOUNT_ID: f50cbb237cd6f0ab48cc3679f727d132
+
+jobs:
+  production:
+    name: Production
+    # CI started by a push to main, and passed; or a run started by hand.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      contents: write # records the release on main
+      id-token: write # assumes the deploy role through GitHub's OIDC
+    steps:
+      - name: Setup
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          HYPERDRIVE_ID: ${{ vars.HYPERDRIVE_ID }}
+        run: |
+          # Nothing ships half-configured: the Worker needs both.
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$HYPERDRIVE_ID" ]; then
+            echo "::error::the production environment needs the CLOUDFLARE_API_TOKEN secret and the HYPERDRIVE_ID variable; see deploy/README.md"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v5
+        with:
+          # The commit CI passed, not whatever main holds by now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Release tag
+        id: release
+        # The tag deploy/scripts/release.sh would give the same commit.
+        run: echo "tag=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push the image
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          aws ecr get-login-password | docker login --username AWS --password-stdin "${REPOSITORY%%/*}"
+          docker buildx build --platform linux/arm64 --tag "$REPOSITORY:$TAG" --push .
+
+      - name: Roll the service onto it
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          # The running task definition with only oryxa's image changed, so
+          # everything OpenTofu set on it carries over.
+          current=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].taskDefinition' --output text)
+          aws ecs describe-task-definition --task-definition "$current" --include TAGS > current.json
+          jq --arg image "$REPOSITORY:$TAG" '
+            (.taskDefinition
+              | .containerDefinitions |= map(if .name == "oryxa" then .image = $image else . end)
+              | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities,
+                    .registeredAt, .registeredBy, .deregisteredAt))
+            + (if ((.tags // []) | length) > 0 then {tags: .tags} else {} end)
+          ' current.json > next.json
+          next=$(aws ecs register-task-definition --cli-input-json file://next.json \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "rolling $SERVICE from $current to $next"
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" --task-definition "$next" > /dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+          # The circuit breaker rolls a release that never turns healthy back,
+          # and a service rolled back is stable too: check what it settled on.
+          read -r running rollout < <(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].deployments[?status==`PRIMARY`] | [0].[taskDefinition, rolloutState]' --output text)
+          if [ "$running" != "$next" ] || [ "$rollout" != "COMPLETED" ]; then
+            echo "::error::the service settled on $running ($rollout), not $next"
+            exit 1
+          fi
+
+      - name: Record the release on main
+        # What release.sh has a person commit: without it, the next
+        # `tofu apply` would roll the service back to the tag it holds.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          path=deploy/production/release.auto.tfvars.json
+          file=$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=main")
+          recorded=$(jq -r .content <<<"$file" | base64 -d)
+          if [ "$(jq -r .image_tag <<<"$recorded")" = "$TAG" ]; then
+            echo "$TAG is already recorded"
+            exit 0
+          fi
+          count=$(jq '.desired_count // 1' <<<"$recorded")
+          content=$(jq -n --arg tag "$TAG" --argjson count "$count" \
+            '{image_tag: $tag, desired_count: $count}' | base64 -w0)
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/contents/$path" \
+            -f message="deploy: record release $TAG" -f content="$content" \
+            -f sha="$(jq -r .sha <<<"$file")" -f branch=main > /dev/null
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+
+      - name: Deploy the web Worker
+        working-directory: web
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          HYPERDRIVE_ID: ${{ vars.HYPERDRIVE_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          npm install --global pnpm@12.4.2
+          pnpm install --frozen-lockfile
+          CLOUDFLARE_ENV=production pnpm build
+          # As deploy/scripts/web.sh does: the Hyperdrive binding's id is the
+          # deployment's, so it joins the configuration the build wrote.
+          config=$(jq -r .configPath .wrangler/deploy/config.json)
+          config=$(cd .wrangler/deploy && cd "$(dirname "$config")" && pwd)/$(basename "$config")
+          jq --arg id "$HYPERDRIVE_ID" '.hyperdrive = [{binding: "HYPERDRIVE", id: $id}]' "$config" > "$config.new"
+          mv "$config.new" "$config"
+          pnpm exec wrangler deploy
