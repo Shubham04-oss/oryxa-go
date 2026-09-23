@@ -294,16 +294,117 @@ describe("WorkspaceShell navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
     expect(shell?.getAttribute("data-left")).toBe("expanded")
 
+    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+    expect(shell?.getAttribute("data-right")).toBe("expanded")
+    expect(screen.getByRole("tab", { name: "Primary agent" })).toBeTruthy()
+
     fireEvent.click(
-      screen.getByRole("button", { name: "Expand activity panel" })
+      screen.getByRole("button", { name: "Collapse agent panel" })
     )
+    expect(shell?.getAttribute("data-right")).toBe("collapsed")
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+  })
+
+  it("replaces the activity feed with agent and team tabs", () => {
+    const { container } = render(<WorkspaceShell />)
+    const shell = container.querySelector(".workspace-shell")
+    const panel = screen.getByRole("complementary", { name: "Agent panel" })
+
+    for (const text of ["Activity", "Team online", "5 online"])
+      expect(within(panel).queryByText(text)).toBeNull()
+    expect(within(panel).queryByText(/launch timeline/)).toBeNull()
+    expect(within(panel).queryByRole("tablist")).toBeNull()
+
+    expect(shell?.getAttribute("data-left")).toBe("expanded")
+    fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("expanded")
 
+    expect(
+      within(panel)
+        .getAllByRole("tab")
+        .map((item) => item.getAttribute("aria-label"))
+    ).toEqual(["Primary agent", "DMs", "Teams"])
+    const primaryTab = within(panel).getByRole("tab", { name: "Primary agent" })
+    expect(primaryTab.getAttribute("aria-selected")).toBe("true")
+    const primaryView = within(panel).getByRole("tabpanel", {
+      name: "Primary agent",
+    })
+    expect(
+      within(primaryView).getByRole("heading", { name: "Primary agent" })
+    ).toBeTruthy()
+    expect(
+      within(primaryView).getByText("Ask anything to start a conversation.")
+    ).toBeTruthy()
+    expect(
+      within(primaryView)
+        .getByRole("textbox", { name: "Message Primary agent" })
+        .hasAttribute("disabled")
+    ).toBe(true)
+    expect(
+      within(primaryView)
+        .getByRole("button", { name: "Send message" })
+        .hasAttribute("disabled")
+    ).toBe(true)
+    expect(
+      within(primaryView).getByText("Chat isn't connected yet.")
+    ).toBeTruthy()
+
+    const expectSelected = (name: string, text: string) => {
+      const selected = within(panel).getByRole("tab", { name })
+      expect(selected.getAttribute("aria-selected")).toBe("true")
+      expect(document.activeElement).toBe(selected)
+      expect(within(panel).getAllByRole("tabpanel")).toHaveLength(1)
+      expect(
+        within(within(panel).getByRole("tabpanel", { name })).getByText(text)
+      ).toBeTruthy()
+      return selected
+    }
+    let tab = primaryTab
+    for (const [key, name, text] of [
+      ["ArrowRight", "DMs", "Direct messages will appear here."],
+      ["ArrowRight", "Teams", "Team rooms will appear here."],
+      ["ArrowRight", "Primary agent", "Ask anything to start a conversation."],
+      ["ArrowLeft", "Teams", "Team rooms will appear here."],
+      ["Home", "Primary agent", "Ask anything to start a conversation."],
+      ["End", "Teams", "Team rooms will appear here."],
+    ]) {
+      fireEvent.keyDown(tab, { key })
+      tab = expectSelected(name, text)
+    }
+
     fireEvent.click(
-      screen.getByRole("button", { name: "Collapse activity panel" })
+      screen.getByRole("button", { name: "Collapse agent panel" })
     )
     expect(shell?.getAttribute("data-right")).toBe("collapsed")
+    expect(shell?.getAttribute("data-left")).toBe("collapsed")
+  })
+
+  it("opens the agent panel on the tab chosen from its rail", () => {
+    const { container } = render(<WorkspaceShell />)
+    const shell = container.querySelector(".workspace-shell")
+
+    for (const [name, text] of [
+      ["DMs", "Direct messages will appear here."],
+      ["Teams", "Team rooms will appear here."],
+      ["Primary agent", "Ask anything to start a conversation."],
+    ]) {
+      fireEvent.click(screen.getByRole("button", { name: `Open ${name}` }))
+      expect(shell?.getAttribute("data-right")).toBe("expanded")
+      expect(shell?.getAttribute("data-left")).toBe("collapsed")
+      const tab = screen.getByRole("tab", { name })
+      expect(tab.getAttribute("aria-selected")).toBe("true")
+      expect(document.activeElement).toBe(tab)
+      expect(
+        within(screen.getByRole("tabpanel", { name })).getByText(text)
+      ).toBeTruthy()
+
+      fireEvent.click(
+        screen.getByRole("button", { name: "Collapse agent panel" })
+      )
+      expect(screen.queryByRole("tab", { name })).toBeNull()
+    }
   })
 
   it("closes the mobile sidebar after selecting a conversation", () => {

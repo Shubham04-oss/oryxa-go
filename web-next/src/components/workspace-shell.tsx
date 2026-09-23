@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import type { ComponentType, FormEvent } from "react"
+import type { ComponentType } from "react"
 import {
   ArrowLeft,
   ArrowRight,
@@ -14,11 +14,7 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
-  PanelRightClose,
-  PanelRightOpen,
-  Paperclip,
   Puzzle,
-  Send,
   Settings2,
   Sparkles,
   UsersRound,
@@ -44,6 +40,7 @@ import {
   TeamspaceAvatar,
 } from "./workspace-avatar"
 import { WorkspaceTools } from "./workspace-tools"
+import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import { getSharedPeople, PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import { signOut } from "@/lib/auth/client"
@@ -121,33 +118,6 @@ const workEntries: Partial<Record<Section, WorkId[]>> = {
   specialists: ["research-specialist"],
 }
 
-const activity = [
-  {
-    identity: people.avery,
-    name: "Avery",
-    action: "updated the launch timeline",
-    detail: "Website refresh · 12 min ago",
-  },
-  {
-    identity: people.jordan,
-    name: "Jordan",
-    action: "added three new tasks",
-    detail: "Acme onboarding · 34 min ago",
-  },
-  {
-    identity: people.sam,
-    name: "Sam",
-    action: "approved the campaign brief",
-    detail: "Q4 campaign · 1 hr ago",
-  },
-  {
-    identity: people.noah,
-    name: "Noah",
-    action: "shared a customer note",
-    detail: "Research hub · 2 hrs ago",
-  },
-]
-
 function teamspaceWorkItem(space: Teamspace): WorkItem {
   if (space.id === "product-sync") {
     return { ...workItems["product-sync"], status: "Active" }
@@ -196,8 +166,6 @@ export function WorkspaceShell({
     [initialMode]: initialSection || defaultSections[initialMode],
   })
   const [focusedWork, setFocusedWork] = useState<WorkItem | null>(null)
-  const [note, setNote] = useState("")
-  const [notes, setNotes] = useState<string[]>([])
   const [knowledgeBases, setKnowledgeBases] = useState(initialKnowledgeBases)
   const [teamspaces, setTeamspaces] = useState(initialTeamspaces)
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState<
@@ -354,14 +322,6 @@ export function WorkspaceShell({
       personId,
       ...current.filter((id) => id !== personId),
     ])
-  }
-
-  function addNote(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const message = note.trim()
-    if (!message) return
-    setNotes((current) => [message, ...current])
-    setNote("")
   }
 
   function openWork(workId: WorkId) {
@@ -811,144 +771,14 @@ export function WorkspaceShell({
         )}
       </div>
 
-      <aside
-        id="workspace-activity"
-        className="workspace-right"
-        aria-label="Activity panel"
-      >
-        <div className="workspace-right-top">
-          {rightExpanded && (
-            <div>
-              <h2>Activity</h2>
-              <p>Today, across your team</p>
-            </div>
-          )}
-          <button
-            className="workspace-icon-button"
-            type="button"
-            aria-label={
-              rightExpanded
-                ? "Collapse activity panel"
-                : "Expand activity panel"
-            }
-            aria-controls="workspace-activity"
-            aria-expanded={rightExpanded}
-            onClick={() => {
-              if (rightExpanded) {
-                setRightExpanded(false)
-              } else {
-                setLeftExpanded(false)
-                setRightExpanded(true)
-              }
-            }}
-          >
-            {rightExpanded ? (
-              <>
-                <PanelRightClose
-                  className="workspace-panel-toggle-desktop"
-                  size={18}
-                  strokeWidth={1.7}
-                />
-                <ArrowRight
-                  className="workspace-panel-toggle-mobile"
-                  size={17}
-                  strokeWidth={1.7}
-                />
-              </>
-            ) : (
-              <>
-                <PanelRightOpen
-                  className="workspace-panel-toggle-desktop"
-                  size={18}
-                  strokeWidth={1.7}
-                />
-                <ArrowLeft
-                  className="workspace-panel-toggle-mobile"
-                  size={17}
-                  strokeWidth={1.7}
-                />
-              </>
-            )}
-          </button>
-        </div>
-
-        {rightExpanded ? (
-          <div className="workspace-activity-body">
-            <div className="workspace-online">
-              <span>Team online</span>
-              <span>5 online</span>
-            </div>
-            <div
-              className="workspace-avatar-row"
-              aria-label="Online team members"
-            >
-              {Object.values(people).map((identity) => (
-                <IdentityAvatar identity={identity} key={identity.id} />
-              ))}
-              <span className="workspace-avatar workspace-avatar-more">+2</span>
-            </div>
-            <div className="workspace-activity-list">
-              {notes.map((message, index) => (
-                <div
-                  className="workspace-activity-item"
-                  key={`${message}-${index}`}
-                >
-                  <IdentityAvatar identity={people.avery} />
-                  <div>
-                    <p>
-                      <strong>You</strong> shared a quick note
-                    </p>
-                    <small>{message}</small>
-                  </div>
-                </div>
-              ))}
-              {activity.map((item) => (
-                <div className="workspace-activity-item" key={item.detail}>
-                  <IdentityAvatar identity={item.identity} />
-                  <div>
-                    <p>
-                      <strong>{item.name}</strong> {item.action}
-                    </p>
-                    <small>{item.detail}</small>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <form className="workspace-quick-note" onSubmit={addNote}>
-              <label htmlFor="quick-note">Quick note</label>
-              <textarea
-                id="quick-note"
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                placeholder="Share an update with your team..."
-                rows={2}
-              />
-              <div className="workspace-note-actions">
-                <Paperclip size={16} strokeWidth={1.7} aria-hidden="true" />
-                <button
-                  type="submit"
-                  disabled={!note.trim()}
-                  aria-label="Send quick note"
-                >
-                  <Send size={14} strokeWidth={1.8} />
-                </button>
-              </div>
-            </form>
-          </div>
-        ) : (
-          <div className="workspace-right-rail">
-            <span className="workspace-rail-label">Activity</span>
-            <div
-              className="workspace-rail-avatars"
-              aria-label="Online team members"
-            >
-              {[people.avery, people.jordan, people.sam].map((identity) => (
-                <IdentityAvatar identity={identity} key={identity.id} />
-              ))}
-            </div>
-          </div>
-        )}
-      </aside>
+      <WorkspaceAgentPanel
+        expanded={rightExpanded}
+        onExpand={() => {
+          setLeftExpanded(false)
+          setRightExpanded(true)
+        }}
+        onCollapse={() => setRightExpanded(false)}
+      />
       {settingsOpen && (
         <WorkspaceSettings
           onClose={() => setSettingsOpen(false)}

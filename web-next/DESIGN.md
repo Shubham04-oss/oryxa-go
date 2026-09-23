@@ -44,13 +44,19 @@ not permission to copy every incidental value into a new component.
 - The base `#111111` surface carries the two sidebars without separate cards.
   The `#1e1e1e` canvas sits between them. No shell separator/divider lines.
 - On desktop, the left sidebar is 20% when expanded and a 48px rail when
-  collapsed. The right activity panel has a 48px collapsed rail and a wider
+  collapsed. The right agent panel has a 48px collapsed rail and a wider
   expanded panel. The center takes all remaining width.
 - Expanding the right panel collapses the left. Collapsing the right expands
   the center; it must **not** automatically expand the left. A manually
   collapsed left sidebar stays collapsed until the user opens it.
 - Home, Team, and Agents are the three primary icon-first pill controls. The
   active one is slightly enlarged and more prominent, not a giant tab.
+- The right agent panel holds the member's agent and team conversations. Its
+  tabs, Primary agent (the default), DMs and Teams, use the same icon-first
+  pills; the Primary agent pill carries the agent's voxel avatar. Collapsed,
+  its rail shows one icon per tab, and each opens the panel on that tab. A tab
+  without a live service shows a one-line empty state, never example people,
+  rooms or messages.
 - Sidebar content follows the primary mode:
 
   | Mode | Left navigation |
@@ -116,13 +122,15 @@ not permission to copy every incidental value into a new component.
   teardrops, persistent rail, extra mobile control bar, or sidebar glyphs.
 - Keep the page/context title centered between those controls. Preserve
   adequate clearance for the title and touch targets at narrow widths.
-- The activity panel and left navigation may open over content, but the
+- The agent panel and left navigation may open over content, but the
   default view should prioritize the center. Do not let both open panels
   compete for the viewport.
 - In a focused mobile chat, when the message field is active and the virtual
   keyboard reduces the visual viewport, hide the work/onboarding panel and
   give the visible height to the conversation and composer. Restore the work
   panel after composition. Do not let a checklist push the composer off-screen.
+  The agent panel's composer follows the same rule: the panel fits the visible
+  height, so its tabs and composer stay on screen.
 - Check a representative desktop viewport near 1099×807 and a phone viewport
   near 423×927, including panel-open, panel-closed, and keyboard/composer
   states when relevant. These are regression targets, not fixed layout sizes.
