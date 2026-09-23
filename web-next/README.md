@@ -48,6 +48,10 @@ The previous app's `../web/src/lib` is untouched. Migrate individual clients
 and domain models after their API contracts are reviewed; directly copying that
 folder would bring its existing coupling and issues into this app.
 
+[PARITY.md](PARITY.md) maps the old app route by route: what each screen does,
+the Go endpoints behind it, where this app stands on it (wired, example data or
+missing), a suggested build order and the pitfalls the #83 review found.
+
 ## Checks
 
 ```sh

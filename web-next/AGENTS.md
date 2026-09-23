@@ -24,3 +24,10 @@ When existing code conflicts with the contract, follow the contract for new
 work and fix the conflict if it is in scope. If it is outside scope, avoid
 copying the inconsistency and mention it rather than silently treating it as
 the pattern.
+
+## Building what the old app already does
+
+Before building a surface `../web` already has, read its row in
+[PARITY.md](PARITY.md): the old behaviour, the real endpoints (check them
+against the Go handler, not the old client), and the pitfalls. Update its status
+there in the same task.

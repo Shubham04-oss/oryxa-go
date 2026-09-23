@@ -101,6 +101,32 @@ jobs:
         env:
           WRANGLER_SEND_METRICS: "false"
 
+  web-next:
+    name: Web next
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web-next
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 26
+      - name: pnpm
+        run: npm install --global pnpm@12.4.2
+      - run: pnpm install --frozen-lockfile
+      - name: Prettier
+        run: pnpm check
+      - name: ESLint
+        run: pnpm lint
+      - name: Types
+        run: pnpm typecheck
+      - name: Tests
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+
   image:
     name: Image
     runs-on: ubuntu-latest
