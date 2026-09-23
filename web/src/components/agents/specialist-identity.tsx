@@ -88,10 +88,10 @@ export function suggestedSpecialistInstructions(
  */
 export const AVATAR_COLOURS = [
 	"#2f3b33",
-	"#3f7d52",
-	"#9a6a1e",
-	"#7d5b4f",
-	"#b08968",
+	"#577c63",
+	"#c4a77d",
+	"#b76e64",
+	"#e5d5c4",
 ];
 
 /**
@@ -119,7 +119,7 @@ export function SpecialistAvatar({
 			role="img"
 		>
 			{/* CSS sizes the box; the svg fills it, so one face works at every size. */}
-			<Avatar colors={AVATAR_COLOURS} name={seed} square variant="marble" />
+			<Avatar colors={AVATAR_COLOURS} name={seed} square variant="beam" />
 		</span>
 	);
 }
