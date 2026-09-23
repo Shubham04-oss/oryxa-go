@@ -1,5 +1,8 @@
 # Redesign plan
 
+> Historical plan for the previous app. The active design contract for the new
+> TanStack Start frontend is [web-next/DESIGN.md](../../web-next/DESIGN.md).
+
 The product works. Using it does not feel like it works.
 
 This folder is the plan for fixing that: what the app should become, screen by

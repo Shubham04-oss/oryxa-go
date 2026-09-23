@@ -68,6 +68,8 @@ For a local email/password-only demo without Google OAuth credentials, set
 `COGNITO_DEMO_PASSWORD_ONLY=true` only for the provisioner run. This skips the
 Google identity provider, restricts the app client to `COGNITO`, and returns no
 `google_redirect_uri`. Do not use this flag for production provisioning.
+Set `AUTH_GOOGLE_ENABLED=false` in the runtime environment for that demo so
+the public auth configuration and sign-in page do not offer Google.
 
 ## PostgreSQL and local runtime
 

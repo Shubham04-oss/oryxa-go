@@ -182,6 +182,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		AllowedOrigins:     config.AllowedReturnURLs,
 		CookieDomain:       config.CookieDomain,
 		CookieSecure:       config.CookieSecure,
+		GoogleEnabled:      config.GoogleEnabled,
 		AgentClientID:      config.CognitoAgentClientID,
 		AgentGrants:        agentGrants,
 		Services:           services,

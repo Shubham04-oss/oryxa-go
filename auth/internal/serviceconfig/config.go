@@ -29,6 +29,7 @@ type Config struct {
 	AllowedReturnURLs    []string
 	CookieDomain         string
 	CookieSecure         bool
+	GoogleEnabled        bool
 
 	// Agent grants let an agent act for a member while the member is absent.
 	// All four of the following are optional; AgentGrantsEnabled reports
@@ -56,6 +57,10 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	googleEnabled, err := boolValue(getenv, "AUTH_GOOGLE_ENABLED", true)
+	if err != nil {
+		return Config{}, err
+	}
 	config := Config{
 		CognitoIssuer:        strings.TrimSpace(getenv("COGNITO_ISSUER")),
 		CognitoUserPoolID:    strings.TrimSpace(getenv("COGNITO_USER_POOL_ID")),
@@ -71,6 +76,7 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		AllowedReturnURLs:    splitList(getenv("AUTH_RETURN_URLS")),
 		CookieDomain:         strings.TrimSpace(getenv("AUTH_COOKIE_DOMAIN")),
 		CookieSecure:         cookieSecure,
+		GoogleEnabled:        googleEnabled,
 
 		CognitoAgentClientID:     strings.TrimSpace(getenv("COGNITO_AGENT_CLIENT_ID")),
 		CognitoAgentClientSecret: strings.TrimSpace(getenv("COGNITO_AGENT_CLIENT_SECRET")),
