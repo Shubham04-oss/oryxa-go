@@ -81,7 +81,7 @@ func TestMembershipRejectsAMismatchedOrEmptyAnswer(t *testing.T) {
 	tests := map[string]string{
 		"a different organization than was asked about": `{"organization":{"id":"org_2","name":"Other"},"membership":{"organization_id":"org_2","user_id":"user-1"}}`,
 		"a membership for a different organization":     `{"organization":{"id":"org_1","name":"Acme"},"membership":{"organization_id":"org_2","user_id":"user-1"}}`,
-		"no member at all":                              `{"organization":{"id":"org_1","name":"Acme"},"membership":{"organization_id":"org_1","user_id":""}}`,
+		"no member at all": `{"organization":{"id":"org_1","name":"Acme"},"membership":{"organization_id":"org_1","user_id":""}}`,
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
