@@ -52,11 +52,14 @@ not permission to copy every incidental value into a new component.
 - Home, Team, and Agents are the three primary icon-first pill controls. The
   active one is slightly enlarged and more prominent, not a giant tab.
 - The right agent panel holds the member's agent and team conversations. Its
-  tabs, Primary agent (the default), DMs and Teams, use the same icon-first
-  pills; the Primary agent pill carries the agent's voxel avatar. Collapsed,
-  its rail shows one icon per tab, and each opens the panel on that tab. A tab
-  without a live service shows a one-line empty state, never example people,
-  rooms or messages.
+  tabs, Agents (the default), DMs and Teams, use the same icon-first pills;
+  the Agents pill carries the primary agent's voxel avatar. The Agents tab's
+  top row is a quick switch between the member's agents: the selected one is
+  the more prominent pill and shows its name, the rest stay avatar-only, and
+  empty slots stay plainly empty (a quiet dashed ring, never an example
+  agent). Collapsed, the panel's rail shows one icon per tab, and each opens
+  the panel on that tab. A tab without a live service shows a one-line empty
+  state, never example people, rooms or messages.
 - Sidebar content follows the primary mode:
 
   | Mode | Left navigation |
