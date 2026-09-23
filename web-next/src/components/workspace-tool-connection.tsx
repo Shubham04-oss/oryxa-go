@@ -103,6 +103,31 @@ function errorText(error: unknown) {
     : "This request could not be completed."
 }
 
+const TRIGGER_TYPES_PAGE_LIMIT = 50
+const TRIGGER_TYPES_MAX_PAGES = 10
+
+// The catalog clamps `limit` to 50 server-side, so an app with more trigger
+// types than fit on one page needs its `next_cursor` followed to be listed
+// in full.
+async function fetchTriggerTypes(toolkit: string): Promise<TriggerType[]> {
+  const types: TriggerType[] = []
+  let cursor: string | null = null
+  for (let page = 0; page < TRIGGER_TYPES_MAX_PAGES; page++) {
+    const params = new URLSearchParams({
+      limit: String(TRIGGER_TYPES_PAGE_LIMIT),
+    })
+    if (cursor) params.set("cursor", cursor)
+    const data = await readApi<{
+      triggers: TriggerType[]
+      next_cursor: string | null
+    }>(`/v1/apps/catalog/${encodeURIComponent(toolkit)}/triggers?${params}`)
+    types.push(...data.triggers)
+    if (!data.next_cursor) break
+    cursor = data.next_cursor
+  }
+  return types
+}
+
 export function ConnectionWorkspace({
   connection,
   toolkit,
@@ -124,6 +149,7 @@ export function ConnectionWorkspace({
   const [problem, setProblem] = useState("")
   const [eventRefresh, setEventRefresh] = useState(0)
   const [sourceRefresh, setSourceRefresh] = useState(0)
+  const [runsSourceId, setRunsSourceId] = useState<string | null>(null)
 
   useEffect(() => {
     if (preview || pane !== "events") return
@@ -133,14 +159,12 @@ export function ConnectionWorkspace({
     const root = `/v1/organizations/${encodeURIComponent(organizationId)}`
     const search = new URLSearchParams({ connection_id: connection.id })
     Promise.all([
-      readApi<{ triggers: TriggerType[] }>(
-        `/v1/apps/catalog/${encodeURIComponent(toolkit.toolkit)}/triggers?limit=100`
-      ),
+      fetchTriggerTypes(toolkit.toolkit),
       readApi<{ triggers: Trigger[] }>(`${root}/apps/triggers?${search}`),
     ])
-      .then(([catalog, subscribed]) => {
+      .then(([catalogTypes, subscribed]) => {
         if (cancelled) return
-        setTypes(catalog.triggers)
+        setTypes(catalogTypes)
         setTriggers(subscribed.triggers)
       })
       .catch((error: unknown) => {
@@ -246,7 +270,10 @@ export function ConnectionWorkspace({
           sources={sources}
           loading={sourceLoading}
           onChange={() => setSourceRefresh((current) => current + 1)}
-          onRuns={() => setPane("runs")}
+          onRuns={(sourceId) => {
+            setRunsSourceId(sourceId)
+            setPane("runs")
+          }}
         />
       )}
       {pane === "runs" && (
@@ -255,6 +282,7 @@ export function ConnectionWorkspace({
           preview={preview}
           sources={sources}
           loading={sourceLoading}
+          initialSourceId={runsSourceId}
         />
       )}
     </div>
@@ -392,7 +420,7 @@ function EventsPane({
           return (
             <div className="workspace-tool-row" key={trigger.id}>
               <span
-                className={`workspace-tool-dot${trigger.status === "active" ? "is-live" : ""}`}
+                className={`workspace-tool-dot ${trigger.status === "active" ? "is-live" : ""}`}
               />
               <div className="workspace-tool-row-copy">
                 <strong>{type?.name || trigger.trigger}</strong>
@@ -645,7 +673,7 @@ function IndexingPane({
   sources: Source[]
   loading: boolean
   onChange: () => void
-  onRuns: () => void
+  onRuns: (sourceId: string) => void
 }) {
   const [adding, setAdding] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -719,7 +747,7 @@ function IndexingPane({
         .map((source) => (
           <div className="workspace-tool-row" key={source.id}>
             <span
-              className={`workspace-tool-dot${source.status === "active" ? "is-live" : ""}`}
+              className={`workspace-tool-dot ${source.status === "active" ? "is-live" : ""}`}
             />
             <div className="workspace-tool-row-copy">
               <strong>{sourceName(source.provider, source.target)}</strong>
@@ -733,7 +761,7 @@ function IndexingPane({
               <button
                 type="button"
                 className="workspace-tool-text-button"
-                onClick={onRuns}
+                onClick={() => onRuns(source.id)}
               >
                 Runs
               </button>
@@ -926,13 +954,15 @@ function RunsPane({
   preview,
   sources,
   loading,
+  initialSourceId,
 }: {
   organizationId: string
   preview: boolean
   sources: Source[]
   loading: boolean
+  initialSourceId: string | null
 }) {
-  const [sourceId, setSourceId] = useState("")
+  const [sourceId, setSourceId] = useState(initialSourceId || "")
   const [runs, setRuns] = useState<Run[]>([])
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState("")
@@ -945,6 +975,7 @@ function RunsPane({
     let cancelled = false
     setBusy(true)
     setProblem("")
+    setRuns([])
     readApi<{ runs: Run[] }>(
       `/v1/organizations/${encodeURIComponent(organizationId)}/sources/${encodeURIComponent(selectedId)}/runs?limit=10`
     )
@@ -1011,7 +1042,7 @@ function RunsPane({
         runs.map((run) => (
           <div className="workspace-tool-row" key={run.id}>
             <span
-              className={`workspace-tool-dot${run.status === "completed" ? "is-live" : run.status === "failed" ? "is-error" : ""}`}
+              className={`workspace-tool-dot ${run.status === "completed" ? "is-live" : run.status === "failed" ? "is-error" : ""}`}
             />
             <div className="workspace-tool-row-copy">
               <strong>

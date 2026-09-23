@@ -111,7 +111,7 @@ describe("WorkspaceTools", () => {
               },
             ],
           })
-        if (url === "/v1/apps/catalog/github/triggers?limit=100")
+        if (url === "/v1/apps/catalog/github/triggers?limit=50")
           return apiResponse({
             triggers: [
               {
@@ -220,7 +220,7 @@ describe("WorkspaceTools", () => {
       }
     )
     vi.stubGlobal("fetch", fetchMock)
-    render(<WorkspaceTools />)
+    render(<WorkspaceTools organizationId="org-1" />)
 
     expect(
       await screen.findByRole("heading", { name: "Connected tools" })
@@ -262,6 +262,17 @@ describe("WorkspaceTools", () => {
         }),
       })
     )
+    // Wait for the "add event" form (its own heading also reads "Push") to
+    // close before looking for the subscribed trigger's row, so this finds
+    // the active row's dot rather than the closing form's heading.
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Watch event" })).toBeNull()
+    )
+    const activeDot = (await screen.findByText("Push"))
+      .closest(".workspace-tool-row")
+      ?.querySelector(".workspace-tool-dot")
+    expect(activeDot?.classList.contains("workspace-tool-dot")).toBe(true)
+    expect(activeDot?.classList.contains("is-live")).toBe(true)
 
     fireEvent.click(screen.getByRole("tab", { name: "Indexing" }))
     fireEvent.click(await screen.findByRole("button", { name: "Add source" }))
@@ -301,6 +312,41 @@ describe("WorkspaceTools", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "/v1/organizations/org-1/apps/connections",
       expect.objectContaining({ credentials: "include" })
+    )
+  })
+
+  it("uses the organizationId prop, never the first organization from /v1/auth/me", async () => {
+    const requestedUrls: string[] = []
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      requestedUrls.push(url)
+      if (url === "/v1/apps/catalog?limit=1")
+        return apiResponse({ toolkits: [], next_cursor: null })
+      if (url === "/v1/auth/me")
+        return apiResponse({
+          organizations: [
+            { id: "org_a", name: "Org A" },
+            { id: "org_b", name: "Org B" },
+          ],
+        })
+      if (url === "/v1/organizations/org_b/apps/connections")
+        return apiResponse({ connections: [] })
+      const slug = url.split("/").at(-1)
+      const toolkit = previewToolkits.find((item) => item.toolkit === slug)
+      return toolkit
+        ? apiResponse({ ...toolkit, connectable: true })
+        : apiResponse({ error: { message: "missing" } }, 404)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    render(<WorkspaceTools organizationId="org_b" />)
+
+    await waitFor(() =>
+      expect(requestedUrls).toContain(
+        "/v1/organizations/org_b/apps/connections"
+      )
+    )
+    expect(requestedUrls).not.toContain(
+      "/v1/organizations/org_a/apps/connections"
     )
   })
 })

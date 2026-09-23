@@ -741,7 +741,9 @@ export function WorkspaceShell({
                   }
                 />
               )}
-              {section === "tools" && <WorkspaceTools />}
+              {section === "tools" && (
+                <WorkspaceTools organizationId={selectedOrganization?.id} />
+              )}
               {section === "people" && (
                 <PeopleDirectory
                   spaces={teamspaces}
@@ -963,6 +965,7 @@ export function WorkspaceShell({
             setSectionsByMode((current) => ({ ...current, home: "tools" }))
             setFocusedWork(null)
             setSettingsOpen(false)
+            if (isMobile) setLeftExpanded(false)
           }}
         />
       )}

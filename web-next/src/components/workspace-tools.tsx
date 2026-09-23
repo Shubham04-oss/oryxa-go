@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowRight,
   ArrowUpRight,
@@ -17,7 +17,7 @@ import {
 } from "./workspace-tools-data"
 import { ApiError, readApi } from "./workspace-tools-api"
 import { ConnectionWorkspace } from "./workspace-tool-connection"
-import type { Connection, Organization, Toolkit } from "./workspace-tools-data"
+import type { Connection, Toolkit } from "./workspace-tools-data"
 
 type ViewState = "loading" | "live" | "preview"
 type AuthState = "loading" | "signed-in" | "signed-out" | "unavailable"
@@ -41,17 +41,20 @@ function ToolkitLogo({ toolkit }: { toolkit: Toolkit }) {
   )
 }
 
-export function WorkspaceTools() {
+export function WorkspaceTools({
+  organizationId,
+}: {
+  organizationId?: string
+}) {
   const [viewState, setViewState] = useState<ViewState>("loading")
   const [authState, setAuthState] = useState<AuthState>("loading")
   const [toolkits, setToolkits] = useState<Toolkit[]>([])
   const [connections, setConnections] = useState<Connection[]>([])
-  const [organizations, setOrganizations] = useState<Organization[]>([])
-  const [organizationId, setOrganizationId] = useState("")
   const [query, setQuery] = useState("")
   const [results, setResults] = useState<Toolkit[] | null>(null)
   const [nextCursor, setNextCursor] = useState<string | null>(null)
   const [searching, setSearching] = useState(false)
+  const searchGeneration = useRef(0)
   const [selectedConnection, setSelectedConnection] = useState<string | null>(
     null
   )
@@ -82,8 +85,8 @@ export function WorkspaceTools() {
             readApi<Toolkit>(`/v1/apps/catalog/${encodeURIComponent(slug)}`)
           )
         ),
-        readApi<{ organizations: Organization[] }>("/v1/auth/me")
-          .then((value) => ({ ok: true as const, value }))
+        readApi("/v1/auth/me")
+          .then(() => ({ ok: true as const }))
           .catch((error: unknown) => ({ ok: false as const, error })),
       ])
       if (cancelled) return
@@ -102,8 +105,6 @@ export function WorkspaceTools() {
         )
       } else {
         setAuthState("signed-in")
-        setOrganizations(identity.value.organizations)
-        setOrganizationId(identity.value.organizations[0]?.id || "")
       }
     }
 
@@ -164,11 +165,14 @@ export function WorkspaceTools() {
   }, [viewState, organizationId])
 
   useEffect(() => {
+    searchGeneration.current += 1
     if (!query.trim() || viewState !== "live") {
       setResults(null)
       setNextCursor(null)
+      setSearching(false)
       return
     }
+    const generation = searchGeneration.current
     const controller = new AbortController()
     const timeout = window.setTimeout(async () => {
       setSearching(true)
@@ -181,7 +185,10 @@ export function WorkspaceTools() {
           toolkits: Toolkit[]
           next_cursor: string | null
         }>(`/v1/apps/catalog?${params}`, { signal: controller.signal })
-        if (!controller.signal.aborted) {
+        if (
+          !controller.signal.aborted &&
+          searchGeneration.current === generation
+        ) {
           setResults(data.toolkits)
           setNextCursor(data.next_cursor)
         }
@@ -235,6 +242,7 @@ export function WorkspaceTools() {
 
   async function loadMore() {
     if (!nextCursor) return
+    const generation = searchGeneration.current
     setSearching(true)
     try {
       const params = new URLSearchParams({
@@ -246,14 +254,16 @@ export function WorkspaceTools() {
         toolkits: Toolkit[]
         next_cursor: string | null
       }>(`/v1/apps/catalog?${params}`)
+      if (searchGeneration.current !== generation) return
       setResults((current) => [...(current || []), ...data.toolkits])
       setNextCursor(data.next_cursor)
     } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Could not load more tools."
-      )
+      if (searchGeneration.current === generation)
+        setMessage(
+          error instanceof Error ? error.message : "Could not load more tools."
+        )
     } finally {
-      setSearching(false)
+      if (searchGeneration.current === generation) setSearching(false)
     }
   }
 
@@ -262,17 +272,19 @@ export function WorkspaceTools() {
     setConnecting(toolkit.toolkit)
     setMessage("")
     try {
-      const returnTo = new URL(window.location.pathname, window.location.origin)
+      const returnTo = new URL(
+        `${window.location.pathname}${window.location.search}`,
+        window.location.origin
+      )
       returnTo.searchParams.set("view", "tools")
       const data = await readApi<{ redirect_url: string }>(
         `/v1/organizations/${encodeURIComponent(organizationId)}/apps/connections`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: {
             toolkit: toolkit.toolkit,
             return_to: returnTo.toString(),
-          }),
+          },
         }
       )
       const target = new URL(data.redirect_url)
@@ -293,33 +305,16 @@ export function WorkspaceTools() {
   }
 
   function signIn() {
-    const returnTo = new URL(window.location.pathname, window.location.origin)
-    returnTo.searchParams.set("view", "tools")
+    const params = new URLSearchParams(window.location.search)
+    params.set("view", "tools")
+    const redirect = `${window.location.pathname}?${params}`
     window.location.assign(
-      `/v1/auth/login?return_to=${encodeURIComponent(returnTo.toString())}`
+      `/auth/sign-in?redirect=${encodeURIComponent(redirect)}`
     )
   }
 
   return (
     <div className="workspace-tools-page">
-      {organizations.length > 1 && (
-        <div className="workspace-tools-intro">
-          <label className="workspace-tools-org">
-            Workspace
-            <select
-              value={organizationId}
-              onChange={(event) => setOrganizationId(event.target.value)}
-            >
-              {organizations.map((organization) => (
-                <option key={organization.id} value={organization.id}>
-                  {organization.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      )}
-
       {isPreview && (
         <div className="workspace-tools-notice" role="status">
           Layout preview · The Apps service is offline. Logos below are
@@ -423,7 +418,7 @@ export function WorkspaceTools() {
               key={selected.id}
               connection={selected}
               toolkit={selectedToolkit}
-              organizationId={organizationId}
+              organizationId={organizationId || ""}
               preview={isPreview}
             />
           </>
