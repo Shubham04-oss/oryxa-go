@@ -73,11 +73,44 @@ wrote: they are what the next apply runs.
 
 ## Releasing
 
-`deploy/scripts/release.sh` builds the image from the commit checked out,
-pushes it tagged with that commit and applies it. The service starts a new
-task, waits for its health check and for cloudflared to connect, then stops
-the old one; one that never turns healthy is rolled back. The schema migrates
-at start (`ORYXA_AUTO_MIGRATE`), under an advisory lock.
+Main releases from CI. Every pull request and every push to main runs
+`.github/workflows/ci.yml`; once it passes on main,
+`.github/workflows/deploy.yml` waits for approval on the repository's
+`production` environment, and then:
+
+1. builds the image for Fargate's arm64 and pushes it to ECR, tagged with the
+   commit as `release.sh` would tag it;
+2. registers the running task definition again with only that image changed,
+   rolls the service onto it, and fails if the circuit breaker rolled it back;
+3. records the tag in `release.auto.tfvars.json` on main, so the next
+   `tofu apply` keeps that release rather than rolling back to the old one;
+4. builds the web app and deploys its Worker.
+
+It runs as `oryxa-production-github-deploy` (`production/github.tf`) through
+GitHub's OIDC, which can push the image and roll the service and nothing
+else, so infrastructure changes are still a `tofu apply` from a laptop. The
+Actions tab's Run workflow releases main's head on demand.
+
+Before its first run, once:
+
+- `tofu apply` in `deploy/production`, which creates the GitHub OIDC provider
+  and the role.
+- In the repository's settings, an environment named `production`: yourself
+  as required reviewer, and main as its only deployment branch. On a private
+  repository GitHub offers required reviewers only on some plans; without one
+  a release does not wait.
+- In that environment, the secret `CLOUDFLARE_API_TOKEN` (the "Edit Cloudflare
+  Workers" template, for this account) and the variable `HYPERDRIVE_ID`, from
+  `tofu -chdir=deploy/production output -raw hyperdrive_id`.
+
+A release from a laptop still works: `deploy/scripts/release.sh` builds the
+image from the commit checked out, pushes it tagged with that commit and
+applies it, and `deploy/scripts/web.sh` deploys the Worker.
+
+Either way the service starts a new task, waits for its health check and for
+cloudflared to connect, then stops the old one; one that never turns healthy
+is rolled back. The schema migrates at start (`ORYXA_AUTO_MIGRATE`), under an
+advisory lock.
 
 ## Looking at it
 
@@ -114,4 +147,5 @@ aws ssm start-session --target <instance id> \
 - A second task and Multi-AZ.
 - A database user for Hyperdrive with only what Workers read, rather than the
   owner.
-- Releases from CI with GitHub's OIDC rather than a laptop.
+- Infrastructure from CI too: `tofu plan` on pull requests and `tofu apply`
+  behind the same approval, which needs a broader role than releases do.
