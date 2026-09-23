@@ -16,7 +16,7 @@ const documentColumns = `
 	id, corpus_id, organization_id, source_kind, source_ref, title, content_type,
 	content_sha256, byte_size, metadata, status, failure_reason, chunk_count,
 	attempts, created_by, created_at, updated_at, ingested_at,
-	original_bucket, original_key, kb_synced_hash`
+	original_bucket, original_key, kb_synced_hash, kb_submitted_at`
 
 // documentColumnsQualified is the same list for a statement that also has
 // another relation in scope, where a bare "id" is ambiguous.
@@ -26,7 +26,8 @@ const documentColumnsQualified = `
 	document.byte_size, document.metadata, document.status, document.failure_reason,
 	document.chunk_count, document.attempts, document.created_by, document.created_at,
 	document.updated_at, document.ingested_at,
-	document.original_bucket, document.original_key, document.kb_synced_hash`
+	document.original_bucket, document.original_key, document.kb_synced_hash,
+	document.kb_submitted_at`
 
 type documentRow struct {
 	ID             string     `db:"id"`
@@ -50,6 +51,7 @@ type documentRow struct {
 	OriginalBucket string     `db:"original_bucket"`
 	OriginalKey    string     `db:"original_key"`
 	KBSyncedHash   string     `db:"kb_synced_hash"`
+	KBSubmittedAt  *time.Time `db:"kb_submitted_at"`
 }
 
 func (row documentRow) document() (domain.Document, error) {
@@ -78,6 +80,7 @@ func (row documentRow) document() (domain.Document, error) {
 		OriginalBucket: row.OriginalBucket,
 		OriginalKey:    row.OriginalKey,
 		KBSyncedHash:   row.KBSyncedHash,
+		KBSubmittedAt:  row.KBSubmittedAt,
 	}, nil
 }
 
@@ -426,9 +429,16 @@ func (store *Store) MarkDocumentFailed(ctx context.Context, documentID, reason s
 // MarkDocumentReady is what lets a claim tell "never submitted, or the
 // content changed since it last was" from "already submitted, only the
 // outcome is still unknown" without resubmitting on every poll.
+//
+// The time goes with the hash, so the worker can tell how long a submission
+// has been outstanding. An empty hash forgets both: nothing is outstanding.
 func (store *Store) MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, contentSHA256 string, at time.Time) error {
 	if _, err := store.db.ExecContext(ctx, `
-		UPDATE rag_documents SET kb_synced_hash = $2, updated_at = $3 WHERE id = $1`,
+		UPDATE rag_documents
+		SET kb_synced_hash = $2,
+		    kb_submitted_at = CASE WHEN $2 = '' THEN NULL ELSE $3::timestamptz END,
+		    updated_at = $3
+		WHERE id = $1`,
 		documentID, contentSHA256, at); err != nil {
 		return fmt.Errorf("mark document submitted to the knowledge base: %w", err)
 	}

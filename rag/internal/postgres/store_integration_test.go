@@ -286,10 +286,14 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 	if afterSubmit.KBSyncedHash != stored.ContentSHA256 {
 		t.Fatalf("kb_synced_hash = %q after submission, want %q", afterSubmit.KBSyncedHash, stored.ContentSHA256)
 	}
+	if afterSubmit.KBSubmittedAt == nil || !afterSubmit.KBSubmittedAt.Equal(at) {
+		t.Fatalf("kb_submitted_at = %v after submission, want %v", afterSubmit.KBSubmittedAt, at)
+	}
 
 	// A claim is how the ingest worker later polls this document's outcome;
 	// it must not disturb kb_synced_hash, which is the only thing telling
-	// the next claim that this content was already submitted.
+	// the next claim that this content was already submitted, nor
+	// kb_submitted_at, which is how long it has been waiting.
 	claimed, err := store.ClaimDocuments(ctx, 10, time.Minute)
 	if err != nil {
 		t.Fatalf("ClaimDocuments: %v", err)
@@ -303,9 +307,26 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 		if candidate.KBSyncedHash != stored.ContentSHA256 {
 			t.Fatalf("claiming the document changed kb_synced_hash to %q, want %q", candidate.KBSyncedHash, stored.ContentSHA256)
 		}
+		if candidate.KBSubmittedAt == nil || !candidate.KBSubmittedAt.Equal(at) {
+			t.Fatalf("claiming the document changed kb_submitted_at to %v, want %v", candidate.KBSubmittedAt, at)
+		}
 	}
 	if !found {
 		t.Fatal("ClaimDocuments did not claim the pending document")
+	}
+
+	// Giving a submission up forgets when it was made along with what it was,
+	// since nothing is outstanding any more.
+	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, "", at.Add(time.Minute)); err != nil {
+		t.Fatalf("MarkKnowledgeBaseSubmitted with no hash: %v", err)
+	}
+	afterReset, err := store.Document(ctx, organizationID, stored.ID)
+	if err != nil {
+		t.Fatalf("Document: %v", err)
+	}
+	if afterReset.KBSyncedHash != "" || afterReset.KBSubmittedAt != nil {
+		t.Fatalf("after a reset kb_synced_hash = %q and kb_submitted_at = %v, want both empty",
+			afterReset.KBSyncedHash, afterReset.KBSubmittedAt)
 	}
 
 	ids, err := store.DocumentIDsForCorpus(ctx, corpus.ID)

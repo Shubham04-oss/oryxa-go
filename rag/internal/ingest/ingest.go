@@ -56,6 +56,15 @@ type Store interface {
 // lease would leave one waiting five minutes to be called ready.
 const knowledgeBaseRecheck = 10 * time.Second
 
+// knowledgeBaseStall is how long a submission may stay unfinished before it
+// is given up on and submitted again. Indexing takes seconds, and minutes for
+// a managed knowledge base reading a document's pictures; an hour is far past
+// either, so a document still unfinished then is one the knowledge base lost,
+// or left in a state this worker does not know to be final. Polls do not
+// count as attempts, so without this such a document was polled forever; a
+// resubmission does count, so one that never finishes ends up failed.
+const knowledgeBaseStall = time.Hour
+
 // Vectors routes a corpus to the store holding its vectors.
 type Vectors interface {
 	For(corpus domain.Corpus) (vectorstore.Store, error)
@@ -379,11 +388,28 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 	}
 	status := statuses[document.ID]
 	switch status.Code {
-	case "INDEXED", "IGNORED":
+	case "INDEXED":
+		return Result{}, pipeline.markKnowledgeBaseReady(ctx, corpus, document, status.Code, at)
+	case "IGNORED":
 		// IGNORED, measured against the validated behaviour, is what
 		// re-ingesting content the knowledge base already holds unchanged
 		// looks like — nothing rag's own dedup would call a failure either.
-		return Result{}, pipeline.markKnowledgeBaseReady(ctx, corpus, document, at)
+		// Bedrock also ignores a document it will not take at all, and says
+		// why. That reason is logged, because such a document reads as ready
+		// with nothing of it searchable.
+		if status.Reason != "" {
+			pipeline.logger.InfoContext(ctx, "the knowledge base ignored a document",
+				"document_id", document.ID, "corpus_id", corpus.ID, "reason", status.Reason)
+		}
+		return Result{}, pipeline.markKnowledgeBaseReady(ctx, corpus, document, status.Code, at)
+	case "PARTIALLY_INDEXED":
+		// A finished outcome, not a step on the way: Bedrock lists it beside
+		// INDEXED and FAILED as what became of the document. Waiting on it
+		// only ever got the same answer back. What did index is searchable,
+		// so the document is ready, and the shortfall is logged.
+		pipeline.logger.WarnContext(ctx, "the knowledge base indexed only part of a document",
+			"document_id", document.ID, "corpus_id", corpus.ID, "reason", status.Reason)
+		return Result{}, pipeline.markKnowledgeBaseReady(ctx, corpus, document, status.Code, at)
 	case "FAILED", "METADATA_UPDATE_FAILED":
 		reason := status.Reason
 		if reason == "" {
@@ -409,11 +435,25 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 		}
 		return Result{}, fmt.Errorf("the knowledge base reported %s for this document; resubmitting", status.Code)
 	default:
-		// STARTING, PENDING, IN_PROGRESS and PARTIALLY_INDEXED all mean
-		// "still working": leave the document ingesting and ask again
-		// shortly. So does TEXT_INDEXED, which a managed knowledge base
-		// reports, undocumented, between taking a document's text and
-		// finishing with it: seen live, it becomes INDEXED minutes later.
+		// STARTING, PENDING and IN_PROGRESS all mean "still working": leave
+		// the document ingesting and ask again shortly. So does TEXT_INDEXED,
+		// which a managed knowledge base reports, undocumented, between
+		// taking a document's text and finishing with it: seen live, it
+		// becomes INDEXED minutes later.
+		//
+		// Still working an hour after the submission is not working. It is
+		// given up on the way a lost document is, by forgetting the
+		// submission so the next claim makes it again; this claim is not
+		// handed back as a poll, so it counts as an attempt.
+		if document.KBSubmittedAt != nil {
+			if waited := at.Sub(*document.KBSubmittedAt); waited > knowledgeBaseStall {
+				if resetErr := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document.ID, "", at); resetErr != nil {
+					return Result{}, resetErr
+				}
+				return Result{}, fmt.Errorf("the knowledge base still reported %s for this document %s after it was submitted; resubmitting",
+					status.Code, waited.Round(time.Minute))
+			}
+		}
 		return Result{}, pipeline.store.RecheckDocumentAt(ctx, document.ID, at.Add(knowledgeBaseRecheck))
 	}
 }
@@ -421,8 +461,9 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 // markKnowledgeBaseReady records a document the knowledge base finished
 // indexing. There is no chunk count of rag's own to report — Bedrock chunked
 // it, not rag — so the field stays zero for a document on this backend,
-// which is an honest answer rather than a guess.
-func (pipeline *Pipeline) markKnowledgeBaseReady(ctx context.Context, corpus domain.Corpus, document domain.Document, at time.Time) error {
+// which is an honest answer rather than a guess. status is the knowledge
+// base's own word for how it finished.
+func (pipeline *Pipeline) markKnowledgeBaseReady(ctx context.Context, corpus domain.Corpus, document domain.Document, status string, at time.Time) error {
 	indexed, err := pipeline.event(rageventsv1.DocumentIndexedDetailType, rageventsv1.DocumentIndexed{
 		DocumentID: document.ID, CorpusID: document.CorpusID, OrganizationID: document.OrganizationID,
 		Provider: string(corpus.Spec.Provider), Model: corpus.Spec.Model, IndexedAt: at,
@@ -440,7 +481,7 @@ func (pipeline *Pipeline) markKnowledgeBaseReady(ctx context.Context, corpus dom
 			"document_id", document.ID, "corpus_id", corpus.ID, "error", err)
 	}
 	pipeline.logger.InfoContext(ctx, "a knowledge base finished indexing a document",
-		"document_id", document.ID, "corpus_id", corpus.ID, "status", "INDEXED")
+		"document_id", document.ID, "corpus_id", corpus.ID, "status", status)
 	return nil
 }
 

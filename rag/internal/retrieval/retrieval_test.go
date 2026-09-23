@@ -24,13 +24,16 @@ func testCorpus() domain.Corpus {
 
 // fakeChunks answers both the lexical search and the hydration reads.
 type fakeChunks struct {
-	lexical     []domain.ScoredChunk
-	lexicalErr  error
-	texts       map[string]string
-	documents   map[string]string
-	missing     map[string]bool
-	lastFilter  domain.Filter
-	lexicalCall int
+	lexical    []domain.ScoredChunk
+	lexicalErr error
+	texts      map[string]string
+	documents  map[string]string
+	missing    map[string]bool
+	// goneDocuments are documents whose rows are deleted, which
+	// DocumentRefs no longer finds.
+	goneDocuments map[string]bool
+	lastFilter    domain.Filter
+	lexicalCall   int
 }
 
 func (fake *fakeChunks) LexicalSearch(_ context.Context, _ domain.Corpus, _ string, _ int, filter domain.Filter) ([]domain.ScoredChunk, error) {
@@ -63,6 +66,9 @@ func (fake *fakeChunks) Chunks(_ context.Context, _, _ string, ids []string) ([]
 func (fake *fakeChunks) DocumentRefs(_ context.Context, _ string, ids []string) (map[string]domain.Ref, error) {
 	refs := map[string]domain.Ref{}
 	for _, id := range ids {
+		if fake.goneDocuments[id] {
+			continue
+		}
 		refs[id] = domain.Ref{ID: id, Title: "Title " + id, Source: domain.Source{Kind: domain.SourceInline}}
 	}
 	return refs, nil
