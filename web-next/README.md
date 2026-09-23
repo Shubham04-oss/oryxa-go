@@ -20,9 +20,10 @@ The app runs at `http://localhost:3001`. Requests to `/v1/*` are proxied to
 The new auth flow uses the backend's password and Google endpoints. Local
 `AUTH_RETURN_URLS` and service `*_ALLOWED_ORIGINS` must include both
 `http://localhost:3001` and `http://127.0.0.1:3001`; the repository's local
-`.env` and `.env.example` now do. Email verification and reset links target
-`http://127.0.0.1:3001/auth/*` in the local setup. Restart the backend after
-changing these variables. The auth service must be running to actually sign
+`.env` and `.env.example` now do. Email verification, reset and invitation
+links target `http://localhost:3001` in `.env.example`: localhost is the host
+of the Google callback, and a Google sign-in started on `127.0.0.1` loses its
+state cookie there. Restart the backend after changing these variables. The auth service must be running to actually sign
 in; it currently proxies through port 8080.
 
 Only in development, an unavailable auth service leaves the existing workspace
