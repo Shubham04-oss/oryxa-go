@@ -57,12 +57,6 @@ type Session struct {
 	ReturnTo     string
 }
 
-type Tokens struct {
-	AccessToken  string
-	RefreshToken string
-	ExpiresIn    int
-}
-
 type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	IDToken      string `json:"id_token"`
@@ -175,28 +169,6 @@ func (manager *Manager) Complete(ctx context.Context, state, stateCookie, code s
 		ExpiresIn:    tokens.ExpiresIn,
 		User:         user,
 		ReturnTo:     flow.ReturnTo,
-	}, nil
-}
-
-func (manager *Manager) Refresh(ctx context.Context, refreshToken string) (Tokens, error) {
-	if refreshToken == "" {
-		return Tokens{}, fmt.Errorf("refresh token is required: %w", domain.ErrUnauthorized)
-	}
-	tokens, err := manager.exchange(ctx, url.Values{
-		"client_id":     {manager.config.ClientID},
-		"grant_type":    {"refresh_token"},
-		"refresh_token": {refreshToken},
-	})
-	if err != nil {
-		return Tokens{}, err
-	}
-	if tokens.RefreshToken == "" {
-		tokens.RefreshToken = refreshToken
-	}
-	return Tokens{
-		AccessToken:  tokens.AccessToken,
-		RefreshToken: tokens.RefreshToken,
-		ExpiresIn:    tokens.ExpiresIn,
 	}, nil
 }
 

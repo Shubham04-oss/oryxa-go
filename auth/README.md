@@ -69,7 +69,9 @@ For a local email/password-only demo without Google OAuth credentials, set
 Google identity provider, restricts the app client to `COGNITO`, and returns no
 `google_redirect_uri`. Do not use this flag for production provisioning.
 Set `AUTH_GOOGLE_ENABLED=false` in the runtime environment for that demo so
-the public auth configuration and sign-in page do not offer Google.
+the public auth configuration does not offer Google, and `/v1/auth/login`
+answers 404; web-next's sign-in page follows the configuration. The older
+`web/` app does not read it: build that one with `VITE_AUTH_PASSWORD_ONLY=true`.
 
 ## PostgreSQL and local runtime
 

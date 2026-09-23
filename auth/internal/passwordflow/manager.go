@@ -73,8 +73,11 @@ type Tokens struct {
 	ExpiresIn    int
 }
 
-// Refresh uses the Cognito user-pools API so tokens from password sign-in can
-// renew even when the app client has refresh-token rotation enabled.
+// Refresh renews a session through the user-pools API, which takes the
+// refresh token of every session the web app client issues: a password
+// sign-in's and a Google sign-in's through managed login alike. It is the
+// call Cognito names for app clients with refresh-token rotation, as this
+// one has; REFRESH_TOKEN_AUTH is refused there.
 func (manager *Manager) Refresh(ctx context.Context, refreshToken string) (Tokens, error) {
 	if refreshToken == "" {
 		return Tokens{}, domain.ErrUnauthorized

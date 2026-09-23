@@ -34,7 +34,6 @@ type accessTokenVerifier interface {
 type authFlow interface {
 	Begin(context.Context, string) (string, string, error)
 	Complete(context.Context, string, string, string) (oauthflow.Session, error)
-	Refresh(context.Context, string) (oauthflow.Tokens, error)
 	Revoke(context.Context, string) error
 }
 
@@ -408,6 +407,9 @@ func (server *Server) refresh(writer http.ResponseWriter, request *http.Request)
 	}
 	tokens, err := server.passwords.Refresh(request.Context(), cookie.Value)
 	if err != nil {
+		// Every member refreshes here, however they signed in, so a kind of
+		// session Cognito stops renewing shows up in this log first.
+		slog.WarnContext(request.Context(), "refresh session", "error", err)
 		server.clearSessionCookies(writer)
 		writeError(writer, http.StatusUnauthorized, "refresh session is invalid")
 		return
