@@ -35,7 +35,9 @@ func TestAgentGrantLifecycle(t *testing.T) {
 		_, _ = store.pool.Exec(cleanupCtx, `DELETE FROM auth_users WHERE id = $1`, userID)
 	}()
 
-	now := time.Now().UTC()
+	// PostgreSQL keeps microseconds; Linux's clock has nanoseconds, which a
+	// round trip would drop before the comparisons below.
+	now := time.Now().UTC().Truncate(time.Microsecond)
 	user := domain.User{ID: userID, Email: userID + "@example.com", CreatedAt: now, UpdatedAt: now}
 	if _, err := store.UpsertFederatedUser(ctx, user, testEvent("it-agent-registered-"+suffix, "auth.user.registered.v1", now), testEvent("it-agent-signed-in-"+suffix, "auth.user.signed-in.v1", now)); err != nil {
 		t.Fatalf("upsert user: %v", err)
