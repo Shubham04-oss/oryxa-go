@@ -23,7 +23,6 @@ describe("AgentSwitcher", () => {
         ]}
         selectedId="agent-ada"
         onSelect={onSelect}
-        placeholders={0}
       />
     )
 
@@ -39,13 +38,15 @@ describe("AgentSwitcher", () => {
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("agent-rex")
   })
 
-  it("falls back to an accessible-only name when the agent's name is unknown", () => {
+  it("names the agent in use for screen readers even before its name loads", () => {
     render(
       <AgentSwitcher
-        agents={[{ id: "agent-primary", avatarSeed: "seed-primary" }]}
+        agents={[
+          { id: "agent-primary", avatarSeed: "seed-primary" },
+          { id: "agent-rex", name: "Rex", avatarSeed: "seed-rex" },
+        ]}
         selectedId="agent-primary"
         onSelect={vi.fn()}
-        placeholders={0}
       />
     )
 
@@ -57,22 +58,16 @@ describe("AgentSwitcher", () => {
     expect(screen.queryByText("Primary agent")).toBeNull()
   })
 
-  it("renders empty placeholder slots that are disabled and never look like real agents", () => {
-    render(
+  it("shows nothing when there is only one agent to choose", () => {
+    const { container } = render(
       <AgentSwitcher
-        agents={[{ id: "agent-primary", avatarSeed: "seed-primary" }]}
+        agents={[{ id: "agent-primary", name: "Krude", avatarSeed: "seed" }]}
         selectedId="agent-primary"
         onSelect={vi.fn()}
-        placeholders={3}
       />
     )
 
-    const slots = screen.getAllByRole("button", { name: "Empty agent slot" })
-    expect(slots).toHaveLength(3)
-    for (const slot of slots) {
-      expect(slot.hasAttribute("disabled")).toBe(true)
-      expect(slot.textContent).toBe("")
-      expect(slot.querySelector("img, svg")).toBeNull()
-    }
+    expect(container.innerHTML).toBe("")
+    expect(screen.queryByRole("group", { name: "Switch agent" })).toBeNull()
   })
 })

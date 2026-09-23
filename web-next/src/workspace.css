@@ -703,13 +703,6 @@
 .workspace-agent-view { display: flex; flex: 1; flex-direction: column; min-height: 0; }
 .workspace-agent-view:focus-visible { outline: 2px solid #d6d6d6; outline-offset: 2px; }
 .workspace-agent-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 44px; }
-.workspace-agent-slot-empty {
-  border-style: dashed;
-  border-color: var(--workspace-border);
-  background: var(--workspace-base);
-  cursor: default;
-}
-.workspace-agent-slot-empty:hover { background: var(--workspace-base); color: #aaa; }
 .workspace-agent-conversation {
   display: flex;
   flex: 1;

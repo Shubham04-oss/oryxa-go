@@ -331,24 +331,13 @@ describe("WorkspaceShell navigation", () => {
     const agentsView = within(panel).getByRole("tabpanel", {
       name: "Agents",
     })
-    const switcher = within(agentsView).getByRole("group", {
-      name: "Switch agent",
-    })
+    // One agent: nothing to switch to, so no switch row and no empty slots.
     expect(
-      within(switcher).getByRole("button", {
-        name: "Primary agent",
-        pressed: true,
-      })
-    ).toBeTruthy()
-    expect(within(switcher).queryByText("Primary agent")).toBeNull()
+      within(agentsView).queryByRole("group", { name: "Switch agent" })
+    ).toBeNull()
     expect(
-      within(switcher).getAllByRole("button", { name: "Empty agent slot" })
-    ).toHaveLength(3)
-    for (const slot of within(switcher).getAllByRole("button", {
-      name: "Empty agent slot",
-    })) {
-      expect(slot.hasAttribute("disabled")).toBe(true)
-    }
+      within(agentsView).queryByRole("button", { name: "Empty agent slot" })
+    ).toBeNull()
     expect(screen.queryByText("Primary agent")).toBeNull()
     expect(
       within(agentsView).getByText("Ask anything to start a conversation.")

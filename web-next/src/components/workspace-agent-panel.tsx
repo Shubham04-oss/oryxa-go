@@ -270,7 +270,6 @@ function AgentsView({
         ]}
         selectedId={PRIMARY_AGENT_SEED}
         onSelect={() => {}}
-        placeholders={3}
       />
       <AgentConversation agentName={agentName} entries={[]} />
       <AgentComposer

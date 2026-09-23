@@ -27,22 +27,20 @@ function switcherIdentity(entry: AgentSwitcherEntry): AvatarIdentity {
 }
 
 /**
- * Quick switch between the member's agents. Today only the primary agent is
- * real; the rest of the row is quiet, disabled placeholders so the layout
- * reads correctly once more agents exist. Placeholders never look like real
- * agents (no avatar, initials, or name).
+ * Quick switch between the member's agents: the one in use is the named
+ * pill, the others avatar-only. With a single agent there is nothing to
+ * switch to, so the row is not shown at all.
  */
 export function AgentSwitcher({
   agents,
   selectedId,
   onSelect,
-  placeholders,
 }: {
   agents: AgentSwitcherEntry[]
   selectedId: string
   onSelect: (id: string) => void
-  placeholders: number
 }) {
+  if (agents.length < 2) return null
   return (
     <div
       className="workspace-agent-identity"
@@ -67,16 +65,6 @@ export function AgentSwitcher({
           </button>
         )
       })}
-      {Array.from({ length: Math.max(0, placeholders) }, (_, index) => (
-        <button
-          className="workspace-switcher-item workspace-agent-slot-empty"
-          type="button"
-          key={`agent-slot-${index}`}
-          disabled
-          aria-label="Empty agent slot"
-          title="More agents will appear here."
-        />
-      ))}
     </div>
   )
 }
