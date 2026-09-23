@@ -29,6 +29,7 @@ type cognitoAPI interface {
 	AdminUpdateUserAttributes(context.Context, *cognitoidentityprovider.AdminUpdateUserAttributesInput, ...func(*cognitoidentityprovider.Options)) (*cognitoidentityprovider.AdminUpdateUserAttributesOutput, error)
 	AdminUserGlobalSignOut(context.Context, *cognitoidentityprovider.AdminUserGlobalSignOutInput, ...func(*cognitoidentityprovider.Options)) (*cognitoidentityprovider.AdminUserGlobalSignOutOutput, error)
 	InitiateAuth(context.Context, *cognitoidentityprovider.InitiateAuthInput, ...func(*cognitoidentityprovider.Options)) (*cognitoidentityprovider.InitiateAuthOutput, error)
+	GetTokensFromRefreshToken(context.Context, *cognitoidentityprovider.GetTokensFromRefreshTokenInput, ...func(*cognitoidentityprovider.Options)) (*cognitoidentityprovider.GetTokensFromRefreshTokenOutput, error)
 }
 
 type lifecycleService interface {
@@ -64,6 +65,39 @@ type Session struct {
 	RefreshToken string
 	ExpiresIn    int
 	User         domain.User
+}
+
+type Tokens struct {
+	AccessToken  string
+	RefreshToken string
+	ExpiresIn    int
+}
+
+// Refresh renews a session through the user-pools API, which takes the
+// refresh token of every session the web app client issues: a password
+// sign-in's and a Google sign-in's through managed login alike. It is the
+// call Cognito names for app clients with refresh-token rotation, as this
+// one has; REFRESH_TOKEN_AUTH is refused there.
+func (manager *Manager) Refresh(ctx context.Context, refreshToken string) (Tokens, error) {
+	if refreshToken == "" {
+		return Tokens{}, domain.ErrUnauthorized
+	}
+	output, err := manager.client.GetTokensFromRefreshToken(ctx, &cognitoidentityprovider.GetTokensFromRefreshTokenInput{
+		ClientId:     aws.String(manager.config.ClientID),
+		RefreshToken: aws.String(refreshToken),
+	})
+	if err != nil {
+		return Tokens{}, mapCognitoError("refresh session", err)
+	}
+	if output == nil || output.AuthenticationResult == nil || aws.ToString(output.AuthenticationResult.AccessToken) == "" || output.AuthenticationResult.ExpiresIn <= 0 {
+		return Tokens{}, domain.ErrUnauthorized
+	}
+	result := output.AuthenticationResult
+	newRefreshToken := aws.ToString(result.RefreshToken)
+	if newRefreshToken == "" {
+		newRefreshToken = refreshToken
+	}
+	return Tokens{AccessToken: aws.ToString(result.AccessToken), RefreshToken: newRefreshToken, ExpiresIn: int(result.ExpiresIn)}, nil
 }
 
 func New(client cognitoAPI, service lifecycleService, verifier identityVerifier, config Config) (*Manager, error) {

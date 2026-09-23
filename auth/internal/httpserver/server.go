@@ -34,7 +34,6 @@ type accessTokenVerifier interface {
 type authFlow interface {
 	Begin(context.Context, string) (string, string, error)
 	Complete(context.Context, string, string, string) (oauthflow.Session, error)
-	Refresh(context.Context, string) (oauthflow.Tokens, error)
 	Revoke(context.Context, string) error
 }
 
@@ -43,6 +42,7 @@ type passwordAuth interface {
 	ResendEmailVerification(context.Context, string) error
 	ConfirmEmail(context.Context, string) error
 	Login(context.Context, string, string) (passwordflow.Session, error)
+	Refresh(context.Context, string) (passwordflow.Tokens, error)
 	RequestPasswordReset(context.Context, string) error
 	ResetPassword(context.Context, string, string) error
 }
@@ -73,6 +73,7 @@ type Config struct {
 	AllowedOrigins     []string
 	CookieDomain       string
 	CookieSecure       bool
+	GoogleEnabled      bool
 
 	// AgentClientID is COGNITO_AGENT_CLIENT_ID: the Cognito agent app
 	// client's ID. Whenever it is set, a verified access token whose
@@ -204,12 +205,11 @@ func (server *Server) health(writer http.ResponseWriter, _ *http.Request) {
 
 func (server *Server) authConfig(writer http.ResponseWriter, _ *http.Request) {
 	noStore(writer)
-	writeJSON(writer, http.StatusOK, map[string]any{
+	identityProviders := []string{"Password"}
+	config := map[string]any{
 		"authorization_endpoint": strings.TrimRight(server.config.CognitoDomain, "/") + "/oauth2/authorize",
 		"callback_url":           server.config.CognitoCallbackURL,
 		"client_id":              server.config.CognitoClientID,
-		"identity_provider":      "Google",
-		"identity_providers":     []string{"Google", "Password"},
 		"password_policy": map[string]any{
 			"minimum_length":     12,
 			"requires_lowercase": true,
@@ -219,7 +219,13 @@ func (server *Server) authConfig(writer http.ResponseWriter, _ *http.Request) {
 		},
 		"response_type": "code",
 		"scopes":        []string{"openid", "email", "profile"},
-	})
+	}
+	if server.config.GoogleEnabled {
+		identityProviders = append([]string{"Google"}, identityProviders...)
+		config["identity_provider"] = "Google"
+	}
+	config["identity_providers"] = identityProviders
+	writeJSON(writer, http.StatusOK, config)
 }
 
 func (server *Server) passwordSignUp(writer http.ResponseWriter, request *http.Request) {
@@ -338,6 +344,10 @@ func (server *Server) passwordReset(writer http.ResponseWriter, request *http.Re
 
 func (server *Server) login(writer http.ResponseWriter, request *http.Request) {
 	noStore(writer)
+	if !server.config.GoogleEnabled {
+		writeError(writer, http.StatusNotFound, "Google sign-in is not enabled")
+		return
+	}
 	state, target, err := server.oauth.Begin(request.Context(), request.URL.Query().Get("return_to"))
 	if err != nil {
 		server.handleError(writer, err)
@@ -395,8 +405,11 @@ func (server *Server) refresh(writer http.ResponseWriter, request *http.Request)
 		writeError(writer, http.StatusUnauthorized, "refresh session is missing")
 		return
 	}
-	tokens, err := server.oauth.Refresh(request.Context(), cookie.Value)
+	tokens, err := server.passwords.Refresh(request.Context(), cookie.Value)
 	if err != nil {
+		// Every member refreshes here, however they signed in, so a kind of
+		// session Cognito stops renewing shows up in this log first.
+		slog.WarnContext(request.Context(), "refresh session", "error", err)
 		server.clearSessionCookies(writer)
 		writeError(writer, http.StatusUnauthorized, "refresh session is invalid")
 		return

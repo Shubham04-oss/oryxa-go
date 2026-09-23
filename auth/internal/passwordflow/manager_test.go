@@ -26,6 +26,8 @@ type fakeCognito struct {
 	getOutput        *cognitoidentityprovider.AdminGetUserOutput
 	getErr           error
 	initiateOutput   *cognitoidentityprovider.InitiateAuthOutput
+	refreshInput     *cognitoidentityprovider.GetTokensFromRefreshTokenInput
+	refreshOutput    *cognitoidentityprovider.GetTokensFromRefreshTokenOutput
 }
 
 func (fake *fakeCognito) AdminCreateUser(_ context.Context, input *cognitoidentityprovider.AdminCreateUserInput, _ ...func(*cognitoidentityprovider.Options)) (*cognitoidentityprovider.AdminCreateUserOutput, error) {
@@ -72,6 +74,11 @@ func (fake *fakeCognito) AdminUserGlobalSignOut(context.Context, *cognitoidentit
 
 func (fake *fakeCognito) InitiateAuth(context.Context, *cognitoidentityprovider.InitiateAuthInput, ...func(*cognitoidentityprovider.Options)) (*cognitoidentityprovider.InitiateAuthOutput, error) {
 	return fake.initiateOutput, nil
+}
+
+func (fake *fakeCognito) GetTokensFromRefreshToken(_ context.Context, input *cognitoidentityprovider.GetTokensFromRefreshTokenInput, _ ...func(*cognitoidentityprovider.Options)) (*cognitoidentityprovider.GetTokensFromRefreshTokenOutput, error) {
+	fake.refreshInput = input
+	return fake.refreshOutput, nil
 }
 
 type fakeLifecycle struct {
@@ -212,6 +219,25 @@ func TestResetPasswordRevokesSessionsAndCompletesAuthAction(t *testing.T) {
 	}
 	if !cognito.globalSignOut || lifecycle.completedPurpose != domain.ActionPasswordReset {
 		t.Fatalf("reset lifecycle incomplete: cognito=%+v lifecycle=%+v", cognito, lifecycle)
+	}
+}
+
+func TestRefreshUsesCognitoAndRotatesToken(t *testing.T) {
+	cognito := &fakeCognito{refreshOutput: &cognitoidentityprovider.GetTokensFromRefreshTokenOutput{
+		AuthenticationResult: &types.AuthenticationResultType{
+			AccessToken: aws.String("new-access"), RefreshToken: aws.String("new-refresh"), ExpiresIn: 3600,
+		},
+	}}
+	manager := newTestManager(t, cognito, &fakeLifecycle{}, fakeIdentityVerifier{})
+	tokens, err := manager.Refresh(context.Background(), "old-refresh")
+	if err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if aws.ToString(cognito.refreshInput.ClientId) != "client" || aws.ToString(cognito.refreshInput.RefreshToken) != "old-refresh" {
+		t.Fatalf("unexpected refresh input: %+v", cognito.refreshInput)
+	}
+	if tokens.AccessToken != "new-access" || tokens.RefreshToken != "new-refresh" || tokens.ExpiresIn != 3600 {
+		t.Fatalf("unexpected refreshed tokens: %+v", tokens)
 	}
 }
 

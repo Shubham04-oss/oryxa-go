@@ -60,6 +60,18 @@ func TestFromEnvRejectsInvalidBoolean(t *testing.T) {
 	}
 }
 
+func TestFromEnvCanDisableGoogle(t *testing.T) {
+	values := requiredEnv()
+	values["AUTH_GOOGLE_ENABLED"] = "false"
+	config, err := FromEnv(env(values))
+	if err != nil {
+		t.Fatalf("FromEnv() error = %v", err)
+	}
+	if config.GoogleEnabled {
+		t.Fatal("GoogleEnabled = true, want false")
+	}
+}
+
 func TestAgentGrantsDisabledUnlessAllFourAreSet(t *testing.T) {
 	config, err := FromEnv(env(requiredEnv()))
 	if err != nil {

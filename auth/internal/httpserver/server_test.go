@@ -35,11 +35,16 @@ type fakeAuthFlow struct {
 type fakePasswordAuth struct {
 	passwordAuth
 	session passwordflow.Session
+	tokens  passwordflow.Tokens
 	err     error
 }
 
 func (fake *fakePasswordAuth) Login(context.Context, string, string) (passwordflow.Session, error) {
 	return fake.session, fake.err
+}
+
+func (fake *fakePasswordAuth) Refresh(context.Context, string) (passwordflow.Tokens, error) {
+	return fake.tokens, fake.err
 }
 
 func (fake *fakeAuthFlow) Begin(_ context.Context, _ string) (string, string, error) {
@@ -91,7 +96,43 @@ func testHandler(verifier fakeVerifier, flow *fakeAuthFlow, service *fakeAuthSer
 		CookieSecure:    true,
 		CognitoDomain:   "https://example.auth.ap-south-1.amazoncognito.com",
 		CognitoClientID: "client-id",
+		GoogleEnabled:   true,
 	})
+}
+
+func TestPasswordOnlyConfigDoesNotOfferGoogle(t *testing.T) {
+	handler := New(fakeVerifier{}, &fakeAuthFlow{}, &fakePasswordAuth{}, &fakeAuthService{}, Config{
+		CognitoDomain: "https://identity.example.com",
+	})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/auth/config", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"identity_providers":["Password"]`) || strings.Contains(response.Body.String(), `"identity_provider":"Google"`) {
+		t.Fatalf("unexpected password-only config: status=%d body=%s", response.Code, response.Body)
+	}
+
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/auth/login", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("Google login status = %d, want 404", response.Code)
+	}
+}
+
+func TestRefreshReplacesRotatedSessionCookies(t *testing.T) {
+	handler := New(fakeVerifier{}, &fakeAuthFlow{}, &fakePasswordAuth{tokens: passwordflow.Tokens{
+		AccessToken: "new-access", RefreshToken: "new-refresh", ExpiresIn: 3600,
+	}}, &fakeAuthService{}, Config{AllowedOrigins: []string{"https://app.example.com"}, CookieSecure: true})
+	request := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh", nil)
+	request.Header.Set("Origin", "https://app.example.com")
+	request.AddCookie(&http.Cookie{Name: refreshCookieName, Value: "old-refresh"})
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("refresh status = %d, want 204", response.Code)
+	}
+	cookies := response.Result().Cookies()
+	if len(cookies) != 2 || cookies[0].Value != "new-access" || cookies[1].Value != "new-refresh" {
+		t.Fatalf("refresh did not rotate session cookies: %+v", cookies)
+	}
 }
 
 func TestPatternsNameEveryRoute(t *testing.T) {
