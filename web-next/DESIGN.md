@@ -33,6 +33,11 @@ not permission to copy every incidental value into a new component.
   cards and pill controls are welcome; avoid ornamental gradients, broad
   shadows, glass effects, or divider lines between shell regions. Borders may
   group content *inside* a surface. Shadows are for overlays, not page depth.
+- A chat composer (message to a person, room, or agent) is a pill-shaped
+  field — full pill at one line, softening to a large radius once its
+  content wraps past one line — with a circular icon send button inside,
+  never a rectangular field with a text "Send" button. Share one set of CSS
+  across composers instead of copying the pattern per screen.
 - Use Lucide for general UI icons. Use actual brand marks for integrations.
   Icons should express an action or entity, never fill empty space.
 - Every interactive state must be visible: hover, active/selected, keyboard
@@ -52,11 +57,14 @@ not permission to copy every incidental value into a new component.
 - Home, Team, and Agents are the three primary icon-first pill controls. The
   active one is slightly enlarged and more prominent, not a giant tab.
 - The right agent panel holds the member's agent and team conversations. Its
-  tabs, Primary agent (the default), DMs and Teams, use the same icon-first
-  pills; the Primary agent pill carries the agent's voxel avatar. Collapsed,
-  its rail shows one icon per tab, and each opens the panel on that tab. A tab
-  without a live service shows a one-line empty state, never example people,
-  rooms or messages.
+  tabs, Agents (the default), DMs and Teams, use the same icon-first pills;
+  the Agents pill carries the primary agent's voxel avatar. When the member
+  has more than one agent, the Agents tab's top row is a quick switch between
+  them: the one in use is the oval pill with its name, like the pills
+  elsewhere, and the rest stay avatar-only. With a single agent the row is not
+  shown, and it never shows empty or example slots. Collapsed, the panel's rail shows one icon per tab, and each opens
+  the panel on that tab. A tab without a live service shows a one-line empty
+  state, never example people, rooms or messages.
 - Sidebar content follows the primary mode:
 
   | Mode | Left navigation |
@@ -82,6 +90,10 @@ not permission to copy every incidental value into a new component.
   and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
   sit **above** the work panel. The panel's top area belongs to the selected
   view's heading and state, not the tab strip.
+- Header-row controls — work tabs, panel tabs, panel toggles — sit on the
+  header's own centre row (y=28 in its 56px band), vertically level with the
+  back button and title, even when (like the work tabs) they are positioned
+  over a region below the header rather than inside the `<header>` itself.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header

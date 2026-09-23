@@ -254,7 +254,8 @@ describe("WorkspaceShell navigation", () => {
         target: { value: "The checklist is ready." },
       }
     )
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Send message" }))
     expect(screen.getByText("The checklist is ready.")).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: "Back to workspace" }))
@@ -297,7 +298,7 @@ describe("WorkspaceShell navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Expand agent panel" }))
     expect(shell?.getAttribute("data-left")).toBe("collapsed")
     expect(shell?.getAttribute("data-right")).toBe("expanded")
-    expect(screen.getByRole("tab", { name: "Primary agent" })).toBeTruthy()
+    expect(screen.getByRole("tab", { name: "Agents" })).toBeTruthy()
 
     fireEvent.click(
       screen.getByRole("button", { name: "Collapse agent panel" })
@@ -325,30 +326,35 @@ describe("WorkspaceShell navigation", () => {
       within(panel)
         .getAllByRole("tab")
         .map((item) => item.getAttribute("aria-label"))
-    ).toEqual(["Primary agent", "DMs", "Teams"])
-    const primaryTab = within(panel).getByRole("tab", { name: "Primary agent" })
-    expect(primaryTab.getAttribute("aria-selected")).toBe("true")
-    const primaryView = within(panel).getByRole("tabpanel", {
-      name: "Primary agent",
+    ).toEqual(["Agents", "DMs", "Teams"])
+    const agentsTab = within(panel).getByRole("tab", { name: "Agents" })
+    expect(agentsTab.getAttribute("aria-selected")).toBe("true")
+    const agentsView = within(panel).getByRole("tabpanel", {
+      name: "Agents",
     })
+    // One agent: nothing to switch to, so no switch row and no empty slots.
     expect(
-      within(primaryView).getByRole("heading", { name: "Primary agent" })
+      within(agentsView).queryByRole("group", { name: "Switch agent" })
+    ).toBeNull()
+    expect(
+      within(agentsView).queryByRole("button", { name: "Empty agent slot" })
+    ).toBeNull()
+    expect(screen.queryByText("Primary agent")).toBeNull()
+    expect(
+      within(agentsView).getByText("Ask anything to start a conversation.")
     ).toBeTruthy()
     expect(
-      within(primaryView).getByText("Ask anything to start a conversation.")
-    ).toBeTruthy()
-    expect(
-      within(primaryView)
-        .getByRole("textbox", { name: "Message Primary agent" })
+      within(agentsView)
+        .getByRole("textbox", { name: "Message your agent" })
         .hasAttribute("disabled")
     ).toBe(true)
     expect(
-      within(primaryView)
+      within(agentsView)
         .getByRole("button", { name: "Send message" })
         .hasAttribute("disabled")
     ).toBe(true)
     expect(
-      within(primaryView).getByText("Chat isn't connected yet.")
+      within(agentsView).getByText("Chat isn't connected yet.")
     ).toBeTruthy()
 
     const expectSelected = (name: string, text: string) => {
@@ -361,13 +367,13 @@ describe("WorkspaceShell navigation", () => {
       ).toBeTruthy()
       return selected
     }
-    let tab = primaryTab
+    let tab = agentsTab
     for (const [key, name, text] of [
       ["ArrowRight", "DMs", "Direct messages will appear here."],
       ["ArrowRight", "Teams", "Team rooms will appear here."],
-      ["ArrowRight", "Primary agent", "Ask anything to start a conversation."],
+      ["ArrowRight", "Agents", "Ask anything to start a conversation."],
       ["ArrowLeft", "Teams", "Team rooms will appear here."],
-      ["Home", "Primary agent", "Ask anything to start a conversation."],
+      ["Home", "Agents", "Ask anything to start a conversation."],
       ["End", "Teams", "Team rooms will appear here."],
     ]) {
       fireEvent.keyDown(tab, { key })
@@ -388,7 +394,7 @@ describe("WorkspaceShell navigation", () => {
     for (const [name, text] of [
       ["DMs", "Direct messages will appear here."],
       ["Teams", "Team rooms will appear here."],
-      ["Primary agent", "Ask anything to start a conversation."],
+      ["Agents", "Ask anything to start a conversation."],
     ]) {
       fireEvent.click(screen.getByRole("button", { name: `Open ${name}` }))
       expect(shell?.getAttribute("data-right")).toBe("expanded")

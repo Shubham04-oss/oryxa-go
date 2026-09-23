@@ -9,12 +9,16 @@ import {
   UsersRound,
 } from "lucide-react"
 import { AgentComposer } from "./agent-composer"
+import { AgentSwitcher, FALLBACK_AGENT_NAME } from "./agent-switcher"
 import { IdentityAvatar } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
 import { cn } from "@/lib/utils"
 
-type AgentPanelTab = "primary" | "dms" | "teams"
+type AgentPanelTab = "agents" | "dms" | "teams"
+
+/** Seed for the one real agent this UI knows about today. */
+const PRIMARY_AGENT_SEED = "primary-agent"
 
 const panelTabs: Array<{
   key: AgentPanelTab
@@ -22,7 +26,7 @@ const panelTabs: Array<{
   icon?: ComponentType<{ size?: number; strokeWidth?: number }>
   empty?: string
 }> = [
-  { key: "primary", label: "Primary agent" },
+  { key: "agents", label: "Agents" },
   {
     key: "dms",
     label: "DMs",
@@ -47,24 +51,27 @@ export function WorkspaceAgentPanel({
   expanded,
   onExpand,
   onCollapse,
-  agentName = "Primary agent",
+  agentName,
 }: {
   expanded: boolean
   onExpand: () => void
   onCollapse: () => void
   agentName?: string
 }) {
-  const [tab, setTab] = useState<AgentPanelTab>("primary")
+  const [tab, setTab] = useState<AgentPanelTab>("agents")
   const [composing, setComposing] = useState(false)
   const visibleHeight = useVisibleHeight(expanded && composing)
   const tabRefs = useRef<
     Partial<Record<AgentPanelTab, HTMLButtonElement | null>>
   >({})
   const focusTabOnExpand = useRef(false)
-  const agent: AvatarIdentity = {
-    id: "primary-agent",
-    name: agentName,
-    initials: agentName
+  // The tab's own icon always shows the primary agent's voxel avatar, with
+  // "Primary agent" as an accessible-name fallback only (never shown as text).
+  const tabIconLabel = agentName ?? FALLBACK_AGENT_NAME
+  const tabIcon: AvatarIdentity = {
+    id: PRIMARY_AGENT_SEED,
+    name: tabIconLabel,
+    initials: tabIconLabel
       .split(/\s+/)
       .slice(0, 2)
       .map((part) => part.charAt(0).toUpperCase())
@@ -145,7 +152,7 @@ export function WorkspaceAgentPanel({
                   {Icon ? (
                     <Icon size={18} strokeWidth={1.8} />
                   ) : (
-                    <IdentityAvatar identity={agent} />
+                    <IdentityAvatar identity={tabIcon} />
                   )}
                   {selected && <span>{item.label}</span>}
                 </button>
@@ -202,9 +209,9 @@ export function WorkspaceAgentPanel({
             tabIndex={0}
             hidden={tab !== item.key}
           >
-            {item.key === "primary" ? (
-              <PrimaryAgentView
-                agent={agent}
+            {item.key === "agents" ? (
+              <AgentsView
+                agentName={agentName}
                 onComposingChange={setComposing}
               />
             ) : (
@@ -228,7 +235,7 @@ export function WorkspaceAgentPanel({
                 {Icon ? (
                   <Icon size={18} strokeWidth={1.7} />
                 ) : (
-                  <IdentityAvatar identity={agent} />
+                  <IdentityAvatar identity={tabIcon} />
                 )}
               </button>
             )
@@ -239,25 +246,35 @@ export function WorkspaceAgentPanel({
   )
 }
 
-function PrimaryAgentView({
-  agent,
+function AgentsView({
+  agentName,
   onComposingChange,
 }: {
-  agent: AvatarIdentity
+  agentName?: string
   onComposingChange: (composing: boolean) => void
 }) {
   const [draft, setDraft] = useState("")
+  const composerLabel = agentName
+    ? `Message ${agentName}`
+    : "Message your agent"
 
   return (
     <>
-      <div className="workspace-agent-identity">
-        <IdentityAvatar identity={agent} />
-        <h2>{agent.name}</h2>
-      </div>
-      <AgentConversation agentName={agent.name} entries={[]} />
+      <AgentSwitcher
+        agents={[
+          {
+            id: PRIMARY_AGENT_SEED,
+            name: agentName,
+            avatarSeed: PRIMARY_AGENT_SEED,
+          },
+        ]}
+        selectedId={PRIMARY_AGENT_SEED}
+        onSelect={() => {}}
+      />
+      <AgentConversation agentName={agentName} entries={[]} />
       <AgentComposer
-        label={`Message ${agent.name}`}
-        placeholder={`Message ${agent.name}`}
+        label={composerLabel}
+        placeholder={composerLabel}
         value={draft}
         onChange={setDraft}
         disabled
@@ -275,7 +292,7 @@ export function AgentConversation({
   loading = false,
   error,
 }: {
-  agentName: string
+  agentName?: string
   entries: AgentConversationEntry[]
   loading?: boolean
   error?: string
@@ -284,7 +301,11 @@ export function AgentConversation({
     <div
       className="workspace-agent-conversation"
       role="log"
-      aria-label={`Conversation with ${agentName}`}
+      aria-label={
+        agentName
+          ? `Conversation with ${agentName}`
+          : "Conversation with your agent"
+      }
     >
       {entries.map((entry) => (
         <p
