@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { ComponentType, KeyboardEvent } from "react"
+import { useQuery } from "@tanstack/react-query"
 import {
   ArrowLeft,
   ArrowRight,
@@ -8,16 +9,20 @@ import {
   PanelRightOpen,
   UsersRound,
 } from "lucide-react"
+import { AgentChat } from "./agent-chat"
 import { AgentComposer } from "./agent-composer"
+import { AgentConversation } from "./agent-conversation"
 import { AgentSwitcher, FALLBACK_AGENT_NAME } from "./agent-switcher"
 import { IdentityAvatar } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
+import { primaryAgent } from "@/lib/agents/policy"
+import { agentsQueryOptions } from "@/lib/agents/queries"
 import { cn } from "@/lib/utils"
 
 type AgentPanelTab = "agents" | "dms" | "teams"
 
-/** Seed for the one real agent this UI knows about today. */
+/** Avatar seed for the primary agent until its id has loaded. */
 const PRIMARY_AGENT_SEED = "primary-agent"
 
 const panelTabs: Array<{
@@ -41,22 +46,17 @@ const panelTabs: Array<{
   },
 ]
 
-export type AgentConversationEntry = {
-  id: string
-  from: "member" | "agent"
-  text: string
-}
-
 export function WorkspaceAgentPanel({
   expanded,
   onExpand,
   onCollapse,
-  agentName,
+  organizationId,
 }: {
   expanded: boolean
   onExpand: () => void
   onCollapse: () => void
-  agentName?: string
+  /** The signed-in member's organization; without one the chat stays off. */
+  organizationId?: string
 }) {
   const [tab, setTab] = useState<AgentPanelTab>("agents")
   const [composing, setComposing] = useState(false)
@@ -65,11 +65,18 @@ export function WorkspaceAgentPanel({
     Partial<Record<AgentPanelTab, HTMLButtonElement | null>>
   >({})
   const focusTabOnExpand = useRef(false)
+  const agents = useQuery({
+    ...agentsQueryOptions(organizationId ?? ""),
+    enabled: Boolean(organizationId),
+  })
+  const primary = agents.data ? primaryAgent(agents.data) : undefined
+  const agentName = primary?.name
+  const agentSeed = primary?.id ?? PRIMARY_AGENT_SEED
   // The tab's own icon always shows the primary agent's voxel avatar, with
   // "Primary agent" as an accessible-name fallback only (never shown as text).
   const tabIconLabel = agentName ?? FALLBACK_AGENT_NAME
   const tabIcon: AvatarIdentity = {
-    id: PRIMARY_AGENT_SEED,
+    id: agentSeed,
     name: tabIconLabel,
     initials: tabIconLabel
       .split(/\s+/)
@@ -211,7 +218,9 @@ export function WorkspaceAgentPanel({
           >
             {item.key === "agents" ? (
               <AgentsView
+                organizationId={organizationId}
                 agentName={agentName}
+                agentSeed={agentSeed}
                 onComposingChange={setComposing}
               />
             ) : (
@@ -247,6 +256,44 @@ export function WorkspaceAgentPanel({
 }
 
 function AgentsView({
+  organizationId,
+  agentName,
+  agentSeed,
+  onComposingChange,
+}: {
+  organizationId?: string
+  agentName?: string
+  agentSeed: string
+  onComposingChange: (composing: boolean) => void
+}) {
+  return (
+    <>
+      {/* Only agents whose chat works are offered: the primary agent, until
+          specialists have their own chat object (REALTIME.md), so the row
+          stays hidden. */}
+      <AgentSwitcher
+        agents={[{ id: agentSeed, name: agentName, avatarSeed: agentSeed }]}
+        selectedId={agentSeed}
+        onSelect={() => {}}
+      />
+      {organizationId ? (
+        <AgentChat
+          organizationId={organizationId}
+          agentName={agentName}
+          onComposingChange={onComposingChange}
+        />
+      ) : (
+        <OfflineChat
+          agentName={agentName}
+          onComposingChange={onComposingChange}
+        />
+      )}
+    </>
+  )
+}
+
+/** No signed-in organization (the development preview): nothing to chat with. */
+function OfflineChat({
   agentName,
   onComposingChange,
 }: {
@@ -260,18 +307,7 @@ function AgentsView({
 
   return (
     <>
-      <AgentSwitcher
-        agents={[
-          {
-            id: PRIMARY_AGENT_SEED,
-            name: agentName,
-            avatarSeed: PRIMARY_AGENT_SEED,
-          },
-        ]}
-        selectedId={PRIMARY_AGENT_SEED}
-        onSelect={() => {}}
-      />
-      <AgentConversation agentName={agentName} entries={[]} />
+      <AgentConversation agentName={agentName} state="empty" />
       <AgentComposer
         label={composerLabel}
         placeholder={composerLabel}
@@ -283,51 +319,5 @@ function AgentsView({
         onBlur={() => onComposingChange(false)}
       />
     </>
-  )
-}
-
-export function AgentConversation({
-  agentName,
-  entries,
-  loading = false,
-  error,
-}: {
-  agentName?: string
-  entries: AgentConversationEntry[]
-  loading?: boolean
-  error?: string
-}) {
-  return (
-    <div
-      className="workspace-agent-conversation"
-      role="log"
-      aria-label={
-        agentName
-          ? `Conversation with ${agentName}`
-          : "Conversation with your agent"
-      }
-    >
-      {entries.map((entry) => (
-        <p
-          className="workspace-agent-message"
-          data-from={entry.from}
-          key={entry.id}
-        >
-          {entry.text}
-        </p>
-      ))}
-      {entries.length === 0 && (
-        <p className="workspace-agent-empty">
-          {loading
-            ? "Loading the conversation…"
-            : "Ask anything to start a conversation."}
-        </p>
-      )}
-      {error && (
-        <p className="workspace-agent-error" role="alert">
-          {error}
-        </p>
-      )}
-    </div>
   )
 }

@@ -772,6 +772,7 @@ export function WorkspaceShell({
       </div>
 
       <WorkspaceAgentPanel
+        organizationId={session ? selectedOrganization?.id : undefined}
         expanded={rightExpanded}
         onExpand={() => {
           setLeftExpanded(false)

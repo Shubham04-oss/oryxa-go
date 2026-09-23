@@ -764,6 +764,95 @@
 .workspace-agent-message[data-from="member"] { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 14px; background: #242424; }
 .workspace-agent-error { margin: 0; color: #e4aaa6; font-size: 12px; line-height: 1.45; }
 
+/* The Agents tab's conversation (DESIGN.md §3). The row above it names the
+   conversation and starts a new one. */
+.workspace-agent-thread-bar { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.workspace-agent-thread-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; color: #929292; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-agent-new {
+  display: grid;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #303030;
+  border-radius: 50%;
+  background: transparent;
+  color: #a8a8a8;
+}
+.workspace-agent-new:hover:not(:disabled) { background: #242424; color: #f2f2f2; }
+.workspace-agent-new:disabled { cursor: default; opacity: .4; }
+.workspace-agent-message[data-from="agent"] { white-space: normal; }
+.workspace-agent-author { margin: 0 0 2px; color: #8d8d8d; font-size: 11px; font-weight: 600; }
+.workspace-agent-note { margin: 4px 0 0; color: #858585; font-size: 11px; line-height: 1.4; }
+.workspace-agent-text-button { padding: 0; border: 0; background: none; color: #bdbdbd; font: inherit; font-size: 11px; text-decoration: underline; text-underline-offset: 2px; }
+.workspace-agent-text-button:hover { color: #f2f2f2; }
+.workspace-agent-working { margin: 0; color: #858585; font-size: 12px; animation: workspace-agent-pulse 1.6s ease-in-out infinite; }
+@keyframes workspace-agent-pulse { 50% { opacity: .4; } }
+.workspace-agent-conversation a:focus-visible { outline: 2px solid #d6d6d6; outline-offset: 2px; }
+
+.workspace-agent-markdown { overflow-wrap: anywhere; }
+.workspace-agent-markdown > :first-child { margin-top: 0; }
+.workspace-agent-markdown > :last-child { margin-bottom: 0; }
+.workspace-agent-markdown p { margin: 0 0 8px; }
+.workspace-agent-markdown ul,
+.workspace-agent-markdown ol { margin: 0 0 8px; padding-left: 18px; }
+.workspace-agent-markdown ul { list-style: disc; }
+.workspace-agent-markdown ol { list-style: decimal; }
+.workspace-agent-markdown li::marker { color: #8d8d8d; }
+.workspace-agent-markdown li + li { margin-top: 3px; }
+.workspace-agent-markdown h1,
+.workspace-agent-markdown h2,
+.workspace-agent-markdown h3,
+.workspace-agent-markdown h4 { margin: 12px 0 6px; color: #efefef; font-size: 13px; font-weight: 600; }
+.workspace-agent-markdown strong { color: #efefef; font-weight: 600; }
+.workspace-agent-markdown a { color: #f2f2f2; text-decoration: underline; text-decoration-color: #777; text-underline-offset: 2px; }
+.workspace-agent-markdown code { padding: 1px 4px; border-radius: 4px; background: #242424; font-size: 12px; }
+.workspace-agent-markdown pre { margin: 0 0 8px; padding: 8px 10px; overflow-x: auto; border: 1px solid #2c2c2c; border-radius: 8px; background: #1a1a1a; font-size: 12px; line-height: 1.45; }
+.workspace-agent-markdown pre code { padding: 0; background: none; }
+.workspace-agent-markdown blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 2px solid #3a3a3a; color: #bdbdbd; }
+.workspace-agent-markdown table { display: block; max-width: 100%; margin: 0 0 8px; overflow-x: auto; border-collapse: collapse; font-size: 12px; }
+.workspace-agent-markdown th,
+.workspace-agent-markdown td { padding: 4px 8px; border: 1px solid #333; text-align: left; }
+.workspace-agent-markdown hr { margin: 10px 0; border: 0; border-top: 1px solid #333; }
+
+.workspace-agent-tools { display: flex; align-items: center; gap: 8px; min-width: 0; color: #9b9b9b; font-size: 12px; line-height: 1.4; }
+.workspace-agent-tools svg { flex: none; }
+.workspace-agent-tools[data-state="failed"] svg { color: #e4aaa6; }
+.workspace-agent-tools-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-agent-tools-status { flex: none; color: #777; font-size: 11px; }
+.workspace-agent-spin { animation: workspace-agent-spin 1s linear infinite; }
+@keyframes workspace-agent-spin { to { transform: rotate(360deg); } }
+
+.workspace-agent-confirmation { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
+.workspace-agent-confirmation-title { display: flex; align-items: center; gap: 7px; margin: 0; color: #ececec; font-size: 12px; font-weight: 600; }
+.workspace-agent-confirmation-hint { margin: 0; color: #a9a9a9; font-size: 12px; line-height: 1.45; }
+.workspace-agent-confirmation details { color: #8d8d8d; font-size: 11px; }
+.workspace-agent-confirmation summary { width: fit-content; cursor: pointer; }
+.workspace-agent-confirmation pre { max-height: 180px; margin: 6px 0 0; padding: 8px; overflow: auto; border-radius: 8px; background: #141414; color: #c9c9c9; font-size: 11px; white-space: pre-wrap; }
+.workspace-agent-confirmation-actions,
+.workspace-agent-answers { display: flex; justify-content: flex-end; gap: 6px; }
+.workspace-agent-confirmation-status { align-self: flex-end; margin: 0; color: #8d8d8d; font-size: 11px; }
+.workspace-agent-pill { min-height: 28px; padding: 0 12px; border: 1px solid #3a3a3a; border-radius: 999px; background: transparent; color: #d6d6d6; font-size: 12px; }
+.workspace-agent-pill:hover:not(:disabled) { background: #262626; color: #fff; }
+.workspace-agent-pill[aria-pressed="true"] { border-color: #9a9a9a; background: #303030; color: #fff; }
+.workspace-agent-pill[data-primary="true"] { border-color: #e9e9e9; background: #e9e9e9; color: #1e1e1e; }
+.workspace-agent-pill[data-primary="true"]:hover:not(:disabled) { background: #fff; color: #111; }
+.workspace-agent-pill:disabled { cursor: default; opacity: .45; }
+
+.workspace-agent-artifact { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.workspace-agent-artifact figcaption { color: #858585; font-size: 11px; }
+.workspace-agent-artifact-image { display: block; width: fit-content; max-width: 100%; overflow: hidden; border: 1px solid #2f2f2f; border-radius: 10px; }
+.workspace-agent-artifact-image img { display: block; max-width: 100%; max-height: 200px; object-fit: contain; }
+.workspace-agent-artifact-file { display: inline-flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; padding: 7px 12px; border: 1px solid #333; border-radius: 10px; color: #d6d6d6; font-size: 12px; text-decoration: none; }
+.workspace-agent-artifact-file svg { flex: none; }
+.workspace-agent-artifact-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-agent-artifact-file:hover { background: #222; color: #fff; }
+
+.workspace-agent-apps { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 10px; border: 1px solid #2e2e2e; border-radius: 12px; }
+.workspace-agent-apps-label { display: flex; align-items: center; gap: 6px; margin: 0; color: #8d8d8d; font-size: 11px; font-weight: 600; }
+.workspace-agent-apps-text { margin: 0; color: #c9c9c9; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+
 .workspace-agent-composer { display: flex; flex-direction: column; gap: 7px; padding-top: 12px; }
 /* Field/button look now comes from the shared .workspace-composer classes;
    this class is kept as a semantic hook and for the data-multiline toggle. */
@@ -935,6 +1024,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .workspace-agent-working,
+  .workspace-agent-spin { animation: none; }
   .workspace-shell { transition: none; }
   .workspace-switcher-item { transition: none; }
   .workspace-switcher-item.is-selected { transform: none; }

@@ -50,7 +50,11 @@ tests and for a page without the object; specialists always stream this way.
 4. **Stream**: `chat.sendMessage({ text })`. A refusal comes back as a
    `run_failed` item. One with `code === sessionExpiredCode` means the socket's
    cookie expired before anything ran: refresh the session, `await
-   reopenSocket(agent)`, regenerate, once. The timeline never shows it.
+   reopenSocket(agent)`, regenerate, once. The timeline never shows it. A new
+   thread's first message goes once the socket is open, not on mount:
+   useChat's cleanup stops a request in flight, and React's development
+   double mount runs that cleanup. A draft left `streaming` while nothing
+   runs was cut short (Stop writes no end marker): show it as interrupted.
 5. **Confirm**: `pendingConfirmationIds(thread.data, chatMessagesToItems(chat.messages))`
    lists what must be answered, and Go wants all of it in one run:
    `chat.sendMessage({ text: " ", metadata: { oryxaConfirmation: true } }, { body: { confirmations } })`.

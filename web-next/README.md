@@ -50,7 +50,9 @@ had since #82.
   `data-oryxa` parts and keeps the transcript. A page that reconnects resumes
   a run still streaming; a run is never replayed after the object restarts,
   since its tools may have side effects. Go still owns runs, thread lists and
-  artifacts. `src/lib/threads/README.md` describes the page's side.
+  artifacts. The right panel's Agents tab is the page's side
+  (`src/components/agent-chat.tsx`); `src/lib/threads/README.md` describes
+  the contract it follows.
 - `DELETE` on the same path, from the app's own origin only, deletes the
   thread in Go and only then clears the object's transcript; a refusal from
   Go leaves both.

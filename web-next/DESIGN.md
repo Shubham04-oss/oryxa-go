@@ -94,6 +94,15 @@ not permission to copy every incidental value into a new component.
   header's own centre row (y=28 in its 56px band), vertically level with the
   back button and title, even when (like the work tabs) they are positioned
   over a region below the header rather than inside the `<header>` itself.
+- An agent conversation reads as a quiet log on the base surface: the
+  member's messages in raised bubbles on the right; the agent's answers as
+  full-width Markdown, labelled only when a sub-agent wrote them; each run of
+  tool calls folded into one muted status row; confirmations as small cards
+  with Decline and Approve pills (several waiting are answered together);
+  files as a thumbnail or a file chip; a failed run as one muted error line,
+  and an answer cut short marked "Interrupted". In the agent panel one muted
+  row above it names the conversation, with a quiet icon button that starts a
+  new one; no history list until one is designed.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header

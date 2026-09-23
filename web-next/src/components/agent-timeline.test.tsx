@@ -1,0 +1,282 @@
+// @vitest-environment jsdom
+
+import { afterEach, describe, expect, it, vi } from "vitest"
+import type { Mock } from "vitest"
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react"
+import { AgentTimeline, groupToolActivity } from "./agent-timeline"
+import type { ConfirmationAnswer, Item } from "@/lib/threads/client"
+import { buildTimeline } from "@/lib/threads/timeline"
+
+afterEach(cleanup)
+
+const agent = "Leo"
+
+function timeline(
+  items: Item[],
+  {
+    running = false,
+    actionable = [],
+    submitted = {},
+    onAnswer = vi.fn<(answers: ConfirmationAnswer[]) => void>(),
+  }: {
+    running?: boolean
+    actionable?: string[]
+    submitted?: Record<string, boolean>
+    onAnswer?: Mock<(answers: ConfirmationAnswer[]) => void>
+  } = {}
+) {
+  const result = render(
+    <div role="log">
+      <AgentTimeline
+        entries={buildTimeline(items)}
+        running={running}
+        agentName={agent}
+        actionable={new Set(actionable)}
+        submitted={submitted}
+        answering={false}
+        onAnswer={onAnswer}
+        organizationId="org_1"
+        threadId="th_1"
+      />
+    </div>
+  )
+  return { ...result, onAnswer, log: screen.getByRole("log") }
+}
+
+const confirmation = (callId: string, tool: string): Item => ({
+  type: "confirmation",
+  id: `ev_${callId}`,
+  call_id: callId,
+  tool_call_id: `tool_${callId}`,
+  tool,
+  arguments: { to: "sam@example.com" },
+  status: "pending",
+})
+
+describe("AgentTimeline", () => {
+  it("renders the member's words as a bubble and the agent's as Markdown", () => {
+    const { log } = timeline([
+      {
+        type: "message",
+        id: "ev_1",
+        author: "member",
+        text: "Plan the **launch**",
+      },
+      {
+        type: "message",
+        id: "ev_2",
+        author: agent,
+        text: "Here is **the plan**: [the brief](https://example.com/brief).\n\n<b>raw</b><script>alert(1)</script>\n\n![chart](https://tracker.example/pixel.png)",
+      },
+    ])
+
+    const member = log.querySelector('[data-from="member"]')
+    // The member's text is shown as typed, never as Markdown.
+    expect(member?.textContent).toBe("Plan the **launch**")
+    const answer = log.querySelector('[data-from="agent"]') as HTMLElement
+    expect(within(answer).getByText("the plan").tagName).toBe("STRONG")
+    const link = within(answer).getByRole("link", { name: "the brief" })
+    expect(link.getAttribute("href")).toBe("https://example.com/brief")
+    expect(link.getAttribute("target")).toBe("_blank")
+    expect(link.getAttribute("rel")).toBe("noopener noreferrer")
+    // No HTML from the answer, and no image fetched on its behalf.
+    expect(answer.querySelector("b, script, img")).toBeNull()
+    expect(within(answer).getByRole("link", { name: "chart" })).toBeTruthy()
+    // The primary agent's own answers carry no author label.
+    expect(within(answer).queryByText(agent)).toBeNull()
+  })
+
+  it("labels a sub-agent's message with its name", () => {
+    const { log } = timeline([
+      { type: "message", id: "ev_1", author: "researcher", text: "Found it." },
+    ])
+    expect(within(log).getByText("researcher")).toBeTruthy()
+  })
+
+  it("streams a draft, and marks one a stopped run left behind as interrupted", () => {
+    const draft: Item[] = [
+      { type: "run_started", run_id: "run_1" },
+      { type: "delta", author: agent, text: "Work" },
+      { type: "delta", author: agent, text: "ing on it" },
+    ]
+    const streaming = timeline(draft, { running: true })
+    const bubble = streaming.log.querySelector('[data-from="agent"]')
+    expect(bubble?.getAttribute("data-state")).toBe("streaming")
+    expect(bubble?.textContent).toContain("Working on it")
+    expect(within(streaming.log).queryByText("Interrupted")).toBeNull()
+    cleanup()
+
+    // The same transcript once nothing runs: no end marker ever came.
+    const stopped = timeline(draft, { running: false })
+    expect(
+      stopped.log
+        .querySelector('[data-from="agent"]')
+        ?.getAttribute("data-state")
+    ).toBe("interrupted")
+    expect(within(stopped.log).getByText("Interrupted")).toBeTruthy()
+    cleanup()
+
+    // A run that failed mid-answer ends its draft too.
+    const failed = timeline(
+      [
+        ...draft,
+        {
+          type: "run_failed",
+          run_id: "run_1",
+          error: "The run was cancelled.",
+        },
+      ],
+      { running: false }
+    )
+    expect(within(failed.log).getByText("Interrupted")).toBeTruthy()
+    expect(within(failed.log).getByText("The run was cancelled.")).toBeTruthy()
+  })
+
+  it("folds consecutive tool calls into one quiet row", () => {
+    const items: Item[] = [
+      { type: "tool_call", id: "ev_1", call_id: "c1", tool: "web_search" },
+      { type: "tool_result", id: "ev_2", call_id: "c1", tool: "web_search" },
+      { type: "tool_call", id: "ev_3", call_id: "c2", tool: "read_file" },
+      { type: "message", id: "ev_4", author: agent, text: "Reading." },
+      { type: "tool_call", id: "ev_5", call_id: "c3", tool: "send_email" },
+      {
+        type: "tool_result",
+        id: "ev_6",
+        call_id: "c3",
+        tool: "send_email",
+        failed: true,
+        error: "mailbox full",
+      },
+    ]
+    expect(
+      groupToolActivity(buildTimeline(items)).map((entry) => entry.kind)
+    ).toEqual(["tools", "message", "tools"])
+    const { container } = timeline(items, { running: true })
+    const rows = container.querySelectorAll(".workspace-agent-tools")
+    expect(rows).toHaveLength(2)
+    expect(rows[0].textContent).toContain("Web search · Read file")
+    expect(rows[0].textContent).toContain("2 calls · Running")
+    expect(rows[0].getAttribute("data-state")).toBe("running")
+    expect(rows[1].textContent).toContain("Send email")
+    expect(rows[1].getAttribute("data-state")).toBe("failed")
+    expect(rows[1].getAttribute("title")).toBe("mailbox full")
+  })
+
+  it("shows the files runs kept: images as thumbnails, other files as links", () => {
+    const { log } = timeline([
+      { type: "artifact", id: "ev_1", artifact: "chart.png", version: 2 },
+      { type: "artifact", id: "ev_2", artifact: "user:report.pdf", version: 1 },
+    ])
+    const image = within(log).getByRole("img", { name: "chart.png" })
+    expect(image.getAttribute("src")).toBe(
+      "/v1/organizations/org_1/threads/th_1/artifacts/chart.png?version=2"
+    )
+    const file = within(log).getByRole("link", { name: "report.pdf" })
+    expect(file.getAttribute("href")).toBe(
+      "/v1/organizations/org_1/threads/th_1/artifacts/user%3Areport.pdf?version=1"
+    )
+    expect(file.getAttribute("download")).toBe("report.pdf")
+  })
+
+  it("shows a failed run as a quiet error line, and a batch from apps as a notice", () => {
+    const { log } = timeline([
+      {
+        type: "run_failed",
+        run_id: "run_1",
+        error: "Your primary agent isn't available right now.",
+        code: "agents_unavailable",
+      },
+      { type: "message", id: "ev_1", author: "apps", text: "1\n2\n3\n4\n5\n6" },
+    ])
+    expect(
+      within(log).getByText("Your primary agent isn't available right now.")
+        .className
+    ).toBe("workspace-agent-error")
+    expect(within(log).getByText("From your apps")).toBeTruthy()
+    expect(within(log).queryByText(/6/)).toBeNull()
+    fireEvent.click(within(log).getByRole("button", { name: "Show more" }))
+    expect(within(log).getByText(/6/)).toBeTruthy()
+  })
+
+  it("never shows the Durable Object's request to refresh the session", () => {
+    const { log } = timeline([
+      { type: "message", id: "ev_1", author: "member", text: "Hi" },
+      {
+        type: "run_failed",
+        error: "Your session has ended.",
+        code: "session_expired",
+      },
+    ])
+    expect(within(log).queryByText("Your session has ended.")).toBeNull()
+  })
+})
+
+describe("confirmations", () => {
+  it("answers a single confirmation at once", () => {
+    const { log, onAnswer } = timeline([confirmation("call_1", "send_email")], {
+      actionable: ["call_1"],
+    })
+    const card = within(log).getByRole("group", { name: "Confirm Send email" })
+    expect(within(card).getByText(/It only runs if you approve/)).toBeTruthy()
+    fireEvent.click(within(card).getByRole("button", { name: "Approve" }))
+    expect(onAnswer).toHaveBeenCalledExactlyOnceWith([
+      { id: "call_1", confirmed: true },
+    ])
+  })
+
+  it("collects every waiting answer and sends them together", () => {
+    const { log, onAnswer } = timeline(
+      [
+        confirmation("call_1", "send_email"),
+        confirmation("call_2", "delete_file"),
+      ],
+      { actionable: ["call_1", "call_2"] }
+    )
+    const send = within(log).getByRole("button", { name: "Send answers" })
+    expect(send.hasAttribute("disabled")).toBe(true)
+
+    const first = within(log).getByRole("group", { name: "Confirm Send email" })
+    const second = within(log).getByRole("group", {
+      name: "Confirm Delete file",
+    })
+    fireEvent.click(within(first).getByRole("button", { name: "Approve" }))
+    expect(onAnswer).not.toHaveBeenCalled()
+    expect(send.hasAttribute("disabled")).toBe(true)
+    fireEvent.click(within(second).getByRole("button", { name: "Decline" }))
+    expect(
+      within(second)
+        .getByRole("button", { name: "Decline" })
+        .getAttribute("aria-pressed")
+    ).toBe("true")
+
+    fireEvent.click(send)
+    expect(onAnswer).toHaveBeenCalledExactlyOnceWith([
+      { id: "call_1", confirmed: true },
+      { id: "call_2", confirmed: false },
+    ])
+  })
+
+  it("shows how a confirmation was answered instead of asking again", () => {
+    const { log } = timeline(
+      [
+        confirmation("call_1", "send_email"),
+        {
+          type: "confirmation",
+          call_id: "call_2",
+          tool: "read_file",
+          status: "declined",
+        },
+      ],
+      { actionable: ["call_1"], submitted: { call_1: true } }
+    )
+    expect(within(log).queryByRole("button", { name: "Approve" })).toBeNull()
+    expect(within(log).getByText("Approved")).toBeTruthy()
+    expect(within(log).getByText("Declined")).toBeTruthy()
+  })
+})
