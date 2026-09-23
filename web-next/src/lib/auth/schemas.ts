@@ -1,13 +1,20 @@
 import { z } from "zod"
 
 const email = z.email("Enter a valid email").trim()
+// Cognito's allowed special characters, plus a space (which Cognito also
+// accepts as long as it isn't leading or trailing — checked separately below).
+const passwordSymbol = /[$^*.[\]{}()?"!@#%&/\\,><':;|_~`=+ -]/
 const password = z
   .string()
   .min(12, "Use at least 12 characters")
   .regex(/[a-z]/, "Add a lowercase letter")
   .regex(/[A-Z]/, "Add an uppercase letter")
   .regex(/[0-9]/, "Add a number")
-  .regex(/[^A-Za-z0-9]/, "Add a symbol")
+  .regex(passwordSymbol, "Add a symbol")
+  .refine(
+    (value) => !/^\s|\s$/.test(value),
+    "Remove spaces at the start or end"
+  )
 
 export const signInSchema = z.object({
   email,
@@ -48,9 +55,11 @@ export function safeRedirect(value: unknown): string | undefined {
   const base = "http://app.invalid"
   try {
     const url = new URL(value, base)
-    return url.origin === base
-      ? `${url.pathname}${url.search}${url.hash}`
-      : undefined
+    if (url.origin !== base) return undefined
+    const path = `${url.pathname}${url.search}${url.hash}`
+    // URL normalisation can turn inputs like "/.//evil.com" into a
+    // protocol-relative path; reject anything that still looks like one.
+    return path.startsWith("//") || path.startsWith("/\\") ? undefined : path
   } catch {
     return undefined
   }

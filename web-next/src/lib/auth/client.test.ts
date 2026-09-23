@@ -88,9 +88,66 @@ describe("auth API", () => {
       "/v1/organizations",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ name: "Product", slug: "" }),
+        body: JSON.stringify({ name: "Product", slug: "product" }),
       })
     )
+  })
+
+  it("truncates a long workspace name's slug to 63 characters with no trailing dash", async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const { slug } = JSON.parse(String(init.body)) as { slug: string }
+      return jsonResponse({ id: "org-1", name: "Long", slug }, 201)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    // Slugifies to "ab-ab-...-ab", which lands a "-" exactly on the 63rd
+    // character before truncation-trimming kicks in.
+    const longName = "ab ".repeat(30).trim()
+
+    await createOrganization(longName)
+
+    const [, init] = fetchMock.mock.calls[0]
+    const { slug } = JSON.parse(String(init.body)) as { slug: string }
+    expect(slug.length).toBeLessThanOrEqual(63)
+    expect(slug.endsWith("-")).toBe(false)
+  })
+
+  it("falls back to a workspace slug for a name with no ASCII letters or digits", async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const { slug } = JSON.parse(String(init.body)) as { slug: string }
+      return jsonResponse({ id: "org-1", name: "टीम", slug }, 201)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    await createOrganization("टीम")
+
+    const [, init] = fetchMock.mock.calls[0]
+    const { slug } = JSON.parse(String(init.body)) as { slug: string }
+    expect(slug.startsWith("workspace")).toBe(true)
+  })
+
+  it("retries once with a suffixed slug when the first slug is taken", async () => {
+    let calls = 0
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      calls += 1
+      const { slug } = JSON.parse(String(init.body)) as { slug: string }
+      if (calls === 1) {
+        return jsonResponse(
+          { error: "resource state conflicts with the request" },
+          409
+        )
+      }
+      return jsonResponse({ id: "org-2", name: "Acme", slug }, 201)
+    })
+    vi.stubGlobal("fetch", fetchMock)
+
+    const organization = await createOrganization("Acme")
+
+    expect(organization.id).toBe("org-2")
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const [, secondInit] = fetchMock.mock.calls[1]
+    const { slug } = JSON.parse(String(secondInit.body)) as { slug: string }
+    expect(slug).toMatch(/^acme-[a-z0-9]{6}$/)
   })
 
   it("uses the invitation API contract", async () => {
@@ -128,6 +185,12 @@ describe("auth validation", () => {
     expect(safeRedirect("/?view=tools")).toBe("/?view=tools")
     expect(safeRedirect("//example.com/steal")).toBeUndefined()
     expect(safeRedirect("https://example.com")).toBeUndefined()
+  })
+
+  it("rejects paths that normalise into a protocol-relative URL", () => {
+    expect(safeRedirect("/.//evil.com")).toBeUndefined()
+    expect(safeRedirect("/..//evil.com")).toBeUndefined()
+    expect(safeRedirect("/%2e//evil.com")).toBeUndefined()
   })
 
   it("requires the backend password policy before sign-up", () => {

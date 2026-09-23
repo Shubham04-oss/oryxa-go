@@ -33,6 +33,12 @@ export function InvitationAcceptPage({ token }: { token?: string }) {
           )
           return
         }
+        if (error.status === 402) {
+          setErrorMessage(
+            "This workspace has reached its member limit. Ask an owner to raise it."
+          )
+          return
+        }
         if ([404, 409, 410].includes(error.status)) {
           setErrorMessage(
             "This invitation is no longer available. Ask your workspace admin for a new one."

@@ -74,7 +74,7 @@ function Home() {
     )
   }
 
-  if (session.error) {
+  if (session.isLoadingError) {
     if (import.meta.env.DEV) return <WorkspaceShell preview />
     return (
       <main className="workspace-auth-error">
@@ -132,10 +132,8 @@ function NewWorkspace({ session }: { session: Session }) {
     const name = String(
       new FormData(event.currentTarget).get("organization") || ""
     ).trim()
-    if (!name || name.length > 120) {
-      setNameError(
-        name ? "Use 120 characters or fewer." : "Give your workspace a name."
-      )
+    if (!name || new TextEncoder().encode(name).length > 120) {
+      setNameError(name ? "Use a shorter name." : "Give your workspace a name.")
       return
     }
     setNameError("")
@@ -147,8 +145,12 @@ function NewWorkspace({ session }: { session: Session }) {
         ...session,
         organizations: [organization],
       })
-    } catch {
-      setFormError("Could not create your workspace. Try again shortly.")
+    } catch (error) {
+      setFormError(
+        error instanceof ApiError && error.status === 400
+          ? error.message
+          : "Could not create your workspace. Try again shortly."
+      )
       setSubmitting(false)
     }
   }

@@ -88,10 +88,53 @@ export function getSession(): Promise<Session> {
   return apiRequest<Session>("/v1/auth/me")
 }
 
-export function createOrganization(name: string): Promise<Organization> {
-  return apiRequest<Organization>("/v1/organizations", {
-    body: { name, slug: "" },
-  })
+// Mirrors the server's slugify (auth/internal/application/service.go): lowercase,
+// collapse runs of non "a-z0-9" into a single "-", then trim leading/trailing "-".
+function slugify(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+}
+
+function organizationSlugBase(name: string): string {
+  const slug = slugify(name).slice(0, 63).replace(/-+$/, "")
+  return slug.length >= 2 ? slug : "workspace"
+}
+
+const slugSuffixAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+// crypto.randomUUID() requires a secure context, which a plain-http LAN
+// address does not have; getRandomValues works everywhere.
+function randomSlugSuffix(): string {
+  const bytes = new Uint8Array(6)
+  crypto.getRandomValues(bytes)
+  return Array.from(
+    bytes,
+    (byte) => slugSuffixAlphabet[byte % slugSuffixAlphabet.length]
+  ).join("")
+}
+
+export async function createOrganization(name: string): Promise<Organization> {
+  const base = organizationSlugBase(name)
+  let slug = base
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await apiRequest<Organization>("/v1/organizations", {
+        body: { name, slug },
+      })
+    } catch (error) {
+      if (
+        !(error instanceof ApiError) ||
+        error.status !== 409 ||
+        attempt >= 2
+      ) {
+        throw error
+      }
+      slug = `${base.slice(0, 56)}-${randomSlugSuffix()}`
+    }
+  }
 }
 
 export function getOrganizationRole(organizationId: string): Promise<Role> {

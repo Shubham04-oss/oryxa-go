@@ -371,7 +371,10 @@ export function ResetPasswordPage({ token }: { token?: string }) {
       setState("done")
     } catch (error) {
       if (error instanceof ApiError && error.status === 410) setState("expired")
-      else if (error instanceof ApiError && error.status === 404)
+      else if (
+        error instanceof ApiError &&
+        [401, 404, 409].includes(error.status)
+      )
         setState("invalid")
       else
         setFormError(
@@ -438,31 +441,31 @@ export function VerifyEmailPage({ token }: { token?: string }) {
   )
   const [attempt, setAttempt] = useState(0)
   const redeemedAttempt = useRef(-1)
+  const outcome = useRef<Promise<Verification>>(undefined)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState("")
   const [sentTo, setSentTo] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
-    if (!token || redeemedAttempt.current === attempt) return
-    redeemedAttempt.current = attempt
+    if (!token) return
     let active = true
-    setState("verifying")
-    verifyEmail(token).then(
-      () => {
-        if (active) setState("verified")
-      },
-      (error: unknown) => {
-        if (!active) return
-        setState(
+    if (redeemedAttempt.current !== attempt) {
+      redeemedAttempt.current = attempt
+      setState("verifying")
+      outcome.current = verifyEmail(token).then(
+        (): Verification => "verified",
+        (error: unknown): Verification =>
           error instanceof ApiError && error.status === 410
             ? "expired"
             : error instanceof ApiError && error.status < 500
               ? "invalid"
               : "unavailable"
-        )
-      }
-    )
+      )
+    }
+    outcome.current?.then((result) => {
+      if (active) setState(result)
+    })
     return () => {
       active = false
     }
