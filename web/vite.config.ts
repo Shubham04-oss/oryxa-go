@@ -2,6 +2,7 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
+import agents from "agents/vite";
 import { defineConfig, loadEnv } from "vite";
 
 // The app calls every service under /v1 on its own origin, so session cookies
@@ -14,6 +15,7 @@ const config = defineConfig(({ mode }) => {
 		resolve: { tsconfigPaths: true },
 		server: { proxy: { "^/v1/": { changeOrigin: true, target } } },
 		plugins: [
+			...agents(),
 			cloudflare({ viteEnvironment: { name: "ssr" } }),
 			tailwindcss(),
 			tanstackStart(),

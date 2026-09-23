@@ -1,5 +1,7 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAgentChat } from "@cloudflare/ai-chat/react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useAgent } from "agents/react";
 import { FileDown, Inbox, ShieldQuestion, Trash2 } from "lucide-react";
 import { type UIEvent, useEffect, useRef, useState } from "react";
 import { AppAlert, QueryError } from "@/components/app/app-alert";
@@ -12,15 +14,22 @@ import {
 } from "@/components/threads/tool-activity";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { ApiError, apiErrorMessage } from "@/lib/api/client";
+import { apiErrorMessage } from "@/lib/api/client";
+import { getSession } from "@/lib/auth/client";
 import { useWorkspace } from "@/lib/auth/session";
+import { reopenSocket } from "@/lib/threads/agent-socket";
+import {
+	chatMessagesToItems,
+	reconcileChatMessages,
+	sessionExpiredCode,
+	type ThreadChatMessage,
+	threadAgentName,
+} from "@/lib/threads/chat-messages";
 import {
 	artifactContentUrl,
 	type ConfirmationAnswer,
 	deleteThread,
-	type Item,
-	type RunInput,
-	startRun,
+	getThread,
 	threadQueryKey,
 	threadQueryOptions,
 	threadsQueryKey,
@@ -36,7 +45,6 @@ import {
 	isImageArtifact,
 	type MessageEntry,
 	type TimelineEntry,
-	unseenLiveItems,
 } from "@/lib/threads/timeline";
 
 const appsUpdatePreviewLines = 4;
@@ -46,19 +54,7 @@ export const Route = createFileRoute("/app/threads/$threadId")({
 	head: () => ({ meta: [{ title: "Conversation · The Weirdly ODD" }] }),
 });
 
-function isAbortError(error: unknown): boolean {
-	return error instanceof Error && error.name === "AbortError";
-}
-
 function runFailureMessage(error: unknown): string {
-	if (error instanceof ApiError) {
-		if (error.code === "run_in_progress") {
-			return "Your primary agent is still answering in this conversation.";
-		}
-		if (error.code === "agents_unavailable") {
-			return "Your primary agent isn't available right now.";
-		}
-	}
 	return apiErrorMessage(
 		error,
 		"Your primary agent could not answer. Try again.",
@@ -75,59 +71,99 @@ function ThreadConversationPage() {
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const thread = useQuery(threadQueryOptions(organization.id, threadId));
+	const agent = useAgent({
+		agent: "ThreadChatAgent",
+		name: threadAgentName(organization.id, threadId),
+		// A dropped socket reconnects by itself with whatever cookie the browser
+		// holds, and the Worker turns one away whose access cookie has expired.
+		// Reading the session refreshes that cookie for the next attempt.
+		onClose: (event) => {
+			if (event.code !== 1000) void getSession().catch(() => {});
+		},
+	});
 
 	const [message, setMessage] = useState("");
-	const [liveItems, setLiveItems] = useState<Item[]>([]);
-	const [optimisticMessage, setOptimisticMessage] = useState<string>();
 	const [runError, setRunError] = useState("");
+	const [resending, setResending] = useState(false);
+	// The last send, so it can go again once a refreshed session has reached
+	// the Durable Object — and only once. `expired` holds the Durable Object's
+	// word that it could not start, until that send's stream ends.
+	const lastSendRef = useRef<{
+		body?: object;
+		expired: boolean;
+		retried: boolean;
+	}>({ expired: false, retried: false });
 	const [draftChoices, setDraftChoices] = useState<Record<string, boolean>>({});
 	const [submittedAnswers, setSubmittedAnswers] = useState<
 		Record<string, boolean>
 	>({});
-	const abortControllerRef = useRef<AbortController | null>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const stickToBottomRef = useRef(true);
-
-	const runMutation = useMutation({
-		mutationFn: async (input: RunInput) => {
-			setRunError("");
-			setLiveItems([]);
-			const controller = new AbortController();
-			abortControllerRef.current = controller;
-			try {
-				await startRun(organization.id, threadId, input, {
-					onItem: (item) => {
-						setLiveItems((previous) => [...previous, item]);
-						if (item.type === "message" && item.author === "member") {
-							setOptimisticMessage(undefined);
-						}
-						if (item.type === "run_failed") {
-							setRunError(item.error ?? "Your primary agent could not answer.");
-						}
-					},
-					signal: controller.signal,
-				});
-			} finally {
-				abortControllerRef.current = null;
-				await queryClient.invalidateQueries({
-					queryKey: threadQueryKey(organization.id, threadId),
-				});
-				// The list's ordering and title can change too, but there is no
-				// need to refetch it while nobody is looking at it.
-				await queryClient.invalidateQueries({
-					queryKey: threadsQueryKey(organization.id),
-					refetchType: "inactive",
-				});
-				setLiveItems([]);
-				setOptimisticMessage(undefined);
+	const chat = useAgentChat<unknown, ThreadChatMessage>({
+		agent,
+		resume: true,
+		getInitialMessages: async ({ url }) => {
+			await getSession();
+			let stored: ThreadChatMessage[] = [];
+			if (url) {
+				try {
+					const response = await fetch(`${url}/get-messages`, {
+						credentials: "include",
+					});
+					if (response.ok) {
+						stored = (await response.json()) as ThreadChatMessage[];
+					}
+				} catch {
+					// An older conversation can still be read from the Go service.
+				}
 			}
+			const existing = await getThread(organization.id, threadId);
+			return reconcileChatMessages(stored, existing.items);
 		},
-		onError: (error) => {
-			if (!isAbortError(error)) {
-				setRunError(runFailureMessage(error));
+		onData: (part) => {
+			if (part.type !== "data-oryxa" || part.data.type !== "run_failed") {
+				return;
 			}
+			if (
+				part.data.code === sessionExpiredCode &&
+				!lastSendRef.current.retried
+			) {
+				// The socket's cookie expired before Go started the run, so
+				// nothing ran; it goes again once this stream ends.
+				lastSendRef.current.retried = true;
+				lastSendRef.current.expired = true;
+				return;
+			}
+			setRunError(part.data.error ?? "Your primary agent could not answer.");
+		},
+		onError: (error) => setRunError(runFailureMessage(error)),
+		onFinish: ({ isAbort, isDisconnect, isError }) => {
+			if (lastSendRef.current.expired) {
+				lastSendRef.current.expired = false;
+				if (!isAbort && !isDisconnect && !isError) {
+					void resendWithFreshSession();
+				}
+				return;
+			}
+			void queryClient.invalidateQueries({
+				queryKey: threadQueryKey(organization.id, threadId),
+			});
+			void queryClient.invalidateQueries({
+				queryKey: threadsQueryKey(organization.id),
+				refetchType: "inactive",
+			});
 		},
 	});
+	const running =
+		resending ||
+		chat.status === "submitted" ||
+		chat.status === "streaming" ||
+		chat.isServerStreaming;
+	useEffect(() => {
+		if (!thread.data || running || agent.readyState !== 1) return;
+		const merged = reconcileChatMessages(chat.messages, thread.data.items);
+		if (merged !== chat.messages) chat.setMessages(merged);
+	}, [agent.readyState, chat.messages, chat.setMessages, running, thread.data]);
 
 	// The home composer cannot send a message before its thread exists, so it
 	// stashes the draft for the conversation page to pick up and send once.
@@ -136,10 +172,12 @@ function ThreadConversationPage() {
 	useEffect(() => {
 		const pending = takePendingMessage(threadId);
 		if (pending) {
-			setOptimisticMessage(pending);
-			runMutation.mutate({ message: pending });
+			lastSendRef.current = { expired: false, retried: false };
+			void chat
+				.sendMessage({ text: pending })
+				.catch((error) => setRunError(runFailureMessage(error)));
 		}
-	}, [threadId, runMutation.mutate]);
+	}, [threadId, chat.sendMessage]);
 
 	useEffect(() => {
 		const container = scrollRef.current;
@@ -147,13 +185,6 @@ function ThreadConversationPage() {
 			container.scrollTop = container.scrollHeight;
 		}
 	});
-
-	// Leaving the page mid-run should not leave the stream running for nobody.
-	useEffect(() => {
-		return () => {
-			abortControllerRef.current?.abort();
-		};
-	}, []);
 
 	function handleScroll(event: UIEvent<HTMLDivElement>) {
 		const target = event.currentTarget;
@@ -164,8 +195,27 @@ function ThreadConversationPage() {
 
 	function sendMessage(text: string) {
 		setMessage("");
-		setOptimisticMessage(text);
-		runMutation.mutate({ message: text });
+		setRunError("");
+		lastSendRef.current = { expired: false, retried: false };
+		void chat
+			.sendMessage({ text })
+			.catch((error) => setRunError(runFailureMessage(error)));
+	}
+
+	// Reading the session refreshes the expired cookie, the reopened socket
+	// carries it to the Durable Object, and regenerating makes the same
+	// request again without adding the member's message twice.
+	async function resendWithFreshSession() {
+		setResending(true);
+		try {
+			await getSession();
+			await reopenSocket(agent);
+			await chat.regenerate({ body: lastSendRef.current.body });
+		} catch (error) {
+			setRunError(runFailureMessage(error));
+		} finally {
+			setResending(false);
+		}
 	}
 
 	function submitConfirmations(answers: ConfirmationAnswer[]) {
@@ -177,18 +227,26 @@ function ThreadConversationPage() {
 			}
 			return next;
 		});
-		runMutation.mutate({ confirmations: answers });
+		setRunError("");
+		const body = { confirmations: answers };
+		lastSendRef.current = { body, expired: false, retried: false };
+		void chat
+			.sendMessage(
+				{ text: " ", metadata: { oryxaConfirmation: true } },
+				{ body },
+			)
+			.catch((error) => setRunError(runFailureMessage(error)));
 	}
 
 	function stop() {
-		abortControllerRef.current?.abort();
+		void chat.stop();
 	}
 
-	if (thread.isPending && liveItems.length === 0) {
+	if (thread.isPending && chat.messages.length === 0) {
 		return <ConversationSkeleton />;
 	}
 
-	if (thread.isError && !runMutation.isPending && liveItems.length === 0) {
+	if (thread.isError && !running && chat.messages.length === 0) {
 		return (
 			<div className="thread-conversation-error">
 				<QueryError
@@ -200,27 +258,8 @@ function ThreadConversationPage() {
 		);
 	}
 
-	const history = thread.data?.items ?? [];
-	const timeline = buildTimeline([
-		...history,
-		...unseenLiveItems(history, liveItems),
-	]);
-	const memberEchoed = liveItems.some(
-		(item) => item.type === "message" && item.author === "member",
-	);
-	const entries: TimelineEntry[] =
-		optimisticMessage !== undefined && !memberEchoed
-			? [
-					...timeline,
-					{
-						author: "member",
-						id: "optimistic",
-						kind: "message",
-						pending: false,
-						text: optimisticMessage,
-					} satisfies MessageEntry,
-				]
-			: timeline;
+	const timeline = buildTimeline(chatMessagesToItems(chat.messages));
+	const entries: TimelineEntry[] = timeline;
 	const displayEntries = groupToolActivity(entries);
 
 	const pendingIds = new Set(thread.data?.pending_confirmations ?? []);
@@ -238,17 +277,39 @@ function ThreadConversationPage() {
 	);
 	const multiple = actionable.length > 1;
 
-	const composerDisabled = runMutation.isPending || actionable.length > 0;
-	const composerHint = runMutation.isPending
+	const composerDisabled = running || actionable.length > 0;
+	const composerHint = running
 		? "Your primary agent is answering…"
 		: actionable.length > 0
 			? `Answer the confirmation${actionable.length > 1 ? "s" : ""} above to continue.`
 			: undefined;
+	const connectionState = running
+		? "working"
+		: agent.readyState === 1
+			? "live"
+			: agent.connectionError
+				? "disconnected"
+				: "connecting";
+	const connectionLabel = {
+		working: "Working",
+		live: "Live",
+		disconnected: "Reconnecting",
+		connecting: "Connecting",
+	}[connectionState];
 
 	return (
 		<div className="thread-conversation">
 			<header className="thread-conversation-header">
-				<h1>{thread.data?.title || "New conversation"}</h1>
+				<div className="thread-conversation-identity">
+					<h1>{thread.data?.title || "New conversation"}</h1>
+					<output
+						className="thread-connection-status"
+						data-state={connectionState}
+					>
+						<span aria-hidden="true" className="thread-connection-dot" />
+						{connectionLabel}
+					</output>
+				</div>
 				<ConfirmDialog
 					confirmLabel="Delete conversation"
 					description="This conversation and its history are removed for everyone in the organization."
@@ -331,7 +392,7 @@ function ThreadConversationPage() {
 								onSubmitOne={(confirmed) =>
 									submitConfirmations([{ confirmed, id: entry.callId }])
 								}
-								submitting={runMutation.isPending}
+								submitting={running}
 							/>
 						);
 					})}
@@ -339,7 +400,7 @@ function ThreadConversationPage() {
 						<div className="thread-confirmations-submit">
 							<Button
 								disabled={
-									runMutation.isPending ||
+									running ||
 									actionable.some((entry) => !(entry.callId in draftChoices))
 								}
 								onClick={() =>
@@ -367,7 +428,7 @@ function ThreadConversationPage() {
 					onChange={setMessage}
 					onStop={stop}
 					onSubmit={sendMessage}
-					streaming={runMutation.isPending}
+					streaming={running}
 					value={message}
 				/>
 			</div>

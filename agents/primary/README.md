@@ -2,7 +2,7 @@
 
 Primary is the agentic system in `/agents`: the prompts, tools and
 configuration behind every agent interaction. adk-go is its engine and Gemini
-its model. The Cloudflare chat layer, `durable-agent`, talks to it over HTTP,
+its model. The web Worker's SQLite-backed `ThreadChatAgent` talks to it over HTTP,
 and the supporting services in `secondary` sit beside it.
 
 Status: the engine is in, and members reach it. adk-go v2.4.0 runs Krude, a
@@ -735,8 +735,10 @@ never run as a page there: every response carries a sandboxing
 are shown in place; anything else, HTML included, downloads. A `user:` file
 is the member's own and reads through any of their threads.
 
-**Durability boundary.** An interactive SSE run is not durable: a closed tab
-or a deploy ends it, and what it had stored stays in the thread. Team workflow
+**Durability boundary.** The web Durable Object stores the visible primary-chat
+transcript and can resume its stream after a browser reconnect. A Go SSE run is
+still not replayed after a Worker restart or deploy: its tools can have side
+effects, and what it had stored stays in the ADK thread. Team workflow
 executions are durable at the orchestration and ledger boundary and can be
 redelivered through the callback queue. An individual model attempt remains
 bounded by its run timeout; a retry reclaims the execution only after its

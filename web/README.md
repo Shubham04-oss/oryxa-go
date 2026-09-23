@@ -2,7 +2,8 @@
 
 The Cloudflare-hosted product interface for The Weirdly ODD. It uses TanStack
 Start, React, TypeScript, TanStack Query, Zod, Tailwind CSS, and the Cloudflare
-Vite plugin.
+Vite plugin. Primary conversations use the Cloudflare Agents chat SDK and
+Vercel AI SDK's React chat hook.
 
 ## Local development
 
@@ -21,6 +22,23 @@ set `VITE_API_URL` only to send API calls to another origin. Auth accepts
 browser requests only from its `AUTH_RETURN_URLS` origins, and the other
 services check cookie-authenticated changes against their `*_ALLOWED_ORIGINS`,
 so keep the app on `http://localhost:3000`.
+
+## Primary chat
+
+`src/server.ts` checks the member's cookie against the Go thread endpoint
+before routing `/agents/thread-chat-agent/{organization}~{thread}` to a
+SQLite-backed Durable Object. `ThreadChatAgent` stores the visible AI SDK
+transcript, relays Go ADK run events over a resumable WebSocket stream, and
+keeps tool activity, confirmations, and artifacts as typed data parts. The Go
+service still owns ADK sessions, execution, thread lists, and artifacts.
+
+Existing Go threads load their history on first open and move that visible
+history into the Durable Object on the next send. Deleting a conversation
+clears the Durable Object transcript before deleting its Go thread. The
+production Worker reaches the Go API at `ORYXA_API_ORIGIN` in `wrangler.jsonc`;
+local development points it at `http://localhost:8080`. A browser reconnect
+can resume an active stream, but an interrupted Go run is not replayed after a
+Durable Object restart because its tools may have side effects.
 
 ## Routes
 

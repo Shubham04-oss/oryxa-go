@@ -102,7 +102,7 @@ describe("deleteThread", () => {
 
 		await expect(deleteThread("org_1", "th_1")).resolves.toBeUndefined();
 		expect(fetchMock).toHaveBeenCalledWith(
-			"/v1/organizations/org_1/threads/th_1",
+			"/agents/thread-chat-agent/org_1~th_1",
 			expect.objectContaining({ method: "DELETE" }),
 		);
 	});
