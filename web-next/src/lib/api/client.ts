@@ -85,13 +85,14 @@ export async function apiRequest<T = void>(
   if (!response.headers.get("Content-Type")?.includes("application/json")) {
     return undefined as T
   }
-  return (await response.json()) as T
+  const data: T = await response.json()
+  return data
 }
 
 export async function requestError(response: Response): Promise<ApiError> {
   let body: ErrorBody = {}
   try {
-    body = (await response.json()) as ErrorBody
+    body = await response.json()
   } catch {
     // The HTTP status is still useful when a proxy returns no JSON.
   }

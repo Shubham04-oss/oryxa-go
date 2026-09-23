@@ -30,6 +30,43 @@ Only in development, an unavailable auth service leaves the existing workspace
 prototype accessible with a Preview badge. A signed-out response still sends
 you to sign-in, and production never falls back to the prototype.
 
+## Primary chat: the Worker and its Durable Object
+
+`pnpm dev` runs the app in workerd through the Cloudflare Vite plugin. The
+Worker is `src/server.ts` (`main` in `wrangler.jsonc`); it serves the app
+through TanStack Start and, beside it, the member's primary-agent chat: one
+SQLite-backed Durable Object per thread, `ThreadChatAgent`
+(`src/thread-chat-agent.ts`), named `{organization}~{thread}`, as `../web` has
+had since #82.
+
+- `/agents/thread-chat-agent/{organization}~{thread}` is the page's WebSocket
+  (the Agents SDK's `useAgent` and `useAgentChat`), and `.../get-messages` the
+  stored transcript. Before routing either, the Worker asks Go whether the
+  member may read the thread (`GET /v1/organizations/{org}/threads/{thread}`
+  with their cookie), refuses a cross-site socket, and hands the object the
+  cookie and ids itself.
+- For each message the object POSTs Go's `.../threads/{thread}/runs` as the
+  member (their cookie and origin), relays the run's items to the page as
+  `data-oryxa` parts and keeps the transcript. A page that reconnects resumes
+  a run still streaming; a run is never replayed after the object restarts,
+  since its tools may have side effects. Go still owns runs, thread lists and
+  artifacts. `src/lib/threads/README.md` describes the page's side.
+- `DELETE` on the same path, from the app's own origin only, deletes the
+  thread in Go and only then clears the object's transcript; a refusal from
+  Go leaves both.
+
+The Worker reaches Go at `ORYXA_API_ORIGIN`, which `wrangler.jsonc` sets to
+`http://localhost:8080`. To point local development elsewhere, copy
+`.dev.vars.example` to `.dev.vars` (gitignored) and restart `pnpm dev`; the
+example targets the stand-in backend on `http://127.0.0.1:18096`. `ORYXA_URL`
+still decides where the browser's `/v1` calls go, through Vite's proxy, so
+keep the two on the same backend.
+
+Deploying web-next is deferred: `wrangler.jsonc` holds only the development
+Worker, `oryxa-web-next`, with no production environment. `pnpm build`
+followed by `pnpm exec wrangler deploy --dry-run` checks the bundle without
+deploying it.
+
 ## Included
 
 - TanStack Start and file-based TanStack Router
@@ -57,8 +94,12 @@ missing), a suggested build order and the pitfalls the #83 review found.
 ```sh
 pnpm typecheck
 pnpm lint
+pnpm test
 pnpm build
 ```
+
+Vitest runs in Node without the Cloudflare plugins (`vite.config.ts` leaves
+them out under Vitest); the Worker's tests stand in for the Agents SDK.
 
 Deployment configuration and final brand assets will be set when the new app is
 ready to replace the current frontend.

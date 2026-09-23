@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // The development Worker. `vite dev` runs it, with the chat's Durable
+  // Object, in workerd; `.dev.vars` (see `.dev.vars.example`) can point
+  // ORYXA_API_ORIGIN at another Go API.
+  //
+  // There is deliberately no production environment yet: deploying web-next
+  // is deferred until it replaces ../web. When it does, add an `env.production`
+  // block as ../web/wrangler.jsonc has one (its own name, `workers_dev` and
+  // `preview_urls` off, ORYXA_API_ORIGIN, and the Durable Object binding and
+  // migration repeated, since wrangler does not inherit them into an env).
+  "name": "oryxa-web-next",
+  "compatibility_date": "2026-09-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "src/server.ts",
+  "vars": {
+    // Where the Worker and the chat's Durable Object reach the Go API. The
+    // browser still calls /v1 on the app's own origin.
+    "ORYXA_API_ORIGIN": "http://localhost:8080"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "ThreadChatAgent", "class_name": "ThreadChatAgent" }]
+  },
+  "migrations": [
+    { "tag": "thread-chat-v1", "new_sqlite_classes": ["ThreadChatAgent"] }
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "upload_source_maps": true
+}

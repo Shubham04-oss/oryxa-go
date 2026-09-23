@@ -68,18 +68,27 @@ shows once. `startRun` throws `ApiError` with Go's code when a run is refused
 otherwise resolves how it ended: `completed`, `failed` (Go's words),
 `aborted` (your signal; Go stops the run), or `incomplete`.
 
-## What the Durable Object must do for these helpers
+## What the Worker and the Durable Object do
 
-As `web/src/thread-chat-agent.ts` and `web/src/server.ts` do: route
-`/agents/thread-chat-agent/{org}~{thread}` only for names
-`parseThreadAgentName` accepts, after checking the cookie with Go's
-`GET .../threads/{thread}`; purge the transcript on `DELETE`, then forward
-Go's `DELETE`; serve `get-messages`. Stream each Go item as a `data-oryxa`
-part except the member's echoed message; write `{ type: "confirmation",
-call_id, status }` per answer once Go accepts the run; turn Go's 401 into a
-`run_failed` with `sessionExpiredCode`; store with `withoutSupersededDeltas`.
-Read Go with `readItemStream`, which returns at `run_completed`: Go keeps the
-response open up to 15 seconds after it while it writes memory.
+`src/server.ts` and `src/thread-chat-agent.ts`, ported from `web/` with a few
+changes. The Worker routes `/agents/thread-chat-agent/{org}~{thread}` (the
+socket) and `.../get-messages` only for names `parseThreadAgentName` accepts
+as they arrive (a percent-encoded name is refused), only for a same-origin
+socket, and only after Go's `GET .../threads/{thread}` accepts the member's
+cookie; it sets `X-Oryxa-Cookie`, `X-Oryxa-Organization` and
+`X-Oryxa-Thread` itself. A refusal is JSON in Go's shape, so `ApiError`
+carries its code: Go's 401, 403, 404 and 503 pass through, other failures
+answer 502. `DELETE` forwards Go's `DELETE` first and clears the transcript
+only once Go has deleted the thread.
+
+The object streams each Go item as a `data-oryxa` part except the member's
+echoed message; writes `{ type: "confirmation", call_id, status }` per answer
+once Go accepts the run; turns Go's 401 into a `run_failed` with
+`sessionExpiredCode`, and any other refusal into a `run_failed` in words for
+the member with Go's code; and stores with `withoutSupersededDeltas`. It reads
+Go with `readItemStream`, so a turn ends at `run_completed` although Go keeps
+the response open up to 15 seconds after it while it writes memory, and a
+stream that breaks before its last item ends with a `run_failed`.
 
 ## Go facts worth knowing
 

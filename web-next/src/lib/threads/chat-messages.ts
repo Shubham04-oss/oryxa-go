@@ -3,9 +3,10 @@ import type { Item } from "./client"
 
 /**
  * The `code` of a `run_failed` the thread's Durable Object writes itself when
- * Go answered 401: the cookie its socket was opened with expired before the
- * run started, so nothing ran. The page refreshes the session, reopens the
- * socket (`reopenSocket`) and sends again, once. Go never sets it.
+ * Go answered 401 (or its socket holds no cookie at all): the cookie its
+ * socket was opened with expired before the run started, so nothing ran. The
+ * page refreshes the session, reopens the socket (`reopenSocket`) and sends
+ * again, once. Go never sets it.
  */
 export const sessionExpiredCode = "session_expired"
 

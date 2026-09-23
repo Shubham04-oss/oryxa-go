@@ -102,7 +102,10 @@ export type Item = {
   error?: string
   /**
    * Set only by the thread's Durable Object, on a run_failed it writes itself:
-   * `"session_expired"` (see `sessionExpiredCode`). Go never sets it.
+   * `"session_expired"` (see `sessionExpiredCode`) when Go answered 401, or
+   * Go's own refusal code (`run_in_progress`, `confirmation_pending`,
+   * `not_found`, ...) when Go would not start the run. Go never sets it on
+   * the items it streams.
    */
   code?: string
   /** Pairs a tool_result with its tool_call. On a confirmation, the id the member's answer names. */
@@ -217,11 +220,11 @@ export function threadChatPath(
 }
 
 /**
- * DELETE /agents/thread-chat-agent/{org}~{thread}: the Worker checks the
- * thread with Go, purges the Durable Object's stored transcript, then
- * forwards Go's DELETE and answers with it. Not a Go route: web/src/server.ts
- * is the contract the web-next Worker is expected to keep. Delete through
- * this whenever the conversation used the Durable Object.
+ * DELETE /agents/thread-chat-agent/{org}~{thread}: the Worker (src/server.ts)
+ * forwards Go's DELETE and, only once Go has deleted the thread, clears the
+ * Durable Object's stored transcript; it answers with Go's response, so a
+ * refusal carries Go's code. Not a Go route. Delete through this whenever
+ * the conversation used the Durable Object.
  */
 export async function deleteThreadChat(
   organizationId: string,
