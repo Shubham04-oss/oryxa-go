@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { FormEvent } from "react"
 import { ArrowLeft, ArrowUpRight, FileText, Paperclip } from "lucide-react"
 import {
@@ -8,6 +8,7 @@ import {
   TeamspaceAvatar,
 } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
+import { useVisibleHeight } from "@/hooks/use-visible-height"
 import { cn } from "@/lib/utils"
 
 export type WorkId = "product-sync" | "launch-crew" | "research-specialist"
@@ -157,42 +158,13 @@ export function WorkspaceFocus({
   const [draft, setDraft] = useState("")
   const [messages, setMessages] = useState(work.messages)
   const [isComposing, setIsComposing] = useState(false)
-  const [visibleHeight, setVisibleHeight] = useState<number | null>(null)
+  const visibleHeight = useVisibleHeight(isComposing)
   const panelTitle =
     tab === "Overview"
       ? work.id === "product-sync"
         ? "Onboarding checklist"
         : work.title
       : tabTitles[tab]
-
-  useEffect(() => {
-    if (!isComposing) return
-
-    const media = window.matchMedia("(max-width: 800px)")
-    const viewport = window.visualViewport
-    function updateVisibleHeight() {
-      setVisibleHeight(
-        media.matches
-          ? Math.round(
-              Math.min(
-                viewport?.height ?? window.innerHeight,
-                window.innerHeight
-              )
-            )
-          : null
-      )
-    }
-
-    updateVisibleHeight()
-    viewport?.addEventListener("resize", updateVisibleHeight)
-    window.addEventListener("resize", updateVisibleHeight)
-    media.addEventListener("change", updateVisibleHeight)
-    return () => {
-      viewport?.removeEventListener("resize", updateVisibleHeight)
-      window.removeEventListener("resize", updateVisibleHeight)
-      media.removeEventListener("change", updateVisibleHeight)
-    }
-  }, [isComposing])
 
   function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -289,10 +261,7 @@ export function WorkspaceFocus({
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onFocus={() => setIsComposing(true)}
-              onBlur={() => {
-                setIsComposing(false)
-                setVisibleHeight(null)
-              }}
+              onBlur={() => setIsComposing(false)}
               placeholder="Add a message..."
             />
             <button type="submit" disabled={!draft.trim()}>
