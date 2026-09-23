@@ -76,8 +76,11 @@ export function WorkspaceAccountSettings({
     : preferences.data?.app_updates
   const grantUnavailable =
     grant.error instanceof ApiError && grant.error.status === 404
+  // Agents answers 503 when it runs without its model or preferences store,
+  // which no retry will change.
   const preferencesUnavailable =
-    preferences.error instanceof ApiError && preferences.error.status === 404
+    preferences.error instanceof ApiError &&
+    (preferences.error.status === 404 || preferences.error.status === 503)
   const teams = useQuery({
     queryKey: ["settings", "teams", organization?.id],
     queryFn: () => listTeams(organization!.id),

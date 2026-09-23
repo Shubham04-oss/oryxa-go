@@ -274,10 +274,6 @@ export function PeopleManagement({
         `/?org=${encodeURIComponent(membership.organization_id)}`
       )
     },
-    onError: () =>
-      setFormError(
-        "Could not join that workspace. Ask for a fresh invitation."
-      ),
   })
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -333,6 +329,13 @@ export function PeopleManagement({
                   </li>
                 ))}
               </ul>
+              {join.isError && (
+                <p className="workspace-people-error" role="alert">
+                  {join.error instanceof ApiError && join.error.status === 402
+                    ? "That workspace has reached its member limit. Ask an owner to raise it."
+                    : "Could not join that workspace. Ask for a fresh invitation."}
+                </p>
+              )}
             </section>
           )}
           {canManage && (

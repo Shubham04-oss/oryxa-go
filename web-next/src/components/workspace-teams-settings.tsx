@@ -78,8 +78,7 @@ export function WorkspaceTeamsSettings({
       setNewName("")
       setParentId("")
       await refreshTeams()
-      setSelectedId(team.id)
-      setEditingName(team.name)
+      openTeam(team)
     },
   })
   const rename = useMutation({
@@ -89,8 +88,7 @@ export function WorkspaceTeamsSettings({
   const remove = useMutation({
     mutationFn: () => deleteTeam(orgId!, selectedId!),
     onSuccess: async () => {
-      setSelectedId(null)
-      setConfirmDelete(false)
+      openTeam()
       await refreshTeams()
     },
   })
@@ -118,6 +116,22 @@ export function WorkspaceTeamsSettings({
       await refreshMembers()
     },
   })
+
+  // What is open below the list belongs to one team: a removal waiting to be
+  // confirmed, a member picked to add or an error must not follow the member
+  // into the next team they open.
+  function openTeam(team?: { id: string; name: string }) {
+    setSelectedId(team?.id ?? null)
+    setEditingName(team?.name ?? "")
+    setAddId("")
+    setConfirmDelete(false)
+    setConfirmRemoveMemberId(null)
+    rename.reset()
+    add.reset()
+    changeRole.reset()
+    removeMember.reset()
+    remove.reset()
+  }
 
   function submitNew(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -153,10 +167,7 @@ export function WorkspaceTeamsSettings({
           <button
             className="workspace-settings-back-inline"
             type="button"
-            onClick={() => {
-              setSelectedId(null)
-              setConfirmDelete(false)
-            }}
+            onClick={() => openTeam()}
           >
             <ArrowLeft size={15} /> All teams
           </button>
@@ -442,10 +453,7 @@ export function WorkspaceTeamsSettings({
               className="workspace-settings-team-row"
               type="button"
               key={team.id}
-              onClick={() => {
-                setSelectedId(team.id)
-                setEditingName(team.name)
-              }}
+              onClick={() => openTeam(team)}
             >
               <UsersRound size={17} />
               <span>
