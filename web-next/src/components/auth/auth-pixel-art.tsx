@@ -74,7 +74,11 @@ function drawScene(
         18,
         Math.min(
           84,
-          25 + cloudBand * 38 + fineBand * 6 + eyeWall + grain * 11 -
+          25 +
+            cloudBand * 38 +
+            fineBand * 6 +
+            eyeWall +
+            grain * 11 -
             Math.max(0, radius - 0.8) * 30
         )
       )
