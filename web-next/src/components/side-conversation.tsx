@@ -390,7 +390,9 @@ export function SideConversationPanel({
             />
           )}
           {!refused && side.peer.typing && (
-            <p className="workspace-dm-typing">{peer.short} is typing…</p>
+            <p className="workspace-dm-typing">
+              {capitalized(peer.short)} is typing…
+            </p>
           )}
           {!empty && notice && <ConversationNotice notice={notice} />}
         </div>
@@ -430,6 +432,11 @@ export function SideConversationPanel({
       </div>
     </section>
   )
+}
+
+/** A name that starts a sentence: "this person" is "This person" there. */
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 /** The longest an answer is said aloud: the rest is in the log. */
@@ -912,8 +919,8 @@ function EmptySide({
       <div className="workspace-dm-empty" role="status">
         <strong>You can't open this conversation</strong>
         <p>
-          {peer.short} may no longer be on {teamspaceName}'s team, or the
-          teamspace is gone.
+          {capitalized(peer.short)} may no longer be on {teamspaceName}'s team,
+          or the teamspace is gone.
         </p>
       </div>
     )

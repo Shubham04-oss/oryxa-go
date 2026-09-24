@@ -1230,6 +1230,38 @@ describe("The DMs tab", () => {
     )
   })
 
+  it("says a conversation with someone who has left can't be opened", async () => {
+    const gone = "user-gone"
+    const goneName = `${org}~tsp_launch~${gone}~${viewerId}`
+    renderPanel({
+      inbox: {
+        conversations: [{ ...side, name: goneName, peerId: gone, unread: 0 }],
+        unreadTotal: 0,
+        status: "live",
+      },
+      route: ({ path }) =>
+        path === `/agents/side-conversation-agent/${goneName}`
+          ? apiError(404, "peer_not_found", "Not on the teamspace's team.")
+          : undefined,
+    })
+    fireEvent.click(screen.getByRole("tab", { name: "DMs" }))
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open side conversation with Former member in Launch room",
+      })
+    )
+    const view = screen.getByRole("region", {
+      name: "Side conversation with Former member in Launch room",
+    })
+    const socket = roomSockets.named(goneName).at(-1)
+    socket?.drop()
+    expect(
+      await within(view).findByText(
+        "This person may no longer be on Launch room's team, or the teamspace is gone."
+      )
+    ).toBeTruthy()
+  })
+
   it("keeps a draft, and whom it goes to, across both places it opens", async () => {
     const { rerender } = renderPanel({
       teamspaceId: "tsp_launch",
