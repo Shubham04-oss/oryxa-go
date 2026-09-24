@@ -1,5 +1,6 @@
 // Wording shared by the knowledge bases list and a knowledge base's detail.
 import {
+  connectedAppName,
   contentTypeName,
   documentOrigin,
   parseTimestamp,
@@ -127,4 +128,51 @@ export function citationSourceLabel(source: DocumentSource): string {
       }
     }
   }
+}
+
+/** One small, muted fact about a cited passage's provenance. */
+export type ProvenanceChip = {
+  key: "provider" | "document_kind" | "category"
+  label: string
+  /** Set only on the `provider` chip, to look up its logo. */
+  provider?: string
+}
+
+/** "work_material" → "Work material". Generic, so a category or kind this
+ * app does not know about yet still reads as words, not a raw token. */
+function humanizeToken(value: string): string {
+  const spaced = value.trim().replace(/[_-]+/g, " ")
+  return spaced ? spaced.charAt(0).toUpperCase() + spaced.slice(1) : spaced
+}
+
+/**
+ * A citation's provenance, from its `metadata` — present only for a document
+ * a connected app filled in
+ * (`rag/internal/application/knowledge_events.go`): the source app
+ * (`provider`), the kind of document at its source (`document_kind`, e.g.
+ * `pull_request`), and its semantic category (`category`, e.g.
+ * `work_material`, from knowledge's quality judge). Empty when `metadata` is
+ * absent or carries none of these — an inline note, a plain link, or an
+ * answer from an older rag build with no `metadata` on its citations.
+ */
+export function citationProvenance(
+  metadata: Partial<Record<string, string>> | undefined
+): ProvenanceChip[] {
+  if (!metadata) return []
+  const chips: ProvenanceChip[] = []
+  const provider = metadata.provider?.trim()
+  if (provider) {
+    chips.push({
+      key: "provider",
+      label: connectedAppName(provider),
+      provider: provider.toLowerCase(),
+    })
+  }
+  const kind = metadata.document_kind?.trim()
+  if (kind) chips.push({ key: "document_kind", label: humanizeToken(kind) })
+  const category = metadata.category?.trim()
+  if (category) {
+    chips.push({ key: "category", label: humanizeToken(category) })
+  }
+  return chips
 }

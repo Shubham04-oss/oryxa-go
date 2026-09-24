@@ -14,8 +14,10 @@ import type { Role } from "@/lib/auth/client"
 import {
   defaultRetentionDays,
   deleteFile,
+  uploadContentType,
   uploadFile,
 } from "@/lib/files/client"
+import type { StoredFile } from "@/lib/files/client"
 
 export type CorpusScope = "member" | "team" | "organization"
 
@@ -74,10 +76,25 @@ export type DocumentSource = {
   ref?: string
 }
 
+/**
+ * `domain.DocumentAccess`: a document's ACL within its corpus's scope.
+ * `admins` is visible only to an organization owner or admin
+ * (`domain.Document.VisibleTo`); rag allows setting it only in an
+ * organization-scoped corpus, and only for an org owner or admin (`AddDocument`,
+ * rag/internal/application/service.go). For a `file` document, the file's own
+ * access wins over whatever is sent here.
+ */
+export type DocumentAccess = "members" | "admins"
+
 export type CorpusDocument = {
   id: string
   corpus_id: string
   organization_id: string
+  /**
+   * Empty means `members` — an older document, from before this field
+   * existed. Absent entirely when talking to a rag build older than that.
+   */
+  access?: DocumentAccess | ""
   source: DocumentSource
   title?: string
   content_type: string
@@ -125,7 +142,13 @@ export type Chunk = {
 }
 
 /** What travels with a match, so a citation renders without a second read. */
-export type DocumentRef = { id: string; title?: string; source: DocumentSource }
+export type DocumentRef = {
+  id: string
+  title?: string
+  source: DocumentSource
+  /** Provenance for a connected app's document: `provider`, `document_kind`… */
+  metadata?: Partial<Record<string, string>>
+}
 
 export type Match = {
   chunk: Chunk
@@ -151,6 +174,8 @@ export type Citation = {
   document_id: string
   title?: string
   source: DocumentSource
+  /** Provenance for a connected app's document: `provider`, `document_kind`… */
+  metadata?: Partial<Record<string, string>>
   heading_path?: string[]
   start_byte: number
   end_byte: number
@@ -375,6 +400,8 @@ export type NewDocument =
       text: string
       title?: string
       contentType?: string
+      /** Defaults to `members`; `admins` needs an organization corpus and an org owner or admin. */
+      access?: DocumentAccess
     }
   | {
       kind: "external"
@@ -383,6 +410,8 @@ export type NewDocument =
       text: string
       title?: string
       contentType?: string
+      /** Defaults to `members`; `admins` needs an organization corpus and an org owner or admin. */
+      access?: DocumentAccess
     }
   | {
       kind: "file"
@@ -391,6 +420,8 @@ export type NewDocument =
       title?: string
       /** Without one, rag uses the content type the file was stored with. */
       contentType?: string
+      /** Ignored in the end: for a file, the file's own access wins. */
+      access?: DocumentAccess
     }
 
 function documentBody(input: NewDocument) {
@@ -407,6 +438,7 @@ function documentBody(input: NewDocument) {
     ...(title ? { title } : {}),
     ...(input.contentType ? { content_type: input.contentType } : {}),
     ...(input.kind === "file" ? {} : { text: input.text }),
+    ...(input.access ? { access: input.access } : {}),
   }
 }
 
@@ -462,16 +494,54 @@ export function indexableContentType(
 }
 
 /**
+ * Uploads a file with an explicit `access`, the one field `uploadFile`
+ * (files' own client, which this shares every other field with) takes no
+ * parameter for. A file's access can only be set at upload — files are
+ * immutable (`files/README.md`) — and files' multipart handler reads it as
+ * plain form field `access` (`files/internal/httpserver/server.go`'s
+ * `readMultipart`), same as `scope` and `purpose` below.
+ */
+function uploadFileWithAccess(
+  organizationId: string,
+  corpus: Pick<Corpus, "scope" | "team_id">,
+  file: File,
+  access: DocumentAccess
+): Promise<StoredFile> {
+  const form = new FormData()
+  form.set("file", file, file.name)
+  form.set("filename", file.name)
+  form.set("content_type", uploadContentType(file))
+  form.set("purpose", "upload")
+  form.set("scope", corpus.scope)
+  form.set("retention_days", String(defaultRetentionDays))
+  form.set("access", access)
+  if (corpus.scope === "team" && corpus.team_id) {
+    form.set("team_id", corpus.team_id)
+  }
+  return apiRequest<StoredFile>(organizationPath(organizationId, "files"), {
+    body: form,
+  })
+}
+
+/**
  * Adds a file from the member's computer. Rag has no upload of its own: the
  * file goes to files first, in the corpus's own scope so it is visible to the
  * same people, and the document names it. Rag reads the file as the caller at
  * once and keeps its text, so indexing never depends on the file again. If
  * rag refuses the document, the upload is deleted rather than left behind.
+ *
+ * `access: "admins"` uploads the file itself as admins-only too: rag lets a
+ * file document's access follow only its file's, refusing (400) an admins
+ * request against a file it does not already hold as admins-only.
  */
 export async function addFileDocument(
   organizationId: string,
   corpus: Pick<Corpus, "id" | "scope" | "team_id">,
-  { file, title }: { file: File; title?: string }
+  {
+    file,
+    title,
+    access,
+  }: { file: File; title?: string; access?: DocumentAccess }
 ): Promise<CorpusDocument> {
   const contentType = indexableContentType(file)
   if (!contentType) {
@@ -479,18 +549,22 @@ export async function addFileDocument(
       "Knowledge bases take text: a .txt, .md, .html, .csv or .json file."
     )
   }
-  const stored = await uploadFile(organizationId, {
-    file,
-    retentionDays: defaultRetentionDays,
-    scope: corpus.scope,
-    teamId: corpus.team_id,
-  })
+  const stored =
+    access === "admins"
+      ? await uploadFileWithAccess(organizationId, corpus, file, access)
+      : await uploadFile(organizationId, {
+          file,
+          retentionDays: defaultRetentionDays,
+          scope: corpus.scope,
+          teamId: corpus.team_id,
+        })
   try {
     return await addDocument(organizationId, corpus.id, {
       kind: "file",
       fileId: stored.id,
       title,
       contentType,
+      ...(access ? { access } : {}),
     })
   } catch (error) {
     await deleteFile(organizationId, stored.id).catch(() => undefined)
@@ -566,6 +640,20 @@ export function isFromConnectedApps(corpus: Pick<Corpus, "metadata">): boolean {
 
 export function isIndexing(document: Pick<CorpusDocument, "status">): boolean {
   return document.status === "pending" || document.status === "ingesting"
+}
+
+/**
+ * Whether a document is limited to organization owners and admins
+ * (`domain.Document.VisibleTo`). Anything else — `members`, empty, or absent
+ * on an older rag build — means every member with access to the corpus can
+ * see it, which is also what an absent field must mean here: the server
+ * already hides what a member may not see, so this only decides whether to
+ * show the badge, never whether to show the document itself.
+ */
+export function isAdminsOnlyDocument(
+  document: Pick<CorpusDocument, "access">
+): boolean {
+  return document.access === "admins"
 }
 
 /** Parses a rag timestamp, whose fraction can run past milliseconds. */
@@ -698,6 +786,19 @@ export function canDeleteCorpus(
     default:
       return false
   }
+}
+
+/**
+ * Whether "Admins only" may be offered when adding a document. `AddDocument`
+ * (rag/internal/application/service.go, around line 397) allows
+ * `access: "admins"` only in an organization-scoped corpus, and only for an
+ * org owner or admin; anyone else gets 403.
+ */
+export function canSetAdminsOnlyAccess(
+  corpus: Pick<Corpus, "scope">,
+  viewer: RagViewer
+): boolean {
+  return corpus.scope === "organization" && isOrgAdmin(viewer)
 }
 
 function sentence(message: string): string {

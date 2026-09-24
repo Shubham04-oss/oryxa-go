@@ -14,6 +14,7 @@ import {
   answerCorpus,
   canCreateOrganizationCorpus,
   canDeleteCorpus,
+  canSetAdminsOnlyAccess,
   canWriteCorpus,
   capabilitiesQueryOptions,
   connectedAppName,
@@ -34,6 +35,7 @@ import {
   indexableContentType,
   indexableContentTypes,
   indexableFileAccept,
+  isAdminsOnlyDocument,
   isFromConnectedApps,
   listCorpora,
   listDocuments,
@@ -303,6 +305,28 @@ describe("documents", () => {
     })
   })
 
+  it("carries access only when it is given", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse(document({ access: "admins" }), 202),
+      jsonResponse(document(), 202)
+    )
+    await addDocument("org_1", "cor_1", {
+      kind: "inline",
+      text: "Board minutes.",
+      access: "admins",
+    })
+    expect(sentBody(fetchMock, 0)).toEqual({
+      source: { kind: "inline" },
+      text: "Board minutes.",
+      access: "admins",
+    })
+    await addDocument("org_1", "cor_1", { kind: "inline", text: "Note." })
+    expect(sentBody(fetchMock, 1)).toEqual({
+      source: { kind: "inline" },
+      text: "Note.",
+    })
+  })
+
   it("adds a files object by reference, with no text of its own", async () => {
     const fetchMock = stubFetch(jsonResponse(document(), 202))
     await addDocument("org_1", "cor_1", {
@@ -367,6 +391,30 @@ describe("addFileDocument", () => {
       source: { kind: "file", ref: "file_9" },
       title: "Team notes",
       content_type: "text/markdown",
+    })
+  })
+
+  it("uploads an admins-only file with access, and adds it with access too", async () => {
+    const fetchMock = stubFetch(
+      jsonResponse({ ...stored, scope: "organization" }, 201),
+      jsonResponse(document({ access: "admins" }), 202)
+    )
+    const file = new File(["# Notes"], "notes.md", { type: "" })
+    await addFileDocument(
+      "org_1",
+      { id: "cor_1", scope: "organization" },
+      { file, access: "admins" }
+    )
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/v1/organizations/org_1/files")
+    const form = sentBody(fetchMock, 0) as FormData
+    expect(form.get("access")).toBe("admins")
+    expect(form.get("scope")).toBe("organization")
+
+    expect(sentBody(fetchMock, 1)).toEqual({
+      source: { kind: "file", ref: "file_9" },
+      content_type: "text/markdown",
+      access: "admins",
     })
   })
 
@@ -523,6 +571,13 @@ describe("reading corpora and documents", () => {
     ).toBeUndefined()
   })
 
+  it("treats only access: admins as admins-only", () => {
+    expect(isAdminsOnlyDocument(document({ access: "admins" }))).toBe(true)
+    expect(isAdminsOnlyDocument(document({ access: "members" }))).toBe(false)
+    expect(isAdminsOnlyDocument(document({ access: "" }))).toBe(false)
+    expect(isAdminsOnlyDocument(document({ access: undefined }))).toBe(false)
+  })
+
   it("names connected apps the way their brands do", () => {
     expect(connectedAppName("github")).toBe("GitHub")
     expect(connectedAppName("googledrive")).toBe("Google Drive")
@@ -568,6 +623,15 @@ describe("who may do what, as rag's service decides", () => {
     expect(canDeleteCorpus(corpus({ scope: "team" }), owner)).toBe(true)
     expect(canDeleteCorpus(corpus({ scope: "team" }), other)).toBe(false)
   })
+
+  it("offers admins-only access only in an organization corpus, to an admin", () => {
+    const org = corpus({ scope: "organization", member_id: undefined })
+    expect(canSetAdminsOnlyAccess(org, admin)).toBe(true)
+    expect(canSetAdminsOnlyAccess(org, { role: "owner" })).toBe(true)
+    expect(canSetAdminsOnlyAccess(org, owner)).toBe(false)
+    expect(canSetAdminsOnlyAccess(corpus(), admin)).toBe(false)
+    expect(canSetAdminsOnlyAccess(corpus({ scope: "team" }), admin)).toBe(false)
+  })
 })
 
 describe("ragErrorMessage", () => {
@@ -575,6 +639,18 @@ describe("ragErrorMessage", () => {
     expect(
       ragErrorMessage(new ApiError("document text is required", 400), "x")
     ).toBe("Document text is required.")
+  })
+
+  it("shows the admins-only refusals in plain words", () => {
+    expect(
+      ragErrorMessage(new ApiError("you may not do that here", 403), "x")
+    ).toBe("You don't have permission to do that here.")
+    expect(
+      ragErrorMessage(
+        new ApiError("set admin access on the file in Files first", 400),
+        "x"
+      )
+    ).toBe("Set admin access on the file in Files first.")
   })
 
   it("says the rest plainly", () => {

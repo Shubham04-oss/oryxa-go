@@ -13,6 +13,7 @@ import {
   FileText,
   Link2,
   LoaderCircle,
+  Lock,
   Plus,
   Puzzle,
   RotateCw,
@@ -33,6 +34,7 @@ import {
   afterDocumentsChange,
   answerCorpus,
   canDeleteCorpus,
+  canSetAdminsOnlyAccess,
   canWriteCorpus,
   corpusDescription,
   corpusQueryOptions,
@@ -43,6 +45,7 @@ import {
   externalSourceLink,
   indexableContentType,
   indexableFileAccept,
+  isAdminsOnlyDocument,
   isFromConnectedApps,
   isIndexing,
   maxDocumentBytes,
@@ -57,12 +60,14 @@ import type {
   Answered,
   Corpus,
   CorpusDocument,
+  DocumentAccess,
   DocumentOrigin,
   DocumentPage,
   RagViewer,
   SearchResults,
 } from "@/lib/rag/client"
 import {
+  citationProvenance,
   citationSourceLabel,
   corpusScopeLabel,
   corpusTimeLabel,
@@ -72,6 +77,8 @@ import {
   relativeTime,
 } from "./knowledge-format"
 
+// simple-icons carries no Slack mark (removed for its trademark policy); a
+// Slack chip falls back to its initial, same as any other unmapped app.
 const appIcons: Partial<Record<string, SimpleIcon>> = {
   github: siGithub,
   gmail: siGmail,
@@ -79,21 +86,26 @@ const appIcons: Partial<Record<string, SimpleIcon>> = {
   notion: siNotion,
 }
 
+/** A connected app's brand mark, or its initial when this app has none. */
+function AppLogo({ provider, name }: { provider: string; name: string }) {
+  const icon = appIcons[provider.toLowerCase()]
+  return icon ? (
+    <svg viewBox="0 0 24 24" fill={`#${icon.hex}`}>
+      <path d={icon.path} />
+    </svg>
+  ) : (
+    <>{name.charAt(0)}</>
+  )
+}
+
 function OriginIcon({ origin }: { origin: DocumentOrigin }) {
   if (origin.kind === "app") {
-    const icon = appIcons[origin.provider.toLowerCase()]
     return (
       <span
         className="workspace-knowledge-source-icon workspace-knowledge-app-icon"
         aria-hidden="true"
       >
-        {icon ? (
-          <svg viewBox="0 0 24 24" fill={`#${icon.hex}`}>
-            <path d={icon.path} />
-          </svg>
-        ) : (
-          origin.name.charAt(0)
-        )}
+        <AppLogo provider={origin.provider} name={origin.name} />
       </span>
     )
   }
@@ -106,6 +118,31 @@ function OriginIcon({ origin }: { origin: DocumentOrigin }) {
   return (
     <span className="workspace-knowledge-source-icon" aria-hidden="true">
       <Icon size={17} strokeWidth={1.7} />
+    </span>
+  )
+}
+
+/** A citation's provenance (`knowledge-format.ts`'s `citationProvenance`), as
+ * small muted chips one line under its title; nothing when there is none. */
+function CitationProvenance({
+  metadata,
+}: {
+  metadata: Partial<Record<string, string>> | undefined
+}) {
+  const chips = citationProvenance(metadata)
+  if (!chips.length) return null
+  return (
+    <span className="workspace-knowledge-citation-provenance">
+      {chips.map((chip) => (
+        <span className="workspace-knowledge-chip" key={chip.key}>
+          {chip.provider && (
+            <span className="workspace-knowledge-chip-icon" aria-hidden="true">
+              <AppLogo provider={chip.provider} name={chip.label} />
+            </span>
+          )}
+          {chip.label}
+        </span>
+      ))}
     </span>
   )
 }
@@ -184,6 +221,12 @@ function DocumentRow({
         )}
         {statusLabels[document.status]}
       </span>
+      {isAdminsOnlyDocument(document) && (
+        <span className="workspace-knowledge-admins-badge">
+          <Lock size={11} strokeWidth={1.8} aria-hidden="true" />
+          Admins only
+        </span>
+      )}
       {canRemove && !confirming && (
         <button
           className="workspace-knowledge-remove"
@@ -286,11 +329,13 @@ function contentErrors(
 function AddContentForm({
   organizationId,
   corpus,
+  viewer,
   onAdded,
   onCancel,
 }: {
   organizationId: string
   corpus: Corpus
+  viewer: RagViewer
   onAdded: (document: CorpusDocument, kind: ContentKind) => void
   onCancel: () => void
 }) {
@@ -300,13 +345,21 @@ function AddContentForm({
   const [text, setText] = useState("")
   const [url, setUrl] = useState("")
   const [file, setFile] = useState<File | null>(null)
+  const [access, setAccess] = useState<DocumentAccess>("members")
   const [errors, setErrors] = useState<ContentErrors>({})
+  const offerAdminsOnly = canSetAdminsOnlyAccess(corpus, viewer)
+  const adminsOnly = offerAdminsOnly && access === "admins"
 
   const add = useMutation({
     mutationFn: () => {
+      const documentAccess = adminsOnly ? "admins" : undefined
       if (kind === "file") {
         if (!file) throw new Error("Choose a file.")
-        return addFileDocument(organizationId, corpus, { file, title })
+        return addFileDocument(organizationId, corpus, {
+          file,
+          title,
+          access: documentAccess,
+        })
       }
       if (kind === "link") {
         return addDocument(organizationId, corpus.id, {
@@ -314,12 +367,14 @@ function AddContentForm({
           url,
           title,
           text,
+          access: documentAccess,
         })
       }
       return addDocument(organizationId, corpus.id, {
         kind: "inline",
         title,
         text,
+        access: documentAccess,
       })
     },
     onSuccess: (document) => onAdded(document, kind),
@@ -477,6 +532,43 @@ function AddContentForm({
               </p>
             ))}
         </>
+      )}
+
+      {offerAdminsOnly && (
+        <fieldset
+          className="workspace-knowledge-choice"
+          disabled={add.isPending}
+        >
+          <legend>Who can find it</legend>
+          <label>
+            <input
+              type="radio"
+              name={`${id}-access`}
+              value="members"
+              checked={access === "members"}
+              onChange={() => setAccess("members")}
+            />
+            Everyone with access
+          </label>
+          <label>
+            <input
+              type="radio"
+              name={`${id}-access`}
+              value="admins"
+              checked={access === "admins"}
+              onChange={() => setAccess("admins")}
+            />
+            <Lock size={15} strokeWidth={1.7} aria-hidden="true" />
+            Admins only
+          </label>
+        </fieldset>
+      )}
+      {offerAdminsOnly && (
+        <p className="workspace-knowledge-hint">
+          {access === "admins"
+            ? "Only workspace owners and admins can find this."
+            : "Everyone with access to this knowledge base can find it."}
+        </p>
       )}
 
       {add.isError && (
@@ -654,6 +746,7 @@ function AskKnowledgeBase({
                             <small>
                               {citationSourceLabel(citation.source)}
                             </small>
+                            <CitationProvenance metadata={citation.metadata} />
                           </span>
                         </li>
                       )
@@ -952,6 +1045,7 @@ export function KnowledgeBaseDetail({
         <AddContentForm
           organizationId={organizationId}
           corpus={corpus}
+          viewer={viewer}
           onAdded={added}
           onCancel={() => setAdding(false)}
         />

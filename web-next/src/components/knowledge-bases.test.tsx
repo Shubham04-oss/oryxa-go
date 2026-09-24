@@ -506,6 +506,21 @@ describe("a knowledge base's documents", () => {
     expect(screen.getByText("5 · 3 indexing")).toBeTruthy()
   })
 
+  it("shows a quiet Admins only badge on a restricted document", async () => {
+    stubApi(
+      detailRoutes(corpus(), () => [
+        document({ access: "admins" }),
+        document({ id: "doc_2", title: "Roadmap", access: "members" }),
+      ])
+    )
+    renderKnowledge(openHandbook)
+
+    const restricted = (await screen.findByText("Decision log")).closest("li")!
+    expect(within(restricted).getByText("Admins only")).toBeTruthy()
+    const open = screen.getByText("Roadmap").closest("li")!
+    expect(within(open).queryByText("Admins only")).toBeNull()
+  })
+
   it("loads more with the cursor the last page returned", async () => {
     const api = stubApi({
       ...detailRoutes(corpus({ document_count: 2 }), () => []),
@@ -550,6 +565,40 @@ describe("adding content", () => {
   function addingRoutes(documents: CorpusDocument[]) {
     return detailRoutes(corpus(), () => documents)
   }
+
+  it("offers admins-only access to an admin in an organization base", async () => {
+    stubApi(
+      detailRoutes(
+        corpus({ scope: "organization", member_id: undefined }),
+        () => []
+      )
+    )
+    renderKnowledge({ ...openHandbook, organizationRole: "admin" })
+    await screen.findByText("No documents yet")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
+    const group = screen.getByRole("group", { name: "Who can find it" })
+    expect(
+      within(group).getByRole("radio", { name: "Everyone with access" })
+    ).toBeTruthy()
+    expect(
+      within(group).getByRole("radio", { name: "Admins only" })
+    ).toBeTruthy()
+  })
+
+  it("hides admins-only access on a 'Just you' base, even for an admin", async () => {
+    stubApi(detailRoutes(corpus(), () => []))
+    renderKnowledge({ ...openHandbook, organizationRole: "admin" })
+    await screen.findByText("No documents yet")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
+    expect(screen.queryByRole("group", { name: "Who can find it" })).toBeNull()
+  })
+
+  // A plain member never reaches this form on an organization base at all —
+  // `canWriteCorpus` refuses "Add content" there first — so the "hidden for
+  // a member" half of the rule is covered at the unit level instead:
+  // `canSetAdminsOnlyAccess` in `lib/rag/client.test.ts`.
 
   it("adds a note as inline text and shows it indexing", async () => {
     const documents: CorpusDocument[] = []
@@ -697,6 +746,160 @@ describe("adding content", () => {
     fireEvent.click(screen.getByRole("button", { name: "Upload file" }))
     expect(screen.getByText(/Knowledge bases take text/)).toBeTruthy()
     expect(api.find("POST", "/v1/organizations/org_1/files")).toHaveLength(0)
+  })
+
+  function adminOrgRoutes(documents: CorpusDocument[]) {
+    return detailRoutes(
+      corpus({ scope: "organization", member_id: undefined }),
+      () => documents
+    )
+  }
+
+  it("sends access: admins for a note when Admins only is chosen", async () => {
+    const api = stubApi({
+      ...adminOrgRoutes([]),
+      [`POST ${corpusPath}/documents`]: () =>
+        json(document({ id: "doc_new", access: "admins" }), 202),
+    })
+    renderKnowledge({ ...openHandbook, organizationRole: "admin" })
+    await screen.findByText("No documents yet")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
+    fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
+      target: { value: "Only leadership should see this." },
+    })
+    fireEvent.click(screen.getByRole("radio", { name: "Admins only" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }))
+
+    await waitFor(() =>
+      expect(api.find("POST", `${corpusPath}/documents`)[0]?.body).toEqual({
+        source: { kind: "inline" },
+        text: "Only leadership should see this.",
+        access: "admins",
+      })
+    )
+  })
+
+  it("uploads an admins-only file with access, then adds it with access", async () => {
+    const api = stubApi({
+      ...adminOrgRoutes([]),
+      "POST /v1/organizations/org_1/files": () =>
+        json(
+          {
+            id: "file_8",
+            organization_id: "org_1",
+            scope: "organization",
+            filename: "policy.md",
+            content_type: "application/octet-stream",
+            purpose: "upload",
+            size_bytes: 20,
+            sha256: "",
+            created_by: "user-1",
+            created_at: ago(0),
+            expires_at: ago(-30 * day),
+          },
+          201
+        ),
+      [`POST ${corpusPath}/documents`]: () =>
+        json(
+          document({
+            id: "doc_new",
+            access: "admins",
+            source: { kind: "file", ref: "file_8" },
+          }),
+          202
+        ),
+    })
+    renderKnowledge({ ...openHandbook, organizationRole: "admin" })
+    await screen.findByText("No documents yet")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
+    fireEvent.click(screen.getByRole("radio", { name: "File" }))
+    fireEvent.click(screen.getByRole("radio", { name: "Admins only" }))
+    fireEvent.change(
+      screen.getByLabelText("File", { selector: 'input[type="file"]' }),
+      { target: { files: [new File(["# Policy"], "policy.md", { type: "" })] } }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload file" }))
+
+    await waitFor(() =>
+      expect(api.find("POST", `${corpusPath}/documents`)[0]?.body).toEqual({
+        source: { kind: "file", ref: "file_8" },
+        content_type: "text/markdown",
+        access: "admins",
+      })
+    )
+    const upload = api.find("POST", "/v1/organizations/org_1/files")[0]
+    expect((upload.body as FormData).get("access")).toBe("admins")
+    expect((upload.body as FormData).get("scope")).toBe("organization")
+  })
+
+  it("explains a 403 refusing admins-only access in plain words", async () => {
+    stubApi({
+      ...adminOrgRoutes([]),
+      [`POST ${corpusPath}/documents`]: () =>
+        json({ error: "you may not do that here" }, 403),
+    })
+    renderKnowledge({ ...openHandbook, organizationRole: "admin" })
+    await screen.findByText("No documents yet")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
+    fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
+      target: { value: "Board minutes." },
+    })
+    fireEvent.click(screen.getByRole("radio", { name: "Admins only" }))
+    fireEvent.click(screen.getByRole("button", { name: "Add note" }))
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "You don't have permission to do that here."
+    )
+  })
+
+  it("explains a 400 file/access mismatch in plain words, and cleans up the upload", async () => {
+    const api = stubApi({
+      ...adminOrgRoutes([]),
+      "POST /v1/organizations/org_1/files": () =>
+        json(
+          {
+            id: "file_8",
+            organization_id: "org_1",
+            scope: "organization",
+            filename: "policy.md",
+            content_type: "application/octet-stream",
+            purpose: "upload",
+            size_bytes: 20,
+            sha256: "",
+            created_by: "user-1",
+            created_at: ago(0),
+            expires_at: ago(-30 * day),
+          },
+          201
+        ),
+      [`POST ${corpusPath}/documents`]: () =>
+        json({ error: "set admin access on the file in Files first" }, 400),
+      "DELETE /v1/organizations/org_1/files/file_8": () =>
+        new Response(null, { status: 204 }),
+    })
+    renderKnowledge({ ...openHandbook, organizationRole: "admin" })
+    await screen.findByText("No documents yet")
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Add content" })[0])
+    fireEvent.click(screen.getByRole("radio", { name: "File" }))
+    fireEvent.click(screen.getByRole("radio", { name: "Admins only" }))
+    fireEvent.change(
+      screen.getByLabelText("File", { selector: 'input[type="file"]' }),
+      { target: { files: [new File(["# Policy"], "policy.md", { type: "" })] } }
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Upload file" }))
+
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "Set admin access on the file in Files first."
+    )
+    await waitFor(() =>
+      expect(
+        api.find("DELETE", "/v1/organizations/org_1/files/file_8")
+      ).toHaveLength(1)
+    )
   })
 })
 
@@ -855,6 +1058,66 @@ describe("asking a knowledge base", () => {
         .getByRole("link", { name: "Launch notes" })
         .getAttribute("href")
     ).toBe("https://example.com/launch")
+  })
+
+  it("shows a citation's provenance as muted chips, and nothing without metadata", async () => {
+    stubApi({
+      ...detailRoutes(corpus(), () => [document()]),
+      [`POST ${corpusPath}/answer`]: {
+        answer: {
+          text: "Ship on the 14th [1], per the note [2].",
+          citations: [
+            {
+              index: 1,
+              chunk_id: "chk_1",
+              document_id: "doc_9",
+              title: "Launch thread",
+              source: { kind: "external", ref: "https://mail.google.com/x" },
+              metadata: {
+                provider: "gmail",
+                document_kind: "message",
+                category: "work_material",
+              },
+              start_byte: 0,
+              end_byte: 10,
+              score: 0.9,
+            },
+            {
+              index: 2,
+              chunk_id: "chk_2",
+              document_id: "doc_1",
+              title: "Plain note",
+              source: { kind: "inline" },
+              start_byte: 0,
+              end_byte: 10,
+              score: 0.8,
+            },
+          ],
+          model: "gemini-3.5-flash-lite",
+          usage: {},
+          grounded: true,
+        },
+        matches: [],
+      },
+    })
+    renderKnowledge(openHandbook)
+    await screen.findByText("Decision log")
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Ask Handbook" }), {
+      target: { value: "When do we ship?" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Ask" }))
+    await screen.findByText("Ship on the 14th [1], per the note [2].")
+
+    const sources = screen.getByRole("list", { name: "Sources" })
+    const withMeta = within(sources).getByText("Launch thread").closest("li")!
+    expect(within(withMeta).getByText("Gmail")).toBeTruthy()
+    expect(within(withMeta).getByText("Message")).toBeTruthy()
+    expect(within(withMeta).getByText("Work material")).toBeTruthy()
+
+    const withoutMeta = within(sources).getByText("Plain note").closest("li")!
+    expect(within(withoutMeta).queryByText("Gmail")).toBeNull()
+    expect(within(withoutMeta).queryByText("Message")).toBeNull()
   })
 
   it("says plainly when nothing answers the question", async () => {
