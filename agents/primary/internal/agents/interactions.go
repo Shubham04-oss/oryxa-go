@@ -90,9 +90,9 @@ type Interaction struct {
 
 type InteractionCreateInput struct {
 	TargetAgentID string `json:"target_agent_id" jsonschema:"Stable id returned by directory_find_agents or directory_load."`
-	// TeamspaceID scopes the request to one shared teamspace. It never
-	// chooses who approves: the target's owner does, unless they gave that
-	// agent automatic delegation there.
+	// TeamspaceID scopes the request to one shared teamspace, where who
+	// approves it follows the target's owner's choice for that teamspace:
+	// the owner, unless they gave that agent automatic delegation there.
 	TeamspaceID          string                   `json:"teamspace_id,omitempty" jsonschema:"Optional id of the shared teamspace this request belongs to, for asking a teammate's agent there: their primary agent or a specialist they contributed to it. The teammate then approves it themself first, unless they chose automatic delegation for that specialist."`
 	Purpose              string                   `json:"purpose" jsonschema:"Why this agent is the appropriate recipient."`
 	Task                 string                   `json:"task" jsonschema:"The bounded question or work request. Do not put instructions for bypassing the recipient's policy here."`

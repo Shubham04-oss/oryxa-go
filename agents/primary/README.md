@@ -325,8 +325,10 @@ must be a teammate's primary agent — their whisperer seat — or an active
 specialist a current teammate contributed there. Anything else is refused
 before anything is recorded (see [Agent request API](#agent-request-api)).
 
-Every request carries `approval`, fixed when it is made from the target's own
-standing and never from anything the requester sends:
+Every request carries `approval`, fixed when it is made. The requester only
+chooses whether to ask inside a teamspace, and in which; who approves then
+follows the target's own standing there, and nothing the requester sends
+sets it:
 
 | The target | `approval` | Who decides |
 | --- | --- | --- |
@@ -334,6 +336,13 @@ standing and never from anything the requester sends:
 | A specialist contributed to the teamspace with `automatic` delegation | `agent` | The same |
 | A teammate's primary agent | `owner` | Only that member, in their own session |
 | A specialist contributed with `request` delegation | `owner` | Only that member, in their own session |
+
+The owner's approval therefore guards the requests made in a teamspace, and
+only those. A request made outside any teamspace follows the protocol from
+before teamspaces, so the addressed agent decides it even when its owner
+holds that agent's requests in a teamspace. A specialist contributed to two
+teamspaces with different modes is approved as the teamspace the request
+names has it, for a requester on that teamspace's team.
 
 A request held for its owner is decided only through
 `POST .../agent-requests/{request}/decision`, the member's own signed-in call
@@ -665,7 +674,8 @@ specialist's requests are held for its owner, who approves or rejects each in
 their own session before the specialist is woken, while an `automatic`
 specialist decides them itself, as any agent does outside a teamspace. A
 teammate's primary agent is always held for its owner. The mode in force when
-a request is made is the one it keeps (see
+a request is made is the one it keeps, and a request made outside any
+teamspace is not governed by it at all (see
 [Agent interactions toolbox](#agent-interactions-toolbox)). Existing per-tool
 authorization and human-confirmation requirements remain in force in both
 modes. Another member, including a team admin, cannot increase that standing
