@@ -24,15 +24,11 @@ import { WorkspaceFocus, workItems } from "./workspace-focus"
 import type { WorkId, WorkItem } from "./workspace-focus"
 import { initialKnowledgeBases, KnowledgeBases } from "./knowledge-bases"
 import type { KnowledgeBase } from "./knowledge-bases"
-import {
-  initialTeamspaces,
-  TeamspacesManagement,
-} from "./teamspaces-management"
-import type {
-  Teamspace,
-  TeamspaceStatus,
-  WorkspaceRole,
-} from "./teamspaces-management"
+import { TeamspacesManagement } from "./teamspaces-management"
+import type { WorkspaceRole } from "./teamspaces-management"
+import { TeamspaceFocus } from "./teamspace-focus"
+import { statusLabel } from "./teamspace-format"
+import { previewSharedSpaces, sharedSpacesOf } from "./people-spaces"
 import {
   agents,
   IdentityAvatar,
@@ -43,6 +39,7 @@ import { WorkspaceTools } from "./workspace-tools"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import { getSharedPeople, PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
+import { useTeamspaces } from "@/hooks/use-teamspaces"
 import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
 import type { AvatarIdentity } from "./workspace-avatar"
@@ -118,26 +115,6 @@ const workEntries: Partial<Record<Section, WorkId[]>> = {
   specialists: ["research-specialist"],
 }
 
-function teamspaceWorkItem(space: Teamspace): WorkItem {
-  if (space.id === "product-sync") {
-    return { ...workItems["product-sync"], status: "Active" }
-  }
-  return {
-    id: space.id,
-    title: space.title,
-    kind: "Teamspace",
-    description: space.description || "A space for your team to work together.",
-    status: "Active",
-    participants: space.members,
-    summary:
-      space.description || "Your team can share work and decisions here.",
-    tasks: [],
-    files: [],
-    activity: [],
-    messages: [],
-  }
-}
-
 export function WorkspaceShell({
   session,
   role = session ? "member" : "admin",
@@ -167,13 +144,10 @@ export function WorkspaceShell({
   })
   const [focusedWork, setFocusedWork] = useState<WorkItem | null>(null)
   const [knowledgeBases, setKnowledgeBases] = useState(initialKnowledgeBases)
-  const [teamspaces, setTeamspaces] = useState(initialTeamspaces)
+  const teamspaces = useTeamspaces(selectedOrganization?.id)
   const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState<
     string | null
   >(null)
-  const [selectedTeamspaceId, setSelectedTeamspaceId] = useState<string | null>(
-    null
-  )
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState("")
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
@@ -244,7 +218,15 @@ export function WorkspaceShell({
   const section = sectionsByMode[activeMode]
   const heading = headings[section]
   const visibleWorkEntries = workEntries[section]
-  const sharedPeople = getSharedPeople(teamspaces, currentIdentity)
+  // People lists who shares a teamspace with the member; only the dev
+  // preview, which has no workspace to read, lists examples.
+  const peopleSpaces = preview
+    ? previewSharedSpaces
+    : sharedSpacesOf(teamspaces.spaces)
+  const sharedPeople = getSharedPeople(peopleSpaces, currentIdentity)
+  const isFocused = Boolean(
+    focusedWork || (teamspaces.openId && selectedOrganization)
+  )
   const selectedPerson =
     section === "people"
       ? sharedPeople.find((person) => person.id === activeConversationId)
@@ -254,19 +236,17 @@ export function WorkspaceShell({
       ? knowledgeBases.find((base) => base.id === selectedKnowledgeBaseId)
       : undefined
   const selectedTeamspace =
-    section === "teamspaces"
-      ? teamspaces.find((space) => space.id === selectedTeamspaceId)
-      : undefined
+    section === "teamspaces" ? teamspaces.selected : undefined
   const detailTitle =
     selectedPerson?.name ||
     selectedKnowledgeBase?.name ||
-    selectedTeamspace?.title
+    selectedTeamspace?.name
   const detailKind = selectedPerson
     ? "Direct message"
     : selectedKnowledgeBase
       ? "Knowledge base"
       : selectedTeamspace
-        ? `Teamspace · ${selectedTeamspace.status === "active" ? "Active" : "Paused"}`
+        ? `Teamspace · ${statusLabel(selectedTeamspace)}`
         : undefined
   const conversations = conversationIds
     .map((id) => sharedPeople.find((person) => person.id === id))
@@ -279,9 +259,10 @@ export function WorkspaceShell({
   function selectMode(nextMode: PrimaryMode) {
     setActiveMode(nextMode)
     setFocusedWork(null)
+    teamspaces.close()
     if (nextMode !== activeMode) {
       setSelectedKnowledgeBaseId(null)
-      setSelectedTeamspaceId(null)
+      teamspaces.select(null)
     }
   }
 
@@ -289,7 +270,7 @@ export function WorkspaceShell({
     setFocusedWork(null)
     setActiveConversationId(null)
     setSelectedKnowledgeBaseId(null)
-    setSelectedTeamspaceId(null)
+    teamspaces.reset()
     setSectionsByMode((current) => ({
       ...current,
       [activeMode]: nextSection,
@@ -307,7 +288,7 @@ export function WorkspaceShell({
     setActiveMode("team")
     setSectionsByMode((current) => ({ ...current, team: "people" }))
     setFocusedWork(null)
-    setSelectedTeamspaceId(null)
+    teamspaces.reset()
     if (isMobile) setLeftExpanded(false)
   }
 
@@ -325,32 +306,23 @@ export function WorkspaceShell({
   }
 
   function openWork(workId: WorkId) {
+    teamspaces.close()
     setFocusedWork(workItems[workId])
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
   }
 
-  function openTeamspace(space: Teamspace) {
-    if (space.status !== "active") return
-    setSelectedTeamspaceId(null)
-    setFocusedWork(teamspaceWorkItem(space))
+  function openTeamspace(id: string) {
+    setFocusedWork(null)
+    teamspaces.open(id)
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
-  }
-
-  function changeTeamspaceStatus(id: string, status: TeamspaceStatus) {
-    if (role !== "admin") return
-    setTeamspaces((current) =>
-      current.map((space) =>
-        space.id === id ? { ...space, status, updated: "Just now" } : space
-      )
-    )
   }
 
   function closeDetail() {
     if (selectedPerson) setActiveConversationId(null)
     if (selectedKnowledgeBase) setSelectedKnowledgeBaseId(null)
-    if (selectedTeamspace) setSelectedTeamspaceId(null)
+    if (selectedTeamspace) teamspaces.select(null)
   }
 
   return (
@@ -358,9 +330,9 @@ export function WorkspaceShell({
       className="workspace-shell"
       data-left={leftExpanded ? "expanded" : "collapsed"}
       data-right={rightExpanded ? "expanded" : "collapsed"}
-      data-view={focusedWork ? "focused" : "browse"}
+      data-view={isFocused ? "focused" : "browse"}
     >
-      {!focusedWork && (
+      {!isFocused && (
         <aside
           id="workspace-navigation"
           className="workspace-left"
@@ -473,10 +445,12 @@ export function WorkspaceShell({
                     <span className="workspace-nav-label">{item.label}</span>
                   )}
                   {leftExpanded &&
-                    (item.count || item.key === "teamspaces") && (
+                    (item.count ||
+                      (item.key === "teamspaces" &&
+                        teamspaces.count !== undefined)) && (
                       <span className="workspace-nav-count">
                         {item.key === "teamspaces"
-                          ? teamspaces.length
+                          ? teamspaces.count
                           : item.count}
                       </span>
                     )}
@@ -620,7 +594,15 @@ export function WorkspaceShell({
       )}
 
       <div className="workspace-middle">
-        {focusedWork ? (
+        {teamspaces.openId && selectedOrganization ? (
+          <TeamspaceFocus
+            key={teamspaces.openId}
+            organizationId={selectedOrganization.id}
+            teamspaceId={teamspaces.openId}
+            viewerId={session?.user.id}
+            onBack={teamspaces.close}
+          />
+        ) : focusedWork ? (
           <WorkspaceFocus
             work={focusedWork}
             onBack={() => setFocusedWork(null)}
@@ -654,7 +636,7 @@ export function WorkspaceShell({
                       </span>
                     )}
                     {selectedTeamspace && (
-                      <TeamspaceAvatar name={selectedTeamspace.title} />
+                      <TeamspaceAvatar name={selectedTeamspace.name} />
                     )}
                     <div>
                       <h1>{detailTitle}</h1>
@@ -706,7 +688,7 @@ export function WorkspaceShell({
               )}
               {section === "people" && (
                 <PeopleDirectory
-                  spaces={teamspaces}
+                  spaces={peopleSpaces}
                   currentIdentity={currentIdentity}
                   preview={preview}
                   selectedId={activeConversationId}
@@ -717,15 +699,10 @@ export function WorkspaceShell({
               )}
               {section === "teamspaces" && (
                 <TeamspacesManagement
-                  role={role}
-                  spaces={teamspaces}
-                  selectedId={selectedTeamspaceId}
-                  onSelect={setSelectedTeamspaceId}
-                  onCreate={(space) => {
-                    if (role !== "admin") return
-                    setTeamspaces((current) => [space, ...current])
-                  }}
-                  onStatusChange={changeTeamspaceStatus}
+                  organizationId={selectedOrganization?.id}
+                  viewerId={session?.user.id}
+                  selectedId={teamspaces.selectedId}
+                  onSelect={teamspaces.select}
                   onOpen={openTeamspace}
                 />
               )}

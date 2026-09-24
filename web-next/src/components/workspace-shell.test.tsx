@@ -7,16 +7,14 @@ import {
   fireEvent,
   render as renderBase,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { useState } from "react"
 import type { ReactElement } from "react"
 import { WorkspaceShell } from "./workspace-shell"
-import {
-  initialTeamspaces,
-  TeamspacesManagement,
-} from "./teamspaces-management"
+import type { Session } from "@/lib/auth/client"
+import { json, mockApi, orgPath, teamspace, viewerId } from "@/test/teamspaces"
 
 function render(ui: ReactElement) {
   const client = new QueryClient({
@@ -24,6 +22,66 @@ function render(ui: ReactElement) {
   })
   return renderBase(
     <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+  )
+}
+
+const session: Session = {
+  user: { id: viewerId, email: "member@sim.oryxa", display_name: "Member" },
+  organizations: [{ id: "org_sim", name: "Simulated Org", slug: "org-sim" }],
+}
+
+const launch = teamspace()
+const design = teamspace({
+  id: "tsp_design",
+  team_id: "team_design",
+  team_name: "Design",
+  name: "Design reviews",
+  status: "disabled",
+  can_manage: false,
+})
+
+/** The agents, teams and files services, answering for `org_sim`'s member. */
+function liveBackend() {
+  const launchPath = `${orgPath}/teamspaces/tsp_launch`
+  return mockApi(({ method, url }) => {
+    const path = url.pathname
+    if (path === `${orgPath}/teamspaces`) {
+      return json({ teamspaces: [launch, design] })
+    }
+    if (path === `${orgPath}/teams`) return json({ teams: [] })
+    if (path === launchPath) return json(launch)
+    if (path === `${launchPath}/catchup`) {
+      return json({ brief: { through_seq: 0 }, messages: [] })
+    }
+    if (path === `${launchPath}/messages` && method === "GET") {
+      return json({
+        messages: [],
+        seats: [
+          {
+            handle: "member",
+            kind: "person",
+            user_id: viewerId,
+            display_name: "Member",
+            present: true,
+          },
+        ],
+      })
+    }
+    if (path === `${launchPath}/entries`) return json({ entries: [] })
+    if (path === `${orgPath}/files`) return json({ files: [] })
+    return undefined
+  })
+}
+
+function SignedInShell() {
+  return (
+    <WorkspaceShell
+      session={session}
+      role="member"
+      organizationRole="member"
+      selectedOrganization={session.organizations[0]}
+      initialMode="team"
+    />
   )
 }
 
@@ -227,43 +285,45 @@ describe("WorkspaceShell navigation", () => {
     expect(screen.getByRole("heading", { name: "Specialists" })).toBeTruthy()
   })
 
-  it("opens focused team and agent work without the left sidebar and returns to the right section", () => {
-    render(<WorkspaceShell />)
+  it("opens focused team and agent work without the left sidebar and returns to the right section", async () => {
+    liveBackend()
+    render(<SignedInShell />)
 
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
-    fireEvent.click(screen.getByRole("button", { name: "Manage Product sync" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Manage Launch room" })
+    )
     fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
     expect(
       screen.queryByRole("complementary", { name: "Workspace navigation" })
     ).toBeNull()
-    expect(screen.getByRole("heading", { name: "Product sync" })).toBeTruthy()
+    expect(
+      screen.getByRole("heading", { name: "Launch room", level: 1 })
+    ).toBeTruthy()
+    expect(screen.getByText("Teamspace · Active")).toBeTruthy()
     const workPanel = screen.getByRole("region", {
-      name: "Product sync work panel",
+      name: "Launch room work panel",
     })
-    const workViews = screen.getByLabelText("Work views")
+    const workViews = screen.getByRole("group", { name: "Work views" })
     expect(workPanel.contains(workViews)).toBe(false)
     fireEvent.click(within(workViews).getByRole("button", { name: "Files" }))
     expect(
-      within(workPanel).getByRole("heading", { name: "Files and context" })
+      within(workPanel).getByRole("heading", { name: "Team files" })
     ).toBeTruthy()
-    expect(within(workPanel).getByText("Handoff notes")).toBeTruthy()
+    expect(
+      await within(workPanel).findByText(
+        "No files have been shared with Launch yet."
+      )
+    ).toBeTruthy()
+    expect(
+      screen.getByRole("textbox", { name: "Message Launch room" })
+    ).toBeTruthy()
 
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Message Product sync" }),
-      {
-        target: { value: "The checklist is ready." },
-      }
-    )
-    expect(screen.getByRole("button", { name: "Send message" })).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }))
-    expect(screen.getByText("The checklist is ready.")).toBeTruthy()
-
-    fireEvent.click(screen.getByRole("button", { name: "Back to workspace" }))
+    fireEvent.click(screen.getByRole("button", { name: "Back to teamspaces" }))
     expect(
       screen.getByRole("navigation", { name: "Team navigation" })
     ).toBeTruthy()
     expect(
-      screen.getByRole("button", { name: "Manage Product sync" })
+      screen.getByRole("button", { name: "Manage Launch room" })
     ).toBeTruthy()
 
     fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
@@ -437,77 +497,47 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
   })
 
-  it("lets an admin filter, resume, and create teamspaces", () => {
-    render(<WorkspaceShell />)
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
+  it("names the selected teamspace in the header and counts the real ones", async () => {
+    liveBackend()
+    render(<SignedInShell />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Paused" }))
-    expect(
-      screen.getByRole("button", { name: "Manage Design reviews" })
-    ).toBeTruthy()
-    expect(
-      screen.queryByRole("button", { name: "Manage Product sync" })
-    ).toBeNull()
+    const teamNavigation = screen.getByRole("navigation", {
+      name: "Team navigation",
+    })
+    await waitFor(() =>
+      expect(
+        within(teamNavigation).getByRole("button", { name: /^Teamspaces/ })
+          .textContent
+      ).toBe("Teamspaces2")
+    )
 
     fireEvent.click(
-      screen.getByRole("button", { name: "Manage Design reviews" })
+      await screen.findByRole("button", { name: "Manage Design reviews" })
     )
     expect(
       screen.getByRole("heading", { name: "Design reviews", level: 1 })
     ).toBeTruthy()
+    expect(screen.getByText("Teamspace · Paused")).toBeTruthy()
     expect(
       screen.queryByRole("heading", { name: "Teamspaces", level: 1 })
     ).toBeNull()
     expect(screen.queryByRole("button", { name: "Open teamspace" })).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: "Resume teamspace" }))
-    expect(screen.getByRole("button", { name: "Open teamspace" })).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "All teamspaces" }))
 
-    fireEvent.click(screen.getByRole("button", { name: "New teamspace" }))
-    fireEvent.click(screen.getByRole("button", { name: "Create teamspace" }))
-    expect(screen.getByText("Use at least 2 characters.")).toBeTruthy()
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
-      target: { value: "Customer success" },
-    })
-    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
-      target: { value: "Customer handoffs and plans." },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Create teamspace" }))
+    fireEvent.click(screen.getByRole("button", { name: "All teamspaces" }))
     expect(
-      screen.getByRole("heading", { name: "Customer success" })
-    ).toBeTruthy()
-    expect(
-      within(
-        screen.getByRole("region", { name: "Teamspace members" })
-      ).getByText("Avery Morgan")
-    ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
-    expect(
-      screen.getByText("No messages yet. Start the conversation here.")
+      screen.getByRole("heading", { name: "Teamspaces", level: 1 })
     ).toBeTruthy()
   })
 
-  it("hides management actions from a teamspace member", () => {
-    function MemberTeamspaces() {
-      const [selectedId, setSelectedId] = useState<string | null>(null)
-      return (
-        <TeamspacesManagement
-          role="member"
-          spaces={initialTeamspaces}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          onCreate={vi.fn()}
-          onStatusChange={vi.fn()}
-          onOpen={vi.fn()}
-        />
-      )
-    }
-    render(<MemberTeamspaces />)
+  it("shows no example teamspaces without a workspace to read", () => {
+    const api = mockApi(() => undefined)
+    render(<WorkspaceShell />)
+    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
 
-    expect(screen.queryByRole("button", { name: "New teamspace" })).toBeNull()
-    fireEvent.click(screen.getByRole("button", { name: "Manage Product sync" }))
-    expect(screen.queryByRole("button", { name: "Pause teamspace" })).toBeNull()
-    expect(screen.getByRole("button", { name: "Open teamspace" })).toBeTruthy()
+    expect(screen.getByText("No workspace to load")).toBeTruthy()
+    for (const example of ["Product sync", "Launch planning", "Design reviews"])
+      expect(screen.queryByText(example)).toBeNull()
+    expect(api.calls).toEqual([])
   })
 
   it("searches, opens, and creates knowledge bases in the local workspace", () => {
@@ -563,7 +593,7 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
   })
 
-  it("uses the visible mobile viewport for chat while composing", () => {
+  it("uses the visible mobile viewport for chat while composing", async () => {
     vi.stubGlobal("matchMedia", () => ({
       matches: true,
       addEventListener: vi.fn(),
@@ -571,15 +601,16 @@ describe("WorkspaceShell navigation", () => {
     }))
     const viewport = Object.assign(new EventTarget(), { height: 420 })
     vi.stubGlobal("visualViewport", viewport)
-    const { container } = render(<WorkspaceShell />)
+    liveBackend()
+    const { container } = render(<SignedInShell />)
 
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
-    fireEvent.click(screen.getByRole("button", { name: "Manage Product sync" }))
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Manage Launch room" })
+    )
     fireEvent.click(screen.getByRole("button", { name: "Open teamspace" }))
 
     const focus = container.querySelector<HTMLElement>(".workspace-focus")
-    const input = screen.getByRole("textbox", { name: "Message Product sync" })
+    const input = screen.getByRole("textbox", { name: "Message Launch room" })
     fireEvent.focus(input)
     expect(focus?.getAttribute("data-composing")).toBe("true")
     expect(focus?.style.height).toBe("420px")
