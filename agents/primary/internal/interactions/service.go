@@ -282,7 +282,7 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 
 // Decide records a decision an agent makes, through its interactions tool:
 // the addressed agent's own, or its member's primary agent mediating. A
-// request held for its owner (ApprovalOwner) is never an agent's to decide,
+// request held for its owner (HeldForOwner) is never an agent's to decide,
 // whichever agent asks.
 func (service *Service) Decide(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
 	return service.decide(ctx, actor, id, input, false)
