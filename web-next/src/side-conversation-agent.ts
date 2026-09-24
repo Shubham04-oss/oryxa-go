@@ -1614,7 +1614,9 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     }
     if (this.epoch !== epoch) return
     const seen = new Set<string>()
-    for (const request of listed) {
+    // Go lists the newest first: the oldest is brought up to date first, so
+    // what their ends leave lands in the order they were asked.
+    for (const request of [...listed].reverse()) {
       const requestId = this.applyRequest(request, true)
       if (requestId) seen.add(requestId)
     }
