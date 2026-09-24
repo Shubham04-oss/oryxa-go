@@ -30,14 +30,15 @@ Only in development, an unavailable auth service leaves the existing workspace
 prototype accessible with a Preview badge. A signed-out response still sends
 you to sign-in, and production never falls back to the prototype.
 
-## Primary chat: the Worker and its Durable Object
+## Chats: the Worker and its Durable Objects
 
 `pnpm dev` runs the app in workerd through the Cloudflare Vite plugin. The
 Worker is `src/server.ts` (`main` in `wrangler.jsonc`); it serves the app
-through TanStack Start and, beside it, the member's primary-agent chat: one
-SQLite-backed Durable Object per thread, `ThreadChatAgent`
-(`src/thread-chat-agent.ts`), named `{organization}~{thread}`, as `../web` has
-had since #82.
+through TanStack Start and, beside it, one SQLite-backed Durable Object for
+every conversation (REALTIME.md), each an entry in the Worker's table of
+realtime objects. The member's primary-agent chat is one object per thread,
+`ThreadChatAgent` (`src/thread-chat-agent.ts`), named
+`{organization}~{thread}`, as `../web` has had since #82.
 
 - `/agents/thread-chat-agent/{organization}~{thread}` is the page's WebSocket
   (the Agents SDK's `useAgent` and `useAgentChat`), and `.../get-messages` the
@@ -56,6 +57,16 @@ had since #82.
 - `DELETE` on the same path, from the app's own origin only, deletes the
   thread in Go and only then clears the object's transcript; a refusal from
   Go leaves both.
+
+The member's chat with one of their specialists is `SpecialistChatAgent`
+(`src/specialist-chat-agent.ts`), one object per specialist, named
+`{organization}~{agent}`: Go creates a specialist conversation only inside
+its first run, so the object keeps the conversation Go names and continues
+it. It is served the same way at `/agents/specialist-chat-agent/...`, behind
+`GET /v1/organizations/{org}/agents/{agent}` (Go answers only the
+specialist's owner). Its `DELETE` starts the chat over and deletes nothing
+in Go, which has no route for that. Both objects share the run relay in
+`src/chat-relay.ts`.
 
 The Worker reaches Go at `ORYXA_API_ORIGIN`, which `wrangler.jsonc` sets to
 `http://localhost:8080`. To point local development elsewhere, copy

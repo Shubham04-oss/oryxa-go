@@ -7,15 +7,24 @@ import { getCurrentAgent } from "agents"
 import type { Connection, ConnectionContext } from "agents"
 import { createUIMessageStream, createUIMessageStreamResponse } from "ai"
 import type { UIMessage } from "ai"
+import { inputFromMessages, primaryRefusals, relayGoRun } from "./chat-relay"
+import type { RelayWords } from "./chat-relay"
 import {
   itemPart,
-  sessionExpiredCode,
   threadAgentName,
   withoutSupersededDeltas,
 } from "./lib/threads/chat-messages"
 import type { ThreadChatMessage } from "./lib/threads/chat-messages"
-import type { ConfirmationAnswer, Item, RunInput } from "./lib/threads/client"
-import { readItemStream } from "./lib/threads/event-stream"
+import type { Item } from "./lib/threads/client"
+
+// A turn's input and Go's refusals are the same for every chat object, and
+// live in ./chat-relay; they are exported from here too, where they began.
+export {
+  RunStartError,
+  confirmationInput,
+  inputFromMessages,
+  runStartError,
+} from "./chat-relay"
 
 /** What the chat's Durable Object reads from the Worker's environment (wrangler.jsonc, `.dev.vars`). */
 export interface ThreadChatEnv extends Cloudflare.Env {
@@ -46,130 +55,6 @@ export type ChatConnectionState = {
   origin: string
 }
 
-/** A run Go would not start, or one that could not be asked for, in words for the member. */
-export class RunStartError extends Error {
-  /**
-   * `sessionExpiredCode` when Go answered 401, otherwise Go's refusal code
-   * (`run_in_progress`, `confirmation_pending`, ...), when it sent one.
-   */
-  readonly code: string | undefined
-
-  constructor(message: string, code?: string) {
-    super(message)
-    this.name = "RunStartError"
-    this.code = code
-  }
-}
-
-/**
- * The member's answers from a chat request's body, or nothing unless there
- * is at least one and every one is well formed. Only `id` and `confirmed`
- * go on: Go refuses a body with any other field.
- */
-export function confirmationInput(
-  value: unknown
-): ConfirmationAnswer[] | undefined {
-  if (!Array.isArray(value) || value.length === 0) return undefined
-  const answers: ConfirmationAnswer[] = []
-  for (const answer of value as unknown[]) {
-    if (typeof answer !== "object" || answer === null) return undefined
-    const { id, confirmed } = answer as { id?: unknown; confirmed?: unknown }
-    if (typeof id !== "string" || id === "" || typeof confirmed !== "boolean") {
-      return undefined
-    }
-    answers.push({ id, confirmed })
-  }
-  return answers
-}
-
-/**
- * What a chat turn asks Go for. Answers to confirmations travel in the chat
- * request's body (`sendMessage(placeholder, { body: { confirmations } })`);
- * anything else sends the text of the member's latest message, which
- * useAgentChat has already stored. Throws `RunStartError` when there is
- * nothing to send.
- */
-export function inputFromMessages(
-  messages: readonly UIMessage[],
-  body: Record<string, unknown> | undefined
-): RunInput {
-  if (body?.confirmations !== undefined) {
-    const confirmations = confirmationInput(body.confirmations)
-    if (!confirmations) throw new RunStartError("Invalid confirmation answers.")
-    return { confirmations }
-  }
-  let lastUser: UIMessage | undefined
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === "user") {
-      lastUser = messages[index]
-      break
-    }
-  }
-  const text = (lastUser?.parts ?? [])
-    .flatMap((part) => (part.type === "text" ? [part.text] : []))
-    .join("")
-    .trim()
-  if (!text) throw new RunStartError("Send a message to start a run.")
-  return { message: text }
-}
-
-/** Go's words for a refused run, as a sentence: they start lower case and end bare. */
-function sentence(text: string): string {
-  const trimmed = text.trim()
-  if (!trimmed) return trimmed
-  const capitalized = trimmed[0].toUpperCase() + trimmed.slice(1)
-  return /[.!?]$/.test(capitalized) ? capitalized : `${capitalized}.`
-}
-
-/**
- * Why Go refused to start a run, from its answer, in words the member can
- * act on. A 401 means the cookie this socket was opened with has expired, and
- * only the page can refresh it: it does, reopens the socket and sends again,
- * once, so the member reads this only when that did not help either.
- */
-export async function runStartError(
-  response: Response
-): Promise<RunStartError> {
-  if (response.status === 401) {
-    return new RunStartError(
-      "Your session has ended. Sign in again to continue.",
-      sessionExpiredCode
-    )
-  }
-  let code = ""
-  let message = ""
-  try {
-    const body: { error?: string | { code?: string; message?: string } } =
-      await response.json()
-    if (typeof body.error === "object") {
-      code = body.error.code ?? ""
-      message = body.error.message ?? ""
-    }
-  } catch {
-    // A gateway can answer with something that is not JSON.
-  }
-  const refused = (words: string) => new RunStartError(words, code || undefined)
-  switch (code) {
-    case "run_in_progress":
-      return refused(
-        "Your primary agent is still answering in this conversation."
-      )
-    case "confirmation_pending":
-      return refused("Answer the confirmation above to continue.")
-    case "agents_unavailable":
-      return refused("Your primary agent isn't available right now.")
-    case "not_found":
-      return refused("This conversation no longer exists.")
-    case "rate_limited":
-      return refused("Too many requests at once. Wait a moment and try again.")
-    case "invalid_request":
-      // Go's words for this code say what to change.
-      if (message) return refused(sentence(message))
-      break
-  }
-  return refused(`The agent could not start (${response.status}).`)
-}
-
 export type RelayRunOptions = {
   /** Go's origin: `ThreadChatEnv.ORYXA_API_ORIGIN`. */
   apiOrigin: string
@@ -185,22 +70,17 @@ export type RelayRunOptions = {
   write: (item: Item) => void
 }
 
+/** The primary chat's words for a run that did not finish. */
+const primaryWords: RelayWords = {
+  refusals: primaryRefusals,
+  cutOff: "Your primary agent's answer was cut off before it finished.",
+  unreachable: "Your primary agent could not be reached. Try again.",
+}
+
 /**
- * One chat turn: POSTs Go's run as the member and writes what it streams.
- *
- * Everything the member should see arrives as an item, refusals included, as
- * a `run_failed` with words for them and, when there is one, a `code` (Go's,
- * or `sessionExpiredCode` for a 401 or a socket that holds no cookie). The
- * member's own message is left out (the transcript has it), and answered
- * confirmations are echoed with their status once Go accepts the run, since
- * Go streams a confirmation only while it waits.
- *
- * It resolves as soon as the run's last item arrives: `readItemStream` stops
- * there rather than waiting out the up to 15 seconds Go keeps the response
- * open while it writes the conversation to memory. A stream that ends or
- * breaks before its last item gets a `run_failed`, so no draft is left
- * looking as if it were still being written. An aborted turn writes nothing
- * more.
+ * One chat turn: POSTs the thread's run as the member and writes what it
+ * streams (`relayGoRun`, which says how refusals, confirmations and a
+ * stream that stops early reach the page).
  */
 export async function relayRun({
   apiOrigin,
@@ -210,71 +90,18 @@ export async function relayRun({
   signal,
   write,
 }: RelayRunOptions): Promise<void> {
-  let runId: string | undefined
-  try {
-    if (!connection?.cookie) {
-      // Nothing ran. A reopened socket carries the page's cookie again.
-      throw new RunStartError(
-        "Your session has ended. Sign in again to continue.",
-        sessionExpiredCode
-      )
-    }
-    const input = inputFromMessages(messages, body)
-    const path = `/v1/organizations/${encodeURIComponent(connection.organizationId)}/threads/${encodeURIComponent(connection.threadId)}/runs`
-    const response = await fetch(new URL(path, apiOrigin), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Cookie: connection.cookie,
-        // Go takes a cookie-authenticated change only from an allowed origin.
-        ...(connection.origin ? { Origin: connection.origin } : {}),
-      },
-      body: JSON.stringify(input),
-      signal,
-    })
-    if (!response.ok) throw await runStartError(response)
-    runId = response.headers.get("X-Oryxa-Run") ?? undefined
-    if (!response.body) {
-      throw new RunStartError("The agent did not return a stream.")
-    }
-    if ("confirmations" in input) {
-      for (const answer of input.confirmations) {
-        write({
-          type: "confirmation",
-          call_id: answer.id,
-          status: answer.confirmed ? "approved" : "declined",
-        })
-      }
-    }
-    const result = await readItemStream(response.body, {
-      signal,
-      onItem: (item) => {
-        if (item.type === "message" && item.author === "member") return
-        write(item)
-      },
-    })
-    if (result.outcome === "incomplete") {
-      write({
-        type: "run_failed",
-        run_id: result.runId ?? runId,
-        error: "Your primary agent's answer was cut off before it finished.",
-      })
-    }
-  } catch (error) {
-    if (signal?.aborted) return
-    if (!(error instanceof RunStartError)) {
-      console.error("thread chat: the run could not reach Go", error)
-    }
-    write({
-      type: "run_failed",
-      run_id: runId,
-      error:
-        error instanceof RunStartError
-          ? error.message
-          : "Your primary agent could not be reached. Try again.",
-      code: error instanceof RunStartError ? error.code : undefined,
-    })
-  }
+  await relayGoRun({
+    connection,
+    words: primaryWords,
+    label: "thread chat",
+    signal,
+    write,
+    request: ({ organizationId, threadId }) => {
+      const input = inputFromMessages(messages, body)
+      const path = `/v1/organizations/${encodeURIComponent(organizationId)}/threads/${encodeURIComponent(threadId)}/runs`
+      return { url: new URL(path, apiOrigin), body: input, input }
+    },
+  })
 }
 
 /** How long a purge waits for a stopped run to finish writing, before clearing anyway. */

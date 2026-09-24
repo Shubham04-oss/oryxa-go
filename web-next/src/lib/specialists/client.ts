@@ -11,7 +11,9 @@ import type {
   Thread,
   ThreadDetail,
 } from "@/lib/threads/client"
+import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
 import type { RunResult } from "@/lib/threads/event-stream"
+import { specialistAgentName } from "./chat-messages"
 
 // A specialist is one of the member's persistent agents (managed agents in
 // Go). Each has its own conversations, kept apart from the primary agent's
@@ -101,6 +103,56 @@ export async function startSpecialistRun(
     }
   )
   return { ...result, threadId }
+}
+
+/**
+ * Where the specialist chat's Durable Object answers HTTP, on the app's own
+ * origin (`/agents/{class}/{name}`): the page's socket is `useAgent({ agent:
+ * "specialist-chat-agent", name: specialistAgentName(org, agent) })`.
+ */
+export function specialistChatPath(
+  organizationId: string,
+  agentId: string
+): string {
+  return `/agents/specialist-chat-agent/${encodeURIComponent(specialistAgentName(organizationId, agentId))}`
+}
+
+/**
+ * GET /agents/specialist-chat-agent/{org}~{agent}/get-messages: the
+ * transcript the specialist chat's Durable Object stored, the specialists'
+ * answers already readable (`readableSpecialistItem`). Through `apiFetch`,
+ * so an expired cookie is refreshed first: the Worker checks with Go that
+ * the specialist is the member's own before answering (404 when it is not).
+ * Not a Go route.
+ */
+export async function getSpecialistChatMessages(
+  organizationId: string,
+  agentId: string,
+  { signal }: { signal?: AbortSignal } = {}
+): Promise<ThreadChatMessage[]> {
+  const messages = await apiRequest<ThreadChatMessage[] | undefined>(
+    `${specialistChatPath(organizationId, agentId)}/get-messages`,
+    { signal }
+  )
+  return messages ?? []
+}
+
+/**
+ * DELETE /agents/specialist-chat-agent/{org}~{agent} (204): starts the chat
+ * over. The Worker (src/server.ts) checks that the specialist is the member's
+ * own, then clears the Durable Object's transcript and forgets its Go
+ * conversation, so the next message starts a new one. Go keeps the old
+ * conversation: it has no route that deletes a specialist conversation, and
+ * `listSpecialistThreads` still lists it. Not a Go route; it deletes nothing
+ * in Go.
+ */
+export async function clearSpecialistChat(
+  organizationId: string,
+  agentId: string
+): Promise<void> {
+  await apiRequest(specialistChatPath(organizationId, agentId), {
+    method: "DELETE",
+  })
 }
 
 /**
