@@ -354,8 +354,8 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 
 	at := time.Now().UTC().Truncate(time.Microsecond)
 	marker := "v2:marker-of-the-submission"
-	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, marker, at); err != nil {
-		t.Fatalf("MarkKnowledgeBaseSubmitted: %v", err)
+	if recorded, err := store.MarkKnowledgeBaseSubmitted(ctx, stored, marker, at); err != nil || !recorded {
+		t.Fatalf("MarkKnowledgeBaseSubmitted = %v, %v", recorded, err)
 	}
 	afterSubmit, err := store.Document(ctx, organizationID, stored.ID)
 	if err != nil {
@@ -395,8 +395,8 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 
 	// Giving a submission up forgets when it was made along with what it was,
 	// since nothing is outstanding any more.
-	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, "", at.Add(time.Minute)); err != nil {
-		t.Fatalf("MarkKnowledgeBaseSubmitted with no marker: %v", err)
+	if forgotten, err := store.MarkKnowledgeBaseSubmitted(ctx, stored, "", at.Add(time.Minute)); err != nil || !forgotten {
+		t.Fatalf("MarkKnowledgeBaseSubmitted with no marker = %v, %v", forgotten, err)
 	}
 	afterReset, err := store.Document(ctx, organizationID, stored.ID)
 	if err != nil {
@@ -457,8 +457,8 @@ func TestDocumentUpsertIsIdempotentOnContent(t *testing.T) {
 		t.Fatalf("re-offering a pending document = (%v, %v), want changed", outcome, err)
 	}
 
-	if err := store.MarkDocumentReady(ctx, stored.ID, 3, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil {
-		t.Fatalf("MarkDocumentReady: %v", err)
+	if marked, err := store.MarkDocumentReady(ctx, stored, 3, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil || !marked {
+		t.Fatalf("MarkDocumentReady = %v, %v", marked, err)
 	}
 
 	// Now the same bytes are a no-op, which is what lets a pipeline
@@ -508,11 +508,11 @@ func TestMetadataChangeRequeuesDocumentAndReplacesVectorMetadata(t *testing.T) {
 	if err := store.MarkChunksEmbedded(ctx, []string{first.Fresh[0].ID}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkDocumentReady(ctx, stored.ID, 1, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil {
-		t.Fatal(err)
+	if marked, err := store.MarkDocumentReady(ctx, stored, 1, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil || !marked {
+		t.Fatal(marked, err)
 	}
-	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, "v2:submitted", time.Now().UTC()); err != nil {
-		t.Fatal(err)
+	if recorded, err := store.MarkKnowledgeBaseSubmitted(ctx, stored, "v2:submitted", time.Now().UTC()); err != nil || !recorded {
+		t.Fatal(recorded, err)
 	}
 	updated := newDocument(corpus, source, "Invoice", body)
 	updated.Metadata = domain.Metadata{"provider": "gmail", "category": "account_record"}
@@ -597,11 +597,11 @@ func TestDocumentACLFiltersPagesAndReferences(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].DocumentCount != 2 {
 		t.Fatalf("admin corpora = %+v, %v", listed, err)
 	}
-	if err := store.MarkDocumentReady(ctx, admin.ID, 0, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil {
-		t.Fatal(err)
+	if marked, err := store.MarkDocumentReady(ctx, admin, 0, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil || !marked {
+		t.Fatal(marked, err)
 	}
-	if err := store.MarkKnowledgeBaseSubmitted(ctx, admin.ID, "v2:submitted", time.Now().UTC()); err != nil {
-		t.Fatal(err)
+	if recorded, err := store.MarkKnowledgeBaseSubmitted(ctx, admin, "v2:submitted", time.Now().UTC()); err != nil || !recorded {
+		t.Fatal(recorded, err)
 	}
 	reclassified := newDocument(corpus, domain.Source{Kind: domain.SourceExternal, Ref: "restricted"}, "Payroll", "payroll")
 	reclassified.Access = domain.AccessMembers

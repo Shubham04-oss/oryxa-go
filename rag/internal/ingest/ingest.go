@@ -37,14 +37,19 @@ type Store interface {
 	SyncChunks(ctx context.Context, document domain.Document, chunks []domain.Chunk, at time.Time) (domain.ChunkSync, error)
 	MarkChunksEmbedded(ctx context.Context, chunkIDs []string, at time.Time) error
 	ClaimDocuments(ctx context.Context, limit int, lease time.Duration) ([]domain.Document, error)
-	MarkDocumentReady(ctx context.Context, documentID string, chunkCount int, at time.Time, event domain.Event) error
-	MarkDocumentFailed(ctx context.Context, documentID, reason string, at time.Time, event domain.Event) error
+	// MarkDocumentReady and MarkDocumentFailed record an outcome for the
+	// version of the document an attempt worked from, and report false,
+	// recording nothing, when the document has changed since: the change
+	// queued an attempt of its own.
+	MarkDocumentReady(ctx context.Context, document domain.Document, chunkCount int, at time.Time, event domain.Event) (bool, error)
+	MarkDocumentFailed(ctx context.Context, document domain.Document, reason string, at time.Time, event domain.Event) (bool, error)
 	ReleaseDocument(ctx context.Context, documentID string) error
 	// MarkKnowledgeBaseSubmitted and RequeueUnsyncedKnowledgeBaseDocuments
 	// are used only for a bedrock-kb corpus's documents; see
 	// indexKnowledgeBase and resyncKnowledgeBase. The first records
-	// knowledgebase.SyncMarker of a submission, or forgets one given "".
-	MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, marker string, at time.Time) error
+	// knowledgebase.SyncMarker of a submission, or forgets one given "",
+	// under the same rule as MarkDocumentReady.
+	MarkKnowledgeBaseSubmitted(ctx context.Context, document domain.Document, marker string, at time.Time) (bool, error)
 	RequeueUnsyncedKnowledgeBaseDocuments(ctx context.Context, limit int) (int64, error)
 	// RecheckDocumentAt leaves a document ingesting, claimable again at at,
 	// without counting the claim as an attempt.
@@ -289,8 +294,13 @@ func (pipeline *Pipeline) Index(ctx context.Context, document domain.Document) (
 	if buildErr != nil {
 		return Result{}, errors.Join(err, buildErr)
 	}
-	if markErr := pipeline.store.MarkDocumentFailed(ctx, document.ID, err.Error(), pipeline.now().UTC(), failure); markErr != nil {
+	marked, markErr := pipeline.store.MarkDocumentFailed(ctx, document, err.Error(), pipeline.now().UTC(), failure)
+	if markErr != nil {
 		return Result{}, errors.Join(err, markErr)
+	}
+	if !marked {
+		pipeline.logger.InfoContext(ctx, "a document changed while it was being indexed; its new version gets an attempt of its own",
+			"document_id", document.ID, "corpus_id", document.CorpusID)
 	}
 	return Result{}, err
 }
@@ -370,8 +380,14 @@ func (pipeline *Pipeline) index(ctx context.Context, document domain.Document) (
 	if err != nil {
 		return Result{}, err
 	}
-	if err := pipeline.store.MarkDocumentReady(ctx, document.ID, len(chunks), at, indexed); err != nil {
+	marked, err := pipeline.store.MarkDocumentReady(ctx, document, len(chunks), at, indexed)
+	if err != nil {
 		return Result{}, err
+	}
+	if !marked {
+		pipeline.logger.InfoContext(ctx, "a document changed while it was being indexed; leaving it to the attempt its change queued",
+			"document_id", document.ID, "corpus_id", corpus.ID)
+		return result, nil
 	}
 	pipeline.logger.InfoContext(ctx, "indexed a document",
 		"document_id", document.ID, "corpus_id", corpus.ID, "chunks", len(chunks),
@@ -418,8 +434,14 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 		if err := pipeline.knowledgeBase.Submit(ctx, corpus, document, text); err != nil {
 			return Result{}, err
 		}
-		if err := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document.ID, marker, at); err != nil {
+		recorded, err := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document, marker, at)
+		if err != nil {
 			return Result{}, err
+		}
+		if !recorded {
+			pipeline.logger.InfoContext(ctx, "a document changed while it was being submitted to the knowledge base; leaving it to the attempt its change queued",
+				"document_id", document.ID, "corpus_id", corpus.ID)
+			return Result{}, nil
 		}
 		pipeline.logger.InfoContext(ctx, "submitted a document to the knowledge base",
 			"document_id", document.ID, "corpus_id", corpus.ID)
@@ -474,7 +496,9 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 		// isolation depends on actually completing: a corpus_id or
 		// organization_id attribute that only partially landed is a risk to
 		// it, not a success.
-		if resetErr := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document.ID, "", at); resetErr != nil {
+		if forgotten, resetErr := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document, "", at); resetErr != nil || !forgotten {
+			// Not forgotten: the document changed since this claim, and the
+			// change is submitted on the attempt it queued.
 			return Result{}, resetErr
 		}
 		return Result{}, fmt.Errorf("the knowledge base reported %s for this document; resubmitting", status.Code)
@@ -491,7 +515,7 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 		// handed back as a poll, so it counts as an attempt.
 		if document.KBSubmittedAt != nil {
 			if waited := at.Sub(*document.KBSubmittedAt); waited > knowledgeBaseStall {
-				if resetErr := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document.ID, "", at); resetErr != nil {
+				if forgotten, resetErr := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document, "", at); resetErr != nil || !forgotten {
 					return Result{}, resetErr
 				}
 				return Result{}, fmt.Errorf("the knowledge base still reported %s for this document %s after it was submitted; resubmitting",
@@ -515,8 +539,17 @@ func (pipeline *Pipeline) markKnowledgeBaseReady(ctx context.Context, corpus dom
 	if err != nil {
 		return err
 	}
-	if err := pipeline.store.MarkDocumentReady(ctx, document.ID, 0, at, indexed); err != nil {
+	marked, err := pipeline.store.MarkDocumentReady(ctx, document, 0, at, indexed)
+	if err != nil {
 		return err
+	}
+	if !marked {
+		// The document changed since this submission. Its staged text is
+		// left for the attempt the change queued, which may resubmit the
+		// same content from it.
+		pipeline.logger.InfoContext(ctx, "a document changed while the knowledge base was indexing it; leaving it to the attempt its change queued",
+			"document_id", document.ID, "corpus_id", corpus.ID)
+		return nil
 	}
 	// Staged text left behind after indexing costs storage, not correctness,
 	// so a failure to remove it is logged rather than failing the document.

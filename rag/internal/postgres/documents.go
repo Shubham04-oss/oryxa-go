@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"fmt"
 	"maps"
@@ -417,33 +418,89 @@ func (store *Store) ClaimDocuments(ctx context.Context, limit int, lease time.Du
 	return documents, nil
 }
 
-// MarkDocumentReady records a finished ingest and its event together.
-func (store *Store) MarkDocumentReady(ctx context.Context, documentID string, chunkCount int, at time.Time, event domain.Event) error {
-	return store.inTx(ctx, func(tx *sqlx.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
+// stillAsIndexed is the condition that a document's row still holds what an
+// ingest worked from: the content, and every attribute an index keeps with
+// it. UpsertDocument changing any of these is the one thing that makes the
+// result of an ingest already under way stale, and it puts the document back
+// in the queue for exactly that reason, so a result is recorded only while
+// this holds and is dropped otherwise, rather than written over the change.
+// The worker's own bookkeeping — claims, rechecks, retries, submissions —
+// touches none of these columns, so it never makes its own result stale.
+//
+// It appends its values to arguments and returns the clause that tests them.
+func stillAsIndexed(document domain.Document, arguments []any) (string, []any, error) {
+	metadata, err := encodeMetadata(document.Metadata)
+	if err != nil {
+		return "", nil, err
+	}
+	access := document.Access
+	if access == "" {
+		access = domain.AccessMembers
+	}
+	first := len(arguments) + 1
+	arguments = append(arguments, document.ContentSHA256, string(access), document.Title, document.ContentType,
+		document.Source.Ref, metadata, document.OriginalBucket, document.OriginalKey)
+	clause := fmt.Sprintf(`content_sha256 = $%d AND access = $%d AND title = $%d AND content_type = $%d
+		AND source_ref = $%d AND metadata = $%d::jsonb AND original_bucket = $%d AND original_key = $%d`,
+		first, first+1, first+2, first+3, first+4, first+5, first+6, first+7)
+	return clause, arguments, nil
+}
+
+// MarkDocumentReady records a finished ingest and its event together, and
+// reports whether it did.
+//
+// document is the version the ingest worked from. If the row has changed
+// since (see stillAsIndexed), nothing is recorded: the change already put the
+// document back in the queue, and marking it ready would leave the change
+// never indexed.
+func (store *Store) MarkDocumentReady(ctx context.Context, document domain.Document, chunkCount int, at time.Time, event domain.Event) (bool, error) {
+	var marked bool
+	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
+		current, arguments, err := stillAsIndexed(document, []any{document.ID, chunkCount, at})
+		if err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `
 			UPDATE rag_documents
 			SET status = 'ready', chunk_count = $2, failure_reason = '',
 			    locked_until = NULL, ingested_at = $3, updated_at = $3
-			WHERE id = $1`, documentID, chunkCount, at); err != nil {
+			WHERE id = $1 AND `+current, arguments...)
+		if err != nil {
 			return fmt.Errorf("mark document ready: %w", err)
+		}
+		if marked, err = affectedOne(result); err != nil || !marked {
+			return err
 		}
 		return insertEvents(ctx, tx, []domain.Event{event})
 	})
+	return marked && err == nil, err
 }
 
 // MarkDocumentFailed keeps the failure with its reason rather than deleting
-// the row, so it can be seen and retried instead of quietly disappearing.
-func (store *Store) MarkDocumentFailed(ctx context.Context, documentID, reason string, at time.Time, event domain.Event) error {
-	return store.inTx(ctx, func(tx *sqlx.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
+// the row, so it can be seen and retried instead of quietly disappearing. Like
+// MarkDocumentReady, it records nothing for a document that has changed since
+// the attempt that failed: the change deserves an attempt of its own.
+func (store *Store) MarkDocumentFailed(ctx context.Context, document domain.Document, reason string, at time.Time, event domain.Event) (bool, error) {
+	var marked bool
+	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
+		current, arguments, err := stillAsIndexed(document, []any{document.ID, reason, at})
+		if err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `
 			UPDATE rag_documents
 			SET status = 'failed', failure_reason = left($2, 1000),
 			    locked_until = NULL, updated_at = $3
-			WHERE id = $1`, documentID, reason, at); err != nil {
+			WHERE id = $1 AND `+current, arguments...)
+		if err != nil {
 			return fmt.Errorf("mark document failed: %w", err)
+		}
+		if marked, err = affectedOne(result); err != nil || !marked {
+			return err
 		}
 		return insertEvents(ctx, tx, []domain.Event{event})
 	})
+	return marked && err == nil, err
 }
 
 // MarkKnowledgeBaseSubmitted records that a document has been handed to a
@@ -459,17 +516,25 @@ func (store *Store) MarkDocumentFailed(ctx context.Context, documentID, reason s
 // every attribute written with it. The time goes with it, so the worker can
 // tell how long a submission has been outstanding. An empty marker forgets
 // both: nothing is outstanding.
-func (store *Store) MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, marker string, at time.Time) error {
-	if _, err := store.db.ExecContext(ctx, `
+//
+// document is the version that was submitted. If the row has changed since
+// (see stillAsIndexed), nothing is recorded and it reports false: the change
+// is submitted on the claim it queued.
+func (store *Store) MarkKnowledgeBaseSubmitted(ctx context.Context, document domain.Document, marker string, at time.Time) (bool, error) {
+	current, arguments, err := stillAsIndexed(document, []any{document.ID, marker, at})
+	if err != nil {
+		return false, err
+	}
+	result, err := store.db.ExecContext(ctx, `
 		UPDATE rag_documents
 		SET kb_synced_hash = $2,
 		    kb_submitted_at = CASE WHEN $2 = '' THEN NULL ELSE $3::timestamptz END,
 		    updated_at = $3
-		WHERE id = $1`,
-		documentID, marker, at); err != nil {
-		return fmt.Errorf("mark document submitted to the knowledge base: %w", err)
+		WHERE id = $1 AND `+current, arguments...)
+	if err != nil {
+		return false, fmt.Errorf("mark document submitted to the knowledge base: %w", err)
 	}
-	return nil
+	return affectedOne(result)
 }
 
 // knowledgeBaseSyncedPrefix is knowledgebase.SyncMarkerPrefix, written out
@@ -510,6 +575,15 @@ func (store *Store) RequeueUnsyncedKnowledgeBaseDocuments(ctx context.Context, l
 		return 0, fmt.Errorf("requeue documents synced under an older marker: %w", err)
 	}
 	return requeued, nil
+}
+
+// affectedOne reports whether an update keyed on one document's id found it.
+func affectedOne(result sql.Result) (bool, error) {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("count updated documents: %w", err)
+	}
+	return affected == 1, nil
 }
 
 // RecheckDocumentAt leaves a document ingesting but claimable again at at:
