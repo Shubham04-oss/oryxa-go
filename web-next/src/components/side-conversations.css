@@ -279,8 +279,10 @@
 }
 .workspace-side-status time { color: #6a6a6a; font-size: 10px; white-space: nowrap; }
 
-/* Whom a message goes to: a pill inside the composer, and its menu. */
-.workspace-side-target { position: relative; display: flex; flex: none; }
+/* Whom a message goes to: a pill inside the composer, and its menu, which
+   opens above the whole composer (positioned against it, workspace.css) so
+   a draft of several lines stays in view. */
+.workspace-side-target { display: flex; flex: none; }
 .workspace-side-target-button {
   display: inline-flex;
   align-items: center;
@@ -317,13 +319,12 @@
 .workspace-side-target-menu {
   position: absolute;
   z-index: 8;
-  bottom: calc(100% + 12px);
-  /* Level with the composer's own left edge. */
-  left: -6px;
+  bottom: calc(100% + 6px);
+  left: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  width: min(300px, calc(100vw - 56px));
+  width: min(300px, 100%);
   max-height: min(320px, 55vh);
   overflow-y: auto;
   padding: 6px;
