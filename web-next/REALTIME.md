@@ -394,6 +394,7 @@ teamspaceId?, peerId?)`:
   peer: { online; typing; lastReadSeq }
   agents: { mine: AgentRef | undefined; theirs: AgentRef[] }  // theirs: primary first, then contributions
   teamspace: { name; paused }
+  reconnect()                // opens the socket again now, while it is not open
   status: "closed" | "connecting" | "live" | "not-allowed" | "error" | "session_expired"
 }
 ```

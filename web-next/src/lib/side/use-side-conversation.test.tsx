@@ -628,6 +628,41 @@ describe("useSideConversation: sessions and refusals", () => {
     expect(result.current.items[0]).toMatchObject({ status: "failed" })
   })
 
+  it("opens the socket again at once when asked while it is down, and only then", async () => {
+    const api = mockApi(({ path: asked }) =>
+      asked === path ? json(undefined, 204) : undefined
+    )
+    const { result } = setup()
+    const socket = open([message(1)])
+    act(() => result.current.reconnect())
+    expect(socket.reconnects).toBe(0)
+
+    socket.drop()
+    await waitFor(() => expect(api.calls).toHaveLength(1))
+    expect(result.current.status).toBe("error")
+    act(() => result.current.send("While away"))
+    act(() => result.current.reconnect())
+    expect(socket.reconnects).toBe(1)
+    await waitFor(() => expect(socket.readyState).toBe(socket.OPEN))
+    socket.says(snapshot([message(1)]))
+    expect(result.current.status).toBe("live")
+    // What waited goes on the reopened socket.
+    expect(socket.said("side-send").map((sent) => sent.body)).toEqual([
+      "While away",
+    ])
+
+    // A conversation the viewer may not open is not tried again.
+    mockApi(({ path: asked }) =>
+      asked === path
+        ? apiError(404, "peer_not_found", "Not on the teamspace's team.")
+        : undefined
+    )
+    socket.drop()
+    await waitFor(() => expect(result.current.status).toBe("not-allowed"))
+    act(() => result.current.reconnect())
+    expect(socket.reconnects).toBe(1)
+  })
+
   it("after a purge, reopens when the Worker lets the viewer in, and takes what stayed as a new run", async () => {
     mockApi(({ path: asked }) =>
       asked === path ? json(undefined, 204) : undefined

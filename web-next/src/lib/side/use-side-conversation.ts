@@ -115,6 +115,8 @@ export type SideConversation = {
   agents: { mine: AgentRef | undefined; theirs: AgentRef[] }
   /** The teamspace it is in, and whether it is paused (its agents can't be asked then). */
   teamspace: { name: string; paused: boolean }
+  /** Opens the socket again now rather than at its next try, while it is not open (`connecting` or `error`); what is waiting to send goes once it opens. */
+  reconnect: () => void
   status: SideConversationStatus
 }
 
@@ -502,6 +504,11 @@ class SideConversationView {
     this.saidTyping = true
     this.typedAt = now
     this.say({ type: "side-typing", typing: true })
+  }
+
+  readonly reconnect = (): void => {
+    if (!this.live.name || this.settled || this.live.open) return
+    this.socket?.reconnect()
   }
 
   readonly decide = (
@@ -1218,6 +1225,7 @@ export function useSideConversation(
     peer: view.peer(),
     agents: view.agents(),
     teamspace: view.teamspace(),
+    reconnect: view.reconnect,
     status: view.status(),
   }
 }
