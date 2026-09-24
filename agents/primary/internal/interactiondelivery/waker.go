@@ -254,7 +254,7 @@ func (waker *Waker) drop(ctx context.Context, delivery Delivery, reason string, 
 // approval arrives as a delivery of its own, which wakes the agent to do the
 // work.
 func heldForOwner(delivery Delivery, request agents.Interaction) bool {
-	return delivery.Kind == KindTargetRequested && request.Approval == interactions.ApprovalOwner
+	return delivery.Kind == KindTargetRequested && interactions.HeldForOwner(request)
 }
 
 func deliverySatisfied(delivery Delivery, request agents.Interaction, now time.Time) bool {
@@ -291,7 +291,7 @@ func Message(delivery Delivery) string {
 // its owner is approved — is told so, and that deciding is not the agent's
 // to do again.
 func messageFor(delivery Delivery, request agents.Interaction) string {
-	return message(delivery, request.Approval == interactions.ApprovalOwner)
+	return message(delivery, interactions.HeldForOwner(request))
 }
 
 func message(delivery Delivery, ownerApproved bool) string {

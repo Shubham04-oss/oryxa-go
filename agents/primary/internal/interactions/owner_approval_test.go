@@ -133,3 +133,24 @@ func TestARequestHeldForItsOwnerStillExpires(t *testing.T) {
 		t.Fatalf("deciding an expired request: error=%v, want ErrExpired", err)
 	}
 }
+
+// TestAnApprovalNobodyKnowsIsHeldForTheOwner: only an explicit agent
+// approval, or none at all from before teamspaces, lets an agent decide;
+// anything else fails closed to the member.
+func TestAnApprovalNobodyKnowsIsHeldForTheOwner(t *testing.T) {
+	for approval, held := range map[string]bool{ApprovalAgent: false, "": false, ApprovalOwner: true, "team": true} {
+		if got := HeldForOwner(agents.Interaction{Approval: approval}); got != held {
+			t.Errorf("HeldForOwner(%q) = %t, want %t", approval, got, held)
+		}
+	}
+	service, repo := teamspaceService(t, teamspaceSeats())
+	unknown := between("irq_unknown", "user_a", "agt_a", "user_b", "agt_b", "tsp_1")
+	unknown.Approval = "team"
+	repo.requests[unknown.ID] = unknown
+	if _, err := service.Decide(context.Background(), targetPrimary, unknown.ID, approve); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("an agent deciding a request with an unknown approval: error=%v, want ErrForbidden", err)
+	}
+	if decided, err := service.DecideAsOwner(context.Background(), targetPrimary, unknown.ID, approve); err != nil || decided.Status != StatusApproved {
+		t.Fatalf("its owner deciding it = %+v, %v", decided, err)
+	}
+}

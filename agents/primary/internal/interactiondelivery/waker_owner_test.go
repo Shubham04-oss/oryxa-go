@@ -112,3 +112,18 @@ func TestOnlyApprovedWorkIsToldItsOwnerApproved(t *testing.T) {
 		t.Fatalf("Message=%q messageFor=%q", Message(approved), messageFor(approved, held))
 	}
 }
+
+// TestAnApprovalNobodyKnowsNeverWakesTheAgentToDecide: the waker holds what
+// the ledger holds, failing closed on an approval it does not know.
+func TestAnApprovalNobodyKnowsNeverWakesTheAgentToDecide(t *testing.T) {
+	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusPending, "team")}}
+	runs := &fakeAgentRuns{}
+	waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runs.calls) != 0 || len(store.done) != 1 {
+		t.Fatalf("calls=%+v done=%v, want the delivery completed without a run", runs.calls, store.done)
+	}
+}

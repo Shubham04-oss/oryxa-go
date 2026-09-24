@@ -197,6 +197,15 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	return service.repository.Create(ctx, request, idempotencyKey)
 }
 
+// HeldForOwner is whether only the addressed agent's member may decide a
+// request, in their own session. It fails closed: any approval but the
+// agent's own holds the request, one this code does not know included,
+// while a request naming none predates teamspaces and is its agent's to
+// decide, as it always was.
+func HeldForOwner(request agents.Interaction) bool {
+	return request.Approval != ApprovalAgent && request.Approval != ""
+}
+
 // approval is who decides a new request. Outside a teamspace the addressed
 // agent does, as it always has. Inside one it follows the target's standing
 // there and nothing the requester sends: a specialist its owner contributed
@@ -301,7 +310,7 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 		if actor.AgentID != request.Target.AgentID && actor.AgentKind != "primary" {
 			return agents.Interaction{}, ErrForbidden
 		}
-		if request.Approval == ApprovalOwner {
+		if HeldForOwner(request) {
 			return agents.Interaction{}, fmt.Errorf("%w: this request is held for your member's own decision in Oryxa, and no agent can approve or reject it; tell your member it is waiting for them", ErrForbidden)
 		}
 	}

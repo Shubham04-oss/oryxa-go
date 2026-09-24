@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 )
 
 // List is how the server reads every listing now: the sent side from Sent,
@@ -173,6 +175,52 @@ func TestAListingTheLedgerRefusesIsABadRequest(t *testing.T) {
 		listed := serve(server, http.MethodGet, "/v1/organizations/org_1/agent-requests"+query, "", bearer)
 		if listed.Code != http.StatusBadRequest || errorCode(t, listed) != "invalid_request" {
 			t.Fatalf("GET agent-requests%s = %d %s, want 400 invalid_request", query, listed.Code, listed.Body.String())
+		}
+	}
+}
+
+// refusingSeats refuses every seat lookup the way the teamspace does.
+type refusingSeats struct{ err error }
+
+func (seats refusingSeats) RequestSeat(context.Context, primaryagents.TeamspaceActor, string, string, string) (primaryagents.TeamspaceSeat, error) {
+	return primaryagents.TeamspaceSeat{}, seats.err
+}
+
+// graceDirectory is user_1's view of the organization: Grace and her
+// primary agent. Loading it is all a new request asks of the directory.
+type graceDirectory struct{ primaryagents.Directory }
+
+func (graceDirectory) Load(context.Context, string, string) (primaryagents.OrganizationDirectory, error) {
+	return primaryagents.OrganizationDirectory{People: []primaryagents.DirectoryPerson{{
+		UserID: "user_2", DisplayName: "Grace",
+		Agents: []primaryagents.DirectoryAgent{{ID: "agt_grace", OwnerUserID: "user_2", Kind: "primary", Name: "Cleo"}},
+	}}}, nil
+}
+
+// TestATeamspaceRefusalReachesTheCallerAsTheTeamspaceSaidIt: a request the
+// teamspace refuses answers with the teamspace's own code and words, and is
+// never recorded — heldRequests has no Create, so reaching it would panic.
+func TestATeamspaceRefusalReachesTheCallerAsTheTeamspaceSaidIt(t *testing.T) {
+	for _, testCase := range []struct {
+		refusal       error
+		status        int
+		code, message string
+	}{
+		{fmt.Errorf("%w: only a current member of this teamspace's team can ask its agents for help there", teamspaces.ErrForbidden), http.StatusForbidden, "forbidden", "only a current member"},
+		{fmt.Errorf("%w: that agent has no seat in this teamspace", teamspaces.ErrInvalid), http.StatusBadRequest, "invalid_request", "that agent has no seat in this teamspace"},
+		{teamspaces.ErrNotFound, http.StatusNotFound, "not_found", "teamspace not found"},
+		{teamspaces.ErrDisabled, http.StatusConflict, "teamspace_disabled", "teamspace is disabled"},
+	} {
+		requests, err := interactions.New(interactions.Config{
+			Repository: &heldRequests{}, Directory: graceDirectory{}, Teamspaces: refusingSeats{err: testCase.refusal},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		refused := serve(agentRequestServer(requests), http.MethodPost, "/v1/organizations/org_1/agent-requests",
+			`{"target_agent_id":"agt_grace","teamspace_id":"tsp_1","purpose":"Launch","task":"Review the plan."}`, bearer)
+		if refused.Code != testCase.status || errorCode(t, refused) != testCase.code || !strings.Contains(refused.Body.String(), testCase.message) {
+			t.Errorf("%v: = %d %s, want %d %s saying %q", testCase.refusal, refused.Code, refused.Body.String(), testCase.status, testCase.code, testCase.message)
 		}
 	}
 }
