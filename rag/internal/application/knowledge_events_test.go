@@ -1190,3 +1190,33 @@ func TestAnOmittedBodyThatWasReplacedOrRemovedKeepsTheIndexedVersion(t *testing.
 		})
 	}
 }
+
+// Every corpus created since collision-resistant slugs is found by its
+// current slug, so that is asked for first; a legacy corpus the same owner
+// also holds is used only when there is none.
+func TestKnowledgeCorpusPrefersTheCurrentSlugOverALegacyOne(t *testing.T) {
+	h := newHarness()
+	legacySlug, err := legacyKnowledgeCorpusSlug(domain.ScopeMember, "", "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	slug, err := knowledgeCorpusSlug(domain.ScopeMember, "", "user-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedCorpus(h.store, domain.Corpus{
+		ID: "cor_legacy", Slug: legacySlug, Scope: domain.ScopeMember,
+		MemberID: "user-1", Metadata: domain.Metadata{"origin": knowledgeCorpusOrigin},
+	})
+	current := seedCorpus(h.store, domain.Corpus{
+		ID: "cor_current", Slug: slug, Scope: domain.ScopeMember,
+		MemberID: "user-1", Metadata: domain.Metadata{"origin": knowledgeCorpusOrigin},
+	})
+	if err := h.service.DocumentPublished(context.Background(), testDocumentPublished(nil)); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, "doc_1")
+	if err != nil || mapping.CorpusID != current.ID {
+		t.Fatalf("mapping = %+v, %v; want corpus %s", mapping, err, current.ID)
+	}
+}

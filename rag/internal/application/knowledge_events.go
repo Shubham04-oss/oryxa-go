@@ -504,31 +504,39 @@ func (service *Service) knowledgeCorpus(ctx context.Context, organizationID stri
 	if err != nil {
 		return domain.Corpus{}, err
 	}
-	// Reuse an older corpus only when its recorded placement and origin match.
-	// The old slug conversion was lossy, so another owner may have inherited
-	// the same slug. Never index into that corpus.
-	legacySlug, err := legacyKnowledgeCorpusSlug(scope, teamID, memberID)
-	if err != nil {
-		return domain.Corpus{}, err
-	}
-	legacy, err := service.store.CorpusBySlug(ctx, organizationID, legacySlug)
-	switch {
-	case err == nil && knowledgeCorpusMatches(legacy, organizationID, scope, placedTeamID, placedMemberID):
-		return legacy, nil
-	case err != nil && !errors.Is(err, domain.ErrNotFound):
-		return domain.Corpus{}, err
-	}
-
 	slug, err := knowledgeCorpusSlug(scope, teamID, memberID)
 	if err != nil {
 		return domain.Corpus{}, err
 	}
 	existing, err := service.store.CorpusBySlug(ctx, organizationID, slug)
 	switch {
-	case err == nil:
-		return checkedKnowledgeCorpus(existing, organizationID, scope, placedTeamID, placedMemberID)
-	case !errors.Is(err, domain.ErrNotFound):
+	case err == nil && knowledgeCorpusMatches(existing, organizationID, scope, placedTeamID, placedMemberID):
+		return existing, nil
+	case err != nil && !errors.Is(err, domain.ErrNotFound):
 		return domain.Corpus{}, err
+	}
+	occupied := err == nil
+
+	// An owner whose corpus predates collision-resistant slugs keeps it, but
+	// only when its recorded placement and origin match: the old slug
+	// conversion was lossy, so another owner may have inherited the same
+	// slug. Never index into that corpus. The current slug is asked first
+	// because every corpus created since is found by it alone.
+	legacySlug, err := legacyKnowledgeCorpusSlug(scope, teamID, memberID)
+	if err != nil {
+		return domain.Corpus{}, err
+	}
+	if legacySlug != slug {
+		legacy, err := service.store.CorpusBySlug(ctx, organizationID, legacySlug)
+		switch {
+		case err == nil && knowledgeCorpusMatches(legacy, organizationID, scope, placedTeamID, placedMemberID):
+			return legacy, nil
+		case err != nil && !errors.Is(err, domain.ErrNotFound):
+			return domain.Corpus{}, err
+		}
+	}
+	if occupied {
+		return checkedKnowledgeCorpus(existing, organizationID, scope, placedTeamID, placedMemberID)
 	}
 
 	// The same defaults a member's own corpus gets when they name none: see
