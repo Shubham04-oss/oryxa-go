@@ -135,8 +135,10 @@ func TestLiveS3VectorsConverse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reindex metadata-only change: %v", err)
 	}
-	if len(indexed.Sync.Fresh) == 0 || len(indexed.Sync.Removed) == 0 {
-		t.Fatalf("metadata-only update left stale vectors: %+v", indexed.Sync)
+	// The same chunks are written again with the new metadata, from the
+	// vectors S3 Vectors already holds: none is removed, none embedded anew.
+	if len(indexed.Sync.Fresh) == 0 || len(indexed.Sync.Removed) != 0 || indexed.Usage.EmbeddingTokens != 0 {
+		t.Fatalf("metadata-only update did not rewrite the chunks in place: %+v, usage %+v", indexed.Sync, indexed.Usage)
 	}
 	newFilter := domain.Filter{Conditions: []domain.Condition{{Key: "category", Operator: domain.OperatorEqual, Values: []string{"account_record"}}}}
 	awaitLiveMatch(t, ctx, searcher, corpus, domain.Query{Text: invoiceQuestion, TopK: 4, Mode: domain.ModeDense, Filter: newFilter}, invoice.ID)

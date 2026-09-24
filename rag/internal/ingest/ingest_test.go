@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1022,5 +1023,84 @@ func TestRunResyncsDocumentsSubmittedByAnOlderBuild(t *testing.T) {
 	pipeline.Run(ctx)
 	if without.resyncs != 0 {
 		t.Fatalf("a deployment with no knowledge base resynced %d times", without.resyncs)
+	}
+}
+
+// storedVectorStore is a vector store that can hand back the vectors it holds.
+type storedVectorStore struct {
+	*fakeVectorStore
+	stored    map[string][]float32
+	storedErr error
+	asked     []string
+}
+
+func (fake *storedVectorStore) Stored(_ context.Context, _ domain.Corpus, chunkIDs []string) (map[string][]float32, error) {
+	fake.asked = append(fake.asked, chunkIDs...)
+	if fake.storedErr != nil {
+		return nil, fake.storedErr
+	}
+	found := map[string][]float32{}
+	for _, id := range chunkIDs {
+		if values, ok := fake.stored[id]; ok {
+			found[id] = values
+		}
+	}
+	return found, nil
+}
+
+type storedVectors struct{ store *storedVectorStore }
+
+func (fake storedVectors) For(domain.Corpus) (vectorstore.Store, error) { return fake.store, nil }
+
+// A document whose metadata changed but whose text did not keeps its chunk
+// ids, and a store that holds their vectors has them written again with the
+// new metadata rather than embedded a second time. Only text that is new is
+// embedded.
+func TestIndexRewritesARelabelledChunkFromItsStoredVector(t *testing.T) {
+	t.Parallel()
+	relabelled := domain.Chunk{ID: "chk_kept", Text: "unchanged", SHA256: domain.Hash("unchanged"), Metadata: domain.Metadata{"category": "account_record"}}
+	added := domain.Chunk{ID: "chk_new", Text: "new text", SHA256: domain.Hash("new text"), Metadata: domain.Metadata{"category": "account_record"}}
+	store := &fakeStore{corpus: testCorpus(), body: body, sync: domain.ChunkSync{Fresh: []domain.Chunk{relabelled, added}}}
+	vectors := &storedVectorStore{fakeVectorStore: &fakeVectorStore{}, stored: map[string][]float32{"chk_kept": {0, 1, 0, 0}}}
+	embedder := &fakeEmbedder{}
+	pipeline := New(store, storedVectors{vectors}, fakeEmbedders{embedder}, nil, Options{}, nil)
+
+	if _, err := pipeline.Index(context.Background(), testDocument()); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if len(embedder.texts) != 1 || embedder.texts[0] != "new text" {
+		t.Fatalf("embedded %q, want only the new text", embedder.texts)
+	}
+	var rewritten *domain.Vector
+	for index, vector := range vectors.upserted {
+		if vector.ChunkID == "chk_kept" {
+			rewritten = &vectors.upserted[index]
+		}
+	}
+	if rewritten == nil || rewritten.Values[1] != 1 || rewritten.Metadata["category"] != "account_record" || rewritten.Metadata["chunk_id"] != "chk_kept" {
+		t.Fatalf("relabelled vector = %+v, want its stored values with the new metadata and provenance", rewritten)
+	}
+	if !slices.Contains(store.embedded, "chk_kept") || !slices.Contains(store.embedded, "chk_new") {
+		t.Fatalf("marked embedded = %v, want both chunks", store.embedded)
+	}
+	if len(store.ready) != 1 {
+		t.Fatalf("ready = %v", store.ready)
+	}
+}
+
+// Reading vectors back is a saving, not a requirement: a store that fails to
+// has every changed chunk embedded instead.
+func TestIndexEmbedsWhatItCouldNotReadBack(t *testing.T) {
+	t.Parallel()
+	fresh := []domain.Chunk{{ID: "chk_kept", Text: "unchanged", SHA256: domain.Hash("unchanged")}}
+	store := &fakeStore{corpus: testCorpus(), body: body, sync: domain.ChunkSync{Fresh: fresh}}
+	vectors := &storedVectorStore{fakeVectorStore: &fakeVectorStore{}, storedErr: errors.New("throttled")}
+	embedder := &fakeEmbedder{}
+	pipeline := New(store, storedVectors{vectors}, fakeEmbedders{embedder}, nil, Options{}, nil)
+	if _, err := pipeline.Index(context.Background(), testDocument()); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if len(embedder.texts) != 1 || len(store.ready) != 1 {
+		t.Fatalf("embedded %q, ready %v; want the chunk embedded and the document ready", embedder.texts, store.ready)
 	}
 }

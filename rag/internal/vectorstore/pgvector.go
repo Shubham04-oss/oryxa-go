@@ -212,6 +212,44 @@ func (store *Pgvector) tune(ctx context.Context, transaction pgx.Tx, search Sear
 	return nil
 }
 
+// Stored returns the vectors already written for these chunks, by chunk id;
+// a chunk with none is left out. The ingest worker writes a relabelled
+// chunk's vector again from it rather than embedding the same text twice.
+func (store *Pgvector) Stored(ctx context.Context, corpus domain.Corpus, chunkIDs []string) (map[string][]float32, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	statement := fmt.Sprintf(`
+		SELECT chunk_id, embedding FROM %s
+		WHERE corpus_id = $1 AND organization_id = $2 AND chunk_id = ANY($3)`, Table(corpus.Spec.Dimensions))
+	rows, err := store.pool.Query(ctx, statement, corpus.ID, corpus.OrganizationID, chunkIDs)
+	if err != nil {
+		return nil, fmt.Errorf("read stored vectors: %w", err)
+	}
+	defer rows.Close()
+	stored := make(map[string][]float32, len(chunkIDs))
+	for rows.Next() {
+		var chunkID string
+		if HalfPrecision(corpus.Spec.Dimensions) {
+			var embedding pgvector.HalfVector
+			if err := rows.Scan(&chunkID, &embedding); err != nil {
+				return nil, fmt.Errorf("scan stored vector: %w", err)
+			}
+			stored[chunkID] = embedding.Slice()
+			continue
+		}
+		var embedding pgvector.Vector
+		if err := rows.Scan(&chunkID, &embedding); err != nil {
+			return nil, fmt.Errorf("scan stored vector: %w", err)
+		}
+		stored[chunkID] = embedding.Slice()
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read stored vectors: %w", err)
+	}
+	return stored, nil
+}
+
 func (store *Pgvector) Delete(ctx context.Context, corpus domain.Corpus, chunkIDs []string) error {
 	if len(chunkIDs) == 0 {
 		return nil

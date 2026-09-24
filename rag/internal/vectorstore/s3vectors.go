@@ -19,6 +19,7 @@ import (
 // S3VectorsAPI is the part of Amazon S3 Vectors this package uses.
 type S3VectorsAPI interface {
 	PutVectors(context.Context, *s3vectors.PutVectorsInput, ...func(*s3vectors.Options)) (*s3vectors.PutVectorsOutput, error)
+	GetVectors(context.Context, *s3vectors.GetVectorsInput, ...func(*s3vectors.Options)) (*s3vectors.GetVectorsOutput, error)
 	QueryVectors(context.Context, *s3vectors.QueryVectorsInput, ...func(*s3vectors.Options)) (*s3vectors.QueryVectorsOutput, error)
 	DeleteVectors(context.Context, *s3vectors.DeleteVectorsInput, ...func(*s3vectors.Options)) (*s3vectors.DeleteVectorsOutput, error)
 	CreateIndex(context.Context, *s3vectors.CreateIndexInput, ...func(*s3vectors.Options)) (*s3vectors.CreateIndexOutput, error)
@@ -31,6 +32,9 @@ type S3VectorsAPI interface {
 // ceiling moves with the size of the metadata each vector carries, so this
 // stays well inside it.
 const putBatchSize = 200
+
+// getBatchSize is the most keys one GetVectors call names.
+const getBatchSize = 100
 
 // queryLimit is the most results one QueryVectors call returns. Rag asks a
 // vector store for more candidates than it will keep — up to 400 — so that
@@ -219,6 +223,40 @@ func (store *S3Vectors) Search(ctx context.Context, corpus domain.Corpus, search
 		})
 	}
 	return hits, nil
+}
+
+// Stored returns the vectors already written for these chunks, by chunk id;
+// a chunk with none is left out. The ingest worker writes a relabelled
+// chunk's vector again from it rather than embedding the same text twice.
+func (store *S3Vectors) Stored(ctx context.Context, corpus domain.Corpus, chunkIDs []string) (map[string][]float32, error) {
+	stored := make(map[string][]float32, len(chunkIDs))
+	name := IndexName(corpus)
+	for start := 0; start < len(chunkIDs); start += getBatchSize {
+		keys := chunkIDs[start:min(start+getBatchSize, len(chunkIDs))]
+		output, err := store.client.GetVectors(ctx, &s3vectors.GetVectorsInput{
+			VectorBucketName: aws.String(store.bucket),
+			IndexName:        aws.String(name),
+			Keys:             keys,
+			ReturnData:       true,
+		})
+		if err != nil {
+			// A corpus that never had a vector written has no index yet,
+			// and so holds nothing to hand back.
+			var missing *s3vectorstypes.NotFoundException
+			if errors.As(err, &missing) {
+				return stored, nil
+			}
+			return nil, fmt.Errorf("read %d stored vectors from corpus %s: %w", len(keys), corpus.ID, err)
+		}
+		for _, vector := range output.Vectors {
+			data, ok := vector.Data.(*s3vectorstypes.VectorDataMemberFloat32)
+			if vector.Key == nil || !ok {
+				continue
+			}
+			stored[*vector.Key] = data.Value
+		}
+	}
+	return stored, nil
 }
 
 func (store *S3Vectors) Delete(ctx context.Context, corpus domain.Corpus, chunkIDs []string) error {

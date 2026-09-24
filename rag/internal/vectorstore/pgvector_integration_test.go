@@ -366,6 +366,40 @@ func TestPgvectorMemberSearchReachesPastNearerAdminOnlyChunks(t *testing.T) {
 	}
 }
 
+// Stored hands back what was written for each chunk, in either column type,
+// so a relabelled chunk is written again from its own vector rather than
+// embedded twice; a chunk with none is absent.
+func TestPgvectorHandsBackStoredVectors(t *testing.T) {
+	for _, dimensions := range []int{768, 3072} {
+		t.Run(fmt.Sprint(dimensions), func(t *testing.T) {
+			fixture, ctx := setup(t, dimensions, domain.MetricCosine)
+			written := fixture.vectors()[:2]
+			if err := fixture.vector.Upsert(ctx, fixture.corpus, written); err != nil {
+				t.Fatal(err)
+			}
+			ids := []string{fixture.chunks[0].ID, fixture.chunks[1].ID, fixture.chunks[2].ID}
+			stored, err := fixture.vector.Stored(ctx, fixture.corpus, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(stored) != 2 {
+				t.Fatalf("stored = %d vectors, want the 2 written", len(stored))
+			}
+			for _, vector := range written {
+				got := stored[vector.ChunkID]
+				if len(got) != dimensions || math.Abs(float64(got[1]-vector.Values[1])) > 1e-3 {
+					t.Fatalf("stored %s = %d values starting %v, want %v", vector.ChunkID, len(got), got[:2], vector.Values[:2])
+				}
+			}
+			stranger := fixture.corpus
+			stranger.OrganizationID += "-stranger"
+			if others, err := fixture.vector.Stored(ctx, stranger, ids); err != nil || len(others) != 0 {
+				t.Fatalf("another organization read %d stored vectors, %v", len(others), err)
+			}
+		})
+	}
+}
+
 func TestPgvectorScopesToTheCorpusAndOrganization(t *testing.T) {
 	fixture, ctx := setup(t, 768, domain.MetricCosine)
 	if err := fixture.vector.Upsert(ctx, fixture.corpus, fixture.vectors()); err != nil {

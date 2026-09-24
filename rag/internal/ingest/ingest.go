@@ -89,6 +89,16 @@ type Vectors interface {
 	For(corpus domain.Corpus) (vectorstore.Store, error)
 }
 
+// StoredVectors is a vector store that can hand back the vectors it already
+// holds for chunks. A chunk whose text is unchanged but whose metadata is not
+// keeps its id and comes back from SyncChunks as fresh, since its vector
+// still carries the old metadata; a store that can return that vector has it
+// written again with the new metadata instead of the same text embedded a
+// second time. pgvector and S3 Vectors both can.
+type StoredVectors interface {
+	Stored(ctx context.Context, corpus domain.Corpus, chunkIDs []string) (map[string][]float32, error)
+}
+
 // Embedders hands out the embedder for a corpus's pinned spec.
 type Embedders interface {
 	For(ctx context.Context, spec domain.EmbeddingSpec) (embedding.Embedder, error)
@@ -363,8 +373,12 @@ func (pipeline *Pipeline) index(ctx context.Context, document domain.Document) (
 	}
 
 	result := Result{Sync: sync}
-	if len(sync.Fresh) > 0 {
-		usage, err := pipeline.embed(ctx, corpus, document, vectors, sync.Fresh, at)
+	unembedded, rewritten, err := pipeline.rewriteStored(ctx, corpus, document, vectors, sync.Fresh, at)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(unembedded) > 0 {
+		usage, err := pipeline.embed(ctx, corpus, document, vectors, unembedded, at)
 		if err != nil {
 			return Result{}, err
 		}
@@ -373,7 +387,7 @@ func (pipeline *Pipeline) index(ctx context.Context, document domain.Document) (
 
 	indexed, err := pipeline.event(rageventsv1.DocumentIndexedDetailType, rageventsv1.DocumentIndexed{
 		DocumentID: document.ID, CorpusID: document.CorpusID, OrganizationID: document.OrganizationID,
-		ChunkCount: len(chunks), EmbeddedChunks: len(sync.Fresh), ReusedChunks: len(sync.Reused),
+		ChunkCount: len(chunks), EmbeddedChunks: len(unembedded), ReusedChunks: len(sync.Reused) + rewritten,
 		RemovedChunks: len(sync.Removed), Provider: string(corpus.Spec.Provider), Model: corpus.Spec.Model,
 		Tokens: result.Usage.EmbeddingTokens, IndexedAt: at,
 	})
@@ -391,8 +405,60 @@ func (pipeline *Pipeline) index(ctx context.Context, document domain.Document) (
 	}
 	pipeline.logger.InfoContext(ctx, "indexed a document",
 		"document_id", document.ID, "corpus_id", corpus.ID, "chunks", len(chunks),
-		"embedded", len(sync.Fresh), "reused", len(sync.Reused), "removed", len(sync.Removed))
+		"embedded", len(unembedded), "rewritten", rewritten, "reused", len(sync.Reused), "removed", len(sync.Removed))
 	return result, nil
+}
+
+// rewriteStored writes again, from the vector the store already holds for
+// it, each fresh chunk that has one — a relabelled chunk, whose text did not
+// change — with the metadata it has now, and returns the chunks still to
+// embed and how many were rewritten. A store that cannot hand vectors back,
+// or fails to, leaves every fresh chunk to be embedded: that costs an
+// embedding call, never correctness.
+func (pipeline *Pipeline) rewriteStored(ctx context.Context, corpus domain.Corpus, document domain.Document, store vectorstore.Store, chunks []domain.Chunk, at time.Time) ([]domain.Chunk, int, error) {
+	reader, ok := store.(StoredVectors)
+	if !ok || len(chunks) == 0 {
+		return chunks, 0, nil
+	}
+	ids := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		ids = append(ids, chunk.ID)
+	}
+	stored, err := reader.Stored(ctx, corpus, ids)
+	if err != nil {
+		pipeline.logger.WarnContext(ctx, "reading back stored vectors failed; embedding every changed chunk instead",
+			"document_id", document.ID, "corpus_id", corpus.ID, "error", err)
+		return chunks, 0, nil
+	}
+	var (
+		unembedded []domain.Chunk
+		rewrite    []domain.Vector
+	)
+	for _, chunk := range chunks {
+		values, found := stored[chunk.ID]
+		if !found || len(values) != corpus.Spec.Dimensions {
+			unembedded = append(unembedded, chunk)
+			continue
+		}
+		rewrite = append(rewrite, domain.Vector{
+			ChunkID: chunk.ID, DocumentID: document.ID, Values: values,
+			Metadata: chunk.Metadata.Merge(chunk.Provenance(document)),
+		})
+	}
+	for start := 0; start < len(rewrite); start += sliceChunks {
+		slice := rewrite[start:min(start+sliceChunks, len(rewrite))]
+		if err := store.Upsert(ctx, corpus, slice); err != nil {
+			return nil, 0, err
+		}
+		written := make([]string, 0, len(slice))
+		for _, vector := range slice {
+			written = append(written, vector.ChunkID)
+		}
+		if err := pipeline.store.MarkChunksEmbedded(ctx, written, at); err != nil {
+			return nil, 0, err
+		}
+	}
+	return unembedded, len(rewrite), nil
 }
 
 // indexKnowledgeBase hands a document to a Bedrock knowledge base instead of

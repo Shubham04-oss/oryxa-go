@@ -62,6 +62,15 @@ func (row chunkRow) chunk() (domain.Chunk, error) {
 //
 // The caller supplies chunks without ids; this assigns them, reusing the id of
 // a matching chunk so its vector row stays attached.
+//
+// A chunk whose text is unchanged but whose metadata is not — the document
+// was reclassified — keeps its id too, but is returned as Fresh: the vector
+// written for it still carries the old metadata, which a filtered search
+// reads. Its row is marked unembedded until the caller writes that vector
+// again, so an attempt that stops first leaves it to be embedded afresh
+// rather than looking settled. Keeping the id is what keeps its vector
+// searchable meanwhile, and what lets a vector store that can hand the vector
+// back rewrite it without embedding the text again.
 func (store *Store) SyncChunks(ctx context.Context, document domain.Document, chunks []domain.Chunk, at time.Time) (domain.ChunkSync, error) {
 	var result domain.ChunkSync
 	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
@@ -117,24 +126,38 @@ func (store *Store) SyncChunks(ctx context.Context, document domain.Document, ch
 
 		result = domain.ChunkSync{}
 		claimed := make(map[string]bool, len(existing))
+		// take claims an embedded chunk with this text for chunk: one whose
+		// metadata is the same when sameMetadata, any otherwise.
+		take := func(chunk *domain.Chunk, sameMetadata bool) bool {
+			choices := available[chunk.SHA256]
+			for i, choice := range choices {
+				if sameMetadata && !maps.Equal(choice.metadata, chunk.Metadata) {
+					continue
+				}
+				chunk.ID = choice.id
+				available[chunk.SHA256] = append(choices[:i], choices[i+1:]...)
+				claimed[chunk.ID] = true
+				return true
+			}
+			return false
+		}
+		// Exact matches are settled for every chunk before any metadata-only
+		// match, so a chunk is never relabelled when another with the same
+		// text could have kept its vector as it is.
+		reused := make([]bool, len(chunks))
+		for index := range chunks {
+			reused[index] = take(&chunks[index], true)
+		}
+		var relabelled []string
 		for index := range chunks {
 			chunk := &chunks[index]
-			choices := available[chunk.SHA256]
-			matched := -1
-			for i, choice := range choices {
-				if maps.Equal(choice.metadata, chunk.Metadata) {
-					matched = i
-					break
-				}
-			}
-			if matched >= 0 {
-				chunk.ID = choices[matched].id
-				available[chunk.SHA256] = append(choices[:matched], choices[matched+1:]...)
-				claimed[chunk.ID] = true
+			switch {
+			case reused[index]:
 				result.Reused = append(result.Reused, *chunk)
 				continue
-			}
-			if chunk.ID == "" {
+			case take(chunk, false):
+				relabelled = append(relabelled, chunk.ID)
+			case chunk.ID == "":
 				id, err := domain.NewID(domain.ChunkIDPrefix)
 				if err != nil {
 					return err
@@ -154,6 +177,13 @@ func (store *Store) SyncChunks(ctx context.Context, document domain.Document, ch
 				DELETE FROM rag_chunks WHERE document_id = $1 AND id = ANY($2)`,
 				document.ID, pgTextArray(result.Removed)); err != nil {
 				return fmt.Errorf("delete stale chunks: %w", err)
+			}
+		}
+		if len(relabelled) > 0 {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE rag_chunks SET embedded_at = NULL WHERE document_id = $1 AND id = ANY($2)`,
+				document.ID, pgTextArray(relabelled)); err != nil {
+				return fmt.Errorf("mark relabelled chunks unembedded: %w", err)
 			}
 		}
 		// Ordinals are unique per document and a re-cut moves chunks between

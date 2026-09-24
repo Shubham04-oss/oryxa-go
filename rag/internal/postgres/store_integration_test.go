@@ -526,8 +526,22 @@ func TestMetadataChangeRequeuesDocumentAndReplacesVectorMetadata(t *testing.T) {
 	}
 	chunk.Metadata = updated.Metadata
 	second, err := store.SyncChunks(ctx, changed, []domain.Chunk{chunk}, time.Now().UTC())
-	if err != nil || len(second.Fresh) != 1 || len(second.Removed) != 1 || len(second.Reused) != 0 {
+	// The same text keeps its chunk id, and so its vector stays searchable,
+	// but it is fresh: that vector carries the old metadata until the chunk
+	// is written again.
+	if err != nil || len(second.Fresh) != 1 || second.Fresh[0].ID != first.Fresh[0].ID ||
+		len(second.Removed) != 0 || len(second.Reused) != 0 {
 		t.Fatalf("changed metadata chunk sync = %+v, %v", second, err)
+	}
+	refreshed, err := store.Chunks(ctx, corpus.OrganizationID, corpus.ID, []string{first.Fresh[0].ID})
+	if err != nil || len(refreshed) != 1 || refreshed[0].Metadata["category"] != "account_record" {
+		t.Fatalf("relabelled chunk = %+v, %v", refreshed, err)
+	}
+	// Until its vector is written again it is not settled: an attempt that
+	// stopped before then leaves it to be embedded afresh.
+	third, err := store.SyncChunks(ctx, changed, []domain.Chunk{chunk}, time.Now().UTC())
+	if err != nil || len(third.Fresh) != 1 || third.Fresh[0].ID == first.Fresh[0].ID || len(third.Removed) != 1 {
+		t.Fatalf("a relabelled chunk never written again was reused: %+v, %v", third, err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -23,6 +24,9 @@ type fakeS3Vectors struct {
 	dropped  []*s3vectors.DeleteIndexInput
 	indexes  map[string]bool
 	queryOut []s3vectorstypes.QueryOutputVector
+	gets     []*s3vectors.GetVectorsInput
+	// stored is what GetVectors hands back, by key.
+	stored map[string][]float32
 }
 
 func newFake() *fakeS3Vectors { return &fakeS3Vectors{indexes: map[string]bool{}} }
@@ -43,6 +47,22 @@ func (fake *fakeS3Vectors) CreateIndex(_ context.Context, input *s3vectors.Creat
 func (fake *fakeS3Vectors) PutVectors(_ context.Context, input *s3vectors.PutVectorsInput, _ ...func(*s3vectors.Options)) (*s3vectors.PutVectorsOutput, error) {
 	fake.puts = append(fake.puts, input)
 	return &s3vectors.PutVectorsOutput{}, nil
+}
+
+func (fake *fakeS3Vectors) GetVectors(_ context.Context, input *s3vectors.GetVectorsInput, _ ...func(*s3vectors.Options)) (*s3vectors.GetVectorsOutput, error) {
+	fake.gets = append(fake.gets, input)
+	if !fake.indexes[aws.ToString(input.IndexName)] {
+		return nil, &s3vectorstypes.NotFoundException{Message: aws.String("no such index")}
+	}
+	output := &s3vectors.GetVectorsOutput{}
+	for _, key := range input.Keys {
+		if values, ok := fake.stored[key]; ok {
+			output.Vectors = append(output.Vectors, s3vectorstypes.GetOutputVector{
+				Key: aws.String(key), Data: &s3vectorstypes.VectorDataMemberFloat32{Value: values},
+			})
+		}
+	}
+	return output, nil
 }
 
 func (fake *fakeS3Vectors) QueryVectors(_ context.Context, input *s3vectors.QueryVectorsInput, _ ...func(*s3vectors.Options)) (*s3vectors.QueryVectorsOutput, error) {
@@ -130,6 +150,46 @@ func TestS3VectorsOverFetchesForAMembersSearch(t *testing.T) {
 				t.Fatalf("asked S3 Vectors for %d results, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// Stored hands back the vectors already written, a batch of keys at a time,
+// so a relabelled chunk is written again from its own vector; a chunk with
+// none, or a corpus with no index yet, is simply absent.
+func TestS3VectorsHandsBackStoredVectors(t *testing.T) {
+	t.Parallel()
+	fake := newFake()
+	store, err := NewS3Vectors(fake, "oryxa-vectors")
+	if err != nil {
+		t.Fatal(err)
+	}
+	corpus := s3Corpus(domain.MetricCosine)
+	if stored, err := store.Stored(context.Background(), corpus, []string{"chk_1"}); err != nil || len(stored) != 0 {
+		t.Fatalf("Stored before the index exists = %v, %v", stored, err)
+	}
+	fake.indexes[IndexName(corpus)] = true
+	keys := make([]string, 0, getBatchSize+5)
+	fake.stored = map[string][]float32{}
+	for index := range getBatchSize + 5 {
+		key := fmt.Sprintf("chk_%d", index)
+		keys = append(keys, key)
+		if index%2 == 0 {
+			fake.stored[key] = []float32{float32(index), 0, 0, 0}
+		}
+	}
+	fake.gets = nil
+	stored, err := store.Stored(context.Background(), corpus, keys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.gets) != 2 || !fake.gets[0].ReturnData || len(fake.gets[0].Keys) != getBatchSize {
+		t.Fatalf("GetVectors calls = %d (first %+v), want batches of %d asking for data", len(fake.gets), fake.gets[0], getBatchSize)
+	}
+	if len(stored) != len(fake.stored) || stored["chk_4"][0] != 4 {
+		t.Fatalf("stored = %d vectors (chk_4 %v), want %d", len(stored), stored["chk_4"], len(fake.stored))
+	}
+	if _, ok := stored["chk_1"]; ok {
+		t.Fatal("a chunk with no vector was handed back")
 	}
 }
 
