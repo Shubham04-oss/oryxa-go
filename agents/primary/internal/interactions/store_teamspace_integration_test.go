@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
@@ -234,5 +236,45 @@ func TestTheLedgerListsTheRequestsBetweenTwoMembersInATeamspace(t *testing.T) {
 	}
 	if _, err := store.List(ctx, organizationID, "user_a", Query{Box: "everything"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("an unknown listing: error=%v, want ErrInvalid", err)
+	}
+}
+
+// TestASideConversationsListingUsesTheTeamspaceIndexOnceItsPlanIsGeneric: a
+// side conversation polls the same listing again and again, so the statement
+// pgx caches soon runs on a generic plan. That plan must still reach one
+// teamspace's requests through their index rather than read, and sort, every
+// request in the organization.
+func TestASideConversationsListingUsesTheTeamspaceIndexOnceItsPlanIsGeneric(t *testing.T) {
+	database, _ := openInteractionStore(t)
+	ctx := context.Background()
+	statement, _, err := listStatement("org_1", "user_a", Query{Box: BoxAll, TeamspaceID: "tsp_1", WithUserID: "user_b", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan []string
+	err = pgx.BeginFunc(ctx, database.Pool, func(tx pgx.Tx) error {
+		// With sequential scans off the plan shows what the indexes allow,
+		// not what a nearly empty test table makes cheapest.
+		if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+			return err
+		}
+		// GENERIC_PLAN plans the $n placeholders without values; pgconn sends
+		// the text as it is, where pgx would want arguments for them.
+		results, err := tx.Conn().PgConn().Exec(ctx, `EXPLAIN (GENERIC_PLAN, COSTS OFF) `+statement).ReadAll()
+		if err != nil {
+			return err
+		}
+		for _, result := range results {
+			for _, row := range result.Rows {
+				plan = append(plan, string(row[0]))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explained := strings.Join(plan, "\n"); !strings.Contains(explained, "agent_interactions_teamspace_idx") {
+		t.Fatalf("the generic plan does not use the teamspace index:\n%s", explained)
 	}
 }

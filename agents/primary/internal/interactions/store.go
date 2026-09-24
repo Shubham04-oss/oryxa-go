@@ -104,32 +104,11 @@ func (store *Store) Sent(ctx context.Context, organizationID, userID string, lim
 // is a party to: as the target (BoxInbox), the requester (BoxSent) or either
 // (BoxAll), optionally only with one other member and only in one teamspace.
 func (store *Store) List(ctx context.Context, organizationID, userID string, query Query) ([]agents.Interaction, error) {
-	args := []any{organizationID, userID}
-	asTarget, asRequester := `target_user_id=$2`, `requester_user_id=$2`
-	if query.WithUserID != "" {
-		args = append(args, query.WithUserID)
-		asTarget += ` AND requester_user_id=$3`
-		asRequester += ` AND target_user_id=$3`
+	statement, args, err := listStatement(organizationID, userID, query)
+	if err != nil {
+		return nil, err
 	}
-	var parties string
-	switch query.Box {
-	case BoxInbox:
-		parties = asTarget
-	case BoxSent:
-		parties = asRequester
-	case BoxAll:
-		parties = `(` + asTarget + `) OR (` + asRequester + `)`
-	default:
-		return nil, fmt.Errorf("%w: unknown listing %q", ErrInvalid, query.Box)
-	}
-	where := `organization_id=$1 AND (` + parties + `)`
-	if query.TeamspaceID != "" {
-		args = append(args, query.TeamspaceID)
-		where += fmt.Sprintf(` AND teamspace_id=$%d`, len(args))
-	}
-	args = append(args, clamp(query.Limit))
-	rows, err := store.database.Pool.Query(ctx, `SELECT `+selectColumns+` FROM agents_primary.agent_interactions
-		WHERE `+where+fmt.Sprintf(` ORDER BY updated_at DESC, id DESC LIMIT $%d`, len(args)), args...)
+	rows, err := store.database.Pool.Query(ctx, statement, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list agent requests: %w", err)
 	}
@@ -146,6 +125,41 @@ func (store *Store) List(ctx context.Context, organizationID, userID string, que
 		return nil, fmt.Errorf("list agent requests: %w", err)
 	}
 	return requests, nil
+}
+
+// listStatement is the query List runs and its arguments. Only placeholder
+// numbers are formatted into it; every value is an argument.
+func listStatement(organizationID, userID string, query Query) (string, []any, error) {
+	args := []any{organizationID, userID}
+	asTarget, asRequester := `target_user_id=$2`, `requester_user_id=$2`
+	if query.WithUserID != "" {
+		args = append(args, query.WithUserID)
+		asTarget += ` AND requester_user_id=$3`
+		asRequester += ` AND target_user_id=$3`
+	}
+	var parties string
+	switch query.Box {
+	case BoxInbox:
+		parties = asTarget
+	case BoxSent:
+		parties = asRequester
+	case BoxAll:
+		parties = `(` + asTarget + `) OR (` + asRequester + `)`
+	default:
+		return "", nil, fmt.Errorf("%w: unknown listing %q", ErrInvalid, query.Box)
+	}
+	where := `organization_id=$1 AND (` + parties + `)`
+	if query.TeamspaceID != "" {
+		// Restating the partial index's own predicate is what lets a generic
+		// plan — the one a cached statement settles on after a few runs, as a
+		// side conversation's polling does — use agent_interactions_teamspace_idx:
+		// the planner cannot prove teamspace_id=$n excludes '' for every $n.
+		args = append(args, query.TeamspaceID)
+		where += fmt.Sprintf(` AND teamspace_id <> '' AND teamspace_id=$%d`, len(args))
+	}
+	args = append(args, clamp(query.Limit))
+	return `SELECT ` + selectColumns + ` FROM agents_primary.agent_interactions
+		WHERE ` + where + fmt.Sprintf(` ORDER BY updated_at DESC, id DESC LIMIT $%d`, len(args)), args, nil
 }
 
 func (store *Store) Decide(ctx context.Context, id string, input agents.InteractionDecisionInput, at time.Time) (agents.Interaction, error) {
