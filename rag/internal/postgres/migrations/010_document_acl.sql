@@ -10,7 +10,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_attribute
                    WHERE attrelid = 'rag_documents'::regclass
                      AND attname = 'access' AND NOT attisdropped) THEN
-        -- Existing documents were member-visible.
+        -- Existing documents were member-visible, so that is what they are
+        -- labelled; the default exists only to label them, and is dropped
+        -- below.
         ALTER TABLE rag_documents ADD COLUMN access text NOT NULL DEFAULT 'members'
             CONSTRAINT rag_documents_access_check CHECK (access IN ('members', 'admins'));
 
@@ -30,3 +32,11 @@ BEGIN
         WHERE corpus_id IN (SELECT id FROM rag_corpora WHERE backend = 'bedrock-kb');
     END IF;
 END $$;
+
+-- No default from here on: every write names its access. During the rolling
+-- deploy that adds this column, a task of the build being replaced still
+-- inserts documents without naming one, and a default would label them
+-- members for good — an admin-only billing attachment published in that
+-- window would be visible to every member. Without one, such an insert fails,
+-- and the event behind it is delivered again, to a task of this build.
+ALTER TABLE rag_documents ALTER COLUMN access DROP DEFAULT;

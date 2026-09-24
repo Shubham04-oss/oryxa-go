@@ -4,12 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"net/url"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // openMigratedSchema gives a test rag's schema in a PostgreSQL schema of its
@@ -142,6 +144,21 @@ func TestDocumentAccessMigrationsApplyOnceInEffect(t *testing.T) {
 	}
 	if got := read("doc_github"); got.Status != "pending" || got.SyncedHash != "" || kind(got) != "" {
 		t.Fatalf("a knowledge base github document = %+v, want requeued", got)
+	}
+
+	// No default: a writer that does not name an access, as the build before
+	// this one does during the rolling deploy, is refused rather than
+	// labelling what it writes members.
+	var defaulted bool
+	if err := store.pool.QueryRow(ctx, `SELECT atthasdef FROM pg_attribute WHERE attrelid = 'rag_documents'::regclass AND attname = 'access'`).Scan(&defaulted); err != nil || defaulted {
+		t.Fatalf("access has a default = %v, %v", defaulted, err)
+	}
+	_, err := store.pool.Exec(ctx, `INSERT INTO rag_documents (id, corpus_id, organization_id, source_kind, source_ref, title,
+		content_type, content_sha256, byte_size, body, metadata, status, created_by, created_at, updated_at)
+		VALUES ('doc_old_writer', 'cor_org', 'org_1', 'file', 'file_2', 'Invoice', 'text/plain', 'sha', 4, 'body', '{}', 'pending', 'usr_1', $1, $1)`, now)
+	var postgresError *pgconn.PgError
+	if !errors.As(err, &postgresError) || postgresError.Code != "23502" {
+		t.Fatalf("a document written without an access = %v, want a not-null violation", err)
 	}
 
 	// What happens afterwards: an admin reclassifies the file, and the
