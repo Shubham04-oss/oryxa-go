@@ -3,7 +3,6 @@ import type { ComponentType } from "react"
 import {
   ArrowLeft,
   ArrowRight,
-  ArrowUpRight,
   BookOpenText,
   Bot,
   ChartNoAxesColumn,
@@ -20,8 +19,7 @@ import {
   UsersRound,
   Workflow,
 } from "lucide-react"
-import { WorkspaceFocus, workItems } from "./workspace-focus"
-import type { WorkId, WorkItem } from "./workspace-focus"
+import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { KnowledgeBases } from "./knowledge-bases"
 import type { SelectedKnowledgeBase } from "./knowledge-bases"
 import { TeamspacesManagement } from "./teamspaces-management"
@@ -29,17 +27,14 @@ import type { WorkspaceRole } from "./teamspaces-management"
 import { TeamspaceFocus } from "./teamspace-focus"
 import { statusLabel } from "./teamspace-format"
 import { previewSharedSpaces, sharedSpacesOf } from "./people-spaces"
-import {
-  agents,
-  IdentityAvatar,
-  people,
-  TeamspaceAvatar,
-} from "./workspace-avatar"
+import { IdentityAvatar, people, TeamspaceAvatar } from "./workspace-avatar"
 import { WorkspaceTools } from "./workspace-tools"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import { getSharedPeople, PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import { useTeamspaces } from "@/hooks/use-teamspaces"
+import { useAgentsMode } from "@/hooks/use-agents-mode"
+import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
 import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
 import type { AvatarIdentity } from "./workspace-avatar"
@@ -109,12 +104,6 @@ const headings: Record<Section, string> = {
 
 const savedViews = ["Launch plan", "At-risk accounts", "Q4 pipeline"]
 
-const workEntries: Partial<Record<Section, WorkId[]>> = {
-  agents: ["launch-crew", "research-specialist"],
-  "multi-agents": ["launch-crew"],
-  specialists: ["research-specialist"],
-}
-
 export function WorkspaceShell({
   session,
   role = session ? "member" : "admin",
@@ -142,7 +131,6 @@ export function WorkspaceShell({
     ...defaultSections,
     [initialMode]: initialSection || defaultSections[initialMode],
   })
-  const [focusedWork, setFocusedWork] = useState<WorkItem | null>(null)
   const teamspaces = useTeamspaces(selectedOrganization?.id)
   const [knowledgeBaseSelection, setKnowledgeBaseSelection] =
     useState<SelectedKnowledgeBase | null>(null)
@@ -158,6 +146,7 @@ export function WorkspaceShell({
     Partial<Record<string, string[]>>
   >({})
   const conversationListRef = useRef<HTMLDivElement>(null)
+  const agentsMode = useAgentsMode()
 
   const currentIdentity: AvatarIdentity = session
     ? {
@@ -215,15 +204,17 @@ export function WorkspaceShell({
 
   const section = sectionsByMode[activeMode]
   const heading = headings[section]
-  const visibleWorkEntries = workEntries[section]
   // People lists who shares a teamspace with the member; only the dev
   // preview, which has no workspace to read, lists examples.
   const peopleSpaces = preview
     ? previewSharedSpaces
     : sharedSpacesOf(teamspaces.spaces)
   const sharedPeople = getSharedPeople(peopleSpaces, currentIdentity)
+  // Agents mode's focused work belongs to that mode and its workspace.
+  const agentWork =
+    activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
   const isFocused = Boolean(
-    focusedWork || (teamspaces.openId && selectedOrganization)
+    agentWork || (teamspaces.openId && selectedOrganization)
   )
   const selectedPerson =
     section === "people"
@@ -254,7 +245,6 @@ export function WorkspaceShell({
 
   function selectMode(nextMode: PrimaryMode) {
     setActiveMode(nextMode)
-    setFocusedWork(null)
     teamspaces.close()
     if (nextMode !== activeMode) {
       setKnowledgeBaseSelection(null)
@@ -263,7 +253,6 @@ export function WorkspaceShell({
   }
 
   function selectSection(nextSection: Section) {
-    setFocusedWork(null)
     setActiveConversationId(null)
     setKnowledgeBaseSelection(null)
     teamspaces.reset()
@@ -283,7 +272,6 @@ export function WorkspaceShell({
     setActiveConversationId(personId)
     setActiveMode("team")
     setSectionsByMode((current) => ({ ...current, team: "people" }))
-    setFocusedWork(null)
     teamspaces.reset()
     if (isMobile) setLeftExpanded(false)
   }
@@ -301,15 +289,14 @@ export function WorkspaceShell({
     ])
   }
 
-  function openWork(workId: WorkId) {
+  function openWork(target: AgentsFocusTarget) {
     teamspaces.close()
-    setFocusedWork(workItems[workId])
+    agentsMode.open(target)
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
   }
 
   function openTeamspace(id: string) {
-    setFocusedWork(null)
     teamspaces.open(id)
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
@@ -590,18 +577,20 @@ export function WorkspaceShell({
       )}
 
       <div className="workspace-middle">
-        {teamspaces.openId && selectedOrganization ? (
+        {agentWork && selectedOrganization ? (
+          <AgentsFocus
+            target={agentWork}
+            organizationId={selectedOrganization.id}
+            onBack={agentsMode.close}
+            onOpen={openWork}
+          />
+        ) : teamspaces.openId && selectedOrganization ? (
           <TeamspaceFocus
             key={teamspaces.openId}
             organizationId={selectedOrganization.id}
             teamspaceId={teamspaces.openId}
             viewerId={session?.user.id}
             onBack={teamspaces.close}
-          />
-        ) : focusedWork ? (
-          <WorkspaceFocus
-            work={focusedWork}
-            onBack={() => setFocusedWork(null)}
           />
         ) : (
           <>
@@ -703,42 +692,16 @@ export function WorkspaceShell({
                   onOpen={openTeamspace}
                 />
               )}
-              {visibleWorkEntries && (
-                <div className="workspace-entry-content">
-                  <p className="workspace-eyebrow">Agentic work</p>
-                  <div className="workspace-entry-grid">
-                    {visibleWorkEntries.map((workId) => {
-                      const work = workItems[workId]
-                      return (
-                        <button
-                          className="workspace-entry"
-                          type="button"
-                          key={work.id}
-                          aria-label={`Open ${work.title}`}
-                          onClick={() => openWork(workId)}
-                        >
-                          <span className="workspace-entry-kind">
-                            <IdentityAvatar
-                              identity={
-                                work.id === "research-specialist"
-                                  ? agents.specialist
-                                  : agents.planning
-                              }
-                            />
-                            {work.kind}
-                          </span>
-                          <span className="workspace-entry-title">
-                            <strong>{work.title}</strong>
-                            <ArrowUpRight size={17} strokeWidth={1.7} />
-                          </span>
-                          <span className="workspace-entry-description">
-                            {work.description}
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
+              {isAgentsSection(section) && (
+                <AgentsCanvas
+                  section={section}
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={session?.user.id}
+                  onOpen={openWork}
+                  onNavigate={selectSection}
+                />
               )}
             </main>
           </>
@@ -768,7 +731,6 @@ export function WorkspaceShell({
           onOpenTools={() => {
             setActiveMode("home")
             setSectionsByMode((current) => ({ ...current, home: "tools" }))
-            setFocusedWork(null)
             setSettingsOpen(false)
             if (isMobile) setLeftExpanded(false)
           }}
