@@ -3,8 +3,11 @@ import { ApiError } from "@/lib/api/client"
 import {
   appsErrorMessage,
   canReconnect,
+  catalogSearchQueryOptions,
+  catalogTriggerTypesQueryOptions,
   connect,
   connectionGroupState,
+  connectionReasonText,
   connectionQueryOptions,
   connectionStatusHint,
   connectionStatusLabel,
@@ -18,6 +21,7 @@ import {
   getConnection,
   groupConnectionsByToolkit,
   hasConnectionDetails,
+  listAllCatalogTriggerTypes,
   listCatalog,
   listCatalogTriggerTypes,
   listConnections,
@@ -26,7 +30,9 @@ import {
   nonConnectableReason,
   parseConnectReturn,
   removeTrigger,
+  replacedConnections,
   toolkitName,
+  triggerTypePagesLimit,
   triggersQueryOptions,
 } from "./client"
 import type { Connection, Toolkit } from "./client"
@@ -131,6 +137,68 @@ describe("catalog API contracts", () => {
       "/v1/apps/catalog/gmail/triggers?cursor=c1&limit=50",
       expect.objectContaining({ method: "GET" })
     )
+  })
+
+  it("reads every trigger type by following next_cursor, and stops at the page limit", async () => {
+    const pages = [
+      jsonResponse({ next_cursor: "page2", triggers: [{ trigger: "A" }] }),
+      jsonResponse({ triggers: [{ trigger: "B" }] }),
+    ]
+    const fetchMock = vi.fn(async () => pages.shift())
+    vi.stubGlobal("fetch", fetchMock)
+    await expect(listAllCatalogTriggerTypes("gmail")).resolves.toEqual([
+      { trigger: "A" },
+      { trigger: "B" },
+    ])
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/v1/apps/catalog/gmail/triggers?limit=50",
+      expect.anything()
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/v1/apps/catalog/gmail/triggers?cursor=page2&limit=50",
+      expect.anything()
+    )
+
+    const endless = vi.fn(async () =>
+      jsonResponse({ next_cursor: "more", triggers: [{ trigger: "X" }] })
+    )
+    vi.stubGlobal("fetch", endless)
+    const all = await catalogTriggerTypesQueryOptions("gmail").queryFn?.(
+      {} as never
+    )
+    expect(all).toHaveLength(triggerTypePagesLimit)
+    expect(endless).toHaveBeenCalledTimes(triggerTypePagesLimit)
+  })
+
+  it("searches the catalog a page at a time, each page's cursor fetching the next", async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ toolkits: [toolkit()], next_cursor: "c2" })
+    )
+    vi.stubGlobal("fetch", fetchMock)
+    const options = catalogSearchQueryOptions({ search: "git", limit: 100 })
+    expect(options.queryKey).toEqual([
+      "apps",
+      "catalog",
+      "search",
+      "git",
+      "",
+      100,
+    ])
+    expect(options.initialPageParam).toBeUndefined()
+    const page = await options.queryFn?.({ pageParam: "c1" } as never)
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/v1/apps/catalog?cursor=c1&limit=100&search=git",
+      expect.anything()
+    )
+    expect(page).toEqual({ nextCursor: "c2", toolkits: [toolkit()] })
+    expect(
+      options.getNextPageParam({ toolkits: [], nextCursor: "c3" }, [], "c1", [])
+    ).toBe("c3")
+    expect(
+      options.getNextPageParam({ toolkits: [] }, [], "c1", [])
+    ).toBeUndefined()
   })
 
   it("pages trigger types by following next_cursor until it is absent", async () => {
@@ -364,22 +432,165 @@ describe("parseConnectReturn", () => {
 })
 
 describe("connectReturnNotice", () => {
-  it("welcomes an active connection", () => {
+  it("welcomes an active connection by name", () => {
     expect(
-      connectReturnNotice({ connectionId: "apc_1", status: "active" }).tone
-    ).toBe("success")
+      connectReturnNotice(
+        { connectionId: "apc_1", status: "active" },
+        { name: "GitHub" }
+      )
+    ).toEqual({
+      text: "GitHub is connected and ready to use.",
+      tone: "success",
+    })
   })
 
-  it("explains a connection still finishing", () => {
-    expect(
-      connectReturnNotice({ connectionId: "apc_1", status: "pending" }).tone
-    ).toBe("info")
+  it("points a connection still pending at cancelling, since nothing checks it again", () => {
+    const notice = connectReturnNotice(
+      { connectionId: "apc_1", status: "pending" },
+      { name: "Gmail" }
+    )
+    expect(notice.tone).toBe("info")
+    expect(notice.text).toBe(
+      "Gmail is still connecting. If it doesn't finish, cancel it and connect again."
+    )
   })
 
-  it("flags anything else as not finished", () => {
+  it("says why a connection failed when the connection itself says", () => {
     expect(
-      connectReturnNotice({ connectionId: "apc_1", status: "failed" }).tone
-    ).toBe("danger")
+      connectReturnNotice(
+        { connectionId: "apc_1", status: "failed" },
+        { name: "Gmail", reason: "link expired" }
+      )
+    ).toEqual({
+      text: "Gmail didn't connect: the link expired before it was finished. Try again.",
+      tone: "danger",
+    })
+  })
+
+  it("flags anything else as not finished, naming nothing it doesn't know", () => {
+    expect(
+      connectReturnNotice({ connectionId: "apc_1", status: "removed" })
+    ).toEqual({ text: "The app didn't connect. Try again.", tone: "danger" })
+  })
+})
+
+describe("connectionReasonText", () => {
+  it("rewords the reasons apps writes itself", () => {
+    expect(connectionReasonText("the member did not finish connecting")).toBe(
+      "it wasn't finished at the app"
+    )
+    expect(connectionReasonText("link expired")).toBe(
+      "the link expired before it was finished"
+    )
+  })
+
+  it("rewords Composio's own account statuses", () => {
+    expect(connectionReasonText("failed")).toBe("the app reported a failure")
+    expect(connectionReasonText("expired")).toBe("the sign-in expired")
+    expect(connectionReasonText("revoked")).toBe("access was revoked")
+    expect(connectionReasonText("inactive")).toBe("the account is inactive")
+  })
+
+  it("passes anything else through, without its closing stop", () => {
+    expect(connectionReasonText(" Refresh token revoked. ")).toBe(
+      "Refresh token revoked"
+    )
+  })
+})
+
+describe("replacedConnections", () => {
+  it("finds failed and expired rows an active connection made later has replaced", () => {
+    const stale = connection({
+      id: "apc_old",
+      status: "expired",
+      created_at: "2026-09-01T00:00:00Z",
+    })
+    const failed = connection({
+      id: "apc_failed",
+      status: "failed",
+      created_at: "2026-09-10T00:00:00.5Z",
+    })
+    const current = connection({
+      id: "apc_new",
+      status: "active",
+      created_at: "2026-09-10T00:00:00.75Z",
+    })
+    expect(
+      replacedConnections([current, failed, stale]).map((item) => item.id)
+    ).toEqual(["apc_failed", "apc_old"])
+  })
+
+  it("leaves stale rows alone while the new connection is still pending, or for another app", () => {
+    expect(
+      replacedConnections([
+        connection({
+          id: "apc_new",
+          status: "pending",
+          created_at: "2026-09-20T00:00:00Z",
+        }),
+        connection({
+          id: "apc_old",
+          status: "expired",
+          created_at: "2026-09-01T00:00:00Z",
+        }),
+        connection({
+          id: "apc_gmail",
+          toolkit: "gmail",
+          status: "active",
+          created_at: "2026-09-21T00:00:00Z",
+        }),
+      ])
+    ).toEqual([])
+  })
+
+  it("compares instants, not strings: Go writes microseconds and sometimes a local offset", () => {
+    // 07:14:14+05:30 is 01:44:14Z, before the failed row's 01:50Z, although
+    // it sorts after it as text.
+    expect(
+      replacedConnections([
+        connection({
+          id: "apc_active",
+          status: "active",
+          created_at: "2026-09-24T07:14:14.114319+05:30",
+        }),
+        connection({
+          id: "apc_failed",
+          status: "failed",
+          created_at: "2026-09-24T01:50:00.000001Z",
+        }),
+      ])
+    ).toEqual([])
+    expect(
+      replacedConnections([
+        connection({
+          id: "apc_active",
+          status: "active",
+          created_at: "2026-09-24T01:43:53.111766Z",
+        }),
+        connection({
+          id: "apc_expired",
+          status: "expired",
+          created_at: "2026-09-24T06:59:00.5+05:30",
+        }),
+      ]).map((item) => item.id)
+    ).toEqual(["apc_expired"])
+  })
+
+  it("never calls an active connection replaced, nor a stale row newer than the active one", () => {
+    expect(
+      replacedConnections([
+        connection({
+          id: "apc_newer_failure",
+          status: "failed",
+          created_at: "2026-09-22T00:00:00Z",
+        }),
+        connection({
+          id: "apc_active",
+          status: "active",
+          created_at: "2026-09-21T00:00:00Z",
+        }),
+      ])
+    ).toEqual([])
   })
 })
 

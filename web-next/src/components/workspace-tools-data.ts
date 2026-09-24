@@ -16,27 +16,10 @@ import {
   siZoom,
 } from "simple-icons"
 import type { SimpleIcon } from "simple-icons"
+import { toolkitName } from "@/lib/apps/client"
+import type { Connection, Toolkit } from "@/lib/apps/client"
 
-export type Toolkit = {
-  toolkit: string
-  name: string
-  description: string
-  logo?: string
-  categories: { id: string; name: string }[]
-  connectable: boolean
-  tools_count: number
-  triggers_count: number
-}
-
-export type Connection = {
-  id: string
-  toolkit: string
-  status: "pending" | "active" | "failed" | "expired" | "removed"
-  label?: string
-  connected_at?: string
-}
-
-export type Organization = { id: string; name: string }
+export type { Connection, Toolkit } from "@/lib/apps/client"
 
 export const featuredGroups = [
   {
@@ -61,6 +44,11 @@ export const featuredGroups = [
   },
 ] as const
 
+/** Every app the browse view features, read one by one from the catalog. */
+export const featuredSlugs: string[] = featuredGroups.flatMap((group) => [
+  ...group.slugs,
+])
+
 const iconBySlug: Record<string, SimpleIcon> = {
   airtable: siAirtable,
   asana: siAsana,
@@ -81,6 +69,23 @@ const iconBySlug: Record<string, SimpleIcon> = {
 
 export function toolkitIcon(slug: string): SimpleIcon | undefined {
   return iconBySlug[slug.toLowerCase()]
+}
+
+/**
+ * Stands in for an app the catalog has not described (yet, or at all), so a
+ * real connection is never hidden for want of its logo and description.
+ */
+export function placeholderToolkit(slug: string): Toolkit {
+  return {
+    toolkit: slug,
+    name: toolkitName(slug),
+    description: "",
+    categories: [],
+    auth_schemes: [],
+    connectable: false,
+    tools_count: 0,
+    triggers_count: 0,
+  }
 }
 
 const previewNames: Record<string, [string, string]> = {
@@ -107,6 +112,7 @@ export const previewToolkits: Toolkit[] = featuredGroups.flatMap((group) =>
     name: previewNames[slug][0],
     description: previewNames[slug][1],
     categories: [{ id: group.name, name: group.name }],
+    auth_schemes: [],
     connectable: false,
     tools_count: 0,
     triggers_count: 0,
@@ -115,11 +121,19 @@ export const previewToolkits: Toolkit[] = featuredGroups.flatMap((group) =>
 
 // These are visual examples only, never interpreted as authenticated accounts.
 export const previewConnections: Connection[] = [
-  { id: "preview-github", toolkit: "github", status: "active" },
-  { id: "preview-notion", toolkit: "notion", status: "active" },
-  { id: "preview-figma", toolkit: "figma", status: "active" },
-  { id: "preview-googledrive", toolkit: "googledrive", status: "active" },
-]
+  "github",
+  "notion",
+  "figma",
+  "googledrive",
+].map((toolkit): Connection => ({
+  id: `preview-${toolkit}`,
+  toolkit,
+  status: "active",
+  member_id: "preview",
+  auto_subscribe: false,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+}))
 
 export function groupToolkits(toolkits: Toolkit[], useFeatured = false) {
   if (useFeatured) {
