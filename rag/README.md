@@ -100,7 +100,9 @@ emits) is stored as `halfvec`, which is the only way to index it at all.
 S3 Vectors indexes on cosine or euclidean only, so an inner-product corpus on
 it is refused by the domain and by a database constraint. One query returns at
 most 100 results, so the candidates rag over-fetches for fusion and reranking
-are capped there, and a bucket holds at most 10,000 indexes: with one per
+are capped there; a member's search always asks for all 100, since S3 Vectors
+keeps no access label with a vector and admin-only ones are only dropped
+afterwards, against PostgreSQL. A bucket holds at most 10,000 indexes: with one per
 corpus — and the knowledge bridge makes one per member whose apps it indexes —
 a deployment nearing that needs a second bucket or shared indexes. Its index name is a
 hash of the organization and corpus ids rather than the corpus id lower-cased,
@@ -347,7 +349,12 @@ Filters narrow on document ids and on metadata, with `eq`, `ne`, `in` and
 `knowledge_source_id`, `document_kind`, and `category`, which RAG writes into
 the managed index. Other metadata conditions are refused rather than silently
 widening the search. Organization, corpus, and document ACL filters are always
-applied separately from caller supplied conditions.
+applied separately from caller supplied conditions. Bedrock takes at most five
+filters in one list, so on a `bedrock-kb` corpus a caller's conditions, with a
+document id list counting as one, are nested in groups beside those, and more
+than ten are refused. What a `bedrock-kb` search returns is also held to the
+caller's filter against the metadata PostgreSQL holds, which the managed index
+only catches up with once a changed document has been submitted again.
 For example, `{"query":"September invoices","filter":{"conditions":[{"key":"provider","operator":"eq","values":["gmail"]},{"key":"category","operator":"eq","values":["financial_record"]}]}}`
 searches Gmail financial records in the corpora the caller may access.
 Metadata is bounded to 16 keys and 2 KiB total, which is the tighter of the two
@@ -443,17 +450,23 @@ as `financial_record`.
 
 **Idempotency and removal.** `rag_knowledge_documents` maps a knowledge
 document id to the organization, corpus and rag document it became, with the
-content hash and extraction time of the version it reflects. An unchanged
-hash, title, content type, metadata, access label, owner and reference needs no
-work. Changed content or metadata requeues the document for indexing. If the
+content hash of the version it reflects and when Knowledge published it. An
+unchanged hash, title, content type, metadata, access label, owner and
+reference needs no work, and is recognised before anything is read back.
+Changed content or metadata requeues the document for indexing. If the
 owner or reference changes, the old document and its
 vectors are removed before a new document is indexed at the new placement.
-An event older than what is already mapped is ignored. Removal timestamps
+Publishes are ordered by when Knowledge published them — the event
+envelope's signed `occurred_at` — not by `extracted_at`: re-including a
+document that a change of kinds had excluded republishes it with the
+`extracted_at` of its last read, which is older than the exclusion. An event
+published before what is already mapped is ignored. Removal timestamps
 are kept in `rag_knowledge_removals`, including when no document was indexed
 yet, so an older publish cannot resurrect a removed document and an older
-removal cannot delete a newer version. Publish and removal handlers for the
-same Knowledge document are serialized with a PostgreSQL advisory lock across
-rag replicas.
+removal cannot delete a newer version. A removal is remembered for 30 days,
+past the longest SQS keeps a message; recording one clears older ones.
+Publish and removal handlers for the same Knowledge document are serialized
+with a PostgreSQL advisory lock across rag replicas.
 `knowledge.document.removed.v1` deletes the mapped rag document through rag's
 normal delete path and the mapping row with it. A corpus left with no
 documents after that is left alone — an empty corpus is harmless and will be
@@ -464,10 +477,12 @@ here has to notice separately.
 **Omitted bodies.** A published event whose body was too large to carry
 (`body_omitted: true`, over knowledge's 128 KiB event budget) is read back
 through Knowledge's internal, service-authenticated body route. Rag checks
-the returned content hash against the event before indexing it. If the body
-cannot be read or no longer matches and a prior version is indexed, rag
-removes that stale version. A temporary read failure leaves the event for
-retry.
+the returned content hash against the event before indexing it. If Knowledge
+has since replaced that version, or no longer holds the document, an indexed
+version is kept: the event for the newer version, or the removal, follows.
+Only when this deployment cannot read the body at all and the content changed
+is the stale indexed version removed. A temporary read failure leaves the
+event for retry.
 
 **Scope safety.** A document missing the id its scope needs — no member id at
 member scope, no team id at team scope — is refused and logged rather than
@@ -622,8 +637,13 @@ match is an ordinary `Match` by the time it leaves this package.
 
 ### Moving to another knowledge base
 
-A document's `kb_synced_hash` says what content was handed to the knowledge
-base rag was configured with at the time, not which one it was. Pointing rag
+A document's `kb_synced_hash` is a marker of what was handed to the knowledge
+base rag was configured with at the time — its content and every attribute
+submitted with it, access and provenance included — not which one it was. A
+changed attribute, or a marker of an older format such as the bare content
+hash a task of the previous build records during a rolling deploy, no longer
+matches, and the document is submitted again; the ingest worker requeues such
+ready documents every five minutes. Pointing rag
 at a different knowledge base (in production, the `rag_knowledge_base`
 variable) therefore leaves every `bedrock-kb` document looking indexed in one
 that has never seen it, and searches there come back empty until each is
