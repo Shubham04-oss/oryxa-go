@@ -378,6 +378,7 @@ reads. They prove nothing about whether the provider agrees.
 | Auth | The agent grant against a provisioned Cognito agent client | The agent client provisioned |
 | Agents | A tool that asks for confirmation, against a real model; the sandbox and browser; a wake-up. Runs Gemini answers, knowledge search through rag, and the web app's conversations ran on 2026-09-18 | AgentCore credentials or a connected app, and the `agents-events` queue |
 | Journey | `test/run.sh` has not run since PR #17 rewrote it for the one binary, and it covers teams, files and email only | Docker |
+| Realtime | A purge against the real Worker. On 2026-09-24 the binary ran against LocalStack and a stand-in Worker that checks the signature from the contract alone: it purged, skipped a deleted organization's members, dropped a `400`, and retried a `503` into the dead-letter queue ([realtime/README.md](../realtime/README.md)) | The Worker's `POST /internal/realtime/purge`, live and holding the same `REALTIME_PURGE_SECRET` |
 
 ## 7. Before production
 
