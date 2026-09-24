@@ -10,6 +10,7 @@ import { INBOX_AGENT, inboxName, isNameId } from "./names"
 import { conversationGoneCloseCode, parseInboxServerMessage } from "./protocol"
 import type { InboxServerMessage } from "./protocol"
 import type { Conversation } from "./types"
+import { socketProtocol } from "@/lib/socket-protocol"
 
 /** Where the member stands with their inbox. */
 export type InboxStatus =
@@ -231,6 +232,7 @@ export function useInbox(organizationId?: string, viewerId?: string): Inbox {
   view.use(name, organizationId ?? "", viewerId ?? "")
 
   const socket = useAgent({
+    protocol: socketProtocol(),
     agent: INBOX_AGENT,
     name: name || "closed",
     enabled: Boolean(name) && view.live.settled === undefined,

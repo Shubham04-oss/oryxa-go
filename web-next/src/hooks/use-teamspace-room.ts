@@ -40,6 +40,7 @@ import type { Teamspace } from "@/lib/teamspaces/client"
 import { canUseRoom } from "@/lib/teamspaces/policy"
 import { teamspaceKeys } from "@/lib/teamspaces/queries"
 import { reopenSocket } from "@/lib/threads/agent-socket"
+import { socketProtocol } from "@/lib/socket-protocol"
 import { sessionExpiredCode } from "@/lib/threads/chat-messages"
 
 export type { RoomMessage, RoomSeat }
@@ -241,6 +242,7 @@ export function useTeamspaceRoom(
 
   const settled = Boolean(live.current.refusal?.settled)
   const agent = useAgent<TeamspaceRoomState>({
+    protocol: socketProtocol(),
     agent: TEAMSPACE_ROOM_AGENT,
     name: room || "closed",
     enabled: open && !settled,

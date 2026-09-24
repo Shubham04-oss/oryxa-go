@@ -32,6 +32,7 @@ import type {
 } from "./protocol"
 import { agentsOf } from "./roster"
 import type { AgentRef, SideItem, SideMessage, SideRequestCard } from "./types"
+import { socketProtocol } from "@/lib/socket-protocol"
 
 /** Where the viewer stands with the side conversation. */
 export type SideConversationStatus =
@@ -1179,6 +1180,7 @@ export function useSideConversation(
   )
 
   const socket = useAgent({
+    protocol: socketProtocol(),
     agent: SIDE_CONVERSATION_AGENT,
     name: name || "closed",
     enabled: Boolean(name) && !view.settled,

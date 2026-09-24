@@ -21,6 +21,7 @@ import type {
   DmServerMessage,
   DmWireMessage,
 } from "./protocol"
+import { socketProtocol } from "@/lib/socket-protocol"
 import type { DmMessage } from "./types"
 
 /** Where the viewer stands with the DM. */
@@ -715,6 +716,7 @@ export function useDirectMessages(
   view.use(name, organizationId ?? "", viewerId ?? "", peerId ?? "")
 
   const socket = useAgent({
+    protocol: socketProtocol(),
     agent: DIRECT_MESSAGE_AGENT,
     name: name || "closed",
     enabled: Boolean(name) && !view.settled,

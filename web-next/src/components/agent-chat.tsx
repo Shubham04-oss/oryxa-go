@@ -27,6 +27,7 @@ import {
 } from "@/lib/threads/client"
 import type { ConfirmationAnswer, Thread } from "@/lib/threads/client"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
+import { socketProtocol } from "@/lib/socket-protocol"
 
 type ComposerHandlers = {
   /** The composer's text, kept here so it survives the conversation loading. */
@@ -336,6 +337,7 @@ function ThreadChat({
   }>({ expired: false, retried: false })
 
   const agent = useAgent({
+    protocol: socketProtocol(),
     agent: "ThreadChatAgent",
     name: threadAgentName(organizationId, threadId),
     onOpen: () => setConnection("open"),
