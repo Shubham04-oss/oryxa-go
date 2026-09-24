@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,17 +14,27 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 )
 
+// List is how the server reads every listing now: the sent side from Sent,
+// the rest from Inbox, each recording the caller's actor.
+func (service *fakeInteractions) List(ctx context.Context, actor primaryagents.InteractionActor, query interactions.Query) ([]primaryagents.Interaction, error) {
+	if query.Box == interactions.BoxSent {
+		return service.Sent(ctx, actor, query.Limit)
+	}
+	return service.Inbox(ctx, actor, query.Limit)
+}
+
 // DecideAsOwner is the one way the server decides: as the member themself.
 func (service *fakeInteractions) DecideAsOwner(ctx context.Context, actor primaryagents.InteractionActor, id string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
 	return service.Decide(ctx, actor, id, input)
 }
 
 // teamspaceInteractions is fakeInteractions keeping the last request body it
-// was asked to create.
+// was asked to create and the last listing it was asked for.
 type teamspaceInteractions struct {
 	fakeInteractions
 	input   primaryagents.InteractionCreateInput
 	creates int
+	query   interactions.Query
 }
 
 func (service *teamspaceInteractions) Create(ctx context.Context, actor primaryagents.InteractionActor, token, key string, input primaryagents.InteractionCreateInput) (primaryagents.Interaction, error) {
@@ -32,11 +43,16 @@ func (service *teamspaceInteractions) Create(ctx context.Context, actor primarya
 	return service.fakeInteractions.Create(ctx, actor, token, key, input)
 }
 
-func agentRequestServer(interactions AgentInteractions) *Server {
+func (service *teamspaceInteractions) List(ctx context.Context, actor primaryagents.InteractionActor, query interactions.Query) ([]primaryagents.Interaction, error) {
+	service.query = query
+	return service.fakeInteractions.List(ctx, actor, query)
+}
+
+func agentRequestServer(ledger AgentInteractions) *Server {
 	managed := &fakeManagedAgents{definitions: []managedagents.Definition{{ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive}}}
 	return New(member(), &fakeThreads{}, Config{
 		AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute,
-		Agents: managed, Interactions: interactions,
+		Agents: managed, Interactions: ledger,
 	}, nil)
 }
 
@@ -44,17 +60,17 @@ func agentRequestServer(interactions AgentInteractions) *Server {
 // the ledger, which decides who approves from the target's standing there; a
 // body that tries to choose that itself is refused before it gets that far.
 func TestARequestNamesItsTeamspaceButNeverWhoApprovesIt(t *testing.T) {
-	interactions := &teamspaceInteractions{}
-	server := agentRequestServer(interactions)
+	requests := &teamspaceInteractions{}
+	server := agentRequestServer(requests)
 	created := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-requests",
 		`{"target_agent_id":"agt_b","teamspace_id":"tsp_1","purpose":"Launch","task":"Review the plan."}`, bearer)
-	if created.Code != http.StatusCreated || interactions.input.TeamspaceID != "tsp_1" || interactions.input.TargetAgentID != "agt_b" {
-		t.Fatalf("create = %d %s, input=%+v", created.Code, created.Body.String(), interactions.input)
+	if created.Code != http.StatusCreated || requests.input.TeamspaceID != "tsp_1" || requests.input.TargetAgentID != "agt_b" {
+		t.Fatalf("create = %d %s, input=%+v", created.Code, created.Body.String(), requests.input)
 	}
 	chosen := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-requests",
 		`{"target_agent_id":"agt_b","teamspace_id":"tsp_1","approval":"agent","purpose":"Launch","task":"Review the plan."}`, bearer)
-	if chosen.Code != http.StatusBadRequest || errorCode(t, chosen) != "invalid_request" || interactions.creates != 1 {
-		t.Fatalf("a body choosing its approval = %d %s after %d creates, want 400 and no second create", chosen.Code, chosen.Body.String(), interactions.creates)
+	if chosen.Code != http.StatusBadRequest || errorCode(t, chosen) != "invalid_request" || requests.creates != 1 {
+		t.Fatalf("a body choosing its approval = %d %s after %d creates, want 400 and no second create", chosen.Code, chosen.Body.String(), requests.creates)
 	}
 }
 
@@ -119,5 +135,44 @@ func TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem(t *testing.T) {
 	}
 	if decided.Code != http.StatusOK || body.Status != interactions.StatusApproved || body.Approval != interactions.ApprovalOwner || body.TeamspaceID != "tsp_1" {
 		t.Fatalf("the member's own decision = %d %s, want 200 and an approved request held for its owner in tsp_1", decided.Code, decided.Body.String())
+	}
+}
+
+// TestEveryListingNarrowsByTeamspaceAndTheOtherMember: the new listing reads
+// both directions, the inbox and sent requests keep their own side, and all
+// three pass ?teamspace_id= and ?with_user= through, acting as the caller.
+func TestEveryListingNarrowsByTeamspaceAndTheOtherMember(t *testing.T) {
+	for path, box := range map[string]string{
+		"/v1/organizations/org_1/agent-requests":       interactions.BoxAll,
+		"/v1/organizations/org_1/agent-requests/inbox": interactions.BoxInbox,
+		"/v1/organizations/org_1/agent-requests/sent":  interactions.BoxSent,
+	} {
+		requests := &teamspaceInteractions{}
+		listed := serve(agentRequestServer(requests), http.MethodGet, path+"?teamspace_id=tsp_1&with_user=user_2&limit=5", "", bearer)
+		want := interactions.Query{Box: box, TeamspaceID: "tsp_1", WithUserID: "user_2", Limit: 5}
+		if listed.Code != http.StatusOK || requests.query != want {
+			t.Fatalf("GET %s = %d %s with query %+v, want 200 and %+v", path, listed.Code, listed.Body.String(), requests.query, want)
+		}
+		if actor := requests.actors[len(requests.actors)-1]; actor.UserID != "user_1" || actor.AgentID != "agt_primary" {
+			t.Fatalf("GET %s listed as %+v, want the caller's own primary agent", path, actor)
+		}
+	}
+}
+
+// TestAListingTheLedgerRefusesIsABadRequest: with the real ledger service
+// behind the API, a listing with the caller as the other member, or with an
+// id no teamspace could have, is the caller's mistake and never reaches the
+// ledger's storage.
+func TestAListingTheLedgerRefusesIsABadRequest(t *testing.T) {
+	requests, err := interactions.New(interactions.Config{Repository: &heldRequests{}, Directory: unusedDirectory{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := agentRequestServer(requests)
+	for _, query := range []string{"?with_user=user_1", "?teamspace_id=" + strings.Repeat("t", 129)} {
+		listed := serve(server, http.MethodGet, "/v1/organizations/org_1/agent-requests"+query, "", bearer)
+		if listed.Code != http.StatusBadRequest || errorCode(t, listed) != "invalid_request" {
+			t.Fatalf("GET agent-requests%s = %d %s, want 400 invalid_request", query, listed.Code, listed.Body.String())
+		}
 	}
 }

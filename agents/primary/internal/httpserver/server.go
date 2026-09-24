@@ -115,8 +115,7 @@ type AgentWorkflows interface {
 // a request held for its owner is decided.
 type AgentInteractions interface {
 	Create(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionCreateInput) (primaryagents.Interaction, error)
-	Inbox(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error)
-	Sent(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error)
+	List(context.Context, primaryagents.InteractionActor, interactions.Query) ([]primaryagents.Interaction, error)
 	Get(context.Context, primaryagents.InteractionActor, string) (primaryagents.Interaction, error)
 	DecideAsOwner(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error)
 	Respond(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionResponseInput) (primaryagents.Interaction, error)
@@ -280,6 +279,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/agent-workflows/{workflowID}/executions", server.listAgentWorkflowExecutions)
 	server.handle("GET /v1/organizations/{organizationID}/agent-workflow-executions/{executionID}", server.getAgentWorkflowExecution)
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests", server.createInteraction)
+	server.handle("GET /v1/organizations/{organizationID}/agent-requests", server.listAgentRequests)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/inbox", server.interactionInbox)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/sent", server.interactionSent)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/{requestID}", server.getInteraction)
@@ -395,15 +395,25 @@ func (server *Server) createInteraction(writer http.ResponseWriter, request *htt
 	writeJSON(writer, http.StatusCreated, created)
 }
 
+// listAgentRequests lists the requests the member's agents sent and were
+// sent, together.
+func (server *Server) listAgentRequests(writer http.ResponseWriter, request *http.Request) {
+	server.listInteractions(writer, request, interactions.BoxAll)
+}
+
 func (server *Server) interactionInbox(writer http.ResponseWriter, request *http.Request) {
-	server.listInteractions(writer, request, true)
+	server.listInteractions(writer, request, interactions.BoxInbox)
 }
 
 func (server *Server) interactionSent(writer http.ResponseWriter, request *http.Request) {
-	server.listInteractions(writer, request, false)
+	server.listInteractions(writer, request, interactions.BoxSent)
 }
 
-func (server *Server) listInteractions(writer http.ResponseWriter, request *http.Request, inbox bool) {
+// listInteractions lists one side of the member's requests, or both. Each
+// listing takes an optional ?teamspace_id= and ?with_user=, which together
+// are how a side conversation reads what two teammates asked each other in
+// one teamspace, as either of them.
+func (server *Server) listInteractions(writer http.ResponseWriter, request *http.Request, box string) {
 	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
 		return
@@ -416,13 +426,10 @@ func (server *Server) listInteractions(writer http.ResponseWriter, request *http
 	if !ok {
 		return
 	}
-	var listed []primaryagents.Interaction
-	var err error
-	if inbox {
-		listed, err = server.interactions.Inbox(request.Context(), interactionActorOf(member), limit)
-	} else {
-		listed, err = server.interactions.Sent(request.Context(), interactionActorOf(member), limit)
-	}
+	query := request.URL.Query()
+	listed, err := server.interactions.List(request.Context(), interactionActorOf(member), interactions.Query{
+		Box: box, TeamspaceID: query.Get("teamspace_id"), WithUserID: query.Get("with_user"), Limit: limit,
+	})
 	if err != nil {
 		server.handleError(writer, request, err)
 		return

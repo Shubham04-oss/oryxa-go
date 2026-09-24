@@ -90,17 +90,46 @@ func (store *Store) Get(ctx context.Context, id string) (agents.Interaction, err
 	return request, nil
 }
 
+// Inbox lists the requests addressed to one member's agents, newest first.
 func (store *Store) Inbox(ctx context.Context, organizationID, userID string, limit int) ([]agents.Interaction, error) {
-	return store.list(ctx, `organization_id=$1 AND target_user_id=$2`, organizationID, userID, limit)
+	return store.List(ctx, organizationID, userID, Query{Box: BoxInbox, Limit: limit})
 }
 
+// Sent lists the requests one member's agents sent, newest first.
 func (store *Store) Sent(ctx context.Context, organizationID, userID string, limit int) ([]agents.Interaction, error) {
-	return store.list(ctx, `organization_id=$1 AND requester_user_id=$2`, organizationID, userID, limit)
+	return store.List(ctx, organizationID, userID, Query{Box: BoxSent, Limit: limit})
 }
 
-func (store *Store) list(ctx context.Context, where, organizationID, userID string, limit int) ([]agents.Interaction, error) {
+// List selects, newest first, the requests of one organization that userID
+// is a party to: as the target (BoxInbox), the requester (BoxSent) or either
+// (BoxAll), optionally only with one other member and only in one teamspace.
+func (store *Store) List(ctx context.Context, organizationID, userID string, query Query) ([]agents.Interaction, error) {
+	args := []any{organizationID, userID}
+	asTarget, asRequester := `target_user_id=$2`, `requester_user_id=$2`
+	if query.WithUserID != "" {
+		args = append(args, query.WithUserID)
+		asTarget += ` AND requester_user_id=$3`
+		asRequester += ` AND target_user_id=$3`
+	}
+	var parties string
+	switch query.Box {
+	case BoxInbox:
+		parties = asTarget
+	case BoxSent:
+		parties = asRequester
+	case BoxAll:
+		parties = `(` + asTarget + `) OR (` + asRequester + `)`
+	default:
+		return nil, fmt.Errorf("%w: unknown listing %q", ErrInvalid, query.Box)
+	}
+	where := `organization_id=$1 AND (` + parties + `)`
+	if query.TeamspaceID != "" {
+		args = append(args, query.TeamspaceID)
+		where += fmt.Sprintf(` AND teamspace_id=$%d`, len(args))
+	}
+	args = append(args, clamp(query.Limit))
 	rows, err := store.database.Pool.Query(ctx, `SELECT `+selectColumns+` FROM agents_primary.agent_interactions
-		WHERE `+where+` ORDER BY updated_at DESC, id DESC LIMIT $3`, organizationID, userID, limit)
+		WHERE `+where+fmt.Sprintf(` ORDER BY updated_at DESC, id DESC LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list agent requests: %w", err)
 	}

@@ -58,12 +58,34 @@ const (
 	maxListItems    = 32
 )
 
+const (
+	// BoxInbox lists the requests addressed to the member's agents.
+	BoxInbox = "inbox"
+	// BoxSent lists the requests the member's agents sent.
+	BoxSent = "sent"
+	// BoxAll lists both, which is how either party reads the requests
+	// between two members.
+	BoxAll = "all"
+)
+
+// Query narrows a listing of the requests a member's agent may read. Every
+// field but Box is optional.
+type Query struct {
+	Box string
+	// TeamspaceID keeps only the requests made in that teamspace.
+	TeamspaceID string
+	// WithUserID keeps only the requests whose other party is that member.
+	WithUserID string
+	Limit      int
+}
+
 // Repository is the transactional interaction ledger. Store implements it.
 type Repository interface {
 	Create(context.Context, agents.Interaction, string) (agents.Interaction, error)
 	Get(context.Context, string) (agents.Interaction, error)
-	Inbox(context.Context, string, string, int) ([]agents.Interaction, error)
-	Sent(context.Context, string, string, int) ([]agents.Interaction, error)
+	// List selects, newest first, the requests of one organization that one
+	// member is a party to, as the query narrows them.
+	List(context.Context, string, string, Query) ([]agents.Interaction, error)
 	Decide(context.Context, string, agents.InteractionDecisionInput, time.Time) (agents.Interaction, error)
 	Respond(context.Context, string, agents.InteractionResponseInput, time.Time) (agents.Interaction, error)
 }
@@ -205,25 +227,34 @@ func (service *Service) approval(ctx context.Context, actor agents.InteractionAc
 }
 
 func (service *Service) Inbox(ctx context.Context, actor agents.InteractionActor, limit int) ([]agents.Interaction, error) {
-	if err := validateActor(actor); err != nil {
-		return nil, err
-	}
-	requests, err := service.repository.Inbox(ctx, actor.OrganizationID, actor.UserID, clamp(limit))
-	if err == nil && actor.AgentKind != "primary" {
-		requests = filterRequests(requests, func(request agents.Interaction) bool { return request.Target.AgentID == actor.AgentID })
-	}
-	return service.views(requests), err
+	return service.List(ctx, actor, Query{Box: BoxInbox, Limit: limit})
 }
 
 func (service *Service) Sent(ctx context.Context, actor agents.InteractionActor, limit int) ([]agents.Interaction, error) {
+	return service.List(ctx, actor, Query{Box: BoxSent, Limit: limit})
+}
+
+// List returns, newest first, the requests the actor may read that the query
+// selects. A request is only ever listed to its two parties: the member who
+// asked and the member asked, as canRead has it, and a specialist sees only
+// the requests it sent or was sent. Asked as either teammate with the other
+// as WithUserID, it is the requests between them in both directions.
+func (service *Service) List(ctx context.Context, actor agents.InteractionActor, query Query) ([]agents.Interaction, error) {
 	if err := validateActor(actor); err != nil {
 		return nil, err
 	}
-	requests, err := service.repository.Sent(ctx, actor.OrganizationID, actor.UserID, clamp(limit))
-	if err == nil && actor.AgentKind != "primary" {
-		requests = filterRequests(requests, func(request agents.Interaction) bool { return request.Requester.AgentID == actor.AgentID })
+	query = cleanQuery(query)
+	if err := validateQuery(actor, query); err != nil {
+		return nil, err
 	}
-	return service.views(requests), err
+	query.Limit = clamp(query.Limit)
+	requests, err := service.repository.List(ctx, actor.OrganizationID, actor.UserID, query)
+	if err != nil {
+		return nil, err
+	}
+	return service.views(filterRequests(requests, func(request agents.Interaction) bool {
+		return listed(actor, query, request)
+	})), nil
 }
 
 func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, id string) (agents.Interaction, error) {
@@ -467,6 +498,50 @@ func canRead(actor agents.InteractionActor, request agents.Interaction) bool {
 	}
 	return request.Requester.UserID == actor.UserID && request.Requester.AgentID == actor.AgentID ||
 		request.Target.UserID == actor.UserID && request.Target.AgentID == actor.AgentID
+}
+
+// listed is whether a request the repository selected belongs in the actor's
+// listing: on the side of it the query names, within its teamspace and with
+// its other member, and readable by the actor. It restates the query, so a
+// listing never rests on the repository alone.
+func listed(actor agents.InteractionActor, query Query, request agents.Interaction) bool {
+	if request.OrganizationID != actor.OrganizationID || !canRead(actor, request) ||
+		query.TeamspaceID != "" && request.TeamspaceID != query.TeamspaceID {
+		return false
+	}
+	asTarget := request.Target.UserID == actor.UserID && (actor.AgentKind == "primary" || request.Target.AgentID == actor.AgentID) &&
+		(query.WithUserID == "" || request.Requester.UserID == query.WithUserID)
+	asRequester := request.Requester.UserID == actor.UserID && (actor.AgentKind == "primary" || request.Requester.AgentID == actor.AgentID) &&
+		(query.WithUserID == "" || request.Target.UserID == query.WithUserID)
+	switch query.Box {
+	case BoxInbox:
+		return asTarget
+	case BoxSent:
+		return asRequester
+	default:
+		return asTarget || asRequester
+	}
+}
+
+func cleanQuery(query Query) Query {
+	query.Box = strings.ToLower(strings.TrimSpace(query.Box))
+	query.TeamspaceID = strings.TrimSpace(query.TeamspaceID)
+	query.WithUserID = strings.TrimSpace(query.WithUserID)
+	return query
+}
+
+func validateQuery(actor agents.InteractionActor, query Query) error {
+	switch {
+	case query.Box != BoxInbox && query.Box != BoxSent && query.Box != BoxAll:
+		return fmt.Errorf("%w: a listing is the inbox, the sent requests, or all of them", ErrInvalid)
+	case !validID(query.TeamspaceID):
+		return fmt.Errorf("%w: teamspace_id must be an id of at most 128 characters", ErrInvalid)
+	case !validID(query.WithUserID):
+		return fmt.Errorf("%w: with_user must be a member id of at most 128 characters", ErrInvalid)
+	case query.WithUserID != "" && query.WithUserID == actor.UserID:
+		return fmt.Errorf("%w: with_user must name another member, since a request is always between two", ErrInvalid)
+	}
+	return nil
 }
 
 func filterRequests(requests []agents.Interaction, keep func(agents.Interaction) bool) []agents.Interaction {

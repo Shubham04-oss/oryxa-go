@@ -336,6 +336,10 @@ var authzRoutes = []authzRoute{
 		path: "/v1/organizations/org_1/agent-requests", body: "{}", malformedBody: unknownField, identity: lastInteractionActor,
 	},
 	{
+		pattern: "GET /v1/organizations/{organizationID}/agent-requests", method: http.MethodGet,
+		path: "/v1/organizations/org_1/agent-requests?teamspace_id=tsp_other&with_user=user_other", malformedQuery: "&limit=abc", identity: lastInteractionActor,
+	},
+	{
 		pattern: "GET /v1/organizations/{organizationID}/agent-requests/inbox", method: http.MethodGet,
 		path: "/v1/organizations/org_1/agent-requests/inbox", malformedQuery: "?limit=abc", identity: lastInteractionActor,
 	},
@@ -449,8 +453,8 @@ var publicRoutePatterns = map[string]string{
 // through the full sweep below) or be named in publicRoutePatterns with a
 // reason. A future route with neither fails this test, on purpose.
 func TestEveryServerPatternIsAuthorizationTested(t *testing.T) {
-	if len(authzRoutes) != 55 {
-		t.Fatalf("authzRoutes has %d entries, want 55 - update this test if a route was intentionally added or removed", len(authzRoutes))
+	if len(authzRoutes) != 56 {
+		t.Fatalf("authzRoutes has %d entries, want 56 - update this test if a route was intentionally added or removed", len(authzRoutes))
 	}
 	covered := map[string]bool{}
 	for _, row := range authzRoutes {
@@ -601,8 +605,8 @@ func TestEveryRouteWithInputRefusesMalformedInputWith400(t *testing.T) {
 			}
 		})
 	}
-	if tested != 31 {
-		t.Fatalf("tested %d routes for malformed input, want 31 - a route gained or lost a body/limit/version without updating this expectation", tested)
+	if tested != 32 {
+		t.Fatalf("tested %d routes for malformed input, want 32 - a route gained or lost a body/limit/version without updating this expectation", tested)
 	}
 }
 

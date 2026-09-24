@@ -2,8 +2,10 @@ package interactions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,5 +164,75 @@ func TestARequestKeepsItsTeamspaceAndApproval(t *testing.T) {
 	unknown.Approval = "anyone"
 	if _, err := store.Create(ctx, unknown, "unknown"); err == nil {
 		t.Fatal("the ledger stored an approval that is neither agent nor owner")
+	}
+}
+
+// TestTheLedgerListsTheRequestsBetweenTwoMembersInATeamspace: the store's own
+// selection, newest first, for each way a listing is narrowed.
+func TestTheLedgerListsTheRequestsBetweenTwoMembersInATeamspace(t *testing.T) {
+	database, store := openInteractionStore(t)
+	ctx := context.Background()
+	organizationID := testOrganization(t, database)
+	start := time.Now().UTC().Truncate(time.Microsecond)
+	for index, seed := range []struct{ id, requester, target, teamspaceID string }{
+		{"ab_room", "user_a", "user_b", "tsp_1"},
+		{"ba_room", "user_b", "user_a", "tsp_1"},
+		{"ab_outside", "user_a", "user_b", ""},
+		{"ac_room", "user_a", "user_c", "tsp_1"},
+		{"bc_room", "user_b", "user_c", "tsp_1"},
+		{"ab_other_room", "user_a", "user_b", "tsp_2"},
+	} {
+		request := storedRequest(organizationID, organizationID+"_"+seed.id, seed.requester, seed.target, start.Add(time.Duration(index)*time.Second))
+		request.TeamspaceID = seed.teamspaceID
+		if _, err := store.Create(ctx, request, seed.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Other organizations' requests between the same members never appear.
+	elsewhere := storedRequest(organizationID+"_elsewhere", organizationID+"_elsewhere", "user_a", "user_b", start)
+	elsewhere.TeamspaceID = "tsp_1"
+	if _, err := store.Create(ctx, elsewhere, "elsewhere"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM agents_primary.agent_interactions WHERE organization_id=$1`, organizationID+"_elsewhere")
+		_, _ = database.Pool.Exec(context.Background(), `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organizationID+"_elsewhere")
+	})
+
+	ids := func(userID string, query Query) string {
+		t.Helper()
+		listed, err := store.List(ctx, organizationID, userID, query)
+		if err != nil {
+			t.Fatalf("List(%s, %+v): %v", userID, query, err)
+		}
+		var names []string
+		for _, request := range listed {
+			names = append(names, strings.TrimPrefix(request.ID, organizationID+"_"))
+		}
+		return fmt.Sprint(names)
+	}
+	for _, testCase := range []struct {
+		name, userID string
+		query        Query
+		want         string
+	}{
+		{"A with B in tsp_1", "user_a", Query{Box: BoxAll, TeamspaceID: "tsp_1", WithUserID: "user_b"}, "[ba_room ab_room]"},
+		{"B with A in tsp_1", "user_b", Query{Box: BoxAll, TeamspaceID: "tsp_1", WithUserID: "user_a"}, "[ba_room ab_room]"},
+		{"C with A in tsp_1", "user_c", Query{Box: BoxAll, TeamspaceID: "tsp_1", WithUserID: "user_a"}, "[ac_room]"},
+		{"A's inbox in tsp_1", "user_a", Query{Box: BoxInbox, TeamspaceID: "tsp_1"}, "[ba_room]"},
+		{"A's sent requests in tsp_1", "user_a", Query{Box: BoxSent, TeamspaceID: "tsp_1"}, "[ac_room ab_room]"},
+		{"A's sent requests to B", "user_a", Query{Box: BoxSent, WithUserID: "user_b"}, "[ab_other_room ab_outside ab_room]"},
+		{"everything A is party to", "user_a", Query{Box: BoxAll}, "[ab_other_room ac_room ab_outside ba_room ab_room]"},
+		{"the newest two", "user_a", Query{Box: BoxAll, Limit: 2}, "[ab_other_room ac_room]"},
+	} {
+		if got := ids(testCase.userID, testCase.query); got != testCase.want {
+			t.Errorf("%s = %s, want %s", testCase.name, got, testCase.want)
+		}
+	}
+	if inbox, err := store.Inbox(ctx, organizationID, "user_b", 20); err != nil || len(inbox) != 3 {
+		t.Fatalf("B's inbox = %+v, %v; want the three A addressed to B", inbox, err)
+	}
+	if _, err := store.List(ctx, organizationID, "user_a", Query{Box: "everything"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("an unknown listing: error=%v, want ErrInvalid", err)
 	}
 }
