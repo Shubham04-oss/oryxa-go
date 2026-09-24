@@ -179,8 +179,9 @@ not permission to copy every incidental value into a new component.
   - The composer is the shared pill with a smaller pill inside it, before the
     field, naming whom the message goes to: the teammate (the default), "Ask
     my agent", or one of the teammate's agents, picked from a small menu. The
-    line under the field says who approves. Asking an agent is for that one
-    message; the next goes to the teammate again.
+    line under the field says who approves, or that the member's own agent
+    is still answering (a second question waits for it). Asking an agent is
+    for that one message; the next goes to the teammate again.
   - The member's own agent's confirmations show to them alone, as in the
     specialist chat; the teammate sees only that it waits. Answers and
     approvals that land in place are said aloud.
