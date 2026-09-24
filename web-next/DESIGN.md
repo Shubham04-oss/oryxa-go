@@ -100,9 +100,13 @@ not permission to copy every incidental value into a new component.
   tool calls folded into one muted status row; confirmations as small cards
   with Decline and Approve pills (several waiting are answered together);
   files as a thumbnail or a file chip; a failed run as one muted error line,
-  and an answer cut short marked "Interrupted". In the agent panel one muted
-  row above it names the conversation, with a quiet icon button that starts a
-  new one; no history list until one is designed.
+  and an answer cut short marked "Interrupted". A specialist's answer is its
+  work result's summary, with one muted line under it for the rest (needs
+  your input or blocked, the tools it used, the files it saved, the hand-offs
+  it suggests); while it works, one muted pulsing line says so. In the agent
+  panel one muted row above it names the conversation, with a quiet icon
+  button that starts a new one; a specialist's focused view carries the same
+  in its presence row. No history list until one is designed.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header

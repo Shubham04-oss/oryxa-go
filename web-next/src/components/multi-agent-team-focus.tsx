@@ -55,7 +55,7 @@ export function AgentTeamFocus({
   teamId: string
   onBack: () => void
   onOpen: (target: AgentsFocusTarget) => void
-  /** Opens a specialist's chat in the agent panel, once it has one. */
+  /** Opens a specialist's chat in the agent panel (the shell's `onChat`). */
   onChat?: (agentId: string) => void
 }) {
   const queryClient = useQueryClient()

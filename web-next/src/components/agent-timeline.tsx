@@ -13,6 +13,10 @@ import {
   ShieldQuestion,
 } from "lucide-react"
 import { ApiError } from "@/lib/api/client"
+import type {
+  SpecialistResult,
+  SpecialistResultStatus,
+} from "@/lib/specialists/result"
 import { artifactContentUrl, fetchArtifactLink } from "@/lib/threads/client"
 import type { ConfirmationAnswer } from "@/lib/threads/client"
 import {
@@ -145,6 +149,41 @@ export function AgentMarkdown({ text }: { text: string }) {
   )
 }
 
+const resultStatusWords: Record<SpecialistResultStatus, string | undefined> = {
+  completed: undefined,
+  needs_input: "Needs your input",
+  blocked: "Blocked",
+}
+
+/**
+ * A specialist's work result under its answer, in one quiet line: whether
+ * it needs the member or is blocked, the tools it used, the files it saved
+ * and the hand-offs it suggests (suggestions only: nothing ran). The
+ * answer itself is the result's summary, shown above it.
+ */
+function WorkResult({ result }: { result: SpecialistResult }) {
+  const tools = [
+    ...new Set(result.tools_used.map(humanizeToolName).filter(Boolean)),
+  ]
+  const files = [
+    ...new Set(result.artifacts.map(artifactFileName).filter(Boolean)),
+  ]
+  const words = [
+    resultStatusWords[result.status],
+    tools.length > 0 ? `Used ${tools.join(", ")}` : undefined,
+    files.length > 0 ? `Saved ${files.join(", ")}` : undefined,
+    ...result.handoffs.map(
+      (handoff) => `Suggests ${handoff.target}: ${handoff.request}`
+    ),
+  ].filter((part): part is string => Boolean(part))
+  if (words.length === 0) return null
+  return (
+    <p className="workspace-agent-result" data-status={result.status}>
+      {words.join(" · ")}
+    </p>
+  )
+}
+
 function MessageBlock({
   entry,
   running,
@@ -167,6 +206,21 @@ function MessageBlock({
   const streaming = entry.state === "streaming" && running
   const interrupted =
     entry.state === "interrupted" || (entry.state === "streaming" && !running)
+  // A draft with no words yet is the specialist chat's progress marker: the
+  // conversation says the agent is working instead of showing an empty
+  // bubble, and one cut short says only that.
+  if (!entry.text && !entry.error) {
+    if (!interrupted) return null
+    return (
+      <div
+        className="workspace-agent-message"
+        data-from="agent"
+        data-state="interrupted"
+      >
+        <p className="workspace-agent-note">Interrupted</p>
+      </div>
+    )
+  }
   // Sub-agents the primary agent hands the turn to write under their own
   // names; the primary agent's own answers need no label in its own tab.
   const labelled = Boolean(entry.author) && entry.author !== agentName
@@ -181,6 +235,7 @@ function MessageBlock({
     >
       {labelled && <p className="workspace-agent-author">{entry.author}</p>}
       <AgentMarkdown text={entry.text} />
+      {entry.result && <WorkResult result={entry.result} />}
       {entry.error && <p className="workspace-agent-note">{entry.error}</p>}
       {interrupted && <p className="workspace-agent-note">Interrupted</p>}
     </div>
@@ -389,6 +444,21 @@ function ArtifactItem({
 }
 
 /**
+ * A file a run kept, where Go offers no route to read it (a specialist's
+ * conversation): its name only, never a link that could not open.
+ */
+function ArtifactName({ entry }: { entry: ArtifactEntry }) {
+  return (
+    <div className="workspace-agent-artifact">
+      <span className="workspace-agent-artifact-file" data-link="false">
+        <FileText size={15} strokeWidth={1.7} aria-hidden="true" />
+        <span>{artifactFileName(entry.name)}</span>
+      </span>
+    </div>
+  )
+}
+
+/**
  * A conversation's entries, as `buildTimeline` makes them: the member's
  * messages, the agent's answers in Markdown (a growing draft while one
  * streams), tool calls folded into quiet rows, confirmations to answer,
@@ -419,7 +489,12 @@ export function AgentTimeline({
   /** Every waiting confirmation's answer, together: Go wants them in one run. */
   onAnswer: (answers: ConfirmationAnswer[]) => void
   organizationId: string
-  threadId: string
+  /**
+   * The primary agent's thread, whose files open through its artifact
+   * route. A specialist's conversation has no such route in Go, so without
+   * it files are shown by name only.
+   */
+  threadId?: string
 }) {
   const [choices, setChoices] = useState<Record<string, boolean>>({})
   const display = groupToolActivity(entries)
@@ -501,12 +576,16 @@ export function AgentTimeline({
       }
       case "artifact":
         blocks.push(
-          <ArtifactItem
-            key={entry.key}
-            entry={entry}
-            organizationId={organizationId}
-            threadId={threadId}
-          />
+          threadId ? (
+            <ArtifactItem
+              key={entry.key}
+              entry={entry}
+              organizationId={organizationId}
+              threadId={threadId}
+            />
+          ) : (
+            <ArtifactName key={entry.key} entry={entry} />
+          )
         )
         break
       case "run_failed":

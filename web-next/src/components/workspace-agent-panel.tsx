@@ -13,14 +13,25 @@ import { AgentChat } from "./agent-chat"
 import { AgentComposer } from "./agent-composer"
 import { AgentConversation } from "./agent-conversation"
 import { AgentSwitcher, FALLBACK_AGENT_NAME } from "./agent-switcher"
+import type { AgentSwitcherEntry } from "./agent-switcher"
+import { SpecialistChat } from "./specialist-chat"
+import type { ChatSpecialist } from "./specialist-chat"
 import { IdentityAvatar } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
-import { primaryAgent } from "@/lib/agents/policy"
+import type { ManagedAgent } from "@/lib/agents/managed-agents"
+import { primaryAgent, specialistAgents } from "@/lib/agents/policy"
 import { agentsQueryOptions } from "@/lib/agents/queries"
 import { cn } from "@/lib/utils"
 
 type AgentPanelTab = "agents" | "dms" | "teams"
+
+/**
+ * The shell asking the panel to chat with one of the member's specialists
+ * (Agents mode's `onChat`): the Agents tab comes forward with it selected.
+ * Each request is a new object, and each is honoured once.
+ */
+export type AgentPanelChatRequest = { agentId: string }
 
 /** Avatar seed for the primary agent until its id has loaded. */
 const PRIMARY_AGENT_SEED = "primary-agent"
@@ -51,14 +62,27 @@ export function WorkspaceAgentPanel({
   onExpand,
   onCollapse,
   organizationId,
+  chatRequest,
 }: {
   expanded: boolean
   onExpand: () => void
   onCollapse: () => void
   /** The signed-in member's organization; without one the chat stays off. */
   organizationId?: string
+  /** The latest request to chat with a specialist here; the shell expands the panel with it. */
+  chatRequest?: AgentPanelChatRequest | null
 }) {
   const [tab, setTab] = useState<AgentPanelTab>("agents")
+  // Whom the Agents tab talks to: one of the member's specialists by id,
+  // or null for their primary agent.
+  const [agentId, setAgentId] = useState<string | null>(null)
+  const [answeredRequest, setAnsweredRequest] =
+    useState<AgentPanelChatRequest | null>(null)
+  if (chatRequest && chatRequest !== answeredRequest) {
+    setAnsweredRequest(chatRequest)
+    setTab("agents")
+    setAgentId(chatRequest.agentId)
+  }
   const [composing, setComposing] = useState(false)
   const visibleHeight = useVisibleHeight(expanded && composing)
   const tabRefs = useRef<
@@ -93,6 +117,12 @@ export function WorkspaceAgentPanel({
     focusTabOnExpand.current = false
     tabRefs.current[tab]?.focus()
   }, [expanded, tab])
+
+  // A chat asked for elsewhere (a team member's Chat button) brings the
+  // Agents tab forward, and focus with it, as the rail's buttons do.
+  useEffect(() => {
+    if (chatRequest) tabRefs.current.agents?.focus()
+  }, [chatRequest])
 
   function openTab(next: AgentPanelTab) {
     setTab(next)
@@ -219,6 +249,9 @@ export function WorkspaceAgentPanel({
             {item.key === "agents" ? (
               <AgentsView
                 organizationId={organizationId}
+                agents={agents.data}
+                agentId={agentId}
+                onSelectAgent={setAgentId}
                 agentName={agentName}
                 agentSeed={agentSeed}
                 onComposingChange={setComposing}
@@ -255,28 +288,77 @@ export function WorkspaceAgentPanel({
   )
 }
 
+/**
+ * The Agents tab: the quick switch between the member's own agents (their
+ * primary agent and their active specialists, DESIGN.md §2), and the chat
+ * with the one in use: the primary agent's thread chat, or a specialist's
+ * chat object (REALTIME.md).
+ */
 function AgentsView({
   organizationId,
+  agents,
+  agentId,
+  onSelectAgent,
   agentName,
   agentSeed,
   onComposingChange,
 }: {
   organizationId?: string
+  /** The member's agents, once read. */
+  agents?: ManagedAgent[]
+  /** The specialist in use, or null for the primary agent. */
+  agentId: string | null
+  onSelectAgent: (agentId: string | null) => void
   agentName?: string
   agentSeed: string
   onComposingChange: (composing: boolean) => void
 }) {
+  const specialists = agents ? specialistAgents(agents) : []
+  const selectedId = agentId === agentSeed ? null : agentId
+  const listed = selectedId
+    ? specialists.find((agent) => agent.id === selectedId)
+    : undefined
+  // The specialist in use as last listed, so one paused or deleted
+  // elsewhere keeps its name and place while its chat says what happened.
+  const [lastListed, setLastListed] = useState<ManagedAgent>()
+  if (listed && listed !== lastListed) setLastListed(listed)
+  const inUse: ChatSpecialist | undefined = selectedId
+    ? (listed ??
+      (lastListed?.id === selectedId
+        ? lastListed
+        : { id: selectedId, name: "Specialist", status: "active" }))
+    : undefined
+  const entries: AgentSwitcherEntry[] = [
+    { id: agentSeed, name: agentName, avatarSeed: agentSeed },
+    ...specialists
+      .filter((agent) => agent.status === "active" || agent.id === selectedId)
+      .map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        avatarSeed: agent.id,
+      })),
+    ...(inUse && !listed
+      ? [{ id: inUse.id, name: inUse.name, avatarSeed: inUse.id }]
+      : []),
+  ]
+
   return (
     <>
-      {/* Only agents whose chat works are offered: the primary agent, until
-          specialists have their own chat object (REALTIME.md), so the row
-          stays hidden. */}
       <AgentSwitcher
-        agents={[{ id: agentSeed, name: agentName, avatarSeed: agentSeed }]}
-        selectedId={agentSeed}
-        onSelect={() => {}}
+        agents={entries}
+        selectedId={selectedId ?? agentSeed}
+        onSelect={(id) => onSelectAgent(id === agentSeed ? null : id)}
       />
-      {organizationId ? (
+      {organizationId && inUse ? (
+        <SpecialistChat
+          key={inUse.id}
+          layout="panel"
+          organizationId={organizationId}
+          specialist={inUse}
+          missing={agents !== undefined && !listed}
+          onComposingChange={onComposingChange}
+        />
+      ) : organizationId ? (
         <AgentChat
           organizationId={organizationId}
           agentName={agentName}

@@ -22,6 +22,17 @@ import {
 import type { FakeAgentsBackend } from "./agents-fake-backend"
 import type { Session } from "@/lib/auth/client"
 
+// A specialist's focused view holds its chat object's socket; the Agents
+// SDK stands in (src/test/room-socket.ts, src/test/agent-chat.ts).
+vi.mock(
+  "agents/react",
+  async () => (await import("@/test/room-socket")).agentsReact
+)
+vi.mock(
+  "@cloudflare/ai-chat/react",
+  async () => (await import("@/test/agent-chat")).aiChatReact
+)
+
 const session: Session = {
   user: { id: VIEWER, email: "member@example.com", display_name: "Member" },
   organizations: [{ id: ORG, name: "Simulated Org", slug: "sim" }],
@@ -141,15 +152,18 @@ describe("Specialists", () => {
       },
     ])
     expect(screen.getByText("Specialist · Active")).toBeTruthy()
-    // No chat is faked before the specialist's chat object exists.
+    // Its conversation column is its chat, starting empty.
+    const column = screen.getByRole("region", {
+      name: "Chat with Pipeline reviewer",
+    })
     expect(
-      screen.getByText(
-        "Chat with Pipeline reviewer opens in the agent panel soon."
-      )
+      await within(column).findByText("Ask anything to start a conversation.")
     ).toBeTruthy()
     expect(
-      screen.queryByRole("textbox", { name: /Message Pipeline reviewer/ })
-    ).toBeNull()
+      within(column).getByRole("textbox", {
+        name: "Message Pipeline reviewer",
+      })
+    ).toBeTruthy()
   })
 
   it("keeps the form open with the name refused when it is taken", async () => {
@@ -250,6 +264,12 @@ describe("Specialists", () => {
         path: `/v1/organizations/${ORG}/agents/${scout.id}`,
         body: { status: "active" },
       },
+      // Its chat first: once Go forgets it, its chat can't be reached.
+      {
+        method: "DELETE",
+        path: `/agents/specialist-chat-agent/${ORG}~${scout.id}`,
+        body: undefined,
+      },
       {
         method: "DELETE",
         path: `/v1/organizations/${ORG}/agents/${scout.id}`,
@@ -298,9 +318,10 @@ describe("Specialists", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Open Loner" }))
     fireEvent.click(workPanel("Loner").getByRole("button", { name: "Delete…" }))
     fireEvent.click(screen.getByRole("button", { name: "Delete specialist" }))
+    // Only Go knew, so its chat had already been cleared.
     expect(
       await screen.findByText(
-        "Loner is on a team or in a teamspace. Take it off first."
+        "Loner is on a team or in a teamspace. Take it off first. Its chat has started over."
       )
     ).toBeTruthy()
     expect(backend.state.agents.map((entry) => entry.name)).toContain("Loner")

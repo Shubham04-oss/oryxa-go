@@ -307,22 +307,7 @@
 .workspace-agents-members li > button:hover strong { text-decoration: underline; text-underline-offset: 2px; }
 .workspace-agents-members + .workspace-agents-note { margin-top: 14px; }
 
-/* A specialist's chat column until its chat opens in the agent panel. */
-.workspace-agents-chat {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  min-height: 0;
-  padding: 24px 12px;
-  text-align: center;
-}
-.workspace-agents-chat p { max-width: 280px; margin: 0; color: #929292; font-size: 12px; line-height: 1.5; }
-.workspace-agents-chat .workspace-agents-chat-avatar .workspace-avatar { width: 56px; height: 56px; }
-
-/* A team's conversation */
+/* A team's conversation, and a specialist's chat in its focused view */
 .workspace-agents-room .workspace-agent-conversation { padding: 12px 4px 18px 0; }
 .workspace-agents-seats { gap: 0; }
 .workspace-agents-seat {

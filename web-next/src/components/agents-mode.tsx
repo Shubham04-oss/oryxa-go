@@ -105,9 +105,10 @@ export function AgentsFocus({
   onBack: () => void
   onOpen: (target: AgentsFocusTarget) => void
   /**
-   * The seam for chatting with a specialist through its Durable Object in
-   * the agent panel. Until the shell passes it, the views say the chat is
-   * coming rather than offering one.
+   * Opens the agent panel on the Agents tab with this specialist's chat: a
+   * team's Members tab offers it for each active specialist. Without it no
+   * Chat button is offered. A specialist's own view needs none: its
+   * conversation column is that chat.
    */
   onChat?: (agentId: string) => void
 }) {
@@ -118,7 +119,6 @@ export function AgentsFocus({
       agentId={target.agentId}
       onBack={onBack}
       onOpen={onOpen}
-      onChat={onChat}
     />
   ) : (
     <AgentTeamFocus

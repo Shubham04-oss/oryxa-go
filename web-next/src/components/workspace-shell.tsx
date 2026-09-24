@@ -30,6 +30,7 @@ import { previewSharedSpaces, sharedSpacesOf } from "./people-spaces"
 import { IdentityAvatar, people, TeamspaceAvatar } from "./workspace-avatar"
 import { WorkspaceTools } from "./workspace-tools"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
+import type { AgentPanelChatRequest } from "./workspace-agent-panel"
 import { getSharedPeople, PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import { useTeamspaces } from "@/hooks/use-teamspaces"
@@ -147,6 +148,9 @@ export function WorkspaceShell({
   >({})
   const conversationListRef = useRef<HTMLDivElement>(null)
   const agentsMode = useAgentsMode()
+  const [chatRequest, setChatRequest] = useState<AgentPanelChatRequest | null>(
+    null
+  )
 
   const currentIdentity: AvatarIdentity = session
     ? {
@@ -294,6 +298,18 @@ export function WorkspaceShell({
     agentsMode.open(target)
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
+  }
+
+  /** Opens the agent panel on the Agents tab, talking to this specialist. */
+  function chatWith(agentId: string) {
+    expandAgentPanel()
+    setChatRequest({ agentId })
+  }
+
+  // Expanding the right panel collapses the left (DESIGN.md §2).
+  function expandAgentPanel() {
+    setLeftExpanded(false)
+    setRightExpanded(true)
   }
 
   function openTeamspace(id: string) {
@@ -583,6 +599,7 @@ export function WorkspaceShell({
             organizationId={selectedOrganization.id}
             onBack={agentsMode.close}
             onOpen={openWork}
+            onChat={chatWith}
           />
         ) : teamspaces.openId && selectedOrganization ? (
           <TeamspaceFocus
@@ -711,11 +728,9 @@ export function WorkspaceShell({
       <WorkspaceAgentPanel
         organizationId={session ? selectedOrganization?.id : undefined}
         expanded={rightExpanded}
-        onExpand={() => {
-          setLeftExpanded(false)
-          setRightExpanded(true)
-        }}
+        onExpand={expandAgentPanel}
         onCollapse={() => setRightExpanded(false)}
+        chatRequest={chatRequest}
       />
       {settingsOpen && (
         <WorkspaceSettings

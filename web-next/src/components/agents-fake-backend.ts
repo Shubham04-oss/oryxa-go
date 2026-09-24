@@ -4,7 +4,10 @@
 // the UI depends on: strict bodies, organization-wide agent names, team
 // rules (an active primary, active specialists, 1–16 members), deletes
 // refused while in use, and a team post that answers only after the
-// agents have (it stores the member's line first).
+// agents have (it stores the member's line first). It also answers the
+// Worker's side of each specialist's chat object (src/server.ts): its
+// stored transcript, and DELETE to start it over, both only for one of the
+// member's specialists.
 import type { AgentRequest } from "@/lib/agents/agent-requests"
 import type { AgentTeam, AgentTeamMessage } from "@/lib/agents/agent-teams"
 import type {
@@ -12,6 +15,9 @@ import type {
   WorkflowExecution,
 } from "@/lib/agents/agent-workflows"
 import type { ManagedAgent } from "@/lib/agents/managed-agents"
+import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
+import type { ThreadDetail } from "@/lib/threads/client"
+import type { Teamspace } from "@/lib/teamspaces/client"
 
 export const ORG = "org-1"
 export const VIEWER = "user-member"
@@ -99,6 +105,11 @@ type Seed = {
   workflows?: AgentWorkflow[]
   executions?: Record<string, WorkflowExecution[]>
   inbox?: AgentRequest[]
+  teamspaces?: Teamspace[]
+  /** Each specialist's chat object's stored transcript, by agent id. */
+  chats?: Record<string, ThreadChatMessage[]>
+  /** Each specialist's conversations in Go, by agent id. */
+  conversations?: Record<string, ThreadDetail[]>
 }
 
 type Call = { method: string; path: string; body?: unknown }
@@ -129,6 +140,9 @@ export function fakeAgentsBackend(seed: Seed = {}) {
     workflows: seed.workflows ?? [],
     executions: new Map(Object.entries(seed.executions ?? {})),
     inbox: seed.inbox ?? [],
+    teamspaces: seed.teamspaces ?? [],
+    chats: new Map(Object.entries(seed.chats ?? {})),
+    conversations: new Map(Object.entries(seed.conversations ?? {})),
   }
   const calls: Call[] = []
   const failures: Array<{
@@ -191,7 +205,7 @@ export function fakeAgentsBackend(seed: Seed = {}) {
   async function route(method: string, path: string, body: unknown) {
     const prefix = `/v1/organizations/${ORG}/`
     if (!path.startsWith(prefix)) return refuse(404, "not_found", "not found")
-    const [resource, id, sub] = path
+    const [resource, id, sub, subId] = path
       .slice(prefix.length)
       .split("?")[0]
       .split("/")
@@ -237,6 +251,23 @@ export function fakeAgentsBackend(seed: Seed = {}) {
       }
       const found = state.agents.find((entry) => entry.id === id)
       if (!found) return refuse(404, "not_found", "agent not found")
+      if (method === "GET" && !sub) return json(found)
+      if (method === "GET" && sub === "threads") {
+        const held = state.conversations.get(found.id) ?? []
+        if (!subId) {
+          return json({
+            threads: held.map(({ id: threadId, title, updated_at }) => ({
+              id: threadId,
+              title,
+              updated_at,
+            })),
+          })
+        }
+        const conversation = held.find((entry) => entry.id === subId)
+        return conversation
+          ? json(conversation)
+          : refuse(404, "not_found", "thread not found")
+      }
       if (method === "PATCH") {
         const extra = unknownField(body, [
           "name",
@@ -449,7 +480,37 @@ export function fakeAgentsBackend(seed: Seed = {}) {
     if (resource === "agent-requests" && method === "GET" && id === "inbox")
       return json({ requests: state.inbox })
 
+    if (resource === "teamspaces" && method === "GET" && !id)
+      return json({ teamspaces: state.teamspaces })
+
+    // The primary agent's conversations, for the agent panel's thread chat.
+    if (resource === "threads" && method === "GET" && !id)
+      return json({ threads: [] })
+
     return refuse(404, "not_found", "not found")
+  }
+
+  /**
+   * The Worker's side of a specialist's chat object: it answers only once
+   * Go says the specialist is the member's own (404 otherwise), then reads
+   * the stored transcript or, for DELETE, starts the chat over.
+   */
+  function chatRoute(method: string, name: string, read: boolean) {
+    const [organizationId, agentId] = name.split("~")
+    const found =
+      organizationId === ORG &&
+      state.agents.some(
+        (entry) => entry.id === agentId && entry.kind === "specialist"
+      )
+    if (!found) {
+      return refuse(404, "not_found", "This is not one of your specialists.")
+    }
+    if (read && method === "GET") return json(state.chats.get(agentId) ?? [])
+    if (!read && method === "DELETE") {
+      state.chats.set(agentId, [])
+      return new Response(null, { status: 204 })
+    }
+    return refuse(405, "method_not_allowed", "Method not allowed.")
   }
 
   const fetch = async (url: string, init: RequestInit = {}) => {
@@ -464,6 +525,18 @@ export function fakeAgentsBackend(seed: Seed = {}) {
     if (failure >= 0) {
       const [{ failure: answer }] = failures.splice(failure, 1)
       return refuse(answer.status, answer.code, answer.message)
+    }
+    const chat =
+      /^\/agents\/specialist-chat-agent\/([^/]+)(\/get-messages)?$/.exec(path)
+    if (chat) {
+      return chatRoute(method, decodeURIComponent(chat[1]), Boolean(chat[2]))
+    }
+    // Reading the session, as the chats do to refresh an expired cookie.
+    if (path === "/v1/auth/me") {
+      return json({
+        user: { id: VIEWER, email: "member@example.com" },
+        organizations: [],
+      })
     }
     return route(method, path, body)
   }
