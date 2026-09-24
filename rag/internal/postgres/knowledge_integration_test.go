@@ -102,6 +102,21 @@ func TestKnowledgeDocumentRemovalTimestampIsScopedAndMonotonic(t *testing.T) {
 	}
 }
 
+// The lock is released however the work under it ends, so a failed handler
+// never leaves the next delivery of the same document waiting.
+func TestKnowledgeDocumentLockIsReleasedWhenTheWorkFails(t *testing.T) {
+	store, ctx := openTestStore(t)
+	failure := errors.New("the handler failed")
+	if err := store.WithKnowledgeDocumentLock(ctx, "org_lock_fail", "doc_1", func() error { return failure }); !errors.Is(err, failure) {
+		t.Fatalf("WithKnowledgeDocumentLock = %v, want the handler's error", err)
+	}
+	again, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := store.WithKnowledgeDocumentLock(again, "org_lock_fail", "doc_1", func() error { return nil }); err != nil {
+		t.Fatalf("the lock was still held after the work failed: %v", err)
+	}
+}
+
 func TestKnowledgeDocumentLockSerializesTheSameDocument(t *testing.T) {
 	store, ctx := openTestStore(t)
 	entered := make(chan struct{})

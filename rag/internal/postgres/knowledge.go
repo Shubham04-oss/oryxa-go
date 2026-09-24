@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jmoiron/sqlx"
+
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 )
 
@@ -129,20 +131,11 @@ func (store *Store) RecordKnowledgeDocumentRemoval(ctx context.Context, organiza
 // Knowledge document across rag replicas. The lock is transaction-scoped and
 // released on commit or rollback; the work itself uses normal store calls.
 func (store *Store) WithKnowledgeDocumentLock(ctx context.Context, organizationID, knowledgeDocumentID string, run func() error) error {
-	tx, err := store.db.BeginTxx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin knowledge document lock: %w", err)
-	}
-	defer tx.Rollback()
-	key := organizationID + "/" + knowledgeDocumentID
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
-		return fmt.Errorf("lock knowledge document: %w", err)
-	}
-	if err := run(); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("release knowledge document lock: %w", err)
-	}
-	return nil
+	return store.inTx(ctx, func(tx *sqlx.Tx) error {
+		key := organizationID + "/" + knowledgeDocumentID
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, key); err != nil {
+			return fmt.Errorf("lock knowledge document: %w", err)
+		}
+		return run()
+	})
 }
