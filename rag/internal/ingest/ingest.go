@@ -40,9 +40,12 @@ type Store interface {
 	MarkDocumentReady(ctx context.Context, documentID string, chunkCount int, at time.Time, event domain.Event) error
 	MarkDocumentFailed(ctx context.Context, documentID, reason string, at time.Time, event domain.Event) error
 	ReleaseDocument(ctx context.Context, documentID string) error
-	// MarkKnowledgeBaseSubmitted is used only for a bedrock-kb corpus's
-	// documents; see indexKnowledgeBase.
-	MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, contentSHA256 string, at time.Time) error
+	// MarkKnowledgeBaseSubmitted and RequeueUnsyncedKnowledgeBaseDocuments
+	// are used only for a bedrock-kb corpus's documents; see
+	// indexKnowledgeBase and resyncKnowledgeBase. The first records
+	// knowledgebase.SyncMarker of a submission, or forgets one given "".
+	MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, marker string, at time.Time) error
+	RequeueUnsyncedKnowledgeBaseDocuments(ctx context.Context, limit int) (int64, error)
 	// RecheckDocumentAt leaves a document ingesting, claimable again at at,
 	// without counting the claim as an attempt.
 	RecheckDocumentAt(ctx context.Context, documentID string, at time.Time) error
@@ -64,6 +67,17 @@ const knowledgeBaseRecheck = 10 * time.Second
 // count as attempts, so without this such a document was polled forever; a
 // resubmission does count, so one that never finishes ends up failed.
 const knowledgeBaseStall = time.Hour
+
+// knowledgeBaseResync is how often the worker looks for ready documents that
+// were submitted to the knowledge base under an older sync marker — by the
+// build a rolling deploy is replacing, which still claims and finishes
+// documents until its last task stops — and puts them back in the queue.
+// knowledgeBaseResyncBatch bounds how many one look requeues; a full batch is
+// followed by another look straight away.
+const (
+	knowledgeBaseResync      = 5 * time.Minute
+	knowledgeBaseResyncBatch = 500
+)
 
 // Vectors routes a corpus to the store holding its vectors.
 type Vectors interface {
@@ -164,7 +178,11 @@ func New(store Store, vectors Vectors, embedders Embedders, knowledgeBase Knowle
 
 // Run works the queue until the context ends.
 func (pipeline *Pipeline) Run(ctx context.Context) {
+	var nextResync time.Time
 	for {
+		if pipeline.knowledgeBase != nil && !pipeline.now().Before(nextResync) {
+			nextResync = pipeline.resyncKnowledgeBase(ctx)
+		}
 		worked, err := pipeline.once(ctx)
 		if err != nil && ctx.Err() == nil {
 			pipeline.logger.ErrorContext(ctx, "claiming documents to index failed", "error", err)
@@ -184,6 +202,28 @@ func (pipeline *Pipeline) Run(ctx context.Context) {
 		case <-timer.C:
 		}
 	}
+}
+
+// resyncKnowledgeBase puts back in the queue the ready documents whose
+// knowledge base submission was recorded under an older sync marker, so they
+// are submitted again with everything this build writes, and returns when to
+// look again.
+func (pipeline *Pipeline) resyncKnowledgeBase(ctx context.Context) time.Time {
+	requeued, err := pipeline.store.RequeueUnsyncedKnowledgeBaseDocuments(ctx, knowledgeBaseResyncBatch)
+	if err != nil {
+		if ctx.Err() == nil {
+			pipeline.logger.ErrorContext(ctx, "looking for documents submitted to the knowledge base by an older build failed", "error", err)
+		}
+		return pipeline.now().Add(knowledgeBaseResync)
+	}
+	if requeued > 0 {
+		pipeline.logger.InfoContext(ctx, "requeued documents submitted to the knowledge base by an older build", "count", requeued)
+	}
+	if requeued >= knowledgeBaseResyncBatch {
+		// There may be more; look again on the next pass.
+		return time.Time{}
+	}
+	return pipeline.now().Add(knowledgeBaseResync)
 }
 
 func (pipeline *Pipeline) once(ctx context.Context) (bool, error) {
@@ -356,13 +396,17 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 	}
 	at := pipeline.now().UTC()
 
-	// kb_synced_hash is the content_sha256 last handed to the knowledge base.
-	// It differs from the document's own content_sha256 exactly when this
-	// content has never been submitted, or was submitted under an id the
-	// knowledge base then lost or only partially indexed — both handled by
-	// submitting again, since re-ingesting the same custom document id
-	// replaces whatever was there.
-	if document.ContentSHA256 != document.KBSyncedHash {
+	// kb_synced_hash is the sync marker of what was last handed to the
+	// knowledge base: the content and every attribute written with it. It
+	// differs from the marker of the document as it is now exactly when this
+	// version has never been submitted — new content, a changed attribute
+	// such as its access or category, or a submission recorded by an older
+	// build that wrote fewer attributes — or when a submission was forgotten
+	// because the knowledge base lost or only partially indexed it. All of
+	// these are handled by submitting again, since re-ingesting the same
+	// custom document id replaces whatever was there.
+	marker := knowledgebase.SyncMarker(corpus, document)
+	if marker != document.KBSyncedHash {
 		var text string
 		if !document.HasOriginal() {
 			body, err := pipeline.store.DocumentBody(ctx, document.ID)
@@ -374,7 +418,7 @@ func (pipeline *Pipeline) indexKnowledgeBase(ctx context.Context, corpus domain.
 		if err := pipeline.knowledgeBase.Submit(ctx, corpus, document, text); err != nil {
 			return Result{}, err
 		}
-		if err := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document.ID, document.ContentSHA256, at); err != nil {
+		if err := pipeline.store.MarkKnowledgeBaseSubmitted(ctx, document.ID, marker, at); err != nil {
 			return Result{}, err
 		}
 		pipeline.logger.InfoContext(ctx, "submitted a document to the knowledge base",

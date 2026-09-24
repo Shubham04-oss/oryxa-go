@@ -54,6 +54,13 @@ func testKBDocument() domain.Document {
 	}
 }
 
+// synced is document as it is once its current version has been submitted
+// to the knowledge base: its kb_synced_hash is the marker of that version.
+func synced(document domain.Document) domain.Document {
+	document.KBSyncedHash = knowledgebase.SyncMarker(testKBCorpus(), document)
+	return document
+}
+
 // fakeStore records what ingest did to a document.
 type fakeStore struct {
 	mutex      sync.Mutex
@@ -74,6 +81,10 @@ type fakeStore struct {
 	kbSynced   []string
 	rechecks   map[string]time.Time
 	retries    map[string]time.Time
+	// unsynced is how many documents each RequeueUnsyncedKnowledgeBaseDocuments
+	// call reports, in turn; resyncs counts the calls.
+	unsynced []int64
+	resyncs  int
 }
 
 func (fake *fakeStore) Corpus(context.Context, string, string) (domain.Corpus, error) {
@@ -165,11 +176,23 @@ func (fake *fakeStore) RetryDocumentAt(_ context.Context, documentID string, at 
 	return nil
 }
 
-func (fake *fakeStore) MarkKnowledgeBaseSubmitted(_ context.Context, documentID, contentSHA256 string, _ time.Time) error {
+func (fake *fakeStore) MarkKnowledgeBaseSubmitted(_ context.Context, documentID, marker string, _ time.Time) error {
 	fake.mutex.Lock()
 	defer fake.mutex.Unlock()
-	fake.kbSynced = append(fake.kbSynced, documentID+":"+contentSHA256)
+	fake.kbSynced = append(fake.kbSynced, documentID+":"+marker)
 	return nil
+}
+
+func (fake *fakeStore) RequeueUnsyncedKnowledgeBaseDocuments(context.Context, int) (int64, error) {
+	fake.mutex.Lock()
+	defer fake.mutex.Unlock()
+	fake.resyncs++
+	if len(fake.unsynced) == 0 {
+		return 0, nil
+	}
+	requeued := fake.unsynced[0]
+	fake.unsynced = fake.unsynced[1:]
+	return requeued, nil
 }
 
 type fakeVectorStore struct {
@@ -606,8 +629,8 @@ func TestIndexKnowledgeBaseSubmitsUnsyncedContent(t *testing.T) {
 	if knowledgeBase.submittedText[0] != "the runbook's text" {
 		t.Fatalf("submitted text = %q", knowledgeBase.submittedText[0])
 	}
-	if len(store.kbSynced) != 1 || store.kbSynced[0] != "doc_1:hash-1" {
-		t.Fatalf("kb_synced_hash was not recorded: %v", store.kbSynced)
+	if want := "doc_1:" + knowledgebase.SyncMarker(testKBCorpus(), testKBDocument()); len(store.kbSynced) != 1 || store.kbSynced[0] != want {
+		t.Fatalf("kb_synced_hash was not recorded: %v, want %s", store.kbSynced, want)
 	}
 	if len(store.ready) != 0 || len(store.failed) != 0 || len(store.released) != 0 {
 		t.Fatalf("a freshly submitted document was not left waiting: ready=%v failed=%v released=%v",
@@ -653,8 +676,7 @@ func TestIndexKnowledgeBaseNeverResubmitsAlreadySyncedContent(t *testing.T) {
 	}}
 	pipeline := newKBPipeline(store, knowledgeBase)
 
-	document := testKBDocument()
-	document.KBSyncedHash = document.ContentSHA256
+	document := synced(testKBDocument())
 	if _, err := pipeline.Index(context.Background(), document); err != nil {
 		t.Fatalf("Index: %v", err)
 	}
@@ -684,8 +706,7 @@ func TestIndexKnowledgeBaseMarksReadyWhenTheKnowledgeBaseIsDone(t *testing.T) {
 			knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": status}}
 			pipeline := newKBPipeline(store, knowledgeBase)
 
-			document := testKBDocument()
-			document.KBSyncedHash = document.ContentSHA256
+			document := synced(testKBDocument())
 			if _, err := pipeline.Index(context.Background(), document); err != nil {
 				t.Fatalf("Index: %v", err)
 			}
@@ -716,8 +737,7 @@ func TestIndexKnowledgeBaseFailsAtOnceOnFailed(t *testing.T) {
 	}}
 	pipeline := newKBPipeline(store, knowledgeBase)
 
-	document := testKBDocument()
-	document.KBSyncedHash = document.ContentSHA256
+	document := synced(testKBDocument())
 	document.Attempts = 1 // Nowhere near MaxAttempts: this must still fail at once.
 	if _, err := pipeline.Index(context.Background(), document); err == nil {
 		t.Fatal("Index succeeded on a knowledge base FAILED status")
@@ -742,8 +762,7 @@ func TestIndexKnowledgeBaseResubmitsOnPartialMetadata(t *testing.T) {
 	}}
 	pipeline := newKBPipeline(store, knowledgeBase)
 
-	document := testKBDocument()
-	document.KBSyncedHash = document.ContentSHA256
+	document := synced(testKBDocument())
 	if _, err := pipeline.Index(context.Background(), document); err == nil {
 		t.Fatal("Index succeeded on a partially indexed document")
 	}
@@ -772,8 +791,7 @@ func TestIndexKnowledgeBaseWaitsOnStillWorkingStatuses(t *testing.T) {
 				pipeline := newKBPipeline(store, knowledgeBase)
 				pipeline.now = func() time.Time { return now }
 
-				document := testKBDocument()
-				document.KBSyncedHash = document.ContentSHA256
+				document := synced(testKBDocument())
 				document.KBSubmittedAt = submittedAt
 				if _, err := pipeline.Index(context.Background(), document); err != nil {
 					t.Fatalf("Index: %v", err)
@@ -806,9 +824,8 @@ func TestIndexKnowledgeBaseResubmitsASubmissionThatNeverFinishes(t *testing.T) {
 			pipeline := newKBPipeline(store, knowledgeBase)
 			pipeline.now = func() time.Time { return now }
 
-			document := testKBDocument()
+			document := synced(testKBDocument())
 			document.Attempts = attempts
-			document.KBSyncedHash = document.ContentSHA256
 			document.KBSubmittedAt = &stalled
 			if _, err := pipeline.Index(context.Background(), document); err == nil {
 				t.Fatal("Index succeeded on a submission the knowledge base never finished")
@@ -830,5 +847,107 @@ func TestIndexKnowledgeBaseResubmitsASubmissionThatNeverFinishes(t *testing.T) {
 				t.Fatalf("retries = %v, failed = %v; want the last attempt to leave the document failed", store.retries, store.failed)
 			}
 		})
+	}
+}
+
+// A document submitted by a build that wrote fewer attributes — its
+// kb_synced_hash the bare content hash, from before sync markers — is
+// submitted again, rather than taken as synced and left without the access
+// attribute members' searches filter on.
+func TestIndexKnowledgeBaseResubmitsWhatAnOlderBuildSubmitted(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{corpus: testKBCorpus(), body: "text"}
+	knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": {Code: "INDEXED"}}}
+	pipeline := newKBPipeline(store, knowledgeBase)
+
+	document := testKBDocument()
+	document.KBSyncedHash = document.ContentSHA256
+	if _, err := pipeline.Index(context.Background(), document); err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if len(knowledgeBase.submitted) != 1 {
+		t.Fatalf("submitted = %+v, want the document submitted again", knowledgeBase.submitted)
+	}
+	if len(store.ready) != 0 {
+		t.Fatalf("a document an older build submitted was marked ready from that submission: %v", store.ready)
+	}
+	if want := "doc_1:" + knowledgebase.SyncMarker(testKBCorpus(), document); len(store.kbSynced) != 1 || store.kbSynced[0] != want {
+		t.Fatalf("recorded %v, want %s", store.kbSynced, want)
+	}
+}
+
+// Any attribute a search filters on is part of what was submitted: changing
+// one, with the content the same, submits the document again.
+func TestIndexKnowledgeBaseResubmitsAChangedAttribute(t *testing.T) {
+	t.Parallel()
+	for name, change := range map[string]func(*domain.Document){
+		"access":   func(document *domain.Document) { document.Access = domain.AccessAdmins },
+		"category": func(document *domain.Document) { document.Metadata = domain.Metadata{"category": "account_record"} },
+		"title":    func(document *domain.Document) { document.Title = "Runbook, revised" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			store := &fakeStore{corpus: testKBCorpus(), body: "text"}
+			knowledgeBase := &fakeKnowledgeBase{statuses: map[string]knowledgebase.DocumentStatus{"doc_1": {Code: "INDEXED"}}}
+			pipeline := newKBPipeline(store, knowledgeBase)
+
+			document := synced(testKBDocument())
+			change(&document)
+			if _, err := pipeline.Index(context.Background(), document); err != nil {
+				t.Fatalf("Index: %v", err)
+			}
+			if len(knowledgeBase.submitted) != 1 || len(store.ready) != 0 {
+				t.Fatalf("submitted = %d, ready = %v; want the changed document submitted, not marked ready",
+					len(knowledgeBase.submitted), store.ready)
+			}
+		})
+	}
+}
+
+// The worker looks for documents an older build submitted every so often,
+// and straight away again after a full batch, since more may be waiting; a
+// deployment with no knowledge base never looks.
+func TestRunResyncsDocumentsSubmittedByAnOlderBuild(t *testing.T) {
+	t.Parallel()
+	store := &fakeStore{corpus: testKBCorpus(), unsynced: []int64{knowledgeBaseResyncBatch, 3}}
+	pipeline := New(store, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, &fakeKnowledgeBase{},
+		Options{Interval: time.Millisecond}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		pipeline.Run(ctx)
+		close(done)
+	}()
+	deadline := time.After(2 * time.Second)
+	for {
+		store.mutex.Lock()
+		resyncs := store.resyncs
+		store.mutex.Unlock()
+		if resyncs >= 2 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("resynced %d times, want a second look after a full batch", resyncs)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	// The second look found less than a batch, so the next waits.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+	store.mutex.Lock()
+	defer store.mutex.Unlock()
+	if store.resyncs != 2 {
+		t.Fatalf("resynced %d times, want 2 before the interval passed", store.resyncs)
+	}
+
+	without := &fakeStore{corpus: testCorpus()}
+	pipeline = New(without, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil, Options{Interval: time.Millisecond}, nil)
+	ctx, cancel = context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	pipeline.Run(ctx)
+	if without.resyncs != 0 {
+		t.Fatalf("a deployment with no knowledge base resynced %d times", without.resyncs)
 	}
 }

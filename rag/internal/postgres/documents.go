@@ -446,28 +446,70 @@ func (store *Store) MarkDocumentFailed(ctx context.Context, documentID, reason s
 	})
 }
 
-// MarkKnowledgeBaseSubmitted records that a document's current content has
-// been handed to a Bedrock knowledge base, without otherwise disturbing its
-// status or its lease: the document stays 'ingesting' until the ingest
-// worker's next claim polls the knowledge base for the outcome, exactly as
-// the lease that claim already holds intends. Recording this separately from
-// MarkDocumentReady is what lets a claim tell "never submitted, or the
-// content changed since it last was" from "already submitted, only the
-// outcome is still unknown" without resubmitting on every poll.
+// MarkKnowledgeBaseSubmitted records that a document has been handed to a
+// Bedrock knowledge base, without otherwise disturbing its status or its
+// lease: the document stays 'ingesting' until the ingest worker's next claim
+// polls the knowledge base for the outcome, exactly as the lease that claim
+// already holds intends. Recording this separately from MarkDocumentReady is
+// what lets a claim tell "never submitted as it is now" from "already
+// submitted, only the outcome is still unknown" without resubmitting on every
+// poll.
 //
-// The time goes with the hash, so the worker can tell how long a submission
-// has been outstanding. An empty hash forgets both: nothing is outstanding.
-func (store *Store) MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, contentSHA256 string, at time.Time) error {
+// marker is knowledgebase.SyncMarker of what was submitted: the content and
+// every attribute written with it. The time goes with it, so the worker can
+// tell how long a submission has been outstanding. An empty marker forgets
+// both: nothing is outstanding.
+func (store *Store) MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, marker string, at time.Time) error {
 	if _, err := store.db.ExecContext(ctx, `
 		UPDATE rag_documents
 		SET kb_synced_hash = $2,
 		    kb_submitted_at = CASE WHEN $2 = '' THEN NULL ELSE $3::timestamptz END,
 		    updated_at = $3
 		WHERE id = $1`,
-		documentID, contentSHA256, at); err != nil {
+		documentID, marker, at); err != nil {
 		return fmt.Errorf("mark document submitted to the knowledge base: %w", err)
 	}
 	return nil
+}
+
+// knowledgeBaseSyncedPrefix is knowledgebase.SyncMarkerPrefix, written out
+// again here and in the partial index RequeueUnsyncedKnowledgeBaseDocuments
+// is served by (migration 013), because an index predicate cannot take a
+// parameter. A test keeps the three the same.
+const knowledgeBaseSyncedPrefix = "v2:"
+
+// RequeueUnsyncedKnowledgeBaseDocuments puts back in the queue up to limit
+// ready documents whose knowledge base submission was recorded under an
+// older marker format than this build writes, and reports how many.
+//
+// A marker is written by whichever build submitted the document. During a
+// rolling deploy the build being replaced can still claim, submit and mark
+// ready a document with the attributes it knew — without access, before
+// access existed — and a ready document is never claimed again to notice.
+// The ingest worker runs this every so often, so such a document is
+// resubmitted soon after the last old task stops; the marker it then gets
+// never matches this query again. Only a bedrock-kb document ever has a
+// marker, so no other document is touched.
+func (store *Store) RequeueUnsyncedKnowledgeBaseDocuments(ctx context.Context, limit int) (int64, error) {
+	result, err := store.db.ExecContext(ctx, `
+		UPDATE rag_documents AS document
+		SET status = 'pending', failure_reason = '', attempts = 0, locked_until = NULL, updated_at = now()
+		FROM (
+			SELECT id FROM rag_documents
+			WHERE status = 'ready' AND kb_synced_hash <> '' AND kb_synced_hash NOT LIKE '`+knowledgeBaseSyncedPrefix+`%'
+			ORDER BY id
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		) AS stale
+		WHERE document.id = stale.id`, limit)
+	if err != nil {
+		return 0, fmt.Errorf("requeue documents synced under an older marker: %w", err)
+	}
+	requeued, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("requeue documents synced under an older marker: %w", err)
+	}
+	return requeued, nil
 }
 
 // RecheckDocumentAt leaves a document ingesting but claimable again at at:

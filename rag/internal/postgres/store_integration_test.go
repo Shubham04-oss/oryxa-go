@@ -353,15 +353,16 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 	}
 
 	at := time.Now().UTC().Truncate(time.Microsecond)
-	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, stored.ContentSHA256, at); err != nil {
+	marker := "v2:marker-of-the-submission"
+	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, marker, at); err != nil {
 		t.Fatalf("MarkKnowledgeBaseSubmitted: %v", err)
 	}
 	afterSubmit, err := store.Document(ctx, organizationID, stored.ID)
 	if err != nil {
 		t.Fatalf("Document: %v", err)
 	}
-	if afterSubmit.KBSyncedHash != stored.ContentSHA256 {
-		t.Fatalf("kb_synced_hash = %q after submission, want %q", afterSubmit.KBSyncedHash, stored.ContentSHA256)
+	if afterSubmit.KBSyncedHash != marker {
+		t.Fatalf("kb_synced_hash = %q after submission, want %q", afterSubmit.KBSyncedHash, marker)
 	}
 	if afterSubmit.KBSubmittedAt == nil || !afterSubmit.KBSubmittedAt.Equal(at) {
 		t.Fatalf("kb_submitted_at = %v after submission, want %v", afterSubmit.KBSubmittedAt, at)
@@ -381,8 +382,8 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 			continue
 		}
 		found = true
-		if candidate.KBSyncedHash != stored.ContentSHA256 {
-			t.Fatalf("claiming the document changed kb_synced_hash to %q, want %q", candidate.KBSyncedHash, stored.ContentSHA256)
+		if candidate.KBSyncedHash != marker {
+			t.Fatalf("claiming the document changed kb_synced_hash to %q, want %q", candidate.KBSyncedHash, marker)
 		}
 		if candidate.KBSubmittedAt == nil || !candidate.KBSubmittedAt.Equal(at) {
 			t.Fatalf("claiming the document changed kb_submitted_at to %v, want %v", candidate.KBSubmittedAt, at)
@@ -395,7 +396,7 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 	// Giving a submission up forgets when it was made along with what it was,
 	// since nothing is outstanding any more.
 	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, "", at.Add(time.Minute)); err != nil {
-		t.Fatalf("MarkKnowledgeBaseSubmitted with no hash: %v", err)
+		t.Fatalf("MarkKnowledgeBaseSubmitted with no marker: %v", err)
 	}
 	afterReset, err := store.Document(ctx, organizationID, stored.ID)
 	if err != nil {
@@ -510,7 +511,7 @@ func TestMetadataChangeRequeuesDocumentAndReplacesVectorMetadata(t *testing.T) {
 	if err := store.MarkDocumentReady(ctx, stored.ID, 1, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, stored.ContentSHA256, time.Now().UTC()); err != nil {
+	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, "v2:submitted", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	updated := newDocument(corpus, source, "Invoice", body)
@@ -599,7 +600,7 @@ func TestDocumentACLFiltersPagesAndReferences(t *testing.T) {
 	if err := store.MarkDocumentReady(ctx, admin.ID, 0, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkKnowledgeBaseSubmitted(ctx, admin.ID, admin.ContentSHA256, time.Now().UTC()); err != nil {
+	if err := store.MarkKnowledgeBaseSubmitted(ctx, admin.ID, "v2:submitted", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
 	reclassified := newDocument(corpus, domain.Source{Kind: domain.SourceExternal, Ref: "restricted"}, "Payroll", "payroll")
