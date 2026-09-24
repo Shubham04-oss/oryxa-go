@@ -47,5 +47,20 @@ func (j judgment) gemini(kept []byte) (domain.Verdict, bool) {
 	if j.Gemini == nil {
 		return domain.Verdict{}, false
 	}
-	return domain.Verdict{Keep: j.Gemini.Keep, Reason: j.Gemini.Reason, Category: j.Gemini.Category, Judgment: kept}, true
+	return domain.Verdict{Keep: j.Gemini.Keep, Reason: j.Gemini.Reason, Category: j.category(), Judgment: kept}, true
+}
+
+// category is what kind of document the judgment says this is. The Gemini
+// judge's answer wins when it gave one: it was asked because Jev could not
+// say, or could not read the document at all. Jev's own kind stands
+// otherwise. It depends on nothing but the judgment, so every verdict drawn
+// from it, whichever kinds a source indexes, names the same category.
+func (j judgment) category() string {
+	if j.Gemini != nil && j.Gemini.Category != "" {
+		return j.Gemini.Category
+	}
+	if j.Jev != nil {
+		return j.Jev.Kind
+	}
+	return ""
 }
