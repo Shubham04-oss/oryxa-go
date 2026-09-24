@@ -18,6 +18,7 @@ import {
 } from "./lib/dms/protocol"
 import type { InboxServerMessage } from "./lib/dms/protocol"
 import type { Conversation, ConversationKind } from "./lib/dms/types"
+import { isPurgeInstant } from "./realtime-registry-agent"
 
 /**
  * What a conversation object tells an inbox about itself: its kind and name,
@@ -41,8 +42,19 @@ export type NotedMessage = {
   createdAt: string
 }
 
-/** A socket's state: whose inbox it opened, as the Worker determined it. */
-export type InboxConnectionState = { userId: string }
+/**
+ * What a conversation's object says an inbox keeps of it, after a purge that
+ * kept part of it: its latest message (none: known, not listed), how far the
+ * member has read, and the seqs of the later messages from others.
+ */
+export type RestatedConversation = {
+  last?: NotedMessage
+  readSeq: number
+  unread: number[]
+}
+
+/** A socket's state: whose inbox it opened, as the Worker determined it, and when. */
+export type InboxConnectionState = { userId: string; connectedAt?: string }
 
 /** The most conversations a socket is sent as it opens, the latest first. The unread total counts them all. */
 export const INBOX_SNAPSHOT_LIMIT = 500
@@ -199,6 +211,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
     }
     connection.setState({
       userId: owner.userId,
+      connectedAt: new Date().toISOString(),
     } satisfies InboxConnectionState)
     this.schema()
     send(connection, {
@@ -308,63 +321,166 @@ export class InboxAgent extends Agent<ConversationEnv> {
   }
 
   /**
-   * The member's purge (src/realtime-purge.ts, through the registry): empties
-   * every conversation they are in and takes it off the other person's
-   * inbox, then empties this inbox and closes its sockets (`inbox-gone`, then
-   * `conversationGoneCloseCode`). A conversation that could not be purged
-   * stays listed, and the purge throws, so trying again finds it. Safe to
-   * call again.
+   * A conversation's object restates what the inbox keeps of it, after a
+   * purge that kept part of it: its latest message, how far the member has
+   * read, and what is unread, in place of what the inbox had. Without a
+   * latest message the conversation is known, not listed.
    */
-  async purge(): Promise<void> {
+  async restateConversation(
+    entry: ConversationEntry,
+    state: RestatedConversation
+  ): Promise<void> {
     this.schema()
-    const { organizationId } = this.owner
+    const conversation = this.checkedEntry(entry)
+    const { name } = conversation
+    const { last, readSeq, unread } = state as {
+      [Key in keyof RestatedConversation]?: unknown
+    }
+    if (
+      typeof readSeq !== "number" ||
+      !Number.isSafeInteger(readSeq) ||
+      readSeq < 0 ||
+      !Array.isArray(unread) ||
+      !unread.every((seq) => isSeq(seq) && seq > readSeq)
+    ) {
+      throw new TypeError("not a restated conversation")
+    }
+    if (last === undefined) {
+      const listed = this.row(name) !== undefined
+      this.sql`DELETE FROM inbox_conversations WHERE name = ${name}`
+      this.sql`DELETE FROM inbox_unread WHERE name = ${name}`
+      this.sql`INSERT INTO inbox_known (name, kind, peer_id)
+        VALUES (${name}, ${conversation.kind}, ${conversation.peerId})
+        ON CONFLICT (name) DO NOTHING`
+      if (listed) {
+        this.tell({
+          type: "inbox-removed",
+          name,
+          unreadTotal: this.unreadTotal(),
+        })
+      }
+      await this.register()
+      return
+    }
+    const latest = this.checkedMessage(conversation, last as NotedMessage)
+    this.list(conversation, latest.createdAt)
+    this.sql`UPDATE inbox_conversations SET
+        last_seq = ${latest.seq},
+        last_author_id = ${latest.authorId},
+        last_body = ${latest.body},
+        last_created_at = ${latest.createdAt},
+        read_seq = ${readSeq},
+        updated_at = ${latest.createdAt}
+      WHERE name = ${name}`
+    this.sql`DELETE FROM inbox_unread WHERE name = ${name}`
+    for (const seq of (unread as number[]).slice(-MAX_UNREAD)) {
+      this.sql`INSERT INTO inbox_unread (name, seq) VALUES (${name}, ${seq})
+        ON CONFLICT DO NOTHING`
+    }
+    this.sql`DELETE FROM inbox_known WHERE name = ${name}`
+    this.announce(name)
+    await this.register()
+  }
+
+  /**
+   * The member's purge (src/realtime-purge.ts, through the registry). Each
+   * conversation they are in, listed or only known, is purged by its object:
+   * entirely, for an organization's purge (no `scope`), or, for a member who
+   * left at `scope.removedAt`, all but what is newer. A conversation emptied
+   * is taken off the other person's inbox and this one; one that kept
+   * something newer stays in both, restated by its object. Conversations
+   * that arrive meanwhile are purged too.
+   *
+   * Then, if nothing stays, the inbox empties itself. Its sockets (all of
+   * them for an organization's purge, else those opened at or before the
+   * member left) are told `inbox-gone` and closed, so each page asks the
+   * Worker whether it may open the inbox again; the rest are sent it as it
+   * now stands. A conversation that could not be purged stays, and the purge
+   * throws, so trying again finds it. Safe to call again. Resolves whether
+   * the inbox was emptied.
+   */
+  async purge(scope?: { removedAt: string }): Promise<{ emptied: boolean }> {
+    this.schema()
+    const { organizationId, userId } = this.owner
+    const removedAt = scope?.removedAt
+    if (scope !== undefined && !isPurgeInstant(removedAt)) {
+      throw new TypeError("not a purge of this inbox")
+    }
+    const purged = new Set<string>()
     for (let pass = 0; pass < purgePasses; pass += 1) {
-      const conversations = this.everyConversation()
+      const conversations = this.everyConversation().filter(
+        (conversation) => !purged.has(conversation.name)
+      )
       if (conversations.length === 0) break
       const failed = await eachLimited(
         conversations,
         purgeConcurrency,
         async (conversation) => {
+          let emptied = true
           if (conversation.kind === "dm") {
             const dm = await getAgentByName(
               this.env.DirectMessageAgent,
               conversation.name
             )
-            await dm.purge()
+            const result = await dm.purge(
+              removedAt === undefined ? undefined : { userId, removedAt }
+            )
+            emptied = result.emptied
           }
           // A side conversation's object comes later: its purge belongs here.
-          const peer = await getAgentByName(
-            this.env.InboxAgent,
-            inboxName(organizationId, conversation.peerId)
-          )
-          await peer.removeConversation(conversation.name)
-          this.sql`DELETE FROM inbox_known WHERE name = ${conversation.name}`
-          if (this.row(conversation.name)) {
-            this.forgetConversation(conversation.name)
+          if (emptied) {
+            const peer = await getAgentByName(
+              this.env.InboxAgent,
+              inboxName(organizationId, conversation.peerId)
+            )
+            await peer.removeConversation(conversation.name)
+            this.sql`DELETE FROM inbox_known WHERE name = ${conversation.name}`
+            if (this.row(conversation.name)) {
+              this.forgetConversation(conversation.name)
+            }
           }
+          purged.add(conversation.name)
         }
       )
       if (failed > 0) {
         throw new Error(`${failed} conversations could not be purged`)
       }
     }
-    if (this.everyConversation().length > 0) {
+    const staying = this.everyConversation()
+    if (removedAt === undefined && staying.length > 0) {
       throw new Error("conversations kept arriving while the inbox was purged")
     }
-    const retry = this.meta("registration_retry")
-    this.sql`DELETE FROM inbox_conversations`
-    this.sql`DELETE FROM inbox_known`
-    this.sql`DELETE FROM inbox_unread`
-    this.sql`DELETE FROM inbox_meta`
-    if (retry) await this.cancelSchedule(retry).catch(() => false)
+    const emptied = staying.length === 0
+    if (emptied) {
+      const retry = this.meta("registration_retry")
+      this.sql`DELETE FROM inbox_conversations`
+      this.sql`DELETE FROM inbox_known`
+      this.sql`DELETE FROM inbox_unread`
+      this.sql`DELETE FROM inbox_meta`
+      if (retry) await this.cancelSchedule(retry).catch(() => false)
+    }
     for (const connection of this.getConnections()) {
-      send(connection, { type: "inbox-gone" })
-      try {
-        connection.close(conversationGoneCloseCode, "Gone")
-      } catch {
-        // Already closed.
+      const state = connection.state as InboxConnectionState | null
+      if (
+        removedAt === undefined ||
+        typeof state?.userId !== "string" ||
+        (state.connectedAt ?? "") <= removedAt
+      ) {
+        send(connection, { type: "inbox-gone" })
+        try {
+          connection.close(conversationGoneCloseCode, "Gone")
+        } catch {
+          // Already closed.
+        }
+      } else {
+        send(connection, {
+          type: "inbox-snapshot",
+          conversations: this.listed(INBOX_SNAPSHOT_LIMIT),
+          unreadTotal: this.unreadTotal(),
+        })
       }
     }
+    return { emptied }
   }
 
   /** The registration retry's schedule. */

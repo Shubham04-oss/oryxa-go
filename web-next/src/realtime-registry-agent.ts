@@ -16,6 +16,29 @@ export const maxPurgeEventId = 200
 export type PurgeOutcome = "purged" | "repeated"
 
 /**
+ * What a purge empties: every member of the organization, or one member who
+ * left it at `removedAt` (a `PurgeInstant`), whose conversations keep what
+ * is newer than that.
+ */
+export type PurgeTarget =
+  | { scope: "organization" }
+  | { scope: "member"; userId: string; removedAt: string }
+
+// An instant as the purge hands it on: ISO 8601 in UTC to the millisecond,
+// as `toISOString` writes it and as messages record theirs, so that two of
+// them compare as strings.
+const purgeInstant = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
+
+/** Whether `value` is an instant in the form the purge hands on. */
+export function isPurgeInstant(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    purgeInstant.test(value) &&
+    Number.isFinite(Date.parse(value))
+  )
+}
+
+/**
  * An organization's registry of the inboxes its members have, named after
  * the organization (`registryName`). An inbox registers itself here with its
  * first conversation, so that an organization's purge can find every
@@ -57,21 +80,26 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
   }
 
   /**
-   * Carries out a purge for Go (src/realtime-purge.ts): one member's
-   * conversations and inbox when `userId` is given, else every registered
-   * member's. Each member leaves the registry, and their inbox empties their
-   * conversations, takes them off the other people's inboxes and empties
-   * itself (`purgeMember`). The event is remembered only once all of it is
-   * done: a purge that failed part-way throws, and the same event again
-   * carries on from where it stopped.
+   * Carries out a purge for Go (src/realtime-purge.ts): every registered
+   * member's conversations and inbox, entirely, for an organization; for a
+   * member who left, what in theirs is not newer than when they left
+   * (`InboxAgent.purge`). Each member leaves the registry while it is done,
+   * and is put back when something newer of theirs stays, or the purge
+   * failed. The event is remembered only once all of it is done: a purge
+   * that failed part-way throws, and the same event again carries on from
+   * where it stopped.
    */
-  async purge(eventId: string, userId?: string): Promise<PurgeOutcome> {
+  async purge(eventId: string, target: PurgeTarget): Promise<PurgeOutcome> {
     this.schema()
+    const { scope } = target as { scope?: unknown }
     if (
       typeof eventId !== "string" ||
       eventId === "" ||
       eventId.length > maxPurgeEventId ||
-      (userId !== undefined && !isNameId(userId))
+      (scope !== "organization" &&
+        (scope !== "member" ||
+          !isNameId((target as { userId?: unknown }).userId) ||
+          !isPurgeInstant((target as { removedAt?: unknown }).removedAt)))
     ) {
       throw new TypeError("not a purge")
     }
@@ -82,7 +110,10 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
     }>`SELECT event_id FROM registry_purges WHERE event_id = ${eventId}`.at(0)
     if (done) return "repeated"
 
-    const users = userId === undefined ? this.memberIds() : [userId]
+    const users =
+      target.scope === "organization" ? this.memberIds() : [target.userId]
+    const removedAt =
+      target.scope === "organization" ? undefined : target.removedAt
     let next = 0
     let failed = 0
     const worker = async () => {
@@ -90,7 +121,7 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
         const user = users[next]
         next += 1
         try {
-          await this.purgeMember(user)
+          await this.purgeMember(user, removedAt)
         } catch (error) {
           failed += 1
           console.error("realtime registry: could not purge a member", error)
@@ -110,30 +141,35 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
   }
 
   /**
-   * Empties a member's inbox and conversations. The member leaves the
-   * registry first, so an inbox that registers again while it is purged (a
-   * conversation noted meanwhile) stays found; if the purge fails, the
-   * member is put back for the next one.
+   * Purges a member's inbox and conversations: entirely, or, with
+   * `removedAt`, what is not newer than it. The member leaves the registry
+   * first, so an inbox that registers again while it is purged (a
+   * conversation noted meanwhile) stays found; the member is put back when
+   * something newer of theirs stays, and when the purge fails, for the next.
    */
-  private async purgeMember(userId: string): Promise<void> {
+  private async purgeMember(userId: string, removedAt?: string): Promise<void> {
     const registered = this.sql<{
       registered_at: string
     }>`SELECT registered_at FROM registry_members WHERE user_id = ${userId}`.at(
       0
     )
+    const putBack = () => {
+      this.sql`INSERT INTO registry_members (user_id, registered_at)
+        VALUES (${userId}, ${registered?.registered_at ?? new Date().toISOString()})
+        ON CONFLICT (user_id) DO NOTHING`
+    }
     this.sql`DELETE FROM registry_members WHERE user_id = ${userId}`
     try {
       const inbox = await getAgentByName(
         this.env.InboxAgent,
         inboxName(this.name, userId)
       )
-      await inbox.purge()
+      const { emptied } = await inbox.purge(
+        removedAt === undefined ? undefined : { removedAt }
+      )
+      if (!emptied) putBack()
     } catch (error) {
-      if (registered) {
-        this.sql`INSERT INTO registry_members (user_id, registered_at)
-          VALUES (${userId}, ${registered.registered_at})
-          ON CONFLICT (user_id) DO NOTHING`
-      }
+      if (registered) putBack()
       throw error
     }
   }

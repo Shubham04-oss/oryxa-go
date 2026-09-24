@@ -8,6 +8,7 @@ import {
   maxPurgeBodyBytes,
   parsePurgeRequest,
   purgeWindowSeconds,
+  removalTime,
   signPurge,
 } from "./realtime-purge"
 import type { PurgeRequest } from "./realtime-purge"
@@ -124,10 +125,26 @@ async function codeOf(response: Response) {
   return [response.status, body.error?.code]
 }
 
+/** The admin left at 12:00: everything the tests say before then is theirs to lose. */
 const memberLeft: PurgeRequest = {
   event_id: "evt_member_removed_1",
   organization_id: org,
+  scope: "member",
   user_id: admin,
+  removed_at: "2026-09-24T12:00:00Z",
+}
+
+const organizationDeleted: PurgeRequest = {
+  event_id: "evt_organization_deleted_1",
+  organization_id: org,
+  scope: "organization",
+  user_id: "",
+  removed_at: "2026-09-24T12:00:00Z",
+}
+
+/** Moves the clock on by `ms`. */
+function later(ms: number) {
+  vi.setSystemTime(Date.now() + ms)
 }
 
 beforeEach(() => {
@@ -141,18 +158,6 @@ afterEach(() => {
 })
 
 describe("the purge's signature", () => {
-  it("signs as Go does: v1= and the hex HMAC-SHA256 of `{timestamp}.{body}`", async () => {
-    // Computed apart from this code, with Node's crypto and with openssl.
-    const body = JSON.stringify({
-      event_id: "evt_1",
-      organization_id: "org_sim",
-      user_id: "user-admin",
-    })
-    expect(await signPurge(secret, "1790000000", body)).toBe(
-      "v1=ec7fbc93691e7a657756945e18b349991bbd8a91c15d3c21818b683a39618fd8"
-    )
-  })
-
   it("refuses a request not signed with the secret, over this very body and timestamp", async () => {
     const world = makeWorld()
     await talk(world, admin, member)
@@ -270,43 +275,57 @@ describe("the purge's request", () => {
     expect(response.headers.get("Allow")).toBe("POST")
   })
 
-  it("refuses a signed body that is not a purge, never reading a missing user_id as the whole organization", async () => {
+  it("refuses a signed body that is not a purge: the scope decides, and user_id must agree with it", async () => {
     const world = makeWorld()
     await talk(world, admin, member)
+    const { scope: _scope, ...withoutScope } = memberLeft
+    const { removed_at: _removedAt, ...withoutRemovedAt } = memberLeft
+    const { user_id: _userId, ...withoutUserId } = memberLeft
     for (const body of [
       "not json",
       "[]",
-      JSON.stringify({ event_id: "evt_1", organization_id: org }),
-      JSON.stringify({
-        event_id: "evt_1",
-        organization_id: org,
-        user_id: null,
-      }),
-      JSON.stringify({ event_id: "", organization_id: org, user_id: admin }),
-      JSON.stringify({
-        event_id: "x".repeat(201),
-        organization_id: org,
-        user_id: admin,
-      }),
-      JSON.stringify({
-        event_id: "evt_1",
-        organization_id: "org~sim",
-        user_id: admin,
-      }),
-      JSON.stringify({
-        event_id: "evt_1",
-        organization_id: org,
-        user_id: "user admin",
-      }),
+      // Contract v1: no scope, no removed_at.
+      { event_id: "evt_1", organization_id: org, user_id: admin },
+      { event_id: "evt_1", organization_id: org, user_id: "" },
+      withoutScope,
+      { ...withoutScope, user_id: "" },
+      { ...memberLeft, scope: "team" },
+      { ...memberLeft, scope: "Member" },
+      // A member's purge names the member.
+      { ...memberLeft, user_id: "" },
+      withoutUserId,
+      { ...memberLeft, user_id: null },
+      { ...memberLeft, user_id: "user admin" },
+      // An organization's names nobody.
+      { ...organizationDeleted, user_id: admin },
+      { ...organizationDeleted, user_id: undefined },
+      withoutRemovedAt,
+      { ...memberLeft, removed_at: "" },
+      { ...memberLeft, removed_at: "yesterday" },
+      { ...memberLeft, removed_at: 1790208000 },
+      { ...memberLeft, removed_at: "2026-02-30T10:00:00Z" },
+      { ...memberLeft, event_id: "" },
+      { ...memberLeft, event_id: "x".repeat(201) },
+      { ...memberLeft, organization_id: "org~sim" },
     ]) {
       expect(
-        await codeOf(await purge(world, await purgeRequest(body)))
+        await codeOf(
+          await purge(
+            world,
+            await purgeRequest(
+              typeof body === "string" ? body : JSON.stringify(body)
+            )
+          )
+        )
       ).toEqual([400, "invalid_request"])
     }
     expect(bodiesIn(world, admin, member)).toEqual(["hello"])
-    expect(
-      parsePurgeRequest(new TextEncoder().encode(JSON.stringify(memberLeft)))
-    ).toEqual(memberLeft)
+    expect(world.callsTo("RealtimeRegistryAgent", "purge")).toEqual([])
+    for (const request of [memberLeft, organizationDeleted]) {
+      expect(
+        parsePurgeRequest(new TextEncoder().encode(JSON.stringify(request)))
+      ).toEqual(request)
+    }
   })
 
   it("refuses a body over 4 KB before checking anything in it", async () => {
@@ -319,6 +338,52 @@ describe("the purge's request", () => {
       413,
       "too_large",
     ])
+  })
+})
+
+describe("removed_at", () => {
+  it("takes RFC 3339 with Z or an offset and 0 to 9 fractional digits, down to its millisecond", () => {
+    for (const [value, instant] of [
+      ["2026-09-24T10:00:00Z", "2026-09-24T10:00:00.000Z"],
+      ["2026-09-24t10:00:00z", "2026-09-24T10:00:00.000Z"],
+      ["2026-09-24T10:00:00.1Z", "2026-09-24T10:00:00.100Z"],
+      ["2026-09-24T10:00:00.12Z", "2026-09-24T10:00:00.120Z"],
+      ["2026-09-24T10:00:00.123Z", "2026-09-24T10:00:00.123Z"],
+      ["2026-09-24T10:00:00.1234Z", "2026-09-24T10:00:00.123Z"],
+      ["2026-09-24T10:00:00.123456789Z", "2026-09-24T10:00:00.123Z"],
+      ["2026-09-24T10:00:00.999999999Z", "2026-09-24T10:00:00.999Z"],
+      ["2026-09-24T15:30:00.5+05:30", "2026-09-24T10:00:00.500Z"],
+      ["2026-09-24T05:00:00-05:00", "2026-09-24T10:00:00.000Z"],
+      ["2024-02-29T23:59:59Z", "2024-02-29T23:59:59.000Z"],
+    ]) {
+      expect(removalTime(value)).toBe(instant)
+    }
+  })
+
+  it("refuses what is not a real time in that form", () => {
+    for (const value of [
+      "2026-02-30T10:00:00Z",
+      "2025-02-29T10:00:00Z",
+      "2026-13-01T10:00:00Z",
+      "2026-00-10T10:00:00Z",
+      "2026-09-24T24:00:00Z",
+      "2026-09-24T10:60:00Z",
+      "2026-09-24T10:00:60Z",
+      "2026-09-24T10:00:00+24:00",
+      "2026-09-24T10:00:00.1234567890Z",
+      "2026-09-24T10:00:00.Z",
+      "2026-09-24T10:00:00",
+      "2026-09-24 10:00:00Z",
+      "2026-09-24T10:00Z",
+      "2026-9-24T10:00:00Z",
+      "1969-12-31T23:59:59Z",
+      " 2026-09-24T10:00:00Z",
+      "",
+      undefined,
+      1790208000,
+    ]) {
+      expect(removalTime(value)).toBeUndefined()
+    }
   })
 })
 
@@ -362,6 +427,42 @@ describe("purging", () => {
     expect(adminList.closed?.code).toBe(4404)
   })
 
+  it("keeps what is newer than removed_at: that conversation stays, restated in both inboxes, and the member stays registered", async () => {
+    const world = makeWorld()
+    await talk(world, admin, member, "before")
+    await talk(world, owner, admin, "old news")
+    // The admin left at 12:00 and is back a minute later.
+    later(60_000)
+    await talk(world, admin, member, "after")
+    const membersInbox = await world.object<Inbox>(
+      "InboxAgent",
+      inboxName(org, member)
+    )
+    expect((await membersInbox.listConversations())[0].unread).toBe(2)
+
+    expect((await purge(world, await purgeRequest(memberLeft))).status).toBe(
+      204
+    )
+
+    expect(bodiesIn(world, admin, member)).toEqual(["after"])
+    expect(bodiesIn(world, owner, admin)).toEqual([])
+    const conversation = directMessageName(org, admin, member)
+    expect(await listed(world, admin)).toEqual([conversation])
+    expect(await listed(world, owner)).toEqual([])
+    expect(await membersInbox.listConversations()).toEqual([
+      expect.objectContaining({
+        name: conversation,
+        lastMessage: expect.objectContaining({
+          authorId: admin,
+          body: "after",
+        }) as unknown,
+        unread: 1,
+      }),
+    ])
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toContain(admin)
+  })
+
   it("reaches a DM opened without a message: its sockets close, so the member who left cannot write in it", async () => {
     const world = makeWorld()
     const dm = await world.object<Dm>(
@@ -396,7 +497,11 @@ describe("purging", () => {
     await talk(world, admin, member)
     const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
     const release = world.hold(inboxName(org, admin))
-    const purging = registry.purge("evt_during", admin)
+    const purging = registry.purge("evt_during", {
+      scope: "member",
+      userId: admin,
+      removedAt: "2026-09-24T12:00:00.000Z",
+    })
     await drain()
     await registry.register(admin)
     release()
@@ -404,20 +509,14 @@ describe("purging", () => {
     expect(await registry.members()).toEqual([admin, member])
   })
 
-  it("purges a whole organization for an empty user_id", async () => {
+  it("purges a whole organization, newer messages too", async () => {
     const world = makeWorld()
     await talk(world, admin, member)
     await talk(world, owner, admin)
+    later(60_000)
     await talk(world, member, owner)
 
-    const response = await purge(
-      world,
-      await purgeRequest({
-        event_id: "evt_organization_deleted_1",
-        organization_id: org,
-        user_id: "",
-      })
-    )
+    const response = await purge(world, await purgeRequest(organizationDeleted))
 
     expect(response.status).toBe(204)
     for (const [userA, userB] of [
@@ -434,7 +533,7 @@ describe("purging", () => {
     expect(await registry.members()).toEqual([])
   })
 
-  it("does nothing for an event it has carried out, so a replay cannot empty what came after it", async () => {
+  it("does nothing for an event it has carried out, and a later purge keeps what came after its removal", async () => {
     const world = makeWorld()
     await talk(world, admin, member, "before")
     // The same request twice: its timestamp, body and signature.
@@ -445,39 +544,60 @@ describe("purging", () => {
     )
     expect((await purge(world, request)).status).toBe(204)
 
-    // The admin is let back in and talks again, within the window.
+    // The admin is let back in and talks again.
+    later(60_000)
     await talk(world, admin, member, "after")
+    const inboxPurges = world.callsTo("InboxAgent", "purge").length
     expect((await purge(world, replay)).status).toBe(204)
+    expect(world.callsTo("InboxAgent", "purge")).toHaveLength(inboxPurges)
+    expect(bodiesIn(world, admin, member)).toEqual(["after"])
+
+    // Another event for the same removal keeps what came after it.
+    const retold = await purgeRequest(
+      { ...memberLeft, event_id: "evt_member_removed_2" },
+      { timestamp: Math.floor(Date.now() / 1000) }
+    )
+    expect((await purge(world, retold, Date.now())).status).toBe(204)
     expect(bodiesIn(world, admin, member)).toEqual(["after"])
     expect(await listed(world, member)).toEqual([
       directMessageName(org, admin, member),
     ])
 
-    // A new event for the same member is a purge.
-    const again = await purgeRequest({
-      ...memberLeft,
-      event_id: "evt_member_removed_2",
-    })
-    expect((await purge(world, again)).status).toBe(204)
+    // A later removal takes it.
+    later(60_000)
+    const leftAgain = await purgeRequest(
+      {
+        ...memberLeft,
+        event_id: "evt_member_removed_3",
+        removed_at: new Date(Date.now()).toISOString(),
+      },
+      { timestamp: Math.floor(Date.now() / 1000) }
+    )
+    expect((await purge(world, leftAgain, Date.now())).status).toBe(204)
     expect(bodiesIn(world, admin, member)).toEqual([])
+    expect(await listed(world, member)).toEqual([])
   })
 
-  it(`forgets an event after ${purgeMemoryMs / 3_600_000} hours`, async () => {
+  it(`forgets an event after ${purgeMemoryMs / 3_600_000} hours, and running it again keeps what came after`, async () => {
     const world = makeWorld()
     await talk(world, admin, member, "before")
     expect((await purge(world, await purgeRequest(memberLeft))).status).toBe(
       204
     )
+    later(purgeMemoryMs + 1_000)
     await talk(world, admin, member, "a day later")
-    vi.setSystemTime(now + purgeMemoryMs + 1_000)
-    const later = Math.floor(Date.now() / 1000)
+    const inboxPurges = world.callsTo("InboxAgent", "purge").length
     const response = await purge(
       world,
-      await purgeRequest(memberLeft, { timestamp: later }),
+      await purgeRequest(memberLeft, {
+        timestamp: Math.floor(Date.now() / 1000),
+      }),
       Date.now()
     )
     expect(response.status).toBe(204)
-    expect(bodiesIn(world, admin, member)).toEqual([])
+    // Forgotten, so carried out again: with nothing of its removal left.
+    expect(world.callsTo("InboxAgent", "purge")).toHaveLength(inboxPurges + 1)
+    expect(bodiesIn(world, admin, member)).toEqual(["a day later"])
   })
 
   it("answers 503 when part of a purge failed, and finishes it when Go sends the event again", async () => {
@@ -517,8 +637,9 @@ describe("purging", () => {
 })
 
 // The Go side's own vectors (the relay that turns auth.member.removed.v1 and
-// auth.organization.deleted.v1 into purges): the key is the secret's
-// characters as written, never hex-decoded, and the signature is lowercase.
+// auth.organization.deleted.v1 into purges), contract v2: the key is the
+// secret's characters as written, never hex-decoded, and the signature is
+// lowercase. Each was checked apart from this code, with openssl.
 describe("Go's purge vectors", () => {
   const goSecret =
     "5f2b8e1c9a7d4036b1e8c2f94a6d0e3b7c1f5a9d2e8b4c6f0a3d7e1b9c5f2a84"
@@ -529,14 +650,19 @@ describe("Go's purge vectors", () => {
   const otherUser = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
   const vectors = {
     memberRemoved: {
-      body: '{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f"}',
+      body: '{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","removed_at":"2026-09-24T10:00:00Z"}',
       signature:
-        "v1=a6f400c72318e7a142e5fcc51f04f98fad8ffae7864549a902cadfa96b584067",
+        "v1=ee12ee93bb00fb5e9901c4a0ac8ed193a85539bfb2c76241f9182f2fcc71b90e",
     },
     organizationDeleted: {
-      body: '{"event_id":"evt_Qm4sT8vY1bN6cX3zL0pK7g","organization_id":"org_2fQx9LmR7vTk4WcA","user_id":""}',
+      body: '{"event_id":"evt_Qm4sT8vY1bN6cX3zL0pK7g","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"organization","user_id":"","removed_at":"2026-09-24T10:00:00Z"}',
       signature:
-        "v1=c35da0ee0a92d26cf07903fcfd3118d42b0517920abe31cf13a0f818b9004314",
+        "v1=ec0202dfc34ba5b946ce5e384b187d7358b3609549a049b3b3bfb51ef73d2177",
+    },
+    memberRemovedNanoseconds: {
+      body: '{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","removed_at":"2026-09-24T10:00:00.123456789Z"}',
+      signature:
+        "v1=0828ea12f32328f23603c3f910c57474459a38a6fe79fce8afcfa12bf5780548",
     },
   }
 
@@ -557,22 +683,36 @@ describe("Go's purge vectors", () => {
     })
   }
 
-  async function goWorld() {
+  /**
+   * The other member writes to the one who left, at each of `times`, on a
+   * socket opened at the first of them.
+   */
+  async function goWorld(times: string[]) {
     const world = makeWorld({ REALTIME_PURGE_SECRET: goSecret })
     const name = directMessageName(goOrganization, removedUser, otherUser)
     const dm = await world.object<Dm>("DirectMessageAgent", name)
+    vi.setSystemTime(new Date(times[0]))
     const socket = await openSocket(dm, {
       organizationId: goOrganization,
       userId: otherUser,
     })
-    await say(dm, socket, {
-      type: "dm-send",
-      clientId: "client-go-vector",
-      body: "Welcome aboard",
-    })
+    for (const [index, time] of times.entries()) {
+      vi.setSystemTime(new Date(time))
+      await say(dm, socket, {
+        type: "dm-send",
+        clientId: `client-go-vector-${index}`,
+        body: `at ${time}`,
+      })
+    }
     const inboxOf = (userId: string) =>
       world.object<Inbox>("InboxAgent", inboxName(goOrganization, userId))
-    return { world, dm, inboxOf }
+    const send = (vector: { body: string; signature: string }) =>
+      handlePurge(
+        goRequest(vector),
+        world.env as unknown as ConversationEnv,
+        goNow
+      )
+    return { world, dm, name, inboxOf, send }
   }
 
   it("signs each of them as Go does", async () => {
@@ -584,13 +724,11 @@ describe("Go's purge vectors", () => {
   })
 
   it("carries out a member's removal, 204 again for the same event", async () => {
-    const { world, dm, inboxOf } = await goWorld()
+    const { world, dm, inboxOf, send } = await goWorld([
+      "2026-09-24T09:00:00.000Z",
+    ])
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const response = await handlePurge(
-        goRequest(vectors.memberRemoved),
-        world.env as unknown as ConversationEnv,
-        goNow
-      )
+      const response = await send(vectors.memberRemoved)
       expect(response.status).toBe(204)
       expect(await response.text()).toBe("")
     }
@@ -598,17 +736,16 @@ describe("Go's purge vectors", () => {
     expect(await (await inboxOf(otherUser)).listConversations()).toEqual([])
     expect(await (await inboxOf(removedUser)).listConversations()).toEqual([])
     expect(world.callsTo("RealtimeRegistryAgent", "purge")).toHaveLength(2)
+    expect(world.callsTo("InboxAgent", "purge")).toHaveLength(1)
   })
 
-  it("carries out an organization's deletion, 204 again for the same event", async () => {
-    const { world, dm, inboxOf } = await goWorld()
+  it("carries out an organization's deletion, newer messages too, 204 again for the same event", async () => {
+    const { world, dm, inboxOf, send } = await goWorld([
+      "2026-09-24T09:00:00.000Z",
+      "2026-09-24T11:00:00.000Z",
+    ])
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const response = await handlePurge(
-        goRequest(vectors.organizationDeleted),
-        world.env as unknown as ConversationEnv,
-        goNow
-      )
-      expect(response.status).toBe(204)
+      expect((await send(vectors.organizationDeleted)).status).toBe(204)
     }
     expect(dm.sql`SELECT * FROM dm_messages`).toEqual([])
     for (const userId of [removedUser, otherUser]) {
@@ -621,8 +758,37 @@ describe("Go's purge vectors", () => {
     expect(await registry.members()).toEqual([])
   })
 
+  it("counts a message written in removed_at's millisecond as at or before it, and one written the next as newer", async () => {
+    const { world, dm, name, inboxOf, send } = await goWorld([
+      "2026-09-24T10:00:00.123Z",
+      "2026-09-24T10:00:00.124Z",
+    ])
+    expect((await send(vectors.memberRemovedNanoseconds)).status).toBe(204)
+
+    expect(
+      dm.sql<{ created_at: string }>`SELECT created_at FROM dm_messages`
+    ).toEqual([{ created_at: "2026-09-24T10:00:00.124Z" }])
+    // The conversation stays, in both inboxes, with what stayed.
+    for (const userId of [removedUser, otherUser]) {
+      expect(await (await inboxOf(userId)).listConversations()).toEqual([
+        expect.objectContaining({
+          name,
+          lastMessage: expect.objectContaining({
+            createdAt: "2026-09-24T10:00:00.124Z",
+          }) as unknown,
+          unread: userId === removedUser ? 1 : 0,
+        }),
+      ])
+    }
+    const registry = await world.object<Registry>(
+      "RealtimeRegistryAgent",
+      goOrganization
+    )
+    expect(await registry.members()).toContain(removedUser)
+  })
+
   it("answers 401 for a changed signature, or the right one outside the window", async () => {
-    const { world, dm } = await goWorld()
+    const { world, dm } = await goWorld(["2026-09-24T09:00:00.000Z"])
     const env = world.env as unknown as ConversationEnv
     const flipped = vectors.memberRemoved.signature.replace(/.$/, (last) =>
       last === "0" ? "1" : "0"
@@ -641,7 +807,7 @@ describe("Go's purge vectors", () => {
       ).status
     ).toBe(401)
     expect(dm.sql<{ body: string }>`SELECT body FROM dm_messages`).toEqual([
-      { body: "Welcome aboard" },
+      { body: "at 2026-09-24T09:00:00.000Z" },
     ])
   })
 })

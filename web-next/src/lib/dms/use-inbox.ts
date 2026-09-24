@@ -41,7 +41,7 @@ type Live = {
   settled?: "error" | "session_expired"
 }
 
-type Socket = { readyState: number; OPEN: number }
+type Socket = { readyState: number; OPEN: number; reconnect: () => void }
 
 function initialLive(name: string): Live {
   return {
@@ -84,6 +84,8 @@ class InboxView {
   private organizationId = ""
   private userId = ""
   private checking = false
+  /** A check under way reopens the socket when the Worker lets the member in: the object ended its run. */
+  private reopenAfterCheck = false
 
   constructor(private readonly render: () => void) {}
 
@@ -121,13 +123,10 @@ class InboxView {
       return
     }
     this.live = { ...this.live, open: false, dropped: true }
-    if (event.code === conversationGoneCloseCode) {
-      this.live = { ...this.live, settled: "error" }
-      this.render()
-      return
-    }
     this.render()
-    this.check()
+    // The object's close of a run it ended (a purge) is not reopened by the
+    // SDK: the Worker says whether it may be.
+    this.check(event.code === conversationGoneCloseCode)
   }
 
   private apply(message: InboxServerMessage): void {
@@ -163,31 +162,54 @@ class InboxView {
         }
         return
       case "inbox-gone":
-        this.live = { ...this.live, open: false, settled: "error" }
+        // A purge ended this run of the inbox. Whether the member may open
+        // it again (with what stayed of it) is the Worker's to say.
+        this.live = { ...this.live, open: false, dropped: true }
+        this.check(true)
         return
     }
   }
 
-  /** Why the socket closed: the Worker makes the socket's own check with Go. */
-  private check(): void {
+  /**
+   * Why the socket closed, or whether a run the object ended may be opened
+   * again (`reopen`): the Worker makes the socket's own check with Go. 401
+   * ends the session, 403 or 404 stops for good; otherwise a socket the SDK
+   * does not reopen by itself is reopened.
+   */
+  private check(reopen: boolean): void {
+    if (reopen) this.reopenAfterCheck = true
     if (this.checking) return
     this.checking = true
     const name = this.live.name
+    const reopenIfWanted = () => {
+      if (
+        this.live.name === name &&
+        !this.live.settled &&
+        this.reopenAfterCheck
+      ) {
+        this.socket?.reconnect()
+      }
+    }
     checkConversationSocket(inboxPath(this.organizationId, this.userId))
-      .catch((error: unknown) => {
-        if (this.live.name !== name || !(error instanceof ApiError)) return
-        if (error.status === 401) {
+      .then(reopenIfWanted, (error: unknown) => {
+        if (this.live.name !== name) return
+        if (error instanceof ApiError && error.status === 401) {
           this.live = { ...this.live, settled: "session_expired" }
-        } else if (error.status === 403 || error.status === 404) {
+        } else if (
+          error instanceof ApiError &&
+          (error.status === 403 || error.status === 404)
+        ) {
           this.live = { ...this.live, settled: "error" }
         } else {
           // Anything else may pass: the socket keeps trying.
+          reopenIfWanted()
           return
         }
         this.render()
       })
       .finally(() => {
         this.checking = false
+        this.reopenAfterCheck = false
       })
   }
 }

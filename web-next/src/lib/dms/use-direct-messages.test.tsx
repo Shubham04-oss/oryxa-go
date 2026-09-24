@@ -586,9 +586,17 @@ describe("useDirectMessages: refusals", () => {
   })
 
   it("opens the socket again at once when asked while it is down, and only then", async () => {
-    const api = mockApi(({ path: asked }) =>
-      asked === path ? json(undefined, 204) : undefined
-    )
+    let refused = false
+    const api = mockApi(({ path: asked }) => {
+      if (asked !== path) return undefined
+      return refused
+        ? apiError(
+            404,
+            "peer_not_found",
+            "This person is not in your organization."
+          )
+        : json(undefined, 204)
+    })
     const { result } = setup()
     const socket = open([wire(1)])
     act(() => result.current.reconnect())
@@ -608,19 +616,67 @@ describe("useDirectMessages: refusals", () => {
       "While away",
     ])
 
-    socket.says({ type: "dm-gone" })
+    // Refused for good: there is nothing to reopen.
+    refused = true
+    socket.drop()
+    await waitFor(() => expect(result.current.status).toBe("not-allowed"))
     act(() => result.current.reconnect())
     expect(socket.reconnects).toBe(1)
   })
 
-  it("is not allowed once the conversation was purged, without asking", () => {
-    const api = mockApi(() => undefined)
+  it("after a purge, asks the Worker, and is not allowed when it refuses", async () => {
+    const api = mockApi(({ path: asked }) =>
+      asked === path
+        ? apiError(
+            404,
+            "peer_not_found",
+            "This person is not in your organization."
+          )
+        : undefined
+    )
     const { result } = setup()
     const socket = open([wire(1)])
     socket.says({ type: "dm-gone" })
-    expect(result.current.status).toBe("not-allowed")
     socket.drop(conversationGoneCloseCode)
-    expect(result.current.status).toBe("not-allowed")
-    expect(api.calls).toEqual([])
+    await waitFor(() => expect(result.current.status).toBe("not-allowed"))
+    expect(api.calls.map((call) => call.path)).toEqual([path])
+    expect(socket.reconnects).toBe(0)
+    expect(socket.options.enabled).toBe(false)
+  })
+
+  it("after a purge, reopens when the Worker lets the viewer in, and takes what stayed as a new run", async () => {
+    mockApi(({ path: asked }) =>
+      asked === path ? json(undefined, 204) : undefined
+    )
+    const { result } = setup()
+    const socket = open([wire(1), wire(2), wire(3)], { conversation: "dmc_1" })
+    act(() => result.current.send("in flight"))
+    const [inFlight] = socket.said("dm-send")
+    socket.says({ type: "dm-gone" })
+    expect(result.current.status).toBe("error")
+    await waitFor(() => expect(socket.reconnects).toBe(1))
+    await waitFor(() => expect(socket.readyState).toBe(1))
+    socket.says(snapshot([wire(3)], { conversation: "dmc_2" }))
+    expect(result.current.status).toBe("live")
+    expect(
+      result.current.messages.map((message) => [message.seq, message.status])
+    ).toEqual([
+      [3, undefined],
+      [0, "sending"],
+    ])
+    // What was out goes again under its own id.
+    expect(socket.said("dm-send").at(-1)).toEqual(inFlight)
+  })
+
+  it("treats the object's close of a run as a purge, when its word did not arrive", async () => {
+    const api = mockApi(({ path: asked }) =>
+      asked === path ? json(undefined, 204) : undefined
+    )
+    setup()
+    const socket = open([wire(1)])
+    socket.drop(conversationGoneCloseCode)
+    await waitFor(() => expect(socket.reconnects).toBe(1))
+    // (The stand-in's reconnect reports one more close, which asks again.)
+    expect(api.calls.map((call) => call.path)).toContain(path)
   })
 })
