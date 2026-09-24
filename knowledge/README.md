@@ -43,15 +43,17 @@ Files has no connection to announce it. The first organization-scoped upload
 starts a shared Files source; the first team-scoped upload starts one for that
 team; the first member-scoped upload starts one for that member. Knowledge
 hears `files.object.created.v1` and registers each source through the
-uploader's standing grant. Later uploads
-schedule the existing source to sync promptly: once, however many arrive
-before its pass starts, and an upload that lands while a pass is under way,
-possibly after it listed the placement, has the next pass run as soon as
-that one ends rather than an interval later. Files answers its whole listing
-at once, so an incremental pass does not download a file the source already
-holds live with the same sha256, name, purpose and access label: a pass
-brought forward by an upload reads the new file, not the whole placement. A
-full sweep reads everything again.
+uploader's standing grant, once Files has answered the listing the source
+would make as them.
+
+Later uploads schedule the existing source to sync promptly: once, however
+many arrive before its pass starts, and an upload that lands while a pass is
+under way, possibly after it listed the placement, has the next pass run as
+soon as that one ends rather than an interval later. Files answers its whole
+listing at once, so an incremental pass does not download a file the source
+already holds live with the same sha256, name, purpose and access label: a
+pass brought forward by an upload reads the new file, not the whole
+placement. A full sweep reads everything again.
 
 A deletion is heard the same way: `files.object.deleted.v1` retracts the
 file's document at once, through the sources at the placement the event
@@ -90,7 +92,10 @@ refuses the listing on every pass, which no retry fixes, so the pass retires
 the source (`no_longer_readable`) with what it held instead of backing off
 for ever. That too gives the placement back: the next upload there registers
 a source as its uploader, and its first pass indexes the placement again.
-Until someone uploads, what the retired source held is not searchable.
+An upload that arrives before any pass has noticed only brings the doomed
+source forward; the pass it causes retires it, and the upload after that
+takes the placement over. Until then, what the retired source held is not
+searchable.
 
 ## Connecting an app indexes what it holds
 
