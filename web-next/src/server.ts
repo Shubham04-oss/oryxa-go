@@ -8,13 +8,21 @@ import {
   isNameId,
   parseDirectMessageName,
   parseInboxName,
+  parseSideConversationName,
   peerIn,
 } from "./lib/dms/names"
 import { parseTeamspaceRoomAgentName } from "./lib/rooms/room-agent"
+import { encodeRoster } from "./lib/side/protocol"
+import type { SideRoster } from "./lib/side/protocol"
+import { rosterOf } from "./lib/side/roster"
 import { parseSpecialistAgentName } from "./lib/specialists/chat-messages"
 import { parseThreadAgentName } from "./lib/threads/chat-messages"
 import { REALTIME_PURGE_PATH, handlePurge } from "./realtime-purge"
 import { RealtimeRegistryAgent } from "./realtime-registry-agent"
+import {
+  SideConversationAgent,
+  sideRequestHeaders,
+} from "./side-conversation-agent"
 import {
   SpecialistChatAgent,
   specialistRequestHeaders,
@@ -38,6 +46,7 @@ export {
   DirectMessageAgent,
   InboxAgent,
   RealtimeRegistryAgent,
+  SideConversationAgent,
   SpecialistChatAgent,
   TeamspaceRoomAgent,
   ThreadChatAgent,
@@ -491,6 +500,77 @@ async function inboxAccess(
   return caller
 }
 
+/** What the side conversation's check learned: who the member is, and who is in the conversation. */
+type SideGrant = Caller & { roster: SideRoster }
+
+/**
+ * Whether the member may open a side conversation: one of its two people,
+ * on the teamspace's team (`is_member`: Go shows a teamspace to a manager
+ * who is not on its team too, but its conversations are the team's), with
+ * the other person on the team as well (in the teamspace's people, the
+ * whisperer seats Go derives from the live team directory). Both of Go's
+ * answers are asked for at once; the member's own refusal comes first
+ * (401, or 404 for an organization that is not theirs), then 403
+ * `not_participant`, Go's refusal of the teamspace (404 for one the member
+ * cannot see), 403 `forbidden` off the team, and 404 `peer_not_found`.
+ */
+async function sideConversationAccess(
+  ids: {
+    organizationId: string
+    teamspaceId: string
+    userA: string
+    userB: string
+  },
+  ask: AskGo
+): Promise<Response | SideGrant> {
+  const [organization, space] = await Promise.all([
+    ask.json(organizationPath(ids.organizationId)),
+    ask.json(teamspacePath(ids)),
+  ])
+  const caller = callerIn(organization)
+  if (caller instanceof Response) return caller
+  const peerId = peerIn(ids, caller.userId)
+  if (!peerId) {
+    return failure(
+      403,
+      "not_participant",
+      "Only the two people in a conversation can open it."
+    )
+  }
+  if (space instanceof Response) return space
+  if ((space.answer as { is_member?: unknown } | null)?.is_member !== true) {
+    return failure(
+      403,
+      "forbidden",
+      "Only the teamspace's team can open its side conversations."
+    )
+  }
+  const roster = rosterOf(space.answer, ids)
+  if (!roster) return badGateway()
+  if (!roster.people.some((person) => person.userId === peerId)) {
+    return failure(
+      404,
+      "peer_not_found",
+      "This person is not on the teamspace's team."
+    )
+  }
+  return { userId: caller.userId, roster }
+}
+
+/** The headers a side conversation trusts: the member as Go said, their cookie, and who is in it. */
+function sideConversationIdentity(
+  ids: { organizationId: string },
+  cookie: string,
+  grant: SideGrant
+): Record<string, string> {
+  return {
+    [sideRequestHeaders.organization]: ids.organizationId,
+    [sideRequestHeaders.user]: grant.userId,
+    [sideRequestHeaders.cookie]: cookie,
+    [sideRequestHeaders.roster]: encodeRoster(grant.roster),
+  }
+}
+
 /** The headers a DM or an inbox trusts: the organization, and the member as Go said. */
 function conversationIdentity(
   ids: { organizationId: string },
@@ -505,7 +585,7 @@ function conversationIdentity(
 
 /**
  * Every realtime object, by the path segment its binding is served at. A
- * new one (REALTIME.md: a side conversation) is one more entry.
+ * new one is one more entry.
  */
 const realtimeObjects = new Map(
   [
@@ -577,6 +657,19 @@ const realtimeObjects = new Map(
       checkAccess: directMessageAccess,
       identity: conversationIdentity,
       unavailable: "This conversation is unavailable.",
+    }),
+    // A teamspace's side conversation, `{organization}~{teamspace}~{userA}~{userB}`
+    // (user ids sorted): two teammates and both their agents. People's
+    // messages live only in its Durable Object; it asks Go as each of them
+    // for their agents and requests. Nobody deletes one; a purge from Go
+    // empties it when one of them leaves (src/realtime-purge.ts).
+    realtimeObject({
+      binding: "SideConversationAgent",
+      reads: [],
+      parseName: parseSideConversationName,
+      checkAccess: sideConversationAccess,
+      identity: sideConversationIdentity,
+      unavailable: "This side conversation is unavailable.",
     }),
     // A member's conversation list, `{organization}~{user}`, which their
     // conversations keep current.

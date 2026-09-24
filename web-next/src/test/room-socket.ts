@@ -1,7 +1,7 @@
 // A stand-in for the Agents SDK's `useAgent`, for the tests of the pages
 // on realtime objects (the teamspace room, the specialist chat, a DM, an
-// inbox): each mount gets a socket the test opens, closes and speaks
-// through as the Durable Object would. Use it with
+// inbox, a side conversation): each mount gets a socket the test opens,
+// closes and speaks through as the Durable Object would. Use it with
 // `vi.mock("agents/react", async () => (await import("@/test/room-socket")).agentsReact)`,
 // and, for a chat, src/test/agent-chat.ts for `useAgentChat`.
 import { act } from "@testing-library/react"
@@ -16,16 +16,18 @@ import type {
   RoomServerMessage,
   TeamspaceRoomState,
 } from "@/lib/rooms/room-agent"
+import type { SideClientMessage, SideServerMessage } from "@/lib/side/protocol"
 import type { SpecialistChatState } from "@/lib/specialists/chat-messages"
 
 /** What an object syncs to its sockets. */
 type SyncedState = TeamspaceRoomState | SpecialistChatState
 
 /** What a page says on a socket. */
-type ClientMessage = RoomClientMessage | DmClientMessage
+type ClientMessage = RoomClientMessage | DmClientMessage | SideClientMessage
 
 /** What an object says on one. */
-type ServerMessage = RoomServerMessage | DmServerMessage | InboxServerMessage
+type ServerMessage =
+  RoomServerMessage | DmServerMessage | InboxServerMessage | SideServerMessage
 
 type Options = {
   agent: string

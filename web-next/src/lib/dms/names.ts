@@ -71,9 +71,14 @@ export function peerIn(
 }
 
 /**
- * A side conversation (REALTIME.md), `{organization}~{teamspace}~{userA}~{userB}`,
- * the user ids sorted as a DM's are. Its object comes later; an inbox already
- * lists one by this name.
+ * A side conversation (REALTIME.md, src/side-conversation-agent.ts): two
+ * teammates and both their agents in one teamspace,
+ * `{organization}~{teamspace}~{userA}~{userB}`, the user ids sorted as a
+ * DM's are, so both people reach the same object whoever opens it.
+ *
+ * Strict: it throws a `TypeError` for an id a name may not hold
+ * (`isNameId`) or for the same person twice, so it never builds a name
+ * `parseSideConversationName` would refuse.
  */
 export function sideConversationName(
   organizationId: string,
@@ -81,11 +86,28 @@ export function sideConversationName(
   userA: string,
   userB: string
 ): string {
+  if (
+    !isNameId(organizationId) ||
+    !isNameId(teamspaceId) ||
+    !isNameId(userA) ||
+    !isNameId(userB)
+  ) {
+    throw new TypeError(
+      "a side conversation's ids are each 1 to 128 of A-Z a-z 0-9 _ -"
+    )
+  }
+  if (userA === userB) {
+    throw new TypeError("a side conversation is between two different people")
+  }
   const [first, second] = userA < userB ? [userA, userB] : [userB, userA]
   return `${organizationId}~${teamspaceId}~${first}~${second}`
 }
 
-/** The ids of a side conversation's name, or nothing for one `sideConversationName` could not have made. */
+/**
+ * The ids a side conversation's name was made from, or nothing for a name
+ * `sideConversationName` could not have made: four ids, the two people
+ * different and in order.
+ */
 export function parseSideConversationName(
   name: string
 ): (DirectMessageIds & { teamspaceId: string }) | undefined {

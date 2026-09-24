@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { DirectMessageAgent } from "./direct-message-agent"
 import { InboxAgent } from "./inbox-agent"
-import { directMessageName, inboxName } from "./lib/dms/names"
+import {
+  directMessageName,
+  inboxName,
+  sideConversationName,
+} from "./lib/dms/names"
 import {
   REALTIME_PURGE_PATH,
   handlePurge,
@@ -13,6 +17,8 @@ import {
 } from "./realtime-purge"
 import type { PurgeRequest } from "./realtime-purge"
 import { RealtimeRegistryAgent, purgeMemoryMs } from "./realtime-registry-agent"
+import { SideConversationAgent } from "./side-conversation-agent"
+import { encodeRoster } from "./lib/side/protocol"
 import { World, drain, openSocket, say } from "./test/durable-objects"
 import type { Harness } from "./test/durable-objects"
 import type { ConversationEnv } from "./conversation-env"
@@ -41,11 +47,51 @@ function makeWorld(
   return new World(
     {
       DirectMessageAgent,
+      SideConversationAgent,
       InboxAgent,
       RealtimeRegistryAgent,
     } as unknown as ConstructorParameters<typeof World>[0],
     vars
   )
+}
+
+type Side = SideConversationAgent & Harness
+
+/**
+ * `from` says something to `to` in their side conversation in the
+ * teamspace, over a socket of it, as a page does. Go is a stand-in with no
+ * requests to read.
+ */
+async function sideTalk(
+  world: World,
+  from: string,
+  to: string,
+  body = "hello"
+) {
+  const side = await world.object<Side>(
+    "SideConversationAgent",
+    sideConversationName(org, "tsp_launch", from, to)
+  )
+  const socket = await openSocket(
+    side,
+    { organizationId: org, userId: from },
+    {
+      "X-Oryxa-Cookie": `oryxa_access=${from}`,
+      "X-Oryxa-Side-Roster": encodeRoster({
+        teamspaceName: "Launch room",
+        paused: false,
+        people: [],
+        contributions: [],
+      }),
+    }
+  )
+  clientIds += 1
+  await say(side, socket, {
+    type: "side-send",
+    clientId: `client-${String(clientIds).padStart(4, "0")}`,
+    body,
+  })
+  return { side, socket }
 }
 
 let clientIds = 0
@@ -461,6 +507,49 @@ describe("purging", () => {
     ])
     const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
     expect(await registry.members()).toContain(admin)
+  })
+
+  it("reaches the side conversations a member is in, as their DMs: emptied, or restated with what is newer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ requests: [] }))
+    )
+    const world = makeWorld({
+      REALTIME_PURGE_SECRET: secret,
+      ORYXA_API_ORIGIN: "http://go.test",
+    })
+    const { socket: adminSocket } = await sideTalk(
+      world,
+      admin,
+      owner,
+      "in the launch room, before"
+    )
+    await sideTalk(world, member, admin, "member, before")
+    later(60_000)
+    await sideTalk(world, member, admin, "member, after")
+    const bodies = (userA: string, userB: string) => {
+      const side = world.existing<Side>(
+        "SideConversationAgent",
+        sideConversationName(org, "tsp_launch", userA, userB)
+      )
+      if (!side) return undefined
+      return side.sql<{
+        body: string
+      }>`SELECT body FROM side_items ORDER BY seq`.map((row) => row.body)
+    }
+
+    expect((await purge(world, await purgeRequest(memberLeft))).status).toBe(
+      204
+    )
+
+    expect(bodies(admin, owner)).toEqual([])
+    expect(adminSocket.closed?.code).toBe(4404)
+    expect(await listed(world, owner)).toEqual([])
+    const kept = sideConversationName(org, "tsp_launch", admin, member)
+    expect(bodies(admin, member)).toEqual(["member, after"])
+    expect(await listed(world, member)).toEqual([kept])
+    expect(await listed(world, admin)).toEqual([kept])
+    vi.unstubAllGlobals()
   })
 
   it("reaches a DM opened without a message: its sockets close, so the member who left cannot write in it", async () => {

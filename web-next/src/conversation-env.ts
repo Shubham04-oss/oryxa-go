@@ -1,14 +1,17 @@
 import type { DirectMessageAgent } from "./direct-message-agent"
 import type { InboxAgent } from "./inbox-agent"
 import type { RealtimeRegistryAgent } from "./realtime-registry-agent"
+import type { SideConversationAgent } from "./side-conversation-agent"
 
 /**
- * What the conversation objects (a DM, a member's inbox, the organization's
- * registry) read from the Worker's environment: each other's bindings, and
- * the secret Go signs a purge with (src/realtime-purge.ts).
+ * What the conversation objects (a DM, a side conversation, a member's
+ * inbox, the organization's registry) read from the Worker's environment:
+ * each other's bindings, and the secret Go signs a purge with
+ * (src/realtime-purge.ts).
  */
 export interface ConversationEnv extends Cloudflare.Env {
   DirectMessageAgent: DurableObjectNamespace<DirectMessageAgent>
+  SideConversationAgent: DurableObjectNamespace<SideConversationAgent>
   InboxAgent: DurableObjectNamespace<InboxAgent>
   RealtimeRegistryAgent: DurableObjectNamespace<RealtimeRegistryAgent>
   /**
