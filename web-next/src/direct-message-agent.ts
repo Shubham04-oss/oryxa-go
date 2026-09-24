@@ -2,7 +2,7 @@ import { Agent, getAgentByName } from "agents"
 import type { Connection, ConnectionContext, WSMessage } from "agents"
 import { conversationRequestHeaders } from "./conversation-env"
 import type { ConversationEnv } from "./conversation-env"
-import type { NotedMessage } from "./inbox-agent"
+import type { NotedMessage, RestatedConversation } from "./inbox-agent"
 import { inboxName, parseDirectMessageName, peerIn } from "./lib/dms/names"
 import type { DirectMessageIds } from "./lib/dms/names"
 import {
@@ -10,11 +10,13 @@ import {
   DM_MAX_BODY_LENGTH,
   DM_PAGE_SIZE,
   DM_TYPING_TTL_MS,
+  MAX_UNREAD,
   codePoints,
   conversationGoneCloseCode,
   parseDmClientMessage,
   preview,
 } from "./lib/dms/protocol"
+import { isPurgeInstant } from "./realtime-registry-agent"
 import type {
   DmRead,
   DmSendFailure,
@@ -24,14 +26,20 @@ import type {
 
 /**
  * What a socket keeps, in its attachment (so hibernation keeps it): who it
- * is, as the Worker determined it, and whether its page says the tab is
- * visible.
+ * is, as the Worker determined it, whether its page says the tab is
+ * visible, and when it opened (a purge ends the sockets from before a
+ * member left, and keeps those opened since).
  */
 export type DmConnectionState = {
   userId: string
   /** False until the page says. */
   visible: boolean
+  /** When the Worker let it in, as `toISOString` writes it. */
+  connectedAt?: string
 }
+
+/** A purge for one person in the DM, who left the organization at `removedAt` (a `PurgeInstant`). */
+export type DmPurgeScope = { userId: string; removedAt: string }
 
 /**
  * How many messages one person may send: `burst` at once, then one every
@@ -212,7 +220,11 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       connection.close(1008, "Unauthorized")
       return
     }
-    connection.setState({ userId, visible: false } satisfies DmConnectionState)
+    connection.setState({
+      userId,
+      visible: false,
+      connectedAt: new Date().toISOString(),
+    } satisfies DmConnectionState)
     this.schema()
     send(connection, this.snapshot(userId))
     // The conversation is its people's from the moment it opens, message or
@@ -231,7 +243,7 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
         this.see(connection, state, said.visible)
         return
       case "dm-send":
-        await this.post(connection, state.userId, said.clientId, said.body)
+        await this.post(connection, state, said.clientId, said.body)
         return
       case "dm-history": {
         const page = this.page(said.beforeSeq, said.limit)
@@ -268,32 +280,66 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
   }
 
   /**
-   * Empties the conversation: its messages, read states and what its inboxes
-   * were told, and closes every socket (`dm-gone`, then
-   * `conversationGoneCloseCode`). The purge (src/realtime-purge.ts) calls it
-   * over RPC when one of its people leaves the organization, and removes it
-   * from both inboxes itself. Safe to call again.
+   * The purge (src/realtime-purge.ts), over RPC from an inbox's.
+   *
+   * Without a `scope` (an organization deleted), it empties the
+   * conversation: every message, read state and what its inboxes were told,
+   * and tells every socket `dm-gone` and closes it.
+   *
+   * For one of its people who left at `scope.removedAt`, the messages written
+   * at or before then go, and so do any that person wrote after it on a
+   * socket opened before it (a page still open from before they left). What
+   * is newer stays, as a new run of the conversation: both inboxes are
+   * restated from it (`InboxAgent.restateConversation`: its latest message
+   * and what is unread), and sockets opened since are sent it, while those
+   * opened before are told `dm-gone` and closed, so each page asks the Worker
+   * whether it may open the conversation again. Nothing newer and no socket
+   * opened since: it is emptied as above.
+   *
+   * Resolves whether it was emptied, and the caller then takes it off both
+   * inboxes; otherwise it stays in them, restated. Safe to call again.
    */
-  async purge(): Promise<void> {
+  async purge(scope?: DmPurgeScope): Promise<{ emptied: boolean }> {
     this.epoch += 1
     this.schema()
     for (const held of this.typing.values()) clearTimeout(held.timer)
     this.typing.clear()
     this.sendBuckets.clear()
-    const retry = this.meta("retry")
-    this.sql`DELETE FROM dm_messages`
-    this.sql`DELETE FROM dm_reads`
-    this.sql`DELETE FROM dm_inbox_sync`
-    this.sql`DELETE FROM dm_meta`
-    if (retry) await this.cancelSchedule(retry).catch(() => false)
-    for (const connection of this.getConnections()) {
-      send(connection, { type: "dm-gone" })
-      try {
-        connection.close(conversationGoneCloseCode, "Gone")
-      } catch {
-        // Already closed.
-      }
+    if (!scope) {
+      await this.reset()
+      this.endSockets(() => true)
+      return { emptied: true }
     }
+    const { userId, removedAt } = this.checkedScope(scope)
+    this.sql`DELETE FROM dm_messages WHERE created_at <= ${removedAt}
+      OR (author_id = ${userId} AND session_at IS NOT NULL AND session_at <= ${removedAt})`
+    const openedBefore = (state: DmConnectionState) =>
+      (state.connectedAt ?? "") <= removedAt
+    const staying = [...this.getConnections()].flatMap((connection) => {
+      const state = stateOf(connection)
+      return state && !openedBefore(state) ? [{ connection, state }] : []
+    })
+    if (this.latestSeq() === 0 && staying.length === 0) {
+      await this.reset()
+      this.endSockets(() => true)
+      return { emptied: true }
+    }
+    // What stays is a new run of the conversation.
+    if (this.latestSeq() === 0) {
+      this.sql`DELETE FROM dm_reads`
+      this.deleteMeta("conversation")
+      this.setMeta("opened", "1")
+    } else {
+      this.setMeta("conversation", `dmc_${randomId()}`)
+    }
+    const { userA, userB } = this.ids
+    for (const user of [userA, userB]) this.setMeta(`restate:${user}`, "1")
+    this.endSockets(openedBefore)
+    for (const { connection, state } of staying) {
+      send(connection, this.snapshot(state.userId))
+    }
+    await this.syncInboxes()
+    return { emptied: false }
   }
 
   /** The retry's schedule: tells the inboxes what they missed; each try that fails waits twice as long for the next. */
@@ -311,16 +357,65 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return ids
   }
 
+  /** A purge's scope checked against this conversation: one of its people, and an instant. */
+  private checkedScope(scope: DmPurgeScope): DmPurgeScope {
+    const { userId, removedAt } = scope as {
+      [Key in keyof DmPurgeScope]?: unknown
+    }
+    if (
+      typeof userId !== "string" ||
+      !peerIn(this.ids, userId) ||
+      !isPurgeInstant(removedAt)
+    ) {
+      throw new TypeError("not a purge of this conversation")
+    }
+    return { userId, removedAt }
+  }
+
+  /** Empties all the conversation keeps, and lets its retry go. */
+  private async reset(): Promise<void> {
+    const retry = this.meta("retry")
+    this.sql`DELETE FROM dm_messages`
+    this.sql`DELETE FROM dm_reads`
+    this.sql`DELETE FROM dm_inbox_sync`
+    this.sql`DELETE FROM dm_meta`
+    if (retry) await this.cancelSchedule(retry).catch(() => false)
+  }
+
+  /**
+   * Tells the sockets `ending` picks (and any never let in) that this run of
+   * the conversation is over, and closes them: each page asks the Worker
+   * whether it may open the conversation again.
+   */
+  private endSockets(ending: (state: DmConnectionState) => boolean): void {
+    for (const connection of this.getConnections()) {
+      const state = stateOf(connection)
+      if (state && !ending(state)) continue
+      send(connection, { type: "dm-gone" })
+      try {
+        connection.close(conversationGoneCloseCode, "Gone")
+      } catch {
+        // Already closed.
+      }
+    }
+  }
+
   private schema(): void {
     if (this.schemaReady) return
+    // `session_at`: when the socket the message came on opened.
     this.sql`CREATE TABLE IF NOT EXISTS dm_messages (
       seq INTEGER PRIMARY KEY,
       id TEXT NOT NULL,
       author_id TEXT NOT NULL,
       client_id TEXT NOT NULL,
       body TEXT NOT NULL,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      session_at TEXT
     )`
+    const columns = this.sql<{ name: string }>`PRAGMA table_info(dm_messages)`
+    if (!columns.some((column) => column.name === "session_at")) {
+      this.sql`ALTER TABLE dm_messages ADD COLUMN session_at TEXT`
+    }
     this
       .sql`CREATE UNIQUE INDEX IF NOT EXISTS dm_messages_by_client ON dm_messages (author_id, client_id)`
     this.sql`CREATE TABLE IF NOT EXISTS dm_reads (
@@ -389,13 +484,14 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return { messages: kept, hasOlder }
   }
 
-  /** Says `body` as `author`, or tells the socket why not. */
+  /** Says `body` as the socket's person, or tells the socket why not. */
   private async post(
     connection: Connection,
-    author: string,
+    state: DmConnectionState,
     clientId: string,
     body: string
   ): Promise<void> {
+    const author = state.userId
     const stored = this
       .sql<MessageRow>`SELECT seq, id, author_id, client_id, body, created_at
       FROM dm_messages WHERE author_id = ${author} AND client_id = ${clientId}`.at(
@@ -421,16 +517,15 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     }
     let row: MessageRow
     try {
-      row = this.store(author, clientId, text)
+      row = this.store(author, clientId, text, state.connectedAt ?? null)
     } catch (error) {
       console.error("direct message: could not store a message", error)
       this.refuse(connection, clientId, "unavailable")
       return
     }
     for (const each of this.getConnections()) {
-      const state = stateOf(each)
-      if (state)
-        send(each, { type: "dm-message", message: wire(row, state.userId) })
+      const viewer = stateOf(each)?.userId
+      if (viewer) send(each, { type: "dm-message", message: wire(row, viewer) })
     }
     // Sending a message reads the conversation through it.
     this.tell({ type: "dm-read", userId: author, seq: row.seq })
@@ -453,10 +548,16 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
 
   /**
    * Stores a message and what it changes, synchronously, so that it is
-   * written as one: the message, the oldest dropped past the limit, the
-   * author's read through it, and the conversation's run.
+   * written as one: the message (with when its socket opened), the oldest
+   * dropped past the limit, the author's read through it, and the
+   * conversation's run.
    */
-  private store(author: string, clientId: string, body: string): MessageRow {
+  private store(
+    author: string,
+    clientId: string,
+    body: string,
+    sessionAt: string | null
+  ): MessageRow {
     const row: MessageRow = {
       seq: this.latestSeq() + 1,
       id: `dmm_${randomId()}`,
@@ -466,8 +567,8 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       created_at: new Date().toISOString(),
     }
     this
-      .sql`INSERT INTO dm_messages (seq, id, author_id, client_id, body, created_at)
-      VALUES (${row.seq}, ${row.id}, ${author}, ${clientId}, ${body}, ${row.created_at})`
+      .sql`INSERT INTO dm_messages (seq, id, author_id, client_id, body, created_at, session_at)
+      VALUES (${row.seq}, ${row.id}, ${author}, ${clientId}, ${body}, ${row.created_at}, ${sessionAt})`
     if (row.seq > DM_HISTORY_LIMIT) {
       this
         .sql`DELETE FROM dm_messages WHERE seq <= ${row.seq - DM_HISTORY_LIMIT}`
@@ -609,13 +710,23 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     user: string,
     epoch: number
   ): Promise<void> {
+    const restate = this.meta(`restate:${user}`) === "1"
     const known = this.meta(`known:${user}`) === "1"
     const told = this.told(user)
-    const fresh = this
-      .sql<MessageRow>`SELECT seq, id, author_id, client_id, body, created_at
+    const fresh = restate
+      ? []
+      : this
+          .sql<MessageRow>`SELECT seq, id, author_id, client_id, body, created_at
       FROM dm_messages WHERE seq > ${told.noted}
       ORDER BY seq DESC LIMIT ${maxNotedPerUpdate}`.reverse()
-    if (known && fresh.length === 0 && this.readSeq(user) <= told.read) return
+    if (
+      !restate &&
+      known &&
+      fresh.length === 0 &&
+      this.readSeq(user) <= told.read
+    ) {
+      return
+    }
     const inbox = await getAgentByName(
       this.env.InboxAgent,
       inboxName(ids.organizationId, user)
@@ -625,6 +736,19 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       kind: "dm" as const,
       name: this.name,
       peerId: peerIn(ids, user) ?? "",
+    }
+    if (restate) {
+      // After a purge that kept something: the inbox is told what stays,
+      // in place of what it had.
+      await inbox.restateConversation(entry, this.restated(user))
+      if (this.epoch !== epoch) return
+      this.sql`INSERT INTO dm_inbox_sync (user_id, noted_seq, read_seq)
+        VALUES (${user}, ${this.latestSeq()}, ${this.readSeq(user)})
+        ON CONFLICT (user_id) DO UPDATE SET
+          noted_seq = excluded.noted_seq, read_seq = excluded.read_seq`
+      this.setMeta(`known:${user}`, "1")
+      this.deleteMeta(`restate:${user}`)
+      return
     }
     const last = fresh.at(-1)
     if (last) {
@@ -666,11 +790,26 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return [userA, userB].some((user) => {
       const told = this.told(user)
       return (
+        this.meta(`restate:${user}`) === "1" ||
         this.meta(`known:${user}`) !== "1" ||
         told.noted < latest ||
         told.read < this.readSeq(user)
       )
     })
+  }
+
+  /** What a person's inbox keeps of the conversation, restated from what it holds now. */
+  private restated(user: string): RestatedConversation {
+    const last = this
+      .sql<MessageRow>`SELECT seq, id, author_id, client_id, body, created_at
+      FROM dm_messages ORDER BY seq DESC LIMIT 1`.at(0)
+    const readSeq = this.readSeq(user)
+    const unread = this.sql<{ seq: number }>`SELECT seq FROM dm_messages
+      WHERE author_id != ${user} AND seq > ${readSeq}
+      ORDER BY seq DESC LIMIT ${MAX_UNREAD}`
+      .map((row) => row.seq)
+      .reverse()
+    return { ...(last ? { last: noted(last) } : {}), readSeq, unread }
   }
 
   /**
