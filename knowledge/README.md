@@ -382,7 +382,7 @@ source never shows its lease, version or attempt count.
 | `DELETE` | `/v1/organizations/{organizationID}/sources/{sourceID}` | Its creator or an org admin | Stop indexing it and retract what it held → `204` |
 | `POST` | `/v1/organizations/{organizationID}/sources/{sourceID}/sync` | Its creator or an org admin | Read it now rather than at its next interval |
 | `GET` | `/v1/organizations/{organizationID}/sources/{sourceID}/runs` | Its creator or an org admin | How recent passes went |
-| `GET` | `/v1/organizations/{organizationID}/documents/{documentID}` | Its source's creator or an org admin | A document's body, for what an event was too small to carry |
+| `GET` | `/v1/organizations/{organizationID}/documents/{documentID}` | Its source's creator or an org admin; an admin-only file's body, an org admin alone (never an agent) | A document's body, for what an event was too small to carry |
 | `GET` | `/v1/internal/organizations/{organizationID}/documents/{documentID}/body` | A named service | The same body, for a retrieval pipeline that has no member to be |
 
 The internal route is how the largest documents get indexed at all. An event

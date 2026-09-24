@@ -288,6 +288,11 @@ func (s *Service) SyncSource(ctx context.Context, credentials authclient.Credent
 
 // Document reads one document's body, for the caller fetching what an event
 // was too small to carry.
+//
+// Registering a source says nothing about who may read an admin-only file it
+// read: that is Files' access label, decided now. A creator who has since
+// stopped being an admin, or an agent acting for one, is told the document
+// does not exist, the same as anyone else it is not for.
 func (s *Service) Document(ctx context.Context, credentials authclient.Credentials, organizationID, documentID string) (domain.Document, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -302,6 +307,9 @@ func (s *Service) Document(ctx context.Context, credentials authclient.Credentia
 		return domain.Document{}, err
 	}
 	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
+		return domain.Document{}, domain.ErrNotFound
+	}
+	if documentAccess(source, document) == accessAdmins && (!caller.Role.IsOrgAdmin() || caller.Agent) {
 		return domain.Document{}, domain.ErrNotFound
 	}
 	return document, nil

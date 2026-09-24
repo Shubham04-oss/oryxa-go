@@ -292,13 +292,24 @@ func (s *Service) documentPublished(source domain.Source, document domain.Docume
 	return s.event(knowledgev1.DocumentPublishedDetailType, published)
 }
 
+// Access labels a published document carries: who within its scope may read
+// it.
+const (
+	accessMembers = "members"
+	accessAdmins  = "admins"
+)
+
+// documentAccess is who within its scope may read a document. Only Files'
+// own labels restrict one: a billing attachment, or a file shared with
+// admins alone. Any other provider's metadata is the provider's say, and
+// grants or revokes nothing.
 func documentAccess(source domain.Source, document domain.Document) string {
-	if source.Provider == "files" {
-		if document.Metadata["purpose"] == "billing.attachment" || document.Metadata["access"] == "admins" {
-			return "admins"
+	if source.Provider == filesProvider {
+		if document.Metadata["purpose"] == "billing.attachment" || document.Metadata["access"] == accessAdmins {
+			return accessAdmins
 		}
 	}
-	return "members"
+	return accessMembers
 }
 
 func (s *Service) documentRemoved(source domain.Source, document domain.Document, reason string) (domain.Event, error) {
