@@ -159,6 +159,20 @@ export function delegationWords(
   return `asks ${ownerId === reader.viewerId ? "you" : reader.peer.short} first`
 }
 
+/**
+ * An agent's Markdown as it is said aloud: its words without the marks
+ * (emphasis, headings, quotes, code), a link as its text, and every run of
+ * whitespace one space.
+ */
+export function spokenMarkdown(markdown: string): string {
+  return markdown
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-*+]|\d+[.)])\s+/gm, "")
+    .replace(/[*_~`]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 /** What something arriving says aloud, as news. */
 export function sideNews(item: SideItem, reader: SideReader): string {
   const who = (userId: string) =>
@@ -172,7 +186,7 @@ export function sideNews(item: SideItem, reader: SideReader): string {
         return `${item.agentName} is waiting for a confirmation.`
       }
       return item.body
-        ? `${item.agentName}: ${item.body}`
+        ? `${item.agentName}: ${spokenMarkdown(item.body)}`
         : `${item.agentName} is answering.`
     case "request-card":
       return `${who(item.requesterId)} asked ${item.targetAgentName}: ${item.task}`

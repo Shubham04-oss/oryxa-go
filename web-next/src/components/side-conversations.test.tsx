@@ -1118,6 +1118,17 @@ describe("A side conversation's states", () => {
       type: "side-read",
       seq: 2,
     })
+    // The answer, written in place, is said as it is done.
+    socket.says({
+      type: "side-item",
+      item: agentMessage(2, {
+        agentId: "agt_nia",
+        agentName: "Nia",
+        ownerId: priya,
+        body: "The notes\n\nare **ready**.",
+      }),
+    })
+    expect(announced(view)).toBe("Nia: The notes are ready.")
     socket.says({ type: "side-typing", userId: priya, typing: true })
     expect(within(view).getByText("Priya is typing…")).toBeTruthy()
   })

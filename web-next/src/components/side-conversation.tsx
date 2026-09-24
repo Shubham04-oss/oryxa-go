@@ -192,7 +192,7 @@ export function SideConversationPanel({
     isNews: (item) => isSideNews(item, viewerId),
     sayArrived: (arrived) =>
       arrived.length === 1
-        ? sideNews(arrived[0], reader)
+        ? spoken(sideNews(arrived[0], reader))
         : `${arrived.length} new messages in your conversation with ${peer.name}`,
     sayBelow: (total) =>
       `${total} new ${total === 1 ? "message" : "messages"} below`,
@@ -207,22 +207,33 @@ export function SideConversationPanel({
   })
   const { announce } = log
 
-  // A card changes in place as its request moves on: its approval is said
-  // aloud here (a result, a decline, a failure and an expiry each arrive as
-  // an item of their own, which is).
-  const approvedBefore = useRef<ReadonlySet<string>>(undefined)
+  // Items also change in place: an agent's answer as its run ends or
+  // waits, a card as its request is approved. Those are said aloud here; a
+  // new item is said as news (above), and a result, a decline, a failure or
+  // an expiry each arrive as an item of their own.
+  const statusesBefore = useRef<ReadonlyMap<string, string>>(undefined)
   useEffect(() => {
     if (status !== "live") return
-    const cards = items.filter(
-      (item): item is SideRequestCard =>
-        item.kind === "request-card" && item.status === "approved"
-    )
-    const before = approvedBefore.current
-    approvedBefore.current = new Set(cards.map((card) => card.requestId))
+    const statuses = new Map<string, string>()
+    for (const item of items) {
+      if (item.kind === "agent-message" || item.kind === "request-card") {
+        statuses.set(item.id, item.status)
+      }
+    }
+    const before = statusesBefore.current
+    statusesBefore.current = statuses
     if (!before) return
-    for (const card of cards) {
-      if (before.has(card.requestId)) continue
-      announce(cardState(card, reader).text)
+    for (const item of items) {
+      if (item.kind !== "agent-message" && item.kind !== "request-card") {
+        continue
+      }
+      const was = before.get(item.id)
+      if (was === undefined || was === item.status) continue
+      if (item.kind === "agent-message" && item.status !== "streaming") {
+        announce(spoken(sideNews(item, reader)))
+      } else if (item.kind === "request-card" && item.status === "approved") {
+        announce(cardState(item, reader).text)
+      }
     }
   }, [announce, items, reader, status])
 
@@ -256,6 +267,9 @@ export function SideConversationPanel({
       ? `${teamspaceName} is paused, so this conversation is read-only until a team admin resumes it.`
       : undefined
     : (length.status ?? (waitingForRoster ? "Connecting…" : target?.hint))
+  // The field is named for whom it writes to; its placeholder says when it
+  // cannot.
+  const label = target?.placeholder ?? `Message ${peer.short}`
   const placeholder = refused
     ? `You can't message ${peer.short} here`
     : sessionEnded
@@ -383,7 +397,7 @@ export function SideConversationPanel({
       <LogAnnouncer announcement={log.announcement} />
       <div ref={log.composerRef}>
         <AgentComposer
-          label={placeholder}
+          label={label}
           placeholder={placeholder}
           value={draft.text}
           onChange={(text) => {
@@ -412,6 +426,16 @@ export function SideConversationPanel({
       </div>
     </section>
   )
+}
+
+/** The longest an answer is said aloud: the rest is in the log. */
+const spokenLength = 280
+
+function spoken(text: string): string {
+  const characters = Array.from(text.replace(/\s+/g, " ").trim())
+  return characters.length <= spokenLength
+    ? characters.join("")
+    : `${characters.slice(0, spokenLength - 1).join("")}…`
 }
 
 /** What of the member's failed to send, and how each is said aloud as it fails. */

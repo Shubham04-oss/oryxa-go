@@ -5,6 +5,7 @@ import {
   cardState,
   isSideNews,
   sideNews,
+  spokenMarkdown,
   sideTimeline,
   targetOptions,
   teammatesOf,
@@ -458,5 +459,13 @@ describe("news", () => {
     expect(sideNews(card({ requesterId: priya }), reader)).toBe(
       "Priya Shah asked Nia: Check the notes"
     )
+  })
+
+  it("says an agent's Markdown as its words", () => {
+    expect(
+      spokenMarkdown(
+        "## Plan\n\n- **Ship** on _Thursday_\n- See [the notes](https://x.test/n) and `deck.pdf`\n\n> Quoted\n1. Two"
+      )
+    ).toBe("Plan Ship on Thursday See the notes and deck.pdf Quoted Two")
   })
 })
