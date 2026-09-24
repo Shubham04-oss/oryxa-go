@@ -3,7 +3,6 @@ import type { ComponentType } from "react"
 import {
   ArrowLeft,
   ArrowRight,
-  ArrowUpRight,
   BookOpenText,
   Bot,
   ChartNoAxesColumn,
@@ -21,7 +20,8 @@ import {
   Workflow,
 } from "lucide-react"
 import { WorkspaceFocus, workItems } from "./workspace-focus"
-import type { WorkId, WorkItem } from "./workspace-focus"
+import type { WorkItem } from "./workspace-focus"
+import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
 import { initialKnowledgeBases, KnowledgeBases } from "./knowledge-bases"
 import type { KnowledgeBase } from "./knowledge-bases"
 import {
@@ -33,16 +33,13 @@ import type {
   TeamspaceStatus,
   WorkspaceRole,
 } from "./teamspaces-management"
-import {
-  agents,
-  IdentityAvatar,
-  people,
-  TeamspaceAvatar,
-} from "./workspace-avatar"
+import { IdentityAvatar, people, TeamspaceAvatar } from "./workspace-avatar"
 import { WorkspaceTools } from "./workspace-tools"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
 import { getSharedPeople, PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
+import { useAgentsMode } from "@/hooks/use-agents-mode"
+import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
 import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
 import type { AvatarIdentity } from "./workspace-avatar"
@@ -112,12 +109,6 @@ const headings: Record<Section, string> = {
 
 const savedViews = ["Launch plan", "At-risk accounts", "Q4 pipeline"]
 
-const workEntries: Partial<Record<Section, WorkId[]>> = {
-  agents: ["launch-crew", "research-specialist"],
-  "multi-agents": ["launch-crew"],
-  specialists: ["research-specialist"],
-}
-
 function teamspaceWorkItem(space: Teamspace): WorkItem {
   if (space.id === "product-sync") {
     return { ...workItems["product-sync"], status: "Active" }
@@ -186,6 +177,7 @@ export function WorkspaceShell({
     Partial<Record<string, string[]>>
   >({})
   const conversationListRef = useRef<HTMLDivElement>(null)
+  const agentsMode = useAgentsMode()
 
   const currentIdentity: AvatarIdentity = session
     ? {
@@ -243,7 +235,10 @@ export function WorkspaceShell({
 
   const section = sectionsByMode[activeMode]
   const heading = headings[section]
-  const visibleWorkEntries = workEntries[section]
+  // Agents mode's focused work belongs to that mode and its workspace.
+  const agentWork =
+    activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
+  const isFocused = Boolean(focusedWork || agentWork)
   const sharedPeople = getSharedPeople(teamspaces, currentIdentity)
   const selectedPerson =
     section === "people"
@@ -324,8 +319,8 @@ export function WorkspaceShell({
     ])
   }
 
-  function openWork(workId: WorkId) {
-    setFocusedWork(workItems[workId])
+  function openWork(target: AgentsFocusTarget) {
+    agentsMode.open(target)
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
   }
@@ -358,9 +353,9 @@ export function WorkspaceShell({
       className="workspace-shell"
       data-left={leftExpanded ? "expanded" : "collapsed"}
       data-right={rightExpanded ? "expanded" : "collapsed"}
-      data-view={focusedWork ? "focused" : "browse"}
+      data-view={isFocused ? "focused" : "browse"}
     >
-      {!focusedWork && (
+      {!isFocused && (
         <aside
           id="workspace-navigation"
           className="workspace-left"
@@ -620,7 +615,14 @@ export function WorkspaceShell({
       )}
 
       <div className="workspace-middle">
-        {focusedWork ? (
+        {agentWork && selectedOrganization ? (
+          <AgentsFocus
+            target={agentWork}
+            organizationId={selectedOrganization.id}
+            onBack={agentsMode.close}
+            onOpen={openWork}
+          />
+        ) : focusedWork ? (
           <WorkspaceFocus
             work={focusedWork}
             onBack={() => setFocusedWork(null)}
@@ -729,42 +731,16 @@ export function WorkspaceShell({
                   onOpen={openTeamspace}
                 />
               )}
-              {visibleWorkEntries && (
-                <div className="workspace-entry-content">
-                  <p className="workspace-eyebrow">Agentic work</p>
-                  <div className="workspace-entry-grid">
-                    {visibleWorkEntries.map((workId) => {
-                      const work = workItems[workId]
-                      return (
-                        <button
-                          className="workspace-entry"
-                          type="button"
-                          key={work.id}
-                          aria-label={`Open ${work.title}`}
-                          onClick={() => openWork(workId)}
-                        >
-                          <span className="workspace-entry-kind">
-                            <IdentityAvatar
-                              identity={
-                                work.id === "research-specialist"
-                                  ? agents.specialist
-                                  : agents.planning
-                              }
-                            />
-                            {work.kind}
-                          </span>
-                          <span className="workspace-entry-title">
-                            <strong>{work.title}</strong>
-                            <ArrowUpRight size={17} strokeWidth={1.7} />
-                          </span>
-                          <span className="workspace-entry-description">
-                            {work.description}
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
+              {isAgentsSection(section) && (
+                <AgentsCanvas
+                  section={section}
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={session?.user.id}
+                  onOpen={openWork}
+                  onNavigate={selectSection}
+                />
               )}
             </main>
           </>

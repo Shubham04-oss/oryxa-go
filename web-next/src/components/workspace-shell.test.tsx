@@ -227,7 +227,8 @@ describe("WorkspaceShell navigation", () => {
     expect(screen.getByRole("heading", { name: "Specialists" })).toBeTruthy()
   })
 
-  it("opens focused team and agent work without the left sidebar and returns to the right section", () => {
+  // Agents mode's focused work is real data now: agents-mode.test.tsx.
+  it("opens focused team work without the left sidebar and returns to the right section", () => {
     render(<WorkspaceShell />)
 
     fireEvent.click(screen.getByRole("button", { name: /^Team$/ }))
@@ -264,19 +265,6 @@ describe("WorkspaceShell navigation", () => {
     ).toBeTruthy()
     expect(
       screen.getByRole("button", { name: "Manage Product sync" })
-    ).toBeTruthy()
-
-    fireEvent.click(screen.getByRole("button", { name: /^Agents$/ }))
-    fireEvent.click(screen.getByRole("button", { name: "Open Launch crew" }))
-    expect(
-      screen.queryByRole("complementary", { name: "Workspace navigation" })
-    ).toBeNull()
-    expect(
-      screen.getByRole("heading", { name: "Launch crew", level: 1 })
-    ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Back to workspace" }))
-    expect(
-      screen.getByRole("navigation", { name: "Agents navigation" })
     ).toBeTruthy()
   })
 

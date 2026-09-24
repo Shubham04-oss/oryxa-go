@@ -8,6 +8,7 @@
 @import "./components/people-directory.css";
 @import "./components/workspace-settings.css";
 @import "./components/auth/auth.css";
+@import "./components/agents-mode.css";
 
 @custom-variant dark (&:is(.dark *));
 

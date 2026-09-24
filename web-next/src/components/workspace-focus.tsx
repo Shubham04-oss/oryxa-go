@@ -7,17 +7,12 @@ import {
   FileText,
   Paperclip,
 } from "lucide-react"
-import {
-  agents,
-  IdentityAvatar,
-  people,
-  TeamspaceAvatar,
-} from "./workspace-avatar"
+import { IdentityAvatar, people, TeamspaceAvatar } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
 import { cn } from "@/lib/utils"
 
-export type WorkId = "product-sync" | "launch-crew" | "research-specialist"
+export type WorkId = "product-sync"
 
 type WorkMessage = {
   author: string
@@ -79,67 +74,6 @@ export const workItems: Record<WorkId, WorkItem> = {
         avatar: people.sam,
         time: "9:16 AM",
         text: "I'll review the checklist now and confirm with the team.",
-      },
-    ],
-  },
-  "launch-crew": {
-    id: "launch-crew",
-    title: "Launch crew",
-    kind: "Multi-agent team",
-    description: "Research, planning, and review agents working as one crew.",
-    status: "3 agents active",
-    participants: [agents.research, agents.planning, agents.review],
-    summary:
-      "The crew is gathering context, building the launch plan, and checking the final handoff.",
-    tasks: [
-      "Gather launch requirements",
-      "Draft the rollout plan",
-      "Review the handoff",
-    ],
-    files: ["Launch brief", "Rollout plan"],
-    activity: [
-      "Research agent gathered the latest context",
-      "Planning agent drafted a rollout outline",
-    ],
-    messages: [
-      {
-        author: "Research agent",
-        avatar: agents.research,
-        time: "9:12 AM",
-        text: "I gathered the launch requirements and linked the key context.",
-      },
-      {
-        author: "Planning agent",
-        avatar: agents.planning,
-        time: "9:14 AM",
-        text: "I'm turning that into a rollout plan with clear owners.",
-      },
-      {
-        author: "Review agent",
-        avatar: agents.review,
-        time: "9:16 AM",
-        text: "I'll check the plan for gaps before the handoff.",
-      },
-    ],
-  },
-  "research-specialist": {
-    id: "research-specialist",
-    title: "Research specialist",
-    kind: "Specialist",
-    description: "A focused agent for deep research and source synthesis.",
-    status: "Available",
-    participants: [agents.specialist],
-    summary:
-      "Bring a question, collect the relevant material, and work through the findings here.",
-    tasks: ["Collect sources", "Synthesize findings"],
-    files: ["Research notes"],
-    activity: ["Research specialist is ready for a new brief"],
-    messages: [
-      {
-        author: "Research specialist",
-        avatar: agents.specialist,
-        time: "9:12 AM",
-        text: "I'm ready to help. What should we investigate first?",
       },
     ],
   },
