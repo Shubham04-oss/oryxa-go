@@ -1,3 +1,4 @@
+import type { SpecialistResult } from "@/lib/specialists/result"
 import { sessionExpiredCode } from "./chat-messages"
 import type { ConfirmationStatus, Item, ThreadDetail } from "./client"
 
@@ -19,9 +20,17 @@ export type MessageEntry = {
   /** Why the model stopped without (fully) answering. */
   error?: string
   /**
+   * A specialist's work result, when the message is one: its status, the
+   * tools it used, the files it saved and the hand-offs it suggests. `text`
+   * is then the result's summary.
+   */
+  result?: SpecialistResult
+  /**
    * `streaming` for a draft built from deltas, replaced in place when its
    * finished message arrives; `interrupted` for a draft whose run ended
-   * without one, which Go did not store either.
+   * without one, which Go did not store either. The specialist chat streams
+   * a draft with no text while its specialist writes (`isProgressMarker`):
+   * show it as the agent working.
    */
   state: "streaming" | "complete" | "interrupted"
 }
@@ -176,6 +185,7 @@ export function buildTimeline(
           // the draft that was writing it again.
           existing.text = item.text ?? ""
           existing.error = item.error
+          existing.result = item.result
           if (drafted) {
             entries.splice(entries.indexOf(drafted), 1)
             draft = undefined
@@ -191,6 +201,7 @@ export function buildTimeline(
           role: roleOf(author),
           text: item.text ?? "",
           error: item.error,
+          result: item.result,
           state: "complete",
         }
         if (item.id) messages.set(item.id, entry)

@@ -6,6 +6,7 @@ import {
   apiUrl,
   requestError,
 } from "@/lib/api/client"
+import type { SpecialistResult } from "@/lib/specialists/result"
 import { threadAgentName } from "./chat-messages"
 import type { ThreadChatMessage } from "./chat-messages"
 import { readItemStream } from "./event-stream"
@@ -75,6 +76,9 @@ export type ItemUsage = {
  * | `run_completed` | run_id, at, usage                                                   |
  * | `run_failed`    | run_id, at, error; code only from the thread's Durable Object       |
  *
+ * The chat Durable Objects add two fields Go never sets: `code` on a
+ * `run_failed` they write, and `result` on a specialist's message.
+ *
  * A thread's history carries the stored event's `id` on every item, so what
  * a client streamed can be matched against what it reads later. One stored
  * event can make several items (a message and the tool calls after it, or
@@ -108,6 +112,12 @@ export type Item = {
    * the items it streams.
    */
   code?: string
+  /**
+   * Set only by the specialist chat's Durable Object, on a specialist's
+   * message that is a JSON work result: the result, parsed, while `text`
+   * holds its summary (`readableSpecialistItem`). Go never sets it.
+   */
+  result?: SpecialistResult
   /** Pairs a tool_result with its tool_call. On a confirmation, the id the member's answer names. */
   call_id?: string
   /** On a confirmation: the tool_call it holds back. */

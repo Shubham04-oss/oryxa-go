@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { QueryClient } from "@tanstack/react-query"
 import {
+  clearSpecialistChat,
+  getSpecialistChatMessages,
   getSpecialistThread,
   listSpecialistThreads,
+  specialistChatPath,
   specialistKeys,
   specialistThreadQueryOptions,
   specialistThreadsQueryOptions,
@@ -300,5 +303,61 @@ describe("specialist query helpers", () => {
       "/v1/organizations/org_1/agents/agt_1/threads",
       "/v1/organizations/org_1/agents/agt_1/threads/th_1",
     ])
+  })
+})
+
+describe("the specialist chat's Durable Object", () => {
+  it("is addressed by organization and specialist, on the app's own origin", () => {
+    expect(specialistChatPath("org_1", "agt_sales")).toBe(
+      "/agents/specialist-chat-agent/org_1~agt_sales"
+    )
+  })
+
+  it("reads the stored transcript, refreshing an expired session first", async () => {
+    const stored = [
+      { id: "m1", role: "user", parts: [{ type: "text", text: "Hi" }] },
+    ]
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json({ error: { code: "unauthorized" } }, 401))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(json(stored))
+    vi.stubGlobal("fetch", fetchMock)
+
+    expect(await getSpecialistChatMessages("org_1", "agt_sales")).toEqual(
+      stored
+    )
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "/agents/specialist-chat-agent/org_1~agt_sales/get-messages",
+      "/v1/auth/refresh",
+      "/agents/specialist-chat-agent/org_1~agt_sales/get-messages",
+    ])
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ method: "GET", credentials: "include" })
+    )
+  })
+
+  it("keeps Go's code when the specialist is not the member's", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        json({ error: { code: "not_found", message: "agent not found" } }, 404)
+      )
+    )
+    await expect(
+      getSpecialistChatMessages("org_1", "agt_other")
+    ).rejects.toMatchObject({ status: 404, code: "not_found" })
+  })
+
+  it("starts the chat over with a DELETE of the object, not of anything in Go", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal("fetch", fetchMock)
+
+    await clearSpecialistChat("org_1", "agt_sales")
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/agents/specialist-chat-agent/org_1~agt_sales",
+      expect.objectContaining({ method: "DELETE", credentials: "include" })
+    )
   })
 })
