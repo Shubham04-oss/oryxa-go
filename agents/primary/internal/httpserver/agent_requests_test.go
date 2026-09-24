@@ -2,13 +2,21 @@ package httpserver
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
 
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 )
+
+// DecideAsOwner is the one way the server decides: as the member themself.
+func (service *fakeInteractions) DecideAsOwner(ctx context.Context, actor primaryagents.InteractionActor, id string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
+	return service.Decide(ctx, actor, id, input)
+}
 
 // teamspaceInteractions is fakeInteractions keeping the last request body it
 // was asked to create.
@@ -47,5 +55,69 @@ func TestARequestNamesItsTeamspaceButNeverWhoApprovesIt(t *testing.T) {
 		`{"target_agent_id":"agt_b","teamspace_id":"tsp_1","approval":"agent","purpose":"Launch","task":"Review the plan."}`, bearer)
 	if chosen.Code != http.StatusBadRequest || errorCode(t, chosen) != "invalid_request" || interactions.creates != 1 {
 		t.Fatalf("a body choosing its approval = %d %s after %d creates, want 400 and no second create", chosen.Code, chosen.Body.String(), interactions.creates)
+	}
+}
+
+// heldRequests is a request ledger holding one request. Reading and deciding
+// it is all a decision reaches; the embedded nil Repository fails loudly on
+// anything else.
+type heldRequests struct {
+	interactions.Repository
+	request primaryagents.Interaction
+}
+
+func (ledger *heldRequests) Get(_ context.Context, id string) (primaryagents.Interaction, error) {
+	if id != ledger.request.ID {
+		return primaryagents.Interaction{}, interactions.ErrNotFound
+	}
+	return ledger.request, nil
+}
+
+func (ledger *heldRequests) Decide(_ context.Context, _ string, input primaryagents.InteractionDecisionInput, at time.Time) (primaryagents.Interaction, error) {
+	ledger.request.Status = interactions.StatusRejected
+	if input.Decision == interactions.DecisionApproved {
+		ledger.request.Status = interactions.StatusApproved
+	}
+	ledger.request.Decision = &primaryagents.InteractionDecision{Decision: input.Decision, Message: input.Message, DecidedAt: at}
+	ledger.request.Revision++
+	return ledger.request, nil
+}
+
+// unusedDirectory stands in for the organization directory, which deciding
+// never reads.
+type unusedDirectory struct{ primaryagents.Directory }
+
+// TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem runs the real
+// ledger service behind the API. Grace asked user_1's primary agent for
+// something in a teamspace, so user_1 decides: the agent's own tool path is
+// refused, while user_1, signed in, approves it through the decision route.
+func TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem(t *testing.T) {
+	ledger := &heldRequests{request: primaryagents.Interaction{
+		ID: "irq_held", OrganizationID: "org_1", TeamspaceID: "tsp_1", Approval: interactions.ApprovalOwner,
+		Requester: primaryagents.InteractionParty{UserID: "user_2", AgentID: "agt_grace", AgentName: "Cleo"},
+		Target:    primaryagents.InteractionParty{UserID: "user_1", AgentID: "agt_primary", AgentName: "Carl"},
+		Purpose:   "Launch", Task: "Review the plan.", Status: interactions.StatusPending, Revision: 1,
+		ExpiresAt: time.Now().Add(time.Hour),
+	}}
+	requests, err := interactions.New(interactions.Config{Repository: ledger, Directory: unusedDirectory{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	agent := primaryagents.InteractionActor{OrganizationID: "org_1", UserID: "user_1", AgentID: "agt_primary", AgentName: "Carl", AgentKind: "primary"}
+	if _, err := requests.Decide(context.Background(), agent, "irq_held", primaryagents.InteractionDecisionInput{
+		Decision: interactions.DecisionApproved, Message: "Approved.",
+	}); !errors.Is(err, interactions.ErrForbidden) || ledger.request.Status != interactions.StatusPending {
+		t.Fatalf("the agent's own decision: error=%v status=%s, want ErrForbidden and nothing decided", err, ledger.request.Status)
+	}
+
+	decided := serve(agentRequestServer(requests), http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_held/decision",
+		`{"decision":"approved","message":"Go ahead."}`, bearer)
+	var body primaryagents.Interaction
+	if err := json.Unmarshal(decided.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decision = %d %s: %v", decided.Code, decided.Body.String(), err)
+	}
+	if decided.Code != http.StatusOK || body.Status != interactions.StatusApproved || body.Approval != interactions.ApprovalOwner || body.TeamspaceID != "tsp_1" {
+		t.Fatalf("the member's own decision = %d %s, want 200 and an approved request held for its owner in tsp_1", decided.Code, decided.Body.String())
 	}
 }

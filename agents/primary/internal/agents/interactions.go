@@ -170,7 +170,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		return Toolbox{}, err
 	}
 	decide, err := functiontool.New(functiontool.Config{
-		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested.",
+		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. A request whose approval is \"owner\" is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it.",
 	}, tools.decide)
 	if err != nil {
 		return Toolbox{}, err

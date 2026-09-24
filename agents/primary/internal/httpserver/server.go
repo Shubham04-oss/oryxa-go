@@ -109,13 +109,16 @@ type AgentWorkflows interface {
 }
 
 // AgentInteractions is the cross-user request ledger. interactions.Service
-// implements it; the HTTP actor is always the member's primary agent.
+// implements it; the HTTP actor is always the member's primary agent. A
+// decision made here is the member's own, made in their signed-in session
+// (agent tokens are refused), so it goes through DecideAsOwner: the only way
+// a request held for its owner is decided.
 type AgentInteractions interface {
 	Create(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionCreateInput) (primaryagents.Interaction, error)
 	Inbox(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error)
 	Sent(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error)
 	Get(context.Context, primaryagents.InteractionActor, string) (primaryagents.Interaction, error)
-	Decide(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error)
+	DecideAsOwner(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error)
 	Respond(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionResponseInput) (primaryagents.Interaction, error)
 }
 
@@ -444,6 +447,9 @@ func (server *Server) getInteraction(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, found)
 }
 
+// decideInteraction is the member deciding a request addressed to one of
+// their agents, themselves: the one way a request held for its owner is
+// decided.
 func (server *Server) decideInteraction(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
@@ -457,7 +463,7 @@ func (server *Server) decideInteraction(writer http.ResponseWriter, request *htt
 	if !server.decode(writer, request, &input) {
 		return
 	}
-	updated, err := server.interactions.Decide(request.Context(), interactionActorOf(member), request.PathValue("requestID"), input)
+	updated, err := server.interactions.DecideAsOwner(request.Context(), interactionActorOf(member), request.PathValue("requestID"), input)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return

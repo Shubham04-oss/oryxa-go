@@ -240,13 +240,39 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 	return service.view(request), nil
 }
 
+// Decide records a decision an agent makes, through its interactions tool:
+// the addressed agent's own, or its member's primary agent mediating. A
+// request held for its owner (ApprovalOwner) is never an agent's to decide,
+// whichever agent asks.
 func (service *Service) Decide(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
+	return service.decide(ctx, actor, id, input, false)
+}
+
+// DecideAsOwner records the decision of the member whose agent a request
+// addresses, made in their own signed-in session. Only the HTTP API calls it
+// — agents' tools see agents.InteractionService, which has no such method —
+// and it is the one way a request held for its owner is decided. The member
+// may decide a request their agent could decide as well, as their primary
+// agent could.
+func (service *Service) DecideAsOwner(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
+	return service.decide(ctx, actor, id, input, true)
+}
+
+func (service *Service) decide(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput, asOwner bool) (agents.Interaction, error) {
 	request, err := service.Get(ctx, actor, id)
 	if err != nil {
 		return agents.Interaction{}, err
 	}
-	if request.Target.UserID != actor.UserID || actor.AgentID != request.Target.AgentID && actor.AgentKind != "primary" {
+	if request.Target.UserID != actor.UserID {
 		return agents.Interaction{}, ErrForbidden
+	}
+	if !asOwner {
+		if actor.AgentID != request.Target.AgentID && actor.AgentKind != "primary" {
+			return agents.Interaction{}, ErrForbidden
+		}
+		if request.Approval == ApprovalOwner {
+			return agents.Interaction{}, fmt.Errorf("%w: this request is held for your member's own decision in Oryxa, and no agent can approve or reject it; tell your member it is waiting for them", ErrForbidden)
+		}
 	}
 	if request.Status == StatusExpired {
 		return agents.Interaction{}, ErrExpired

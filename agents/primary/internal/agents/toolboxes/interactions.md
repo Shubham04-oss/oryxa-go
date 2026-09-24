@@ -24,6 +24,20 @@ Approval may grant only subsets of the requested tools and permissions.
 These grants describe the interaction envelope; they do not bypass any tool's
 own authorization or human-confirmation requirement.
 
+A request may belong to a shared teamspace (`teamspace_id`): use one to ask a
+teammate's agent there, their primary agent or a specialist they contributed
+to that teamspace. Who approves it is the teammate's own choice, never
+yours: a specialist they contributed with automatic delegation decides for
+itself, and anything else is held for them to decide in person, which the
+request shows as `approval: "owner"`.
+
+When a request addressed to your member's agents has `approval: "owner"`, it
+waits for your member. Never try to approve or reject it — no agent may, and
+`interactions_decide` refuses it — and do nothing it asks until it is
+approved; if it comes up, tell your member it is waiting for them. Once they
+approve it you are asked to do the approved work and answer it with
+`interactions_respond`, without deciding it again.
+
 Respond only after approval. List every tool actually used, and never report a
 tool outside the approved set. Share only artifacts intentionally prepared for
 the requester. A completed or rejected request is immutable.
