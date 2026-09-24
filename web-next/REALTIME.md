@@ -578,8 +578,11 @@ inbox (`useInbox`); a DM opens there, and in the main canvas from People or
 the recent conversations, each view with `useDirectMessages` on the same
 object. On Home the Agents tab switches
 between the member's own agents. On a teamspace page it also offers that
-teamspace's teammates' agents, each opening a side conversation
-(`useSideConversation`; its views come next).
+teamspace's teammates and their agents, each opening a side conversation
+in the tab (`components/side-conversation.tsx` on `useSideConversation`);
+the DMs tab opens one from its list the same way, whichever page is open,
+since its object needs only the ids. Each place is its own view, with its
+own socket, mounted only while it shows, as a DM's is.
 
 A specialist's chat (`components/specialist-chat.tsx`) is one component in
 two places: its focused view's conversation column, and the Agents tab once
