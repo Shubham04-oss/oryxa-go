@@ -395,6 +395,37 @@ func TestWriteAccessByScope(t *testing.T) {
 	}
 }
 
+// TestOrganizationAdminWritesTeamCorpusWithoutTeamsLookup: an org admin reads
+// every team corpus without asking teams (see
+// TestOrganizationAdminReadsTeamCorpusWithoutTeamMembershipLookup), so
+// adding to or removing from one must not depend on teams answering either.
+// Everyone else still needs teams to say they can see the team.
+func TestOrganizationAdminWritesTeamCorpusWithoutTeamsLookup(t *testing.T) {
+	for name, breakTeams := range map[string]func(*harness){
+		"teams not configured": func(h *harness) { h.service.teams = nil },
+		"teams not answering":  func(h *harness) { h.teams.err = errors.New("teams did not answer") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness()
+			ctx := context.Background()
+			corpus := seedCorpus(h.store, domain.Corpus{Slug: "team-eng", Scope: domain.ScopeTeam, TeamID: "team_eng"})
+			breakTeams(h)
+			add := given(AddDocumentInput{Source: domain.Source{Kind: domain.SourceInline}, Text: "The on-call runbook.", ContentType: "text/plain"})
+
+			document, err := h.service.AddDocument(ctx, creds("user-admin"), testOrganization, corpus.ID, add)
+			if err != nil {
+				t.Fatalf("org admin AddDocument to a team corpus = %v", err)
+			}
+			if err := h.service.DeleteDocument(ctx, creds("user-admin"), testOrganization, corpus.ID, document.ID); err != nil {
+				t.Fatalf("org admin DeleteDocument from a team corpus = %v", err)
+			}
+			if _, err := h.service.AddDocument(ctx, creds("user-teammate"), testOrganization, corpus.ID, add); err == nil {
+				t.Fatal("a plain team member wrote to a team corpus without teams saying they can see the team")
+			}
+		})
+	}
+}
+
 func TestAddDocumentFetchesFromFilesAsTheCaller(t *testing.T) {
 	h := newHarness()
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "m1", Scope: domain.ScopeMember, MemberID: "user-creator"})

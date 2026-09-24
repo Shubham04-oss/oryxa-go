@@ -683,7 +683,8 @@ func (service *Service) mayRead(ctx context.Context, credentials authclient.Cred
 
 // mayWrite decides who can add or remove documents. Being able to see a
 // corpus is enough for a team or member corpus; an organization corpus is
-// shared by everyone, so writing to it is an admin's job.
+// shared by everyone, so writing to it is an admin's job. An org admin writes
+// to a team corpus without asking teams, exactly as mayRead lets them read it.
 func (service *Service) mayWrite(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) error {
 	switch corpus.Scope {
 	case domain.ScopeOrganization:
@@ -697,6 +698,9 @@ func (service *Service) mayWrite(ctx context.Context, credentials authclient.Cre
 		}
 		return domain.ErrNotFound
 	case domain.ScopeTeam:
+		if member.Role.IsOrgAdmin() {
+			return nil
+		}
 		if _, err := service.teamAccess(ctx, credentials, corpus.OrganizationID, corpus.TeamID); err != nil {
 			return err
 		}

@@ -36,7 +36,7 @@ comes from auth, and from teams for a team corpus.
 | Scope | Who may create | Who may search | Who may add or remove documents | Who may delete the corpus |
 | --- | --- | --- | --- | --- |
 | `member` (default) | Any org member; hangs under the caller | Owner or org admin | Owner or org admin | Owner or org admin |
-| `team` | Anyone who can **see** the team | Team member or org admin | Anyone who can see the team | Creator, team `can_manage`, or org admin |
+| `team` | Anyone who can **see** the team | Team member or org admin | Anyone who can see the team, or org admin | Creator, team `can_manage`, or org admin |
 | `organization` | Org admin | Any org member | Org admin | Org admin |
 
 A caller who is not in the organization gets `404`, as auth conceals which
