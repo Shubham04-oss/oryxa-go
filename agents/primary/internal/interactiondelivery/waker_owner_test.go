@@ -63,19 +63,36 @@ func TestARequestHeldForItsOwnerWakesTheAgentOnlyOnceTheOwnerApproves(t *testing
 	}
 }
 
-// TestAHeldRequestTheOwnerRejectedNeverWakesItsAgent: a rejection is the
-// requester's news, as before; the addressed agent has nothing to do.
-func TestAHeldRequestTheOwnerRejectedNeverWakesItsAgent(t *testing.T) {
-	requested := testDelivery("evt_requested", KindTargetRequested, 1)
-	store := &fakeDeliveries{pending: []Delivery{requested}}
-	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusRejected, interactions.ApprovalOwner)}}
+// TestAHeldRequestTheOwnerRejectsReachesOnlyTheRequester: the request's own
+// delivery, while it waits for the owner, wakes nobody; when the owner
+// rejects it, the rejection is the requester's news, told exactly as any
+// rejection is, and the addressed agent never runs at all.
+func TestAHeldRequestTheOwnerRejectsReachesOnlyTheRequester(t *testing.T) {
+	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner)}}
 	runs := &fakeAgentRuns{}
 	waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(runs.calls) != 0 || len(store.done) != 1 {
-		t.Fatalf("calls=%+v done=%v", runs.calls, store.done)
+		t.Fatalf("while held: calls=%+v done=%v, want the delivery completed without a run", runs.calls, store.done)
+	}
+
+	// The owner rejects it in their own session; the decision's event arrives.
+	requests.setStatus("irq_1", interactions.StatusRejected)
+	rejected := testDelivery("evt_rejected", KindRequesterRejected, 2)
+	rejected.RecipientUserID, rejected.RecipientAgentID, rejected.Status = "user_a", "agt_a", interactions.StatusRejected
+	store.pending = []Delivery{rejected}
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runs.calls) != 1 || len(store.done) != 2 {
+		t.Fatalf("after the rejection: calls=%+v done=%v, want one run for the requester", runs.calls, store.done)
+	}
+	told := runs.calls[0]
+	if told.agentID != "agt_a" || told.member.UserID != "user_a" || told.reach != managedagents.UnattendedQuiet || told.input.Message != Message(rejected) {
+		t.Fatalf("told=%+v, want the requester's agent told of the rejection as before", told)
 	}
 }
 

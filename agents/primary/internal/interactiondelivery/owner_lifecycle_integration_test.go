@@ -43,6 +43,10 @@ func (teammateB) Load(context.Context, string, string) (agents.OrganizationDirec
 // the directory and the agent runs are stand-ins. The request's delivery
 // wakes nobody, B's agent cannot decide it, B does, and only then is B's
 // agent woken — able to read B's apps and told B approved — to answer it.
+//
+// The waker is handed the deliveries this test recorded rather than claiming
+// due ones: the table may be shared with a running agents service, whose
+// deliveries a claim here would take and settle with stand-in runs.
 func TestAnOwnerHeldRequestLivesItsWholeLifeAgainstTheDatabase(t *testing.T) {
 	databaseURL := os.Getenv("AGENTS_PRIMARY_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -123,9 +127,7 @@ func TestAnOwnerHeldRequestLivesItsWholeLifeAgainstTheDatabase(t *testing.T) {
 	runs := &fakeAgentRuns{}
 	waker := NewWaker(deliveries, runs, ledger, Config{Interval: time.Second, Lease: time.Minute}, nil)
 	requested := deliver(agentsv1.InteractionRequestedDetailType, KindTargetRequested, b, created.ID)
-	if err := waker.WakeDue(ctx); err != nil {
-		t.Fatal(err)
-	}
+	waker.wake(ctx, requested)
 	if len(runs.calls) != 0 || !handled(requested.EventID) {
 		t.Fatalf("the request's own delivery: runs=%+v handled=%v, want it completed without waking anyone", runs.calls, handled(requested.EventID))
 	}
@@ -146,9 +148,7 @@ func TestAnOwnerHeldRequestLivesItsWholeLifeAgainstTheDatabase(t *testing.T) {
 		}
 	}
 	approvedDelivery := deliver(agentsv1.InteractionDecidedDetailType, KindTargetApproved, b, created.ID)
-	if err := waker.WakeDue(ctx); err != nil {
-		t.Fatal(err)
-	}
+	waker.wake(ctx, approvedDelivery)
 	if len(runs.calls) != 1 || !handled(approvedDelivery.EventID) {
 		t.Fatalf("the approval's delivery: runs=%+v handled=%v, want one run that answered", runs.calls, handled(approvedDelivery.EventID))
 	}
