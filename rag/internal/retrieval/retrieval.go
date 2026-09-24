@@ -219,7 +219,7 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 		return Results{}, err
 	}
 	matches := make([]domain.Match, 0, len(passages))
-	var gone []string
+	var gone, stale []string
 	for _, passage := range passages {
 		ref, found := refs[passage.documentID]
 		if !found {
@@ -231,6 +231,17 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 			// removed kept answering questions, untitled.
 			if !slices.Contains(gone, passage.documentID) {
 				gone = append(gone, passage.documentID)
+			}
+			continue
+		}
+		if !refMatches(ref, query.Filter) {
+			// The knowledge base filtered on the attributes it was last
+			// given, which lag PostgreSQL's until the document is submitted
+			// again, so a document just reclassified could still match the
+			// category it left. What PostgreSQL holds is what a caller's
+			// filter is held to.
+			if !slices.Contains(stale, passage.documentID) {
+				stale = append(stale, passage.documentID)
 			}
 			continue
 		}
@@ -251,11 +262,46 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 		retriever.logger.WarnContext(ctx, "the knowledge base answered with documents rag no longer holds; leaving them out",
 			"corpus_id", corpus.ID, "document_ids", gone)
 	}
+	if len(stale) > 0 {
+		retriever.logger.InfoContext(ctx, "the knowledge base matched documents on attributes rag has since changed; leaving them out",
+			"corpus_id", corpus.ID, "document_ids", stale)
+	}
 	// Bedrock's own reranking, when it ran, already reordered and scored
 	// these; the cross-encoder Reranker below is never invoked for a
 	// knowledge base corpus, since it has nothing here of its own to send it.
 	reranked := query.Rerank && retriever.knowledgeBase.reranks()
 	return Results{Matches: retriever.finalize(matches, query), Reranked: reranked}, nil
+}
+
+// refMatches holds a document to a caller's filter as PostgreSQL has it,
+// with the meaning the PostgreSQL filters give each operator: eq and in need
+// the key present with a listed value, ne and nin pass a document without
+// the key. source_kind is the document's own column rather than metadata;
+// every other key a bedrock-kb corpus filters on is metadata.
+func refMatches(ref domain.Ref, filter domain.Filter) bool {
+	if len(filter.DocumentIDs) > 0 && !slices.Contains(filter.DocumentIDs, ref.ID) {
+		return false
+	}
+	for _, condition := range filter.Conditions {
+		value, present := ref.Metadata[condition.Key]
+		if condition.Key == "source_kind" {
+			value, present = string(ref.Source.Kind), true
+		}
+		listed := present && slices.Contains(condition.Values, value)
+		switch condition.Operator {
+		case domain.OperatorEqual, domain.OperatorIn:
+			if !listed {
+				return false
+			}
+		case domain.OperatorNotEqual, domain.OperatorNotIn:
+			if listed {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // dense embeds the question and asks the vector store.

@@ -127,19 +127,35 @@ func TenantFilter(organizationID string, corpusIDs []string) agenttypes.Retrieva
 	return &agenttypes.RetrievalFilterMemberAndAll{Value: tenantConditions(organizationID, corpusIDs)}
 }
 
+// maxFilterGroup is the most filters Bedrock takes in one andAll or orAll.
+// Groups nest one level deep: the top-level andAll may hold groups of
+// filters, and a group holds filters only.
+const maxFilterGroup = 5
+
+// maxCallerFilters is the most filters a caller's own query filter may turn
+// into on a bedrock-kb corpus, a document list counting as one and each
+// condition as one: as many as fit, in groups, beside what a member's search
+// always carries at the top level (organization, corpus and access). It is
+// the same whoever asks, so no filter works for an admin and fails for a
+// member.
+const maxCallerFilters = (maxFilterGroup - 3) * maxFilterGroup
+
 // searchFilter narrows TenantFilter further by a caller's own query filter,
-// when it named one.
+// when it named one, and to member-visible documents unless the caller may
+// see admin-only ones.
 //
 // Only fields actually written by knowledgebase.Client.Submit are accepted.
 // A condition on anything else is refused rather than silently widening a
-// search. Tenant and access filters are always added independently.
-func searchFilter(organizationID string, corpusIDs []string, filter domain.Filter) (agenttypes.RetrievalFilter, error) {
+// search. Tenant and access filters are always added independently, at the
+// top level; the caller's go there too while every list stays within
+// maxFilterGroup, and in nested groups otherwise.
+func searchFilter(organizationID string, corpusIDs []string, filter domain.Filter, includeAdminOnly bool) (agenttypes.RetrievalFilter, error) {
 	if err := filter.Validate(); err != nil {
 		return nil, err
 	}
-	conditions := tenantConditions(organizationID, corpusIDs)
+	var caller []agenttypes.RetrievalFilter
 	if len(filter.DocumentIDs) > 0 {
-		conditions = append(conditions, documentIDCondition(filter.DocumentIDs))
+		caller = append(caller, documentIDCondition(filter.DocumentIDs))
 	}
 	for _, condition := range filter.Conditions {
 		if !kbFilterable(condition.Key) {
@@ -149,21 +165,50 @@ func searchFilter(organizationID string, corpusIDs []string, filter domain.Filte
 		switch condition.Operator {
 		case domain.OperatorEqual:
 			attribute.Value = kbdoc.NewLazyDocument(condition.Values[0])
-			conditions = append(conditions, &agenttypes.RetrievalFilterMemberEquals{Value: attribute})
+			caller = append(caller, &agenttypes.RetrievalFilterMemberEquals{Value: attribute})
 		case domain.OperatorNotEqual:
 			attribute.Value = kbdoc.NewLazyDocument(condition.Values[0])
-			conditions = append(conditions, &agenttypes.RetrievalFilterMemberNotEquals{Value: attribute})
+			caller = append(caller, &agenttypes.RetrievalFilterMemberNotEquals{Value: attribute})
 		case domain.OperatorIn:
 			attribute.Value = kbdoc.NewLazyDocument(condition.Values)
-			conditions = append(conditions, &agenttypes.RetrievalFilterMemberIn{Value: attribute})
+			caller = append(caller, &agenttypes.RetrievalFilterMemberIn{Value: attribute})
 		case domain.OperatorNotIn:
 			attribute.Value = kbdoc.NewLazyDocument(condition.Values)
-			conditions = append(conditions, &agenttypes.RetrievalFilterMemberNotIn{Value: attribute})
+			caller = append(caller, &agenttypes.RetrievalFilterMemberNotIn{Value: attribute})
 		default:
 			return nil, fmt.Errorf("a bedrock-kb corpus cannot use operator %q: %w", condition.Operator, domain.ErrInvalid)
 		}
 	}
+	if len(caller) > maxCallerFilters {
+		return nil, fmt.Errorf("a bedrock-kb corpus takes at most %d filter conditions, a document list counting as one: %w",
+			maxCallerFilters, domain.ErrInvalid)
+	}
+	conditions := tenantConditions(organizationID, corpusIDs)
+	if !includeAdminOnly {
+		conditions = append(conditions, &agenttypes.RetrievalFilterMemberEquals{Value: agenttypes.FilterAttribute{
+			Key: aws.String("access"), Value: kbdoc.NewLazyDocument(string(domain.AccessMembers)),
+		}})
+	}
+	conditions = append(conditions, grouped(caller, maxFilterGroup-len(conditions))...)
 	return &agenttypes.RetrievalFilterMemberAndAll{Value: conditions}, nil
+}
+
+// grouped fits filters into at most slots entries of an andAll: each on its
+// own while they all fit, and otherwise in nested andAll groups of at most
+// maxFilterGroup, as even in size as they divide — never a group of one,
+// which Bedrock refuses. searchFilter's limit on the caller's filters is what
+// guarantees the groups fit.
+func grouped(filters []agenttypes.RetrievalFilter, slots int) []agenttypes.RetrievalFilter {
+	if len(filters) <= slots {
+		return filters
+	}
+	count := (len(filters) + maxFilterGroup - 1) / maxFilterGroup
+	groups := make([]agenttypes.RetrievalFilter, 0, count)
+	for index := range count {
+		start, end := index*len(filters)/count, (index+1)*len(filters)/count
+		groups = append(groups, &agenttypes.RetrievalFilterMemberAndAll{Value: filters[start:end]})
+	}
+	return groups
 }
 
 func kbFilterable(key string) bool {
@@ -203,17 +248,9 @@ func (knowledgeBase *KnowledgeBase) retrieve(ctx context.Context, organizationID
 		return nil, nil
 	}
 	numberOfResults = min(max(numberOfResults, 1), retrieveLimit)
-	filter, err := searchFilter(organizationID, corpusIDs, query.Filter)
+	filter, err := searchFilter(organizationID, corpusIDs, query.Filter, query.IncludeAdminOnly)
 	if err != nil {
 		return nil, err
-	}
-	if !query.IncludeAdminOnly {
-		filter.(*agenttypes.RetrievalFilterMemberAndAll).Value = append(
-			filter.(*agenttypes.RetrievalFilterMemberAndAll).Value,
-			&agenttypes.RetrievalFilterMemberEquals{Value: agenttypes.FilterAttribute{
-				Key: aws.String("access"), Value: kbdoc.NewLazyDocument(string(domain.AccessMembers)),
-			}},
-		)
 	}
 	output, err := knowledgeBase.client.Retrieve(ctx, &bedrockagentruntime.RetrieveInput{
 		KnowledgeBaseId:        aws.String(knowledgeBase.knowledgeBaseID),

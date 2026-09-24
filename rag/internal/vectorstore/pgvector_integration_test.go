@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"os"
 	"testing"
 	"time"
@@ -252,8 +253,10 @@ func TestPgvectorExcludesAdminOnlyDocumentsBeforeRanking(t *testing.T) {
 	}
 	document.Access = domain.AccessAdmins
 	document.UpdatedAt = time.Now().UTC()
+	// An event id of its own each run: the outbox outlives the corpus.
+	eventID, _ := domain.NewID(domain.EventIDPrefix)
 	if _, _, err := fixture.store.UpsertDocument(ctx, document, "body", domain.Event{
-		ID: "evt_acl", DetailType: "rag.document.received.v1", OccurredAt: time.Now().UTC(), Data: json.RawMessage(`{}`),
+		ID: eventID, DetailType: "rag.document.received.v1", OccurredAt: time.Now().UTC(), Data: json.RawMessage(`{}`),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -264,6 +267,136 @@ func TestPgvectorExcludesAdminOnlyDocumentsBeforeRanking(t *testing.T) {
 	admin, err := fixture.vector.Search(ctx, fixture.corpus, Search{Vector: probe(768), TopK: 10, IncludeAdminOnly: true})
 	if err != nil || len(admin) != 5 {
 		t.Fatalf("admin hits = %+v, %v", admin, err)
+	}
+}
+
+// A member's access is checked after the index answers, so the admin-only
+// chunks nearest a question use up the candidates HNSW hands back. With
+// enough of them — a corpus full of admin-only files, say — a member search
+// came back empty from a corpus that plainly held passages they may read. The
+// index must keep scanning past them, as it does for a metadata filter.
+func TestPgvectorMemberSearchReachesPastNearerAdminOnlyChunks(t *testing.T) {
+	fixture, ctx := setup(t, 256, domain.MetricCosine)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	pool := fixture.store.Pool()
+	random := rand.New(rand.NewPCG(1, 2))
+	near := func(spread float32) []float32 {
+		values := make([]float32, 256)
+		values[0] = 1
+		for index := 1; index < len(values); index++ {
+			values[index] = (random.Float32()*2 - 1) * spread
+		}
+		return values
+	}
+
+	body := "payroll"
+	adminID, _ := domain.NewID(domain.DocumentIDPrefix)
+	admin, _, err := fixture.store.UpsertDocument(ctx, domain.Document{
+		ID: adminID, CorpusID: fixture.corpus.ID, OrganizationID: fixture.corpus.OrganizationID,
+		Source: domain.Source{Kind: domain.SourceExternal, Ref: "https://example.com/payroll"}, Title: "Payroll",
+		ContentType: "text/plain", ContentSHA256: domain.Hash(body), ByteSize: int64(len(body)), Access: domain.AccessAdmins,
+		CreatedBy: "usr_vec", CreatedAt: now, UpdatedAt: now,
+	}, body, domain.Event{ID: "evt_" + adminID, DetailType: "rag.document.received.v1", OccurredAt: now, Data: json.RawMessage(`{}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Far more admin-only chunks nearest the question than ef_search keeps.
+	const adminChunks = 2000
+	chunks := make([]domain.Chunk, 0, adminChunks)
+	for index := range adminChunks {
+		text := fmt.Sprintf("payroll %d", index)
+		chunks = append(chunks, domain.Chunk{Ordinal: index, Text: text, TokenCount: 2, SHA256: domain.Hash(text), StartByte: 0, EndByte: 1})
+	}
+	synced, err := fixture.store.SyncChunks(ctx, admin, chunks, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectors := make([]domain.Vector, 0, adminChunks)
+	for _, chunk := range synced.Fresh {
+		vectors = append(vectors, domain.Vector{ChunkID: chunk.ID, DocumentID: admin.ID, Values: near(0.02)})
+	}
+	if err := fixture.vector.Upsert(ctx, fixture.corpus, vectors); err != nil {
+		t.Fatal(err)
+	}
+	// The member document's chunks, further away.
+	member := fixture.vectors()
+	for index := range member {
+		member[index].Values = near(0.2)
+	}
+	if err := fixture.vector.Upsert(ctx, fixture.corpus, member); err != nil {
+		t.Fatal(err)
+	}
+	// Member documents with no vectors, as a real corpus holds many of: they
+	// make it dearer to start from the member documents than to walk the
+	// index, which is the plan a real corpus gets.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO rag_documents (id, corpus_id, organization_id, source_kind, source_ref, title, content_type,
+			content_sha256, byte_size, body, metadata, status, created_by, created_at, updated_at, access)
+		SELECT 'doc_filler_' || $1 || '_' || g, $1, $2, 'external', 'https://example.com/filler/' || g, 'Filler', 'text/plain',
+			md5(g::text), 4, 'body', '{}', 'ready', 'usr_vec', now(), now(), 'members'
+		FROM generate_series(1, 3000) AS g`, fixture.corpus.ID, fixture.corpus.OrganizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO rag_chunks (id, document_id, corpus_id, organization_id, ordinal, body, token_count,
+			start_byte, end_byte, sha256, metadata, created_at)
+		SELECT 'chk_filler_' || $1 || '_' || g, 'doc_filler_' || $1 || '_' || g, $1, $2, 0, 'filler', 1, 0, 1, md5(g::text), '{}', now()
+		FROM generate_series(1, 3000) AS g`, fixture.corpus.ID, fixture.corpus.OrganizationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `ANALYZE rag_vectors_256; ANALYZE rag_documents; ANALYZE rag_chunks`); err != nil {
+		t.Fatal(err)
+	}
+
+	hits, err := fixture.vector.Search(ctx, fixture.corpus, Search{Vector: probe(256), TopK: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberChunks := map[string]bool{}
+	for _, vector := range member {
+		memberChunks[vector.ChunkID] = true
+	}
+	if len(hits) == 0 {
+		t.Fatal("a member search came back empty from a corpus holding passages the member may read")
+	}
+	for _, hit := range hits {
+		if !memberChunks[hit.ChunkID] {
+			t.Fatalf("a member search returned %s, which is not the member document's", hit.ChunkID)
+		}
+	}
+}
+
+// Stored hands back what was written for each chunk, in either column type,
+// so a relabelled chunk is written again from its own vector rather than
+// embedded twice; a chunk with none is absent.
+func TestPgvectorHandsBackStoredVectors(t *testing.T) {
+	for _, dimensions := range []int{768, 3072} {
+		t.Run(fmt.Sprint(dimensions), func(t *testing.T) {
+			fixture, ctx := setup(t, dimensions, domain.MetricCosine)
+			written := fixture.vectors()[:2]
+			if err := fixture.vector.Upsert(ctx, fixture.corpus, written); err != nil {
+				t.Fatal(err)
+			}
+			ids := []string{fixture.chunks[0].ID, fixture.chunks[1].ID, fixture.chunks[2].ID}
+			stored, err := fixture.vector.Stored(ctx, fixture.corpus, ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(stored) != 2 {
+				t.Fatalf("stored = %d vectors, want the 2 written", len(stored))
+			}
+			for _, vector := range written {
+				got := stored[vector.ChunkID]
+				if len(got) != dimensions || math.Abs(float64(got[1]-vector.Values[1])) > 1e-3 {
+					t.Fatalf("stored %s = %d values starting %v, want %v", vector.ChunkID, len(got), got[:2], vector.Values[:2])
+				}
+			}
+			stranger := fixture.corpus
+			stranger.OrganizationID += "-stranger"
+			if others, err := fixture.vector.Stored(ctx, stranger, ids); err != nil || len(others) != 0 {
+				t.Fatalf("another organization read %d stored vectors, %v", len(others), err)
+			}
+		})
 	}
 }
 

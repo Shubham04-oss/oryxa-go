@@ -1,6 +1,7 @@
 package vectorstore
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -66,7 +67,8 @@ type Pgvector struct {
 	pool *pgxpool.Pool
 	// iterativeScan turns on pgvector 0.8's iterative index scan. It matters
 	// for exactly the case this service always has: a search that also
-	// filters. Without it the index returns its nearest ef_search rows and the
+	// filters, whether by the caller's metadata filter or by a member's
+	// access. Without it the index returns its nearest ef_search rows and the
 	// filter is applied afterwards, so a narrow filter can return far fewer
 	// rows than asked for, or none, from a corpus that plainly contains them.
 	iterativeScan bool
@@ -132,9 +134,11 @@ func (store *Pgvector) Search(ctx context.Context, corpus domain.Corpus, search 
 	arguments := []any{embeddingValue(corpus.Spec.Dimensions, search.Vector), corpus.ID, corpus.OrganizationID}
 	where := []string{"corpus_id = $2", "organization_id = $3"}
 	if !search.IncludeAdminOnly {
-		where = append(where, `EXISTS (SELECT 1 FROM rag_chunks AS acl_chunk
-			JOIN rag_documents AS acl_document ON acl_document.id = acl_chunk.document_id
-			WHERE acl_chunk.id = chunk_id AND acl_document.access = 'members')`)
+		// The vector row names its own document, so its access is one
+		// primary-key lookup per candidate rather than one through its chunk
+		// first.
+		where = append(where, `EXISTS (SELECT 1 FROM rag_documents AS acl_document
+			WHERE acl_document.id = candidate.document_id AND acl_document.access = 'members')`)
 	}
 	where, arguments, err = appendFilter(where, arguments, search.Filter)
 	if err != nil {
@@ -143,7 +147,7 @@ func (store *Pgvector) Search(ctx context.Context, corpus domain.Corpus, search 
 	arguments = append(arguments, search.TopK)
 	statement := fmt.Sprintf(`
 		SELECT chunk_id, embedding %s $1 AS distance
-		FROM %s
+		FROM %s AS candidate
 		WHERE %s
 		ORDER BY embedding %s $1
 		LIMIT $%d`, operator, Table(corpus.Spec.Dimensions), strings.Join(where, " AND "), operator, len(arguments))
@@ -185,6 +189,9 @@ func (store *Pgvector) Search(ctx context.Context, corpus domain.Corpus, search 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read vector matches: %w", err)
 	}
+	// Iterative scan in relaxed order can hand rows back slightly out of
+	// distance order, and a ranked list is what the caller fuses by position.
+	slices.SortStableFunc(hits, func(a, b Hit) int { return cmp.Compare(a.Distance, b.Distance) })
 	return hits, nil
 }
 
@@ -193,18 +200,58 @@ func (store *Pgvector) Search(ctx context.Context, corpus domain.Corpus, search 
 // ef_search is how many candidates HNSW keeps while descending; the default of
 // 40 is below what a top-k of any size with a filter needs. Iterative scan
 // then lets the index keep going when the filter rejects what it found, which
-// is what stops a filtered search from silently coming back short.
+// is what stops a filtered search from silently coming back short. A member's
+// search is always filtered, by access: the admin-only chunks nearest a
+// question would otherwise use up every candidate the index hands back.
 func (store *Pgvector) tune(ctx context.Context, transaction pgx.Tx, search Search) error {
 	efSearch := min(max(search.TopK*4, 40), 1000)
 	if _, err := transaction.Exec(ctx, "SET LOCAL hnsw.ef_search = "+strconv.Itoa(efSearch)); err != nil {
 		return fmt.Errorf("set hnsw.ef_search: %w", err)
 	}
-	if store.iterativeScan && !search.Filter.Empty() {
+	if store.iterativeScan && (!search.Filter.Empty() || !search.IncludeAdminOnly) {
 		if _, err := transaction.Exec(ctx, "SET LOCAL hnsw.iterative_scan = 'relaxed_order'"); err != nil {
 			return fmt.Errorf("set hnsw.iterative_scan: %w", err)
 		}
 	}
 	return nil
+}
+
+// Stored returns the vectors already written for these chunks, by chunk id;
+// a chunk with none is left out. The ingest worker writes a relabelled
+// chunk's vector again from it rather than embedding the same text twice.
+func (store *Pgvector) Stored(ctx context.Context, corpus domain.Corpus, chunkIDs []string) (map[string][]float32, error) {
+	if len(chunkIDs) == 0 {
+		return nil, nil
+	}
+	statement := fmt.Sprintf(`
+		SELECT chunk_id, embedding FROM %s
+		WHERE corpus_id = $1 AND organization_id = $2 AND chunk_id = ANY($3)`, Table(corpus.Spec.Dimensions))
+	rows, err := store.pool.Query(ctx, statement, corpus.ID, corpus.OrganizationID, chunkIDs)
+	if err != nil {
+		return nil, fmt.Errorf("read stored vectors: %w", err)
+	}
+	defer rows.Close()
+	stored := make(map[string][]float32, len(chunkIDs))
+	for rows.Next() {
+		var chunkID string
+		if HalfPrecision(corpus.Spec.Dimensions) {
+			var embedding pgvector.HalfVector
+			if err := rows.Scan(&chunkID, &embedding); err != nil {
+				return nil, fmt.Errorf("scan stored vector: %w", err)
+			}
+			stored[chunkID] = embedding.Slice()
+			continue
+		}
+		var embedding pgvector.Vector
+		if err := rows.Scan(&chunkID, &embedding); err != nil {
+			return nil, fmt.Errorf("scan stored vector: %w", err)
+		}
+		stored[chunkID] = embedding.Slice()
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read stored vectors: %w", err)
+	}
+	return stored, nil
 }
 
 func (store *Pgvector) Delete(ctx context.Context, corpus domain.Corpus, chunkIDs []string) error {

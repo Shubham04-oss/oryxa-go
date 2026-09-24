@@ -114,11 +114,13 @@ func TestLiveManagedProvenance(t *testing.T) {
 	}
 	fileFilter := domain.Filter{Conditions: []domain.Condition{{Key: "provider", Operator: domain.OperatorEqual, Values: []string{"files"}}}}
 	adminQuestion := "What is the payroll approval code in " + marker + "?"
+	// The admin-only document is shown to be searchable first: a member
+	// finding nothing proves nothing about access until it is.
+	awaitLiveMatch(t, ctx, searcher, corpus, domain.Query{Text: adminQuestion, TopK: 4, Filter: fileFilter, IncludeAdminOnly: true}, admin.ID)
 	memberResult, err := searcher.Search(ctx, corpus, domain.Query{Text: adminQuestion, TopK: 4, Filter: fileFilter})
 	if err != nil || len(memberResult.Matches) != 0 {
 		t.Fatalf("member retrieved admin-only document: %+v, %v", memberResult.Matches, err)
 	}
-	awaitLiveMatch(t, ctx, searcher, corpus, domain.Query{Text: adminQuestion, TopK: 4, Filter: fileFilter, IncludeAdminOnly: true}, admin.ID)
 
 	model := os.Getenv("RAG_LIVE_ANSWER_MODEL")
 	if model == "" {
