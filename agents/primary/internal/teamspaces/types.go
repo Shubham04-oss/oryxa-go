@@ -26,10 +26,13 @@ const (
 )
 
 // DelegationMode is the authority a specialist owner deliberately gives to
-// this teamspace. Request keeps the existing decide/respond protocol between
-// users. Automatic lets the organization agent start bounded work without
-// another approval, while the specialist still runs as its owner and keeps
-// the owner's tool authorization and confirmation boundaries.
+// this teamspace, and the request ledger enforces it for every cross-user
+// request made here (RequestSeat reports it): Request holds each such request
+// for the owner to approve or reject in their own session before the
+// specialist is woken; Automatic lets the specialist decide them itself, and
+// lets the organization agent start bounded work without another approval.
+// Either way the specialist still runs as its owner and keeps the owner's
+// tool authorization and confirmation boundaries.
 type DelegationMode string
 
 const (

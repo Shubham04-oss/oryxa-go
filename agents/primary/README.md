@@ -315,6 +315,41 @@ cannot report using a tool outside the approved set. These grants describe the
 interaction envelope; they never bypass a tool's existing authorization or
 human-confirmation requirements.
 
+**Requests inside a teamspace, and who approves them.** A request may name the
+teamspace it belongs to (`teamspace_id`), which is how a teamspace side
+conversation asks a teammate's agent for something. The ledger then asks the
+teamspace, against the live Teams directory, where the target sits
+(`teamspaces.Service.RequestSeat`): the requester must be on the teamspace's
+team now, the space and the organization agent must be active, and the target
+must be a teammate's primary agent — their whisperer seat — or an active
+specialist a current teammate contributed there. Anything else is refused
+before anything is recorded (see [Agent request API](#agent-request-api)).
+
+Every request carries `approval`, fixed when it is made from the target's own
+standing and never from anything the requester sends:
+
+| The target | `approval` | Who decides |
+| --- | --- | --- |
+| Any agent, in a request made outside a teamspace | `agent` | The addressed agent, or its member's primary agent mediating, as before teamspaces |
+| A specialist contributed to the teamspace with `automatic` delegation | `agent` | The same |
+| A teammate's primary agent | `owner` | Only that member, in their own session |
+| A specialist contributed with `request` delegation | `owner` | Only that member, in their own session |
+
+A request held for its owner is decided only through
+`POST .../agent-requests/{request}/decision`, the member's own signed-in call
+(`interactions.Service.DecideAsOwner`). Agent tokens are refused there, and
+agents' tools see `agents.InteractionService`, which has no owner path, so
+`interactions_decide` answers `ErrForbidden`, telling the agent its member
+decides. The member may also decide a request their agent could. Its
+`requested` delivery wakes nobody; the member's approval arrives as the
+ordinary `approved` delivery, which wakes the addressed agent with the
+read-only apps toolbox and a prompt saying its owner approved the request
+themself, so it does the approved work and answers with `interactions_respond`
+rather than deciding again. Rejection and expiry work as for any request. The
+check fails closed: any approval but `agent` holds a request, so one this code
+does not know is the owner's too. `approval` is a snapshot: changing a
+contribution's delegation mode later does not change requests already made.
+
 **What a delivered request may reach.** The member whose agent is woken is not
 there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
 what it may reach follows what their own agent has already allowed:
@@ -322,7 +357,7 @@ what it may reach follows what their own agent has already allowed:
 - **Deciding** on a new request, and **reporting** a finished one back to its
   own member, run without the apps toolbox at all. Nothing another member
   wrote can read this member's connected apps before their agent has approved
-  it.
+  it. A request held for its owner is never delivered for deciding at all.
 - **Doing approved work** runs with the read-only apps toolbox — the same one
   a wake-up gets — and never the writing one.
 - No unwatched run may start an interaction of its own: `interactions_create`
@@ -510,16 +545,40 @@ is not durable across a process restart and is never selected by production.
 
 ### Agent request API
 
-The same ledger is available to the member through their primary identity:
+The same ledger is available to the member through their primary identity,
+and a decision made here is the member's own:
 
 | Route | What it does |
 | --- | --- |
-| `POST /v1/organizations/{org}/agent-requests` | Creates a request; accepts `Idempotency-Key` for caller retries |
+| `POST /v1/organizations/{org}/agent-requests` | Creates a request, in a teamspace when the body names `teamspace_id`; accepts `Idempotency-Key` for caller retries |
+| `GET /v1/organizations/{org}/agent-requests` | Lists, newest first, the requests the member's agents sent and were sent |
 | `GET /v1/organizations/{org}/agent-requests/inbox` | Lists requests addressed to the member's agents |
 | `GET /v1/organizations/{org}/agent-requests/sent` | Lists requests sent by the member's agents |
 | `GET /v1/organizations/{org}/agent-requests/{request}` | Reads one request visible to the member |
-| `POST /v1/organizations/{org}/agent-requests/{request}/decision` | Approves or rejects with narrowed tools and permissions |
+| `POST /v1/organizations/{org}/agent-requests/{request}/decision` | The member approves or rejects, with narrowed tools and permissions; the only way a request held for its owner is decided |
 | `POST /v1/organizations/{org}/agent-requests/{request}/response` | Completes an approved request with the strict result envelope |
+
+A request's JSON carries `teamspace_id` (absent outside a teamspace) and
+`approval` (`agent` or `owner`, see
+[Agent interactions toolbox](#agent-interactions-toolbox)) beside its parties,
+status, decision and result. All three listings take `?limit=` and two
+optional filters: `?teamspace_id=` keeps the requests made in that teamspace,
+and `?with_user=` those whose other party is that member.
+`GET .../agent-requests?teamspace_id=T&with_user=U` is how a side conversation
+reads what two teammates asked each other in teamspace T, in both directions:
+either of them gets the same list, polling as themself, and a listing only
+ever holds requests its caller is a party to. `with_user` naming the caller is
+`400 invalid_request`.
+
+Creating a request in a teamspace answers with the teamspace's refusal when
+there is one, and records nothing: `404 not_found` for a teamspace the caller
+cannot see, `403 forbidden` for a caller who is not on its team,
+`409 teamspace_disabled` when the space or the organization agent is
+disabled, and `400 invalid_request` for a target with no seat there. A body
+naming `approval` is `400 invalid_request`, since nothing the requester sends
+chooses it. Deciding a request addressed to someone else is `403 forbidden`
+(one the caller is not a party to is `404 not_found`), one past its expiry
+`409 request_expired`, and one already decided `409 invalid_state`.
 
 ### A teamspace is a room
 
@@ -598,15 +657,22 @@ contribution is withdrawn; primary participation follows live Teams
 membership.
 
 Contributing a specialist never transfers its identity, instructions, app
-connections, or tool permissions. The specialist still runs as its owner. The
-owner chooses `request` delegation, which uses the audited cross-user request
-protocol, or explicitly opts into `automatic` bounded delegation by the
-organization agent. Existing per-tool authorization and human-confirmation
-requirements remain in force in both modes. Another member, including a team
-admin, cannot increase that standing authority; they can only remove the
-contribution. At this layer the organization agent records follow-ups as
-`proposed` only; it does not yet execute them, even when a contribution has
-automatic delegation authority. Execution is a separate authority boundary.
+connections, or tool permissions. The specialist still runs as its owner.
+`delegation_mode` is the owner's standing answer to whether teammates may ask
+it for work here without them, and the request ledger enforces it for every
+cross-user request made in the teamspace (`teamspace_id`): a `request`
+specialist's requests are held for its owner, who approves or rejects each in
+their own session before the specialist is woken, while an `automatic`
+specialist decides them itself, as any agent does outside a teamspace. A
+teammate's primary agent is always held for its owner. The mode in force when
+a request is made is the one it keeps (see
+[Agent interactions toolbox](#agent-interactions-toolbox)). Existing per-tool
+authorization and human-confirmation requirements remain in force in both
+modes. Another member, including a team admin, cannot increase that standing
+authority; they can only remove the contribution. The organization agent
+records follow-ups as `proposed` only; it does not yet execute them, even when
+a contribution has automatic delegation authority. Execution is a separate
+authority boundary.
 
 Organization-agent and teamspace lifecycle events contain only routing
 identity, status, revision, and contributor user ids. Prompts, whisperer
@@ -753,7 +819,7 @@ fills it (`internal/inbound`):
 | Detail type | What agents does |
 | --- | --- |
 | `batching.trigger-batch.ready.v1` | Keeps the batch's triggers, all at once, to wake Krude for its member (see [Wake-ups](#wake-ups)) |
-| `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent |
+| `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent; one held for its owner completes without waking it |
 | `agents.interaction.decided.v1` | Wakes the target to finish approved work, or the requester to observe a rejection |
 | `agents.interaction.completed.v1` | Wakes the requester to observe a completed or failed result |
 | `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, and cross-user request content in that organization |
@@ -842,8 +908,11 @@ wakes Krude for each batch it hands over, as `batching.trigger-batch.ready.v1`
 Interaction wake-ups use a separate durable job table because they have a
 state machine rather than an app digest. The target's `requested` delivery is
 complete only after it records a decision; an `approved` delivery is complete
-only after it records a final result. Rejected and completed deliveries notify
-the requesting agent. Jobs lease across replicas, retry failed runs three
+only after it records a final result. A `requested` delivery for a request
+held for its owner is completed without a run, since no agent may decide it;
+the owner's approval arrives as the `approved` delivery, whose prompt says the
+owner approved it. Rejected and completed deliveries notify the requesting
+agent. Jobs lease across replicas, retry failed runs three
 times, settle recorded revisions in order per request and recipient, and keep handled IDs
 for a week. If an earlier run already advanced the interaction, a later or
 repeated delivery is settled without running the agent again.
