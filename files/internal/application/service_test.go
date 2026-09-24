@@ -159,6 +159,26 @@ func TestTeamFileFollowsTeamsACL(t *testing.T) {
 	}
 }
 
+func TestOrganizationAdminReadsTeamFilesWithoutTeamMembershipLookup(t *testing.T) {
+	store := newFakeStore()
+	service := testService(store, blob.NewMemory())
+	created, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "team.md", ContentType: "text/markdown", Scope: domain.ScopeTeam,
+		TeamID: "team_eng", Content: []byte("team notes"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.teams = nil
+	if _, err := service.Get(context.Background(), creds("user-admin"), "org_1", created.ID); err != nil {
+		t.Fatalf("org admin get team file = %v", err)
+	}
+	listed, err := service.List(context.Background(), creds("user-admin"), "org_1", ListFilter{Scope: domain.ScopeTeam, TeamID: "team_eng"})
+	if err != nil || len(listed) != 1 || listed[0].ID != created.ID {
+		t.Fatalf("org admin list team files = %+v, %v", listed, err)
+	}
+}
+
 func TestBillingAttachmentIsAdminOnly(t *testing.T) {
 	service := testService(newFakeStore(), blob.NewMemory())
 	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
@@ -184,6 +204,45 @@ func TestBillingAttachmentIsAdminOnly(t *testing.T) {
 	memberList, err := service.List(context.Background(), creds("user-member"), "org_1", ListFilter{Scope: domain.ScopeOrganization})
 	if err != nil || len(memberList) != 0 {
 		t.Fatalf("member org list leaked billing = %+v, %v", memberList, err)
+	}
+}
+
+func TestAdminOnlyOrganizationFileACL(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	if _, err := service.Create(context.Background(), creds("user-member"), "org_1", given(CreateInput{
+		Filename: "secret.txt", ContentType: "text/plain", Access: domain.AccessAdmins, Content: []byte("secret"),
+	})); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("member admin-only create = %v", err)
+	}
+	if _, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "secret.txt", ContentType: "text/plain", Scope: domain.ScopeMember, Access: domain.AccessAdmins, Content: []byte("secret"),
+	})); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("private admin-only create = %v", err)
+	}
+	restricted, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "secret.txt", ContentType: "text/plain", Scope: domain.ScopeOrganization, Access: domain.AccessAdmins, Content: []byte("secret"),
+	}))
+	if err != nil || restricted.Access != domain.AccessAdmins {
+		t.Fatalf("restricted file = %+v, %v", restricted, err)
+	}
+	general, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "handbook.txt", ContentType: "text/plain", Scope: domain.ScopeOrganization, Content: []byte("handbook"),
+	}))
+	if err != nil || general.Access != domain.AccessMembers {
+		t.Fatalf("general file = %+v, %v", general, err)
+	}
+	if _, err := service.Get(context.Background(), creds("user-member"), "org_1", restricted.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("member restricted GET = %v", err)
+	}
+	if _, _, err := service.Content(context.Background(), creds("user-member"), "org_1", restricted.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("member restricted content = %v", err)
+	}
+	if _, err := service.Get(context.Background(), creds("user-owner"), "org_1", restricted.ID); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := service.List(context.Background(), creds("user-member"), "org_1", ListFilter{Scope: domain.ScopeOrganization})
+	if err != nil || len(listed) != 1 || listed[0].ID != general.ID {
+		t.Fatalf("member list = %+v, %v", listed, err)
 	}
 }
 

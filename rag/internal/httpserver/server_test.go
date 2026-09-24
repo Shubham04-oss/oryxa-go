@@ -292,7 +292,10 @@ func TestAddDocumentFromAFile(t *testing.T) {
 
 func TestSearchPassesEveryKnobDown(t *testing.T) {
 	t.Parallel()
-	fake := &fakeService{results: retrieval.Results{Matches: []domain.Match{{Score: 0.9}}, Reranked: true}}
+	fake := &fakeService{results: retrieval.Results{Matches: []domain.Match{{
+		Document: domain.Ref{ID: "doc_1", Metadata: domain.Metadata{"provider": "gmail", "document_kind": "message", "category": "financial_record"}},
+		Score:    0.9,
+	}}, Reranked: true}}
 	recorder := do(t, newServer(fake), http.MethodPost, "/v1/organizations/org_1/corpora/cor_1/search", `{
 		"query":"how often do credentials rotate?","top_k":5,"mode":"hybrid",
 		"min_score":0.3,"diversity":0.7,"rerank":true,"over_fetch":6,
@@ -323,6 +326,9 @@ func TestSearchPassesEveryKnobDown(t *testing.T) {
 	if len(body.Matches) != 1 || !body.Reranked {
 		t.Fatalf("body = %+v", body)
 	}
+	if body.Matches[0].Document.Metadata["provider"] != "gmail" || body.Matches[0].Document.Metadata["category"] != "financial_record" {
+		t.Fatalf("search response lost provenance: %+v", body.Matches[0].Document)
+	}
 }
 
 func TestSearchWithNoMatchesReturnsAnEmptyList(t *testing.T) {
@@ -343,7 +349,7 @@ func TestAnswerReturnsTheAnswerAndWhatItWasBuiltFrom(t *testing.T) {
 	fake := &fakeService{answered: application.Answered{
 		Answer: domain.Answer{
 			Text:      "Every ninety days [1].",
-			Citations: []domain.Citation{{Index: 1, ChunkID: "chk_a", DocumentID: "doc_a", StartByte: 10, EndByte: 40}},
+			Citations: []domain.Citation{{Index: 1, ChunkID: "chk_a", DocumentID: "doc_a", StartByte: 10, EndByte: 40, Metadata: domain.Metadata{"provider": "gmail", "category": "account_record"}}},
 			Grounded:  true, Model: "test-model",
 		},
 		Matches: []domain.Match{{Chunk: domain.Chunk{ID: "chk_a"}, Score: 0.9}},
@@ -367,6 +373,9 @@ func TestAnswerReturnsTheAnswerAndWhatItWasBuiltFrom(t *testing.T) {
 	}
 	if body.Answer.Citations[0].EndByte != 40 {
 		t.Fatalf("the citation lost its byte range: %+v", body.Answer.Citations[0])
+	}
+	if body.Answer.Citations[0].Metadata["provider"] != "gmail" || body.Answer.Citations[0].Metadata["category"] != "account_record" {
+		t.Fatalf("the citation lost its provenance: %+v", body.Answer.Citations[0])
 	}
 }
 

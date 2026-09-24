@@ -133,6 +133,83 @@ func TestCorpusLifecycle(t *testing.T) {
 	}
 }
 
+func TestDocumentsCannotCrossOrganizationBoundaries(t *testing.T) {
+	store, ctx := openTestStore(t)
+	first := testCorpus(t, store, ctx, uniqueOrganization(), titanSpec())
+	second := testCorpus(t, store, ctx, uniqueOrganization(), titanSpec())
+	otherCorpusInFirst := testCorpus(t, store, ctx, first.OrganizationID, titanSpec())
+
+	firstBody := "Only the first organization may read this."
+	firstDocument, _, err := store.UpsertDocument(ctx,
+		newDocument(first, domain.Source{Kind: domain.SourceExternal, Ref: "https://example.test/first"}, "First", firstBody),
+		firstBody, testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("write first organization's document: %v", err)
+	}
+	secondBody := "Only the second organization may read this."
+	secondDocument, _, err := store.UpsertDocument(ctx,
+		newDocument(second, domain.Source{Kind: domain.SourceInline}, "Second", secondBody),
+		secondBody, testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("write second organization's document: %v", err)
+	}
+	otherBody := "A different collection in the first organization."
+	otherDocument, _, err := store.UpsertDocument(ctx,
+		newDocument(otherCorpusInFirst, domain.Source{Kind: domain.SourceInline}, "Other", otherBody),
+		otherBody, testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatalf("write other corpus's document: %v", err)
+	}
+
+	// Even an internal writer must not attach a document claiming one
+	// organization to a corpus owned by another.
+	wrong := newDocument(first, domain.Source{Kind: domain.SourceInline}, "Wrong", "cross-organization")
+	wrong.OrganizationID = second.OrganizationID
+	if _, _, err := store.UpsertDocument(ctx, wrong, "cross-organization", testEvent(t, "rag.document.received.v1")); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cross-organization document write = %v, want ErrConflict", err)
+	}
+	wrongUpdate := firstDocument
+	wrongUpdate.OrganizationID = second.OrganizationID
+	wrongUpdate.ContentSHA256 = domain.Hash("changed by foreign organization")
+	if _, _, err := store.UpsertDocument(ctx, wrongUpdate, "changed by foreign organization", testEvent(t, "rag.document.received.v1")); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cross-organization document update = %v, want ErrConflict", err)
+	}
+	unchanged, err := store.Document(ctx, first.OrganizationID, firstDocument.ID)
+	if err != nil || unchanged.ContentSHA256 != firstDocument.ContentSHA256 {
+		t.Fatalf("foreign update changed first organization's document: %+v, %v", unchanged, err)
+	}
+	wrongChunkParent := firstDocument
+	wrongChunkParent.OrganizationID = second.OrganizationID
+	if _, err := store.SyncChunks(ctx, wrongChunkParent, []domain.Chunk{{
+		Ordinal: 0, Text: firstBody, TokenCount: 7, SHA256: domain.Hash(firstBody),
+		StartByte: 0, EndByte: len(firstBody),
+	}}, time.Now().UTC()); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cross-organization chunk write = %v, want ErrConflict", err)
+	}
+	now := time.Now().UTC()
+	if err := store.UpsertKnowledgeDocumentMapping(ctx, domain.KnowledgeDocumentMapping{
+		KnowledgeDocumentID: "kdoc_foreign", OrganizationID: second.OrganizationID,
+		CorpusID: first.ID, DocumentID: firstDocument.ID,
+		ContentHash: "hash", ExtractedAt: now, UpdatedAt: now,
+	}); !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("cross-organization knowledge mapping = %v, want ErrConflict", err)
+	}
+
+	// Bedrock results are hydrated from PostgreSQL. A result carrying a
+	// foreign document id must be discarded even if Bedrock returned it.
+	refs, err := store.DocumentRefs(ctx, first.OrganizationID, first.ID,
+		[]string{firstDocument.ID, secondDocument.ID, otherDocument.ID}, false)
+	if err != nil {
+		t.Fatalf("read first organization's references: %v", err)
+	}
+	if len(refs) != 1 || refs[firstDocument.ID].ID != firstDocument.ID {
+		t.Fatalf("references from the first organization = %+v", refs)
+	}
+	if _, err := store.Document(ctx, first.OrganizationID, secondDocument.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("foreign document read = %v, want ErrNotFound", err)
+	}
+}
+
 // TestCorporaCountsWhatEachHolds is the regression for a listing that said
 // every corpus was empty: Krude searches only the corpora a listing says hold
 // documents, so it searched none.
@@ -165,7 +242,7 @@ func TestCorporaCountsWhatEachHolds(t *testing.T) {
 	if counts[full.ID] != [2]int64{1, 2} || counts[empty.ID] != [2]int64{0, 0} || len(counts) != 2 {
 		t.Fatalf("listed counts = %v, want %s holding 1 document of 2 chunks and %s nothing", counts, full.ID, empty.ID)
 	}
-	documents, chunks, err := store.CorpusCounts(ctx, full.ID)
+	documents, chunks, err := store.CorpusCounts(ctx, full.ID, true)
 	if err != nil || [2]int64{documents, chunks} != counts[full.ID] {
 		t.Fatalf("CorpusCounts = (%d, %d, %v), want what the listing said", documents, chunks, err)
 	}
@@ -276,15 +353,16 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 	}
 
 	at := time.Now().UTC().Truncate(time.Microsecond)
-	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, stored.ContentSHA256, at); err != nil {
-		t.Fatalf("MarkKnowledgeBaseSubmitted: %v", err)
+	marker := "v2:marker-of-the-submission"
+	if recorded, err := store.MarkKnowledgeBaseSubmitted(ctx, stored, marker, at); err != nil || !recorded {
+		t.Fatalf("MarkKnowledgeBaseSubmitted = %v, %v", recorded, err)
 	}
 	afterSubmit, err := store.Document(ctx, organizationID, stored.ID)
 	if err != nil {
 		t.Fatalf("Document: %v", err)
 	}
-	if afterSubmit.KBSyncedHash != stored.ContentSHA256 {
-		t.Fatalf("kb_synced_hash = %q after submission, want %q", afterSubmit.KBSyncedHash, stored.ContentSHA256)
+	if afterSubmit.KBSyncedHash != marker {
+		t.Fatalf("kb_synced_hash = %q after submission, want %q", afterSubmit.KBSyncedHash, marker)
 	}
 	if afterSubmit.KBSubmittedAt == nil || !afterSubmit.KBSubmittedAt.Equal(at) {
 		t.Fatalf("kb_submitted_at = %v after submission, want %v", afterSubmit.KBSubmittedAt, at)
@@ -304,8 +382,8 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 			continue
 		}
 		found = true
-		if candidate.KBSyncedHash != stored.ContentSHA256 {
-			t.Fatalf("claiming the document changed kb_synced_hash to %q, want %q", candidate.KBSyncedHash, stored.ContentSHA256)
+		if candidate.KBSyncedHash != marker {
+			t.Fatalf("claiming the document changed kb_synced_hash to %q, want %q", candidate.KBSyncedHash, marker)
 		}
 		if candidate.KBSubmittedAt == nil || !candidate.KBSubmittedAt.Equal(at) {
 			t.Fatalf("claiming the document changed kb_submitted_at to %v, want %v", candidate.KBSubmittedAt, at)
@@ -317,8 +395,8 @@ func TestDocumentOriginalAndKnowledgeBaseColumnsRoundTrip(t *testing.T) {
 
 	// Giving a submission up forgets when it was made along with what it was,
 	// since nothing is outstanding any more.
-	if err := store.MarkKnowledgeBaseSubmitted(ctx, stored.ID, "", at.Add(time.Minute)); err != nil {
-		t.Fatalf("MarkKnowledgeBaseSubmitted with no hash: %v", err)
+	if forgotten, err := store.MarkKnowledgeBaseSubmitted(ctx, stored, "", at.Add(time.Minute)); err != nil || !forgotten {
+		t.Fatalf("MarkKnowledgeBaseSubmitted with no marker = %v, %v", forgotten, err)
 	}
 	afterReset, err := store.Document(ctx, organizationID, stored.ID)
 	if err != nil {
@@ -379,8 +457,8 @@ func TestDocumentUpsertIsIdempotentOnContent(t *testing.T) {
 		t.Fatalf("re-offering a pending document = (%v, %v), want changed", outcome, err)
 	}
 
-	if err := store.MarkDocumentReady(ctx, stored.ID, 3, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil {
-		t.Fatalf("MarkDocumentReady: %v", err)
+	if marked, err := store.MarkDocumentReady(ctx, stored, 3, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil || !marked {
+		t.Fatalf("MarkDocumentReady = %v, %v", marked, err)
 	}
 
 	// Now the same bytes are a no-op, which is what lets a pipeline
@@ -407,6 +485,143 @@ func TestDocumentUpsertIsIdempotentOnContent(t *testing.T) {
 	}
 	if changed.IngestedAt != nil {
 		t.Fatal("a changed document kept the previous ingest time")
+	}
+}
+
+func TestMetadataChangeRequeuesDocumentAndReplacesVectorMetadata(t *testing.T) {
+	store, ctx := openTestStore(t)
+	corpus := testCorpus(t, store, ctx, uniqueOrganization(), titanSpec())
+	body := "An invoice for the September service."
+	source := domain.Source{Kind: domain.SourceExternal, Ref: "https://example.com/invoice"}
+	initial := newDocument(corpus, source, "Invoice", body)
+	initial.Metadata = domain.Metadata{"provider": "gmail", "category": "financial_record"}
+	stored, _, err := store.UpsertDocument(ctx, initial, body, testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk := domain.Chunk{DocumentID: stored.ID, CorpusID: corpus.ID, OrganizationID: corpus.OrganizationID,
+		Ordinal: 0, Text: body, TokenCount: 7, SHA256: domain.Hash(body), StartByte: 0, EndByte: len(body), Metadata: initial.Metadata}
+	first, err := store.SyncChunks(ctx, stored, []domain.Chunk{chunk}, time.Now().UTC())
+	if err != nil || len(first.Fresh) != 1 {
+		t.Fatalf("initial chunk sync = %+v, %v", first, err)
+	}
+	if err := store.MarkChunksEmbedded(ctx, []string{first.Fresh[0].ID}, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if marked, err := store.MarkDocumentReady(ctx, stored, 1, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil || !marked {
+		t.Fatal(marked, err)
+	}
+	if recorded, err := store.MarkKnowledgeBaseSubmitted(ctx, stored, "v2:submitted", time.Now().UTC()); err != nil || !recorded {
+		t.Fatal(recorded, err)
+	}
+	updated := newDocument(corpus, source, "Invoice", body)
+	updated.Metadata = domain.Metadata{"provider": "gmail", "category": "account_record"}
+	changed, outcome, err := store.UpsertDocument(ctx, updated, body, testEvent(t, "rag.document.received.v1"))
+	if err != nil || outcome != UpsertChanged || changed.Status != domain.StatusPending || changed.KBSyncedHash != "" {
+		t.Fatalf("metadata update = %+v, %v, %v", changed, outcome, err)
+	}
+	refs, err := store.DocumentRefs(ctx, corpus.OrganizationID, corpus.ID, []string{changed.ID}, false)
+	if err != nil || refs[changed.ID].Metadata["category"] != "account_record" {
+		t.Fatalf("updated document provenance = %+v, %v", refs, err)
+	}
+	chunk.Metadata = updated.Metadata
+	second, err := store.SyncChunks(ctx, changed, []domain.Chunk{chunk}, time.Now().UTC())
+	// The same text keeps its chunk id, and so its vector stays searchable,
+	// but it is fresh: that vector carries the old metadata until the chunk
+	// is written again.
+	if err != nil || len(second.Fresh) != 1 || second.Fresh[0].ID != first.Fresh[0].ID ||
+		len(second.Removed) != 0 || len(second.Reused) != 0 {
+		t.Fatalf("changed metadata chunk sync = %+v, %v", second, err)
+	}
+	refreshed, err := store.Chunks(ctx, corpus.OrganizationID, corpus.ID, []string{first.Fresh[0].ID})
+	if err != nil || len(refreshed) != 1 || refreshed[0].Metadata["category"] != "account_record" {
+		t.Fatalf("relabelled chunk = %+v, %v", refreshed, err)
+	}
+	// Until its vector is written again it is not settled: an attempt that
+	// stopped before then leaves it to be embedded afresh.
+	third, err := store.SyncChunks(ctx, changed, []domain.Chunk{chunk}, time.Now().UTC())
+	if err != nil || len(third.Fresh) != 1 || third.Fresh[0].ID == first.Fresh[0].ID || len(third.Removed) != 1 {
+		t.Fatalf("a relabelled chunk never written again was reused: %+v, %v", third, err)
+	}
+}
+
+func TestDocumentACLFiltersPagesAndReferences(t *testing.T) {
+	store, ctx := openTestStore(t)
+	organizationID := uniqueOrganization()
+	corpus := testCorpus(t, store, ctx, organizationID, titanSpec())
+	general := newDocument(corpus, domain.Source{Kind: domain.SourceExternal, Ref: "general"}, "Handbook", "handbook")
+	general.Access = domain.AccessMembers
+	general, _, err := store.UpsertDocument(ctx, general, "handbook", testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := newDocument(corpus, domain.Source{Kind: domain.SourceExternal, Ref: "restricted"}, "Payroll", "payroll")
+	admin.Access = domain.AccessAdmins
+	admin, _, err = store.UpsertDocument(ctx, admin, "payroll", testEvent(t, "rag.document.received.v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []struct {
+		document domain.Document
+		body     string
+	}{{general, "handbook"}, {admin, "payroll"}} {
+		_, err := store.SyncChunks(ctx, entry.document, []domain.Chunk{{
+			Text: entry.body, TokenCount: 1, SHA256: domain.Hash(entry.body), StartByte: 0, EndByte: len(entry.body),
+		}}, time.Now().UTC())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if hits, err := store.LexicalSearch(ctx, corpus, "payroll", 10, domain.Filter{}, false); err != nil || len(hits) != 0 {
+		t.Fatalf("member payroll hits = %+v, %v", hits, err)
+	}
+	if hits, err := store.LexicalSearch(ctx, corpus, "payroll", 10, domain.Filter{}, true); err != nil || len(hits) != 1 {
+		t.Fatalf("admin payroll hits = %+v, %v", hits, err)
+	}
+	memberPage, next, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 1, false)
+	if err != nil || len(memberPage) != 1 || memberPage[0].ID != general.ID || next != "" {
+		t.Fatalf("member page = %+v, %q, %v", memberPage, next, err)
+	}
+	adminPage, _, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 2, true)
+	if err != nil || len(adminPage) != 2 {
+		t.Fatalf("admin page = %+v, %v", adminPage, err)
+	}
+	ids := []string{general.ID, admin.ID}
+	memberRefs, err := store.DocumentRefs(ctx, organizationID, corpus.ID, ids, false)
+	if err != nil || len(memberRefs) != 1 || memberRefs[general.ID].ID != general.ID {
+		t.Fatalf("member refs = %+v, %v", memberRefs, err)
+	}
+	adminRefs, err := store.DocumentRefs(ctx, organizationID, corpus.ID, ids, true)
+	if err != nil || len(adminRefs) != 2 {
+		t.Fatalf("admin refs = %+v, %v", adminRefs, err)
+	}
+	visibleDocuments, _, err := store.CorpusCounts(ctx, corpus.ID, false)
+	if err != nil || visibleDocuments != 1 {
+		t.Fatalf("member count = %d, %v", visibleDocuments, err)
+	}
+	allDocuments, _, err := store.CorpusCounts(ctx, corpus.ID, true)
+	if err != nil || allDocuments != 2 {
+		t.Fatalf("admin count = %d, %v", allDocuments, err)
+	}
+	listed, err := store.Corpora(ctx, organizationID, CorpusQuery{Scope: domain.ScopeOrganization})
+	if err != nil || len(listed) != 1 || listed[0].DocumentCount != 1 {
+		t.Fatalf("member corpora = %+v, %v", listed, err)
+	}
+	listed, err = store.Corpora(ctx, organizationID, CorpusQuery{Scope: domain.ScopeOrganization, Admin: true})
+	if err != nil || len(listed) != 1 || listed[0].DocumentCount != 2 {
+		t.Fatalf("admin corpora = %+v, %v", listed, err)
+	}
+	if marked, err := store.MarkDocumentReady(ctx, admin, 0, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil || !marked {
+		t.Fatal(marked, err)
+	}
+	if recorded, err := store.MarkKnowledgeBaseSubmitted(ctx, admin, "v2:submitted", time.Now().UTC()); err != nil || !recorded {
+		t.Fatal(recorded, err)
+	}
+	reclassified := newDocument(corpus, domain.Source{Kind: domain.SourceExternal, Ref: "restricted"}, "Payroll", "payroll")
+	reclassified.Access = domain.AccessMembers
+	reclassified, outcome, err := store.UpsertDocument(ctx, reclassified, "payroll", testEvent(t, "rag.document.received.v1"))
+	if err != nil || outcome != UpsertChanged || reclassified.ID != admin.ID || reclassified.Status != domain.StatusPending || reclassified.KBSyncedHash != "" {
+		t.Fatalf("ACL update = %+v, %v, %v", reclassified, outcome, err)
 	}
 }
 
@@ -544,7 +759,7 @@ func TestLexicalSearchFindsExactTerms(t *testing.T) {
 
 	// An exact identifier is precisely what a dense retriever misses and what
 	// the lexical half is here for.
-	hits, err := store.LexicalSearch(ctx, corpus, "ERR_ROTATION_4471", 10, domain.Filter{})
+	hits, err := store.LexicalSearch(ctx, corpus, "ERR_ROTATION_4471", 10, domain.Filter{}, true)
 	if err != nil {
 		t.Fatalf("LexicalSearch: %v", err)
 	}
@@ -559,7 +774,7 @@ func TestLexicalSearchFindsExactTerms(t *testing.T) {
 	// or a filtered query would leak through one half of the hybrid.
 	hits, err = store.LexicalSearch(ctx, corpus, "rotation", 10, domain.Filter{
 		Conditions: []domain.Condition{{Key: "team", Operator: domain.OperatorEqual, Values: []string{"people"}}},
-	})
+	}, true)
 	if err != nil {
 		t.Fatalf("LexicalSearch: %v", err)
 	}
@@ -572,7 +787,7 @@ func TestLexicalSearchFindsExactTerms(t *testing.T) {
 	// A question worded as a person asks it carries words no passage holds.
 	// Requiring every word found nothing; the passage with the most of them
 	// is what the lexical half should return.
-	hits, err = store.LexicalSearch(ctx, corpus, "When does the rotation happen, and is it automatic?", 10, domain.Filter{})
+	hits, err = store.LexicalSearch(ctx, corpus, "When does the rotation happen, and is it automatic?", 10, domain.Filter{}, true)
 	if err != nil {
 		t.Fatalf("LexicalSearch: %v", err)
 	}
@@ -582,7 +797,7 @@ func TestLexicalSearchFindsExactTerms(t *testing.T) {
 
 	// Punctuation must not blow up the query parser.
 	for _, query := range []string{"what's the (rotation) policy?", `"ninety days"`, "rotation -holidays", "!!!", "a & b | c", "'quoted' :*"} {
-		if _, err := store.LexicalSearch(ctx, corpus, query, 5, domain.Filter{}); err != nil {
+		if _, err := store.LexicalSearch(ctx, corpus, query, 5, domain.Filter{}, true); err != nil {
 			t.Fatalf("LexicalSearch(%q): %v", query, err)
 		}
 	}
@@ -814,7 +1029,7 @@ func TestDeleteCorpusTakesEverythingWithIt(t *testing.T) {
 	}, time.Now().UTC()); err != nil {
 		t.Fatalf("SyncChunks: %v", err)
 	}
-	documents, chunks, err := store.CorpusCounts(ctx, corpus.ID)
+	documents, chunks, err := store.CorpusCounts(ctx, corpus.ID, true)
 	if err != nil || documents != 1 || chunks != 1 {
 		t.Fatalf("CorpusCounts = (%d, %d, %v)", documents, chunks, err)
 	}
@@ -923,7 +1138,7 @@ func TestDocumentsPaginatesWithACursor(t *testing.T) {
 
 	// No cursor must return exactly the first page an unpaged caller gets
 	// today: the newest three, with a cursor to continue.
-	firstPage, next, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 3)
+	firstPage, next, err := store.Documents(ctx, organizationID, corpus.ID, "", "", 3, true)
 	if err != nil {
 		t.Fatalf("Documents: %v", err)
 	}
@@ -944,7 +1159,7 @@ func TestDocumentsPaginatesWithACursor(t *testing.T) {
 		if pages > len(created) {
 			t.Fatal("Documents did not terminate: the cursor is not making progress")
 		}
-		page, next, err := store.Documents(ctx, organizationID, corpus.ID, "", cursor, 2)
+		page, next, err := store.Documents(ctx, organizationID, corpus.ID, "", cursor, 2, true)
 		if err != nil {
 			t.Fatalf("Documents: %v", err)
 		}
@@ -969,7 +1184,7 @@ func TestDocumentsPaginatesWithACursor(t *testing.T) {
 
 	// A page that holds everything carries no cursor, so a caller knows to
 	// stop asking.
-	_, lastNext, err := store.Documents(ctx, organizationID, corpus.ID, "", "", len(created))
+	_, lastNext, err := store.Documents(ctx, organizationID, corpus.ID, "", "", len(created), true)
 	if err != nil {
 		t.Fatalf("Documents: %v", err)
 	}
@@ -979,7 +1194,7 @@ func TestDocumentsPaginatesWithACursor(t *testing.T) {
 
 	// A cursor that was not handed back unmodified is refused rather than
 	// silently treated as the start.
-	if _, _, err := store.Documents(ctx, organizationID, corpus.ID, "", "not-a-real-cursor", 2); !errors.Is(err, domain.ErrInvalid) {
+	if _, _, err := store.Documents(ctx, organizationID, corpus.ID, "", "not-a-real-cursor", 2, true); !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("a malformed cursor returned %v, want ErrInvalid", err)
 	}
 }

@@ -250,6 +250,7 @@ func readJSONCreate(request *http.Request) (application.CreateInput, error) {
 		Filename      string `json:"filename"`
 		ContentType   string `json:"content_type"`
 		Purpose       string `json:"purpose"`
+		Access        string `json:"access"`
 		Scope         string `json:"scope"`
 		TeamID        string `json:"team_id"`
 		RetentionDays int    `json:"retention_days"`
@@ -275,6 +276,7 @@ func readJSONCreate(request *http.Request) (application.CreateInput, error) {
 		Filename:      body.Filename,
 		ContentType:   body.ContentType,
 		Purpose:       domain.Purpose(strings.TrimSpace(body.Purpose)),
+		Access:        domain.Access(strings.TrimSpace(body.Access)),
 		Scope:         scope,
 		TeamID:        strings.TrimSpace(body.TeamID),
 		RetentionDays: body.RetentionDays,
@@ -319,6 +321,7 @@ func readMultipart(request *http.Request) (application.CreateInput, error) {
 		Filename:      filename,
 		ContentType:   contentType,
 		Purpose:       domain.Purpose(strings.TrimSpace(request.FormValue("purpose"))),
+		Access:        domain.Access(strings.TrimSpace(request.FormValue("access"))),
 		Scope:         scope,
 		TeamID:        strings.TrimSpace(request.FormValue("team_id")),
 		RetentionDays: days,

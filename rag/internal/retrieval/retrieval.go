@@ -37,9 +37,9 @@ const MaxRerankPassages = 100
 // Chunks is what retrieval needs from PostgreSQL: the lexical half of the
 // search, and the text and provenance of whatever either half found.
 type Chunks interface {
-	LexicalSearch(ctx context.Context, corpus domain.Corpus, text string, limit int, filter domain.Filter) ([]domain.ScoredChunk, error)
+	LexicalSearch(ctx context.Context, corpus domain.Corpus, text string, limit int, filter domain.Filter, includeAdminOnly bool) ([]domain.ScoredChunk, error)
 	Chunks(ctx context.Context, organizationID, corpusID string, ids []string) ([]domain.Chunk, error)
-	DocumentRefs(ctx context.Context, organizationID string, ids []string) (map[string]domain.Ref, error)
+	DocumentRefs(ctx context.Context, organizationID, corpusID string, ids []string, includeAdminOnly bool) (map[string]domain.Ref, error)
 }
 
 // Vectors routes a corpus to the store holding its vectors.
@@ -115,7 +115,7 @@ func (retriever *Retriever) Search(ctx context.Context, corpus domain.Corpus, qu
 		lists = append(lists, ranked{name: denseRetriever, hits: hits})
 	}
 	if query.Mode.UsesLexical() {
-		hits, err := retriever.chunks.LexicalSearch(ctx, corpus, query.Text, candidates, query.Filter)
+		hits, err := retriever.chunks.LexicalSearch(ctx, corpus, query.Text, candidates, query.Filter, query.IncludeAdminOnly)
 		if err != nil {
 			return Results{}, err
 		}
@@ -139,7 +139,7 @@ func (retriever *Retriever) Search(ctx context.Context, corpus domain.Corpus, qu
 		sortFused(combined)
 	}
 
-	matches, err := retriever.hydrate(ctx, corpus, combined)
+	matches, err := retriever.hydrate(ctx, corpus, combined, query.IncludeAdminOnly)
 	if err != nil {
 		return Results{}, err
 	}
@@ -214,12 +214,12 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 			documentIDs = append(documentIDs, passage.documentID)
 		}
 	}
-	refs, err := retriever.chunks.DocumentRefs(ctx, corpus.OrganizationID, documentIDs)
+	refs, err := retriever.chunks.DocumentRefs(ctx, corpus.OrganizationID, corpus.ID, documentIDs, query.IncludeAdminOnly)
 	if err != nil {
 		return Results{}, err
 	}
 	matches := make([]domain.Match, 0, len(passages))
-	var gone []string
+	var gone, stale []string
 	for _, passage := range passages {
 		ref, found := refs[passage.documentID]
 		if !found {
@@ -234,11 +234,22 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 			}
 			continue
 		}
+		if !refMatches(ref, query.Filter) {
+			// The knowledge base filtered on the attributes it was last
+			// given, which lag PostgreSQL's until the document is submitted
+			// again, so a document just reclassified could still match the
+			// category it left. What PostgreSQL holds is what a caller's
+			// filter is held to.
+			if !slices.Contains(stale, passage.documentID) {
+				stale = append(stale, passage.documentID)
+			}
+			continue
+		}
 		matches = append(matches, domain.Match{
 			Chunk: domain.Chunk{
 				ID: kbChunkID(passage.documentID, passage.text), DocumentID: passage.documentID,
 				CorpusID: corpus.ID, OrganizationID: corpus.OrganizationID,
-				Text: passage.text, SHA256: domain.Hash(passage.text),
+				Text: passage.text, SHA256: domain.Hash(passage.text), Metadata: ref.Metadata,
 			},
 			Document: ref,
 			Score:    passage.score,
@@ -251,11 +262,46 @@ func (retriever *Retriever) searchKnowledgeBase(ctx context.Context, corpus doma
 		retriever.logger.WarnContext(ctx, "the knowledge base answered with documents rag no longer holds; leaving them out",
 			"corpus_id", corpus.ID, "document_ids", gone)
 	}
+	if len(stale) > 0 {
+		retriever.logger.InfoContext(ctx, "the knowledge base matched documents on attributes rag has since changed; leaving them out",
+			"corpus_id", corpus.ID, "document_ids", stale)
+	}
 	// Bedrock's own reranking, when it ran, already reordered and scored
 	// these; the cross-encoder Reranker below is never invoked for a
 	// knowledge base corpus, since it has nothing here of its own to send it.
 	reranked := query.Rerank && retriever.knowledgeBase.reranks()
 	return Results{Matches: retriever.finalize(matches, query), Reranked: reranked}, nil
+}
+
+// refMatches holds a document to a caller's filter as PostgreSQL has it,
+// with the meaning the PostgreSQL filters give each operator: eq and in need
+// the key present with a listed value, ne and nin pass a document without
+// the key. source_kind is the document's own column rather than metadata;
+// every other key a bedrock-kb corpus filters on is metadata.
+func refMatches(ref domain.Ref, filter domain.Filter) bool {
+	if len(filter.DocumentIDs) > 0 && !slices.Contains(filter.DocumentIDs, ref.ID) {
+		return false
+	}
+	for _, condition := range filter.Conditions {
+		value, present := ref.Metadata[condition.Key]
+		if condition.Key == "source_kind" {
+			value, present = string(ref.Source.Kind), true
+		}
+		listed := present && slices.Contains(condition.Values, value)
+		switch condition.Operator {
+		case domain.OperatorEqual, domain.OperatorIn:
+			if !listed {
+				return false
+			}
+		case domain.OperatorNotEqual, domain.OperatorNotIn:
+			if listed {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // dense embeds the question and asks the vector store.
@@ -275,7 +321,7 @@ func (retriever *Retriever) dense(ctx context.Context, corpus domain.Corpus, que
 		return nil, usage, err
 	}
 	hits, err := store.Search(ctx, corpus, vectorstore.Search{
-		Vector: vector, TopK: candidates, Filter: query.Filter,
+		Vector: vector, TopK: candidates, Filter: query.Filter, IncludeAdminOnly: query.IncludeAdminOnly,
 	})
 	if err != nil {
 		return nil, usage, err
@@ -293,7 +339,7 @@ func (retriever *Retriever) dense(ctx context.Context, corpus domain.Corpus, que
 // than reported. That happens when a document was deleted between the index
 // answering and this read, and an index that is briefly ahead of the source of
 // truth should not turn into an error for the person asking a question.
-func (retriever *Retriever) hydrate(ctx context.Context, corpus domain.Corpus, combined []fused) ([]domain.Match, error) {
+func (retriever *Retriever) hydrate(ctx context.Context, corpus domain.Corpus, combined []fused, includeAdminOnly bool) ([]domain.Match, error) {
 	ids := make([]string, 0, len(combined))
 	for _, entry := range combined {
 		ids = append(ids, entry.chunkID)
@@ -312,7 +358,7 @@ func (retriever *Retriever) hydrate(ctx context.Context, corpus domain.Corpus, c
 			documentIDs = append(documentIDs, chunk.DocumentID)
 		}
 	}
-	refs, err := retriever.chunks.DocumentRefs(ctx, corpus.OrganizationID, documentIDs)
+	refs, err := retriever.chunks.DocumentRefs(ctx, corpus.OrganizationID, corpus.ID, documentIDs, includeAdminOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -323,9 +369,13 @@ func (retriever *Retriever) hydrate(ctx context.Context, corpus domain.Corpus, c
 		if !found {
 			continue
 		}
+		ref, allowed := refs[chunk.DocumentID]
+		if !allowed {
+			continue
+		}
 		matches = append(matches, domain.Match{
 			Chunk:       chunk,
-			Document:    refs[chunk.DocumentID],
+			Document:    ref,
 			Score:       entry.score,
 			Dense:       entry.dense,
 			Lexical:     entry.lexical,

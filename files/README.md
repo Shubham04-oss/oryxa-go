@@ -1,9 +1,10 @@
 # Files service
 
 Files owns object storage for an organization. Auth remains the identity and
-organization/membership boundary. Teams remains the team graph: files forwards
-the caller's credentials to teams when a file hangs on a team, and never copies
-the tree. Billing and pipelines do not write to the bucket. They will attach later by file id and purpose.
+organization/membership boundary. Teams remains the team graph: files
+forwards an ordinary caller's credentials to teams when a file hangs on a
+team, and never copies the tree. Billing and pipelines do not write to the
+bucket. They will attach later by file id and purpose.
 
 S3 is the blob store. PostgreSQL is the source of truth for whether an object
 exists, where it hangs, who created it, its purpose, checksum, and when it
@@ -22,13 +23,16 @@ teams ── team deleted ──▶ files-events queue
 ## Placement and purpose
 
 Privilege and placement are separate, as on teams. **Scope** is where the
-object hangs. **Purpose** is why it exists.
+object hangs. **Purpose** is why it exists. **Access** is the document ACL
+within organization scope: `members` by default, or `admins` for an admin-only
+file. Billing attachments are always `admins`. Only an org admin can create an
+admin-only file. Files are immutable; changing access requires a new upload.
 
 | Scope | Who may create | Who may GET | List | Delete |
 | --- | --- | --- | --- | --- |
 | `member` (default) | Any org member; hangs under the caller | Owner or org admin | Owner's member files; org admin sees every member file | Owner or org admin |
-| `team` | Anyone who can **see** the team | Anyone who can see the team | `?team_id=` after the same teams ACL | Creator, team `can_manage`, or org admin |
-| `organization` | Org admin | Any org member, except `billing.attachment` (admin only) | Organization files; billing hidden unless admin | Org admin |
+| `team` | Anyone who can **see** the team | Team member or org admin | `?team_id=`; Teams checks ordinary members, org admins read directly | Creator, team `can_manage`, or org admin |
+| `organization` | Org admin | Any org member for `members`; org admins for `admins` | Restricted files hidden unless admin | Org admin |
 
 A caller who is not in the organization gets `404`, as auth conceals which
 organizations exist. A team the caller cannot see is `404`, as teams conceals
@@ -82,13 +86,13 @@ Cookie-authenticated mutations must come from an origin in `FILES_ALLOWED_ORIGIN
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | Anyone | Liveness |
 | `GET` | `/v1/organizations/{organizationID}/files` | Members | List. Query `scope`, `team_id`, `purpose`, `year`, `month`, `day` (UTC, from `created_at`; month needs year, day needs month). Default is the caller's member files plus organization files they may see. Team files need `team_id` |
-| `POST` | `/v1/organizations/{organizationID}/files` | Members | Create. JSON `{filename, content_type, purpose, scope, team_id, retention_days, content}` with base64 `content`, or `multipart/form-data` with a `file` part. `scope` defaults to `member`. `team_id` is required when `scope` is `team` |
+| `POST` | `/v1/organizations/{organizationID}/files` | Members | Create. JSON `{filename, content_type, purpose, scope, team_id, access, retention_days, content}` with base64 `content`, or `multipart/form-data` with a `file` part. `scope` defaults to `member`; `access` defaults to `members`. `team_id` is required when `scope` is `team` |
 | `GET` | `/v1/organizations/{organizationID}/files/{fileID}` | Per placement | Metadata |
 | `GET` | `/v1/organizations/{organizationID}/files/{fileID}/content` | Per placement | Bytes, through this service |
 | `POST` | `/v1/organizations/{organizationID}/files/{fileID}/download-url` | Per placement | Short-lived presigned GET against S3 |
 | `DELETE` | `/v1/organizations/{organizationID}/files/{fileID}` | Per placement | Delete metadata and the object |
 
-Events carry ids, placement, purpose, size, and sha256 — never bytes, never
+Events carry ids, placement, purpose, access, size, and sha256 — never bytes, never
 AWS credentials.
 
 Team-scoped operations need `TEAMS_URL`. Without it, `scope=team` is invalid.

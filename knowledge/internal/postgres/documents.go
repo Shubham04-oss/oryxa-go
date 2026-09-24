@@ -15,9 +15,26 @@ const documentColumns = `id, organization_id, source_id, external_id, kind, titl
 	content_hash, byte_size, original_bucket, original_key, original_size, metadata,
 	source_updated_at, extracted_at, last_seen_at, removed_at, excluded_reason, judged_policy, judgment`
 
-// UpsertDocument writes what a run read, and the event saying so only when the
-// content actually changed. It answers whether anything was published, so a
-// pass over an unchanged source publishes nothing.
+// An INSERT's composite foreign key catches a document with the wrong
+// organization, but ON CONFLICT updates an existing row without changing its
+// organization. Check the parent before either path can write or publish.
+func requireSourceOrganization(ctx context.Context, tx pgx.Tx, sourceID, organizationID string) error {
+	var owner string
+	err := tx.QueryRow(ctx, `
+		SELECT organization_id FROM knowledge_sources WHERE id = $1 FOR KEY SHARE`, sourceID).Scan(&owner)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && owner != organizationID) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read document's source: %w", err)
+	}
+	return nil
+}
+
+// UpsertDocument writes what a run read, publishing when searchable content
+// or provenance changes: its content, title, URL, kind or MIME, or the
+// metadata a consumer indexes it by. A pass over an unchanged source
+// publishes nothing.
 func (store *Store) UpsertDocument(ctx context.Context, document domain.Document, event func(domain.Document) (domain.Event, error)) (bool, error) {
 	metadata, err := encodeMap(document.Metadata)
 	if err != nil {
@@ -26,19 +43,31 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 	originalBucket, originalKey, originalSize := originalColumns(document.Original)
 	published := false
 	err = store.inTx(ctx, func(tx pgx.Tx) error {
-		var existingID, existingHash string
+		if err := requireSourceOrganization(ctx, tx, document.SourceID, document.OrganizationID); err != nil {
+			return err
+		}
+		var existingID, existingHash, existingKind, existingTitle, existingURL, existingMIME string
+		var existingMetadata []byte
 		var removedAt *time.Time
 		err := tx.QueryRow(ctx, `
-			SELECT id, content_hash, removed_at
+			SELECT id, content_hash, removed_at, kind, title, url, mime, metadata
 			FROM knowledge_documents
 			WHERE source_id = $1 AND external_id = $2`, document.SourceID, document.ExternalID).
-			Scan(&existingID, &existingHash, &removedAt)
+			Scan(&existingID, &existingHash, &removedAt, &existingKind, &existingTitle, &existingURL, &existingMIME, &existingMetadata)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("read document: %w", err)
 		}
+		previousMetadata, err := decodeMap(existingMetadata)
+		if err != nil {
+			return err
+		}
 		// A document that came back counts as changed, whatever its hash, so a
-		// consumer that forgot it is told to hold it again.
-		changed := existingID == "" || existingHash != document.ContentHash || removedAt != nil
+		// consumer that forgot it is told to hold it again. Metadata only
+		// counts where a consumer indexes by it: a label or a comment count
+		// that moved is written, not published.
+		changed := existingID == "" || existingHash != document.ContentHash || removedAt != nil ||
+			existingKind != document.Kind || existingTitle != document.Title || existingURL != document.URL ||
+			existingMIME != document.MIME || !domain.SearchableMetadataEqual(previousMetadata, document.Metadata)
 		if existingID != "" {
 			document.ID = existingID
 		}
@@ -171,6 +200,9 @@ func (store *Store) ExcludeDocument(ctx context.Context, document domain.Documen
 	}
 	retracted := false
 	err = store.inTx(ctx, func(tx pgx.Tx) error {
+		if err := requireSourceOrganization(ctx, tx, document.SourceID, document.OrganizationID); err != nil {
+			return err
+		}
 		var existingID string
 		var removedAt *time.Time
 		err := tx.QueryRow(ctx, `

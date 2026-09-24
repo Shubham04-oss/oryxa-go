@@ -101,12 +101,12 @@ func TestHealthz(t *testing.T) {
 
 func TestCreateJSON(t *testing.T) {
 	service := &fakeService{object: domain.Object{ID: "file_1", Filename: "notes.txt"}}
-	body := `{"filename":"notes.txt","content_type":"text/plain","purpose":"upload","scope":"team","team_id":"team_eng","content":"` + base64.StdEncoding.EncodeToString([]byte("hello")) + `"}`
+	body := `{"filename":"notes.txt","content_type":"text/plain","purpose":"upload","scope":"team","team_id":"team_eng","access":"members","content":"` + base64.StdEncoding.EncodeToString([]byte("hello")) + `"}`
 	response := do(New(service, Config{}, nil), http.MethodPost, "/v1/organizations/org_1/files", body)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("status = %d body = %s", response.Code, response.Body.Bytes())
 	}
-	if service.created.Filename != "notes.txt" || string(service.created.Content) != "hello" || service.created.Purpose != domain.PurposeUpload || service.created.Scope != domain.ScopeTeam || service.created.TeamID != "team_eng" {
+	if service.created.Filename != "notes.txt" || string(service.created.Content) != "hello" || service.created.Purpose != domain.PurposeUpload || service.created.Scope != domain.ScopeTeam || service.created.TeamID != "team_eng" || service.created.Access != domain.AccessMembers {
 		t.Fatalf("created = %+v", service.created)
 	}
 }

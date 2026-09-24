@@ -227,16 +227,25 @@ func providerFor(toolkit string) string {
 
 // FileDeleted forgets a file the moment it is deleted. The files source reads
 // objects by id, so the document whose external id is the file's is that
-// file, in whichever of the organization's files sources held it. Without
-// this it stayed searchable until the next full sweep noticed it missing,
-// up to a week later.
+// file, held by a source at the placement it lived in. Without this it stayed
+// searchable until the next full sweep noticed it missing, up to a week
+// later.
+//
+// The event names that placement, so only its sources are asked: with a
+// source for every member and every team, asking all of an organization's
+// was a transaction for each of them on every deletion. An event that names
+// no placement this knows is looked for everywhere, as before.
 func (s *Service) FileDeleted(ctx context.Context, event filesv1.ObjectDeleted) error {
 	if event.OrganizationID == "" || event.FileID == "" {
 		return fmt.Errorf("a deleted file needs an organization and an id: %w", domain.ErrInvalid)
 	}
-	sources, err := s.store.Sources(ctx, event.OrganizationID, domain.SourceQuery{Provider: filesProvider, Admin: true})
+	query := domain.SourceQuery{Provider: filesProvider, Admin: true}
+	if placement, ok := filePlacement(event.Scope, event.TeamID, event.MemberID); ok {
+		query.Placement = &placement
+	}
+	sources, err := s.store.Sources(ctx, event.OrganizationID, query)
 	if err != nil {
-		return fmt.Errorf("find the organization's files sources: %w", err)
+		return fmt.Errorf("find the files sources that could hold a deleted file: %w", err)
 	}
 	for _, source := range sources {
 		if source.Status == domain.StatusRemoved {
@@ -258,64 +267,89 @@ func (s *Service) FileDeleted(ctx context.Context, event filesv1.ObjectDeleted) 
 	return nil
 }
 
-// FileStored indexes the organization's own files, once it has any.
+// filePlacement is the placement a file lives in, from what files says of
+// it; false when that names none.
+func filePlacement(scope, teamID, memberID string) (domain.Placement, bool) {
+	switch domain.Scope(scope) {
+	case domain.ScopeOrganization:
+		return domain.Placement{Scope: domain.ScopeOrganization}, true
+	case domain.ScopeTeam:
+		return domain.Placement{Scope: domain.ScopeTeam, TeamID: teamID}, teamID != ""
+	case domain.ScopeMember:
+		return domain.Placement{Scope: domain.ScopeMember, MemberID: memberID}, memberID != ""
+	default:
+		return domain.Placement{}, false
+	}
+}
+
+// FileStored starts indexing shared, team or private files when the first
+// such file is uploaded. Each placement has its own source, read as the
+// member who uploaded that first file.
 //
-// Only an organization-scoped upload counts. A member's private file and a
-// team's are not what this source reads — it asks files for the
-// organization's own, precisely so that what it publishes, which the whole
-// organization can search, is what the whole organization could already see.
-//
-// Every upload after the first finds the source already registered, so this
-// costs one cheap lookup per upload and mints no token.
+// Every upload after the first finds the placement already held, so this
+// costs one lookup by placement and mints no token. A source there that
+// reads the new file is brought forward, so the file is indexed on the next
+// pass rather than at the source's next interval.
 func (s *Service) FileStored(ctx context.Context, event filesv1.ObjectCreated) error {
-	if s.grants == nil {
+	if s.grants == nil || event.OrganizationID == "" {
 		return nil
 	}
-	if event.OrganizationID == "" || event.Scope != string(domain.ScopeOrganization) {
+	placement, target, uploader, ok := storedFilePlacement(event)
+	if !ok {
 		return nil
 	}
 	if _, mounted := s.extractors[filesProvider]; !mounted {
 		// This deployment does not read files at all.
 		return nil
 	}
-	existing, err := s.store.Sources(ctx, event.OrganizationID,
-		domain.SourceQuery{Provider: filesProvider, Admin: true, IncludeRemoved: true})
+	existing, err := s.store.Sources(ctx, event.OrganizationID, domain.SourceQuery{
+		Provider: filesProvider, Placement: &placement, Admin: true, IncludeRemoved: true,
+	})
 	if err != nil {
-		return fmt.Errorf("look for the organization's files source: %w", err)
+		return fmt.Errorf("look for the placement's files source: %w", err)
 	}
+	held := false
 	for _, source := range existing {
-		if source.Scope == domain.ScopeOrganization {
-			// Already indexed — or removed, which is a member saying their
-			// organization's files should not be. Neither is undone by
-			// someone uploading another file, so registering again is only
-			// ever the member's own doing.
-			return nil
+		switch source.Status {
+		case domain.StatusActive:
+			held = true
+			if !readsFile(source, event) || dueAndWaiting(source, s.now()) {
+				continue
+			}
+			if _, err := s.store.HastenSource(ctx, event.OrganizationID, source.ID, s.now()); err != nil {
+				return fmt.Errorf("bring the placement's files source forward: %w", err)
+			}
+		case domain.StatusRemoved:
+			// A member removing a source said this placement should not be
+			// indexed, and another upload does not reverse that. A source
+			// retired for any reason nobody chose gives the placement back.
+			if !replaceable(source.Reason) {
+				held = true
+			}
+		default:
+			held = true
 		}
 	}
-
-	member := event.CreatedBy
-	if member == "" {
-		member = event.MemberID
-	}
-	if member == "" {
+	if held || uploader == "" {
 		return nil
 	}
-	token, err := s.grants.MemberToken(ctx, event.OrganizationID, member)
+
+	token, err := s.grants.MemberToken(ctx, event.OrganizationID, uploader)
 	if err != nil {
 		return withoutGrant(ctx, s.logger.With("organization_id", event.OrganizationID),
-			"the organization's files are not indexed", err)
+			"the files are not indexed", err)
 	}
 	// Read as whoever stored the file. Only an admin can share a file with
 	// the whole organization, so that is an admin, whose view also carries
-	// billing attachments; the files source never publishes those.
+	// billing attachments; those are published with admin-only access.
 	credentials := authclient.Credentials{Authorization: "Bearer " + token}
-	source, err := s.registerFor(ctx, credentials, event.OrganizationID, member, RegisterInput{
-		Provider: filesProvider, Interval: autoRegisterInterval,
+	source, err := s.registerFor(ctx, credentials, event.OrganizationID, uploader, RegisterInput{
+		Provider: filesProvider, Target: target, Interval: autoRegisterInterval,
 	})
 	switch {
 	case err == nil:
-		s.logger.InfoContext(ctx, "the organization's own files are now indexed",
-			"organization_id", event.OrganizationID, "source_id", source.ID)
+		s.logger.InfoContext(ctx, "files are now indexed",
+			"organization_id", event.OrganizationID, "source_id", source.ID, "scope", event.Scope)
 		return nil
 	case errors.Is(err, domain.ErrConflict):
 		// Two uploads at once, and the other won.
@@ -327,4 +361,51 @@ func (s *Service) FileStored(ctx context.Context, event filesv1.ObjectCreated) e
 			"organization_id", event.OrganizationID, "error", err)
 		return nil
 	}
+}
+
+// storedFilePlacement is where an uploaded file lives, the target a source
+// registered for that placement takes, and who uploaded it; false for a file
+// no source here reads. A private file is only ever indexed as its owner.
+func storedFilePlacement(event filesv1.ObjectCreated) (domain.Placement, map[string]string, string, bool) {
+	placement, ok := filePlacement(event.Scope, event.TeamID, event.MemberID)
+	if !ok {
+		return domain.Placement{}, nil, "", false
+	}
+	switch placement.Scope {
+	case domain.ScopeTeam:
+		if event.CreatedBy == "" {
+			return domain.Placement{}, nil, "", false
+		}
+		return placement, map[string]string{"team": event.TeamID}, event.CreatedBy, true
+	case domain.ScopeMember:
+		if event.CreatedBy != "" && event.CreatedBy != event.MemberID {
+			return domain.Placement{}, nil, "", false
+		}
+		return placement, map[string]string{"member": "self"}, event.MemberID, true
+	default:
+		return placement, nil, event.CreatedBy, true
+	}
+}
+
+// dueAndWaiting says a source is already due and its pass has not begun, so
+// that pass will list a file uploaded now, and there is nothing to write: a
+// burst of uploads costs one pass, not a write each. A source whose pass is
+// under way may already have listed, so it is asked for again.
+func dueAndWaiting(source domain.Source, now time.Time) bool {
+	return source.SyncAt != nil && !source.SyncAt.After(now) &&
+		(source.LeaseUntil == nil || !source.LeaseUntil.After(now))
+}
+
+// readsFile says whether a source at a file's placement reads that file: one
+// narrowed to a purpose reads only files of it.
+func readsFile(source domain.Source, event filesv1.ObjectCreated) bool {
+	purpose, narrowed := source.Target["purpose"]
+	return !narrowed || purpose == event.Purpose
+}
+
+// replaceable says a retired files source gave its placement back: it went
+// because its member left, or because Files stopped letting them read it,
+// not because anyone chose to stop indexing it.
+func replaceable(reason string) bool {
+	return reason == knowledgev1.RemovedReasonMemberLeft || reason == knowledgev1.RemovedReasonNoLongerReadable
 }

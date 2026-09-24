@@ -22,6 +22,44 @@ func testCorpus() domain.Corpus {
 	}
 }
 
+func TestLexicalResultsDropAdminOnlyDocumentsBeforeAnswering(t *testing.T) {
+	chunks := &fakeChunks{
+		lexical:            []domain.ScoredChunk{{ChunkID: "chk_admin", Score: 0.9}, {ChunkID: "chk_general", Score: 0.8}},
+		documents:          map[string]string{"chk_admin": "doc_admin", "chk_general": "doc_general"},
+		adminOnlyDocuments: map[string]bool{"doc_admin": true},
+	}
+	retriever := New(chunks, nil, nil, nil, nil, nil)
+	query := domain.Query{Text: "payroll", Mode: domain.ModeLexical}
+	member, err := retriever.Search(context.Background(), testCorpus(), query)
+	if err != nil || len(member.Matches) != 1 || member.Matches[0].Chunk.DocumentID != "doc_general" {
+		t.Fatalf("member matches = %+v, %v", member.Matches, err)
+	}
+	query.IncludeAdminOnly = true
+	admin, err := retriever.Search(context.Background(), testCorpus(), query)
+	if err != nil || len(admin.Matches) != 2 {
+		t.Fatalf("admin matches = %+v, %v", admin.Matches, err)
+	}
+}
+
+func TestDenseResultsDropAdminOnlyDocumentsAfterVectorSearch(t *testing.T) {
+	chunks := &fakeChunks{
+		documents:          map[string]string{"chk_admin": "doc_admin", "chk_general": "doc_general"},
+		adminOnlyDocuments: map[string]bool{"doc_admin": true},
+	}
+	vectors := &fakeVectorStore{hits: []vectorstore.Hit{{ChunkID: "chk_admin", Score: 0.9}, {ChunkID: "chk_general", Score: 0.8}}}
+	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, nil, nil)
+	query := domain.Query{Text: "policy", Mode: domain.ModeDense}
+	member, err := retriever.Search(context.Background(), testCorpus(), query)
+	if err != nil || len(member.Matches) != 1 || member.Matches[0].Chunk.DocumentID != "doc_general" {
+		t.Fatalf("member dense matches = %+v, %v", member.Matches, err)
+	}
+	query.IncludeAdminOnly = true
+	admin, err := retriever.Search(context.Background(), testCorpus(), query)
+	if err != nil || len(admin.Matches) != 2 {
+		t.Fatalf("admin dense matches = %+v, %v", admin.Matches, err)
+	}
+}
+
 // fakeChunks answers both the lexical search and the hydration reads.
 type fakeChunks struct {
 	lexical    []domain.ScoredChunk
@@ -29,14 +67,16 @@ type fakeChunks struct {
 	texts      map[string]string
 	documents  map[string]string
 	missing    map[string]bool
+	metadata   map[string]domain.Metadata
 	// goneDocuments are documents whose rows are deleted, which
 	// DocumentRefs no longer finds.
-	goneDocuments map[string]bool
-	lastFilter    domain.Filter
-	lexicalCall   int
+	goneDocuments      map[string]bool
+	adminOnlyDocuments map[string]bool
+	lastFilter         domain.Filter
+	lexicalCall        int
 }
 
-func (fake *fakeChunks) LexicalSearch(_ context.Context, _ domain.Corpus, _ string, _ int, filter domain.Filter) ([]domain.ScoredChunk, error) {
+func (fake *fakeChunks) LexicalSearch(_ context.Context, _ domain.Corpus, _ string, _ int, filter domain.Filter, _ bool) ([]domain.ScoredChunk, error) {
 	fake.lexicalCall++
 	fake.lastFilter = filter
 	return fake.lexical, fake.lexicalErr
@@ -63,13 +103,13 @@ func (fake *fakeChunks) Chunks(_ context.Context, _, _ string, ids []string) ([]
 	return chunks, nil
 }
 
-func (fake *fakeChunks) DocumentRefs(_ context.Context, _ string, ids []string) (map[string]domain.Ref, error) {
+func (fake *fakeChunks) DocumentRefs(_ context.Context, _, _ string, ids []string, includeAdminOnly bool) (map[string]domain.Ref, error) {
 	refs := map[string]domain.Ref{}
 	for _, id := range ids {
-		if fake.goneDocuments[id] {
+		if fake.goneDocuments[id] || (fake.adminOnlyDocuments[id] && !includeAdminOnly) {
 			continue
 		}
-		refs[id] = domain.Ref{ID: id, Title: "Title " + id, Source: domain.Source{Kind: domain.SourceInline}}
+		refs[id] = domain.Ref{ID: id, Title: "Title " + id, Source: domain.Source{Kind: domain.SourceInline}, Metadata: fake.metadata[id]}
 	}
 	return refs, nil
 }

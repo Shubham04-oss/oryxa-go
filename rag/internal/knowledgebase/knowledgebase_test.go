@@ -159,11 +159,39 @@ func TestSubmitSendsTextInline(t *testing.T) {
 		t.Fatalf("metadata type = %q, want IN_LINE_ATTRIBUTE", metadata.Type)
 	}
 	for key, want := range map[string]string{
-		"organization_id": "org_1", "corpus_id": "cor_1", "document_id": "doc_1", "title": "Runbook",
+		"organization_id": "org_1", "corpus_id": "cor_1", "document_id": "doc_1", "title": "Runbook", "access": "members",
 	} {
 		if got, ok := attribute(metadata.InlineAttributes, key); !ok || got != want {
 			t.Fatalf("attribute %q = %q, %v; want %q", key, got, ok, want)
 		}
+	}
+}
+
+func TestSubmitIndexesKnowledgeProvenanceWithoutProviderDetails(t *testing.T) {
+	t.Parallel()
+	ingest := &fakeIngest{}
+	client, err := New(ingest, nil, testConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := testDocument()
+	document.Metadata = domain.Metadata{
+		"provider": "gmail", "knowledge_source_id": "src_1", "document_kind": "message",
+		"category": "financial_record", "from": "private@example.com",
+	}
+	if err := client.Submit(context.Background(), testCorpus(), document, "invoice details"); err != nil {
+		t.Fatal(err)
+	}
+	attributes := ingest.lastIngest.Documents[0].Metadata.InlineAttributes
+	for key, want := range map[string]string{
+		"provider": "gmail", "knowledge_source_id": "src_1", "document_kind": "message", "category": "financial_record",
+	} {
+		if got, ok := attribute(attributes, key); !ok || got != want {
+			t.Fatalf("%s = %q, %v; want %q", key, got, ok, want)
+		}
+	}
+	if _, ok := attribute(attributes, "from"); ok {
+		t.Fatal("a Gmail address was copied to Bedrock metadata")
 	}
 }
 
@@ -330,5 +358,62 @@ func TestDeleteStagedRemovesTheStagedObject(t *testing.T) {
 	wantKey := StagingKey("org_1", "cor_1", "doc_1", document.ContentSHA256)
 	if got := aws.ToString(objects.deleted[0].Key); got != wantKey {
 		t.Fatalf("deleted key = %q, want %q", got, wantKey)
+	}
+}
+
+// The sync marker is what tells the ingest worker whether the knowledge base
+// holds a document as it is now, so it must change with the content and with
+// every attribute Submit writes — above all access, which member searches
+// filter on — and with nothing else.
+func TestSyncMarkerCoversTheContentAndEveryAttributeSubmitted(t *testing.T) {
+	base := testDocument()
+	base.Access = domain.AccessMembers
+	base.Source = domain.Source{Kind: domain.SourceExternal, Ref: "https://example.com/runbook"}
+	base.Metadata = domain.Metadata{"provider": "gmail", "knowledge_source_id": "src_1", "document_kind": "message", "category": "work_material", "author": "ada"}
+	marker := SyncMarker(testCorpus(), base)
+	if !strings.HasPrefix(marker, SyncMarkerPrefix) || marker == base.ContentSHA256 {
+		t.Fatalf("marker %q, want the %q prefix and never the bare content hash", marker, SyncMarkerPrefix)
+	}
+	if again := SyncMarker(testCorpus(), base); again != marker {
+		t.Fatalf("the same document gave two markers: %q and %q", marker, again)
+	}
+	withMetadata := func(key, value string) func(*domain.Document) {
+		return func(document *domain.Document) {
+			metadata := document.Metadata.Clone()
+			metadata[key] = value
+			document.Metadata = metadata
+		}
+	}
+	for name, change := range map[string]func(*domain.Document){
+		"content":          func(document *domain.Document) { document.ContentSHA256 = "hash-2" },
+		"access":           func(document *domain.Document) { document.Access = domain.AccessAdmins },
+		"title":            func(document *domain.Document) { document.Title = "Runbook, revised" },
+		"source ref":       func(document *domain.Document) { document.Source.Ref = "https://example.com/moved" },
+		"provider":         withMetadata("provider", "slack"),
+		"knowledge source": withMetadata("knowledge_source_id", "src_2"),
+		"document kind":    withMetadata("document_kind", "file"),
+		"category":         withMetadata("category", "financial_record"),
+		"category is dropped": func(document *domain.Document) {
+			document.Metadata = document.Metadata.Clone()
+			delete(document.Metadata, "category")
+		},
+	} {
+		document := base
+		change(&document)
+		if SyncMarker(testCorpus(), document) == marker {
+			t.Errorf("changing the %s left the marker as it was", name)
+		}
+	}
+	// What Submit never writes cannot make a submission stale.
+	unsent := base
+	withMetadata("author", "grace")(&unsent)
+	if SyncMarker(testCorpus(), unsent) != marker {
+		t.Error("a metadata key Submit does not write changed the marker")
+	}
+	// A document with no access recorded is submitted as member-visible.
+	unset := base
+	unset.Access = ""
+	if SyncMarker(testCorpus(), unset) != marker {
+		t.Error("an unset access and members gave different markers")
 	}
 }

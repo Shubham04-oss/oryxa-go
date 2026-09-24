@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -61,16 +62,40 @@ func (row chunkRow) chunk() (domain.Chunk, error) {
 //
 // The caller supplies chunks without ids; this assigns them, reusing the id of
 // a matching chunk so its vector row stays attached.
+//
+// A chunk whose text is unchanged but whose metadata is not — the document
+// was reclassified — keeps its id too, but is returned as Fresh: the vector
+// written for it still carries the old metadata, which a filtered search
+// reads. Its row is marked unembedded until the caller writes that vector
+// again, so an attempt that stops first leaves it to be embedded afresh
+// rather than looking settled. Keeping the id is what keeps its vector
+// searchable meanwhile, and what lets a vector store that can hand the vector
+// back rewrite it without embedding the text again.
 func (store *Store) SyncChunks(ctx context.Context, document domain.Document, chunks []domain.Chunk, at time.Time) (domain.ChunkSync, error) {
 	var result domain.ChunkSync
 	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
+		var placement struct {
+			CorpusID       string `db:"corpus_id"`
+			OrganizationID string `db:"organization_id"`
+		}
+		if err := tx.GetContext(ctx, &placement, `
+			SELECT corpus_id, organization_id FROM rag_documents WHERE id = $1 FOR KEY SHARE`, document.ID); err != nil {
+			if isNoRows(err) {
+				return domain.ErrConflict
+			}
+			return fmt.Errorf("read chunk's document: %w", err)
+		}
+		if placement.CorpusID != document.CorpusID || placement.OrganizationID != document.OrganizationID {
+			return domain.ErrConflict
+		}
 		var existing []struct {
 			ID         string     `db:"id"`
 			SHA256     string     `db:"sha256"`
+			Metadata   []byte     `db:"metadata"`
 			EmbeddedAt *time.Time `db:"embedded_at"`
 		}
 		if err := tx.SelectContext(ctx, &existing, `
-			SELECT id, sha256, embedded_at FROM rag_chunks WHERE document_id = $1 ORDER BY ordinal
+			SELECT id, sha256, metadata, embedded_at FROM rag_chunks WHERE document_id = $1 ORDER BY ordinal
 			FOR UPDATE`, document.ID); err != nil {
 			return fmt.Errorf("read existing chunks: %w", err)
 		}
@@ -83,26 +108,56 @@ func (store *Store) SyncChunks(ctx context.Context, document domain.Document, ch
 		// Chunks with identical text are rare but possible — a repeated
 		// boilerplate paragraph — so each hash holds a queue of ids rather
 		// than one, and each is claimed at most once.
-		available := make(map[string][]string, len(existing))
+		type reusableChunk struct {
+			id       string
+			metadata domain.Metadata
+		}
+		available := make(map[string][]reusableChunk, len(existing))
 		for _, row := range existing {
 			if row.EmbeddedAt == nil {
 				continue
 			}
-			available[row.SHA256] = append(available[row.SHA256], row.ID)
+			metadata, err := decodeMetadata(row.Metadata)
+			if err != nil {
+				return err
+			}
+			available[row.SHA256] = append(available[row.SHA256], reusableChunk{id: row.ID, metadata: metadata})
 		}
 
 		result = domain.ChunkSync{}
 		claimed := make(map[string]bool, len(existing))
+		// take claims an embedded chunk with this text for chunk: one whose
+		// metadata is the same when sameMetadata, any otherwise.
+		take := func(chunk *domain.Chunk, sameMetadata bool) bool {
+			choices := available[chunk.SHA256]
+			for i, choice := range choices {
+				if sameMetadata && !maps.Equal(choice.metadata, chunk.Metadata) {
+					continue
+				}
+				chunk.ID = choice.id
+				available[chunk.SHA256] = append(choices[:i], choices[i+1:]...)
+				claimed[chunk.ID] = true
+				return true
+			}
+			return false
+		}
+		// Exact matches are settled for every chunk before any metadata-only
+		// match, so a chunk is never relabelled when another with the same
+		// text could have kept its vector as it is.
+		reused := make([]bool, len(chunks))
+		for index := range chunks {
+			reused[index] = take(&chunks[index], true)
+		}
+		var relabelled []string
 		for index := range chunks {
 			chunk := &chunks[index]
-			if ids := available[chunk.SHA256]; len(ids) > 0 {
-				chunk.ID = ids[0]
-				available[chunk.SHA256] = ids[1:]
-				claimed[chunk.ID] = true
+			switch {
+			case reused[index]:
 				result.Reused = append(result.Reused, *chunk)
 				continue
-			}
-			if chunk.ID == "" {
+			case take(chunk, false):
+				relabelled = append(relabelled, chunk.ID)
+			case chunk.ID == "":
 				id, err := domain.NewID(domain.ChunkIDPrefix)
 				if err != nil {
 					return err
@@ -122,6 +177,13 @@ func (store *Store) SyncChunks(ctx context.Context, document domain.Document, ch
 				DELETE FROM rag_chunks WHERE document_id = $1 AND id = ANY($2)`,
 				document.ID, pgTextArray(result.Removed)); err != nil {
 				return fmt.Errorf("delete stale chunks: %w", err)
+			}
+		}
+		if len(relabelled) > 0 {
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE rag_chunks SET embedded_at = NULL WHERE document_id = $1 AND id = ANY($2)`,
+				document.ID, pgTextArray(relabelled)); err != nil {
+				return fmt.Errorf("mark relabelled chunks unembedded: %w", err)
 			}
 		}
 		// Ordinals are unique per document and a re-cut moves chunks between
@@ -199,7 +261,7 @@ func (store *Store) Chunks(ctx context.Context, organizationID, corpusID string,
 
 // DocumentRefs reads the little about each document that travels with a match,
 // so a citation can be rendered without a second round trip per result.
-func (store *Store) DocumentRefs(ctx context.Context, organizationID string, ids []string) (map[string]domain.Ref, error) {
+func (store *Store) DocumentRefs(ctx context.Context, organizationID, corpusID string, ids []string, includeAdminOnly bool) (map[string]domain.Ref, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
@@ -208,19 +270,27 @@ func (store *Store) DocumentRefs(ctx context.Context, organizationID string, ids
 		Title      string `db:"title"`
 		SourceKind string `db:"source_kind"`
 		SourceRef  string `db:"source_ref"`
+		Metadata   []byte `db:"metadata"`
 	}
 	if err := store.db.SelectContext(ctx, &rows, `
-		SELECT id, title, source_kind, source_ref
+		SELECT id, title, source_kind, source_ref, metadata
 		FROM rag_documents
-		WHERE organization_id = $1 AND id = ANY($2)`, organizationID, pgTextArray(ids)); err != nil {
+		WHERE organization_id = $1 AND corpus_id = $2 AND id = ANY($3)
+		  AND ($4 OR access = 'members')`,
+		organizationID, corpusID, pgTextArray(ids), includeAdminOnly); err != nil {
 		return nil, fmt.Errorf("read document references: %w", err)
 	}
 	refs := make(map[string]domain.Ref, len(rows))
 	for _, row := range rows {
+		metadata, err := decodeMetadata(row.Metadata)
+		if err != nil {
+			return nil, err
+		}
 		refs[row.ID] = domain.Ref{
-			ID:     row.ID,
-			Title:  row.Title,
-			Source: domain.Source{Kind: domain.SourceKind(row.SourceKind), Ref: row.SourceRef},
+			ID:       row.ID,
+			Title:    row.Title,
+			Source:   domain.Source{Kind: domain.SourceKind(row.SourceKind), Ref: row.SourceRef},
+			Metadata: metadata,
 		}
 	}
 	return refs, nil
@@ -236,11 +306,11 @@ func (store *Store) DocumentRefs(ctx context.Context, organizationID string, ids
 // websearch_to_tsquery is used rather than plainto_tsquery because it accepts
 // what people actually type — quoted phrases, and a leading minus to exclude —
 // and because it never errors on punctuation the way to_tsquery does.
-func (store *Store) LexicalSearch(ctx context.Context, corpus domain.Corpus, text string, limit int, filter domain.Filter) ([]domain.ScoredChunk, error) {
+func (store *Store) LexicalSearch(ctx context.Context, corpus domain.Corpus, text string, limit int, filter domain.Filter, includeAdminOnly bool) ([]domain.ScoredChunk, error) {
 	if err := filter.Validate(); err != nil {
 		return nil, err
 	}
-	arguments := []any{corpus.OrganizationID, corpus.ID, text}
+	arguments := []any{corpus.OrganizationID, corpus.ID, text, includeAdminOnly}
 	// A chunk matches on any of the question's words, and ranks by how many it
 	// holds and how close together. A question worded the way a person asks
 	// it rarely has every one of its words in one passage, and requiring them
@@ -253,7 +323,9 @@ func (store *Store) LexicalSearch(ctx context.Context, corpus domain.Corpus, tex
 		)
 		SELECT id, ts_rank_cd(search_vector, asked.query) AS score
 		FROM rag_chunks, asked
-		WHERE organization_id = $1 AND corpus_id = $2 AND search_vector @@ asked.query`
+		WHERE organization_id = $1 AND corpus_id = $2 AND search_vector @@ asked.query
+		  AND ($4 OR EXISTS (SELECT 1 FROM rag_documents AS acl_document
+		                    WHERE acl_document.id = rag_chunks.document_id AND acl_document.access = 'members'))`
 	if len(filter.DocumentIDs) > 0 {
 		arguments = append(arguments, pgTextArray(filter.DocumentIDs))
 		statement += fmt.Sprintf(` AND document_id = ANY($%d)`, len(arguments))

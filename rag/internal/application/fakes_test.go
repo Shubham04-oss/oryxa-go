@@ -1,7 +1,9 @@
 package application
 
 import (
+	"cmp"
 	"context"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -26,10 +28,18 @@ func creds(userID string) authclient.Credentials {
 	return authclient.Credentials{Authorization: "Bearer " + userID}
 }
 
+// agentCreds is a token auth minted for an agent acting for userID. Auth, and
+// teams after it, answer it as that member, marked as an agent.
+func agentCreds(userID string) authclient.Credentials {
+	return authclient.Credentials{Authorization: "Bearer " + agentTokenPrefix + userID}
+}
+
+const agentTokenPrefix = "agent:"
+
 type fakeDirectory struct{}
 
 func (fakeDirectory) Membership(_ context.Context, organizationID string, credentials authclient.Credentials) (domain.OrgMembership, error) {
-	token := strings.TrimPrefix(credentials.Authorization, "Bearer ")
+	token, agent := strings.CutPrefix(strings.TrimPrefix(credentials.Authorization, "Bearer "), agentTokenPrefix)
 	people := map[string]domain.OrgMembership{
 		"user-owner":    {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner},
 		"user-admin":    {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
@@ -43,16 +53,19 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 	if !ok || organizationID != testOrganization {
 		return domain.OrgMembership{}, domain.ErrNotFound
 	}
+	membership.Agent = agent
 	return membership, nil
 }
 
-// fakeTeams knows one team, team_eng. user-creator and user-teammate can both
-// see it as plain members; user-teamlead can see it and manage it. An org
+// fakeTeams knows two teams. On team_eng, user-creator and user-teammate are
+// plain members; user-teamlead is its team admin, so can manage it. An org
 // owner or admin sees and can manage every team whether or not they are a
 // member of it — teams.CanSeeTeam and teams.CanManageTeam grant both
 // automatically to org.IsOrgAdmin() — so user-owner and user-admin are here
 // too, unlike user-outsider, an organization member in good standing who
-// simply never joined team_eng and so cannot see it at all.
+// simply never joined team_eng and so cannot see it at all. user-admin also
+// sits on team_ops as a plain member, where teams still says they can manage
+// it, only because they are an org admin.
 type fakeTeams struct {
 	access map[string]domain.TeamAccess
 	err    error
@@ -62,9 +75,10 @@ func newFakeTeams() *fakeTeams {
 	return &fakeTeams{access: map[string]domain.TeamAccess{
 		"user-creator/team_eng":  {TeamID: "team_eng", CanManage: false, Member: true},
 		"user-teammate/team_eng": {TeamID: "team_eng", CanManage: false, Member: true},
-		"user-teamlead/team_eng": {TeamID: "team_eng", CanManage: true, Member: true},
+		"user-teamlead/team_eng": {TeamID: "team_eng", CanManage: true, Member: true, TeamAdmin: true},
 		"user-owner/team_eng":    {TeamID: "team_eng", CanManage: true, Member: false},
 		"user-admin/team_eng":    {TeamID: "team_eng", CanManage: true, Member: false},
+		"user-admin/team_ops":    {TeamID: "team_ops", CanManage: true, Member: true},
 	}}
 }
 
@@ -75,7 +89,7 @@ func (fake *fakeTeams) Team(_ context.Context, organizationID, teamID string, cr
 	if organizationID != testOrganization {
 		return domain.TeamAccess{}, domain.ErrNotFound
 	}
-	token := strings.TrimPrefix(credentials.Authorization, "Bearer ")
+	token := strings.TrimPrefix(strings.TrimPrefix(credentials.Authorization, "Bearer "), agentTokenPrefix)
 	access, ok := fake.access[token+"/"+teamID]
 	if !ok || access.TeamID == "" {
 		return domain.TeamAccess{}, domain.ErrNotFound
@@ -104,6 +118,8 @@ type fakeStore struct {
 	orgs              map[string]string
 	events            []domain.Event
 	knowledgeMappings map[string]domain.KnowledgeDocumentMapping
+	knowledgeRemovals map[string]time.Time
+	knowledgeLocks    map[string]*sync.Mutex
 
 	lastDocumentsCall documentsCall
 	documentsPage     []domain.Document
@@ -118,6 +134,8 @@ func newFakeStore() *fakeStore {
 		chunkIDs:          map[string][]string{},
 		orgs:              map[string]string{},
 		knowledgeMappings: map[string]domain.KnowledgeDocumentMapping{},
+		knowledgeRemovals: map[string]time.Time{},
+		knowledgeLocks:    map[string]*sync.Mutex{},
 	}
 }
 
@@ -186,28 +204,37 @@ func matchesCorpusQuery(corpus domain.Corpus, query postgres.CorpusQuery) bool {
 	}
 }
 
+// Corpora lists each corpus with its document count, as the real listing
+// does; this store keeps no chunks, so there are none to count.
 func (store *fakeStore) Corpora(_ context.Context, organizationID string, query postgres.CorpusQuery) ([]domain.Corpus, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	var result []domain.Corpus
 	for _, corpus := range store.corpora {
 		if corpus.OrganizationID == organizationID && matchesCorpusQuery(corpus, query) {
+			corpus.DocumentCount = store.countDocuments(corpus.ID, query.Admin)
 			result = append(result, corpus)
 		}
 	}
 	return result, nil
 }
 
-func (store *fakeStore) CorpusCounts(_ context.Context, corpusID string) (int64, int64, error) {
+func (store *fakeStore) CorpusCounts(_ context.Context, corpusID string, includeAdminOnly bool) (int64, int64, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	return store.countDocuments(corpusID, includeAdminOnly), 0, nil
+}
+
+// countDocuments counts what a corpus holds, leaving out admin-only documents
+// unless asked for them. The caller holds store.mu.
+func (store *fakeStore) countDocuments(corpusID string, includeAdminOnly bool) int64 {
 	var documents int64
 	for _, document := range store.documents {
-		if document.CorpusID == corpusID {
+		if document.CorpusID == corpusID && (includeAdminOnly || document.Access != domain.AccessAdmins) {
 			documents++
 		}
 	}
-	return documents, 0, nil
+	return documents
 }
 
 func (store *fakeStore) CorporaForWipe(_ context.Context, organizationID string, scope domain.Scope, ownerID string) ([]domain.Corpus, error) {
@@ -245,9 +272,12 @@ func (store *fakeStore) DeleteCorpus(_ context.Context, organizationID, corpusID
 	return nil
 }
 
+// UpsertDocument settles a missing access label as postgres.Store does: the
+// document already held keeps its own, and a new one gets members.
 func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Document, _ string, event domain.Event) (domain.Document, postgres.Upsert, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	requestedAccess := document.Access
 	for _, existing := range store.documents {
 		if existing.CorpusID != document.CorpusID {
 			continue
@@ -257,7 +287,10 @@ func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Docume
 		if !sameSource && !sameInline {
 			continue
 		}
-		if existing.ContentSHA256 == document.ContentSHA256 && existing.Status == domain.StatusReady {
+		document.Access = cmp.Or(requestedAccess, existing.Access, domain.AccessMembers)
+		if existing.ContentSHA256 == document.ContentSHA256 && existing.Access == document.Access &&
+			existing.Title == document.Title && existing.ContentType == document.ContentType &&
+			maps.Equal(existing.Metadata, document.Metadata) && existing.Status == domain.StatusReady {
 			return existing, postgres.UpsertUnchanged, nil
 		}
 		document.ID = existing.ID
@@ -265,6 +298,7 @@ func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Docume
 		store.events = append(store.events, event)
 		return document, postgres.UpsertChanged, nil
 	}
+	document.Access = cmp.Or(requestedAccess, domain.AccessMembers)
 	store.documents[document.ID] = document
 	store.events = append(store.events, event)
 	return document, postgres.UpsertCreated, nil
@@ -286,14 +320,23 @@ func (store *fakeStore) Document(_ context.Context, organizationID, documentID s
 // store_integration_test.go; what this layer must prove instead is that the
 // service applies the access gate first and forwards status, cursor and a
 // clamped limit unchanged.
-func (store *fakeStore) Documents(_ context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) ([]domain.Document, string, error) {
+func (store *fakeStore) Documents(_ context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, includeAdminOnly bool) ([]domain.Document, string, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.lastDocumentsCall = documentsCall{organizationID, corpusID, status, cursor, limit}
 	if store.documentsErr != nil {
 		return nil, "", store.documentsErr
 	}
-	return store.documentsPage, store.documentsNext, nil
+	if includeAdminOnly {
+		return store.documentsPage, store.documentsNext, nil
+	}
+	visible := make([]domain.Document, 0, len(store.documentsPage))
+	for _, document := range store.documentsPage {
+		if document.Access != domain.AccessAdmins {
+			visible = append(visible, document)
+		}
+	}
+	return visible, store.documentsNext, nil
 }
 
 func (store *fakeStore) DocumentsBySource(_ context.Context, organizationID string, kind domain.SourceKind, ref string) ([]domain.Document, error) {
@@ -380,6 +423,40 @@ func (store *fakeStore) DeleteKnowledgeDocumentMapping(_ context.Context, organi
 	}
 	delete(store.knowledgeMappings, knowledgeDocumentID)
 	return nil
+}
+
+func (store *fakeStore) KnowledgeDocumentRemovedAt(_ context.Context, organizationID, knowledgeDocumentID string) (time.Time, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	removedAt, ok := store.knowledgeRemovals[organizationID+"/"+knowledgeDocumentID]
+	if !ok {
+		return time.Time{}, domain.ErrNotFound
+	}
+	return removedAt, nil
+}
+
+func (store *fakeStore) RecordKnowledgeDocumentRemoval(_ context.Context, organizationID, knowledgeDocumentID string, removedAt time.Time) error {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	key := organizationID + "/" + knowledgeDocumentID
+	if removedAt.After(store.knowledgeRemovals[key]) {
+		store.knowledgeRemovals[key] = removedAt
+	}
+	return nil
+}
+
+func (store *fakeStore) WithKnowledgeDocumentLock(_ context.Context, organizationID, knowledgeDocumentID string, run func() error) error {
+	key := organizationID + "/" + knowledgeDocumentID
+	store.mu.Lock()
+	lock := store.knowledgeLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		store.knowledgeLocks[key] = lock
+	}
+	store.mu.Unlock()
+	lock.Lock()
+	defer lock.Unlock()
+	return run()
 }
 
 // seedCorpus writes a corpus directly into the store, bypassing CreateCorpus

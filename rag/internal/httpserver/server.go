@@ -251,10 +251,11 @@ type documentRequest struct {
 		Kind string `json:"kind"`
 		Ref  string `json:"ref"`
 	} `json:"source"`
-	Title       string            `json:"title"`
-	ContentType string            `json:"content_type"`
-	Text        string            `json:"text"`
-	Metadata    map[string]string `json:"metadata"`
+	Title       string                `json:"title"`
+	ContentType string                `json:"content_type"`
+	Text        string                `json:"text"`
+	Access      domain.DocumentAccess `json:"access"`
+	Metadata    map[string]string     `json:"metadata"`
 }
 
 func (server *Server) addDocument(writer http.ResponseWriter, request *http.Request) {
@@ -284,6 +285,7 @@ func (server *Server) addDocument(writer http.ResponseWriter, request *http.Requ
 				Title:       body.Title,
 				ContentType: body.ContentType,
 				Text:        body.Text,
+				Access:      body.Access,
 				Metadata:    domain.Metadata(body.Metadata),
 			}, nil
 		})

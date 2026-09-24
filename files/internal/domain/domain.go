@@ -92,6 +92,16 @@ func ParseScope(raw string) (Scope, error) {
 
 type Purpose string
 
+// Access is the document ACL within an organization-scoped file.
+type Access string
+
+const (
+	AccessMembers Access = "members"
+	AccessAdmins  Access = "admins"
+)
+
+func (access Access) Valid() bool { return access == AccessMembers || access == AccessAdmins }
+
 // The allowlist is closed, so a lifecycle or a later pipeline cannot invent a
 // storage class. The integrations.* purposes were retired with that service on
 // 2026-09-17; see migration 004.
@@ -143,11 +153,22 @@ type Object struct {
 	Filename       string    `json:"filename" db:"filename"`
 	ContentType    string    `json:"content_type" db:"content_type"`
 	Purpose        Purpose   `json:"purpose" db:"purpose"`
+	Access         Access    `json:"access" db:"access"`
 	SizeBytes      int64     `json:"size_bytes" db:"size_bytes"`
 	SHA256         string    `json:"sha256" db:"sha256"`
 	CreatedBy      string    `json:"created_by" db:"created_by"`
 	CreatedAt      time.Time `json:"created_at" db:"created_at"`
 	ExpiresAt      time.Time `json:"expires_at" db:"expires_at"`
+}
+
+func (object Object) EffectiveAccess() Access {
+	if object.Purpose == PurposeBillingAttachment {
+		return AccessAdmins
+	}
+	if object.Access == "" {
+		return AccessMembers
+	}
+	return object.Access
 }
 
 func (object Object) DatePath() string {

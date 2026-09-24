@@ -100,7 +100,7 @@ func KnowledgeToolbox(config KnowledgeConfig) (Toolbox, error) {
 	}
 	search, err := functiontool.New(functiontool.Config{
 		Name:        "knowledge_search",
-		Description: "Searches the organization's own documents — what the member and their organization indexed, including what their connected apps hold — and returns the passages that best match, each with its document's title and source to cite.",
+		Description: "Searches the organization's own documents — what the member and their organization indexed, including what their connected apps hold — and returns the passages that best match, each with its document's title, source, provider and classification to cite.",
 	}, knowledge.search)
 	if err != nil {
 		return Toolbox{}, err
@@ -251,6 +251,9 @@ type Passage struct {
 	CollectionID  string  `json:"collection_id"`
 	DocumentTitle string  `json:"document_title"`
 	Source        string  `json:"source,omitempty"`
+	Provider      string  `json:"provider,omitempty"`
+	DocumentKind  string  `json:"document_kind,omitempty"`
+	Category      string  `json:"category,omitempty"`
 	Section       string  `json:"section,omitempty"`
 	Text          string  `json:"text"`
 	Score         float64 `json:"score"`
@@ -369,6 +372,9 @@ func passageOf(collectionID string, match ragclient.Match) Passage {
 		CollectionID:  collectionID,
 		DocumentTitle: title,
 		Source:        match.Document.Source.Ref,
+		Provider:      match.Document.Metadata["provider"],
+		DocumentKind:  match.Document.Metadata["document_kind"],
+		Category:      match.Document.Metadata["category"],
 		Section:       strings.Join(match.Chunk.HeadingPath, " › "),
 		Text:          text,
 		Score:         match.Score,

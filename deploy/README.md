@@ -112,6 +112,46 @@ cloudflared to connect, then stops the old one; one that never turns healthy
 is rolled back. The schema migrates at start (`ORYXA_AUTO_MIGRATE`), under an
 advisory lock.
 
+### Releasing document access labels (#85)
+
+The release that adds document access labels (Files → Knowledge → RAG,
+`members` or `admins`) needs more care than the usual one. For a minute or two
+the old task keeps serving a database the new one has already migrated. The old
+build has no idea of access, so on that database it would show admin-only files
+and passages to members. Its RAG inserts also fail, because the access column
+no longer has a default. So, for this release only:
+
+1. Stop the old task before the new one starts. That means one or two minutes
+   of downtime instead of an overlap:
+
+   ```sh
+   aws ecs update-service --region us-west-2 --cluster oryxa-production --service oryxa \
+     --deployment-configuration minimumHealthyPercent=0,maximumPercent=100
+   ```
+
+   Then release as usual. Afterwards, put the overlap back, either with
+   `minimumHealthyPercent=100,maximumPercent=200` or with a `tofu apply`, which
+   restores `compute.tf`'s values.
+2. Once members or admins have created admin-only content, do not roll back to
+   a build older than this one, because it would serve that content to
+   members. If a later release has to be rolled back, roll back to a build
+   that includes this one. If the circuit breaker rolls this release back,
+   nothing admin-only exists yet. RAG ingestion stays stuck, though, with its
+   inserts failing and knowledge events waiting in their queue, until this
+   release goes out again.
+3. What to expect afterwards:
+   - Migration 010 requeues every document on the managed knowledge base, to
+     add the `access` attribute. Members keep finding those documents during
+     the resync, because their filter is "not admin-only", and PostgreSQL still
+     checks access on every hit.
+   - The ingest worker resubmits, within about five minutes, anything an older
+     build submitted.
+   - Knowledge republishes its Files documents with their labels on each
+     source's first pass.
+   - Documents an admin once added to an organization corpus from a Files file
+     (source kind `file`) become admin-only. Re-add any that members should
+     see.
+
 ## Looking at it
 
 - **Dashboard** `oryxa-production` in CloudWatch: the tunnel, API latency by

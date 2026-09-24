@@ -40,6 +40,12 @@ var (
 	// document is worth indexing could not be reached. Nothing is published
 	// unjudged, so the run stops and is tried again.
 	ErrQualityCheckUnavailable = errors.New("the quality check is unavailable")
+	// ErrUnreadable means the member a source reads as cannot read what it
+	// names at all: Files refuses them the placement, because they left the
+	// team or stopped being an admin. Trying again as them changes nothing;
+	// only reading as someone who can does. It travels alongside the
+	// refusal itself (ErrNotFound or ErrForbidden), never instead of it.
+	ErrUnreadable = errors.New("the member it reads as cannot read it")
 )
 
 type OrgRole string
@@ -167,17 +173,53 @@ func (source Source) Extractable() error {
 	}
 }
 
+// Placement is where a source hangs: a scope, and the team or member it
+// hangs on for a team or member scope.
+type Placement struct {
+	Scope    Scope
+	TeamID   string
+	MemberID string
+}
+
 // SourceQuery narrows a listing. An org admin sees the organization's
 // sources; anyone else sees the ones they registered.
 type SourceQuery struct {
 	CreatedBy    string
 	ConnectionID string
 	Provider     string
-	Admin        bool
+	// Placement narrows the listing to the sources at one placement; nil
+	// answers every placement.
+	Placement *Placement
+	Admin     bool
 	// IncludeRemoved also answers sources a member removed. A listing never
 	// wants them; deciding whether to register something on a member's
 	// behalf does, since a source they removed is theirs saying no.
 	IncludeRemoved bool
+}
+
+// CategoryMetadataKey is where a judged document's semantic category travels
+// in its metadata.
+const CategoryMetadataKey = "knowledge_category"
+
+// searchableMetadata are the metadata keys a consumer indexes a document by:
+// its category, and the purpose and access label Files gives a stored file,
+// which decide who may read it. The rest of what a provider says about a
+// document — a label, a comment count, a state — is kept with it, but is not
+// on its own a new version of what is searched: an issue commented on, or a
+// message archived, still says what it said.
+var searchableMetadata = []string{CategoryMetadataKey, "purpose", "access"}
+
+// SearchableMetadataEqual says whether two versions of a document's metadata
+// agree on everything a consumer indexes it by, present or not.
+func SearchableMetadataEqual(previous, current map[string]string) bool {
+	for _, key := range searchableMetadata {
+		before, had := previous[key]
+		after, has := current[key]
+		if had != has || before != after {
+			return false
+		}
+	}
+	return true
 }
 
 // AppConnection is what apps answered about one of a member's connections to

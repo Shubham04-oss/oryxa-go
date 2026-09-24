@@ -71,6 +71,15 @@ func (store *Store) Sources(ctx context.Context, organizationID string, query do
 	if query.Provider != "" {
 		sql += ` AND provider = ` + bind(query.Provider)
 	}
+	if placement := query.Placement; placement != nil {
+		sql += ` AND scope = ` + bind(string(placement.Scope))
+		switch placement.Scope {
+		case domain.ScopeTeam:
+			sql += ` AND team_id = ` + bind(placement.TeamID)
+		case domain.ScopeMember:
+			sql += ` AND member_id = ` + bind(placement.MemberID)
+		}
+	}
 	sql += ` ORDER BY created_at DESC, id`
 	return querySources(ctx, store.pool, sql, args...)
 }
@@ -115,19 +124,27 @@ func (store *Store) RenewLease(ctx context.Context, sourceID, leaseToken string,
 // FinishSource schedules the next run and releases the claim. It answers false
 // when the lease has moved on, so a run that lost it changes nothing.
 //
+// claimedDue is when the source was due as the run claimed it. A sync_at
+// later than that was asked for while the run went on (see HastenSource), and
+// the sooner of it and nextSync stands, so the run's own schedule does not
+// erase a request it may have listed too early to satisfy. Nil schedules
+// nextSync regardless.
+//
 // fullSweptAt is set when this pass read the source from the beginning and
 // drained: it becomes the new full_sweep_at. Nil leaves the column as it was,
 // which is what keeps an ordinary incremental pass from erasing a sweep an
 // earlier pass recorded.
-func (store *Store) FinishSource(ctx context.Context, sourceID, leaseToken string, now time.Time, nextSync time.Time, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
+func (store *Store) FinishSource(ctx context.Context, sourceID, leaseToken string, now, nextSync time.Time, claimedDue, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
 	claimed := false
 	err := store.inTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE knowledge_sources
-			SET last_synced_at = $3, sync_at = $4, attempts = 0, reason = '',
+			SET last_synced_at = $3,
+			    sync_at = CASE WHEN $6::timestamptz IS NOT NULL AND sync_at > $6 THEN LEAST(sync_at, $4) ELSE $4 END,
+			    attempts = 0, reason = '',
 			    lease_token = NULL, lease_until = NULL, updated_at = $3, version = version + 1,
 			    full_sweep_at = COALESCE($5, full_sweep_at)
-			WHERE id = $1 AND lease_token = $2`, sourceID, leaseToken, now, nextSync, fullSweptAt)
+			WHERE id = $1 AND lease_token = $2`, sourceID, leaseToken, now, nextSync, fullSweptAt, claimedDue)
 		if err != nil {
 			return fmt.Errorf("finish source: %w", err)
 		}
@@ -169,16 +186,18 @@ func (store *Store) FailSource(ctx context.Context, sourceID, leaseToken, reason
 }
 
 // RemoveSources retires every source an organization, or one of its members,
-// no longer has, and retracts what they held in the same transaction.
-func (store *Store) RemoveSources(ctx context.Context, organizationID, createdBy string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+// no longer has, and retracts what they held in the same transaction. reason
+// is recorded on each: a source retired because its member left is one the
+// next uploader may take over, unlike one a member removed.
+func (store *Store) RemoveSources(ctx context.Context, organizationID, createdBy, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	sql := `
 		UPDATE knowledge_sources
-		SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		SET status = 'removed', reason = $3, sync_at = NULL, lease_token = NULL, lease_until = NULL,
 		    updated_at = $2, version = version + 1
 		WHERE organization_id = $1 AND status <> 'removed'`
-	args := []any{organizationID, now}
+	args := []any{organizationID, now, reason}
 	if createdBy != "" {
-		sql += ` AND created_by = $3`
+		sql += ` AND created_by = $4`
 		args = append(args, createdBy)
 	}
 	return store.removeSources(ctx, sql+` RETURNING `+sourceColumns, args, now, events)
@@ -188,13 +207,13 @@ func (store *Store) RemoveSources(ctx context.Context, organizationID, createdBy
 // connection, and retracts what they held in the same transaction. Unlike
 // RemoveSources, which retires by organization or creator, this runs when the
 // connection itself is gone for good: apps.connection.removed.v1.
-func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	return store.removeSources(ctx, `
 		UPDATE knowledge_sources
-		SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		SET status = 'removed', reason = $3, sync_at = NULL, lease_token = NULL, lease_until = NULL,
 		    updated_at = $2, version = version + 1
 		WHERE connection_id = $1 AND status <> 'removed'
-		RETURNING `+sourceColumns, []any{connectionID, now}, now, events)
+		RETURNING `+sourceColumns, []any{connectionID, now, reason}, now, events)
 }
 
 // RemoveSourcesByTeam retires every source a deleted team held, and retracts
@@ -202,13 +221,27 @@ func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID 
 // running, a deleted team's sources would go on publishing its documents,
 // and rag — which removes the team's corpora when the team goes — would build
 // it a new one from them.
-func (store *Store) RemoveSourcesByTeam(ctx context.Context, organizationID, teamID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *Store) RemoveSourcesByTeam(ctx context.Context, organizationID, teamID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	return store.removeSources(ctx, `
 		UPDATE knowledge_sources
-		SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		SET status = 'removed', reason = $4, sync_at = NULL, lease_token = NULL, lease_until = NULL,
 		    updated_at = $2, version = version + 1
 		WHERE organization_id = $1 AND scope = 'team' AND team_id = $3 AND status <> 'removed'
-		RETURNING `+sourceColumns, []any{organizationID, now, teamID}, now, events)
+		RETURNING `+sourceColumns, []any{organizationID, now, teamID, reason}, now, events)
+}
+
+// RetireSource retires a source the run holding its lease found can no longer
+// be read, records reason on it, and retracts what it held in the same
+// transaction. It answers false, and changes nothing, once the lease has
+// moved on: like every write that ends a run, it is the lease holder's alone.
+func (store *Store) RetireSource(ctx context.Context, sourceID, leaseToken, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) (bool, error) {
+	removed, err := store.removeSources(ctx, `
+		UPDATE knowledge_sources
+		SET status = 'removed', reason = $3, sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		    updated_at = $4, version = version + 1
+		WHERE id = $1 AND lease_token = $2 AND status <> 'removed'
+		RETURNING `+sourceColumns, []any{sourceID, leaseToken, reason, now}, now, events)
+	return len(removed) == 1, err
 }
 
 // removeSources runs a statement that retires sources and returns them, then
@@ -250,12 +283,18 @@ func (store *Store) removeSources(ctx context.Context, statement string, args []
 // provider — and refusing them because a pass ran a minute ago would make
 // the button a lie. It answers false for a source that is not active, or one
 // already due sooner.
+//
+// A source whose pass is under way may already have read past what the
+// asking is about, such as a file uploaded after the pass listed its
+// placement. Its sync_at, still the past time it was claimed at, is moved to
+// at, so FinishSource sees it was asked for again and runs it once more
+// rather than an interval later.
 func (store *Store) HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error) {
 	tag, err := store.pool.Exec(ctx, `
 		UPDATE knowledge_sources
 		SET sync_at = $3, updated_at = $3, version = version + 1
-		WHERE organization_id = $1 AND id = $2 AND status = 'active'
-		  AND sync_at IS NOT NULL AND sync_at > $3`, organizationID, sourceID, at)
+		WHERE organization_id = $1 AND id = $2 AND status = 'active' AND sync_at IS NOT NULL
+		  AND (sync_at > $3 OR (lease_until > $3 AND sync_at < $3))`, organizationID, sourceID, at)
 	if err != nil {
 		return false, fmt.Errorf("hasten a source: %w", err)
 	}
@@ -321,15 +360,15 @@ func (store *Store) PauseSources(ctx context.Context, connectionID, reason strin
 }
 
 // RemoveSource retires one source a member asked to stop indexing, retracting
-// its documents with it.
-func (store *Store) RemoveSource(ctx context.Context, organizationID, sourceID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error {
+// its documents with it, and records reason on it.
+func (store *Store) RemoveSource(ctx context.Context, organizationID, sourceID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error {
 	return store.inTx(ctx, func(tx pgx.Tx) error {
 		sources, err := querySources(ctx, tx, `
 			UPDATE knowledge_sources
-			SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+			SET status = 'removed', reason = $4, sync_at = NULL, lease_token = NULL, lease_until = NULL,
 			    updated_at = $3, version = version + 1
 			WHERE organization_id = $1 AND id = $2 AND status <> 'removed'
-			RETURNING `+sourceColumns, organizationID, sourceID, now)
+			RETURNING `+sourceColumns, organizationID, sourceID, now, reason)
 		if err != nil {
 			return err
 		}

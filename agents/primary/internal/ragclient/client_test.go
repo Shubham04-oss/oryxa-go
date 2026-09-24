@@ -22,7 +22,7 @@ func TestCorporaAndSearchCallRagAsTheMember(t *testing.T) {
 			if err := json.NewDecoder(request.Body).Decode(&body); err != nil || body["query"] != "launch" || body["top_k"] != float64(5) || body["rerank"] != true || body["min_score"] != 0.2 {
 				t.Errorf("search body = %v (%v)", body, err)
 			}
-			_, _ = writer.Write([]byte(`{"matches":[{"chunk":{"text":"Launch is on the 3rd.","heading_path":["Plan"]},"document":{"id":"d1","title":"Launch plan","source":{"kind":"external","ref":"https://notion.so/x"}},"score":0.8}],"reranked":false}`))
+			_, _ = writer.Write([]byte(`{"matches":[{"chunk":{"text":"Launch is on the 3rd.","heading_path":["Plan"]},"document":{"id":"d1","title":"Launch plan","source":{"kind":"external","ref":"https://notion.so/x"},"metadata":{"provider":"notion","document_kind":"page","category":"project_plan"}},"score":0.8}],"reranked":false}`))
 		default:
 			http.NotFound(writer, request)
 		}
@@ -42,7 +42,8 @@ func TestCorporaAndSearchCallRagAsTheMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(matches) != 1 || matches[0].Document.Title != "Launch plan" || matches[0].Document.Source.Ref != "https://notion.so/x" ||
-		matches[0].Chunk.HeadingPath[0] != "Plan" || matches[0].Score != 0.8 {
+		matches[0].Chunk.HeadingPath[0] != "Plan" || matches[0].Score != 0.8 ||
+		matches[0].Document.Metadata["provider"] != "notion" || matches[0].Document.Metadata["category"] != "project_plan" {
 		t.Fatalf("matches = %+v", matches)
 	}
 	want := []string{

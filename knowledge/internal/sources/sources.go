@@ -33,6 +33,10 @@ type Item struct {
 	Metadata map[string]string
 	// UpdatedAt is when the provider last changed it, when it says.
 	UpdatedAt *time.Time
+	// Unchanged says the source already holds this item live, exactly as it
+	// is now (see Request.Held), so the extractor did not read it again: it
+	// carries no Content, and the caller only notes that it saw it.
+	Unchanged bool
 }
 
 // Page is one call's worth of a source.
@@ -73,6 +77,11 @@ type Request struct {
 	// Limit is how many items to ask the provider for in one call. An
 	// extractor may ask for fewer if the provider allows less.
 	Limit int
+	// Held answers what the source already holds under an external id, live
+	// or not, so an extractor that can describe an item before reading it
+	// can skip reading one it holds unchanged. Nil on a full pass, which
+	// reads everything again.
+	Held func(ctx context.Context, externalID string) (domain.Document, bool, error)
 }
 
 // Extractor reads documents out of one provider.
@@ -86,6 +95,16 @@ type Extractor interface {
 	// Fetch returns one page. Calling it with the cursor the last page
 	// returned walks the source; an empty cursor back means it is drained.
 	Fetch(ctx context.Context, request Request) (Page, error)
+}
+
+// Checker is an extractor that can say, before a source is registered,
+// whether the member it would read as can read what it names at all. A
+// source its member cannot read would hold the name for nothing: every pass
+// refused, and nobody who can read it able to register it instead.
+type Checker interface {
+	// Check answers nil when request.Credential can read what
+	// request.Source names, and the refusal otherwise.
+	Check(ctx context.Context, request Request) error
 }
 
 // Registry is the extractors this build knows, by provider.

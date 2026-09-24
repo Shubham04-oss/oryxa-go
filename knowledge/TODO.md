@@ -105,7 +105,9 @@ someone else to confirm.
   our side — but each page asks again. For an organization with thousands of
   files that is quadratic. Fix by carrying the listing across pages within one
   run, which needs the extractor to hold per-run state the seam does not offer
-  yet.
+  yet. The bytes, at least, are no longer read again: an incremental pass
+  skips a file the source holds unchanged (`Request.Held`), and only a full
+  sweep downloads every file.
 
 ---
 
@@ -133,12 +135,16 @@ to miss and expensive to get wrong:
   and `MemberID` say who may read that document. A retrieval pipeline
   answering across an organization has to honour them, or a member-scoped
   source's documents leak to the whole org.
-- **`ContentHash` is the version.** A document is published on first sight and
-  whenever its hash changes, so upsert on `(SourceID, ExternalID)`. Delivery
-  is at least once — dedupe on the envelope's `event_id`, or treat an equal
-  hash as a no-op.
+- **The whole publication is the version.** A document is published on first
+  sight and when its content or searchable provenance changes. Upsert on
+  `(SourceID, ExternalID)` and use `ExtractedAt` to reject older deliveries.
+  An equal `ContentHash` alone does not make an event a no-op. Delivery is at
+  least once, so dedupe on the envelope's `event_id` where appropriate.
+  Provider metadata other than `knowledge_category` and a stored file's
+  `purpose` and `access` can lag: a change to it alone is not published.
 - **`BodyOmitted` means fetch it.** Bodies over 128 KiB are not carried;
-  `GET /v1/organizations/{org}/documents/{DocumentID}` returns the full text.
+  `GET /v1/internal/organizations/{org}/documents/{DocumentID}/body`
+  returns the full text to an authenticated service caller.
 
 `knowledge.document.removed.v1` fires whenever a full pass — a source's
 first, or a periodic sweep at most `KNOWLEDGE_FULL_SWEEP_INTERVAL` apart —
@@ -180,8 +186,9 @@ it needs the provisioner to create two rules rather than one.
    deliberately parked. It reads as whoever stored the first shared file —
    always an admin, since only an admin can share a file with the whole
    organization. The one thing an admin's view adds to organization-scoped
-   files is billing attachments, and the source skips those itself, so what
-   it publishes is what every member could already see. What stays open is
+   files is billing attachments and other admin-only files. The source
+   publishes those with their document ACL, so members cannot retrieve them.
+   What stays open is
    availability: that member can leave, and their grant goes with them, and
    nothing says the first uploader should be the one the whole
    organization's index depends on. The alternatives — an organization-level

@@ -25,6 +25,8 @@ type Search struct {
 	Vector []float32
 	TopK   int
 	Filter domain.Filter
+	// Assigned by the application from the verified organization role.
+	IncludeAdminOnly bool
 }
 
 // Hit is one chunk the index matched. Score is the distance turned into a
