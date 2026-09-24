@@ -555,3 +555,70 @@ func TestSearchFilterKeepsEveryListWithinWhatBedrockTakes(t *testing.T) {
 		}
 	}
 }
+
+// The knowledge base filters on the attributes it was last given, which lag
+// PostgreSQL's until a changed document is submitted again. A passage whose
+// document no longer satisfies the caller's filter as PostgreSQL has it is
+// left out, so a reclassified document cannot answer for the category it
+// left.
+func TestSearchKnowledgeBaseHoldsPassagesToTheFilterAsPostgresHasIt(t *testing.T) {
+	t.Parallel()
+	api := &fakeKnowledgeBaseAPI{output: &bedrockagentruntime.RetrieveOutput{RetrievalResults: []agenttypes.KnowledgeBaseRetrievalResult{
+		textResult("doc_reclassified", "invoice 128 due", 0.99),
+		textResult("doc_financial", "invoice 256 due", 0.90),
+	}}}
+	knowledgeBase, err := NewManagedKnowledgeBase(api, "kb-managed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := &fakeChunks{metadata: map[string]domain.Metadata{
+		"doc_reclassified": {"provider": "gmail", "category": "account_record"},
+		"doc_financial":    {"provider": "gmail", "category": "financial_record"},
+	}}
+	retriever := New(chunks, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil, knowledgeBase, nil)
+	corpus := testCorpus()
+	corpus.Backend = domain.BackendBedrockKB
+	results, err := retriever.Search(context.Background(), corpus, domain.Query{Text: "invoice", Filter: domain.Filter{Conditions: []domain.Condition{
+		{Key: "category", Operator: domain.OperatorEqual, Values: []string{"financial_record"}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results.Matches) != 1 || results.Matches[0].Document.ID != "doc_financial" {
+		t.Fatalf("matches = %+v, want only the document that is still financial_record", results.Matches)
+	}
+}
+
+// refMatches gives each operator the meaning PostgreSQL's filters give it,
+// so a bedrock-kb corpus answers a filter as the other backends do.
+func TestRefMatchesMirrorsThePostgresFilters(t *testing.T) {
+	t.Parallel()
+	gmail := domain.Ref{ID: "doc_1", Source: domain.Source{Kind: domain.SourceExternal}, Metadata: domain.Metadata{"provider": "gmail"}}
+	condition := func(key string, operator domain.Operator, values ...string) domain.Filter {
+		return domain.Filter{Conditions: []domain.Condition{{Key: key, Operator: operator, Values: values}}}
+	}
+	for name, tc := range map[string]struct {
+		filter domain.Filter
+		want   bool
+	}{
+		"no filter":                     {domain.Filter{}, true},
+		"eq matches":                    {condition("provider", domain.OperatorEqual, "gmail"), true},
+		"eq differs":                    {condition("provider", domain.OperatorEqual, "slack"), false},
+		"eq on a missing key":           {condition("category", domain.OperatorEqual, "booking"), false},
+		"ne differs":                    {condition("provider", domain.OperatorNotEqual, "slack"), true},
+		"ne matches":                    {condition("provider", domain.OperatorNotEqual, "gmail"), false},
+		"ne on a missing key":           {condition("category", domain.OperatorNotEqual, "booking"), true},
+		"in lists it":                   {condition("provider", domain.OperatorIn, "slack", "gmail"), true},
+		"in does not list it":           {condition("provider", domain.OperatorIn, "slack"), false},
+		"nin lists it":                  {condition("provider", domain.OperatorNotIn, "gmail"), false},
+		"nin on a missing key":          {condition("category", domain.OperatorNotIn, "booking"), true},
+		"source kind is its own column": {condition("source_kind", domain.OperatorEqual, "external"), true},
+		"another source kind":           {condition("source_kind", domain.OperatorEqual, "file"), false},
+		"named document":                {domain.Filter{DocumentIDs: []string{"doc_1"}}, true},
+		"another document":              {domain.Filter{DocumentIDs: []string{"doc_2"}}, false},
+	} {
+		if got := refMatches(gmail, tc.filter); got != tc.want {
+			t.Errorf("%s: refMatches = %v, want %v", name, got, tc.want)
+		}
+	}
+}
