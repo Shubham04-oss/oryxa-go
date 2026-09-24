@@ -174,11 +174,20 @@ func (store *S3Vectors) Search(ctx context.Context, corpus domain.Corpus, search
 	if err != nil {
 		return nil, err
 	}
+	topK := min(search.TopK, queryLimit)
+	if !search.IncludeAdminOnly {
+		// A vector here carries no access of its own: a member's admin-only
+		// matches are dropped only once PostgreSQL is asked about them, after
+		// this returns (see retrieval's hydrate). Asking for as many as one
+		// query returns keeps the admin-only chunks nearest a question from
+		// using up everything a member would otherwise have got.
+		topK = queryLimit
+	}
 	input := &s3vectors.QueryVectorsInput{
 		VectorBucketName: aws.String(store.bucket),
 		IndexName:        aws.String(IndexName(corpus)),
 		QueryVector:      &s3vectorstypes.VectorDataMemberFloat32{Value: search.Vector},
-		TopK:             aws.Int32(int32(min(search.TopK, queryLimit))),
+		TopK:             aws.Int32(int32(topK)),
 		ReturnDistance:   true,
 	}
 	if filter != nil {

@@ -100,6 +100,39 @@ func TestS3VectorsAsksForNoMoreThanOneQueryReturns(t *testing.T) {
 	}
 }
 
+// S3 Vectors holds no access with a vector, so a member's admin-only matches
+// are dropped only after the query, in PostgreSQL. A member's search asks for
+// as many results as one query returns, so those cannot use up every result
+// the member would have got; an admin's asks for what it needs.
+func TestS3VectorsOverFetchesForAMembersSearch(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		includeAdminOnly bool
+		want             int32
+	}{
+		"member": {false, queryLimit},
+		"admin":  {true, 8},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fake := newFake()
+			store, err := NewS3Vectors(fake, "oryxa-vectors")
+			if err != nil {
+				t.Fatal(err)
+			}
+			corpus := s3Corpus(domain.MetricCosine)
+			fake.indexes[IndexName(corpus)] = true
+			search := Search{Vector: []float32{1, 0, 0, 0}, TopK: 8, IncludeAdminOnly: tc.includeAdminOnly}
+			if _, err := store.Search(context.Background(), corpus, search); err != nil {
+				t.Fatalf("Search: %v", err)
+			}
+			if got := aws.ToInt32(fake.queries[0].TopK); got != tc.want {
+				t.Fatalf("asked S3 Vectors for %d results, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestS3VectorsCreatesTheIndexOnFirstWrite(t *testing.T) {
 	t.Parallel()
 	fake := newFake()
