@@ -14,6 +14,10 @@ import { AgentComposer } from "./agent-composer"
 import { AgentConversation } from "./agent-conversation"
 import { AgentSwitcher, FALLBACK_AGENT_NAME } from "./agent-switcher"
 import type { AgentSwitcherEntry } from "./agent-switcher"
+import { countLabel } from "./direct-message-format"
+import { DirectMessagesTab, dmPanelList } from "./direct-message-inbox"
+import type { DmPanelView } from "./direct-message-inbox"
+import type { DmPeople } from "./direct-message-people"
 import { SpecialistChat } from "./specialist-chat"
 import type { ChatSpecialist } from "./specialist-chat"
 import { IdentityAvatar } from "./workspace-avatar"
@@ -22,9 +26,25 @@ import { useVisibleHeight } from "@/hooks/use-visible-height"
 import type { ManagedAgent } from "@/lib/agents/managed-agents"
 import { primaryAgent, specialistAgents } from "@/lib/agents/policy"
 import { agentsQueryOptions } from "@/lib/agents/queries"
+import type { Inbox } from "@/lib/dms"
 import { cn } from "@/lib/utils"
 
-type AgentPanelTab = "agents" | "dms" | "teams"
+export type AgentPanelTab = "agents" | "dms" | "teams"
+
+/**
+ * The shell bringing a tab forward (Team's "All conversations" opens DMs).
+ * Each request is a new object, and each is honoured once.
+ */
+export type AgentPanelTabRequest = { tab: AgentPanelTab }
+
+/** What the DMs tab lists and opens: the member's inbox, and whom it can name. */
+export type PanelDirectMessages = {
+  viewerId: string
+  inbox: Inbox
+  people: DmPeople
+  /** A side conversation picked from the list; the teamspace's side-conversation view wires in here. */
+  onOpenSide: (name: string) => void
+}
 
 /**
  * The shell asking the panel to chat with one of the member's specialists
@@ -63,6 +83,8 @@ export function WorkspaceAgentPanel({
   onCollapse,
   organizationId,
   chatRequest,
+  tabRequest,
+  directMessages,
 }: {
   expanded: boolean
   onExpand: () => void
@@ -71,6 +93,10 @@ export function WorkspaceAgentPanel({
   organizationId?: string
   /** The latest request to chat with a specialist here; the shell expands the panel with it. */
   chatRequest?: AgentPanelChatRequest | null
+  /** The latest request to bring a tab forward; the shell expands the panel with it. */
+  tabRequest?: AgentPanelTabRequest | null
+  /** The member's direct messages; without them (no session) the DMs tab says what it will hold. */
+  directMessages?: PanelDirectMessages
 }) {
   const [tab, setTab] = useState<AgentPanelTab>("agents")
   // Whom the Agents tab talks to: one of the member's specialists by id,
@@ -83,6 +109,19 @@ export function WorkspaceAgentPanel({
     setTab("agents")
     setAgentId(chatRequest.agentId)
   }
+  // The DMs tab's place (its list, the picker, or a conversation) and its
+  // drafts, kept here so they outlast the panel collapsing.
+  const [dmView, setDmView] = useState<DmPanelView>(dmPanelList)
+  const [dmDrafts, setDmDrafts] = useState<Partial<Record<string, string>>>({})
+  const [answeredTabRequest, setAnsweredTabRequest] =
+    useState<AgentPanelTabRequest | null>(null)
+  if (tabRequest && tabRequest !== answeredTabRequest) {
+    setAnsweredTabRequest(tabRequest)
+    setTab(tabRequest.tab)
+    // "All conversations" means the list, not the one last open.
+    if (tabRequest.tab === "dms") setDmView(dmPanelList)
+  }
+  const unread = directMessages?.inbox.unreadTotal ?? 0
   const [composing, setComposing] = useState(false)
   const visibleHeight = useVisibleHeight(expanded && composing)
   const tabRefs = useRef<
@@ -123,6 +162,9 @@ export function WorkspaceAgentPanel({
   useEffect(() => {
     if (chatRequest) tabRefs.current.agents?.focus()
   }, [chatRequest])
+  useEffect(() => {
+    if (tabRequest) tabRefs.current[tabRequest.tab]?.focus()
+  }, [tabRequest])
 
   function openTab(next: AgentPanelTab) {
     setTab(next)
@@ -178,7 +220,7 @@ export function WorkspaceAgentPanel({
                   ref={(element) => {
                     tabRefs.current[item.key] = element
                   }}
-                  aria-label={item.label}
+                  aria-label={tabLabel(item.key, item.label, unread)}
                   aria-selected={selected}
                   aria-controls={`workspace-agent-view-${item.key}`}
                   tabIndex={selected ? 0 : -1}
@@ -192,6 +234,9 @@ export function WorkspaceAgentPanel({
                     <IdentityAvatar identity={tabIcon} />
                   )}
                   {selected && <span>{item.label}</span>}
+                  {item.key === "dms" && unread > 0 && (
+                    <UnreadBadge count={unread} />
+                  )}
                 </button>
               )
             })}
@@ -256,6 +301,25 @@ export function WorkspaceAgentPanel({
                 agentSeed={agentSeed}
                 onComposingChange={setComposing}
               />
+            ) : item.key === "dms" && organizationId && directMessages ? (
+              // Mounted only while it shows: an open conversation is what
+              // makes the member online in it (REALTIME.md, "Presence").
+              tab === "dms" && (
+                <DirectMessagesTab
+                  organizationId={organizationId}
+                  viewerId={directMessages.viewerId}
+                  inbox={directMessages.inbox}
+                  people={directMessages.people}
+                  view={dmView}
+                  onViewChange={setDmView}
+                  drafts={dmDrafts}
+                  onDraftChange={(peerId, draft) =>
+                    setDmDrafts((current) => ({ ...current, [peerId]: draft }))
+                  }
+                  onComposingChange={setComposing}
+                  onOpenSide={directMessages.onOpenSide}
+                />
+              )
             ) : (
               <p className="workspace-agent-empty">{item.empty}</p>
             )}
@@ -270,7 +334,7 @@ export function WorkspaceAgentPanel({
                 className="workspace-rail-button"
                 type="button"
                 key={item.key}
-                aria-label={`Open ${item.label}`}
+                aria-label={`Open ${tabLabel(item.key, item.label, unread)}`}
                 title={item.label}
                 onClick={() => openTab(item.key)}
               >
@@ -279,12 +343,29 @@ export function WorkspaceAgentPanel({
                 ) : (
                   <IdentityAvatar identity={tabIcon} />
                 )}
+                {item.key === "dms" && unread > 0 && (
+                  <UnreadBadge count={unread} />
+                )}
               </button>
             )
           })}
         </div>
       )}
     </aside>
+  )
+}
+
+/** A tab's name, with the DMs' unread total when there is one. */
+function tabLabel(key: AgentPanelTab, label: string, unread: number): string {
+  return key === "dms" && unread > 0 ? `${label}, ${unread} unread` : label
+}
+
+/** The DMs' unread total on their tab and rail icon: a small badge, "9+" past nine. */
+function UnreadBadge({ count }: { count: number }) {
+  return (
+    <span className="workspace-unread-badge" aria-hidden="true">
+      {countLabel(count, 9)}
+    </span>
   )
 }
 
