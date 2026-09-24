@@ -461,7 +461,7 @@ describe.each(objects)("the $segment route", (object) => {
     expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
   })
 
-  it("sets its identity headers itself, and drops every other X-Oryxa header the browser sent", async () => {
+  it("sets its identity headers itself, and drops every other X-Oryxa header, and the SDK's own, the browser sent", async () => {
     const response = await send(
       socketRequest(pathOf(object), {
         "X-Oryxa-Cookie": "oryxa_access=forged",
@@ -470,6 +470,11 @@ describe.each(objects)("the $segment route", (object) => {
         "X-Oryxa-Agent": "agt_other",
         "X-Oryxa-User": "user-forged",
         "x-oryxa-anything": "forged",
+        // The Agents SDK routes a socket to a sub-agent by this header,
+        // before the object's onConnect checks anything.
+        "X-CF-Agents-Subagent-URL": `${app}/agents/${object.segment}/${object.name}/sub/direct-message-agent/org_sim~user-ada~user-zed`,
+        "x-agents-lifecycle-props": "eyJ4IjoxfQ",
+        "x-partykit-room": "org_sim~other",
       })
     )
     expect(response.status).toBe(200)
@@ -491,6 +496,13 @@ describe.each(objects)("the $segment route", (object) => {
       )
     )
     expect(routed.headers.get(object.foreignHeader)).toBeNull()
+    for (const internal of [
+      "x-cf-agents-subagent-url",
+      "x-agents-lifecycle-props",
+      "x-partykit-room",
+    ]) {
+      expect(routed.headers.get(internal)).toBeNull()
+    }
     expect(routedEnv).toBe(env)
   })
 

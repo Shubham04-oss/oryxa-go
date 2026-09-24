@@ -143,6 +143,16 @@ function askGo(env: Env, cookie: string): AskGo {
   return Object.assign(ask, { json })
 }
 
+/**
+ * Headers only the Worker may set on a request it routes: its identity
+ * headers (`X-Oryxa-*`), and those the Agents SDK trusts from a request as
+ * its own routing (`x-cf-agents-subagent-url` hands a socket to a sub-agent
+ * before the object's `onConnect` runs; `x-agents-lifecycle-props` sets its
+ * props), with PartyKit's prefix beside them. A browser's copy of any of
+ * them is dropped.
+ */
+const internalHeader = /^(x-oryxa-|x-cf-agents-|x-agents-|x-partykit-)/i
+
 /** The bindings routeAgentRequest routes: the Durable Object namespaces in `Env`. */
 type ObjectBinding = {
   [Key in keyof Env]-?: Env[Key] extends { idFromName: unknown } ? Key : never
@@ -318,7 +328,7 @@ async function routeToObject<TIds, TGrant>(
 
   const headers = new Headers(request.headers)
   for (const name of [...headers.keys()]) {
-    if (name.toLowerCase().startsWith("x-oryxa-")) headers.delete(name)
+    if (internalHeader.test(name)) headers.delete(name)
   }
   for (const [name, value] of Object.entries(
     object.identity(ids, cookie, access)
