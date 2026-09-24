@@ -304,7 +304,7 @@ that path needs no origin check.
 | `GET` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | One corpus, with its document and chunk counts. `{corpus}` may be an id or the slug |
 | `DELETE` | `/v1/organizations/{org}/corpora/{corpus}` | Per placement | Delete the corpus, its documents and its vectors |
 | `GET` | `.../corpora/{corpus}/documents` | Per placement | List. Query `status`, `limit`, `cursor`. Answers `{documents, next_cursor}`; `next_cursor` is absent on the last page |
-| `POST` | `.../corpora/{corpus}/documents` | Per placement | Add. `{source:{kind,ref}, title, content_type, text, metadata, access}`. `access` is `members` by default; an org admin may set `admins` in an organization corpus. Answers `202`: it is queued, not yet searchable |
+| `POST` | `.../corpora/{corpus}/documents` | Per placement | Add. `{source:{kind,ref}, title, content_type, text, metadata, access}`. `access` is `members` for a new document when left out, and a document added again without it keeps the access it has; an org admin may set `admins` in an organization corpus, and a `file` document takes its access from Files. Answers `202`: it is queued, not yet searchable |
 | `GET` | `.../corpora/{corpus}/documents/{document}` | Per placement | One document and its ingest status |
 | `DELETE` | `.../corpora/{corpus}/documents/{document}` | Per placement | Remove it and its vectors |
 | `POST` | `.../corpora/{corpus}/search` | Per placement | `{query, top_k, mode, min_score, diversity, rerank, over_fetch, filter}` |

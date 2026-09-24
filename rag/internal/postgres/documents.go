@@ -107,11 +107,12 @@ const (
 // The body is stored alongside the metadata because a citation addresses a
 // byte range of it. Recording the row and the event together means a document
 // cannot exist without the ingest work having been announced.
+//
+// A document offered with no access label keeps the one it already has, and
+// a new one gets members; see settledAccess.
 func (store *Store) UpsertDocument(ctx context.Context, document domain.Document, body string, event domain.Event) (domain.Document, Upsert, error) {
-	if document.Access == "" {
-		document.Access = domain.AccessMembers
-	}
-	if !document.Access.Valid() {
+	requestedAccess := document.Access
+	if requestedAccess != "" && !requestedAccess.Valid() {
 		return domain.Document{}, 0, fmt.Errorf("document access is not allowed: %w", domain.ErrInvalid)
 	}
 	metadata, err := encodeMetadata(document.Metadata)
@@ -138,6 +139,7 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 		if err != nil {
 			return err
 		}
+		document.Access = settledAccess(requestedAccess, existing, found)
 		attributesChanged := found && (existing.Title != document.Title || existing.ContentType != document.ContentType ||
 			!maps.Equal(existing.Metadata, document.Metadata))
 		switch {
@@ -203,6 +205,21 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 		return domain.Document{}, 0, err
 	}
 	return stored, outcome, nil
+}
+
+// settledAccess is who may read a document being offered: the label the
+// caller named, or, when they named none, the one the document already held
+// has. Offering an admin-only document again without saying so must never
+// open it to every member. Only a document never held before gets members.
+func settledAccess(requested domain.DocumentAccess, existing domain.Document, found bool) domain.DocumentAccess {
+	switch {
+	case requested != "":
+		return requested
+	case found:
+		return existing.Access
+	default:
+		return domain.AccessMembers
+	}
 }
 
 // findDocument looks for the document a source already has. Inline text has no

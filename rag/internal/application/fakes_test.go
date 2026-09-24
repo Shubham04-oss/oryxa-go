@@ -1,6 +1,7 @@
 package application
 
 import (
+	"cmp"
 	"context"
 	"maps"
 	"strings"
@@ -268,9 +269,12 @@ func (store *fakeStore) DeleteCorpus(_ context.Context, organizationID, corpusID
 	return nil
 }
 
+// UpsertDocument settles a missing access label as postgres.Store does: the
+// document already held keeps its own, and a new one gets members.
 func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Document, _ string, event domain.Event) (domain.Document, postgres.Upsert, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	requestedAccess := document.Access
 	for _, existing := range store.documents {
 		if existing.CorpusID != document.CorpusID {
 			continue
@@ -280,6 +284,7 @@ func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Docume
 		if !sameSource && !sameInline {
 			continue
 		}
+		document.Access = cmp.Or(requestedAccess, existing.Access, domain.AccessMembers)
 		if existing.ContentSHA256 == document.ContentSHA256 && existing.Access == document.Access &&
 			existing.Title == document.Title && existing.ContentType == document.ContentType &&
 			maps.Equal(existing.Metadata, document.Metadata) && existing.Status == domain.StatusReady {
@@ -290,6 +295,7 @@ func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Docume
 		store.events = append(store.events, event)
 		return document, postgres.UpsertChanged, nil
 	}
+	document.Access = cmp.Or(requestedAccess, domain.AccessMembers)
 	store.documents[document.ID] = document
 	store.events = append(store.events, event)
 	return document, postgres.UpsertCreated, nil

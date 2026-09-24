@@ -397,11 +397,12 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 	if err := input.Metadata.Validate(); err != nil {
 		return domain.Document{}, err
 	}
+	// No access named is passed on as none: the store keeps the label a
+	// document it already holds has, and gives a new one members. A
+	// re-delivery that leaves access out must never open an admin-only
+	// document to every member.
 	access := input.Access
-	if access == "" {
-		access = domain.AccessMembers
-	}
-	if !access.Valid() {
+	if access != "" && !access.Valid() {
 		return domain.Document{}, fmt.Errorf("document access is not allowed: %w", domain.ErrInvalid)
 	}
 	if access == domain.AccessAdmins && (corpus.Scope != domain.ScopeOrganization || !member.Role.IsOrgAdmin()) {

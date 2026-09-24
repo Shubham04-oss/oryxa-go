@@ -552,6 +552,58 @@ func TestAnAdminsAgentReadsOnlyWhatEveryMemberMay(t *testing.T) {
 	}
 }
 
+// TestReAddingADocumentWithoutAccessKeepsItsAccess: a pipeline re-delivering
+// what it indexed before need not repeat who may read it. Leaving access out
+// keeps what the stored document has, so an admin-only document is never
+// opened to every member by a request that did not ask for that. Only a
+// document rag has never held defaults to members, and naming access still
+// changes it.
+func TestReAddingADocumentWithoutAccessKeepsItsAccess(t *testing.T) {
+	h := newHarness()
+	ctx := context.Background()
+	corpus := seedCorpus(h.store, domain.Corpus{Slug: "org-acl", Scope: domain.ScopeOrganization})
+	add := func(source domain.Source, text string, access domain.DocumentAccess) domain.Document {
+		t.Helper()
+		document, err := h.service.AddDocument(ctx, creds("user-admin"), testOrganization, corpus.ID, given(AddDocumentInput{
+			Source: source, Text: text, ContentType: "text/plain", Access: access,
+		}))
+		if err != nil {
+			t.Fatalf("AddDocument(%+v, access %q) = %v", source, access, err)
+		}
+		return document
+	}
+	hiddenFromMembers := func(document domain.Document) {
+		t.Helper()
+		if _, err := h.service.Document(ctx, creds("user-teammate"), testOrganization, corpus.ID, document.ID); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("a plain member read %s = %v, want ErrNotFound", document.ID, err)
+		}
+	}
+
+	payroll := domain.Source{Kind: domain.SourceExternal, Ref: "https://intranet.example/payroll"}
+	inline := domain.Source{Kind: domain.SourceInline}
+	for _, source := range []domain.Source{payroll, inline} {
+		first := add(source, "Salary bands", domain.AccessAdmins)
+		again := add(source, "Salary bands", "")
+		if again.ID != first.ID || again.Access != domain.AccessAdmins {
+			t.Fatalf("%s re-added without access = %s %q, want %s still admins", source.Kind, again.ID, again.Access, first.ID)
+		}
+		hiddenFromMembers(first)
+	}
+
+	revised := add(payroll, "Salary bands, revised", "")
+	if revised.Access != domain.AccessAdmins {
+		t.Fatalf("changed content re-added without access = %q, want admins", revised.Access)
+	}
+	hiddenFromMembers(revised)
+
+	if opened := add(payroll, "Salary bands, revised", domain.AccessMembers); opened.ID != revised.ID || opened.Access != domain.AccessMembers {
+		t.Fatalf("re-added naming members = %s %q, want %s opened to members", opened.ID, opened.Access, revised.ID)
+	}
+	if fresh := add(domain.Source{Kind: domain.SourceExternal, Ref: "https://intranet.example/handbook"}, "Handbook", ""); fresh.Access != domain.AccessMembers {
+		t.Fatalf("a new document without access = %q, want members", fresh.Access)
+	}
+}
+
 func TestFileCannotBeCopiedIntoWiderCorpus(t *testing.T) {
 	h := newHarness()
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "org-files", Scope: domain.ScopeOrganization})
