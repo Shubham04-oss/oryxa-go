@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { encodeRoster } from "./lib/side/protocol"
 import { signPurge } from "./realtime-purge"
 import worker from "./server"
 import type { Env } from "./server"
@@ -39,6 +40,7 @@ const env = {
   SpecialistChatAgent: { idFromName: () => "specialist-id" },
   TeamspaceRoomAgent: { idFromName: () => "room-id" },
   DirectMessageAgent: { idFromName: () => "dm-id" },
+  SideConversationAgent: { idFromName: () => "side-id" },
   InboxAgent: { idFromName: () => "inbox-id" },
   RealtimeRegistryAgent: { idFromName: () => "registry-id" },
 } as unknown as Env
@@ -61,6 +63,7 @@ type RealtimeCase = {
     | "SpecialistChatAgent"
     | "TeamspaceRoomAgent"
     | "DirectMessageAgent"
+    | "SideConversationAgent"
     | "InboxAgent"
   /** What a page may GET beneath it, besides the socket. */
   reads: string[]
@@ -102,6 +105,79 @@ function organizationAnswer(url: string, members = ["user-ada", "user-bo"]) {
     200
   )
 }
+
+/** Go's teamspace, as the side conversation's check reads it: Ada, Bo and Cy on its team, a specialist each of Bo's and Cy's. */
+function teamspaceAnswer(overrides: Record<string, unknown> = {}) {
+  const seat = (userId: string, name: string, agentId: string) => ({
+    user_id: userId,
+    user_display_name: name,
+    agent_id: agentId,
+    agent_name: `${name}'s agent`,
+    mode: "whisperer",
+  })
+  return json(
+    {
+      id: "tsp_launch",
+      name: "Launch room",
+      status: "active",
+      is_member: true,
+      whisperers: [
+        seat("user-ada", "Ada", "agt_ada"),
+        seat("user-bo", "Bo", "agt_bo"),
+        seat("user-cy", "Cy", "agt_cy"),
+      ],
+      contributions: [
+        {
+          agent_id: "agt_pricing",
+          owner_user_id: "user-bo",
+          name: "Pricing",
+          status: "active",
+          role: "Prices things",
+          delegation_mode: "automatic",
+        },
+        {
+          agent_id: "agt_cy_notes",
+          owner_user_id: "user-cy",
+          name: "Notes",
+          status: "active",
+          role: "Takes notes",
+          delegation_mode: "request",
+        },
+      ],
+      ...overrides,
+    },
+    200
+  )
+}
+
+/** The roster the Worker hands the Ada–Bo side conversation for `teamspaceAnswer`. */
+const adaBoRoster = encodeRoster({
+  teamspaceName: "Launch room",
+  paused: false,
+  people: [
+    {
+      userId: "user-ada",
+      displayName: "Ada",
+      agentId: "agt_ada",
+      agentName: "Ada's agent",
+    },
+    {
+      userId: "user-bo",
+      displayName: "Bo",
+      agentId: "agt_bo",
+      agentName: "Bo's agent",
+    },
+  ],
+  contributions: [
+    {
+      agentId: "agt_pricing",
+      ownerId: "user-bo",
+      name: "Pricing",
+      role: "Prices things",
+      delegationMode: "automatic",
+    },
+  ],
+})
 
 const objects: RealtimeCase[] = [
   {
@@ -207,6 +283,39 @@ const objects: RealtimeCase[] = [
     },
     // A DM never calls Go, so it is not handed the member's cookie.
     foreignHeader: "X-Oryxa-Cookie",
+  },
+  {
+    segment: "side-conversation-agent",
+    binding: "SideConversationAgent",
+    reads: [],
+    deletes: false,
+    name: "org_sim~tsp_launch~user-ada~user-bo",
+    invalidNames: [
+      "org_sim~tsp_launch",
+      "org_sim~user-ada~user-bo",
+      "org_sim~tsp_launch~user-bo~user-ada",
+      "org_sim~tsp_launch~user-ada~user-ada",
+      "org_sim~~user-ada~user-bo",
+      "org_sim~tsp_launch~user-ada~user-bo~user-cy",
+      "org_sim%7Etsp_launch%7Euser-ada%7Euser-bo",
+      "org_sim~tsp%20launch~user-ada~user-bo",
+      "org.sim~tsp_launch~user-ada~user-bo",
+    ],
+    accessUrls: [
+      "http://go.test/v1/organizations/org_sim",
+      "http://go.test/v1/organizations/org_sim/teamspaces/tsp_launch",
+    ],
+    accepted: (url) =>
+      url.endsWith("/teamspaces/tsp_launch")
+        ? teamspaceAnswer()
+        : organizationAnswer(url),
+    identity: {
+      "X-Oryxa-Organization": "org_sim",
+      "X-Oryxa-User": "user-ada",
+      "X-Oryxa-Cookie": cookie,
+      "X-Oryxa-Side-Roster": adaBoRoster,
+    },
+    foreignHeader: "X-Oryxa-Teamspace",
   },
   {
     segment: "inbox-agent",
@@ -824,6 +933,128 @@ describe("the direct messages", () => {
       const response = await send(socketRequest(dm))
       expect(response.status).toBe(502)
     }
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe("the side conversations", () => {
+  const side = `${app}/agents/side-conversation-agent/org_sim~tsp_launch~user-ada~user-bo`
+
+  /** Go as the side conversation's check asks it: the member (`caller`) and the teamspace. */
+  function goAnswers(
+    caller: string,
+    space: Response | (() => Response) = teamspaceAnswer
+  ) {
+    fetchMock.mockImplementation(async (url: URL | string) => {
+      const asked = String(url)
+      if (asked.endsWith("/teamspaces/tsp_launch")) {
+        return typeof space === "function" ? space() : space.clone()
+      }
+      return json(
+        {
+          membership: { organization_id: "org_sim", user_id: caller },
+          ...(caller === "agent" ? { agent: true } : {}),
+        },
+        200
+      )
+    })
+  }
+
+  it("is only for its two people: anyone else is refused as not a participant", async () => {
+    goAnswers("user-cy")
+    for (const request of [
+      socketRequest(side),
+      new Request(side, { headers: { Cookie: cookie } }),
+    ]) {
+      const response = await send(request)
+      expect(response.status).toBe(403)
+      expect(await errorOf(response)).toEqual({
+        code: "not_participant",
+        message: "Only the two people in a conversation can open it.",
+      })
+    }
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("is only for the teamspace's team: a manager who is not on it is kept out", async () => {
+    goAnswers("user-ada", () => teamspaceAnswer({ is_member: false }))
+    const response = await send(socketRequest(side))
+    expect(response.status).toBe(403)
+    expect(await errorOf(response)).toEqual({
+      code: "forbidden",
+      message: "Only the teamspace's team can open its side conversations.",
+    })
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("is refused when the other person is not on the teamspace's team", async () => {
+    goAnswers("user-ada", () =>
+      teamspaceAnswer({
+        whisperers: [
+          {
+            user_id: "user-ada",
+            user_display_name: "Ada",
+            agent_id: "agt_ada",
+            agent_name: "Ada's agent",
+            mode: "whisperer",
+          },
+        ],
+      })
+    )
+    const response = await send(socketRequest(side))
+    expect(response.status).toBe(404)
+    expect(await errorOf(response)).toEqual({
+      code: "peer_not_found",
+      message: "This person is not on the teamspace's team.",
+    })
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("passes on Go's refusal of the member first, then of the teamspace", async () => {
+    fetchMock.mockImplementation(async (url: URL | string) =>
+      String(url).endsWith("/tsp_launch")
+        ? goError(404, "not_found", "teamspace not found")
+        : goError(401, "unauthorized", "access token is required")
+    )
+    const member = await send(socketRequest(side))
+    expect([member.status, (await errorOf(member)).code]).toEqual([
+      401,
+      "unauthorized",
+    ])
+    goAnswers("user-ada", () =>
+      goError(404, "not_found", "teamspace not found")
+    )
+    const space = await send(socketRequest(side))
+    expect(space.status).toBe(404)
+    expect(await errorOf(space)).toEqual({
+      code: "not_found",
+      message: "teamspace not found",
+    })
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("refuses an agent's token: side conversations are between people", async () => {
+    goAnswers("agent")
+    const response = await send(socketRequest(side))
+    expect(response.status).toBe(403)
+    expect((await errorOf(response)).code).toBe("forbidden")
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("hands the object who is in it for the other person too, as Go answered the member", async () => {
+    goAnswers("user-bo")
+    const response = await send(socketRequest(side))
+    expect(response.status).toBe(200)
+    const [routed] = sdk.routeAgentRequest.mock.calls[0] as [Request]
+    expect(routed.headers.get("X-Oryxa-User")).toBe("user-bo")
+    expect(routed.headers.get("X-Oryxa-Side-Roster")).toBe(adaBoRoster)
+    expect(routed.headers.get("Origin")).toBe(app)
+  })
+
+  it("reports Go answering with something that is not a teamspace as a bad gateway", async () => {
+    goAnswers("user-ada", () => json({ is_member: true }, 200))
+    const response = await send(socketRequest(side))
+    expect(response.status).toBe(502)
     expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
   })
 })
