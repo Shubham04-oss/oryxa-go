@@ -111,6 +111,44 @@ not permission to copy every incidental value into a new component.
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header
   principle and keeps the conversation/composer as the main content.
+- **Direct messages.** A DM is one conversation (`direct-message.tsx`) in two
+  layouts, each its own view of the same live object (REALTIME.md): the main
+  canvas, opened from People or Team's recent conversations, under the header
+  that names the person; and the agent panel's DMs tab, under a compact row
+  with a back arrow to the list.
+  - It reads as a quiet log (a centered column in the canvas): the member's
+    messages in raised bubbles on the right, the other person's as plain text
+    on the left beside their avatar. Each person's messages within one minute
+    form a group with one time, and a separator starts each day ("Today",
+    "Yesterday", or the date). The log names nobody: the header does.
+  - A message waiting for the object is faded; a failed one says "Not sent."
+    with Retry. A quiet "Seen" sits under the member's last message the other
+    person has read, until they reply. Their typing is one muted pulsing line
+    at the end.
+  - Online means they have this DM open in a visible tab: a green dot on
+    their avatar in the header, and on any list row whose DM a view on the
+    page has open. Nobody is ever shown offline.
+  - The log follows the end only while the reader is there; otherwise new
+    messages raise a "N new messages" pill and are announced. The page before
+    loads at the top without moving what the reader is looking at, and the
+    start of the conversation says so.
+  - Unread is a count on a DMs row, a dot on a recent conversation in Team's
+    navigation, and a badge on the DMs tab and its rail icon ("9+" past
+    nine). A DM counts as read while it is on screen, at its end, in a
+    visible tab.
+  - States: loading; empty ("Say hello to Priya"); "You can't message this
+    person" once they have left; session ended, with Sign in; and "Can't
+    reach this conversation" with Try again, while the composer keeps taking
+    messages that send once it is back.
+  - People lists everyone in the organization but the member, with role and
+    shared teamspaces as context, search, and a Message action. Team's
+    navigation shows the three latest DMs, and "All" opens the DMs tab, where
+    "New message" picks anyone in the organization. The canvas DM is in the
+    page's address (`?dm=`), so a refresh returns to it.
+  - Opening a DM moves focus to its composer, or to the log on a phone so the
+    keyboard stays down; going back returns focus to the person or row it
+    came from. Editing, deleting, reactions and attachments do not exist yet,
+    so nothing offers them.
 - Teamspace management is role-aware. Put account, teammate, organization,
   access, email, and billing administration inside Settings, opened from the
   user menu. Keep the simple Organization tab in that single Settings surface;
