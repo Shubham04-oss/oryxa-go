@@ -61,6 +61,21 @@ function latestFirst(left: Conversation, right: Conversation): number {
   return left.name < right.name ? -1 : left.name > right.name ? 1 : 0
 }
 
+/**
+ * Whether an event came from the socket of the conversation the view shows
+ * now. When a view moves to another conversation, the SDK hands it the new
+ * socket only in the render after (it swaps sockets in an effect), so for a
+ * moment the old socket's events reach the new conversation's handlers.
+ * Each PartySocket carries the object's name as its `room`; a stand-in with
+ * none is judged by identity.
+ */
+function fromSocketOf(name: string, socket: unknown, target: unknown): boolean {
+  if (target === undefined || target === null) return true
+  const room = (target as { room?: unknown }).room
+  if (typeof room === "string") return room === name
+  return target === socket
+}
+
 /** One view's inbox: what its socket said. */
 class InboxView {
   live: Live = initialLive("")
@@ -89,7 +104,7 @@ class InboxView {
 
   /** A message on the socket; one from a socket the view has since replaced is not this view's. */
   heard(data: unknown, target?: unknown): void {
-    if (target != null && target !== this.socket) return
+    if (!fromSocketOf(this.live.name, this.socket, target)) return
     const message = parseInboxServerMessage(data)
     if (!message || !this.live.name || this.live.settled) return
     this.apply(message)
@@ -101,7 +116,7 @@ class InboxView {
       !this.mounted ||
       !this.live.name ||
       this.live.settled ||
-      (event.target !== undefined && event.target !== this.socket)
+      !fromSocketOf(this.live.name, this.socket, event.target)
     ) {
       return
     }

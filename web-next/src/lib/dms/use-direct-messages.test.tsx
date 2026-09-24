@@ -195,16 +195,58 @@ describe("useDirectMessages: a view that moves to another DM", () => {
     expect(result.current.messages).toEqual([])
     expect(result.current.status).toBe("connecting")
 
-    // A frame from the previous socket, still in flight.
+    // Until the SDK swaps sockets, the previous one's frames and close
+    // still reach this view's handlers: its room tells them apart.
+    const previous = { room: name }
     act(() => {
       socket.options.onMessage?.({
-        data: JSON.stringify(snapshot([wire(7)])),
-        target: {},
+        data: JSON.stringify({ type: "dm-message", message: wire(7) }),
+        target: previous,
       } as unknown as { data: string })
+      socket.options.onClose?.({ code: 1000, target: previous })
     })
     expect(result.current.messages).toEqual([])
-    socket.says(snapshot([wire(1, "user-owner")]))
-    expect(result.current.messages).toEqual([wire(1, "user-owner")])
+    expect(result.current.status).toBe("connecting")
+    // The new socket's own frames do count.
+    act(() => {
+      socket.options.onMessage?.({
+        data: JSON.stringify(snapshot([wire(2, "user-owner")])),
+        target: { room: "org_sim~user-member~user-owner" },
+      } as unknown as { data: string })
+    })
+    expect(result.current.status).toBe("live")
+    expect(result.current.messages).toEqual([wire(2, "user-owner")])
+  })
+})
+
+describe("useDirectMessages: a message confirmed long after", () => {
+  it("does not splice an old message into what it holds, and leaves it to history", () => {
+    const { result } = setup()
+    const socket = open()
+    act(() => result.current.send("Sent before a long drop"))
+    const clientId = result.current.messages[0].clientId
+    socket.drop()
+    socket.open()
+    // Fifty and more messages later, the snapshot no longer has it; sent
+    // again, the object answers with the stored one.
+    socket.says(
+      snapshot(
+        Array.from({ length: 50 }, (_, index) => wire(61 + index)),
+        { hasOlder: true }
+      )
+    )
+    socket.says({
+      type: "dm-message",
+      message: wire(9, viewer, { body: "Sent before a long drop", clientId }),
+    })
+    expect(result.current.messages.map((message) => message.seq)).toEqual(
+      Array.from({ length: 50 }, (_, index) => 61 + index)
+    )
+    expect(result.current.hasOlder).toBe(true)
+    act(() => {
+      void result.current.loadOlder()
+    })
+    expect(socket.said("dm-history").at(-1)?.beforeSeq).toBe(61)
   })
 })
 

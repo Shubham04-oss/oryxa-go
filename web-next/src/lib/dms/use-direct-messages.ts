@@ -146,6 +146,21 @@ function statusOf(live: Live): DirectMessagesStatus {
 }
 
 /**
+ * Whether an event came from the socket of the conversation the view shows
+ * now. When a view moves to another conversation, the SDK hands it the new
+ * socket only in the render after (it swaps sockets in an effect), so for a
+ * moment the old socket's events reach the new conversation's handlers.
+ * Each PartySocket carries the object's name as its `room`; a stand-in with
+ * none is judged by identity.
+ */
+function fromSocketOf(name: string, socket: unknown, target: unknown): boolean {
+  if (target === undefined || target === null) return true
+  const room = (target as { room?: unknown }).room
+  if (typeof room === "string") return room === name
+  return target === socket
+}
+
+/**
  * One view's DM: what its socket said, what it sent, and its timers. Its
  * methods keep their identity for the view's life.
  */
@@ -356,7 +371,7 @@ class DirectMessagesView {
 
   /** A message on the socket; one from a socket the view has since replaced is not this view's. */
   heard(data: unknown, target?: unknown): void {
-    if (target != null && target !== this.socket) return
+    if (!fromSocketOf(this.live.name, this.socket, target)) return
     const message = parseDmServerMessage(data)
     if (!message || !this.live.name || this.settled) return
     this.apply(message)
@@ -368,7 +383,7 @@ class DirectMessagesView {
       !this.mounted ||
       !this.live.name ||
       this.settled ||
-      (event.target !== undefined && event.target !== this.socket)
+      !fromSocketOf(this.live.name, this.socket, event.target)
     ) {
       return
     }
@@ -396,7 +411,15 @@ class DirectMessagesView {
         return
       case "dm-message": {
         const arrived = message.message
-        this.change({ messages: merged(this.live.messages, [arrived]) })
+        const first = this.live.messages.at(0)?.seq
+        if (first !== undefined && arrived.seq < first) {
+          // Older than anything held: a message sent long ago that the
+          // object answered again from storage. Held here it would leave a
+          // gap history never fills; it comes with the older pages.
+          this.change({ hasOlder: true })
+        } else {
+          this.change({ messages: merged(this.live.messages, [arrived]) })
+        }
         if (arrived.clientId !== undefined) this.confirmed(arrived.clientId)
         return
       }
