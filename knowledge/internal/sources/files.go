@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -100,33 +101,13 @@ func (source *Files) Target(target map[string]string) error {
 // starting over, and keeps a file uploaded mid-walk from shifting everything
 // after it the way an offset would.
 func (source *Files) Fetch(ctx context.Context, request Request) (Page, error) {
-	if request.Source.Scope == domain.ScopeMember && request.Source.MemberID == "" {
-		return Page{}, fmt.Errorf("a member files source has no owner: %w", domain.ErrInvalid)
-	}
-	if request.Source.Scope == domain.ScopeTeam &&
-		(request.Source.TeamID == "" || request.Source.Target["team"] != request.Source.TeamID) {
-		return Page{}, fmt.Errorf("a team files source has no matching team target: %w", domain.ErrInvalid)
-	}
-	query := filesclient.Query{
-		TeamID:  strings.TrimSpace(request.Source.Target["team"]),
-		Purpose: strings.TrimSpace(request.Source.Target["purpose"]),
-	}
-	// The scope is always named, and that matters more than it looks.
-	//
-	// Everything this source publishes carries its own scope. Files asked
-	// with no scope also answers the caller's private files, which could
-	// otherwise land in a broader index. Ask for the exact scope and check
-	// each returned object's owner before reading its bytes.
-	query.Scope = string(domain.ScopeOrganization)
-	if request.Source.Scope == domain.ScopeMember && request.Source.MemberID != "" {
-		query.Scope = string(domain.ScopeMember)
-	} else if query.TeamID != "" {
-		query.Scope = string(domain.ScopeTeam)
-	}
-
-	objects, err := source.client.Objects(ctx, request.Source.OrganizationID, request.Credential.AccessToken, query)
+	query, err := listing(request.Source)
 	if err != nil {
 		return Page{}, err
+	}
+	objects, err := source.client.Objects(ctx, request.Source.OrganizationID, request.Credential.AccessToken, query)
+	if err != nil {
+		return Page{}, refused(query, err)
 	}
 	slices.SortFunc(objects, func(left, right filesclient.Object) int {
 		return strings.Compare(left.ID, right.ID)
@@ -160,6 +141,61 @@ func (source *Files) Fetch(ctx context.Context, request Request) (Page, error) {
 		page.Watermark = watermarkAfter(page.Watermark, object.CreatedAt)
 	}
 	return page, nil
+}
+
+// Check asks Files, as the member a source would read as, for the listing
+// every pass of it would make. A member off a team, or one who is not an
+// admin reading as though they were, is refused it now rather than on every
+// pass once the source is registered.
+func (source *Files) Check(ctx context.Context, request Request) error {
+	query, err := listing(request.Source)
+	if err != nil {
+		return err
+	}
+	if _, err := source.client.Objects(ctx, request.Source.OrganizationID, request.Credential.AccessToken, query); err != nil {
+		return refused(query, err)
+	}
+	return nil
+}
+
+// listing is what a source asks Files for: exactly the placement it
+// publishes under.
+//
+// The scope is always named, and that matters more than it looks. Everything
+// a source publishes carries its own scope. Files asked with no scope also
+// answers the caller's private files, which could otherwise land in a broader
+// index. So this asks for the exact scope, and Fetch checks each returned
+// object's owner before reading its bytes.
+func listing(placed domain.Source) (filesclient.Query, error) {
+	if placed.Scope == domain.ScopeMember && placed.MemberID == "" {
+		return filesclient.Query{}, fmt.Errorf("a member files source has no owner: %w", domain.ErrInvalid)
+	}
+	if placed.Scope == domain.ScopeTeam && (placed.TeamID == "" || placed.Target["team"] != placed.TeamID) {
+		return filesclient.Query{}, fmt.Errorf("a team files source has no matching team target: %w", domain.ErrInvalid)
+	}
+	query := filesclient.Query{
+		Scope:   string(domain.ScopeOrganization),
+		TeamID:  strings.TrimSpace(placed.Target["team"]),
+		Purpose: strings.TrimSpace(placed.Target["purpose"]),
+	}
+	if placed.Scope == domain.ScopeMember {
+		query.Scope = string(domain.ScopeMember)
+	} else if query.TeamID != "" {
+		query.Scope = string(domain.ScopeTeam)
+	}
+	return query, nil
+}
+
+// refused says what a listing Files would not answer means. Not found and
+// forbidden are Files refusing the member a source reads as the placement
+// itself — they left the team, or are no longer an admin — which no retry
+// fixes, unlike Files being down or a token it did not take.
+func refused(query filesclient.Query, err error) error {
+	if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrForbidden) {
+		return fmt.Errorf("files will not list these %s files for the member this reads as: %w: %w",
+			query.Scope, domain.ErrUnreadable, err)
+	}
+	return err
 }
 
 // publishable is the second guard on what a pass publishes, after the scope
@@ -205,6 +241,26 @@ func (source *Files) read(ctx context.Context, request Request, object filesclie
 		mime, passthrough = declared, true
 	}
 
+	created := object.CreatedAt
+	metadata := objectMetadata(object)
+	if request.Held != nil {
+		// A file's id names the same bytes for as long as it exists, and its
+		// sha256 says which, so one the source holds live with the same
+		// details is not downloaded again: a pass brought forward by an
+		// upload reads the new file, not the whole placement.
+		held, found, err := request.Held(ctx, object.ID)
+		if err != nil {
+			return Item{}, false, err
+		}
+		if found && held.RemovedAt == nil && held.Kind == knowledgev1.KindFile &&
+			held.Title == object.Filename && maps.Equal(held.Metadata, metadata) {
+			return Item{
+				ExternalID: object.ID, Kind: knowledgev1.KindFile, Title: object.Filename,
+				Metadata: metadata, UpdatedAt: &created, Unchanged: true,
+			}, true, nil
+		}
+	}
+
 	content, served, err := source.client.Content(ctx, request.Source.OrganizationID, object.ID, request.Credential.AccessToken)
 	if err != nil {
 		// Retention lapsing is silent — files publishes no event for it and
@@ -229,7 +285,6 @@ func (source *Files) read(ctx context.Context, request Request, object filesclie
 		return Item{}, false, nil
 	}
 
-	created := object.CreatedAt
 	return Item{
 		// Objects are immutable and there is no overwrite, so a file's id
 		// names the same bytes for as long as it exists.
@@ -238,13 +293,20 @@ func (source *Files) read(ctx context.Context, request Request, object filesclie
 		Title:      object.Filename,
 		MIME:       mime,
 		Content:    content,
-		Metadata: map[string]string{
-			"filename":   object.Filename,
-			"purpose":    object.Purpose,
-			"access":     object.Access,
-			"sha256":     object.SHA256,
-			"created_by": object.CreatedBy,
-		},
-		UpdatedAt: &created,
+		Metadata:   metadata,
+		UpdatedAt:  &created,
 	}, true, nil
+}
+
+// objectMetadata is what a document read from a stored file says of it: its
+// purpose and access label, which decide who may read it, and its sha256,
+// which says whether it is still the same file.
+func objectMetadata(object filesclient.Object) map[string]string {
+	return map[string]string{
+		"filename":   object.Filename,
+		"purpose":    object.Purpose,
+		"access":     object.Access,
+		"sha256":     object.SHA256,
+		"created_by": object.CreatedBy,
+	}
 }

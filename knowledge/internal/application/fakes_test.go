@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -37,9 +36,13 @@ type fakeStore struct {
 	lease map[string]string
 
 	retractUnseen int
-	paused        []string
-	finishedNext  time.Time
-	failedReason  string
+	// retractCalls counts RetractDocument calls, one transaction each, and
+	// hastenCalls HastenSource calls, one write each.
+	retractCalls int
+	hastenCalls  int
+	paused       []string
+	finishedNext time.Time
+	failedReason string
 }
 
 func newFakeStore() *fakeStore {
@@ -83,11 +86,13 @@ func (store *fakeStore) CreateSource(_ context.Context, source domain.Source, ev
 func (store *fakeStore) HastenSource(_ context.Context, organizationID, sourceID string, at time.Time) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	store.hastenCalls++
 	source, ok := store.sources[sourceID]
-	if !ok || source.OrganizationID != organizationID || source.Status != domain.StatusActive {
+	if !ok || source.OrganizationID != organizationID || source.Status != domain.StatusActive || source.SyncAt == nil {
 		return false, nil
 	}
-	if source.SyncAt == nil || !source.SyncAt.After(at) {
+	running := source.LeaseUntil != nil && source.LeaseUntil.After(at)
+	if !source.SyncAt.After(at) && !(running && source.SyncAt.Before(at)) {
 		return false, nil
 	}
 	hastened := at
@@ -118,6 +123,21 @@ func (store *fakeStore) HastenSources(_ context.Context, connectionID string, at
 		moved++
 	}
 	return moved, nil
+}
+
+// atPlacement mirrors the real query: a scope, and for a team or a member,
+// which one.
+func atPlacement(source domain.Source, placement domain.Placement) bool {
+	switch {
+	case source.Scope != placement.Scope:
+		return false
+	case placement.Scope == domain.ScopeTeam:
+		return source.TeamID == placement.TeamID
+	case placement.Scope == domain.ScopeMember:
+		return source.MemberID == placement.MemberID
+	default:
+		return true
+	}
 }
 
 func sameTarget(left, right map[string]string) bool {
@@ -153,7 +173,8 @@ func (store *fakeStore) Sources(_ context.Context, _ string, query domain.Source
 		case source.Status == domain.StatusRemoved && !query.IncludeRemoved,
 			!query.Admin && source.CreatedBy != query.CreatedBy,
 			query.ConnectionID != "" && source.ConnectionID != query.ConnectionID,
-			query.Provider != "" && source.Provider != query.Provider:
+			query.Provider != "" && source.Provider != query.Provider,
+			query.Placement != nil && !atPlacement(source, *query.Placement):
 			continue
 		}
 		listed = append(listed, source)
@@ -161,19 +182,26 @@ func (store *fakeStore) Sources(_ context.Context, _ string, query domain.Source
 	return listed, nil
 }
 
-func (store *fakeStore) RemoveSource(_ context.Context, _, sourceID string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error {
+// retire marks a source removed the way every real removal does: with its
+// reason, and nothing left scheduled.
+func retire(source domain.Source, reason string) domain.Source {
+	source.Status, source.Reason, source.SyncAt = domain.StatusRemoved, reason, nil
+	return source
+}
+
+func (store *fakeStore) RemoveSource(_ context.Context, _, sourceID, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	source, ok := store.sources[sourceID]
-	if !ok {
+	if !ok || source.Status == domain.StatusRemoved {
 		return domain.ErrNotFound
 	}
-	source.Status = domain.StatusRemoved
+	source = retire(source, reason)
 	store.sources[sourceID] = source
 	return store.retractAll(source, events)
 }
 
-func (store *fakeStore) RemoveSources(_ context.Context, organizationID, createdBy string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *fakeStore) RemoveSources(_ context.Context, organizationID, createdBy, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	removed := []domain.Source{}
@@ -184,7 +212,7 @@ func (store *fakeStore) RemoveSources(_ context.Context, organizationID, created
 		if createdBy != "" && source.CreatedBy != createdBy {
 			continue
 		}
-		source.Status = domain.StatusRemoved
+		source = retire(source, reason)
 		store.sources[id] = source
 		removed = append(removed, source)
 		if err := store.retractAll(source, events); err != nil {
@@ -217,7 +245,7 @@ func (store *fakeStore) retractAll(source domain.Source, events func(domain.Sour
 	return nil
 }
 
-func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionID string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionID, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	removed := []domain.Source{}
@@ -225,7 +253,7 @@ func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionI
 		if source.ConnectionID != connectionID || source.Status == domain.StatusRemoved {
 			continue
 		}
-		source.Status = domain.StatusRemoved
+		source = retire(source, reason)
 		store.sources[id] = source
 		removed = append(removed, source)
 		if err := store.retractAll(source, events); err != nil {
@@ -235,7 +263,7 @@ func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionI
 	return removed, nil
 }
 
-func (store *fakeStore) RemoveSourcesByTeam(_ context.Context, organizationID, teamID string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *fakeStore) RemoveSourcesByTeam(_ context.Context, organizationID, teamID, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	removed := []domain.Source{}
@@ -243,7 +271,7 @@ func (store *fakeStore) RemoveSourcesByTeam(_ context.Context, organizationID, t
 		if source.OrganizationID != organizationID || source.Scope != domain.ScopeTeam || source.TeamID != teamID || source.Status == domain.StatusRemoved {
 			continue
 		}
-		source.Status = domain.StatusRemoved
+		source = retire(source, reason)
 		store.sources[id] = source
 		removed = append(removed, source)
 		if err := store.retractAll(source, events); err != nil {
@@ -278,7 +306,7 @@ func (store *fakeStore) PauseSources(_ context.Context, connectionID, reason str
 	return paused, nil
 }
 
-func (store *fakeStore) ClaimDueSources(_ context.Context, now time.Time, limit int, leaseToken string, _ time.Time) ([]domain.Source, error) {
+func (store *fakeStore) ClaimDueSources(_ context.Context, now time.Time, limit int, leaseToken string, leaseUntil time.Time) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	claimed := []domain.Source{}
@@ -290,7 +318,9 @@ func (store *fakeStore) ClaimDueSources(_ context.Context, now time.Time, limit 
 			continue
 		}
 		store.lease[id] = leaseToken
-		source.LeaseToken = leaseToken
+		until := leaseUntil
+		source.LeaseToken, source.LeaseUntil = leaseToken, &until
+		store.sources[id] = source
 		claimed = append(claimed, source)
 	}
 	return claimed, nil
@@ -302,16 +332,43 @@ func (store *fakeStore) RenewLease(_ context.Context, sourceID, leaseToken strin
 	return store.lease[sourceID] == leaseToken, nil
 }
 
-func (store *fakeStore) FinishSource(_ context.Context, sourceID, leaseToken string, _ time.Time, nextSync time.Time, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
+// FinishSource mirrors the real one, keeping a sooner sync_at something asked
+// for after the pass claimed the source due at claimedDue.
+func (store *fakeStore) FinishSource(_ context.Context, sourceID, leaseToken string, now, nextSync time.Time, claimedDue, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.lease[sourceID] != leaseToken {
 		return false, nil
 	}
+	if source, ok := store.sources[sourceID]; ok {
+		if claimedDue != nil && source.SyncAt != nil && source.SyncAt.After(*claimedDue) && source.SyncAt.Before(nextSync) {
+			nextSync = *source.SyncAt
+		}
+		finished, next := now, nextSync
+		source.SyncAt, source.LastSyncedAt, source.LeaseUntil = &next, &finished, nil
+		source.Attempts, source.Reason = 0, ""
+		if fullSweptAt != nil {
+			source.FullSweepAt = fullSweptAt
+		}
+		store.sources[sourceID] = source
+	}
 	store.finishedNext = nextSync
-	if fullSweptAt != nil {
-		source := store.sources[sourceID]
-		source.FullSweepAt = fullSweptAt
+	if event != nil {
+		store.events = append(store.events, *event)
+	}
+	return true, nil
+}
+
+func (store *fakeStore) FailSource(_ context.Context, sourceID, leaseToken, reason string, _ time.Time, retryAt time.Time, event *domain.Event) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.lease[sourceID] != leaseToken {
+		return false, nil
+	}
+	store.failedReason = reason
+	if source, ok := store.sources[sourceID]; ok {
+		source.SyncAt, source.LeaseUntil = &retryAt, nil
+		source.Attempts, source.Reason = source.Attempts+1, reason
 		store.sources[sourceID] = source
 	}
 	if event != nil {
@@ -320,17 +377,16 @@ func (store *fakeStore) FinishSource(_ context.Context, sourceID, leaseToken str
 	return true, nil
 }
 
-func (store *fakeStore) FailSource(_ context.Context, sourceID, leaseToken, reason string, _ time.Time, _ time.Time, event *domain.Event) (bool, error) {
+func (store *fakeStore) RetireSource(_ context.Context, sourceID, lease, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if store.lease[sourceID] != leaseToken {
+	source, ok := store.sources[sourceID]
+	if !ok || source.Status == domain.StatusRemoved || store.lease[sourceID] != lease {
 		return false, nil
 	}
-	store.failedReason = reason
-	if event != nil {
-		store.events = append(store.events, *event)
-	}
-	return true, nil
+	source = retire(source, reason)
+	store.sources[sourceID] = source
+	return true, store.retractAll(source, events)
 }
 
 func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Document, event func(domain.Document) (domain.Event, error)) (bool, error) {
@@ -340,7 +396,7 @@ func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Docume
 	existing, found := store.documents[key]
 	changed := !found || existing.ContentHash != document.ContentHash || existing.RemovedAt != nil ||
 		existing.Title != document.Title || existing.URL != document.URL || existing.Kind != document.Kind ||
-		existing.MIME != document.MIME || !maps.Equal(existing.Metadata, document.Metadata)
+		existing.MIME != document.MIME || !domain.SearchableMetadataEqual(existing.Metadata, document.Metadata)
 	if found {
 		document.ID = existing.ID
 	}
@@ -495,7 +551,7 @@ func (judge *fakeJudge) Redecide(kept []byte, include []string) (domain.Verdict,
 		return domain.Verdict{}, false
 	}
 	keep := domain.IncludedKinds(include)[kind]
-	return domain.Verdict{Keep: keep, Reason: kind, Judgment: kept}, true
+	return domain.Verdict{Keep: keep, Reason: kind, Category: kind, Judgment: kept}, true
 }
 
 func (judge *fakeJudge) Judge(_ context.Context, candidate domain.Candidate) (domain.Verdict, error) {
@@ -533,6 +589,7 @@ func (store *fakeStore) DocumentByExternalID(_ context.Context, sourceID, extern
 func (store *fakeStore) RetractDocument(_ context.Context, sourceID, externalID string, now time.Time, event func(domain.Document) (domain.Event, error)) (domain.Document, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	store.retractCalls++
 	key := sourceID + "\x00" + externalID
 	document, ok := store.documents[key]
 	if !ok || document.RemovedAt != nil {
@@ -743,9 +800,11 @@ func (apps *fakeApps) Connection(_ context.Context, _, connectionID string, _ au
 	return apps.connection, nil
 }
 
-// fakeGrants mints a member token, recording whom it was minted for.
+// fakeGrants mints a member token, recording whom it was minted for. A member
+// named in tokens gets their own; anyone else gets token.
 type fakeGrants struct {
 	token   string
+	tokens  map[string]string
 	err     error
 	members []string
 }
@@ -754,6 +813,9 @@ func (grants *fakeGrants) MemberToken(_ context.Context, organizationID, memberI
 	grants.members = append(grants.members, organizationID+"/"+memberID)
 	if grants.err != nil {
 		return "", grants.err
+	}
+	if token, ok := grants.tokens[memberID]; ok {
+		return token, nil
 	}
 	return grants.token, nil
 }

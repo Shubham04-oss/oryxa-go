@@ -11,6 +11,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
 )
 
 // RegisterInput is what a member says to have something indexed.
@@ -127,6 +128,18 @@ func (s *Service) register(ctx context.Context, credentials authclient.Credentia
 		return domain.Source{}, err
 	}
 	source.TeamID, source.MemberID = teamID, memberID
+	if checker, ok := extractor.(sources.Checker); ok && provider == filesProvider {
+		// A source reads as the member who registers it. One they cannot read
+		// would be refused on every pass, and would hold the placement
+		// against anyone who can, so Files is asked as them first.
+		credential, err := memberCredential(credentials)
+		if err != nil {
+			return domain.Source{}, err
+		}
+		if err := checker.Check(ctx, sources.Request{Source: source, Credential: credential}); err != nil {
+			return domain.Source{}, err
+		}
+	}
 
 	if source.ID, err = newID("src"); err != nil {
 		return domain.Source{}, err
@@ -143,6 +156,19 @@ func (s *Service) register(ctx context.Context, credentials authclient.Credentia
 	s.logger.InfoContext(ctx, "source registered",
 		"source_id", source.ID, "organization_id", organizationID, "provider", provider)
 	return source, nil
+}
+
+// memberCredential is the caller's own token, as an internal source is read
+// with: a bearer token, or the one the web app's access cookie carries.
+func memberCredential(credentials authclient.Credentials) (domain.Credential, error) {
+	token := credentials.AccessCookie
+	if scheme, value, found := strings.Cut(credentials.Authorization, " "); found && strings.EqualFold(scheme, "bearer") {
+		token = strings.TrimSpace(value)
+	}
+	if token == "" {
+		return domain.Credential{}, domain.ErrUnauthorized
+	}
+	return domain.Credential{AccessToken: token, In: "header", Name: "Authorization", Prefix: "Bearer "}, nil
 }
 
 // usableConnection refuses now what a background run could not do later: a
@@ -238,7 +264,8 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 		return domain.ErrNotFound
 	}
 	pending := &pendingOriginals{}
-	if err := s.store.RemoveSource(ctx, organizationID, sourceID, s.now(), s.retractions(knowledgev1.RemovedReasonSourceRemoved, pending)); err != nil {
+	if err := s.store.RemoveSource(ctx, organizationID, sourceID, knowledgev1.RemovedReasonSourceRemoved, s.now(),
+		s.retractions(knowledgev1.RemovedReasonSourceRemoved, pending)); err != nil {
 		return err
 	}
 	s.deleteOriginals(ctx, pending)
@@ -288,6 +315,11 @@ func (s *Service) SyncSource(ctx context.Context, credentials authclient.Credent
 
 // Document reads one document's body, for the caller fetching what an event
 // was too small to carry.
+//
+// Registering a source says nothing about who may read an admin-only file it
+// read: that is Files' access label, decided now. A creator who has since
+// stopped being an admin, or an agent acting for one, is told the document
+// does not exist, the same as anyone else it is not for.
 func (s *Service) Document(ctx context.Context, credentials authclient.Credentials, organizationID, documentID string) (domain.Document, error) {
 	caller, err := s.caller(ctx, credentials, organizationID)
 	if err != nil {
@@ -302,6 +334,9 @@ func (s *Service) Document(ctx context.Context, credentials authclient.Credentia
 		return domain.Document{}, err
 	}
 	if source.CreatedBy != caller.UserID && !caller.Role.IsOrgAdmin() {
+		return domain.Document{}, domain.ErrNotFound
+	}
+	if documentAccess(source, document) == accessAdmins && (!caller.Role.IsOrgAdmin() || caller.Agent) {
 		return domain.Document{}, domain.ErrNotFound
 	}
 	return document, nil
@@ -374,9 +409,9 @@ func (s *Service) SetSourceKinds(ctx context.Context, credentials authclient.Cre
 		}
 		// Kept in the order kinds are shown, once each.
 		include = include[:0:0]
-		for _, kind := range domain.Kinds {
-			if chosen[kind.Name] {
-				include = append(include, kind.Name)
+		for _, name := range domain.KindNames() {
+			if chosen[name] {
+				include = append(include, name)
 			}
 		}
 		if len(include) == 0 {

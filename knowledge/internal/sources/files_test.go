@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -391,5 +392,133 @@ func TestFilesReportsWhatStoppedTheListing(t *testing.T) {
 	files := &fakeFiles{listErr: domain.ErrUnauthorized}
 	if _, err := NewFiles(files).Fetch(context.Background(), filesRequest()); !errors.Is(err, domain.ErrUnauthorized) {
 		t.Fatalf("Fetch() error = %v, want ErrUnauthorized", err)
+	}
+}
+
+// TestFilesSaysWhenItsMemberCannotReadThePlacement: Files answering not found
+// or forbidden to the listing itself is Files refusing the member a source
+// reads as the whole placement, which no retry fixes; anything else is not.
+func TestFilesSaysWhenItsMemberCannotReadThePlacement(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		listErr    error
+		unreadable bool
+	}{
+		"not found":           {listErr: domain.ErrNotFound, unreadable: true},
+		"forbidden":           {listErr: domain.ErrForbidden, unreadable: true},
+		"a token not taken":   {listErr: domain.ErrUnauthorized},
+		"files not answering": {listErr: domain.ErrProviderUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := filesRequest()
+			request.Source.Scope, request.Source.TeamID = domain.ScopeTeam, "team_1"
+			request.Source.Target = map[string]string{"team": "team_1"}
+			_, err := NewFiles(&fakeFiles{listErr: testCase.listErr}).Fetch(context.Background(), request)
+			if !errors.Is(err, testCase.listErr) {
+				t.Fatalf("Fetch() error = %v, want it to keep %v", err, testCase.listErr)
+			}
+			if errors.Is(err, domain.ErrUnreadable) != testCase.unreadable {
+				t.Fatalf("Fetch() error = %v, unreadable = %t, want %t", err, errors.Is(err, domain.ErrUnreadable), testCase.unreadable)
+			}
+		})
+	}
+	// A single file gone missing is only that file: it is stepped over, and
+	// says nothing about the placement.
+	files := &fakeFiles{
+		objects: []filesclient.Object{storedFile("file_1", "gone.md", "text/markdown")},
+		missing: map[string]bool{"file_1": true},
+	}
+	if _, err := NewFiles(files).Fetch(context.Background(), filesRequest()); err != nil {
+		t.Fatalf("Fetch() with one file gone = %v, want it stepped over", err)
+	}
+}
+
+// TestFilesChecksAPlacementWithTheListingItsPassesWouldMake: registering
+// asks Files for exactly what every pass would, as the member it reads as,
+// and reads no file's bytes to do it.
+func TestFilesChecksAPlacementWithTheListingItsPassesWouldMake(t *testing.T) {
+	files := &fakeFiles{objects: []filesclient.Object{storedFile("file_1", "notes.md", "text/markdown")}}
+	request := filesRequest()
+	request.Source.Scope, request.Source.TeamID = domain.ScopeTeam, "team_1"
+	request.Source.Target = map[string]string{"team": "team_1", "purpose": "report"}
+	if err := NewFiles(files).Check(context.Background(), request); err != nil {
+		t.Fatalf("Check() = %v", err)
+	}
+	if files.listedAs != (filesclient.Query{Scope: "team", TeamID: "team_1", Purpose: "report"}) || len(files.fetched) != 0 {
+		t.Fatalf("Check() listed %+v and read %v, want the team listing and no bytes", files.listedAs, files.fetched)
+	}
+
+	files.listErr = domain.ErrNotFound
+	if err := NewFiles(files).Check(context.Background(), request); !errors.Is(err, domain.ErrNotFound) || !errors.Is(err, domain.ErrUnreadable) {
+		t.Fatalf("Check(refused) = %v, want the member unable to read it", err)
+	}
+
+	unowned := filesRequest()
+	unowned.Source.Scope, unowned.Source.Target = domain.ScopeMember, map[string]string{"member": "self"}
+	files = &fakeFiles{}
+	if err := NewFiles(files).Check(context.Background(), unowned); !errors.Is(err, domain.ErrInvalid) || files.listedAs.Scope != "" {
+		t.Fatalf("Check(no owner) = %v after listing %+v, want it refused before asking Files", err, files.listedAs)
+	}
+}
+
+// TestFilesReadsNoBytesItAlreadyHolds: a file's id names the same bytes for
+// as long as it exists, so one the source already holds live, with the same
+// sha256 and details, is reported unchanged without its bytes being read.
+// Anything else, or a pass that reads everything, reads them.
+func TestFilesReadsNoBytesItAlreadyHolds(t *testing.T) {
+	held, differs, removed, fresh := storedFile("file_1", "held.md", "text/markdown"), storedFile("file_2", "differs.md", "text/markdown"),
+		storedFile("file_3", "removed.md", "text/markdown"), storedFile("file_4", "new.md", "text/markdown")
+	files := &fakeFiles{
+		objects: []filesclient.Object{held, differs, removed, fresh},
+		bodies:  map[string]string{"file_1": "one", "file_2": "two", "file_3": "three", "file_4": "four"},
+	}
+	document := func(object filesclient.Object) domain.Document {
+		return domain.Document{
+			ExternalID: object.ID, Kind: knowledgev1.KindFile, Title: object.Filename,
+			Metadata: map[string]string{
+				"filename": object.Filename, "purpose": object.Purpose, "access": object.Access,
+				"sha256": object.SHA256, "created_by": object.CreatedBy,
+			},
+		}
+	}
+	stored := map[string]domain.Document{
+		"file_1": document(held),
+		"file_2": document(differs),
+		"file_3": document(removed),
+	}
+	stale := stored["file_2"]
+	stale.Metadata = map[string]string{"filename": differs.Filename, "purpose": differs.Purpose, "sha256": differs.SHA256, "created_by": differs.CreatedBy}
+	stored["file_2"] = stale // held from before files carried an access label
+	gone := stored["file_3"]
+	gone.RemovedAt = &gone.ExtractedAt
+	stored["file_3"] = gone
+	request := filesRequest()
+	request.Held = func(_ context.Context, externalID string) (domain.Document, bool, error) {
+		document, ok := stored[externalID]
+		return document, ok, nil
+	}
+
+	page, err := NewFiles(files).Fetch(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 4 || !page.Items[0].Unchanged || page.Items[0].Content != nil {
+		t.Fatalf("Fetch() = %+v, want the held file reported unchanged, without its bytes", page.Items)
+	}
+	for _, item := range page.Items[1:] {
+		if item.Unchanged || len(item.Content) == 0 {
+			t.Fatalf("Fetch() item %s = %+v, want it read", item.ExternalID, item)
+		}
+	}
+	if !slices.Equal(files.fetched, []string{"file_2", "file_3", "file_4"}) {
+		t.Fatalf("read the bytes of %v, want only what the source does not hold unchanged", files.fetched)
+	}
+
+	files.fetched = nil
+	request.Held = nil
+	if _, err := NewFiles(files).Fetch(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if len(files.fetched) != 4 {
+		t.Fatalf("a pass that reads everything read %v", files.fetched)
 	}
 }

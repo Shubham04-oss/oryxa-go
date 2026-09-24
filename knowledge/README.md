@@ -43,13 +43,22 @@ Files has no connection to announce it. The first organization-scoped upload
 starts a shared Files source; the first team-scoped upload starts one for that
 team; the first member-scoped upload starts one for that member. Knowledge
 hears `files.object.created.v1` and registers each source through the
-uploader's standing grant. Later uploads
-schedule the existing source to sync promptly.
+uploader's standing grant, once Files has answered the listing the source
+would make as them.
+
+Later uploads schedule the existing source to sync promptly: once, however
+many arrive before its pass starts, and an upload that lands while a pass is
+under way, possibly after it listed the placement, has the next pass run as
+soon as that one ends rather than an interval later. Files answers its whole
+listing at once, so an incremental pass does not download a file the source
+already holds live with the same sha256, name, purpose and access label: a
+pass brought forward by an upload reads the new file, not the whole
+placement. A full sweep reads everything again.
 
 A deletion is heard the same way: `files.object.deleted.v1` retracts the
-file's document from every files source in the organization at once, and
-deletes its original, instead of leaving it searchable until the next full
-sweep notices it missing, up to a week later.
+file's document at once, through the sources at the placement the event
+names, and deletes its original, instead of leaving it searchable until the
+next full sweep notices it missing, up to a week later.
 
 The shared source asks Files for organization scope alone. A private source
 asks for member scope and checks every returned object's member ID against
@@ -68,9 +77,25 @@ it reads is searchable by that team's members and organization admins.
 A member can register `{"member": "self"}` to index their own private
 files; a target cannot name another member.
 
-A source explicitly removed by a member is not registered again by another
-upload. A source retired because its registering member left can be replaced
-by the next uploader.
+Any source already at a placement keeps another from being registered there
+by an upload, whatever its target: one narrowed to a purpose by hand would
+otherwise sit beside a new one reading everything, and the files both read
+would be indexed twice. An upload brings forward the live sources there that
+read it. A source a member removed stays removed: another upload does not
+reverse that. A source retired because its registering member left gives the
+placement back, and the next uploader's source replaces it.
+
+A source reads as the member whose upload started it, and Files can stop
+letting them read its placement while they stay in the organization: they
+leave the team, or an admin who was never on it stops being one. Files then
+refuses the listing on every pass, which no retry fixes, so the pass retires
+the source (`no_longer_readable`) with what it held instead of backing off
+for ever. That too gives the placement back: the next upload there registers
+a source as its uploader, and its first pass indexes the placement again.
+An upload that arrives before any pass has noticed only brings the doomed
+source forward; the pass it causes retires it, and the upload after that
+takes the placement over. Until then, what the retired source held is not
+searchable.
 
 ## Connecting an app indexes what it holds
 
@@ -154,6 +179,7 @@ registration, while a member is still present to be told:
 | A provider nothing reads | Nothing would ever run |
 | A target the extractor does not understand | The first pass would fail and keep failing |
 | `files` with a `connection_id` | It reads the organization's own storage, not a connected app |
+| `files` for a placement Files will not list for the member (a team they are not on) | Every pass would be refused, and the source would hold the placement against members who can read it |
 | GitHub, Notion or Slack with no `connection_id` | There is nothing to proxy calls through |
 | A connection for a different toolkit, one that is not `active`, or one that is not the caller's own | It could only ever fail once a run finally reached it |
 
@@ -195,8 +221,14 @@ with a token behind it is exactly as "already read through" as one with a
 watermark for deciding whether the next pass is full or incremental.
 
 A document is published when it is first seen, when its normalized content
-changes, or when its title, URL, kind, MIME type, or source metadata changes.
-A pass over a truly unchanged source publishes nothing. Normalizing before
+changes, or when its title, URL, kind, MIME type, or the metadata a consumer
+indexes it by changes: its `knowledge_category`, and a stored file's purpose
+and access label. The rest of what a provider says about a document moves on
+its own — a Gmail label, a GitHub comment count or state — and is written
+without being published, or judged again: when the content, title, kind and
+MIME type are what the judge read before, the verdict is drawn again from the
+judgment kept with the document rather than paid for twice. A pass over a
+truly unchanged source publishes nothing. Normalizing before
 hashing avoids republishing a provider's harmless serialization or line-ending
 changes. When the judge is enabled, Knowledge also records its semantic
 category as `knowledge_category` in document metadata; that category describes
@@ -382,7 +414,7 @@ source never shows its lease, version or attempt count.
 | `DELETE` | `/v1/organizations/{organizationID}/sources/{sourceID}` | Its creator or an org admin | Stop indexing it and retract what it held → `204` |
 | `POST` | `/v1/organizations/{organizationID}/sources/{sourceID}/sync` | Its creator or an org admin | Read it now rather than at its next interval |
 | `GET` | `/v1/organizations/{organizationID}/sources/{sourceID}/runs` | Its creator or an org admin | How recent passes went |
-| `GET` | `/v1/organizations/{organizationID}/documents/{documentID}` | Its source's creator or an org admin | A document's body, for what an event was too small to carry |
+| `GET` | `/v1/organizations/{organizationID}/documents/{documentID}` | Its source's creator or an org admin; an admin-only file's body, an org admin alone (never an agent) | A document's body, for what an event was too small to carry |
 | `GET` | `/v1/internal/organizations/{organizationID}/documents/{documentID}/body` | A named service | The same body, for a retrieval pipeline that has no member to be |
 
 The internal route is how the largest documents get indexed at all. An event

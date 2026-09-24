@@ -357,3 +357,46 @@ func TestRedecideDrawsTheVerdictAgainForAChangedChoice(t *testing.T) {
 		t.Fatal("Redecide() decided from no judgment at all")
 	}
 }
+
+// A document Jev was unsure of is categorized by the judge it escalated to,
+// which read it because Jev could not say: Judge and Redecide give the same
+// category, and a member's changed choice of kinds, which can make Jev sure
+// enough to decide alone, does not change what kind of document it is.
+func TestTheEscalationsCategoryIsTheDocuments(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		escalated string
+		want      string
+	}{
+		"the escalation named one":     {escalated: "booking", want: "booking"},
+		"the escalation named nothing": {escalated: "", want: "routine_notification"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := &fakeTypeSafe{answers: []string{kindAnswer("routine_notification", 0.6, "booking")}}
+			escalate := &recordingJudge{verdict: domain.Verdict{
+				Keep: true, Reason: "an order with its details", Category: testCase.escalated,
+				Judgment: judgment{Gemini: &geminiVerdict{Keep: true, Reason: "an order with its details", Category: testCase.escalated}}.encode(),
+			}}
+			jev := testJev(t, fake, escalate)
+			verdict, err := jev.Judge(context.Background(), promotion())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if escalate.calls != 1 {
+				t.Fatalf("escalations = %d, want 1", escalate.calls)
+			}
+			if verdict.Category != testCase.want {
+				t.Fatalf("Judge() category = %q, want %q", verdict.Category, testCase.want)
+			}
+			again, ok := jev.Redecide(verdict.Judgment, promotion().Include)
+			if !ok || again.Category != verdict.Category {
+				t.Fatalf("Redecide() = %q (%t), Judge() = %q: the same judgment gave two categories", again.Category, ok, verdict.Category)
+			}
+			// Both kinds chosen: Jev is sure it is worth keeping and decides
+			// alone, but the document is still what the escalation said.
+			chosen, ok := jev.Redecide(verdict.Judgment, []string{"routine_notification", "booking"})
+			if !ok || !chosen.Keep || chosen.Category != testCase.want {
+				t.Fatalf("Redecide(both kinds) = %+v (%t), want kept as %q", chosen, ok, testCase.want)
+			}
+		})
+	}
+}

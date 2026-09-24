@@ -134,10 +134,26 @@ func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source 
 		return result, err
 	}
 
+	request := sources.Request{Source: source, Credential: credential, Full: full, Limit: pageSize}
+	if !full {
+		// An incremental pass may skip what the source already holds as it
+		// is; a full sweep reads everything again, so what changed in how
+		// knowledge reads a document still reaches it within a sweep.
+		request.Held = func(ctx context.Context, externalID string) (domain.Document, bool, error) {
+			held, err := s.store.DocumentByExternalID(ctx, source.ID, externalID)
+			switch {
+			case err == nil:
+				return held, true, nil
+			case errors.Is(err, domain.ErrNotFound):
+				return domain.Document{}, false, nil
+			default:
+				return domain.Document{}, false, err
+			}
+		}
+	}
 	for range pagesPerRun {
-		page, err := extractor.Fetch(ctx, sources.Request{
-			Source: source, Credential: credential, Cursor: cursor, Full: full, Limit: pageSize,
-		})
+		request.Cursor = cursor
+		page, err := extractor.Fetch(ctx, request)
 		if err != nil {
 			return result, err
 		}
@@ -372,12 +388,14 @@ func (s *Service) runCompleted(ctx context.Context, source domain.Source, run do
 	}
 
 	// A pass that stopped early comes straight back rather than waiting an
-	// interval: there is more of this source to read.
+	// interval: there is more of this source to read. One asked for again
+	// while it ran — an upload that may have landed after it listed — keeps
+	// that sooner time: the store compares against when it was claimed due.
 	next := now.Add(source.Interval)
 	if !result.drained {
 		next = now
 	}
-	if _, err := s.store.FinishSource(ctx, source.ID, lease, now, next, fullSweptAt, nil); err != nil {
+	if _, err := s.store.FinishSource(ctx, source.ID, lease, now, next, source.SyncAt, fullSweptAt, nil); err != nil {
 		return err
 	}
 	s.logger.InfoContext(ctx, "source read",
@@ -431,6 +449,26 @@ func (s *Service) runFailed(ctx context.Context, source domain.Source, run domai
 			return err
 		}
 		s.logger.WarnContext(ctx, "source paused", "source_id", source.ID, "reason", reason)
+		return nil
+	}
+
+	// An internal source reads as a member, and one Files now refuses the
+	// placement — they left the team, or stopped being an admin — is refused
+	// on every pass from here on. It is retired with what it held rather
+	// than backed off for ever, and the next member to upload there takes
+	// the placement over: see FileStored.
+	if errors.Is(cause, domain.ErrUnreadable) && source.ConnectionID == "" {
+		pending := &pendingOriginals{}
+		retired, err := s.store.RetireSource(ctx, source.ID, lease, knowledgev1.RemovedReasonNoLongerReadable, now,
+			s.retractions(knowledgev1.RemovedReasonNoLongerReadable, pending))
+		if err != nil {
+			return err
+		}
+		s.deleteOriginals(ctx, pending)
+		if retired {
+			s.logger.WarnContext(ctx, "source retired: the member it reads as can no longer read it",
+				"source_id", source.ID, "created_by", source.CreatedBy, "error", cause)
+		}
 		return nil
 	}
 

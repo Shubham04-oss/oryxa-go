@@ -105,7 +105,9 @@ someone else to confirm.
   our side — but each page asks again. For an organization with thousands of
   files that is quadratic. Fix by carrying the listing across pages within one
   run, which needs the extractor to hold per-run state the seam does not offer
-  yet.
+  yet. The bytes, at least, are no longer read again: an incremental pass
+  skips a file the source holds unchanged (`Request.Held`), and only a full
+  sweep downloads every file.
 
 ---
 
@@ -138,6 +140,8 @@ to miss and expensive to get wrong:
   `(SourceID, ExternalID)` and use `ExtractedAt` to reject older deliveries.
   An equal `ContentHash` alone does not make an event a no-op. Delivery is at
   least once, so dedupe on the envelope's `event_id` where appropriate.
+  Provider metadata other than `knowledge_category` and a stored file's
+  `purpose` and `access` can lag: a change to it alone is not published.
 - **`BodyOmitted` means fetch it.** Bodies over 128 KiB are not carried;
   `GET /v1/internal/organizations/{org}/documents/{DocumentID}/body`
   returns the full text to an authenticated service caller.

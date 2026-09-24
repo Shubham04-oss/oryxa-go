@@ -267,7 +267,11 @@ func TestUpsertDocumentPublishesOnlyWhatChanged(t *testing.T) {
 	}
 }
 
-func TestUpsertDocumentPublishesMetadataOnlyChanges(t *testing.T) {
+// TestUpsertDocumentPublishesOnlyWhatAConsumerIndexes: a label or a comment
+// count moving is written, but it is not a new version of what is searched.
+// A document's category, and a stored file's purpose and access label, are:
+// they decide how it is found and who may find it.
+func TestUpsertDocumentPublishesOnlyWhatAConsumerIndexes(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	source := testSource(t, store, "org_1")
@@ -280,11 +284,27 @@ func TestUpsertDocumentPublishesMetadataOnlyChanges(t *testing.T) {
 		t.Fatalf("initial publish = %v, %v", published, err)
 	}
 	document.Metadata = map[string]string{"labels": "IMPORTANT"}
-	if published, err := store.UpsertDocument(ctx, document, publish); err != nil || !published {
-		t.Fatalf("label-only publish = %v, %v", published, err)
+	if published, err := store.UpsertDocument(ctx, document, publish); err != nil || published {
+		t.Fatalf("label-only change = %v, %v, want it written without an event", published, err)
+	}
+	if held, err := store.DocumentByExternalID(ctx, source.ID, "mail-1"); err != nil || held.Metadata["labels"] != "IMPORTANT" {
+		t.Fatalf("stored metadata = %v, %v, want the new label kept", held.Metadata, err)
+	}
+	for _, change := range []map[string]string{
+		{"labels": "IMPORTANT", "knowledge_category": "conversation"},
+		{"labels": "IMPORTANT", "knowledge_category": "conversation", "purpose": "upload"},
+		{"labels": "IMPORTANT", "knowledge_category": "conversation", "purpose": "upload", "access": "admins"},
+	} {
+		document.Metadata = change
+		if published, err := store.UpsertDocument(ctx, document, publish); err != nil || !published {
+			t.Fatalf("change to %v = %v, %v, want it published", change, published, err)
+		}
 	}
 	if published, err := store.UpsertDocument(ctx, document, publish); err != nil || published {
 		t.Fatalf("repeated metadata = %v, %v, want no event", published, err)
+	}
+	if count := outboxCount(t, store); count != 4 {
+		t.Fatalf("outbox events = %d, want the first sight and the three changes a consumer indexes", count)
 	}
 }
 
@@ -616,7 +636,7 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 	}
 
 	event := testEvent(t, "knowledge.sync.completed.v1")
-	claimed, err := store.FinishSource(ctx, source.ID, "lease-b", due, due.Add(time.Hour), nil, &event)
+	claimed, err := store.FinishSource(ctx, source.ID, "lease-b", due, due.Add(time.Hour), nil, nil, &event)
 	if err != nil {
 		t.Fatalf("FinishSource() error = %v", err)
 	}
@@ -628,7 +648,7 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 		t.Fatalf("outbox events = %d, error = %v, want none from a run that lost its lease", outboxCount, err)
 	}
 
-	claimed, err = store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), nil, &event)
+	claimed, err = store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), nil, nil, &event)
 	if err != nil || !claimed {
 		t.Fatalf("FinishSource(own lease) = %v, %v, want claimed", claimed, err)
 	}
@@ -654,7 +674,7 @@ func TestFinishSourceRecordsAFullSweepAndKeepsItOnALaterIncrementalPass(t *testi
 		t.Fatalf("ClaimDueSources() error = %v", err)
 	}
 	swept := due
-	if _, err := store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), &swept, nil); err != nil {
+	if _, err := store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), nil, &swept, nil); err != nil {
 		t.Fatalf("FinishSource() error = %v", err)
 	}
 	read, err := store.Source(ctx, "org_1", source.ID)
@@ -672,7 +692,7 @@ func TestFinishSourceRecordsAFullSweepAndKeepsItOnALaterIncrementalPass(t *testi
 	if _, err := store.ClaimDueSources(ctx, later, 10, "lease-b", later.Add(time.Minute)); err != nil {
 		t.Fatalf("ClaimDueSources() error = %v", err)
 	}
-	if _, err := store.FinishSource(ctx, source.ID, "lease-b", later, later.Add(time.Hour), nil, nil); err != nil {
+	if _, err := store.FinishSource(ctx, source.ID, "lease-b", later, later.Add(time.Hour), nil, nil, nil); err != nil {
 		t.Fatalf("FinishSource() error = %v", err)
 	}
 	read, err = store.Source(ctx, "org_1", source.ID)
@@ -721,7 +741,7 @@ func TestRemoveSourceRetractsWhatItHeld(t *testing.T) {
 	}
 
 	var retracted int
-	err := store.RemoveSource(ctx, "org_1", source.ID, testClock, func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
+	err := store.RemoveSource(ctx, "org_1", source.ID, "source_removed", testClock, func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
 		retracted = len(documents)
 		events := make([]domain.Event, 0, len(documents))
 		for range documents {
@@ -743,7 +763,7 @@ func TestRemoveSourceRetractsWhatItHeld(t *testing.T) {
 	if read.Status != domain.StatusRemoved {
 		t.Fatalf("Source() status = %s, want removed", read.Status)
 	}
-	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock, nil); !errors.Is(err, domain.ErrNotFound) {
+	if err := store.RemoveSource(ctx, "org_1", source.ID, "source_removed", testClock, nil); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("RemoveSource(again) error = %v, want ErrNotFound", err)
 	}
 }
@@ -799,7 +819,7 @@ func TestSourcesAnswersRemovedOnesOnlyWhenAsked(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	source := testSource(t, store, "org_1")
-	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock, nil); err != nil {
+	if err := store.RemoveSource(ctx, "org_1", source.ID, "source_removed", testClock, nil); err != nil {
 		t.Fatalf("RemoveSource() error = %v", err)
 	}
 
@@ -892,7 +912,7 @@ func TestRemoveSourcesByConnectionRetractsWhatItHeld(t *testing.T) {
 	}
 
 	var retracted int
-	removed, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, testClock,
+	removed, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, "connection_removed", testClock,
 		func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
 			retracted = len(documents)
 			events := make([]domain.Event, 0, len(documents))
@@ -928,7 +948,7 @@ func TestRemoveSourcesByConnectionRetractsWhatItHeld(t *testing.T) {
 
 	// Running it again finds nothing further: a redelivered event is
 	// harmless.
-	again, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, testClock, nil)
+	again, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, "connection_removed", testClock, nil)
 	if err != nil || len(again) != 0 {
 		t.Fatalf("RemoveSourcesByConnection(again) = %d, %v, want none", len(again), err)
 	}
@@ -960,7 +980,7 @@ func TestRemoveSourcesByTeamRetiresOnlyThatTeam(t *testing.T) {
 	}
 
 	var retracted int
-	removed, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", testClock,
+	removed, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", "team_deleted", testClock,
 		func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
 			retracted = len(documents)
 			events := make([]domain.Event, 0, len(documents))
@@ -983,7 +1003,7 @@ func TestRemoveSourcesByTeamRetiresOnlyThatTeam(t *testing.T) {
 	}
 
 	// A redelivered event finds nothing further.
-	if again, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", testClock, nil); err != nil || len(again) != 0 {
+	if again, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", "team_deleted", testClock, nil); err != nil || len(again) != 0 {
 		t.Fatalf("RemoveSourcesByTeam(again) = %d, %v, want none", len(again), err)
 	}
 }
@@ -1459,7 +1479,7 @@ func TestHastenSourceLeavesWhatIsNotItsToMove(t *testing.T) {
 
 	// One that is not active has something wrong with it that hurrying does
 	// not fix.
-	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock,
+	if err := store.RemoveSource(ctx, "org_1", source.ID, "source_removed", testClock,
 		func(domain.Source, []domain.Document) ([]domain.Event, error) { return nil, nil }); err != nil {
 		t.Fatalf("RemoveSource() error = %v", err)
 	}
@@ -1559,5 +1579,239 @@ func TestDocumentsToRedecideFindsWhatAJudgeDecided(t *testing.T) {
 		if document.Judgment == nil || document.Body == "" {
 			t.Fatalf("document %s = judgment %s, body %q; want both, to decide it again", document.ExternalID, document.Judgment, document.Body)
 		}
+	}
+}
+
+// TestEveryRemovalRecordsItsReason pins what knowledge decides by: a source
+// retired because its member left may be taken over by the next uploader,
+// and only the reason on its row can say that is why it went.
+func TestEveryRemovalRecordsItsReason(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	failing := func(source domain.Source) {
+		t.Helper()
+		// A reason left over from a failed pass must not survive a removal.
+		if _, err := store.pool.Exec(ctx, `UPDATE knowledge_sources SET reason = 'provider_unavailable' WHERE id = $1`, source.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	left := testSource(t, store, "org_1")
+	if _, err := store.pool.Exec(ctx, `UPDATE knowledge_sources SET created_by = 'user-left' WHERE id = $1`, left.ID); err != nil {
+		t.Fatal(err)
+	}
+	failing(left)
+	removed := testSource(t, store, "org_1")
+	failing(removed)
+	disconnected := testSource(t, store, "org_1")
+	failing(disconnected)
+	team := domain.Source{
+		ID: "src_" + randomHex(8), OrganizationID: "org_1", Provider: "files",
+		Target: map[string]string{"team": "team_gone"}, Scope: domain.ScopeTeam, TeamID: "team_gone",
+		CreatedBy: "user-1", Status: domain.StatusActive, Interval: time.Hour, SyncAt: &testClock, CreatedAt: testClock,
+	}
+	if err := store.CreateSource(ctx, team, nil); err != nil {
+		t.Fatal(err)
+	}
+	failing(team)
+	organization := testSource(t, store, "org_2")
+	failing(organization)
+
+	if _, err := store.RemoveSources(ctx, "org_1", "user-left", "member_left", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveSource(ctx, "org_1", removed.ID, "source_removed", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RemoveSourcesByConnection(ctx, disconnected.ConnectionID, "connection_removed", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", "team_deleted", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RemoveSources(ctx, "org_2", "", "organization_deleted", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []struct {
+		organizationID, sourceID, reason string
+	}{
+		{"org_1", left.ID, "member_left"},
+		{"org_1", removed.ID, "source_removed"},
+		{"org_1", disconnected.ID, "connection_removed"},
+		{"org_1", team.ID, "team_deleted"},
+		{"org_2", organization.ID, "organization_deleted"},
+	} {
+		read, err := store.Source(ctx, want.organizationID, want.sourceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if read.Status != domain.StatusRemoved || read.Reason != want.reason {
+			t.Errorf("%s: status %s, reason %q; want removed as %q", want.sourceID, read.Status, read.Reason, want.reason)
+		}
+	}
+}
+
+// TestSourcesNarrowToOnePlacement is what an upload or a deletion in one
+// placement looks up by, rather than every files source the organization
+// has.
+func TestSourcesNarrowToOnePlacement(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	files := func(scope domain.Scope, teamID, memberID string, target map[string]string) domain.Source {
+		t.Helper()
+		source := domain.Source{
+			ID: "src_" + randomHex(8), OrganizationID: "org_1", Provider: "files", Target: target,
+			Scope: scope, TeamID: teamID, MemberID: memberID, CreatedBy: "user-1", Status: domain.StatusActive,
+			Interval: time.Hour, SyncAt: &testClock, CreatedAt: testClock,
+		}
+		if err := store.CreateSource(ctx, source, nil); err != nil {
+			t.Fatal(err)
+		}
+		return source
+	}
+	organization := files(domain.ScopeOrganization, "", "", nil)
+	narrower := files(domain.ScopeOrganization, "", "", map[string]string{"purpose": "report"})
+	eng := files(domain.ScopeTeam, "team_eng", "", map[string]string{"team": "team_eng"})
+	files(domain.ScopeTeam, "team_design", "", map[string]string{"team": "team_design"})
+	mine := files(domain.ScopeMember, "", "user-1", map[string]string{"member": "self"})
+	files(domain.ScopeMember, "", "user-2", map[string]string{"member": "self"})
+	testSource(t, store, "org_1") // github, organization-scoped
+	if err := store.RemoveSource(ctx, "org_1", narrower.ID, "source_removed", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, testCase := range map[string]struct {
+		placement      domain.Placement
+		includeRemoved bool
+		want           []string
+	}{
+		"the organization's":              {placement: domain.Placement{Scope: domain.ScopeOrganization}, want: []string{organization.ID}},
+		"the organization's, removed too": {placement: domain.Placement{Scope: domain.ScopeOrganization}, includeRemoved: true, want: []string{organization.ID, narrower.ID}},
+		"one team's":                      {placement: domain.Placement{Scope: domain.ScopeTeam, TeamID: "team_eng"}, want: []string{eng.ID}},
+		"one member's":                    {placement: domain.Placement{Scope: domain.ScopeMember, MemberID: "user-1"}, want: []string{mine.ID}},
+		"a team with none":                {placement: domain.Placement{Scope: domain.ScopeTeam, TeamID: "team_none"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			placement := testCase.placement
+			found, err := store.Sources(ctx, "org_1", domain.SourceQuery{
+				Provider: "files", Placement: &placement, Admin: true, IncludeRemoved: testCase.includeRemoved,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ids []string
+			for _, source := range found {
+				ids = append(ids, source.ID)
+			}
+			slices.Sort(ids)
+			want := slices.Clone(testCase.want)
+			slices.Sort(want)
+			if !slices.Equal(ids, want) {
+				t.Fatalf("Sources(%+v) = %v, want %v", placement, ids, want)
+			}
+		})
+	}
+}
+
+// TestRetireSourceIsTheLeaseHolders ends a run by retiring its source: only
+// the run still holding the lease may, and what the source held is retracted
+// with it.
+func TestRetireSourceIsTheLeaseHolders(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "file-1", strings.Repeat("a", 64))
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatal(err)
+	}
+	due := testClock.Add(time.Minute)
+	if _, err := store.ClaimDueSources(ctx, due, 10, "lease-a", due.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	retract := func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
+		events := make([]domain.Event, 0, len(documents))
+		for range documents {
+			events = append(events, testEvent(t, "knowledge.document.removed.v1"))
+		}
+		return events, nil
+	}
+
+	retired, err := store.RetireSource(ctx, source.ID, "lease-b", "no_longer_readable", due, retract)
+	if err != nil || retired {
+		t.Fatalf("RetireSource(someone else's lease) = %v, %v, want nothing retired", retired, err)
+	}
+	if read, err := store.Source(ctx, "org_1", source.ID); err != nil || read.Status != domain.StatusActive {
+		t.Fatalf("after a lost lease tried, source = %+v, %v; want it untouched", read, err)
+	}
+
+	retired, err = store.RetireSource(ctx, source.ID, "lease-a", "no_longer_readable", due, retract)
+	if err != nil || !retired {
+		t.Fatalf("RetireSource(own lease) = %v, %v, want retired", retired, err)
+	}
+	read, err := store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.Status != domain.StatusRemoved || read.Reason != "no_longer_readable" || read.SyncAt != nil || read.LeaseToken != "" {
+		t.Fatalf("retired source = %+v", read)
+	}
+	held, err := store.DocumentByExternalID(ctx, source.ID, "file-1")
+	if err != nil || held.RemovedAt == nil {
+		t.Fatalf("what the retired source held = %+v, %v; want it retracted", held, err)
+	}
+	if count := outboxCount(t, store); count != 1 {
+		t.Fatalf("outbox events = %d, want the one removal", count)
+	}
+	if again, err := store.RetireSource(ctx, source.ID, "lease-a", "no_longer_readable", due, retract); err != nil || again {
+		t.Fatalf("RetireSource(again) = %v, %v, want nothing to retire", again, err)
+	}
+}
+
+// TestAHastenDuringAPassOutlivesItsFinish: a pass may have listed its source
+// before something asked for it to be read again. What was asked is kept
+// while the pass runs, and the pass's own schedule does not overwrite it.
+func TestAHastenDuringAPassOutlivesItsFinish(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+
+	claimedAt := testClock.Add(time.Minute)
+	claimed, err := store.ClaimDueSources(ctx, claimedAt, 10, "lease-a", claimedAt.Add(2*time.Minute))
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimDueSources() = %d, %v", len(claimed), err)
+	}
+	due := claimed[0].SyncAt
+	asked := claimedAt.Add(10 * time.Second)
+	if moved, err := store.HastenSource(ctx, "org_1", source.ID, asked); err != nil || !moved {
+		t.Fatalf("HastenSource(during a pass) = %v, %v, want it kept for when the pass ends", moved, err)
+	}
+	finished := claimedAt.Add(30 * time.Second)
+	if _, err := store.FinishSource(ctx, source.ID, "lease-a", finished, finished.Add(time.Hour), due, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if next := readSyncAt(t, store, source.ID); next == nil || !next.Equal(asked) {
+		t.Fatalf("after a pass that was asked for again, the source is due at %v, want %v", next, asked)
+	}
+
+	// A pass nobody asked for again schedules its interval, as before.
+	claimedAt = asked.Add(time.Minute)
+	claimed, err = store.ClaimDueSources(ctx, claimedAt, 10, "lease-b", claimedAt.Add(2*time.Minute))
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimDueSources() = %d, %v", len(claimed), err)
+	}
+	finished = claimedAt.Add(30 * time.Second)
+	if _, err := store.FinishSource(ctx, source.ID, "lease-b", finished, finished.Add(time.Hour), claimed[0].SyncAt, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if next := readSyncAt(t, store, source.ID); next == nil || !next.Equal(finished.Add(time.Hour)) {
+		t.Fatalf("after an ordinary pass, the source is due at %v, want its interval", next)
+	}
+
+	// Asking between passes, of a source not due, brings it forward as it
+	// always has; asking again once it is due changes nothing.
+	if moved, err := store.HastenSource(ctx, "org_1", source.ID, finished); err != nil || !moved {
+		t.Fatalf("HastenSource(between passes) = %v, %v", moved, err)
+	}
+	if moved, err := store.HastenSource(ctx, "org_1", source.ID, finished.Add(time.Second)); err != nil || moved {
+		t.Fatalf("HastenSource(already due) = %v, %v, want unmoved", moved, err)
 	}
 }

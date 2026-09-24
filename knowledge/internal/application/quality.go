@@ -45,7 +45,7 @@ type Judge interface {
 // every source over its next full sweep.
 const qualityPolicy = 3
 
-const categoryMetadataKey = "knowledge_category"
+const categoryMetadataKey = domain.CategoryMetadataKey
 
 const (
 	// judgeConcurrency is how many documents of a page are judged at once.
@@ -107,6 +107,21 @@ func gated(source domain.Source) bool {
 // decide is decided here.
 func (s *Service) prepare(ctx context.Context, source domain.Source, item sources.Item) (*entry, error) {
 	e := &entry{item: item}
+	if item.Unchanged {
+		// The extractor found this held live as it is, and did not read it
+		// again: there is nothing to write, only that it was seen. One gone
+		// since it looked is read in full on the next pass.
+		existing, err := s.store.DocumentByExternalID(ctx, source.ID, item.ExternalID)
+		switch {
+		case err == nil && existing.RemovedAt == nil:
+			e.existing, e.settled = &existing, true
+		case err == nil, errors.Is(err, domain.ErrNotFound):
+			e.skip = true
+		default:
+			return nil, err
+		}
+		return e, nil
+	}
 	document := domain.Document{
 		OrganizationID: source.OrganizationID, SourceID: source.ID, ExternalID: item.ExternalID,
 		Kind: item.Kind, Title: item.Title, URL: item.URL,
@@ -146,17 +161,27 @@ func (s *Service) prepare(ctx context.Context, source domain.Source, item source
 	default:
 		return nil, err
 	}
-	if e.existing != nil && e.existing.ContentHash == document.ContentHash &&
-		e.existing.Title == document.Title && e.existing.URL == document.URL &&
-		e.existing.Kind == document.Kind && e.existing.MIME == document.MIME &&
-		sourceMetadataEqual(e.existing.Metadata, document.Metadata) && s.judgedEnough(source, *e.existing) &&
-		(e.existing.RemovedAt == nil || e.existing.Excluded != "") {
-		// Live and unchanged, or excluded and unchanged: a weekly full sweep
-		// over the same content neither judges nor writes it again. One that
-		// was removed for another reason and has come back is not settled: it
-		// is published again.
-		e.settled = true
-		return e, nil
+	if e.existing != nil && e.existing.ContentHash == document.ContentHash && e.existing.Title == document.Title &&
+		e.existing.Kind == document.Kind && e.existing.MIME == document.MIME && s.judgedEnough(source, *e.existing) {
+		if e.existing.URL == document.URL && sourceMetadataEqual(e.existing.Metadata, document.Metadata) &&
+			(e.existing.RemovedAt == nil || e.existing.Excluded != "") {
+			// Live and unchanged, or excluded and unchanged: a weekly full
+			// sweep over the same content neither judges nor writes it again.
+			// One that was removed for another reason and has come back is not
+			// settled: it is published again.
+			e.settled = true
+			return e, nil
+		}
+		// What the judge read is what it read before; only what the provider
+		// says about it moved — a label, a comment count, a state, its link —
+		// or it came back. Its verdict stands, drawn again from the kept
+		// judgment for the kinds the source indexes rather than paid for
+		// twice. What moved is written, and published only if a consumer
+		// indexes it.
+		if verdict, ok := s.keptVerdict(source, *e.existing); ok {
+			e.verdict = &verdict
+			return e, nil
+		}
 	}
 	if gated(source) && !e.original && !hasWords(document.Body) {
 		// A blank document, a spreadsheet exported as nothing but its commas,
@@ -187,6 +212,16 @@ func withCategory(document domain.Document, verdict *domain.Verdict) domain.Docu
 		document.Metadata[categoryMetadataKey] = verdict.Category
 	}
 	return document
+}
+
+// keptVerdict is the verdict a document judged under this policy is given
+// again from its kept judgment, without asking the judge; false when there is
+// no judge, the source is not judged, or what was kept cannot settle it.
+func (s *Service) keptVerdict(source domain.Source, existing domain.Document) (domain.Verdict, bool) {
+	if s.judge == nil || !gated(source) || len(existing.Judgment) == 0 {
+		return domain.Verdict{}, false
+	}
+	return s.judge.Redecide(existing.Judgment, source.IncludeKinds)
 }
 
 // judgedEnough says whether a document's verdict still stands for the same

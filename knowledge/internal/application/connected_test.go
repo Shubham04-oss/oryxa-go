@@ -9,8 +9,10 @@ import (
 	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
+	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
+	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -625,6 +627,108 @@ func TestTeamFilesSourceRetiredWithItsUploaderCanBeReplaced(t *testing.T) {
 	}
 }
 
+// The first uploader owns what a placement's files source reads as. When they
+// leave the organization their sources go with them, and the next member to
+// upload there takes the placement over: a departure is not somebody saying
+// the placement should stop being indexed.
+func TestAPlacementWhoseUploaderLeftIsTakenOverByTheNextUploader(t *testing.T) {
+	for _, scope := range []string{"organization", "team"} {
+		t.Run(scope, func(t *testing.T) {
+			store := newFakeStore()
+			service, grants := filesService(t, store)
+			first := storedFile(scope)
+			first.TeamID = map[string]string{"team": "team_eng"}[scope]
+			first.CreatedBy = "user-departed"
+			service.directory.(*fakeDirectory).membership.UserID = "user-departed"
+			if err := service.FileStored(context.Background(), first); err != nil {
+				t.Fatal(err)
+			}
+			if len(store.sources) != 1 {
+				t.Fatalf("the first upload registered %d sources, want 1", len(store.sources))
+			}
+
+			if err := service.MemberRemoved(context.Background(), authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-departed"}); err != nil {
+				t.Fatal(err)
+			}
+			for _, source := range store.sources {
+				if source.Status != domain.StatusRemoved || source.Reason != knowledgev1.RemovedReasonMemberLeft {
+					t.Fatalf("the departed member's source = %s, reason %q; want it retired as member_left", source.Status, source.Reason)
+				}
+			}
+
+			next := first
+			next.FileID, next.CreatedBy = "fil_2", "user-1"
+			service.directory.(*fakeDirectory).membership.UserID = "user-1"
+			if err := service.FileStored(context.Background(), next); err != nil {
+				t.Fatal(err)
+			}
+			live := 0
+			for _, source := range store.sources {
+				if source.Status == domain.StatusActive {
+					live++
+					if source.CreatedBy != "user-1" || string(source.Scope) != scope {
+						t.Fatalf("replacement = %+v, want user-1's %s source", source, scope)
+					}
+				}
+			}
+			if live != 1 {
+				t.Fatalf("live sources after the next upload = %d, want the next uploader's", live)
+			}
+			if got := grants.members[len(grants.members)-1]; got != "org_1/user-1" {
+				t.Fatalf("the replacement reads as %s, want the next uploader", got)
+			}
+		})
+	}
+}
+
+// Every way a source is retired records why, so what decides whether to
+// register one again can tell a member saying no from anything else.
+func TestEveryRetirementRecordsItsReason(t *testing.T) {
+	store := newFakeStore()
+	service, _ := filesService(t, store)
+	seed := func(id string, change func(*domain.Source)) {
+		source := domain.Source{
+			ID: id, OrganizationID: "org_1", Provider: "github", ConnectionID: "apc_" + id,
+			Scope: domain.ScopeMember, MemberID: "user-" + id, CreatedBy: "user-" + id, Status: domain.StatusActive,
+			Reason: knowledgev1.SyncErrorProviderUnavailable,
+		}
+		if change != nil {
+			change(&source)
+		}
+		store.sources[id] = source
+	}
+	seed("left", nil)
+	seed("disconnected", nil)
+	seed("team", func(source *domain.Source) {
+		source.Provider, source.ConnectionID, source.Scope, source.MemberID, source.TeamID = "files", "", domain.ScopeTeam, "", "team_gone"
+	})
+	seed("removed", nil)
+	ctx := context.Background()
+	if err := service.MemberRemoved(ctx, authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-left"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConnectionRemoved(ctx, appsv1.ConnectionRemoved{ConnectionID: "apc_disconnected"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.TeamDeleted(ctx, teamsv1.TeamDeleted{OrganizationID: "org_1", TeamID: "team_gone"}); err != nil {
+		t.Fatal(err)
+	}
+	service.directory.(*fakeDirectory).membership.UserID = "user-removed"
+	if err := service.RemoveSource(ctx, authclient.Credentials{Authorization: "Bearer t"}, "org_1", "removed"); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{
+		"left":         knowledgev1.RemovedReasonMemberLeft,
+		"disconnected": knowledgev1.RemovedReasonConnectionRemoved,
+		"team":         knowledgev1.RemovedReasonTeamDeleted,
+		"removed":      knowledgev1.RemovedReasonSourceRemoved,
+	} {
+		if source := store.sources[id]; source.Status != domain.StatusRemoved || source.Reason != want {
+			t.Errorf("%s: status %s, reason %q; want removed as %q", id, source.Status, source.Reason, want)
+		}
+	}
+}
+
 func TestFirstPrivateFileStartsOnlyItsOwnersSource(t *testing.T) {
 	store := newFakeStore()
 	service, grants := filesService(t, store)
@@ -735,6 +839,54 @@ func TestASourceAMemberRemovedDoesNotComeBack(t *testing.T) {
 	// who removed it would not want. It stays removed.
 	if len(store.sources) != 1 {
 		t.Fatalf("sources = %d, want the removed one left alone", len(store.sources))
+	}
+}
+
+// Any source already at a placement, live or removed, keeps another from
+// being registered there automatically: a narrower one someone registered by
+// hand would otherwise sit beside a new one reading everything, and the
+// files both read would be indexed, and found, twice. Only a source retired
+// because its member left gives the placement back.
+func TestAnySourceAtThePlacementKeepsAnotherFromBeingRegistered(t *testing.T) {
+	later := testClock.Add(time.Hour)
+	narrower := func(id string, status domain.Status, reason string) domain.Source {
+		return domain.Source{
+			ID: id, OrganizationID: "org_1", Provider: "files", Target: map[string]string{"purpose": "report"},
+			Scope: domain.ScopeOrganization, CreatedBy: "user-2", Status: status, Reason: reason, SyncAt: &later,
+		}
+	}
+	for name, testCase := range map[string]struct {
+		source     domain.Source
+		purpose    string
+		registered bool
+		hastened   bool
+	}{
+		"a live narrower source, another kind uploaded": {source: narrower("src_narrow", domain.StatusActive, ""), purpose: "upload"},
+		"a live narrower source, its kind uploaded":     {source: narrower("src_narrow", domain.StatusActive, ""), purpose: "report", hastened: true},
+		"a narrower source a member removed": {
+			source: narrower("src_narrow", domain.StatusRemoved, knowledgev1.RemovedReasonSourceRemoved), purpose: "upload",
+		},
+		"a narrower source whose member left": {
+			source: narrower("src_narrow", domain.StatusRemoved, knowledgev1.RemovedReasonMemberLeft), purpose: "upload", registered: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := newFakeStore()
+			service, _ := filesService(t, store)
+			store.sources[testCase.source.ID] = testCase.source
+			event := storedFile("organization")
+			event.Purpose = testCase.purpose
+			if err := service.FileStored(context.Background(), event); err != nil {
+				t.Fatal(err)
+			}
+			if registered := len(store.sources) == 2; registered != testCase.registered {
+				t.Fatalf("registered another source = %t, want %t: %+v", registered, testCase.registered, store.sources)
+			}
+			due := store.sources[testCase.source.ID].SyncAt
+			if hastened := due != nil && due.Equal(testClock); hastened != testCase.hastened {
+				t.Fatalf("brought the narrower source forward = %t, want %t", hastened, testCase.hastened)
+			}
+		})
 	}
 }
 
@@ -917,5 +1069,51 @@ func TestFileDeletedForgetsTheFileAtOnce(t *testing.T) {
 	// Delivered again, as the bus may, it finds nothing left to do.
 	if err := service.FileDeleted(context.Background(), filesv1.ObjectDeleted{FileID: "file_1", OrganizationID: "org_1"}); err != nil {
 		t.Fatalf("FileDeleted() again error = %v", err)
+	}
+}
+
+// A deleted file is forgotten through the source of the placement it lived
+// in, which the event names, not by asking every files source the
+// organization has: with a source per member and per team, that was one
+// transaction for each of them on every deletion.
+func TestFileDeletedAsksOnlyThePlacementsSource(t *testing.T) {
+	store := newFakeStore()
+	service, _ := filesService(t, store)
+	placements := map[string]domain.Source{
+		"src_team":   {Scope: domain.ScopeTeam, TeamID: "team_eng", Target: map[string]string{"team": "team_eng"}},
+		"src_design": {Scope: domain.ScopeTeam, TeamID: "team_design", Target: map[string]string{"team": "team_design"}},
+		"src_org":    {Scope: domain.ScopeOrganization},
+		"src_mine":   {Scope: domain.ScopeMember, MemberID: "user-1", Target: map[string]string{"member": "self"}},
+		"src_theirs": {Scope: domain.ScopeMember, MemberID: "user-2", Target: map[string]string{"member": "self"}},
+	}
+	for id, source := range placements {
+		source.ID, source.OrganizationID, source.Provider = id, "org_1", "files"
+		source.CreatedBy, source.Status = "user-1", domain.StatusActive
+		store.sources[id] = source
+	}
+	store.documents["src_team\x00file_1"] = domain.Document{
+		ID: "doc_1", OrganizationID: "org_1", SourceID: "src_team", ExternalID: "file_1", LastSeenAt: testClock,
+	}
+
+	if err := service.FileDeleted(context.Background(), filesv1.ObjectDeleted{
+		FileID: "file_1", OrganizationID: "org_1", Scope: "team", TeamID: "team_eng", Reason: filesv1.DeletedReasonDeleted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if store.documents["src_team\x00file_1"].RemovedAt == nil {
+		t.Fatal("the team's deleted file is still searchable")
+	}
+	if store.retractCalls != 1 {
+		t.Fatalf("asked %d sources to forget the file, want only the team's", store.retractCalls)
+	}
+
+	store.retractCalls = 0
+	if err := service.FileDeleted(context.Background(), filesv1.ObjectDeleted{
+		FileID: "file_2", OrganizationID: "org_1", Scope: "member", MemberID: "user-2",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if store.retractCalls != 1 {
+		t.Fatalf("asked %d sources to forget a private file, want only its owner's", store.retractCalls)
 	}
 }

@@ -30,21 +30,26 @@ type Store interface {
 	CreateSource(context.Context, domain.Source, *domain.Event) error
 	Source(context.Context, string, string) (domain.Source, error)
 	Sources(context.Context, string, domain.SourceQuery) ([]domain.Source, error)
-	RemoveSource(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) error
-	RemoveSources(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	// Every removal records its reason on what it retires (one of
+	// knowledgev1's RemovedReason values), so what decides whether to
+	// register a source again can tell a member saying no from a member
+	// leaving.
+	RemoveSource(ctx context.Context, organizationID, sourceID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error
+	RemoveSources(ctx context.Context, organizationID, createdBy, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
 	// RemoveSourcesByConnection retires every source reading through one
 	// connection: apps.connection.removed.v1, which is gone for good.
-	RemoveSourcesByConnection(context.Context, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	RemoveSourcesByConnection(ctx context.Context, connectionID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
 	// HastenSources brings forward the next sweep of a connection's live
 	// sources, no sooner than floor after their last.
 	HastenSources(ctx context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error)
 	// HastenSource brings forward one source's next sweep, because someone
-	// asked. It answers false for a source that is not active or already due
-	// sooner.
+	// asked; for a source whose pass is under way, it asks for another once
+	// that pass ends. It answers false for a source that is not active or
+	// already due sooner.
 	HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error)
 	// RemoveSourcesByTeam retires every source a deleted team held, and
 	// retracts what they held in the same transaction.
-	RemoveSourcesByTeam(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	RemoveSourcesByTeam(ctx context.Context, organizationID, teamID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
 	// PauseSources stops every live source reading through one connection:
 	// apps.connection.expired.v1, or a run that just discovered the same
 	// thing the hard way.
@@ -52,8 +57,15 @@ type Store interface {
 
 	ClaimDueSources(context.Context, time.Time, int, string, time.Time) ([]domain.Source, error)
 	RenewLease(context.Context, string, string, time.Time) (bool, error)
-	FinishSource(context.Context, string, string, time.Time, time.Time, *time.Time, *domain.Event) (bool, error)
+	// FinishSource schedules a source's next pass for next, unless it was
+	// asked for again after the pass claimed it due at claimedDue: then the
+	// sooner of the two.
+	FinishSource(ctx context.Context, sourceID, lease string, now, next time.Time, claimedDue, fullSweptAt *time.Time, event *domain.Event) (bool, error)
 	FailSource(context.Context, string, string, string, time.Time, time.Time, *domain.Event) (bool, error)
+	// RetireSource retires a source the run holding its lease found can no
+	// longer be read, retracting what it held; false once the lease has
+	// moved on.
+	RetireSource(ctx context.Context, sourceID, lease, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) (bool, error)
 
 	UpsertDocument(context.Context, domain.Document, func(domain.Document) (domain.Event, error)) (bool, error)
 	RetractUnseen(context.Context, string, time.Time, time.Time, func(domain.Document) (domain.Event, error)) (int, error)
@@ -292,13 +304,24 @@ func (s *Service) documentPublished(source domain.Source, document domain.Docume
 	return s.event(knowledgev1.DocumentPublishedDetailType, published)
 }
 
+// Access labels a published document carries: who within its scope may read
+// it.
+const (
+	accessMembers = "members"
+	accessAdmins  = "admins"
+)
+
+// documentAccess is who within its scope may read a document. Only Files'
+// own labels restrict one: a billing attachment, or a file shared with
+// admins alone. Any other provider's metadata is the provider's say, and
+// grants or revokes nothing.
 func documentAccess(source domain.Source, document domain.Document) string {
-	if source.Provider == "files" {
-		if document.Metadata["purpose"] == "billing.attachment" || document.Metadata["access"] == "admins" {
-			return "admins"
+	if source.Provider == filesProvider {
+		if document.Metadata["purpose"] == "billing.attachment" || document.Metadata["access"] == accessAdmins {
+			return accessAdmins
 		}
 	}
-	return "members"
+	return accessMembers
 }
 
 func (s *Service) documentRemoved(source domain.Source, document domain.Document, reason string) (domain.Event, error) {

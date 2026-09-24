@@ -32,8 +32,19 @@ func member() domain.OrgMembership {
 	return domain.OrgMembership{OrganizationID: "org_1", UserID: "user-1", Role: domain.OrgRoleMember}
 }
 
+// The source and its document exist, and the caller would be allowed both as
+// an admin and as their creator, so only the check that the membership is
+// this organization's stands between them.
 func TestMembershipForAnotherOrganizationCannotReadASourceOrDocument(t *testing.T) {
 	store := newFakeStore()
+	store.sources["src_1"] = domain.Source{
+		ID: "src_1", OrganizationID: "org_1", Provider: "files", Scope: domain.ScopeOrganization,
+		CreatedBy: "user-1", Status: domain.StatusActive,
+	}
+	store.documents["src_1\x00file_1"] = domain.Document{
+		ID: "doc_1", OrganizationID: "org_1", SourceID: "src_1", ExternalID: "file_1",
+		Title: "handbook.md", Body: "the handbook",
+	}
 	foreignMember := domain.OrgMembership{OrganizationID: "org_2", UserID: "user-1", Role: domain.OrgRoleAdmin}
 	service := registrar(t, store, foreignMember)
 	credentials := authclient.Credentials{Authorization: "Bearer user-1"}
