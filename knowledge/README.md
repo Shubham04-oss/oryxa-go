@@ -47,9 +47,9 @@ uploader's standing grant. Later uploads
 schedule the existing source to sync promptly.
 
 A deletion is heard the same way: `files.object.deleted.v1` retracts the
-file's document from every files source in the organization at once, and
-deletes its original, instead of leaving it searchable until the next full
-sweep notices it missing, up to a week later.
+file's document at once, through the sources at the placement the event
+names, and deletes its original, instead of leaving it searchable until the
+next full sweep notices it missing, up to a week later.
 
 The shared source asks Files for organization scope alone. A private source
 asks for member scope and checks every returned object's member ID against
@@ -68,9 +68,13 @@ it reads is searchable by that team's members and organization admins.
 A member can register `{"member": "self"}` to index their own private
 files; a target cannot name another member.
 
-A source explicitly removed by a member is not registered again by another
-upload. A source retired because its registering member left can be replaced
-by the next uploader.
+Any source already at a placement keeps another from being registered there
+by an upload, whatever its target: one narrowed to a purpose by hand would
+otherwise sit beside a new one reading everything, and the files both read
+would be indexed twice. An upload brings forward the live sources there that
+read it. A source a member removed stays removed: another upload does not
+reverse that. A source retired because its registering member left gives the
+placement back, and the next uploader's source replaces it.
 
 ## Connecting an app indexes what it holds
 

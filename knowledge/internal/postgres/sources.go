@@ -71,6 +71,15 @@ func (store *Store) Sources(ctx context.Context, organizationID string, query do
 	if query.Provider != "" {
 		sql += ` AND provider = ` + bind(query.Provider)
 	}
+	if placement := query.Placement; placement != nil {
+		sql += ` AND scope = ` + bind(string(placement.Scope))
+		switch placement.Scope {
+		case domain.ScopeTeam:
+			sql += ` AND team_id = ` + bind(placement.TeamID)
+		case domain.ScopeMember:
+			sql += ` AND member_id = ` + bind(placement.MemberID)
+		}
+	}
 	sql += ` ORDER BY created_at DESC, id`
 	return querySources(ctx, store.pool, sql, args...)
 }

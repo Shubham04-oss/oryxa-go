@@ -1629,3 +1629,65 @@ func TestEveryRemovalRecordsItsReason(t *testing.T) {
 		}
 	}
 }
+
+// TestSourcesNarrowToOnePlacement is what an upload or a deletion in one
+// placement looks up by, rather than every files source the organization
+// has.
+func TestSourcesNarrowToOnePlacement(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	files := func(scope domain.Scope, teamID, memberID string, target map[string]string) domain.Source {
+		t.Helper()
+		source := domain.Source{
+			ID: "src_" + randomHex(8), OrganizationID: "org_1", Provider: "files", Target: target,
+			Scope: scope, TeamID: teamID, MemberID: memberID, CreatedBy: "user-1", Status: domain.StatusActive,
+			Interval: time.Hour, SyncAt: &testClock, CreatedAt: testClock,
+		}
+		if err := store.CreateSource(ctx, source, nil); err != nil {
+			t.Fatal(err)
+		}
+		return source
+	}
+	organization := files(domain.ScopeOrganization, "", "", nil)
+	narrower := files(domain.ScopeOrganization, "", "", map[string]string{"purpose": "report"})
+	eng := files(domain.ScopeTeam, "team_eng", "", map[string]string{"team": "team_eng"})
+	files(domain.ScopeTeam, "team_design", "", map[string]string{"team": "team_design"})
+	mine := files(domain.ScopeMember, "", "user-1", map[string]string{"member": "self"})
+	files(domain.ScopeMember, "", "user-2", map[string]string{"member": "self"})
+	testSource(t, store, "org_1") // github, organization-scoped
+	if err := store.RemoveSource(ctx, "org_1", narrower.ID, "source_removed", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, testCase := range map[string]struct {
+		placement      domain.Placement
+		includeRemoved bool
+		want           []string
+	}{
+		"the organization's":              {placement: domain.Placement{Scope: domain.ScopeOrganization}, want: []string{organization.ID}},
+		"the organization's, removed too": {placement: domain.Placement{Scope: domain.ScopeOrganization}, includeRemoved: true, want: []string{organization.ID, narrower.ID}},
+		"one team's":                      {placement: domain.Placement{Scope: domain.ScopeTeam, TeamID: "team_eng"}, want: []string{eng.ID}},
+		"one member's":                    {placement: domain.Placement{Scope: domain.ScopeMember, MemberID: "user-1"}, want: []string{mine.ID}},
+		"a team with none":                {placement: domain.Placement{Scope: domain.ScopeTeam, TeamID: "team_none"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			placement := testCase.placement
+			found, err := store.Sources(ctx, "org_1", domain.SourceQuery{
+				Provider: "files", Placement: &placement, Admin: true, IncludeRemoved: testCase.includeRemoved,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ids []string
+			for _, source := range found {
+				ids = append(ids, source.ID)
+			}
+			slices.Sort(ids)
+			want := slices.Clone(testCase.want)
+			slices.Sort(want)
+			if !slices.Equal(ids, want) {
+				t.Fatalf("Sources(%+v) = %v, want %v", placement, ids, want)
+			}
+		})
+	}
+}

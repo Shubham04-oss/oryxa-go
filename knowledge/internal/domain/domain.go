@@ -167,13 +167,24 @@ func (source Source) Extractable() error {
 	}
 }
 
+// Placement is where a source hangs: a scope, and the team or member it
+// hangs on for a team or member scope.
+type Placement struct {
+	Scope    Scope
+	TeamID   string
+	MemberID string
+}
+
 // SourceQuery narrows a listing. An org admin sees the organization's
 // sources; anyone else sees the ones they registered.
 type SourceQuery struct {
 	CreatedBy    string
 	ConnectionID string
 	Provider     string
-	Admin        bool
+	// Placement narrows the listing to the sources at one placement; nil
+	// answers every placement.
+	Placement *Placement
+	Admin     bool
 	// IncludeRemoved also answers sources a member removed. A listing never
 	// wants them; deciding whether to register something on a member's
 	// behalf does, since a source they removed is theirs saying no.

@@ -37,9 +37,11 @@ type fakeStore struct {
 	lease map[string]string
 
 	retractUnseen int
-	paused        []string
-	finishedNext  time.Time
-	failedReason  string
+	// retractCalls counts RetractDocument calls, one transaction each.
+	retractCalls int
+	paused       []string
+	finishedNext time.Time
+	failedReason string
 }
 
 func newFakeStore() *fakeStore {
@@ -120,6 +122,21 @@ func (store *fakeStore) HastenSources(_ context.Context, connectionID string, at
 	return moved, nil
 }
 
+// atPlacement mirrors the real query: a scope, and for a team or a member,
+// which one.
+func atPlacement(source domain.Source, placement domain.Placement) bool {
+	switch {
+	case source.Scope != placement.Scope:
+		return false
+	case placement.Scope == domain.ScopeTeam:
+		return source.TeamID == placement.TeamID
+	case placement.Scope == domain.ScopeMember:
+		return source.MemberID == placement.MemberID
+	default:
+		return true
+	}
+}
+
 func sameTarget(left, right map[string]string) bool {
 	if len(left) != len(right) {
 		return false
@@ -153,7 +170,8 @@ func (store *fakeStore) Sources(_ context.Context, _ string, query domain.Source
 		case source.Status == domain.StatusRemoved && !query.IncludeRemoved,
 			!query.Admin && source.CreatedBy != query.CreatedBy,
 			query.ConnectionID != "" && source.ConnectionID != query.ConnectionID,
-			query.Provider != "" && source.Provider != query.Provider:
+			query.Provider != "" && source.Provider != query.Provider,
+			query.Placement != nil && !atPlacement(source, *query.Placement):
 			continue
 		}
 		listed = append(listed, source)
@@ -540,6 +558,7 @@ func (store *fakeStore) DocumentByExternalID(_ context.Context, sourceID, extern
 func (store *fakeStore) RetractDocument(_ context.Context, sourceID, externalID string, now time.Time, event func(domain.Document) (domain.Event, error)) (domain.Document, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	store.retractCalls++
 	key := sourceID + "\x00" + externalID
 	document, ok := store.documents[key]
 	if !ok || document.RemovedAt != nil {
