@@ -26,7 +26,9 @@ conversation) live only in the Durable Object's SQLite.
 | `SpecialistChatAgent` | `org~agent` | the member, own specialists only | `POST …/agents/{id}/runs` (SSE), with the `thread_id` the object keeps | DO transcript of the current conversation; Go threads canonical |
 | `TeamspaceRoomAgent` | `org~teamspace` | the teamspace's team | `…/teamspaces/{id}/messages` (read and post), `/catchup`, as each member | Go room canonical; DO keeps the recent window, fan-out, live presence |
 | side conversation | `org~teamspace~userA~userB` (ids sorted) | those two members | agent requests: create, decide, respond | DO SQLite for human messages; Go for agent work |
-| DM | `org~userA~userB` (ids sorted) | those two members | none | DO SQLite only |
+| `DirectMessageAgent` (a DM) | `org~userA~userB` (ids sorted) | those two members | none | DO SQLite only |
+| `InboxAgent` | `org~user` | that member | none | DO SQLite: the member's conversation list |
+| `RealtimeRegistryAgent` | `org` | nobody: inboxes and the purge | none | DO SQLite: who has an inbox, purges carried out |
 
 Go runs only a member's own agents (`managedagents` scopes by user). A
 teammate's agent is reached through the agent-request flow, which honours its
@@ -148,6 +150,94 @@ answers. What travels on the socket is in `src/lib/rooms/room-agent.ts`.
   second transport behind the socket: a page never reads or posts to Go's
   room itself.
 
+## Direct messages
+
+A DM is `DirectMessageAgent` (`src/direct-message-agent.ts`), one object per
+pair of people in an organization, named `directMessageName(org, userA,
+userB)`: `{org}~{userA}~{userB}`, the two user ids sorted (by code unit,
+which for these ASCII ids is byte order), so both people reach the same
+object. It is the whole of the DM: nothing is kept in Go. A page reaches it
+through `useDirectMessages(org, viewer, peer)` (`src/lib/dms`). Every view of
+a DM (the main canvas, the right panel's DMs tab) opens its own socket on it
+and the object sends every socket everything, so two views on one page both
+stay current. What travels on the socket is in `src/lib/dms/protocol.ts`;
+the socket carries that alone (no SDK identity, state or MCP frames, no
+callable methods, and a page may not set state).
+
+- **Storage** (its SQLite): the messages (id, seq gapless from 1, author,
+  body, `created_at`, and the page's `clientId`), how far each person has
+  read, and what each person's inbox has been told. It keeps at most
+  `DM_HISTORY_LIMIT`, 10,000 messages: past that the oldest go as new ones
+  arrive (about 160 MB at the longest bodies; a typical conversation is a
+  small fraction of that).
+- **Sending** (`dm-send`, with the page's `clientId`). The author is the
+  socket's person as the Worker determined it, never anything the page
+  says. The body is trimmed and holds 1 to 4,000 Unicode code points. Each
+  person may send 10 at once, then one a second (kept in memory, so a
+  restart forgives). A message is stored once per author and `clientId`:
+  sending it again (a retry, or a page that never heard the answer) answers
+  that socket with the stored message. A stored message reaches every socket
+  at once (`dm-message`, with its `clientId` only on the author's), reads the
+  conversation through it for its author, and stops their typing. A refusal
+  (`empty`, `too_long`, `rate_limited`, `unavailable`) goes only to the socket
+  that sent it (`dm-send-failed`); the page shows the message failed, with
+  retry.
+- **History.** A socket that opens is sent `dm-snapshot`: the latest 50
+  messages (fewer when long ones would pass 256 KB), whether older ones
+  exist, both read states, who is online and who is typing, and
+  `conversation`, which names this run of the conversation and changes after
+  a purge, so a page never joins messages from before one to those after.
+  `dm-history` asks for up to 100 before a seq.
+- **Reading** (`dm-read`): a person reads through a seq, at most the latest,
+  and only ever further. Both people's sockets and the reader's inbox are
+  told.
+- **Typing** (`dm-typing`) lasts 6 s after the page last said so (a page
+  says so again every 2.5 s while typing). The other person is told when it
+  starts, again at most every 2 s while it lasts, and when it stops: on the
+  page's word, after 6 s, when the typist sends, or when their last socket
+  closes. It is never stored.
+- **Presence.** A person is online in the DM while one of their sockets says
+  its tab is visible (`dm-visibility`, as the room's); every change is sent
+  as `dm-presence`.
+- **Inboxes.** After each message and each read, the object tells both
+  people's inboxes what they have not been told: `noteMessage` with the
+  messages since (the latest 200 at most), then `markRead`. It keeps what
+  each was told, so an inbox it could not reach is told again on a schedule
+  (after 2 s, doubling to 5 minutes), and after a restart.
+
+A member's conversation list is `InboxAgent` (`src/inbox-agent.ts`), one per
+member per organization, `{org}~{user}`, read live by `useInbox(org, viewer)`
+(the DMs tab, Team's recent conversations, and their badges). Only its
+member's sockets reach it, and they only listen. It is sent the latest 500
+conversations as it opens (`inbox-snapshot`), then each change
+(`inbox-conversation`, `inbox-removed`), always with the unread total over
+all of them. The conversation objects (a DM now, side conversations next)
+keep it current over RPC:
+
+- `noteMessage(entry, ...messages)` lists the conversation (`entry`: its kind,
+  name, the other person, and a side conversation's teamspace), keeps the
+  latest message as its preview (one line, 160 code points), counts a
+  message from someone else after what the member has read as unread, and
+  reads through the member's own. Unread is a set of seqs (at most 999 a
+  conversation), not a counter, so a message told twice counts once and
+  messages and reads may arrive in either order.
+- `markRead(name, seq)`: unread is only what comes after `seq`. A
+  conversation is noted before it is marked read; a read of one not listed
+  does nothing.
+- `upsertConversation(entry)` lists one before its first message (a side
+  conversation as it starts); `removeConversation(name)` takes one off.
+- The inbox checks every entry against itself: a conversation of its
+  organization that its member is in, with `peerId` the other person, and in
+  a DM only its two people write. Anything else throws, so one object can
+  never list itself in the wrong inbox.
+
+`RealtimeRegistryAgent` (`src/realtime-registry-agent.ts`), one per
+organization and named after it, records which members have an inbox: an
+inbox registers itself with its first conversation (and tries on every write
+until it has; a failure is tried again on a schedule), so an organization's
+purge can find every inbox and, through them, every conversation. It also
+remembers the purges it carried out (below). No page reaches it.
+
 ## Side conversations
 
 On a teamspace page the left panel is the group room. The right panel's
@@ -172,11 +262,20 @@ Each object is one entry in the Worker's `realtimeObjects` table: its
 binding (routeAgentRequest serves it at the binding's name in kebab case),
 the reads a page may GET beside the socket (`get-messages`), a name parser
 that reads the raw, undecoded path segment, the access check against Go
-with the member's cookie, the identity headers, and, when the page may
+with the member's cookie, the identity headers (built from what the check
+learned, when it learned who the member is), and, when the page may
 delete, either Go's DELETE (sent first; the transcript is purged only once
 Go has deleted) or, when Go has nothing to delete, the purge alone behind
 the access check. Go's 401, 403, 404 and 503 pass through with Go's code;
 any other failure answers 502, and a Go it cannot reach 503.
+
+A DM and an inbox are handed `X-Oryxa-Organization` and `X-Oryxa-User`, the
+member's user id as Go answered the Worker, and not the cookie: they never
+call Go. The member is the `user_id` of their own membership in Go's answer
+to `GET /v1/organizations/{org}`, the same subject `GET /v1/auth/me` answers
+with; that answer also marks an agent's token (`agent: true`), which is
+refused, since DMs are between people. The registry has no entry: no page
+reaches it.
 
 | Object | Access check against Go |
 |---|---|
@@ -184,7 +283,8 @@ any other failure answers 502, and a Go it cannot reach 503.
 | `SpecialistChatAgent` | `GET …/agents/{agent}`: Go loads only the owner's agents (404 otherwise), and it must be a specialist (the primary agent's chat is its threads) |
 | `TeamspaceRoomAgent` | `GET …/teamspaces/{id}` with `is_member`: Go shows a teamspace to a manager who is not on its team too, and would let them read the room and count as present in it, but the room is the team's (no DELETE: Go deletes the room with its teamspace) |
 | side conversation | the teamspace check, the caller is one of the two, the other is a member of it |
-| DM | the caller is one of the two (`GET /v1/auth/me`), both are members of the organization |
+| `DirectMessageAgent` | `GET /v1/organizations/{org}` and `GET …/members`, asked at once. Go's refusal of the member (401, or 404 for an organization that is not theirs) comes first; then the member must be one of the name's two people (403 `not_participant`), and the other must be in the members listing (404 `peer_not_found`). No DELETE |
+| `InboxAgent` | `GET /v1/organizations/{org}`: the member must be the name's member (403 `forbidden`). No DELETE |
 
 ## Lifecycle
 
@@ -197,14 +297,69 @@ any other failure answers 502, and a Go it cannot reach 503.
   Deleting a specialist in Go leaves its chat's transcript behind,
   unreachable (the access check answers 404), so a page clears the chat
   before it deletes the specialist.
-- A member leaving or an organization being deleted must also empty the DMs
-  and side conversations they were in. Go will call a Worker endpoint to
-  purge those objects; it is built with the DMs.
+- A member leaving or an organization being deleted empties the DMs (and,
+  once they exist, the side conversations) they were in: Go calls the
+  Worker's purge, below.
+
+### Purging a member's conversations
+
+Go's relay turns `auth.member.removed.v1` and `auth.organization.deleted.v1`
+into one call each (an organization's deletion is one call, not one per
+member):
+
+`POST /internal/realtime/purge`, not under `/agents/`, with no cookie.
+
+- `X-Oryxa-Timestamp`: Unix seconds, when Go signed it.
+- `X-Oryxa-Signature`: `v1=` and the lowercase hex HMAC-SHA256, keyed with
+  `REALTIME_PURGE_SECRET` (its characters as written, never hex-decoded), of
+  the timestamp as sent, a `.`, and the raw body's bytes.
+- The body, at most 4 KB of JSON:
+  `{"event_id": "…", "organization_id": "…", "user_id": "…"}`. `event_id` is
+  1 to 200 characters, unique per event. `organization_id` is an id a name
+  may hold (`A-Z a-z 0-9 _ -`, at most 128). `user_id` is always present: a
+  member's id purges that member, and `""` purges the whole organization; a
+  body without it is refused, never read as the organization.
+
+The Worker checks, in order: POST (405); its secret is set and at least 32
+characters (503 `unavailable` otherwise); both headers (401
+`unauthorized`); the timestamp within 300 s of its clock, either way (401
+`stale_request`); the body at most 4 KB (413 `too_large`); the signature,
+compared in constant time (401 `invalid_signature`); the body (400
+`invalid_request`). Then the organization's registry carries the purge out,
+and the Worker answers 204 with no body once it is done, or was done
+already for this `event_id`: the registry remembers an event for 24 hours,
+so a replay, or Go sending an event again after missing the answer, does
+nothing. A purge that failed part-way answers 503, and sent again it
+carries on from where it stopped. Only 204 is done: Go retries 401, 408,
+429, 5xx and any other 2xx, and follows no redirect.
+
+A member's purge: their inbox lists their conversations; each is emptied (a
+DM's `purge` deletes its messages, read states and what it told the inboxes,
+tells every socket `dm-gone` and closes it with 4404) and taken off the
+other person's inbox; then the inbox empties itself, tells its sockets
+`inbox-gone` and closes them; then the registry lets the member go. An
+organization's purge does that for every member in its registry, 8 at a
+time. The objects are left empty, not deleted: nothing of the member stays.
+A message sent in the moment a DM is purged can leave its preview in the
+other person's inbox; opening it then answers 404, as the member is gone.
+
+A page treats `dm-gone` and `inbox-gone` as final (both hooks settle and
+close their own socket). The object's close alone is not enough: in `vite
+dev` it does not reach a socket whose page never sent a frame on it (an
+inbox's; a DM's page always says its visibility first).
+
+`REALTIME_PURGE_SECRET` is a Worker secret (`wrangler secret put
+REALTIME_PURGE_SECRET`, the same value Go has; `.dev.vars` locally, see
+`.dev.vars.example`). `src/realtime-purge.test.ts` pins Go's own signing
+vectors.
 
 ## UI
 
 The right agent panel (DESIGN.md §2) is location-aware. Its tabs, Agents,
-DMs and Teams, stay the same everywhere. On Home the Agents tab switches
+DMs and Teams, stay the same everywhere. The DMs tab lists the member's
+inbox (`useInbox`); a DM opens there, and in the main canvas from People or
+the recent conversations, each view with `useDirectMessages` on the same
+object. On Home the Agents tab switches
 between the member's own agents. On a teamspace page it also offers that
 teamspace's teammates' agents, each opening a side conversation.
 

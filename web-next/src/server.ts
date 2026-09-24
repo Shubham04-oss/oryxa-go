@@ -495,7 +495,7 @@ function conversationIdentity(
 
 /**
  * Every realtime object, by the path segment its binding is served at. A
- * new one (REALTIME.md: a side conversation, a DM) is one more entry.
+ * new one (REALTIME.md: a side conversation) is one more entry.
  */
 const realtimeObjects = new Map(
   [
