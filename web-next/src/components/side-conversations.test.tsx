@@ -701,6 +701,48 @@ describe("Whom a message goes to", () => {
     expect(socket.said("side-send")).toHaveLength(1)
   })
 
+  it("holds a question to the member's own agent while it still answers", async () => {
+    const view = await openWithPriya()
+    const socket = opened(
+      snapshot([agentMessage(1, { status: "streaming", body: "Looking" })])
+    )
+    sendTo(view, /Ask my agent/)
+    expect(
+      within(view).getByText("Leo is still answering. Ask again once it has.")
+    ).toBeTruthy()
+    const field = composer(view)
+    fireEvent.change(field, { target: { value: "And the risks?" } })
+    fireEvent.keyDown(field, { key: "Enter" })
+    expect(socket.said("side-ask-mine")).toEqual([])
+    expect(field.value).toBe("And the risks?")
+    const sendButton = within(view).getByRole("button", {
+      name: "Send message",
+    })
+    expect(sendButton.hasAttribute("disabled")).toBe(true)
+
+    socket.says({
+      type: "side-item",
+      item: agentMessage(1, {
+        status: "waiting",
+        body: "Looking",
+        confirmations: [{ callId: "call_1", tool: "read_calendar" }],
+      }),
+    })
+    expect(
+      within(view).getByText("Answer Leo's confirmation above first.")
+    ).toBeTruthy()
+
+    socket.says({
+      type: "side-item",
+      item: agentMessage(1, { body: "Two tasks remain." }),
+    })
+    expect(sendButton.hasAttribute("disabled")).toBe(false)
+    fireEvent.keyDown(field, { key: "Enter" })
+    expect(socket.said("side-ask-mine").map((sent) => sent.body)).toEqual([
+      "And the risks?",
+    ])
+  })
+
   it("says a request that could not be filed, and files it again on Retry", async () => {
     const view = await openWithPriya()
     const socket = opened()

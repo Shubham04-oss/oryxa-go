@@ -245,9 +245,25 @@ export function SideConversationPanel({
     !chosen && draft.target !== "person" && status !== "live"
   const target = waitingForRoster ? undefined : (chosen ?? options[0])
   const length = composerLength(draft.text, SIDE_MAX_BODY_LENGTH)
+  // The member's own agent answers one question here at a time: while it
+  // still answers, or waits on their confirmation, asking it again waits.
+  const ownRun =
+    target?.key === "mine"
+      ? items.find(
+          (item): item is SideAgentMessage =>
+            item.kind === "agent-message" &&
+            item.ownerId === viewerId &&
+            (item.status === "streaming" || item.status === "waiting")
+        )
+      : undefined
+  const busy = ownRun
+    ? ownRun.status === "waiting"
+      ? `Answer ${ownRun.agentName}'s confirmation above first.`
+      : `${ownRun.agentName} is still answering. Ask again once it has.`
+    : undefined
 
   function send(text: string) {
-    if (!target || codePoints(text) > SIDE_MAX_BODY_LENGTH) return
+    if (!target || busy || codePoints(text) > SIDE_MAX_BODY_LENGTH) return
     log.follow()
     if (target.key === "person") side.send(text)
     else if (target.key === "mine") side.askMyAgent(text)
@@ -266,7 +282,9 @@ export function SideConversationPanel({
     ? paused && !refused && !sessionEnded
       ? `${teamspaceName} is paused, so this conversation is read-only until a team admin resumes it.`
       : undefined
-    : (length.status ?? (waitingForRoster ? "Connecting…" : target?.hint))
+    : (length.status ??
+      busy ??
+      (waitingForRoster ? "Connecting…" : target?.hint))
   // The field is named for whom it writes to; its placeholder says when it
   // cannot.
   const label = target?.placeholder ?? `Message ${peer.short}`
@@ -412,7 +430,7 @@ export function SideConversationPanel({
           }}
           onSubmit={send}
           disabled={readOnly}
-          sendDisabled={length.tooLong || !target}
+          sendDisabled={length.tooLong || !target || busy !== undefined}
           status={composerStatus}
           leading={
             <TargetPicker
