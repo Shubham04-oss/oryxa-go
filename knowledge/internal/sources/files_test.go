@@ -393,3 +393,40 @@ func TestFilesReportsWhatStoppedTheListing(t *testing.T) {
 		t.Fatalf("Fetch() error = %v, want ErrUnauthorized", err)
 	}
 }
+
+// TestFilesSaysWhenItsMemberCannotReadThePlacement: Files answering not found
+// or forbidden to the listing itself is Files refusing the member a source
+// reads as the whole placement, which no retry fixes; anything else is not.
+func TestFilesSaysWhenItsMemberCannotReadThePlacement(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		listErr    error
+		unreadable bool
+	}{
+		"not found":           {listErr: domain.ErrNotFound, unreadable: true},
+		"forbidden":           {listErr: domain.ErrForbidden, unreadable: true},
+		"a token not taken":   {listErr: domain.ErrUnauthorized},
+		"files not answering": {listErr: domain.ErrProviderUnavailable},
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := filesRequest()
+			request.Source.Scope, request.Source.TeamID = domain.ScopeTeam, "team_1"
+			request.Source.Target = map[string]string{"team": "team_1"}
+			_, err := NewFiles(&fakeFiles{listErr: testCase.listErr}).Fetch(context.Background(), request)
+			if !errors.Is(err, testCase.listErr) {
+				t.Fatalf("Fetch() error = %v, want it to keep %v", err, testCase.listErr)
+			}
+			if errors.Is(err, domain.ErrUnreadable) != testCase.unreadable {
+				t.Fatalf("Fetch() error = %v, unreadable = %t, want %t", err, errors.Is(err, domain.ErrUnreadable), testCase.unreadable)
+			}
+		})
+	}
+	// A single file gone missing is only that file: it is stepped over, and
+	// says nothing about the placement.
+	files := &fakeFiles{
+		objects: []filesclient.Object{storedFile("file_1", "gone.md", "text/markdown")},
+		missing: map[string]bool{"file_1": true},
+	}
+	if _, err := NewFiles(files).Fetch(context.Background(), filesRequest()); err != nil {
+		t.Fatalf("Fetch() with one file gone = %v, want it stepped over", err)
+	}
+}

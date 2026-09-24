@@ -395,7 +395,8 @@ func readsFile(source domain.Source, event filesv1.ObjectCreated) bool {
 }
 
 // replaceable says a retired files source gave its placement back: it went
-// because its member left, not because anyone chose to stop indexing it.
+// because its member left, or because Files stopped letting them read it,
+// not because anyone chose to stop indexing it.
 func replaceable(reason string) bool {
-	return reason == knowledgev1.RemovedReasonMemberLeft
+	return reason == knowledgev1.RemovedReasonMemberLeft || reason == knowledgev1.RemovedReasonNoLongerReadable
 }

@@ -40,6 +40,12 @@ var (
 	// document is worth indexing could not be reached. Nothing is published
 	// unjudged, so the run stops and is tried again.
 	ErrQualityCheckUnavailable = errors.New("the quality check is unavailable")
+	// ErrUnreadable means the member a source reads as cannot read what it
+	// names at all: Files refuses them the placement, because they left the
+	// team or stopped being an admin. Trying again as them changes nothing;
+	// only reading as someone who can does. It travels alongside the
+	// refusal itself (ErrNotFound or ErrForbidden), never instead of it.
+	ErrUnreadable = errors.New("the member it reads as cannot read it")
 )
 
 type OrgRole string

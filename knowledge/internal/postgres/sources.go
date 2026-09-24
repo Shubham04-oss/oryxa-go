@@ -222,6 +222,20 @@ func (store *Store) RemoveSourcesByTeam(ctx context.Context, organizationID, tea
 		RETURNING `+sourceColumns, []any{organizationID, now, teamID, reason}, now, events)
 }
 
+// RetireSource retires a source the run holding its lease found can no longer
+// be read, records reason on it, and retracts what it held in the same
+// transaction. It answers false, and changes nothing, once the lease has
+// moved on: like every write that ends a run, it is the lease holder's alone.
+func (store *Store) RetireSource(ctx context.Context, sourceID, leaseToken, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) (bool, error) {
+	removed, err := store.removeSources(ctx, `
+		UPDATE knowledge_sources
+		SET status = 'removed', reason = $3, sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		    updated_at = $4, version = version + 1
+		WHERE id = $1 AND lease_token = $2 AND status <> 'removed'
+		RETURNING `+sourceColumns, []any{sourceID, leaseToken, reason, now}, now, events)
+	return len(removed) == 1, err
+}
+
 // removeSources runs a statement that retires sources and returns them, then
 // retracts each one's documents and records its events, all in one
 // transaction, so a source is never retired with its documents still live.

@@ -1691,3 +1691,57 @@ func TestSourcesNarrowToOnePlacement(t *testing.T) {
 		})
 	}
 }
+
+// TestRetireSourceIsTheLeaseHolders ends a run by retiring its source: only
+// the run still holding the lease may, and what the source held is retracted
+// with it.
+func TestRetireSourceIsTheLeaseHolders(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+	document := testDocument(source, "file-1", strings.Repeat("a", 64))
+	if _, err := store.UpsertDocument(ctx, document, nil); err != nil {
+		t.Fatal(err)
+	}
+	due := testClock.Add(time.Minute)
+	if _, err := store.ClaimDueSources(ctx, due, 10, "lease-a", due.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	retract := func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
+		events := make([]domain.Event, 0, len(documents))
+		for range documents {
+			events = append(events, testEvent(t, "knowledge.document.removed.v1"))
+		}
+		return events, nil
+	}
+
+	retired, err := store.RetireSource(ctx, source.ID, "lease-b", "no_longer_readable", due, retract)
+	if err != nil || retired {
+		t.Fatalf("RetireSource(someone else's lease) = %v, %v, want nothing retired", retired, err)
+	}
+	if read, err := store.Source(ctx, "org_1", source.ID); err != nil || read.Status != domain.StatusActive {
+		t.Fatalf("after a lost lease tried, source = %+v, %v; want it untouched", read, err)
+	}
+
+	retired, err = store.RetireSource(ctx, source.ID, "lease-a", "no_longer_readable", due, retract)
+	if err != nil || !retired {
+		t.Fatalf("RetireSource(own lease) = %v, %v, want retired", retired, err)
+	}
+	read, err := store.Source(ctx, "org_1", source.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.Status != domain.StatusRemoved || read.Reason != "no_longer_readable" || read.SyncAt != nil || read.LeaseToken != "" {
+		t.Fatalf("retired source = %+v", read)
+	}
+	held, err := store.DocumentByExternalID(ctx, source.ID, "file-1")
+	if err != nil || held.RemovedAt == nil {
+		t.Fatalf("what the retired source held = %+v, %v; want it retracted", held, err)
+	}
+	if count := outboxCount(t, store); count != 1 {
+		t.Fatalf("outbox events = %d, want the one removal", count)
+	}
+	if again, err := store.RetireSource(ctx, source.ID, "lease-a", "no_longer_readable", due, retract); err != nil || again {
+		t.Fatalf("RetireSource(again) = %v, %v, want nothing to retire", again, err)
+	}
+}

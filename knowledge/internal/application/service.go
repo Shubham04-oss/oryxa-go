@@ -58,6 +58,10 @@ type Store interface {
 	RenewLease(context.Context, string, string, time.Time) (bool, error)
 	FinishSource(context.Context, string, string, time.Time, time.Time, *time.Time, *domain.Event) (bool, error)
 	FailSource(context.Context, string, string, string, time.Time, time.Time, *domain.Event) (bool, error)
+	// RetireSource retires a source the run holding its lease found can no
+	// longer be read, retracting what it held; false once the lease has
+	// moved on.
+	RetireSource(ctx context.Context, sourceID, lease, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) (bool, error)
 
 	UpsertDocument(context.Context, domain.Document, func(domain.Document) (domain.Event, error)) (bool, error)
 	RetractUnseen(context.Context, string, time.Time, time.Time, func(domain.Document) (domain.Event, error)) (int, error)

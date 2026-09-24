@@ -358,6 +358,18 @@ func (store *fakeStore) FailSource(_ context.Context, sourceID, leaseToken, reas
 	return true, nil
 }
 
+func (store *fakeStore) RetireSource(_ context.Context, sourceID, lease, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) (bool, error) {
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	source, ok := store.sources[sourceID]
+	if !ok || source.Status == domain.StatusRemoved || store.lease[sourceID] != lease {
+		return false, nil
+	}
+	source = retire(source, reason)
+	store.sources[sourceID] = source
+	return true, store.retractAll(source, events)
+}
+
 func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Document, event func(domain.Document) (domain.Event, error)) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
@@ -769,9 +781,11 @@ func (apps *fakeApps) Connection(_ context.Context, _, connectionID string, _ au
 	return apps.connection, nil
 }
 
-// fakeGrants mints a member token, recording whom it was minted for.
+// fakeGrants mints a member token, recording whom it was minted for. A member
+// named in tokens gets their own; anyone else gets token.
 type fakeGrants struct {
 	token   string
+	tokens  map[string]string
 	err     error
 	members []string
 }
@@ -780,6 +794,9 @@ func (grants *fakeGrants) MemberToken(_ context.Context, organizationID, memberI
 	grants.members = append(grants.members, organizationID+"/"+memberID)
 	if grants.err != nil {
 		return "", grants.err
+	}
+	if token, ok := grants.tokens[memberID]; ok {
+		return token, nil
 	}
 	return grants.token, nil
 }

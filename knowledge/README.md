@@ -76,6 +76,15 @@ read it. A source a member removed stays removed: another upload does not
 reverse that. A source retired because its registering member left gives the
 placement back, and the next uploader's source replaces it.
 
+A source reads as the member whose upload started it, and Files can stop
+letting them read its placement while they stay in the organization: they
+leave the team, or an admin who was never on it stops being one. Files then
+refuses the listing on every pass, which no retry fixes, so the pass retires
+the source (`no_longer_readable`) with what it held instead of backing off
+for ever. That too gives the placement back: the next upload there registers
+a source as its uploader, and its first pass indexes the placement again.
+Until someone uploads, what the retired source held is not searchable.
+
 ## Connecting an app indexes what it holds
 
 A member who connects GitHub means Krude to know about their repositories.

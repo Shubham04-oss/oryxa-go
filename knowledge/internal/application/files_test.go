@@ -1,0 +1,175 @@
+package application
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
+
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/filesclient"
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
+)
+
+// fakeFilesClient answers what the files service would, through the real
+// files extractor: every object it holds, to anyone it does not refuse, and
+// what it refuses to whom, by the token they read with.
+type fakeFilesClient struct {
+	mu      sync.Mutex
+	objects []filesclient.Object
+	bodies  map[string]string
+	refused map[string]error
+	// listed and fetched are the tokens that listed and the file ids whose
+	// bytes were read, in order.
+	listed  []string
+	fetched []string
+}
+
+func (files *fakeFilesClient) Objects(_ context.Context, _, token string, query filesclient.Query) ([]filesclient.Object, error) {
+	files.mu.Lock()
+	defer files.mu.Unlock()
+	files.listed = append(files.listed, token)
+	if err := files.refused[token]; err != nil {
+		return nil, err
+	}
+	var listed []filesclient.Object
+	for _, object := range files.objects {
+		if object.Scope == query.Scope && (query.TeamID == "" || object.TeamID == query.TeamID) {
+			listed = append(listed, object)
+		}
+	}
+	return listed, nil
+}
+
+func (files *fakeFilesClient) Content(_ context.Context, _, fileID, token string) ([]byte, string, error) {
+	files.mu.Lock()
+	defer files.mu.Unlock()
+	files.fetched = append(files.fetched, fileID)
+	if err := files.refused[token]; err != nil {
+		return nil, "", err
+	}
+	body, ok := files.bodies[fileID]
+	if !ok {
+		return nil, "", domain.ErrNotFound
+	}
+	return []byte(body), "text/markdown", nil
+}
+
+// realFilesService is knowledge reading files through the real extractor,
+// each member with a token of their own.
+func realFilesService(t *testing.T, store *fakeStore, files *fakeFilesClient, caller domain.OrgMembership) (*Service, *fakeGrants) {
+	t.Helper()
+	grants := &fakeGrants{token: "member-token", tokens: map[string]string{
+		"user-1": "token-user-1", "user-2": "token-user-2", "user-left-team": "token-user-left-team",
+	}}
+	service := New(Dependencies{
+		Store:      store,
+		Directory:  &fakeDirectory{membership: caller},
+		Grants:     grants,
+		Extractors: sources.Registry{"files": sources.NewFiles(files)},
+		Clock:      func() time.Time { return testClock },
+	}, Config{})
+	return service, grants
+}
+
+func teamFile(id, teamID, createdBy string) filesclient.Object {
+	return filesclient.Object{
+		ID: id, OrganizationID: "org_1", Scope: string(domain.ScopeTeam), TeamID: teamID,
+		Filename: id + ".md", ContentType: "text/markdown", Purpose: "upload", Access: "members",
+		SHA256: "sha-" + id, CreatedBy: createdBy, CreatedAt: testClock.Add(-time.Hour),
+	}
+}
+
+// A team's files source reads as the member whose upload started it. Once
+// they are off the team, Files refuses them the team's files on every pass:
+// the source is retired rather than backed off for ever, and the next member
+// to upload there takes the placement over.
+func TestAPlacementItsSourceCanNoLongerReadGoesToTheNextUploader(t *testing.T) {
+	for name, refusal := range map[string]error{"not found": domain.ErrNotFound, "forbidden": domain.ErrForbidden} {
+		t.Run(name, func(t *testing.T) {
+			store := newFakeStore()
+			files := &fakeFilesClient{
+				objects: []filesclient.Object{teamFile("file_old", "team_eng", "user-left-team")},
+				bodies:  map[string]string{"file_old": "# the old notes"},
+				refused: map[string]error{"token-user-left-team": refusal},
+			}
+			service, grants := realFilesService(t, store, files, member())
+			stale := domain.Source{
+				ID: "src_stale", OrganizationID: "org_1", Provider: "files",
+				Target: map[string]string{"team": "team_eng"}, Scope: domain.ScopeTeam, TeamID: "team_eng",
+				CreatedBy: "user-left-team", Status: domain.StatusActive, Interval: time.Hour, FullSweepAt: &testClock,
+			}
+			store.sources[stale.ID] = stale
+			store.lease[stale.ID] = "lease-a"
+			store.documents["src_stale\x00file_old"] = domain.Document{
+				ID: "doc_old", OrganizationID: "org_1", SourceID: "src_stale", ExternalID: "file_old",
+				Body: "# the old notes", LastSeenAt: testClock,
+			}
+
+			if err := service.Sync(context.Background(), stale, "lease-a"); err != nil {
+				t.Fatal(err)
+			}
+			retired := store.sources[stale.ID]
+			if retired.Status != domain.StatusRemoved || retired.Reason != knowledgev1.RemovedReasonNoLongerReadable {
+				t.Fatalf("the source Files refused = %s, reason %q; want it retired as no longer readable", retired.Status, retired.Reason)
+			}
+			if store.failedReason != "" {
+				t.Fatalf("the source was backed off with %q, as though trying again could read it", store.failedReason)
+			}
+			if store.documents["src_stale\x00file_old"].RemovedAt == nil {
+				t.Fatal("what the retired source held is still searchable, with nothing left to keep it current")
+			}
+			if reasons := store.publishedReasons(knowledgev1.DocumentRemovedDetailType); len(reasons) != 1 ||
+				reasons[0] != knowledgev1.RemovedReasonNoLongerReadable {
+				t.Fatalf("removals = %v, want the old notes, as no longer readable", reasons)
+			}
+
+			upload := storedFile("team")
+			upload.FileID, upload.TeamID, upload.CreatedBy = "file_new", "team_eng", "user-1"
+			if err := service.FileStored(context.Background(), upload); err != nil {
+				t.Fatal(err)
+			}
+			var replacement domain.Source
+			for _, source := range store.sources {
+				if source.Status == domain.StatusActive {
+					replacement = source
+				}
+			}
+			if replacement.ID == "" || replacement.CreatedBy != "user-1" || replacement.TeamID != "team_eng" {
+				t.Fatalf("after the next team upload, live source = %+v; want user-1's for team_eng", replacement)
+			}
+			if got := grants.members[len(grants.members)-1]; got != "org_1/user-1" {
+				t.Fatalf("the replacement reads as %s, want the uploader", got)
+			}
+		})
+	}
+}
+
+// Only Files refusing the placement retires a source. Files being down, or
+// a token it did not take, is tried again with backoff, as before.
+func TestAFilesSourceIsNotRetiredForWhatTryingAgainCanFix(t *testing.T) {
+	for name, cause := range map[string]error{
+		"files is down":         domain.ErrProviderUnavailable,
+		"the token was refused": domain.ErrUnauthorized,
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := newFakeStore()
+			files := &fakeFilesClient{refused: map[string]error{"token-user-1": cause}}
+			service, _ := realFilesService(t, store, files, member())
+			source := domain.Source{
+				ID: "src_1", OrganizationID: "org_1", Provider: "files", Scope: domain.ScopeOrganization,
+				CreatedBy: "user-1", Status: domain.StatusActive, Interval: time.Hour, FullSweepAt: &testClock,
+			}
+			store.sources[source.ID] = source
+			store.lease[source.ID] = "lease-a"
+			if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+				t.Fatal(err)
+			}
+			if store.sources[source.ID].Status != domain.StatusActive || store.failedReason == "" {
+				t.Fatalf("source = %s, failed %q; want it active and backed off", store.sources[source.ID].Status, store.failedReason)
+			}
+		})
+	}
+}

@@ -434,6 +434,26 @@ func (s *Service) runFailed(ctx context.Context, source domain.Source, run domai
 		return nil
 	}
 
+	// An internal source reads as a member, and one Files now refuses the
+	// placement — they left the team, or stopped being an admin — is refused
+	// on every pass from here on. It is retired with what it held rather
+	// than backed off for ever, and the next member to upload there takes
+	// the placement over: see FileStored.
+	if errors.Is(cause, domain.ErrUnreadable) && source.ConnectionID == "" {
+		pending := &pendingOriginals{}
+		retired, err := s.store.RetireSource(ctx, source.ID, lease, knowledgev1.RemovedReasonNoLongerReadable, now,
+			s.retractions(knowledgev1.RemovedReasonNoLongerReadable, pending))
+		if err != nil {
+			return err
+		}
+		s.deleteOriginals(ctx, pending)
+		if retired {
+			s.logger.WarnContext(ctx, "source retired: the member it reads as can no longer read it",
+				"source_id", source.ID, "created_by", source.CreatedBy, "error", cause)
+		}
+		return nil
+	}
+
 	retryAt := now.Add(domain.RetryAfter(source.Attempts))
 	if _, err := s.store.FailSource(ctx, source.ID, lease, reason, now, retryAt, nil); err != nil {
 		return err

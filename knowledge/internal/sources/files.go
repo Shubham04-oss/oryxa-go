@@ -126,7 +126,7 @@ func (source *Files) Fetch(ctx context.Context, request Request) (Page, error) {
 
 	objects, err := source.client.Objects(ctx, request.Source.OrganizationID, request.Credential.AccessToken, query)
 	if err != nil {
-		return Page{}, err
+		return Page{}, refused(query, err)
 	}
 	slices.SortFunc(objects, func(left, right filesclient.Object) int {
 		return strings.Compare(left.ID, right.ID)
@@ -160,6 +160,18 @@ func (source *Files) Fetch(ctx context.Context, request Request) (Page, error) {
 		page.Watermark = watermarkAfter(page.Watermark, object.CreatedAt)
 	}
 	return page, nil
+}
+
+// refused says what a listing Files would not answer means. Not found and
+// forbidden are Files refusing the member a source reads as the placement
+// itself — they left the team, or are no longer an admin — which no retry
+// fixes, unlike Files being down or a token it did not take.
+func refused(query filesclient.Query, err error) error {
+	if errors.Is(err, domain.ErrNotFound) || errors.Is(err, domain.ErrForbidden) {
+		return fmt.Errorf("files will not list these %s files for the member this reads as: %w: %w",
+			query.Scope, domain.ErrUnreadable, err)
+	}
+	return err
 }
 
 // publishable is the second guard on what a pass publishes, after the scope
