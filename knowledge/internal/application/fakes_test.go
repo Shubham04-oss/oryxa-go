@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -397,7 +396,7 @@ func (store *fakeStore) UpsertDocument(_ context.Context, document domain.Docume
 	existing, found := store.documents[key]
 	changed := !found || existing.ContentHash != document.ContentHash || existing.RemovedAt != nil ||
 		existing.Title != document.Title || existing.URL != document.URL || existing.Kind != document.Kind ||
-		existing.MIME != document.MIME || !maps.Equal(existing.Metadata, document.Metadata)
+		existing.MIME != document.MIME || !domain.SearchableMetadataEqual(existing.Metadata, document.Metadata)
 	if found {
 		document.ID = existing.ID
 	}
@@ -552,7 +551,7 @@ func (judge *fakeJudge) Redecide(kept []byte, include []string) (domain.Verdict,
 		return domain.Verdict{}, false
 	}
 	keep := domain.IncludedKinds(include)[kind]
-	return domain.Verdict{Keep: keep, Reason: kind, Judgment: kept}, true
+	return domain.Verdict{Keep: keep, Reason: kind, Category: kind, Judgment: kept}, true
 }
 
 func (judge *fakeJudge) Judge(_ context.Context, candidate domain.Candidate) (domain.Verdict, error) {

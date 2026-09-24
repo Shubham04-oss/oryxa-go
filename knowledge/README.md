@@ -216,8 +216,14 @@ with a token behind it is exactly as "already read through" as one with a
 watermark for deciding whether the next pass is full or incremental.
 
 A document is published when it is first seen, when its normalized content
-changes, or when its title, URL, kind, MIME type, or source metadata changes.
-A pass over a truly unchanged source publishes nothing. Normalizing before
+changes, or when its title, URL, kind, MIME type, or the metadata a consumer
+indexes it by changes: its `knowledge_category`, and a stored file's purpose
+and access label. The rest of what a provider says about a document moves on
+its own — a Gmail label, a GitHub comment count or state — and is written
+without being published, or judged again: when the content, title, kind and
+MIME type are what the judge read before, the verdict is drawn again from the
+judgment kept with the document rather than paid for twice. A pass over a
+truly unchanged source publishes nothing. Normalizing before
 hashing avoids republishing a provider's harmless serialization or line-ending
 changes. When the judge is enabled, Knowledge also records its semantic
 category as `knowledge_category` in document metadata; that category describes

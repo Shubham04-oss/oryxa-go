@@ -197,6 +197,31 @@ type SourceQuery struct {
 	IncludeRemoved bool
 }
 
+// CategoryMetadataKey is where a judged document's semantic category travels
+// in its metadata.
+const CategoryMetadataKey = "knowledge_category"
+
+// searchableMetadata are the metadata keys a consumer indexes a document by:
+// its category, and the purpose and access label Files gives a stored file,
+// which decide who may read it. The rest of what a provider says about a
+// document — a label, a comment count, a state — is kept with it, but is not
+// on its own a new version of what is searched: an issue commented on, or a
+// message archived, still says what it said.
+var searchableMetadata = []string{CategoryMetadataKey, "purpose", "access"}
+
+// SearchableMetadataEqual says whether two versions of a document's metadata
+// agree on everything a consumer indexes it by, present or not.
+func SearchableMetadataEqual(previous, current map[string]string) bool {
+	for _, key := range searchableMetadata {
+		before, had := previous[key]
+		after, has := current[key]
+		if had != has || before != after {
+			return false
+		}
+	}
+	return true
+}
+
 // AppConnection is what apps answered about one of a member's connections to
 // a third-party app: the little of it a provider source needs to decide
 // whether it may index through it, and what to read it with. Apps forwards

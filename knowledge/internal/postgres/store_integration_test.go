@@ -267,7 +267,11 @@ func TestUpsertDocumentPublishesOnlyWhatChanged(t *testing.T) {
 	}
 }
 
-func TestUpsertDocumentPublishesMetadataOnlyChanges(t *testing.T) {
+// TestUpsertDocumentPublishesOnlyWhatAConsumerIndexes: a label or a comment
+// count moving is written, but it is not a new version of what is searched.
+// A document's category, and a stored file's purpose and access label, are:
+// they decide how it is found and who may find it.
+func TestUpsertDocumentPublishesOnlyWhatAConsumerIndexes(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	source := testSource(t, store, "org_1")
@@ -280,11 +284,27 @@ func TestUpsertDocumentPublishesMetadataOnlyChanges(t *testing.T) {
 		t.Fatalf("initial publish = %v, %v", published, err)
 	}
 	document.Metadata = map[string]string{"labels": "IMPORTANT"}
-	if published, err := store.UpsertDocument(ctx, document, publish); err != nil || !published {
-		t.Fatalf("label-only publish = %v, %v", published, err)
+	if published, err := store.UpsertDocument(ctx, document, publish); err != nil || published {
+		t.Fatalf("label-only change = %v, %v, want it written without an event", published, err)
+	}
+	if held, err := store.DocumentByExternalID(ctx, source.ID, "mail-1"); err != nil || held.Metadata["labels"] != "IMPORTANT" {
+		t.Fatalf("stored metadata = %v, %v, want the new label kept", held.Metadata, err)
+	}
+	for _, change := range []map[string]string{
+		{"labels": "IMPORTANT", "knowledge_category": "conversation"},
+		{"labels": "IMPORTANT", "knowledge_category": "conversation", "purpose": "upload"},
+		{"labels": "IMPORTANT", "knowledge_category": "conversation", "purpose": "upload", "access": "admins"},
+	} {
+		document.Metadata = change
+		if published, err := store.UpsertDocument(ctx, document, publish); err != nil || !published {
+			t.Fatalf("change to %v = %v, %v, want it published", change, published, err)
+		}
 	}
 	if published, err := store.UpsertDocument(ctx, document, publish); err != nil || published {
 		t.Fatalf("repeated metadata = %v, %v, want no event", published, err)
+	}
+	if count := outboxCount(t, store); count != 4 {
+		t.Fatalf("outbox events = %d, want the first sight and the three changes a consumer indexes", count)
 	}
 }
 

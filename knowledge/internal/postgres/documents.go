@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,7 +32,9 @@ func requireSourceOrganization(ctx context.Context, tx pgx.Tx, sourceID, organiz
 }
 
 // UpsertDocument writes what a run read, publishing when searchable content
-// or provenance changes. A pass over an unchanged source publishes nothing.
+// or provenance changes: its content, title, URL, kind or MIME, or the
+// metadata a consumer indexes it by. A pass over an unchanged source
+// publishes nothing.
 func (store *Store) UpsertDocument(ctx context.Context, document domain.Document, event func(domain.Document) (domain.Event, error)) (bool, error) {
 	metadata, err := encodeMap(document.Metadata)
 	if err != nil {
@@ -61,10 +62,12 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 			return err
 		}
 		// A document that came back counts as changed, whatever its hash, so a
-		// consumer that forgot it is told to hold it again.
+		// consumer that forgot it is told to hold it again. Metadata only
+		// counts where a consumer indexes by it: a label or a comment count
+		// that moved is written, not published.
 		changed := existingID == "" || existingHash != document.ContentHash || removedAt != nil ||
 			existingKind != document.Kind || existingTitle != document.Title || existingURL != document.URL ||
-			existingMIME != document.MIME || !maps.Equal(previousMetadata, document.Metadata)
+			existingMIME != document.MIME || !domain.SearchableMetadataEqual(previousMetadata, document.Metadata)
 		if existingID != "" {
 			document.ID = existingID
 		}

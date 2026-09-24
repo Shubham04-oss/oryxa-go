@@ -13,8 +13,11 @@
 // organization must honour it.
 //
 // A document is published when its content hash or searchable provenance
-// changes (title, URL, kind, MIME or metadata). An extraction run that finds
-// none of those changes publishes nothing.
+// changes: title, URL, kind, MIME, or the metadata a consumer indexes it by
+// (knowledge_category, and a stored file's purpose and access). Any other
+// metadata travels with a document when it is published but does not publish
+// it on its own. An extraction run that finds none of those changes publishes
+// nothing.
 // Delivery is at least once, as everywhere on the bus: deduplicate on the
 // envelope's event_id. ContentHash alone is not an event version because
 // provenance may change without a content change. Events never carry a
@@ -102,6 +105,8 @@ type DocumentPublished struct {
 	// Metadata includes provider attributes (author, label, channel) and
 	// Knowledge's semantic knowledge_category when judged. It is small,
 	// flat, and never a credential or an authority for access decisions.
+	// Provider attributes may lag what the provider now says: a change to
+	// them alone, such as a label or a comment count, is not published.
 	Metadata map[string]string `json:"metadata,omitempty"`
 	// SourceUpdatedAt is when the provider last changed the document, when it
 	// says; ExtractedAt is when knowledge read it.
