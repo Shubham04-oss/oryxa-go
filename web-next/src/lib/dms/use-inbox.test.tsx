@@ -136,8 +136,12 @@ describe("useInbox", () => {
     }
   })
 
-  it("stops for good once the inbox was purged", () => {
-    const api = mockApi(() => undefined)
+  it("after a purge, stops for good when the Worker refuses the member", async () => {
+    const api = mockApi(({ path: asked }) =>
+      asked === path
+        ? apiError(404, "not_found", "resource not found")
+        : undefined
+    )
     const { result } = setup()
     const socket = roomSockets.latest
     socket.open()
@@ -148,8 +152,36 @@ describe("useInbox", () => {
     })
     socket.says({ type: "inbox-gone" })
     socket.drop(conversationGoneCloseCode)
+    await waitFor(() => expect(socket.options.enabled).toBe(false))
     expect(result.current.status).toBe("error")
-    expect(socket.options.enabled).toBe(false)
-    expect(api.calls).toEqual([])
+    expect(api.calls.map((call) => call.path)).toEqual([path])
+    expect(socket.reconnects).toBe(0)
+  })
+
+  it("after a purge that kept something, reopens and takes the inbox as it now stands", async () => {
+    mockApi(({ path: asked }) =>
+      asked === path ? json(undefined, 204) : undefined
+    )
+    const { result } = setup()
+    const socket = roomSockets.latest
+    socket.open()
+    socket.says({
+      type: "inbox-snapshot",
+      conversations: [withAdmin, withOwner],
+      unreadTotal: 3,
+    })
+    socket.says({ type: "inbox-gone" })
+    await waitFor(() => expect(socket.reconnects).toBe(1))
+    await waitFor(() => expect(socket.readyState).toBe(1))
+    socket.says({
+      type: "inbox-snapshot",
+      conversations: [withOwner],
+      unreadTotal: 1,
+    })
+    expect(result.current).toEqual({
+      conversations: [withOwner],
+      unreadTotal: 1,
+      status: "live",
+    })
   })
 })

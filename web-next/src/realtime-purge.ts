@@ -6,6 +6,7 @@ import { getAgentByName } from "agents"
 import type { ConversationEnv } from "./conversation-env"
 import { isNameId, registryName } from "./lib/dms/names"
 import { maxPurgeEventId } from "./realtime-registry-agent"
+import type { PurgeTarget } from "./realtime-registry-agent"
 
 /** Where the Worker takes a purge. Not under `/agents/`: no page reaches it. */
 export const REALTIME_PURGE_PATH = "/internal/realtime/purge"
@@ -28,15 +29,71 @@ export const minPurgeSecretLength = 32
 export const maxPurgeBodyBytes = 4 * 1024
 
 /**
- * A purge, as Go sends it. `user_id` is always present: a member's id purges
- * that member's conversations and inbox; `""` purges every member of the
- * organization. `event_id` names the event behind it (1 to 200 characters,
- * unique per event): the same event again does nothing.
+ * A purge, as Go sends it (contract v2).
+ *
+ * - `event_id` names the event behind it (1 to 200 characters, unique per
+ *   event): the same event again does nothing.
+ * - `scope` says what goes: `member` (the member `user_id`, never empty) or
+ *   `organization` (every member; `user_id` is then `""`). An empty
+ *   `user_id` never means the organization by itself.
+ * - `removed_at` is when the member left, RFC 3339 with 0 to 9 fractional
+ *   digits: in a member's conversations, only what is not newer than it
+ *   goes. An organization's purge takes everything.
  */
 export type PurgeRequest = {
   event_id: string
   organization_id: string
+  scope: PurgeTarget["scope"]
   user_id: string
+  removed_at: string
+}
+
+// RFC 3339's date-time, strictly: the date, `T`, the time, 1 to 9
+// fractional digits, and `Z` or an offset. Its numbers are checked apart.
+const rfc3339 =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?(?:[Zz]|([+-])(\d{2}):(\d{2}))$/
+
+/**
+ * An RFC 3339 time as the purge hands it on (`toISOString`: UTC, to the
+ * millisecond), or nothing for one that is not a real time (a 30th of
+ * February, 24:00, a leap second, an offset past 23:59).
+ *
+ * The digits past the millisecond go. Messages record when they were written
+ * to the millisecond, and for those, "at or before `removed_at`" is the same
+ * as "at or before its millisecond": a message written in that millisecond
+ * counts as at or before it, and one written in the next does not.
+ */
+export function removalTime(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined
+  const match = rfc3339.exec(value)
+  if (!match) return undefined
+  const [, year, month, day, hour, minute, second, fraction = ""] = match
+  const [sign, offsetHours = "0", offsetMinutes = "0"] = match.slice(8)
+  const numbers = [year, month, day, hour, minute, second].map(Number)
+  const [y, mo, d, h, mi, se] = numbers
+  const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate()
+  if (
+    y < 1970 ||
+    mo < 1 ||
+    mo > 12 ||
+    d < 1 ||
+    d > daysInMonth ||
+    h > 23 ||
+    mi > 59 ||
+    se > 59 ||
+    Number(offsetHours) > 23 ||
+    Number(offsetMinutes) > 59
+  ) {
+    return undefined
+  }
+  const offset =
+    (sign === "-" ? -1 : 1) *
+    (Number(offsetHours) * 60 + Number(offsetMinutes)) *
+    60_000
+  const milliseconds = Number(fraction.slice(0, 3).padEnd(3, "0"))
+  return new Date(
+    Date.UTC(y, mo - 1, d, h, mi, se, milliseconds) - offset
+  ).toISOString()
 }
 
 const encoder = new TextEncoder()
@@ -157,23 +214,31 @@ export function parsePurgeRequest(body: Uint8Array): PurgeRequest | undefined {
   const fields = value as Record<string, unknown>
   const eventId = fields.event_id
   const organizationId = fields.organization_id
+  const scope = fields.scope
   const userId = fields.user_id
+  const removedAt = fields.removed_at
   if (
     typeof eventId !== "string" ||
     eventId === "" ||
     eventId.length > maxPurgeEventId ||
     !isNameId(organizationId) ||
-    // Present on every purge: a body that left it out is refused, never
-    // read as the whole organization.
-    typeof userId !== "string" ||
-    (userId !== "" && !isNameId(userId))
+    // The scope says what goes; `user_id` must agree with it. An empty
+    // `user_id` alone never means the organization.
+    !(
+      (scope === "member" && isNameId(userId)) ||
+      (scope === "organization" && userId === "")
+    ) ||
+    typeof removedAt !== "string" ||
+    removalTime(removedAt) === undefined
   ) {
     return undefined
   }
   return {
     event_id: eventId,
     organization_id: organizationId,
+    scope,
     user_id: userId,
+    removed_at: removedAt,
   }
 }
 
@@ -236,15 +301,23 @@ export async function handlePurge(
     return refuse(
       400,
       "invalid_request",
-      "A purge needs event_id, organization_id and user_id."
+      "A purge needs event_id, organization_id, a scope that agrees with user_id, and removed_at."
     )
   }
+  const target: PurgeTarget =
+    purge.scope === "organization"
+      ? { scope: "organization" }
+      : {
+          scope: "member",
+          userId: purge.user_id,
+          removedAt: removalTime(purge.removed_at) ?? "",
+        }
   try {
     const registry = await getAgentByName(
       env.RealtimeRegistryAgent,
       registryName(purge.organization_id)
     )
-    await registry.purge(purge.event_id, purge.user_id || undefined)
+    await registry.purge(purge.event_id, target)
   } catch (error) {
     console.error("realtime purge: a purge did not finish", error)
     return refuse(503, "unavailable", "The purge did not finish. Try again.")

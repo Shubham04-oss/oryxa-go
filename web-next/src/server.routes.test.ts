@@ -859,7 +859,9 @@ describe("the purge", () => {
   const body = JSON.stringify({
     event_id: "evt_1",
     organization_id: "org_sim",
+    scope: "member",
     user_id: "user-ada",
+    removed_at: "2026-09-24T10:00:00.123456789Z",
   })
 
   async function signed(timestamp = Math.floor(Date.now() / 1000)) {
@@ -886,7 +888,11 @@ describe("the purge", () => {
       env.RealtimeRegistryAgent,
       "org_sim"
     )
-    expect(sdk.purge).toHaveBeenCalledWith("evt_1", "user-ada")
+    expect(sdk.purge).toHaveBeenCalledWith("evt_1", {
+      scope: "member",
+      userId: "user-ada",
+      removedAt: "2026-09-24T10:00:00.123Z",
+    })
     expect(fetchMock).not.toHaveBeenCalled()
     expect(sdk.startFetch).not.toHaveBeenCalled()
   })

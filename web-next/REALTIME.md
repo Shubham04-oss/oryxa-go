@@ -233,6 +233,9 @@ keep it current over RPC:
   conversation as it starts); `removeConversation(name)` takes one off.
 - `knowConversation(entry)` keeps one the member is in without listing it
   (a DM opened before its first message): only a purge reads it.
+- `restateConversation(entry, state)`: after a purge that kept part of a
+  conversation, its object says what the inbox keeps of it (its latest
+  message, the read, what is unread) in place of what it had.
 - The inbox checks every entry against itself: a conversation of its
   organization that its member is in, with `peerId` the other person, and in
   a DM only its two people write. Anything else throws, so one object can
@@ -308,10 +311,10 @@ reaches it.
   unreachable (the access check answers 404), so a page clears the chat
   before it deletes the specialist.
 - A member leaving or an organization being deleted empties the DMs (and,
-  once they exist, the side conversations) they were in: Go calls the
-  Worker's purge, below.
+  once they exist, the side conversations) they were in, up to when they
+  left: Go calls the Worker's purge, below.
 
-### Purging a member's conversations
+### Purging a member's conversations (contract v2)
 
 Go's relay turns `auth.member.removed.v1` and `auth.organization.deleted.v1`
 into one call each (an organization's deletion is one call, not one per
@@ -323,12 +326,17 @@ member):
 - `X-Oryxa-Signature`: `v1=` and the lowercase hex HMAC-SHA256, keyed with
   `REALTIME_PURGE_SECRET` (its characters as written, never hex-decoded), of
   the timestamp as sent, a `.`, and the raw body's bytes.
-- The body, at most 4 KB of JSON:
-  `{"event_id": "…", "organization_id": "…", "user_id": "…"}`. `event_id` is
-  1 to 200 characters, unique per event. `organization_id` is an id a name
-  may hold (`A-Z a-z 0-9 _ -`, at most 128). `user_id` is always present: a
-  member's id purges that member, and `""` purges the whole organization; a
-  body without it is refused, never read as the organization.
+- The body, at most 4 KB of compact JSON, keys in this order:
+  `{"event_id":"…","organization_id":"…","scope":"member"|"organization","user_id":"…","removed_at":"…"}`.
+  - `event_id`: 1 to 200 characters, unique per event.
+  - `organization_id`: an id a name may hold (`A-Z a-z 0-9 _ -`, at most
+    128).
+  - `scope`: required. `member` needs a `user_id` (the member who left, an id
+    as above); `organization` needs `user_id` to be `""`. Anything else is
+    refused: an empty `user_id` never means the organization by itself.
+  - `removed_at`: required, RFC 3339 (`T` and `Z` in either case, or an
+    offset; 0 to 9 fractional digits), a real time: a 30th of February,
+    24:00, a leap second or a year before 1970 is refused.
 
 The Worker checks, in order: POST (405); its secret is set and at least 32
 characters (503 `unavailable` otherwise); both headers (401
@@ -336,36 +344,68 @@ characters (503 `unavailable` otherwise); both headers (401
 `stale_request`); the signature's form, `v1=` and 64 hex digits (401
 `invalid_signature`); the body at most 4 KB (413 `too_large`); the
 signature itself, compared in constant time (401 `invalid_signature`); the
-body (400 `invalid_request`). Then the organization's registry carries the purge out,
-and the Worker answers 204 with no body once it is done, or was done
-already for this `event_id`: the registry remembers an event for 24 hours,
-so a replay, or Go sending an event again after missing the answer, does
-nothing. A purge that failed part-way answers 503, and sent again it
-carries on from where it stopped. Only 204 is done: Go retries 401, 408,
-429, 5xx and any other 2xx, and follows no redirect.
+body (400 `invalid_request`, which Go does not retry). Then the
+organization's registry carries the purge out, and the Worker answers 204
+with no body once it is done, or was done already for this `event_id`: the
+registry remembers an event for 24 hours, so a replay, or Go sending an
+event again after missing the answer, does nothing. A purge that failed
+part-way answers 503, and sent again it carries on from where it stopped.
+Only 204 is done: Go retries 401, 408, 429, 5xx and any other 2xx, and
+follows no redirect.
 
-A member's purge: the member leaves the registry (and is put back if the
-purge fails, for the next organization purge). Their inbox goes through
-every conversation it lists or knows: each is emptied (a DM's `purge`
-deletes its messages, read states and what it told the inboxes, tells every
-socket `dm-gone` and closes it with 4404, so a socket the member still has
-open cannot write in it) and taken off the other person's inbox. It goes
-through them again while any arrived meanwhile (at most five passes), then
-empties itself, tells its sockets `inbox-gone` and closes them. An
-organization's purge does that for every member in its registry, 8 at a
-time. The objects are left empty, not deleted: nothing of the member stays.
-A message sent in the moment a DM is purged can leave its preview in the
-other person's inbox; opening it then answers 404, as the member is gone.
+**`removed_at`, to the millisecond.** Messages record when they were
+written to the millisecond, so `removed_at` is compared at that precision:
+its digits past the millisecond are dropped, which for such times is exact.
+A message written in `removed_at`'s millisecond counts as at or before it
+(`…10:00:00.123Z` goes for `…10:00:00.123456789Z`); one written in the
+next does not (`…10:00:00.124Z` stays).
 
-A page treats `dm-gone` and `inbox-gone` as final (both hooks settle and
-close their own socket). The object's close alone is not enough: in `vite
-dev` it does not reach a socket whose page never sent a frame on it (an
-inbox's; a DM's page always says its visibility first).
+**An organization's purge** empties every member's conversations and inbox
+in its registry, 8 members at a time, newer messages too, and every socket
+is told `…-gone` and closed.
+
+**A member's purge** keeps what is newer than `removed_at` (a member let
+back in who talked since). The member leaves the registry while it runs.
+Their inbox goes through every conversation it lists or knows (a DM opened
+without a message too), again while any arrive meanwhile (at most five
+passes). In each DM (`DirectMessageAgent.purge`):
+
+- The messages written at or before `removed_at` go, and so do any the
+  member wrote after it on a socket opened before it: a page left open from
+  before they left, writing in the moment between their removal and this
+  purge.
+- Nothing left, and no socket opened since `removed_at`: the DM is emptied
+  (messages, read states, what it told the inboxes), its sockets are told
+  `dm-gone` and closed, and it leaves both inboxes.
+- Otherwise it stays, as a new run of the conversation (a new
+  `conversation` id, so no page joins what it held to what stayed). Both
+  inboxes are restated from what stayed
+  (`InboxAgent.restateConversation`: its latest message, the read, and
+  what is unread; with no message left, known but not listed). Its sockets
+  opened since `removed_at` are sent the new run; those opened before are
+  told `dm-gone` and closed.
+
+Then the inbox empties itself only if nothing of the member's stays, and the
+member is put back in the registry if something does (or if the purge
+failed, for the next one). Its sockets opened before `removed_at` are told
+`inbox-gone` and closed; those opened since are sent the inbox as it now
+stands. The objects are left empty, not deleted. A message sent in the
+moment a DM is purged can leave its preview in the other person's inbox;
+opening it then answers 404, as the member is gone.
+
+**A page on a purged socket.** `dm-gone` and `inbox-gone` end the socket's
+run, not the conversation: both hooks ask the Worker (the GET check), then
+settle on 401 (`session_expired`) or 403/404 (`not-allowed`; the inbox's
+`error`), and otherwise reopen the socket, whose snapshot is what stayed.
+The hooks act on the message, not only the close: in `vite dev` the
+object's close does not reach a socket whose page never sent a frame on it
+(an inbox's; a DM's page always says its visibility first).
 
 `REALTIME_PURGE_SECRET` is a Worker secret (`wrangler secret put
 REALTIME_PURGE_SECRET`, the same value Go has; `.dev.vars` locally, see
 `.dev.vars.example`). `src/realtime-purge.test.ts` pins Go's own signing
-vectors.
+vectors: a member's purge, an organization's, and a member's with a
+nanosecond `removed_at`.
 
 ## UI
 

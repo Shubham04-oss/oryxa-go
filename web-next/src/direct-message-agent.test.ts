@@ -113,7 +113,11 @@ describe("DirectMessageAgent: sockets", () => {
 
     const socket = await join(dm, bo)
     expect(socket.closed).toBeUndefined()
-    expect(socket.state).toEqual({ userId: bo, visible: false })
+    expect(socket.state).toEqual({
+      userId: bo,
+      visible: false,
+      connectedAt: "2026-09-24T09:00:00.000Z",
+    })
     expect(socket.sent).toEqual([
       {
         type: "dm-snapshot",
@@ -713,5 +717,147 @@ describe("DirectMessageAgent: purge", () => {
     const reopened = await join(dm, bo)
     expect(reopened.last("dm-snapshot")?.conversation).toMatch(/^dmc_/)
     expect(reopened.last("dm-snapshot")?.conversation).not.toBe(before)
+  })
+})
+
+describe("DirectMessageAgent: purging one person who left", () => {
+  const removedAt = "2026-09-24T09:00:30.000Z"
+
+  it("keeps what is newer than when they left, as a new run, and restates both inboxes", async () => {
+    const { dm, world } = await setup()
+    const adaOld = await join(dm, ada)
+    const boOld = await join(dm, bo)
+    await send(dm, adaOld, "before, from Ada")
+    await send(dm, boOld, "before, from Bo")
+    // Ada leaves at 09:00:30. Her page from before is still open, and says
+    // something after she left; then she is back, on a socket opened since.
+    vi.setSystemTime(new Date("2026-09-24T09:01:00.000Z"))
+    await send(dm, adaOld, "stale, from Ada")
+    const adaNew = await join(dm, ada)
+    await send(dm, adaNew, "after, from Ada")
+    const before = adaNew.last("dm-snapshot")?.conversation
+    expect((await inboxOf(world, bo))[0].unread).toBe(2)
+
+    expect(await dm.purge({ userId: ada, removedAt })).toEqual({
+      emptied: false,
+    })
+
+    expect(dm.sql`SELECT seq, body FROM dm_messages`).toEqual([
+      { seq: 4, body: "after, from Ada" },
+    ])
+    // The sockets from before she left end their run, and each page asks
+    // the Worker whether it may open the DM again; hers since is sent the
+    // new run.
+    for (const socket of [adaOld, boOld]) {
+      expect(socket.sent.at(-1)).toEqual({ type: "dm-gone" })
+      expect(socket.closed?.code).toBe(conversationGoneCloseCode)
+    }
+    expect(adaNew.closed).toBeUndefined()
+    const run = adaNew.last("dm-snapshot")
+    expect(run?.conversation).toMatch(/^dmc_/)
+    expect(run?.conversation).not.toBe(before)
+    expect(
+      (run?.messages as Array<{ seq: number }>).map((message) => message.seq)
+    ).toEqual([4])
+    // Both inboxes keep only what stays: its latest message, and Bo's
+    // unread without the messages that went.
+    expect(await inboxOf(world, bo)).toEqual([
+      expect.objectContaining({
+        lastMessage: expect.objectContaining({
+          body: "after, from Ada",
+        }) as unknown,
+        unread: 1,
+      }),
+    ])
+    expect(await inboxOf(world, ada)).toEqual([
+      expect.objectContaining({ unread: 0 }),
+    ])
+    // What stays goes on as before.
+    const boNew = await join(dm, bo)
+    await send(dm, boNew, "welcome back")
+    expect((await inboxOf(world, ada))[0].unread).toBe(1)
+  })
+
+  it("empties it when nothing is newer and no socket opened since", async () => {
+    const { dm, world } = await setup()
+    const adaTab = await join(dm, ada)
+    await send(dm, adaTab, "before")
+    vi.setSystemTime(new Date("2026-09-24T09:05:00.000Z"))
+
+    expect(await dm.purge({ userId: ada, removedAt })).toEqual({
+      emptied: true,
+    })
+    for (const table of [
+      "dm_messages",
+      "dm_reads",
+      "dm_inbox_sync",
+      "dm_meta",
+    ]) {
+      expect(
+        dm.sql([`SELECT * FROM ${table}`] as unknown as TemplateStringsArray)
+      ).toEqual([])
+    }
+    expect(adaTab.closed?.code).toBe(conversationGoneCloseCode)
+    // The inbox's caller takes it off both inboxes.
+    expect(world.callsTo("InboxAgent", "restateConversation")).toEqual([])
+  })
+
+  it("keeps a DM open on a socket opened since, known but not listed, when nothing newer was said", async () => {
+    const { dm, world } = await setup()
+    const adaOld = await join(dm, ada)
+    await send(dm, adaOld, "before")
+    vi.setSystemTime(new Date("2026-09-24T09:01:00.000Z"))
+    const boNew = await join(dm, bo)
+
+    expect(await dm.purge({ userId: ada, removedAt })).toEqual({
+      emptied: false,
+    })
+    expect(dm.sql`SELECT * FROM dm_messages`).toEqual([])
+    expect(boNew.last("dm-snapshot")).toEqual(
+      expect.objectContaining({
+        conversation: "",
+        messages: [],
+        reads: [
+          { userId: ada, seq: 0 },
+          { userId: bo, seq: 0 },
+        ],
+      })
+    )
+    for (const user of [ada, bo]) {
+      expect(await inboxOf(world, user)).toEqual([])
+      const inbox = await world.object<Inbox>(
+        "InboxAgent",
+        inboxName(org, user)
+      )
+      expect(inbox.sql`SELECT name FROM inbox_known`).toEqual([
+        { name: dmName },
+      ])
+    }
+  })
+
+  it("counts a message in removed_at's millisecond as at or before it, and the next one as newer", async () => {
+    const { dm } = await setup()
+    const boTab = await join(dm, bo)
+    vi.setSystemTime(new Date("2026-09-24T10:00:00.123Z"))
+    await send(dm, boTab, "in the same millisecond")
+    vi.setSystemTime(new Date("2026-09-24T10:00:00.124Z"))
+    await send(dm, boTab, "a millisecond later")
+
+    // removed_at 10:00:00.123456789Z, as the purge hands it on.
+    await dm.purge({ userId: ada, removedAt: "2026-09-24T10:00:00.123Z" })
+    expect(dm.sql`SELECT body FROM dm_messages`).toEqual([
+      { body: "a millisecond later" },
+    ])
+  })
+
+  it("refuses a scope that is not this conversation's, or not an instant", async () => {
+    const { dm } = await setup()
+    for (const scope of [
+      { userId: "user-cy", removedAt },
+      { userId: ada, removedAt: "2026-09-24T09:00:30Z" },
+      { userId: ada, removedAt: "yesterday" },
+    ]) {
+      await expect(dm.purge(scope)).rejects.toThrow(TypeError)
+    }
   })
 })

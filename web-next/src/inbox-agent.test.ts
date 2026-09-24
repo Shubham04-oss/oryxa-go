@@ -392,7 +392,143 @@ describe("InboxAgent: the organization's registry", () => {
   })
 })
 
+describe("InboxAgent: a conversation restated after a purge", () => {
+  it("takes its object's word for the latest message, the read and what is unread", async () => {
+    const { inbox } = await setup()
+    const socket = await openSocket(inbox, { organizationId: org, userId: ada })
+    await inbox.noteMessage(dmWith(bo), message(1, bo), message(2, bo))
+    socket.clear()
+
+    await inbox.restateConversation(dmWith(bo), {
+      last: message(5, bo, "what stays", "2026-09-24T09:30:00.000Z"),
+      readSeq: 3,
+      unread: [4, 5],
+    })
+    expect(await inbox.listConversations()).toEqual([
+      {
+        kind: "dm",
+        name: dmWith(bo).name,
+        peerId: bo,
+        lastMessage: {
+          authorId: bo,
+          body: "what stays",
+          createdAt: "2026-09-24T09:30:00.000Z",
+        },
+        unread: 2,
+        updatedAt: "2026-09-24T09:30:00.000Z",
+      },
+    ])
+    expect(socket.last("inbox-conversation")?.unreadTotal).toBe(2)
+    // What comes after goes on from there.
+    await inbox.noteMessage(dmWith(bo), message(6, bo))
+    expect((await inbox.listConversations())[0].unread).toBe(3)
+  })
+
+  it("keeps one with nothing left known, not listed", async () => {
+    const { inbox } = await setup()
+    const socket = await openSocket(inbox, { organizationId: org, userId: ada })
+    await inbox.noteMessage(dmWith(bo), message(1, bo))
+    socket.clear()
+    await inbox.restateConversation(dmWith(bo), { readSeq: 0, unread: [] })
+    expect(await inbox.listConversations()).toEqual([])
+    expect(inbox.sql`SELECT name FROM inbox_known`).toEqual([
+      { name: dmWith(bo).name },
+    ])
+    expect(socket.of("inbox-removed")).toEqual([
+      { type: "inbox-removed", name: dmWith(bo).name, unreadTotal: 0 },
+    ])
+  })
+
+  it("refuses a restatement that does not add up", async () => {
+    const { inbox } = await setup()
+    for (const state of [
+      { readSeq: -1, unread: [] },
+      { readSeq: 3, unread: [2] },
+      { readSeq: 0, unread: [1.5] },
+      { last: message(1, cy), readSeq: 0, unread: [] },
+    ]) {
+      await expect(
+        inbox.restateConversation(dmWith(bo), state)
+      ).rejects.toThrow(TypeError)
+    }
+  })
+})
+
 describe("InboxAgent: purge", () => {
+  it("purging one member who left keeps what is newer, and ends only the sockets from before", async () => {
+    const world = makeWorld()
+    const adaBo = directMessageName(org, ada, bo)
+    const adaCy = directMessageName(org, ada, cy)
+    // 10:00: Ada talks with Bo and with Cy, and has her inbox open.
+    const toBo = await world.object<Dm>("DirectMessageAgent", adaBo)
+    const toBoSocket = await openSocket(toBo, {
+      organizationId: org,
+      userId: ada,
+    })
+    await say(toBo, toBoSocket, {
+      type: "dm-send",
+      clientId: "client-bo-1",
+      body: "old",
+    })
+    const toCy = await world.object<Dm>("DirectMessageAgent", adaCy)
+    const toCySocket = await openSocket(toCy, {
+      organizationId: org,
+      userId: ada,
+    })
+    await say(toCy, toCySocket, {
+      type: "dm-send",
+      clientId: "client-cy-1",
+      body: "old",
+    })
+    const inbox = await world.object<Inbox>("InboxAgent", inboxName(org, ada))
+    const oldList = await openSocket(inbox, {
+      organizationId: org,
+      userId: ada,
+    })
+    // She leaves at 10:00:30 and is back at 10:01, writing to Bo again.
+    vi.setSystemTime(new Date("2026-09-24T10:01:00.000Z"))
+    const toBoAgain = await openSocket(toBo, {
+      organizationId: org,
+      userId: ada,
+    })
+    await say(toBo, toBoAgain, {
+      type: "dm-send",
+      clientId: "client-bo-2",
+      body: "new",
+    })
+    const newList = await openSocket(inbox, {
+      organizationId: org,
+      userId: ada,
+    })
+    newList.clear()
+
+    expect(
+      await inbox.purge({ removedAt: "2026-09-24T10:00:30.000Z" })
+    ).toEqual({
+      emptied: false,
+    })
+
+    expect((await inbox.listConversations()).map((c) => c.name)).toEqual([
+      adaBo,
+    ])
+    const cysInbox = await world.object<Inbox>("InboxAgent", inboxName(org, cy))
+    expect(await cysInbox.listConversations()).toEqual([])
+    expect(toCy.sql`SELECT * FROM dm_messages`).toEqual([])
+    expect(toBo.sql`SELECT body FROM dm_messages`).toEqual([{ body: "new" }])
+    expect(oldList.sent.at(-1)).toEqual({ type: "inbox-gone" })
+    expect(oldList.closed?.code).toBe(conversationGoneCloseCode)
+    expect(newList.closed).toBeUndefined()
+    expect(newList.last("inbox-snapshot")).toEqual(
+      expect.objectContaining({
+        conversations: [expect.objectContaining({ name: adaBo })],
+      })
+    )
+    // Still registered: something of hers stays.
+    expect(
+      inbox.sql`SELECT value FROM inbox_meta WHERE key = 'registered'`
+    ).toEqual([{ value: "1" }])
+  })
+
   it("empties each conversation, takes it off the other person's inbox, then empties itself and closes its sockets", async () => {
     const world = makeWorld()
     const adaBo = directMessageName(org, ada, bo)

@@ -97,7 +97,12 @@ type Live = {
 }
 
 /** The part of the SDK's socket the view uses. */
-type Socket = { readyState: number; OPEN: number; send: (data: string) => void }
+type Socket = {
+  readyState: number
+  OPEN: number
+  send: (data: string) => void
+  reconnect: () => void
+}
 
 function initialLive(name: string): Live {
   return {
@@ -179,6 +184,8 @@ class DirectMessagesView {
     timer: ReturnType<typeof setTimeout>
   }
   private checking = false
+  /** A check under way reopens the socket when the Worker lets the member in: the object ended its run. */
+  private reopenAfterCheck = false
   private saidTyping = false
   private typedAt = 0
   private readSent = 0
@@ -390,13 +397,10 @@ class DirectMessagesView {
     this.finishHistory()
     this.stopPeerTyping()
     this.change({ open: false, dropped: true, typing: new Set() })
-    if (event.code === conversationGoneCloseCode) {
-      this.settle("not-allowed")
-      this.render()
-      return
-    }
     this.render()
-    this.check()
+    // The object's close of a run it ended (a purge) is not reopened by the
+    // SDK: the Worker says whether it may be.
+    this.check(event.code === conversationGoneCloseCode)
   }
 
   dispose(): void {
@@ -456,7 +460,12 @@ class DirectMessagesView {
         return
       }
       case "dm-gone":
-        this.settle("not-allowed")
+        // A purge ended this run of the conversation. Whether the viewer
+        // may open it again (with what stayed of it) is the Worker's to say.
+        this.finishHistory()
+        this.stopPeerTyping()
+        this.change({ open: false, dropped: true, typing: new Set() })
+        this.check(true)
         return
     }
   }
@@ -567,28 +576,44 @@ class DirectMessagesView {
     })
   }
 
-  /** Why the socket closed: the Worker makes the socket's own check with Go. */
-  private check(): void {
+  /**
+   * Why the socket closed, or whether a run the object ended may be opened
+   * again (`reopen`): the Worker makes the socket's own check with Go. 401
+   * ends the session, 403 or 404 is not allowed; otherwise a socket the SDK
+   * does not reopen by itself is reopened.
+   */
+  private check(reopen: boolean): void {
+    if (reopen) this.reopenAfterCheck = true
     if (this.checking) return
     this.checking = true
     const name = this.live.name
+    const reopenIfWanted = () => {
+      if (this.live.name === name && !this.settled && this.reopenAfterCheck) {
+        this.socket?.reconnect()
+      }
+    }
     checkConversationSocket(
       directMessagePath(this.organizationId, this.viewerId, this.peerId)
     )
-      .catch((error: unknown) => {
-        if (this.live.name !== name || !(error instanceof ApiError)) return
-        if (error.status === 401) {
+      .then(reopenIfWanted, (error: unknown) => {
+        if (this.live.name !== name) return
+        if (error instanceof ApiError && error.status === 401) {
           this.settle("session_expired")
-        } else if (error.status === 403 || error.status === 404) {
+        } else if (
+          error instanceof ApiError &&
+          (error.status === 403 || error.status === 404)
+        ) {
           this.settle("not-allowed")
         } else {
           // Anything else may pass: the socket keeps trying.
+          reopenIfWanted()
           return
         }
         this.render()
       })
       .finally(() => {
         this.checking = false
+        this.reopenAfterCheck = false
       })
   }
 
