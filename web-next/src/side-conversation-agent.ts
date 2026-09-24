@@ -1174,23 +1174,24 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     switch (item.type) {
       case "delta": {
         if (!fromAgent || !item.text || draft.full) return
-        const before = bodyOf(draft)
+        const at = bodyOf(draft).length
         const separator =
           draft.draft === "" && draft.finished.some((part) => part !== "")
             ? "\n\n"
             : ""
         draft.draft += item.text
-        if (codePoints(bodyOf(draft)) > SIDE_MAX_AGENT_TEXT) {
+        const length = at + separator.length + item.text.length
+        // Counted in code points only once it could be too long: a code
+        // point is one or two UTF-16 units.
+        if (
+          length > SIDE_MAX_AGENT_TEXT &&
+          codePoints(bodyOf(draft)) > SIDE_MAX_AGENT_TEXT
+        ) {
           draft.full = true
           this.persistDraft(seq, draft)
           return
         }
-        this.tell({
-          type: "side-delta",
-          seq,
-          at: before.length,
-          text: separator + item.text,
-        })
+        this.tell({ type: "side-delta", seq, at, text: separator + item.text })
         return
       }
       case "message":
