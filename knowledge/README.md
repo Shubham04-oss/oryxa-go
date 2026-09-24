@@ -44,7 +44,14 @@ starts a shared Files source; the first team-scoped upload starts one for that
 team; the first member-scoped upload starts one for that member. Knowledge
 hears `files.object.created.v1` and registers each source through the
 uploader's standing grant. Later uploads
-schedule the existing source to sync promptly.
+schedule the existing source to sync promptly: once, however many arrive
+before its pass starts, and an upload that lands while a pass is under way,
+possibly after it listed the placement, has the next pass run as soon as
+that one ends rather than an interval later. Files answers its whole listing
+at once, so an incremental pass does not download a file the source already
+holds live with the same sha256, name, purpose and access label: a pass
+brought forward by an upload reads the new file, not the whole placement. A
+full sweep reads everything again.
 
 A deletion is heard the same way: `files.object.deleted.v1` retracts the
 file's document at once, through the sources at the placement the event

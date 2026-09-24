@@ -134,10 +134,26 @@ func (s *Service) walk(ctx context.Context, extractor sources.Extractor, source 
 		return result, err
 	}
 
+	request := sources.Request{Source: source, Credential: credential, Full: full, Limit: pageSize}
+	if !full {
+		// An incremental pass may skip what the source already holds as it
+		// is; a full sweep reads everything again, so what changed in how
+		// knowledge reads a document still reaches it within a sweep.
+		request.Held = func(ctx context.Context, externalID string) (domain.Document, bool, error) {
+			held, err := s.store.DocumentByExternalID(ctx, source.ID, externalID)
+			switch {
+			case err == nil:
+				return held, true, nil
+			case errors.Is(err, domain.ErrNotFound):
+				return domain.Document{}, false, nil
+			default:
+				return domain.Document{}, false, err
+			}
+		}
+	}
 	for range pagesPerRun {
-		page, err := extractor.Fetch(ctx, sources.Request{
-			Source: source, Credential: credential, Cursor: cursor, Full: full, Limit: pageSize,
-		})
+		request.Cursor = cursor
+		page, err := extractor.Fetch(ctx, request)
 		if err != nil {
 			return result, err
 		}
@@ -372,12 +388,14 @@ func (s *Service) runCompleted(ctx context.Context, source domain.Source, run do
 	}
 
 	// A pass that stopped early comes straight back rather than waiting an
-	// interval: there is more of this source to read.
+	// interval: there is more of this source to read. One asked for again
+	// while it ran — an upload that may have landed after it listed — keeps
+	// that sooner time: the store compares against when it was claimed due.
 	next := now.Add(source.Interval)
 	if !result.drained {
 		next = now
 	}
-	if _, err := s.store.FinishSource(ctx, source.ID, lease, now, next, fullSweptAt, nil); err != nil {
+	if _, err := s.store.FinishSource(ctx, source.ID, lease, now, next, source.SyncAt, fullSweptAt, nil); err != nil {
 		return err
 	}
 	s.logger.InfoContext(ctx, "source read",

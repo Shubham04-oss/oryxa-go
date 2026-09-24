@@ -43,8 +43,9 @@ type Store interface {
 	// sources, no sooner than floor after their last.
 	HastenSources(ctx context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error)
 	// HastenSource brings forward one source's next sweep, because someone
-	// asked. It answers false for a source that is not active or already due
-	// sooner.
+	// asked; for a source whose pass is under way, it asks for another once
+	// that pass ends. It answers false for a source that is not active or
+	// already due sooner.
 	HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error)
 	// RemoveSourcesByTeam retires every source a deleted team held, and
 	// retracts what they held in the same transaction.
@@ -56,7 +57,10 @@ type Store interface {
 
 	ClaimDueSources(context.Context, time.Time, int, string, time.Time) ([]domain.Source, error)
 	RenewLease(context.Context, string, string, time.Time) (bool, error)
-	FinishSource(context.Context, string, string, time.Time, time.Time, *time.Time, *domain.Event) (bool, error)
+	// FinishSource schedules a source's next pass for next, unless it was
+	// asked for again after the pass claimed it due at claimedDue: then the
+	// sooner of the two.
+	FinishSource(ctx context.Context, sourceID, lease string, now, next time.Time, claimedDue, fullSweptAt *time.Time, event *domain.Event) (bool, error)
 	FailSource(context.Context, string, string, string, time.Time, time.Time, *domain.Event) (bool, error)
 	// RetireSource retires a source the run holding its lease found can no
 	// longer be read, retracting what it held; false once the lease has

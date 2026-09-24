@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -240,6 +241,26 @@ func (source *Files) read(ctx context.Context, request Request, object filesclie
 		mime, passthrough = declared, true
 	}
 
+	created := object.CreatedAt
+	metadata := objectMetadata(object)
+	if request.Held != nil {
+		// A file's id names the same bytes for as long as it exists, and its
+		// sha256 says which, so one the source holds live with the same
+		// details is not downloaded again: a pass brought forward by an
+		// upload reads the new file, not the whole placement.
+		held, found, err := request.Held(ctx, object.ID)
+		if err != nil {
+			return Item{}, false, err
+		}
+		if found && held.RemovedAt == nil && held.Kind == knowledgev1.KindFile &&
+			held.Title == object.Filename && maps.Equal(held.Metadata, metadata) {
+			return Item{
+				ExternalID: object.ID, Kind: knowledgev1.KindFile, Title: object.Filename,
+				Metadata: metadata, UpdatedAt: &created, Unchanged: true,
+			}, true, nil
+		}
+	}
+
 	content, served, err := source.client.Content(ctx, request.Source.OrganizationID, object.ID, request.Credential.AccessToken)
 	if err != nil {
 		// Retention lapsing is silent — files publishes no event for it and
@@ -264,7 +285,6 @@ func (source *Files) read(ctx context.Context, request Request, object filesclie
 		return Item{}, false, nil
 	}
 
-	created := object.CreatedAt
 	return Item{
 		// Objects are immutable and there is no overwrite, so a file's id
 		// names the same bytes for as long as it exists.
@@ -273,13 +293,20 @@ func (source *Files) read(ctx context.Context, request Request, object filesclie
 		Title:      object.Filename,
 		MIME:       mime,
 		Content:    content,
-		Metadata: map[string]string{
-			"filename":   object.Filename,
-			"purpose":    object.Purpose,
-			"access":     object.Access,
-			"sha256":     object.SHA256,
-			"created_by": object.CreatedBy,
-		},
-		UpdatedAt: &created,
+		Metadata:   metadata,
+		UpdatedAt:  &created,
 	}, true, nil
+}
+
+// objectMetadata is what a document read from a stored file says of it: its
+// purpose and access label, which decide who may read it, and its sha256,
+// which says whether it is still the same file.
+func objectMetadata(object filesclient.Object) map[string]string {
+	return map[string]string{
+		"filename":   object.Filename,
+		"purpose":    object.Purpose,
+		"access":     object.Access,
+		"sha256":     object.SHA256,
+		"created_by": object.CreatedBy,
+	}
 }

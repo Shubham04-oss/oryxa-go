@@ -105,7 +105,9 @@ someone else to confirm.
   our side — but each page asks again. For an organization with thousands of
   files that is quadratic. Fix by carrying the listing across pages within one
   run, which needs the extractor to hold per-run state the seam does not offer
-  yet.
+  yet. The bytes, at least, are no longer read again: an incremental pass
+  skips a file the source holds unchanged (`Request.Held`), and only a full
+  sweep downloads every file.
 
 ---
 

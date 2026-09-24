@@ -124,19 +124,27 @@ func (store *Store) RenewLease(ctx context.Context, sourceID, leaseToken string,
 // FinishSource schedules the next run and releases the claim. It answers false
 // when the lease has moved on, so a run that lost it changes nothing.
 //
+// claimedDue is when the source was due as the run claimed it. A sync_at
+// later than that was asked for while the run went on (see HastenSource), and
+// the sooner of it and nextSync stands, so the run's own schedule does not
+// erase a request it may have listed too early to satisfy. Nil schedules
+// nextSync regardless.
+//
 // fullSweptAt is set when this pass read the source from the beginning and
 // drained: it becomes the new full_sweep_at. Nil leaves the column as it was,
 // which is what keeps an ordinary incremental pass from erasing a sweep an
 // earlier pass recorded.
-func (store *Store) FinishSource(ctx context.Context, sourceID, leaseToken string, now time.Time, nextSync time.Time, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
+func (store *Store) FinishSource(ctx context.Context, sourceID, leaseToken string, now, nextSync time.Time, claimedDue, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
 	claimed := false
 	err := store.inTx(ctx, func(tx pgx.Tx) error {
 		tag, err := tx.Exec(ctx, `
 			UPDATE knowledge_sources
-			SET last_synced_at = $3, sync_at = $4, attempts = 0, reason = '',
+			SET last_synced_at = $3,
+			    sync_at = CASE WHEN $6::timestamptz IS NOT NULL AND sync_at > $6 THEN LEAST(sync_at, $4) ELSE $4 END,
+			    attempts = 0, reason = '',
 			    lease_token = NULL, lease_until = NULL, updated_at = $3, version = version + 1,
 			    full_sweep_at = COALESCE($5, full_sweep_at)
-			WHERE id = $1 AND lease_token = $2`, sourceID, leaseToken, now, nextSync, fullSweptAt)
+			WHERE id = $1 AND lease_token = $2`, sourceID, leaseToken, now, nextSync, fullSweptAt, claimedDue)
 		if err != nil {
 			return fmt.Errorf("finish source: %w", err)
 		}
@@ -275,12 +283,18 @@ func (store *Store) removeSources(ctx context.Context, statement string, args []
 // provider — and refusing them because a pass ran a minute ago would make
 // the button a lie. It answers false for a source that is not active, or one
 // already due sooner.
+//
+// A source whose pass is under way may already have read past what the
+// asking is about, such as a file uploaded after the pass listed its
+// placement. Its sync_at, still the past time it was claimed at, is moved to
+// at, so FinishSource sees it was asked for again and runs it once more
+// rather than an interval later.
 func (store *Store) HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error) {
 	tag, err := store.pool.Exec(ctx, `
 		UPDATE knowledge_sources
 		SET sync_at = $3, updated_at = $3, version = version + 1
-		WHERE organization_id = $1 AND id = $2 AND status = 'active'
-		  AND sync_at IS NOT NULL AND sync_at > $3`, organizationID, sourceID, at)
+		WHERE organization_id = $1 AND id = $2 AND status = 'active' AND sync_at IS NOT NULL
+		  AND (sync_at > $3 OR (lease_until > $3 AND sync_at < $3))`, organizationID, sourceID, at)
 	if err != nil {
 		return false, fmt.Errorf("hasten a source: %w", err)
 	}

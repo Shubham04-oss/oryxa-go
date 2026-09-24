@@ -37,8 +37,10 @@ type fakeStore struct {
 	lease map[string]string
 
 	retractUnseen int
-	// retractCalls counts RetractDocument calls, one transaction each.
+	// retractCalls counts RetractDocument calls, one transaction each, and
+	// hastenCalls HastenSource calls, one write each.
 	retractCalls int
+	hastenCalls  int
 	paused       []string
 	finishedNext time.Time
 	failedReason string
@@ -85,11 +87,13 @@ func (store *fakeStore) CreateSource(_ context.Context, source domain.Source, ev
 func (store *fakeStore) HastenSource(_ context.Context, organizationID, sourceID string, at time.Time) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	store.hastenCalls++
 	source, ok := store.sources[sourceID]
-	if !ok || source.OrganizationID != organizationID || source.Status != domain.StatusActive {
+	if !ok || source.OrganizationID != organizationID || source.Status != domain.StatusActive || source.SyncAt == nil {
 		return false, nil
 	}
-	if source.SyncAt == nil || !source.SyncAt.After(at) {
+	running := source.LeaseUntil != nil && source.LeaseUntil.After(at)
+	if !source.SyncAt.After(at) && !(running && source.SyncAt.Before(at)) {
 		return false, nil
 	}
 	hastened := at
@@ -303,7 +307,7 @@ func (store *fakeStore) PauseSources(_ context.Context, connectionID, reason str
 	return paused, nil
 }
 
-func (store *fakeStore) ClaimDueSources(_ context.Context, now time.Time, limit int, leaseToken string, _ time.Time) ([]domain.Source, error) {
+func (store *fakeStore) ClaimDueSources(_ context.Context, now time.Time, limit int, leaseToken string, leaseUntil time.Time) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	claimed := []domain.Source{}
@@ -315,7 +319,9 @@ func (store *fakeStore) ClaimDueSources(_ context.Context, now time.Time, limit 
 			continue
 		}
 		store.lease[id] = leaseToken
-		source.LeaseToken = leaseToken
+		until := leaseUntil
+		source.LeaseToken, source.LeaseUntil = leaseToken, &until
+		store.sources[id] = source
 		claimed = append(claimed, source)
 	}
 	return claimed, nil
@@ -327,31 +333,45 @@ func (store *fakeStore) RenewLease(_ context.Context, sourceID, leaseToken strin
 	return store.lease[sourceID] == leaseToken, nil
 }
 
-func (store *fakeStore) FinishSource(_ context.Context, sourceID, leaseToken string, _ time.Time, nextSync time.Time, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
+// FinishSource mirrors the real one, keeping a sooner sync_at something asked
+// for after the pass claimed the source due at claimedDue.
+func (store *fakeStore) FinishSource(_ context.Context, sourceID, leaseToken string, now, nextSync time.Time, claimedDue, fullSweptAt *time.Time, event *domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.lease[sourceID] != leaseToken {
 		return false, nil
 	}
-	store.finishedNext = nextSync
-	if fullSweptAt != nil {
-		source := store.sources[sourceID]
-		source.FullSweepAt = fullSweptAt
+	if source, ok := store.sources[sourceID]; ok {
+		if claimedDue != nil && source.SyncAt != nil && source.SyncAt.After(*claimedDue) && source.SyncAt.Before(nextSync) {
+			nextSync = *source.SyncAt
+		}
+		finished, next := now, nextSync
+		source.SyncAt, source.LastSyncedAt, source.LeaseUntil = &next, &finished, nil
+		source.Attempts, source.Reason = 0, ""
+		if fullSweptAt != nil {
+			source.FullSweepAt = fullSweptAt
+		}
 		store.sources[sourceID] = source
 	}
+	store.finishedNext = nextSync
 	if event != nil {
 		store.events = append(store.events, *event)
 	}
 	return true, nil
 }
 
-func (store *fakeStore) FailSource(_ context.Context, sourceID, leaseToken, reason string, _ time.Time, _ time.Time, event *domain.Event) (bool, error) {
+func (store *fakeStore) FailSource(_ context.Context, sourceID, leaseToken, reason string, _ time.Time, retryAt time.Time, event *domain.Event) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.lease[sourceID] != leaseToken {
 		return false, nil
 	}
 	store.failedReason = reason
+	if source, ok := store.sources[sourceID]; ok {
+		source.SyncAt, source.LeaseUntil = &retryAt, nil
+		source.Attempts, source.Reason = source.Attempts+1, reason
+		store.sources[sourceID] = source
+	}
 	if event != nil {
 		store.events = append(store.events, *event)
 	}

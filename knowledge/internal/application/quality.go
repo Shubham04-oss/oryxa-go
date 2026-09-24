@@ -107,6 +107,21 @@ func gated(source domain.Source) bool {
 // decide is decided here.
 func (s *Service) prepare(ctx context.Context, source domain.Source, item sources.Item) (*entry, error) {
 	e := &entry{item: item}
+	if item.Unchanged {
+		// The extractor found this held live as it is, and did not read it
+		// again: there is nothing to write, only that it was seen. One gone
+		// since it looked is read in full on the next pass.
+		existing, err := s.store.DocumentByExternalID(ctx, source.ID, item.ExternalID)
+		switch {
+		case err == nil && existing.RemovedAt == nil:
+			e.existing, e.settled = &existing, true
+		case err == nil, errors.Is(err, domain.ErrNotFound):
+			e.skip = true
+		default:
+			return nil, err
+		}
+		return e, nil
+	}
 	document := domain.Document{
 		OrganizationID: source.OrganizationID, SourceID: source.ID, ExternalID: item.ExternalID,
 		Kind: item.Kind, Title: item.Title, URL: item.URL,

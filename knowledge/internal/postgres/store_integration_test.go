@@ -616,7 +616,7 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 	}
 
 	event := testEvent(t, "knowledge.sync.completed.v1")
-	claimed, err := store.FinishSource(ctx, source.ID, "lease-b", due, due.Add(time.Hour), nil, &event)
+	claimed, err := store.FinishSource(ctx, source.ID, "lease-b", due, due.Add(time.Hour), nil, nil, &event)
 	if err != nil {
 		t.Fatalf("FinishSource() error = %v", err)
 	}
@@ -628,7 +628,7 @@ func TestFinishSourceChangesNothingWithoutTheLease(t *testing.T) {
 		t.Fatalf("outbox events = %d, error = %v, want none from a run that lost its lease", outboxCount, err)
 	}
 
-	claimed, err = store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), nil, &event)
+	claimed, err = store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), nil, nil, &event)
 	if err != nil || !claimed {
 		t.Fatalf("FinishSource(own lease) = %v, %v, want claimed", claimed, err)
 	}
@@ -654,7 +654,7 @@ func TestFinishSourceRecordsAFullSweepAndKeepsItOnALaterIncrementalPass(t *testi
 		t.Fatalf("ClaimDueSources() error = %v", err)
 	}
 	swept := due
-	if _, err := store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), &swept, nil); err != nil {
+	if _, err := store.FinishSource(ctx, source.ID, "lease-a", due, due.Add(time.Hour), nil, &swept, nil); err != nil {
 		t.Fatalf("FinishSource() error = %v", err)
 	}
 	read, err := store.Source(ctx, "org_1", source.ID)
@@ -672,7 +672,7 @@ func TestFinishSourceRecordsAFullSweepAndKeepsItOnALaterIncrementalPass(t *testi
 	if _, err := store.ClaimDueSources(ctx, later, 10, "lease-b", later.Add(time.Minute)); err != nil {
 		t.Fatalf("ClaimDueSources() error = %v", err)
 	}
-	if _, err := store.FinishSource(ctx, source.ID, "lease-b", later, later.Add(time.Hour), nil, nil); err != nil {
+	if _, err := store.FinishSource(ctx, source.ID, "lease-b", later, later.Add(time.Hour), nil, nil, nil); err != nil {
 		t.Fatalf("FinishSource() error = %v", err)
 	}
 	read, err = store.Source(ctx, "org_1", source.ID)
@@ -1743,5 +1743,55 @@ func TestRetireSourceIsTheLeaseHolders(t *testing.T) {
 	}
 	if again, err := store.RetireSource(ctx, source.ID, "lease-a", "no_longer_readable", due, retract); err != nil || again {
 		t.Fatalf("RetireSource(again) = %v, %v, want nothing to retire", again, err)
+	}
+}
+
+// TestAHastenDuringAPassOutlivesItsFinish: a pass may have listed its source
+// before something asked for it to be read again. What was asked is kept
+// while the pass runs, and the pass's own schedule does not overwrite it.
+func TestAHastenDuringAPassOutlivesItsFinish(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	source := testSource(t, store, "org_1")
+
+	claimedAt := testClock.Add(time.Minute)
+	claimed, err := store.ClaimDueSources(ctx, claimedAt, 10, "lease-a", claimedAt.Add(2*time.Minute))
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimDueSources() = %d, %v", len(claimed), err)
+	}
+	due := claimed[0].SyncAt
+	asked := claimedAt.Add(10 * time.Second)
+	if moved, err := store.HastenSource(ctx, "org_1", source.ID, asked); err != nil || !moved {
+		t.Fatalf("HastenSource(during a pass) = %v, %v, want it kept for when the pass ends", moved, err)
+	}
+	finished := claimedAt.Add(30 * time.Second)
+	if _, err := store.FinishSource(ctx, source.ID, "lease-a", finished, finished.Add(time.Hour), due, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if next := readSyncAt(t, store, source.ID); next == nil || !next.Equal(asked) {
+		t.Fatalf("after a pass that was asked for again, the source is due at %v, want %v", next, asked)
+	}
+
+	// A pass nobody asked for again schedules its interval, as before.
+	claimedAt = asked.Add(time.Minute)
+	claimed, err = store.ClaimDueSources(ctx, claimedAt, 10, "lease-b", claimedAt.Add(2*time.Minute))
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("ClaimDueSources() = %d, %v", len(claimed), err)
+	}
+	finished = claimedAt.Add(30 * time.Second)
+	if _, err := store.FinishSource(ctx, source.ID, "lease-b", finished, finished.Add(time.Hour), claimed[0].SyncAt, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if next := readSyncAt(t, store, source.ID); next == nil || !next.Equal(finished.Add(time.Hour)) {
+		t.Fatalf("after an ordinary pass, the source is due at %v, want its interval", next)
+	}
+
+	// Asking between passes, of a source not due, brings it forward as it
+	// always has; asking again once it is due changes nothing.
+	if moved, err := store.HastenSource(ctx, "org_1", source.ID, finished); err != nil || !moved {
+		t.Fatalf("HastenSource(between passes) = %v, %v", moved, err)
+	}
+	if moved, err := store.HastenSource(ctx, "org_1", source.ID, finished.Add(time.Second)); err != nil || moved {
+		t.Fatalf("HastenSource(already due) = %v, %v, want unmoved", moved, err)
 	}
 }

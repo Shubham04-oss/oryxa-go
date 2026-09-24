@@ -313,7 +313,7 @@ func (s *Service) FileStored(ctx context.Context, event filesv1.ObjectCreated) e
 		switch source.Status {
 		case domain.StatusActive:
 			held = true
-			if !readsFile(source, event) {
+			if !readsFile(source, event) || dueAndWaiting(source, s.now()) {
 				continue
 			}
 			if _, err := s.store.HastenSource(ctx, event.OrganizationID, source.ID, s.now()); err != nil {
@@ -385,6 +385,15 @@ func storedFilePlacement(event filesv1.ObjectCreated) (domain.Placement, map[str
 	default:
 		return placement, nil, event.CreatedBy, true
 	}
+}
+
+// dueAndWaiting says a source is already due and its pass has not begun, so
+// that pass will list a file uploaded now, and there is nothing to write: a
+// burst of uploads costs one pass, not a write each. A source whose pass is
+// under way may already have listed, so it is asked for again.
+func dueAndWaiting(source domain.Source, now time.Time) bool {
+	return source.SyncAt != nil && !source.SyncAt.After(now) &&
+		(source.LeaseUntil == nil || !source.LeaseUntil.After(now))
 }
 
 // readsFile says whether a source at a file's placement reads that file: one
