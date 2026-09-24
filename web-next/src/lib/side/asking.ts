@@ -79,7 +79,11 @@ export type OwnAgentPromptInput = {
   agentName: string
   /** The other person, and the agents of theirs a request may go to. */
   peerName: string
-  peerAgents: ReadonlyArray<{ id: string; name: string; approval: SideApproval }>
+  peerAgents: ReadonlyArray<{
+    id: string
+    name: string
+    approval: SideApproval
+  }>
   /** What was said before the question, oldest first, each line already named. */
   transcript: readonly TranscriptLine[]
   question: string
@@ -116,8 +120,7 @@ export function ownAgentPrompt(input: OwnAgentPromptInput): string {
     "",
     `Answer in one or a few short paragraphs, as a colleague would in a chat. ${input.peerName} reads your answer too, so share only what ${input.askerName} would share with them.`
   )
-  const [agent] = input.peerAgents
-  if (agent) {
+  if (input.peerAgents.length > 0) {
     const named = input.peerAgents
       .map((each) => `${each.name} (target_agent_id ${each.id})`)
       .join(", ")
@@ -200,8 +203,14 @@ export function cardFields(
   | Omit<SideWireRequestCard, "kind" | "id" | "seq" | "clientId" | "updatedAt">
   | undefined {
   if (typeof value !== "object" || value === null) return undefined
-  const request = value as Partial<GoRequest>
-  const { requester, target } = request
+  // Read as whatever Go sent, not as the type says it is.
+  const request = value as {
+    [Key in keyof GoRequest]?: unknown
+  }
+  const requester = request.requester as
+    Partial<Record<keyof AgentRequest["requester"], unknown>> | undefined
+  const target = request.target as
+    Partial<Record<keyof AgentRequest["target"], unknown>> | undefined
   if (
     typeof request.id !== "string" ||
     !request.id ||
@@ -217,7 +226,8 @@ export function cardFields(
   ) {
     return undefined
   }
-  const decision = request.decision
+  const decision = request.decision as
+    { decision?: unknown; message?: unknown; decided_at?: unknown } | undefined
   return {
     requestId: request.id,
     requesterId: requester.user_id,
@@ -260,7 +270,9 @@ const statuses = new Set<string>([
 /** A finished request's result as an agent's message: its summary, then its content when there is more. */
 export function resultText(value: unknown): string | undefined {
   if (typeof value !== "object" || value === null) return undefined
-  const result = (value as Partial<GoRequest>).result
+  const result = (
+    value as { result?: { summary?: unknown; content?: unknown } }
+  ).result
   if (!result || typeof result.summary !== "string") return undefined
   const summary = result.summary.trim()
   const content =
@@ -272,14 +284,12 @@ export function resultText(value: unknown): string | undefined {
 /**
  * The quiet line a request that ended without a result leaves, in words
  * that say who did what: the owner or the agent that declined it, the agent
- * that could not finish it, or the time that ran out.
+ * that could not finish it, or the time that ran out (before it was
+ * approved, or, once it was, before its agent finished).
  */
 export function statusLineText(
   outcome: "rejected" | "failed" | "expired",
-  card: Pick<
-    SideWireRequestCard,
-    "approval" | "status" | "targetAgentName" | "decision"
-  > & { previousStatus?: SideRequestStatus },
+  card: Pick<SideWireRequestCard, "approval" | "targetAgentName" | "decision">,
   ownerName: string,
   failure?: string
 ): string {
@@ -299,7 +309,7 @@ export function statusLineText(
         : `${agent} could not finish the request.`
     }
     case "expired":
-      return card.previousStatus === "approved"
+      return card.decision?.decision === "approved"
         ? `The request to ${agent} expired before ${agent} finished it.`
         : card.approval === "owner"
           ? `The request to ${agent} expired before ${ownerName} approved it.`

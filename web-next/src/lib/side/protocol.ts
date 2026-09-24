@@ -250,7 +250,12 @@ export type SideClientMessage =
   /** A message that asks the socket's person's own agent, which answers for both to see. */
   | { type: "side-ask-mine"; clientId: string; body: string }
   /** Asks the teammate's agent `agentId` for something: an agent request, filed as the socket's person. */
-  | { type: "side-ask-teammate"; clientId: string; agentId: string; body: string }
+  | {
+      type: "side-ask-teammate"
+      clientId: string
+      agentId: string
+      body: string
+    }
   /** The owner's answers to every confirmation their agent's message `seq` waits on. */
   | {
       type: "side-confirm"
@@ -265,7 +270,12 @@ export type SideClientMessage =
       message?: string
     }
   /** Up to `limit` items before `beforeSeq` (0: the latest). */
-  | { type: "side-history"; requestId: string; beforeSeq: number; limit: number }
+  | {
+      type: "side-history"
+      requestId: string
+      beforeSeq: number
+      limit: number
+    }
   /** The socket's person has read through `seq`. */
   | { type: "side-read"; seq: number }
   /** The socket's person is typing, or stopped. Never stored. */
@@ -345,7 +355,12 @@ const requestStatuses = new Set<string>([
   "expired",
 ])
 
-const agentStatuses = new Set<string>(["streaming", "waiting", "done", "failed"])
+const agentStatuses = new Set<string>([
+  "streaming",
+  "waiting",
+  "done",
+  "failed",
+])
 
 /** A page's message to a side conversation, or nothing for anything the object does not take. */
 export function parseSideClientMessage(
@@ -380,7 +395,9 @@ export function parseSideClientMessage(
     case "side-confirm": {
       if (!isSeq(value.seq) || value.seq === 0) return undefined
       const answers = confirmationAnswers(value.answers)
-      return answers ? { type: "side-confirm", seq: value.seq, answers } : undefined
+      return answers
+        ? { type: "side-confirm", seq: value.seq, answers }
+        : undefined
     }
     case "side-decide":
       if (
@@ -394,7 +411,9 @@ export function parseSideClientMessage(
         type: "side-decide",
         requestId: value.requestId,
         decision: value.decision,
-        ...(typeof value.message === "string" ? { message: value.message } : {}),
+        ...(typeof value.message === "string"
+          ? { message: value.message }
+          : {}),
       }
     case "side-history":
       if (
@@ -412,7 +431,9 @@ export function parseSideClientMessage(
         limit: Math.min(Math.max(value.limit, 1), SIDE_MAX_PAGE_SIZE),
       }
     case "side-read":
-      return isSeq(value.seq) ? { type: "side-read", seq: value.seq } : undefined
+      return isSeq(value.seq)
+        ? { type: "side-read", seq: value.seq }
+        : undefined
     case "side-typing":
       return typeof value.typing === "boolean"
         ? { type: "side-typing", typing: value.typing }
@@ -723,9 +744,7 @@ function wireItem(value: unknown): SideWireItem | undefined {
       const parsedVia = via === undefined ? undefined : viaOf(via)
       if (via !== undefined && !parsedVia) return undefined
       const parsedConfirmations =
-        confirmations === undefined
-          ? undefined
-          : confirmationsOf(confirmations)
+        confirmations === undefined ? undefined : confirmationsOf(confirmations)
       if (confirmations !== undefined && !parsedConfirmations) return undefined
       return {
         kind,

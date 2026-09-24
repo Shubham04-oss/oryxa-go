@@ -416,18 +416,22 @@ export class InboxAgent extends Agent<ConversationEnv> {
         conversations,
         purgeConcurrency,
         async (conversation) => {
-          let emptied = true
-          if (conversation.kind === "dm") {
-            const dm = await getAgentByName(
-              this.env.DirectMessageAgent,
-              conversation.name
-            )
-            const result = await dm.purge(
-              removedAt === undefined ? undefined : { userId, removedAt }
-            )
-            emptied = result.emptied
-          }
-          // A side conversation's object comes later: its purge belongs here.
+          const leaving =
+            removedAt === undefined ? undefined : { userId, removedAt }
+          const { emptied } =
+            conversation.kind === "dm"
+              ? await (
+                  await getAgentByName(
+                    this.env.DirectMessageAgent,
+                    conversation.name
+                  )
+                ).purge(leaving)
+              : await (
+                  await getAgentByName(
+                    this.env.SideConversationAgent,
+                    conversation.name
+                  )
+                ).purge(leaving)
           if (emptied) {
             const peer = await getAgentByName(
               this.env.InboxAgent,
