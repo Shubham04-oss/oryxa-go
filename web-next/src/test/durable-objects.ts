@@ -175,6 +175,7 @@ export class FakeNamespace {
             if (this.world.failing.has(name)) {
               throw new Error(`Durable Object reset: ${name}`)
             }
+            await this.world.gate(name)
             const object = (await this.get(name)) as Record<
               string,
               (...params: Array<unknown>) => unknown
@@ -201,6 +202,7 @@ export class World {
   /** Objects whose calls fail, by name, as one that was reset mid-call. */
   readonly failing = new Set<string>()
   private readonly namespaces = new Map<string, FakeNamespace>()
+  private readonly gates = new Map<string, Promise<void>>()
 
   constructor(
     classes: Record<string, ObjectClass>,
@@ -219,6 +221,26 @@ export class World {
     const namespace = this.namespaces.get(binding)
     if (!namespace) throw new Error(`no binding ${binding}`)
     return (await namespace.get(name)) as T
+  }
+
+  /** Makes calls to the object `name` wait until the returned release is called. */
+  hold(name: string): () => void {
+    let release!: () => void
+    this.gates.set(
+      name,
+      new Promise<void>((resolve) => {
+        release = resolve
+      })
+    )
+    return () => {
+      this.gates.delete(name)
+      release()
+    }
+  }
+
+  /** What a call to `name` waits for: nothing, unless the object is held. */
+  gate(name: string): Promise<void> | undefined {
+    return this.gates.get(name)
   }
 
   /** The object if it was ever made, without making it. */
@@ -307,6 +329,11 @@ export async function closeSocket(
 ): Promise<void> {
   socket.open = false
   await (object as Harness).onClose(socket)
+}
+
+/** Lets every promise chain that can move, move: a call held by `World.hold` is then waiting. */
+export async function drain(): Promise<void> {
+  for (let turn = 0; turn < 50; turn += 1) await Promise.resolve()
 }
 
 /** Runs every schedule due by now, as the SDK's alarm does, oldest first. */

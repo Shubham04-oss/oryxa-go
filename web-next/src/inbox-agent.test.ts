@@ -9,7 +9,13 @@ import {
 } from "./lib/dms/names"
 import { MAX_UNREAD, conversationGoneCloseCode } from "./lib/dms/protocol"
 import { RealtimeRegistryAgent } from "./realtime-registry-agent"
-import { World, openSocket, runDueJobs, say } from "./test/durable-objects"
+import {
+  World,
+  drain,
+  openSocket,
+  runDueJobs,
+  say,
+} from "./test/durable-objects"
 import type { Harness } from "./test/durable-objects"
 
 vi.mock(
@@ -302,6 +308,60 @@ describe("InboxAgent: what the conversations tell it", () => {
     await expect(
       inbox.markRead(directMessageName(org, ada, bo), -1)
     ).rejects.toThrow(TypeError)
+    expect(await inbox.listConversations()).toEqual([])
+  })
+})
+
+describe("InboxAgent: conversations it knows but does not list", () => {
+  it("keeps one unseen, registers for it, and forgets it with the conversation", async () => {
+    const { inbox, world } = await setup()
+    const socket = await openSocket(inbox, { organizationId: org, userId: ada })
+    socket.clear()
+    await inbox.knowConversation(dmWith(bo))
+    await inbox.knowConversation(dmWith(bo))
+    expect(await inbox.listConversations()).toEqual([])
+    expect(socket.sent).toEqual([])
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([ada])
+    await expect(
+      inbox.knowConversation({
+        kind: "dm",
+        name: directMessageName(org, bo, cy),
+        peerId: bo,
+      })
+    ).rejects.toThrow(TypeError)
+
+    await inbox.removeConversation(dmWith(bo).name)
+    expect(inbox.sql`SELECT * FROM inbox_known`).toEqual([])
+    expect(socket.sent).toEqual([])
+  })
+
+  it("purges one it only knows, and one that arrives while it purges the others", async () => {
+    const world = makeWorld()
+    const inbox = await world.object<Inbox>("InboxAgent", inboxName(org, ada))
+    await inbox.noteMessage(dmWith(bo), message(1, bo))
+    await inbox.knowConversation(dmWith(cy))
+    const release = world.hold(directMessageName(org, ada, bo))
+    const purging = inbox.purge()
+    await drain()
+    // A conversation opens meanwhile.
+    await inbox.knowConversation(dmWith("user-dee"))
+    release()
+    await purging
+
+    expect(
+      world
+        .callsTo("DirectMessageAgent", "purge")
+        .map((call) => call.name)
+        .sort()
+    ).toEqual(
+      [
+        directMessageName(org, ada, bo),
+        directMessageName(org, ada, cy),
+        directMessageName(org, ada, "user-dee"),
+      ].sort()
+    )
+    expect(inbox.sql`SELECT * FROM inbox_known`).toEqual([])
     expect(await inbox.listConversations()).toEqual([])
   })
 })

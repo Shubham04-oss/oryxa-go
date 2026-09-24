@@ -12,7 +12,7 @@ import {
 } from "./realtime-purge"
 import type { PurgeRequest } from "./realtime-purge"
 import { RealtimeRegistryAgent, purgeMemoryMs } from "./realtime-registry-agent"
-import { World, openSocket, say } from "./test/durable-objects"
+import { World, drain, openSocket, say } from "./test/durable-objects"
 import type { Harness } from "./test/durable-objects"
 import type { ConversationEnv } from "./conversation-env"
 
@@ -362,6 +362,48 @@ describe("purging", () => {
     expect(adminList.closed?.code).toBe(4404)
   })
 
+  it("reaches a DM opened without a message: its sockets close, so the member who left cannot write in it", async () => {
+    const world = makeWorld()
+    const dm = await world.object<Dm>(
+      "DirectMessageAgent",
+      directMessageName(org, admin, member)
+    )
+    const adminSocket = await openSocket(dm, {
+      organizationId: org,
+      userId: admin,
+    })
+    const memberSocket = await openSocket(dm, {
+      organizationId: org,
+      userId: member,
+    })
+
+    expect((await purge(world, await purgeRequest(memberLeft))).status).toBe(
+      204
+    )
+    for (const socket of [adminSocket, memberSocket]) {
+      expect(socket.closed?.code).toBe(4404)
+    }
+    const membersInbox = await world.object<Inbox>(
+      "InboxAgent",
+      inboxName(org, member)
+    )
+    expect(membersInbox.sql`SELECT * FROM inbox_known`).toEqual([])
+    expect(dm.sql`SELECT * FROM dm_meta`).toEqual([])
+  })
+
+  it("keeps a member found by the registry when their inbox registers again while it is purged", async () => {
+    const world = makeWorld()
+    await talk(world, admin, member)
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    const release = world.hold(inboxName(org, admin))
+    const purging = registry.purge("evt_during", admin)
+    await drain()
+    await registry.register(admin)
+    release()
+    expect(await purging).toBe("purged")
+    expect(await registry.members()).toEqual([admin, member])
+  })
+
   it("purges a whole organization for an empty user_id", async () => {
     const world = makeWorld()
     await talk(world, admin, member)
@@ -452,6 +494,9 @@ describe("purging", () => {
     expect(await listed(world, admin)).toEqual([
       directMessageName(org, owner, admin),
     ])
+    // Still found by an organization's purge.
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toContain(admin)
 
     world.failing.clear()
     expect((await purge(world, await purgeRequest(memberLeft))).status).toBe(

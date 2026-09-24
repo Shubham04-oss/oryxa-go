@@ -17,6 +17,7 @@ import { RealtimeRegistryAgent } from "./realtime-registry-agent"
 import {
   World,
   closeSocket,
+  drain,
   openSocket,
   runDueJobs,
   say,
@@ -619,6 +620,41 @@ describe("DirectMessageAgent: inboxes", () => {
       { user_id: ada, noted_seq: 2, read_seq: 2 },
       { user_id: bo, noted_seq: 2, read_seq: 0 },
     ])
+  })
+
+  it("tells both inboxes it exists as it opens, before any message, without listing it", async () => {
+    const { dm, world } = await setup()
+    await join(dm, ada)
+    expect(
+      world.callsTo("InboxAgent", "knowConversation").map((call) => call.name)
+    ).toEqual([inboxName(org, ada), inboxName(org, bo)])
+    for (const user of [ada, bo]) {
+      expect(await inboxOf(world, user)).toEqual([])
+      const inbox = await world.object<Inbox>(
+        "InboxAgent",
+        inboxName(org, user)
+      )
+      expect(inbox.sql`SELECT name, peer_id FROM inbox_known`).toEqual([
+        { name: dmName, peer_id: user === ada ? bo : ada },
+      ])
+    }
+    // Once known, it is not told again.
+    await join(dm, bo)
+    expect(world.callsTo("InboxAgent", "knowConversation")).toHaveLength(2)
+  })
+
+  it("sets its alarm before it calls the inboxes, and lets it go once they answered", async () => {
+    const { dm, world } = await setup()
+    const adaTab = await join(dm, ada)
+    const release = world.hold(inboxName(org, bo))
+    const sending = send(dm, adaTab, "one")
+    await drain()
+    // Were this instance lost now, the alarm would still tell Bo's inbox.
+    expect(dm.jobs.map((job) => job.callback)).toEqual(["retryInboxSync"])
+    release()
+    await sending
+    expect(dm.jobs).toEqual([])
+    expect((await inboxOf(world, bo))[0].unread).toBe(1)
   })
 
   it("tells an inbox again after a restart, when nothing was scheduled", async () => {

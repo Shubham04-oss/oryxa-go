@@ -195,7 +195,7 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
   // After a restart: an inbox that was never told is told again.
   override async onStart(): Promise<void> {
     this.schema()
-    if (this.syncPending() && !this.meta("retry")) await this.scheduleRetry()
+    if (this.syncPending()) await this.armRetry()
   }
 
   override async onConnect(connection: Connection, context: ConnectionContext) {
@@ -215,6 +215,10 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     connection.setState({ userId, visible: false } satisfies DmConnectionState)
     this.schema()
     send(connection, this.snapshot(userId))
+    // The conversation is its people's from the moment it opens, message or
+    // not: both inboxes learn it exists, so purging either person finds it.
+    if (this.meta("opened") !== "1") this.setMeta("opened", "1")
+    if (this.syncPending()) await this.syncInboxes()
   }
 
   override async onMessage(connection: Connection, message: WSMessage) {
@@ -292,10 +296,12 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     }
   }
 
-  /** The retry's schedule: tells the inboxes what they missed. */
+  /** The retry's schedule: tells the inboxes what they missed; each try that fails waits twice as long for the next. */
   async retryInboxSync(): Promise<void> {
     this.schema()
     this.deleteMeta("retry")
+    const attempt = Number(this.meta("retry_attempt") ?? "0") + 1
+    this.setMeta("retry_attempt", String(attempt))
     await this.syncInboxes()
   }
 
@@ -575,6 +581,14 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
   private async syncOnce(): Promise<void> {
     const epoch = this.epoch
     const ids = this.ids
+    if (!this.syncPending()) {
+      this.deleteMeta("retry_attempt")
+      return
+    }
+    // The alarm first: an instance lost before the inboxes answer (a
+    // deploy, an eviction) still tells them once the alarm wakes it.
+    await this.armRetry()
+    if (this.epoch !== epoch) return
     const results = await Promise.allSettled([
       this.syncInbox(ids, ids.userA, epoch),
       this.syncInbox(ids, ids.userB, epoch),
@@ -584,16 +598,10 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     for (const failure of failed) {
       console.error("direct message: could not update an inbox", failure.reason)
     }
-    if (failed.length > 0) {
-      await this.scheduleRetry()
-      return
-    }
+    // What failed is tried again when the alarm goes off.
+    if (failed.length > 0) return
     this.deleteMeta("retry_attempt")
-    const retry = this.meta("retry")
-    if (retry) {
-      this.deleteMeta("retry")
-      await this.cancelSchedule(retry).catch(() => false)
-    }
+    await this.disarmRetry()
   }
 
   private async syncInbox(
@@ -601,28 +609,36 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     user: string,
     epoch: number
   ): Promise<void> {
+    const known = this.meta(`known:${user}`) === "1"
     const told = this.told(user)
     const fresh = this
       .sql<MessageRow>`SELECT seq, id, author_id, client_id, body, created_at
       FROM dm_messages WHERE seq > ${told.noted}
       ORDER BY seq DESC LIMIT ${maxNotedPerUpdate}`.reverse()
-    if (fresh.length === 0 && this.readSeq(user) <= told.read) return
+    if (known && fresh.length === 0 && this.readSeq(user) <= told.read) return
     const inbox = await getAgentByName(
       this.env.InboxAgent,
       inboxName(ids.organizationId, user)
     )
     if (this.epoch !== epoch) return
+    const entry = {
+      kind: "dm" as const,
+      name: this.name,
+      peerId: peerIn(ids, user) ?? "",
+    }
     const last = fresh.at(-1)
     if (last) {
-      await inbox.noteMessage(
-        { kind: "dm", name: this.name, peerId: peerIn(ids, user) ?? "" },
-        ...fresh.map(noted)
-      )
+      await inbox.noteMessage(entry, ...fresh.map(noted))
       if (this.epoch !== epoch) return
       this
         .sql`INSERT INTO dm_inbox_sync (user_id, noted_seq) VALUES (${user}, ${last.seq})
         ON CONFLICT (user_id) DO UPDATE SET noted_seq = MAX(noted_seq, excluded.noted_seq)`
+    } else if (!known) {
+      // Opened without a message yet: known to the inbox, listed by none.
+      await inbox.knowConversation(entry)
+      if (this.epoch !== epoch) return
     }
+    if (!known) this.setMeta(`known:${user}`, "1")
     const read = this.readSeq(user)
     if (read > told.read) {
       // An inbox reads through its member's own message as it is noted: a
@@ -639,27 +655,45 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     }
   }
 
-  /** Whether an inbox has yet to be told something. */
+  /**
+   * Whether an inbox has yet to be told something: that the conversation
+   * exists, once it has opened, or a message or a read since.
+   */
   private syncPending(): boolean {
     const latest = this.latestSeq()
-    if (latest === 0) return false
+    if (latest === 0 && this.meta("opened") !== "1") return false
     const { userA, userB } = this.ids
     return [userA, userB].some((user) => {
       const told = this.told(user)
-      return told.noted < latest || told.read < this.readSeq(user)
+      return (
+        this.meta(`known:${user}`) !== "1" ||
+        told.noted < latest ||
+        told.read < this.readSeq(user)
+      )
     })
   }
 
-  private async scheduleRetry(): Promise<void> {
+  /**
+   * Makes sure an alarm will run the sync again: `dmInboxRetry.firstSeconds`
+   * from now, doubled for each retry that failed in a row, at most
+   * `dmInboxRetry.maxSeconds`.
+   */
+  private async armRetry(): Promise<void> {
     if (this.meta("retry")) return
-    const attempt = Number(this.meta("retry_attempt") ?? "0") + 1
+    const attempt = Number(this.meta("retry_attempt") ?? "0")
     const delay = Math.min(
-      dmInboxRetry.firstSeconds * 2 ** (attempt - 1),
+      dmInboxRetry.firstSeconds * 2 ** attempt,
       dmInboxRetry.maxSeconds
     )
     const schedule = await this.schedule(delay, "retryInboxSync")
     this.setMeta("retry", schedule.id)
-    this.setMeta("retry_attempt", String(attempt))
+  }
+
+  private async disarmRetry(): Promise<void> {
+    const retry = this.meta("retry")
+    if (!retry) return
+    this.deleteMeta("retry")
+    await this.cancelSchedule(retry).catch(() => false)
   }
 
   private told(user: string): { noted: number; read: number } {

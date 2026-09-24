@@ -200,11 +200,15 @@ callable methods, and a page may not set state).
 - **Presence.** A person is online in the DM while one of their sockets says
   its tab is visible (`dm-visibility`, as the room's); every change is sent
   as `dm-presence`.
-- **Inboxes.** After each message and each read, the object tells both
-  people's inboxes what they have not been told: `noteMessage` with the
-  messages since (the latest 200 at most), then `markRead`. It keeps what
-  each was told, so an inbox it could not reach is told again on a schedule
-  (after 2 s, doubling to 5 minutes), and after a restart.
+- **Inboxes.** As the DM first opens, both people's inboxes learn it exists
+  (`knowConversation`, which lists nothing), so purging either person finds
+  it before its first message. After each message and each read, the object
+  tells both inboxes what they have not been told: `noteMessage` with the
+  messages since (the latest 200 at most), then `markRead` when the read goes
+  further than the member's own message. It keeps what each was told, and
+  sets an alarm before it calls them, so an inbox it could not reach, or an
+  instance lost mid-call, is told again (after 2 s, doubling with each retry
+  that fails, up to 5 minutes).
 
 A member's conversation list is `InboxAgent` (`src/inbox-agent.ts`), one per
 member per organization, `{org}~{user}`, read live by `useInbox(org, viewer)`
@@ -227,6 +231,8 @@ keep it current over RPC:
   does nothing.
 - `upsertConversation(entry)` lists one before its first message (a side
   conversation as it starts); `removeConversation(name)` takes one off.
+- `knowConversation(entry)` keeps one the member is in without listing it
+  (a DM opened before its first message): only a purge reads it.
 - The inbox checks every entry against itself: a conversation of its
   organization that its member is in, with `peerId` the other person, and in
   a DM only its two people write. Anything else throws, so one object can
@@ -270,9 +276,12 @@ Go has deleted) or, when Go has nothing to delete, the purge alone behind
 the access check. Go's 401, 403, 404 and 503 pass through with Go's code;
 any other failure answers 502, and a Go it cannot reach 503.
 
-A DM and an inbox are handed `X-Oryxa-Organization` and `X-Oryxa-User`, the
-member's user id as Go answered the Worker, and not the cookie: they never
-call Go. The member is the `user_id` of their own membership in Go's answer
+Besides every `X-Oryxa-*` header, the Worker drops the headers the Agents
+SDK trusts from a request as its own routing (`x-cf-agents-*`, which hands a
+socket to a sub-agent before the object's `onConnect` runs, `x-agents-*` and
+`x-partykit-*`), for every object. A DM and an inbox are handed
+`X-Oryxa-Organization` and `X-Oryxa-User`, the member's user id as Go
+answered the Worker, and not the cookie: they never call Go. The member is the `user_id` of their own membership in Go's answer
 to `GET /v1/organizations/{org}`, the same subject `GET /v1/auth/me` answers
 with; that answer also marks an agent's token (`agent: true`), which is
 refused, since DMs are between people. The registry has no entry: no page
@@ -335,11 +344,14 @@ nothing. A purge that failed part-way answers 503, and sent again it
 carries on from where it stopped. Only 204 is done: Go retries 401, 408,
 429, 5xx and any other 2xx, and follows no redirect.
 
-A member's purge: their inbox lists their conversations; each is emptied (a
-DM's `purge` deletes its messages, read states and what it told the inboxes,
-tells every socket `dm-gone` and closes it with 4404) and taken off the
-other person's inbox; then the inbox empties itself, tells its sockets
-`inbox-gone` and closes them; then the registry lets the member go. An
+A member's purge: the member leaves the registry (and is put back if the
+purge fails, for the next organization purge). Their inbox goes through
+every conversation it lists or knows: each is emptied (a DM's `purge`
+deletes its messages, read states and what it told the inboxes, tells every
+socket `dm-gone` and closes it with 4404, so a socket the member still has
+open cannot write in it) and taken off the other person's inbox. It goes
+through them again while any arrived meanwhile (at most five passes), then
+empties itself, tells its sockets `inbox-gone` and closes them. An
 organization's purge does that for every member in its registry, 8 at a
 time. The objects are left empty, not deleted: nothing of the member stays.
 A message sent in the moment a DM is purged can leave its preview in the

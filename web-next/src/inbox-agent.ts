@@ -53,6 +53,12 @@ const registrationRetrySeconds = 30
 /** How many conversations a purge empties at once. */
 const purgeConcurrency = 4
 
+/**
+ * How many times a purge goes through its conversations: one noted while it
+ * was emptying the others is found by the next pass.
+ */
+const purgePasses = 5
+
 const maxTeamspaceName = 200
 
 type ConversationRow = {
@@ -276,8 +282,23 @@ export class InboxAgent extends Agent<ConversationEnv> {
     if (typeof name !== "string") {
       throw new TypeError("removeConversation needs a conversation")
     }
+    this.sql`DELETE FROM inbox_known WHERE name = ${name}`
     if (!this.row(name)) return
     this.forgetConversation(name)
+  }
+
+  /**
+   * A conversation the member is in exists, though it lists nothing yet (a
+   * DM opened before its first message). The inbox keeps it unseen, so a
+   * purge of the member finds it too.
+   */
+  async knowConversation(entry: ConversationEntry): Promise<void> {
+    this.schema()
+    const conversation = this.checkedEntry(entry)
+    this.sql`INSERT INTO inbox_known (name, kind, peer_id)
+      VALUES (${conversation.name}, ${conversation.kind}, ${conversation.peerId})
+      ON CONFLICT (name) DO NOTHING`
+    await this.register()
   }
 
   /** Every conversation listed, the latest first. */
@@ -297,31 +318,42 @@ export class InboxAgent extends Agent<ConversationEnv> {
   async purge(): Promise<void> {
     this.schema()
     const { organizationId } = this.owner
-    const failed = await eachLimited(
-      this.listed(),
-      purgeConcurrency,
-      async (conversation) => {
-        if (conversation.kind === "dm") {
-          const dm = await getAgentByName(
-            this.env.DirectMessageAgent,
-            conversation.name
+    for (let pass = 0; pass < purgePasses; pass += 1) {
+      const conversations = this.everyConversation()
+      if (conversations.length === 0) break
+      const failed = await eachLimited(
+        conversations,
+        purgeConcurrency,
+        async (conversation) => {
+          if (conversation.kind === "dm") {
+            const dm = await getAgentByName(
+              this.env.DirectMessageAgent,
+              conversation.name
+            )
+            await dm.purge()
+          }
+          // A side conversation's object comes later: its purge belongs here.
+          const peer = await getAgentByName(
+            this.env.InboxAgent,
+            inboxName(organizationId, conversation.peerId)
           )
-          await dm.purge()
+          await peer.removeConversation(conversation.name)
+          this.sql`DELETE FROM inbox_known WHERE name = ${conversation.name}`
+          if (this.row(conversation.name)) {
+            this.forgetConversation(conversation.name)
+          }
         }
-        // A side conversation's object comes later: its purge belongs here.
-        const peer = await getAgentByName(
-          this.env.InboxAgent,
-          inboxName(organizationId, conversation.peerId)
-        )
-        await peer.removeConversation(conversation.name)
-        this.forgetConversation(conversation.name)
+      )
+      if (failed > 0) {
+        throw new Error(`${failed} conversations could not be purged`)
       }
-    )
-    if (failed > 0) {
-      throw new Error(`${failed} conversations could not be purged`)
+    }
+    if (this.everyConversation().length > 0) {
+      throw new Error("conversations kept arriving while the inbox was purged")
     }
     const retry = this.meta("registration_retry")
     this.sql`DELETE FROM inbox_conversations`
+    this.sql`DELETE FROM inbox_known`
     this.sql`DELETE FROM inbox_unread`
     this.sql`DELETE FROM inbox_meta`
     if (retry) await this.cancelSchedule(retry).catch(() => false)
@@ -368,6 +400,13 @@ export class InboxAgent extends Agent<ConversationEnv> {
       name TEXT NOT NULL,
       seq INTEGER NOT NULL,
       PRIMARY KEY (name, seq)
+    )`
+    // Conversations the member is in that list nothing yet: only a purge
+    // reads them.
+    this.sql`CREATE TABLE IF NOT EXISTS inbox_known (
+      name TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      peer_id TEXT NOT NULL
     )`
     this.sql`CREATE TABLE IF NOT EXISTS inbox_meta (
       key TEXT PRIMARY KEY,
@@ -575,9 +614,29 @@ export class InboxAgent extends Agent<ConversationEnv> {
     )
   }
 
+  /** Sends the member's sockets a message: those `onConnect` has let in. */
   private tell(message: InboxServerMessage): void {
     const data = JSON.stringify(message)
-    for (const connection of this.getConnections()) send(connection, data)
+    for (const connection of this.getConnections()) {
+      const state = connection.state as InboxConnectionState | null
+      if (typeof state?.userId === "string") send(connection, data)
+    }
+  }
+
+  /** Every conversation the member is in, listed or only known: what a purge empties. */
+  private everyConversation(): Array<{
+    name: string
+    kind: ConversationKind
+    peerId: string
+  }> {
+    return this.sql<{ name: string; kind: ConversationKind; peer_id: string }>`
+      SELECT name, kind, peer_id FROM inbox_conversations
+      UNION
+      SELECT name, kind, peer_id FROM inbox_known`.map((row) => ({
+      name: row.name,
+      kind: row.kind,
+      peerId: row.peer_id,
+    }))
   }
 
   private meta(key: string): string | undefined {

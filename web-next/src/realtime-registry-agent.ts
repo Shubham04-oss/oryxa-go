@@ -59,9 +59,9 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
   /**
    * Carries out a purge for Go (src/realtime-purge.ts): one member's
    * conversations and inbox when `userId` is given, else every registered
-   * member's. Each member's inbox empties their conversations, takes them
-   * off the other people's inboxes and empties itself; then the member
-   * leaves the registry. The event is remembered only once all of it is
+   * member's. Each member leaves the registry, and their inbox empties their
+   * conversations, takes them off the other people's inboxes and empties
+   * itself (`purgeMember`). The event is remembered only once all of it is
    * done: a purge that failed part-way throws, and the same event again
    * carries on from where it stopped.
    */
@@ -109,13 +109,33 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
     return "purged"
   }
 
+  /**
+   * Empties a member's inbox and conversations. The member leaves the
+   * registry first, so an inbox that registers again while it is purged (a
+   * conversation noted meanwhile) stays found; if the purge fails, the
+   * member is put back for the next one.
+   */
   private async purgeMember(userId: string): Promise<void> {
-    const inbox = await getAgentByName(
-      this.env.InboxAgent,
-      inboxName(this.name, userId)
+    const registered = this.sql<{
+      registered_at: string
+    }>`SELECT registered_at FROM registry_members WHERE user_id = ${userId}`.at(
+      0
     )
-    await inbox.purge()
     this.sql`DELETE FROM registry_members WHERE user_id = ${userId}`
+    try {
+      const inbox = await getAgentByName(
+        this.env.InboxAgent,
+        inboxName(this.name, userId)
+      )
+      await inbox.purge()
+    } catch (error) {
+      if (registered) {
+        this.sql`INSERT INTO registry_members (user_id, registered_at)
+          VALUES (${userId}, ${registered.registered_at})
+          ON CONFLICT (user_id) DO NOTHING`
+      }
+      throw error
+    }
   }
 
   private memberIds(): string[] {
