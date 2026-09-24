@@ -27,10 +27,18 @@ func creds(userID string) authclient.Credentials {
 	return authclient.Credentials{Authorization: "Bearer " + userID}
 }
 
+// agentCreds is a token auth minted for an agent acting for userID. Auth, and
+// teams after it, answer it as that member, marked as an agent.
+func agentCreds(userID string) authclient.Credentials {
+	return authclient.Credentials{Authorization: "Bearer " + agentTokenPrefix + userID}
+}
+
+const agentTokenPrefix = "agent:"
+
 type fakeDirectory struct{}
 
 func (fakeDirectory) Membership(_ context.Context, organizationID string, credentials authclient.Credentials) (domain.OrgMembership, error) {
-	token := strings.TrimPrefix(credentials.Authorization, "Bearer ")
+	token, agent := strings.CutPrefix(strings.TrimPrefix(credentials.Authorization, "Bearer "), agentTokenPrefix)
 	people := map[string]domain.OrgMembership{
 		"user-owner":    {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner},
 		"user-admin":    {OrganizationID: testOrganization, OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
@@ -44,6 +52,7 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 	if !ok || organizationID != testOrganization {
 		return domain.OrgMembership{}, domain.ErrNotFound
 	}
+	membership.Agent = agent
 	return membership, nil
 }
 
@@ -76,7 +85,7 @@ func (fake *fakeTeams) Team(_ context.Context, organizationID, teamID string, cr
 	if organizationID != testOrganization {
 		return domain.TeamAccess{}, domain.ErrNotFound
 	}
-	token := strings.TrimPrefix(credentials.Authorization, "Bearer ")
+	token := strings.TrimPrefix(strings.TrimPrefix(credentials.Authorization, "Bearer "), agentTokenPrefix)
 	access, ok := fake.access[token+"/"+teamID]
 	if !ok || access.TeamID == "" {
 		return domain.TeamAccess{}, domain.ErrNotFound
@@ -191,12 +200,15 @@ func matchesCorpusQuery(corpus domain.Corpus, query postgres.CorpusQuery) bool {
 	}
 }
 
+// Corpora lists each corpus with its document count, as the real listing
+// does; this store keeps no chunks, so there are none to count.
 func (store *fakeStore) Corpora(_ context.Context, organizationID string, query postgres.CorpusQuery) ([]domain.Corpus, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	var result []domain.Corpus
 	for _, corpus := range store.corpora {
 		if corpus.OrganizationID == organizationID && matchesCorpusQuery(corpus, query) {
+			corpus.DocumentCount = store.countDocuments(corpus.ID, query.IncludeAdminOnly)
 			result = append(result, corpus)
 		}
 	}
@@ -206,13 +218,19 @@ func (store *fakeStore) Corpora(_ context.Context, organizationID string, query 
 func (store *fakeStore) CorpusCounts(_ context.Context, corpusID string, includeAdminOnly bool) (int64, int64, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
+	return store.countDocuments(corpusID, includeAdminOnly), 0, nil
+}
+
+// countDocuments counts what a corpus holds, leaving out admin-only documents
+// unless asked for them. The caller holds store.mu.
+func (store *fakeStore) countDocuments(corpusID string, includeAdminOnly bool) int64 {
 	var documents int64
 	for _, document := range store.documents {
 		if document.CorpusID == corpusID && (includeAdminOnly || document.Access != domain.AccessAdmins) {
 			documents++
 		}
 	}
-	return documents, 0, nil
+	return documents
 }
 
 func (store *fakeStore) CorporaForWipe(_ context.Context, organizationID string, scope domain.Scope, ownerID string) ([]domain.Corpus, error) {

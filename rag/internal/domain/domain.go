@@ -108,6 +108,20 @@ type OrgMembership struct {
 	Email            string
 	DisplayName      string
 	Role             OrgRole
+	// Agent says the caller is an agent acting for this member rather than
+	// the member themselves, which auth says of every token it mints for an
+	// agent. An agent may run with its member absent, answering someone
+	// else: a teammate's interaction request, a room it was mentioned in.
+	// What it reads can end up in front of any of them.
+	Agent bool
+}
+
+// SeesAdminOnly reports whether the caller may read documents only org
+// owners and admins may read. An admin's own session may. An agent acting for
+// an admin may not, because what it reads can reach members who may not. It
+// says nothing about which corpora the caller may reach.
+func (membership OrgMembership) SeesAdminOnly() bool {
+	return membership.Role.IsOrgAdmin() && !membership.Agent
 }
 
 // TeamAccess is what teams answers about one team. An empty TeamID means the

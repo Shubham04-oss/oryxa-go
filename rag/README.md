@@ -320,7 +320,12 @@ source names one and `category` when judged. Answer returns `{answer, matches}`;
 `text`, `citations`, `model`, `usage` and `grounded`. Each citation carries
 the same document metadata so a caller can identify its origin without a
 second lookup. Scope and admin access are derived from the caller's token;
-neither can be supplied in the request body.
+neither can be supplied in the request body. An agent's token, which auth
+answers with `agent: true`, reads only what every member may: an agent acting
+for an org admin may be answering someone else, such as a teammate's
+interaction request or a room it was mentioned in, so its searches, answers,
+document lists, document reads and counts leave out `access: admins`
+documents. The admin's own session still sees them.
 
 A request that adds a document may be up to 24 MiB; every other request body,
 a corpus's settings or a query and its filters, at most 1 MiB. Past its limit

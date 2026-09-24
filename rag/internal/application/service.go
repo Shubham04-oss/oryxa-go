@@ -298,7 +298,10 @@ func (service *Service) Corpora(ctx context.Context, credentials authclient.Cred
 	if err != nil {
 		return nil, err
 	}
-	query := postgres.CorpusQuery{Scope: filter.Scope, MemberID: member.UserID, Admin: member.Role.IsOrgAdmin()}
+	query := postgres.CorpusQuery{
+		Scope: filter.Scope, MemberID: member.UserID,
+		Admin: member.Role.IsOrgAdmin(), IncludeAdminOnly: member.SeesAdminOnly(),
+	}
 	if filter.Scope == domain.ScopeTeam {
 		if member.Role.IsOrgAdmin() {
 			query.TeamID = filter.TeamID
@@ -319,7 +322,7 @@ func (service *Service) Corpus(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return domain.Corpus{}, err
 	}
-	documents, chunks, err := service.store.CorpusCounts(ctx, corpus.ID, member.Role.IsOrgAdmin())
+	documents, chunks, err := service.store.CorpusCounts(ctx, corpus.ID, member.SeesAdminOnly())
 	if err != nil {
 		return domain.Corpus{}, err
 	}
@@ -515,7 +518,7 @@ func (service *Service) Documents(ctx context.Context, credentials authclient.Cr
 	if limit <= 0 || limit > MaxDocumentsPerPage {
 		limit = MaxDocumentsPerPage
 	}
-	documents, nextCursor, err := service.store.Documents(ctx, organizationID, corpus.ID, status, cursor, limit, member.Role.IsOrgAdmin())
+	documents, nextCursor, err := service.store.Documents(ctx, organizationID, corpus.ID, status, cursor, limit, member.SeesAdminOnly())
 	if err != nil {
 		return DocumentPage{}, err
 	}
@@ -534,7 +537,7 @@ func (service *Service) Document(ctx context.Context, credentials authclient.Cre
 	if document.CorpusID != corpus.ID {
 		return domain.Document{}, domain.ErrNotFound
 	}
-	if !document.VisibleTo(member.Role) {
+	if !document.VisibleTo(member) {
 		return domain.Document{}, domain.ErrNotFound
 	}
 	return document, nil
@@ -580,7 +583,7 @@ func (service *Service) Search(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return retrieval.Results{}, err
 	}
-	query.IncludeAdminOnly = member.Role.IsOrgAdmin()
+	query.IncludeAdminOnly = member.SeesAdminOnly()
 	return service.retriever.Search(ctx, corpus, query)
 }
 
@@ -600,7 +603,7 @@ func (service *Service) Answer(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return Answered{}, err
 	}
-	query.IncludeAdminOnly = member.Role.IsOrgAdmin()
+	query.IncludeAdminOnly = member.SeesAdminOnly()
 	results, err := service.retriever.Search(ctx, corpus, query)
 	if err != nil {
 		return Answered{}, err

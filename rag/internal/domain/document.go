@@ -220,8 +220,18 @@ const (
 
 func (access DocumentAccess) Valid() bool { return access == AccessMembers || access == AccessAdmins }
 
-func (document Document) VisibleTo(role OrgRole) bool {
-	return document.Access == "" || document.Access == AccessMembers || (document.Access == AccessAdmins && role.IsOrgAdmin())
+// VisibleTo reports whether a caller already allowed into this document's
+// corpus may read the document itself. An access label this service does not
+// know is refused rather than guessed at.
+func (document Document) VisibleTo(member OrgMembership) bool {
+	switch document.Access {
+	case "", AccessMembers:
+		return true
+	case AccessAdmins:
+		return member.SeesAdminOnly()
+	default:
+		return false
+	}
 }
 
 // HasOriginal reports whether a document was indexed with no extracted text

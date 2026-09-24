@@ -487,6 +487,71 @@ func TestOrganizationDocumentACL(t *testing.T) {
 	}
 }
 
+// TestAnAdminsAgentReadsOnlyWhatEveryMemberMay: an agent acting for an org
+// admin can be answering someone else — a teammate's interaction request, a
+// room it was mentioned in — so no read path may hand it a document only
+// admins may read, or count one. The admin's own session still reads
+// everything their role allows.
+func TestAnAdminsAgentReadsOnlyWhatEveryMemberMay(t *testing.T) {
+	h := newHarness()
+	ctx := context.Background()
+	corpus := seedCorpus(h.store, domain.Corpus{Slug: "org-acl", Scope: domain.ScopeOrganization})
+	invoice := seedDocument(h.store, domain.Document{CorpusID: corpus.ID, Title: "September invoice", Access: domain.AccessAdmins, Status: domain.StatusReady})
+	handbook := seedDocument(h.store, domain.Document{CorpusID: corpus.ID, Title: "Handbook", Access: domain.AccessMembers, Status: domain.StatusReady})
+	h.store.documentsPage = []domain.Document{invoice, handbook}
+
+	for _, reader := range []struct {
+		name          string
+		credentials   authclient.Credentials
+		seesAdminOnly bool
+	}{
+		{"the admin's agent", agentCreds("user-admin"), false},
+		{"the owner's agent", agentCreds("user-owner"), false},
+		{"the admin themselves", creds("user-admin"), true},
+	} {
+		t.Run(reader.name, func(t *testing.T) {
+			wantDocuments := int64(1)
+			if reader.seesAdminOnly {
+				wantDocuments = 2
+			}
+			// Search and Answer set the flag on every call, so each starts
+			// from the opposite of what it should end up as.
+			h.retriever.seen.query.IncludeAdminOnly = !reader.seesAdminOnly
+			if _, err := h.service.Search(ctx, reader.credentials, testOrganization, corpus.ID, domain.Query{Text: "invoice"}); err != nil ||
+				h.retriever.seen.query.IncludeAdminOnly != reader.seesAdminOnly {
+				t.Fatalf("Search: IncludeAdminOnly = %v, %v; want %v", h.retriever.seen.query.IncludeAdminOnly, err, reader.seesAdminOnly)
+			}
+			h.retriever.seen.query.IncludeAdminOnly = !reader.seesAdminOnly
+			if _, err := h.service.Answer(ctx, reader.credentials, testOrganization, corpus.ID, domain.Query{Text: "invoice"}); err != nil ||
+				h.retriever.seen.query.IncludeAdminOnly != reader.seesAdminOnly {
+				t.Fatalf("Answer: IncludeAdminOnly = %v, %v; want %v", h.retriever.seen.query.IncludeAdminOnly, err, reader.seesAdminOnly)
+			}
+			page, err := h.service.Documents(ctx, reader.credentials, testOrganization, corpus.ID, "", "", 0)
+			if err != nil || int64(len(page.Documents)) != wantDocuments {
+				t.Fatalf("Documents = %+v, %v; want %d", page.Documents, err, wantDocuments)
+			}
+			if _, err := h.service.Document(ctx, reader.credentials, testOrganization, corpus.ID, handbook.ID); err != nil {
+				t.Fatalf("Document(handbook) = %v", err)
+			}
+			_, err = h.service.Document(ctx, reader.credentials, testOrganization, corpus.ID, invoice.ID)
+			if reader.seesAdminOnly && err != nil {
+				t.Fatalf("Document(invoice) = %v, want it read", err)
+			}
+			if !reader.seesAdminOnly && !errors.Is(err, domain.ErrNotFound) {
+				t.Fatalf("Document(invoice) = %v, want ErrNotFound", err)
+			}
+			read, err := h.service.Corpus(ctx, reader.credentials, testOrganization, corpus.ID)
+			if err != nil || read.DocumentCount != wantDocuments {
+				t.Fatalf("Corpus count = %d, %v; want %d", read.DocumentCount, err, wantDocuments)
+			}
+			listed, err := h.service.Corpora(ctx, reader.credentials, testOrganization, ListFilter{Scope: domain.ScopeOrganization})
+			if err != nil || len(listed) != 1 || listed[0].DocumentCount != wantDocuments {
+				t.Fatalf("Corpora = %+v, %v; want one corpus counting %d", listed, err, wantDocuments)
+			}
+		})
+	}
+}
+
 func TestFileCannotBeCopiedIntoWiderCorpus(t *testing.T) {
 	h := newHarness()
 	corpus := seedCorpus(h.store, domain.Corpus{Slug: "org-files", Scope: domain.ScopeOrganization})

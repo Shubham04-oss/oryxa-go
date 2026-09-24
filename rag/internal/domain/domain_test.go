@@ -479,6 +479,41 @@ func TestChunkProvenanceCannotBeForged(t *testing.T) {
 	}
 }
 
+// TestAnAgentActingForAnAdminSeesWhatEveryMemberMay: an admin's own session
+// reads admin-only documents; an agent acting for that admin does not, since
+// what it reads can reach members who may not. Documents every member may
+// read stay readable to everyone, and a label this service does not know is
+// read by nobody.
+func TestAnAgentActingForAnAdminSeesWhatEveryMemberMay(t *testing.T) {
+	t.Parallel()
+	callers := map[string]struct {
+		membership    OrgMembership
+		seesAdminOnly bool
+	}{
+		"owner":                 {OrgMembership{Role: OrgRoleOwner}, true},
+		"admin":                 {OrgMembership{Role: OrgRoleAdmin}, true},
+		"member":                {OrgMembership{Role: OrgRoleMember}, false},
+		"agent for an owner":    {OrgMembership{Role: OrgRoleOwner, Agent: true}, false},
+		"agent for an admin":    {OrgMembership{Role: OrgRoleAdmin, Agent: true}, false},
+		"agent for a member":    {OrgMembership{Role: OrgRoleMember, Agent: true}, false},
+		"unrecognised role":     {OrgMembership{Role: OrgRole("pending")}, false},
+		"agent with no role":    {OrgMembership{Agent: true}, false},
+		"nothing known of them": {OrgMembership{}, false},
+	}
+	for name, caller := range callers {
+		if got := caller.membership.SeesAdminOnly(); got != caller.seesAdminOnly {
+			t.Errorf("%s: SeesAdminOnly() = %v, want %v", name, got, caller.seesAdminOnly)
+		}
+		for access, want := range map[DocumentAccess]bool{
+			"": true, AccessMembers: true, AccessAdmins: caller.seesAdminOnly, "owners": false,
+		} {
+			if got := (Document{Access: access}).VisibleTo(caller.membership); got != want {
+				t.Errorf("%s: VisibleTo(access %q) = %v, want %v", name, access, got, want)
+			}
+		}
+	}
+}
+
 func TestSimilarityIsMonotonic(t *testing.T) {
 	t.Parallel()
 	for _, metric := range []Metric{MetricCosine, MetricL2, MetricInnerProduct} {
