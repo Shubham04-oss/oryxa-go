@@ -13,6 +13,9 @@ locals {
     # Only when Jev judges: the tasks cannot start while a secret they name
     # holds no value, so it exists only once there is one to put in it.
     var.knowledge_judge == "jev" ? { TYPESAFE_API_KEY = "typesafe-api-key" } : {},
+    # Only once realtime purges, for the same reason. The Worker holds the
+    # same value.
+    var.realtime_purge ? { REALTIME_PURGE_SECRET = "realtime-purge-secret" } : {},
   )
 }
 

@@ -152,6 +152,98 @@ no longer has a default. So, for this release only:
      (source kind `file`) become admin-only. Re-add any that members should
      see.
 
+### Releasing realtime, and turning it on
+
+Realtime (`realtime/README.md`) has the web app's Worker purge a member's
+direct messages and teamspace side conversations when they leave an
+organization or it is deleted. It calls
+`https://app.oryxa.in/internal/realtime/purge`, signed with
+`REALTIME_PURGE_SECRET`, a new secret that the Worker holds too. It ships off.
+`realtime_purge` turns it on.
+
+**Before approving the first release that carries it**, apply once:
+
+```sh
+(cd deploy/production && tofu apply)
+```
+
+This gives the task `REALTIME_EVENTS_QUEUE_URL`, lets it read that queue, and
+adds the queue's backlog and dead-letter alarms. A production start refuses
+while any consumer's queue variable is unset, realtime's included, even while
+realtime is off. A release approved before this apply never turns healthy, and
+the circuit breaker rolls it back. Nothing is lost, but nothing ships until the
+apply runs. After the release, the task logs `REALTIME_WORKER_URL and
+REALTIME_PURGE_SECRET are not set: realtime is off`.
+
+**Turning it on.** The Worker's endpoint must be live, holding the secret,
+before realtime is on. Until then the Worker answers `404` to the purge, and
+realtime drops every purge that gets one. In this order:
+
+1. Make the secret, and put it in the repository's `.env` as
+   `REALTIME_PURGE_SECRET=…`:
+
+   ```sh
+   openssl rand -hex 32
+   ```
+
+   Give the Worker the same value (its production environment, in its own
+   project), and deploy the Worker with `POST /internal/realtime/purge`:
+
+   ```sh
+   npx wrangler secret put REALTIME_PURGE_SECRET --env production
+   ```
+
+   The key is the value's characters as written, not decoded from hex.
+   `realtime/README.md` has golden vectors to test the Worker's check against.
+2. Switch it on, and create the secret's container:
+
+   ```sh
+   echo '{"realtime_purge": true}' > deploy/production/realtime.auto.tfvars.json
+   (cd deploy/production && tofu apply -target='aws_secretsmanager_secret.external["REALTIME_PURGE_SECRET"]')
+   ```
+
+3. Store the secret, then make the queue, its dead-letter queue and the rule
+   that feeds it. The other provisioners run again too, and change nothing.
+   The tasks cannot start while a secret they name holds no value, so store it
+   before the next step:
+
+   ```sh
+   deploy/scripts/put-secrets.sh
+   deploy/scripts/provision-app.sh
+   ```
+
+4. Apply. The task gets `REALTIME_WORKER_URL=https://app.oryxa.in` and the
+   secret, and restarts with realtime on:
+
+   ```sh
+   (cd deploy/production && tofu apply)
+   ```
+
+   Then commit `realtime.auto.tfvars.json`: an apply from a checkout without
+   it turns realtime off again.
+
+5. Check it. The task logs `realtime mounted` with
+   `worker_url=https://app.oryxa.in`. Remove a member from a test
+   organization. Realtime then logs `realtime conversations purged`, and the
+   Worker logs a `204`. `realtime purge dropped` means the Worker refused the
+   purge; the log line carries the Worker's answer. If the Worker never sees
+   the call, look at Cloudflare's security events for `app.oryxa.in`: a bot or
+   WAF challenge answers `403`, and realtime drops that too. A `401` means the
+   two secrets differ. Those purges are retried into
+   `oryxa-production-realtime-events-dlq`, whose alarm mails, and can be
+   redriven once the secrets match:
+
+   ```sh
+   aws sqs start-message-move-task --region us-west-2 \
+     --source-arn "arn:aws:sqs:us-west-2:$(aws sts get-caller-identity --query Account --output text):oryxa-production-realtime-events-dlq"
+   ```
+
+To turn it off, set `realtime_purge` to `false` and apply. That also deletes
+the stored secret, at once, so turning it on again repeats steps 2 to 4. The
+rule keeps filling the queue, which holds each event for 14 days, and the
+backlog alarm mails after ten minutes. Turned on again within those 14 days,
+realtime purges everything that waited.
+
 ## Looking at it
 
 - **Dashboard** `oryxa-production` in CloudWatch: the tunnel, API latency by

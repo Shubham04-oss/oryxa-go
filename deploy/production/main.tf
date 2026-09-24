@@ -23,7 +23,7 @@ locals {
   # Each service's event queue. The service provisioners create them (so their
   # rule patterns stay generated from the code that consumes them); the names
   # are fixed here so the task's configuration and IAM can refer to them.
-  queue_services = ["agents", "apps", "auth", "batching", "billing", "files", "knowledge", "rag", "teams"]
+  queue_services = ["agents", "apps", "auth", "batching", "billing", "files", "knowledge", "rag", "realtime", "teams"]
   queue_names = merge(
     { for service in local.queue_services : service => "${local.name}-${service}-events" },
     { email = "${local.name}-email-events" },

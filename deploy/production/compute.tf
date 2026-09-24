@@ -145,6 +145,10 @@ locals {
       EMAIL_SUPPRESSIONS_TABLE = local.email_suppressions_table
     },
     { for service, url in local.queue_urls : (service == "email" ? "EMAIL_QUEUE_URL" : "${upper(service)}_EVENTS_QUEUE_URL") => url },
+    # Realtime has the web app's Worker purge a member's direct messages and
+    # side conversations, at the app's origin; with REALTIME_PURGE_SECRET
+    # (secrets.tf), only once realtime_purge turns it on.
+    var.realtime_purge ? { REALTIME_WORKER_URL = local.app_url } : {},
   )
 
   app_secrets = merge(

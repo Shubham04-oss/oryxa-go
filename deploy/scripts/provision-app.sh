@@ -25,8 +25,12 @@ provision() {
   env "$@" go run "./$package/cmd/provision" | jq -c .
 }
 
-for service in apps auth batching billing knowledge teams; do
-  provision "$service/infra/events" "$(tr '[:lower:]' '[:upper:]' <<<"$service")_EVENTS_QUEUE_NAME=$(queue_name "$service")"
+for service in apps auth batching billing knowledge realtime teams; do
+  # Assigned first, so a service OpenTofu names no queue for yet (the
+  # configuration adding it not applied) stops the script, rather than
+  # provisioning a queue called "null".
+  queue=$(queue_name "$service")
+  provision "$service/infra/events" "$(tr '[:lower:]' '[:upper:]' <<<"$service")_EVENTS_QUEUE_NAME=$queue"
 done
 provision agents/primary/infra/events "AGENTS_EVENTS_QUEUE_NAME=$(queue_name agents)"
 provision files/infra/storage "FILES_EVENTS_QUEUE_NAME=$(queue_name files)"
