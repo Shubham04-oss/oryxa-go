@@ -1111,3 +1111,82 @@ func TestAnOlderPublishOfTheSameReadCannotDisplaceALaterOne(t *testing.T) {
 		t.Fatalf("mapping = %+v, %v; want the later publish's version", mapping, err)
 	}
 }
+
+// A redelivery of what is already indexed is recognised before its body is
+// read back, and never costs the document what it holds.
+func TestARedeliveredOmittedBodyIsNeitherFetchedNorRemoved(t *testing.T) {
+	h := newHarness()
+	h.documents.body = "# The handbook\n\nEverything about how we work."
+	h.documents.hash = "hash-1"
+	event := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.BodyOmitted = true
+		event.Body = ""
+	})
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, event.DocumentID)
+	if err != nil {
+		t.Fatalf("not indexed: %v", err)
+	}
+	if len(h.documents.calls) != 1 {
+		t.Fatalf("read back %d times for the first delivery, want 1", len(h.documents.calls))
+	}
+
+	// Knowledge has since read a newer version; this is the old event again.
+	h.documents.body = "# The handbook\n\nEverything, revised."
+	h.documents.hash = "hash-2"
+	if err := h.service.DocumentPublished(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.documents.calls) != 1 {
+		t.Fatalf("a redelivery read the body back again: %d reads", len(h.documents.calls))
+	}
+	if _, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID); err != nil {
+		t.Fatalf("a redelivery removed the document it had indexed: %v", err)
+	}
+}
+
+// A newer event whose body has already been replaced at knowledge, or that
+// knowledge no longer holds, leaves what is indexed alone: the event for the
+// newer version, or the removal, follows it.
+func TestAnOmittedBodyThatWasReplacedOrRemovedKeepsTheIndexedVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*fakeDocuments)
+	}{
+		{"replaced", func(documents *fakeDocuments) {
+			documents.body, documents.hash = "a version newer still", "hash-3"
+		}},
+		{"removed", func(documents *fakeDocuments) { documents.err = knowledgeclient.ErrNotFound }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness()
+			first := testDocumentPublished(nil)
+			if err := h.service.DocumentPublished(context.Background(), first); err != nil {
+				t.Fatal(err)
+			}
+			mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.setup(h.documents)
+			grew := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+				event.BodyOmitted = true
+				event.Body = ""
+				event.ContentHash = "hash-2"
+				event.ExtractedAt = testClock.Add(time.Hour)
+			})
+			if err := h.service.DocumentPublished(context.Background(), grew); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID); err != nil {
+				t.Fatalf("the indexed version was removed: %v", err)
+			}
+			kept, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+			if err != nil || kept.ContentHash != "hash-1" {
+				t.Fatalf("mapping = %+v, %v; want the indexed version's", kept, err)
+			}
+		})
+	}
+}
