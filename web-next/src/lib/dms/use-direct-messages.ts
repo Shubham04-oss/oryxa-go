@@ -168,6 +168,7 @@ class DirectMessagesView {
   private typedAt = 0
   private readSent = 0
   private shown?: { live: Live; messages: DmMessage[] }
+  private shownPeer?: DirectMessages["peer"]
 
   constructor(private readonly render: () => void) {}
 
@@ -219,12 +220,23 @@ class DirectMessagesView {
     return shown
   }
 
+  /** The other person as the view renders them, kept while nothing about them changed. */
   peer(): DirectMessages["peer"] {
-    return {
+    const next = {
       online: this.live.online.has(this.peerId),
       typing: this.live.typing.has(this.peerId),
       lastReadSeq: this.live.reads.get(this.peerId) ?? 0,
     }
+    const shown = this.shownPeer
+    if (
+      shown?.online === next.online &&
+      shown.typing === next.typing &&
+      shown.lastReadSeq === next.lastReadSeq
+    ) {
+      return shown
+    }
+    this.shownPeer = next
+    return next
   }
 
   status(): DirectMessagesStatus {
@@ -342,7 +354,9 @@ class DirectMessagesView {
     if (!visible) this.setTyping(false)
   }
 
-  heard(data: unknown): void {
+  /** A message on the socket; one from a socket the view has since replaced is not this view's. */
+  heard(data: unknown, target?: unknown): void {
+    if (target != null && target !== this.socket) return
     const message = parseDmServerMessage(data)
     if (!message || !this.live.name || this.settled) return
     this.apply(message)
@@ -650,7 +664,7 @@ export function useDirectMessages(
     name: name || "closed",
     enabled: Boolean(name) && !view.settled,
     onOpen: () => view.opened(),
-    onMessage: (event: MessageEvent) => view.heard(event.data),
+    onMessage: (event: MessageEvent) => view.heard(event.data, event.target),
     onClose: (event: CloseEvent) => view.closed(event),
   })
   view.socket = socket

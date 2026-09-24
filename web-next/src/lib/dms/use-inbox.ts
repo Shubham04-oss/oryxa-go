@@ -87,7 +87,9 @@ class InboxView {
     return live.dropped ? "error" : "connecting"
   }
 
-  heard(data: unknown): void {
+  /** A message on the socket; one from a socket the view has since replaced is not this view's. */
+  heard(data: unknown, target?: unknown): void {
+    if (target != null && target !== this.socket) return
     const message = parseInboxServerMessage(data)
     if (!message || !this.live.name || this.live.settled) return
     this.apply(message)
@@ -195,7 +197,7 @@ export function useInbox(organizationId?: string, viewerId?: string): Inbox {
     agent: INBOX_AGENT,
     name: name || "closed",
     enabled: Boolean(name) && view.live.settled === undefined,
-    onMessage: (event: MessageEvent) => view.heard(event.data),
+    onMessage: (event: MessageEvent) => view.heard(event.data, event.target),
     onClose: (event: CloseEvent) => view.closed(event),
   })
   view.socket = socket

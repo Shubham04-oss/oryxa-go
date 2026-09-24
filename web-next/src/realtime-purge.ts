@@ -180,11 +180,12 @@ export function parsePurgeRequest(body: Uint8Array): PurgeRequest | undefined {
 /**
  * `POST /internal/realtime/purge`, from Go. Checked in this order: the
  * method (405), the Worker's secret (503 when it is not set), both headers
- * (401), the timestamp within `purgeWindowSeconds` of now (401), the body at
- * most `maxPurgeBodyBytes` (413), the signature, compared in constant time
- * (401), and the body (400). Then the organization's registry carries the
- * purge out (`RealtimeRegistryAgent.purge`): 204 once it is done, or was done
- * already for this event; 503 when part of it failed, and Go sends it again.
+ * (401), the timestamp within `purgeWindowSeconds` of now (401), the
+ * signature's form (401), the body at most `maxPurgeBodyBytes` (413), the
+ * signature itself, compared in constant time (401), and the body (400).
+ * Then the organization's registry carries the purge out
+ * (`RealtimeRegistryAgent.purge`): 204 once it is done, or was done already
+ * for this event; 503 when part of it failed, and Go sends it again.
  */
 export async function handlePurge(
   request: Request,

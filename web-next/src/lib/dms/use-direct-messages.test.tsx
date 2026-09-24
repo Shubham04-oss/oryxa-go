@@ -184,6 +184,30 @@ describe("useDirectMessages: opening", () => {
   })
 })
 
+describe("useDirectMessages: a view that moves to another DM", () => {
+  it("starts over, and ignores what the socket it replaced still says", () => {
+    const { result, rerender } = setup()
+    const socket = open([wire(1)])
+    act(() => result.current.send("For the admin"))
+
+    rerender({ current: [org, viewer, "user-owner"] })
+    expect(socket.options.name).toBe("org_sim~user-member~user-owner")
+    expect(result.current.messages).toEqual([])
+    expect(result.current.status).toBe("connecting")
+
+    // A frame from the previous socket, still in flight.
+    act(() => {
+      socket.options.onMessage?.({
+        data: JSON.stringify(snapshot([wire(7)])),
+        target: {},
+      } as unknown as { data: string })
+    })
+    expect(result.current.messages).toEqual([])
+    socket.says(snapshot([wire(1, "user-owner")]))
+    expect(result.current.messages).toEqual([wire(1, "user-owner")])
+  })
+})
+
 describe("useDirectMessages: sending", () => {
   it("shows a message at once as sending, and as a normal message once the object confirms it", () => {
     const { result } = setup()
@@ -456,6 +480,10 @@ describe("useDirectMessages: read state, typing and presence", () => {
     socket.says({ type: "dm-typing", userId: viewer, typing: true })
     expect(result.current.peer.typing).toBe(false)
 
+    // The same peer, the same object: a view's effects need not re-run.
+    const before = result.current.peer
+    socket.says({ type: "dm-read", userId: viewer, seq: 0 })
+    expect(result.current.peer).toBe(before)
     socket.says({ type: "dm-presence", userId: peer, online: true })
     expect(result.current.peer.online).toBe(true)
     socket.says({ type: "dm-presence", userId: peer, online: false })

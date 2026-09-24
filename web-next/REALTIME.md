@@ -183,7 +183,8 @@ callable methods, and a page may not set state).
   that sent it (`dm-send-failed`); the page shows the message failed, with
   retry.
 - **History.** A socket that opens is sent `dm-snapshot`: the latest 50
-  messages (fewer when long ones would pass 256 KB), whether older ones
+  messages (fewer when long ones would pass 256 K characters of JSON, so a
+  frame stays well under the WebSocket limit), whether older ones
   exist, both read states, who is online and who is typing, and
   `conversation`, which names this run of the conversation and changes after
   a purge, so a page never joins messages from before one to those after.
@@ -323,9 +324,10 @@ member):
 The Worker checks, in order: POST (405); its secret is set and at least 32
 characters (503 `unavailable` otherwise); both headers (401
 `unauthorized`); the timestamp within 300 s of its clock, either way (401
-`stale_request`); the body at most 4 KB (413 `too_large`); the signature,
-compared in constant time (401 `invalid_signature`); the body (400
-`invalid_request`). Then the organization's registry carries the purge out,
+`stale_request`); the signature's form, `v1=` and 64 hex digits (401
+`invalid_signature`); the body at most 4 KB (413 `too_large`); the
+signature itself, compared in constant time (401 `invalid_signature`); the
+body (400 `invalid_request`). Then the organization's registry carries the purge out,
 and the Worker answers 204 with no body once it is done, or was done
 already for this `event_id`: the registry remembers an event for 24 hours,
 so a replay, or Go sending an event again after missing the answer, does

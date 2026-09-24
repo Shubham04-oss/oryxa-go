@@ -625,8 +625,14 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     }
     const read = this.readSeq(user)
     if (read > told.read) {
-      await inbox.markRead(this.name, read)
-      if (this.epoch !== epoch) return
+      // An inbox reads through its member's own message as it is noted: a
+      // read that goes no further than that needs no word of its own.
+      const readByNote =
+        fresh.filter((row) => row.author_id === user).at(-1)?.seq ?? 0
+      if (read > readByNote) {
+        await inbox.markRead(this.name, read)
+        if (this.epoch !== epoch) return
+      }
       this
         .sql`INSERT INTO dm_inbox_sync (user_id, read_seq) VALUES (${user}, ${read})
         ON CONFLICT (user_id) DO UPDATE SET read_seq = MAX(read_seq, excluded.read_seq)`

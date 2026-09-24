@@ -545,6 +545,9 @@ describe("DirectMessageAgent: inboxes", () => {
     expect(await inboxOf(world, ada)).toEqual([
       expect.objectContaining({ peerId: bo, unread: 0 }),
     ])
+    // Sending reads through it in the author's inbox as it is noted: no
+    // read of its own goes to either inbox.
+    expect(world.callsTo("InboxAgent", "markRead")).toEqual([])
     expect(boList.last("inbox-conversation")).toEqual({
       type: "inbox-conversation",
       conversation: expect.objectContaining({
@@ -555,6 +558,9 @@ describe("DirectMessageAgent: inboxes", () => {
     })
 
     await say(dm, boTab, { type: "dm-read", seq: 1 })
+    expect(world.callsTo("InboxAgent", "markRead")).toEqual([
+      { binding: "InboxAgent", name: inboxName(org, bo), method: "markRead" },
+    ])
     expect((await inboxOf(world, bo))[0].unread).toBe(1)
     await say(dm, boTab, { type: "dm-read", seq: 2 })
     expect((await inboxOf(world, bo))[0].unread).toBe(0)
