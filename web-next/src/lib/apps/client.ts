@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query"
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query"
 import { ApiError, apiRequest } from "@/lib/api/client"
 
 // ---------------------------------------------------------------------------
@@ -121,6 +121,27 @@ export async function listCatalogTriggerTypes(
     })
   )
   return { nextCursor: next_cursor, triggers }
+}
+
+/** How many pages of trigger types one read follows before settling for what it has. */
+export const triggerTypePagesLimit = 10
+
+/**
+ * Every subscribable event an app has, following `nextCursor` (at most
+ * `triggerTypePagesLimit` pages of 50), since the catalog pages them.
+ */
+export async function listAllCatalogTriggerTypes(
+  toolkit: string
+): Promise<TriggerType[]> {
+  const types: TriggerType[] = []
+  let cursor: string | undefined
+  for (let page = 0; page < triggerTypePagesLimit; page += 1) {
+    const result = await listCatalogTriggerTypes(toolkit, { cursor, limit: 50 })
+    types.push(...result.triggers)
+    if (!result.nextCursor) break
+    cursor = result.nextCursor
+  }
+  return types
 }
 
 // ---------------------------------------------------------------------------
@@ -399,11 +420,36 @@ export function catalogToolkitQueryOptions(toolkit: string) {
   })
 }
 
+/** Every event an app can deliver, cached: the catalog changes rarely. */
 export function catalogTriggerTypesQueryOptions(toolkit: string) {
   return queryOptions({
     queryKey: ["apps", "catalog", "triggers", toolkit] as const,
-    queryFn: () => listCatalogTriggerTypes(toolkit, { limit: 50 }),
+    queryFn: () => listAllCatalogTriggerTypes(toolkit),
     staleTime: 5 * 60_000,
+  })
+}
+
+/**
+ * A catalog search, a page at a time: each page's `nextCursor` is the next
+ * page's cursor, until there is none.
+ */
+export function catalogSearchQueryOptions(query: {
+  search: string
+  category?: string
+  limit?: number
+}) {
+  return infiniteQueryOptions({
+    queryKey: [
+      "apps",
+      "catalog",
+      "search",
+      query.search,
+      query.category ?? "",
+      query.limit ?? 0,
+    ] as const,
+    queryFn: ({ pageParam }) => listCatalog({ ...query, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page: CatalogPage) => page.nextCursor,
   })
 }
 
@@ -506,21 +552,61 @@ export type ConnectNotice = {
   tone: "danger" | "info" | "success"
 }
 
-/** What to tell the member once their browser is back from connecting. */
-export function connectReturnNotice(value: ConnectReturn): ConnectNotice {
+/**
+ * What to tell the member once their browser is back from connecting.
+ * `detail` is what `getConnection` says about it: the app's name, and for a
+ * failure its `status_reason`, which the redirect itself never carries.
+ *
+ * A connection still `pending` after the callback stays pending until the
+ * sweep fails it a day later; nothing checks again sooner, so the copy
+ * points at cancelling rather than waiting.
+ */
+export function connectReturnNotice(
+  value: ConnectReturn,
+  detail: { name?: string; reason?: string } = {}
+): ConnectNotice {
+  const name = detail.name || "The app"
   switch (value.status) {
     case "active":
-      return { text: "Connected. It's ready to use.", tone: "success" }
+      return { text: `${name} is connected and ready to use.`, tone: "success" }
     case "pending":
       return {
-        text: "Still finishing up — check back in a moment.",
+        text: `${name} is still connecting. If it doesn't finish, cancel it and connect again.`,
         tone: "info",
       }
     default:
       return {
-        text: "The connection did not finish. Try again.",
+        text: detail.reason
+          ? `${name} didn't connect: ${connectionReasonText(detail.reason)}. Try again.`
+          : `${name} didn't connect. Try again.`,
         tone: "danger",
       }
+  }
+}
+
+/**
+ * A connection's `status_reason` in a member's words. apps writes it either
+ * in its own words (`CompleteConnection`, the maintenance sweep's "link
+ * expired") or as Composio's own lowercased account status; an expired
+ * connection carries Composio's free text, which is passed through.
+ */
+export function connectionReasonText(reason: string): string {
+  switch (reason.trim()) {
+    case "the member did not finish connecting":
+      return "it wasn't finished at the app"
+    case "link expired":
+      return "the link expired before it was finished"
+    case "failed":
+      return "the app reported a failure"
+    case "expired":
+      return "the sign-in expired"
+    case "revoked":
+      return "access was revoked"
+    case "inactive":
+      return "the account is inactive"
+    default:
+      // Composio's own text arrives as a sentence; the caller adds the stop.
+      return reason.trim().replace(/[.!?]+$/, "")
   }
 }
 
@@ -619,6 +705,36 @@ export function hasConnectionDetails(status: ConnectionStatus): boolean {
  */
 export function canReconnect(status: ConnectionStatus): boolean {
   return status === "expired" || status === "failed"
+}
+
+/**
+ * The stale rows a newer connection has replaced: a `failed` or `expired`
+ * connection whose app now has an `active` connection created after it.
+ * `connect()` always makes a new row and leaves the old one listed (see
+ * README), and apps allows one pending-or-active connection per app and
+ * member, so the newer active one is the member's current connection to that
+ * app, though not necessarily the same account.
+ *
+ * Only the `failed` ones are safe to disconnect without asking: nothing
+ * hangs off a connection that never connected. An `expired` one still holds
+ * what its paused sources indexed, and disconnecting it retires them and
+ * retracts those documents, so a page shows it as replaced and removes it
+ * only when the member says so (behind a confirm step).
+ */
+export function replacedConnections(
+  connections: readonly Connection[]
+): Connection[] {
+  const time = (value: string) => Date.parse(value) || 0
+  return connections.filter(
+    (stale) =>
+      (stale.status === "failed" || stale.status === "expired") &&
+      connections.some(
+        (current) =>
+          current.toolkit === stale.toolkit &&
+          current.status === "active" &&
+          time(current.created_at) > time(stale.created_at)
+      )
+  )
 }
 
 /** Why `toolkit` cannot be connected here, for a disabled catalog row. */

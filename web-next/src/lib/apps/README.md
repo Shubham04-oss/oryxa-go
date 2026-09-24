@@ -84,19 +84,41 @@ frontend did).
 connection row (new id, new Composio account) rather than reusing the old
 one, reconnecting an expired/failed connection leaves the old row in place
 — now stale, but not `removed`, so it still shows up in `listConnections`.
-A page that offers "Reconnect" should also disconnect the old row (either
-immediately before starting the new connect, or once the new one activates)
-so the toolkit doesn't show two cards.
+A page that offers "Reconnect" has to decide what becomes of the old row;
+how depends on its status, because disconnecting deletes data.
+
+`replacedConnections()` finds those rows: a `failed` or `expired` connection
+whose toolkit has an `active` connection created after it (compared with
+`Date.parse`, since Go writes microseconds and sometimes a local offset).
+
+- A **failed** one is safe to disconnect without asking: it never connected,
+  so nothing hangs off it. Tools removes it once the new connection is
+  active, and shows it again only if that fails.
+- An **expired** one is never disconnected for the member. Its sources were
+  paused (`needs_reconnect`) with their documents kept and searchable, and
+  knowledge never re-links a paused source to a new connection, so
+  disconnecting the old row retires them and retracts what they indexed. The
+  new connection may also be a different account for the same app (an old
+  work mailbox, a new personal one), which would make an automatic removal
+  wipe data the member still wants. Tools shows it as "Replaced by your new
+  connection" and offers only Remove, behind the same confirm step as
+  Disconnect; it offers no Reconnect, which apps would refuse with 409 while
+  the new one is active.
+
+With a standing agent grant, knowledge registers up to ten sources for a
+newly connected app by itself (`ConnectionConnected`); without one, the
+member registers them again.
 
 ## What a page should offer, by status
 
-| Status    | Disconnect                 | Reconnect                                 | Cancel                    |
-| --------- | -------------------------- | ----------------------------------------- | ------------------------- |
-| `pending` | Yes — this **is** cancel   | No (would 409)                            | Same action as Disconnect |
-| `active`  | Yes                        | No (already connected)                    | —                         |
-| `failed`  | Yes (clears the stale row) | Yes (`connect()` again)                   | —                         |
-| `expired` | Yes (clears the stale row) | Yes (`connect()` again)                   | —                         |
-| `removed` | No-op if attempted         | Yes (`connect()` again; nothing to clear) | —                         |
+| Status                                    | Disconnect                                             | Reconnect                                 | Cancel                    |
+| ----------------------------------------- | ------------------------------------------------------ | ----------------------------------------- | ------------------------- |
+| `pending`                                 | Yes — this **is** cancel                               | No (would 409)                            | Same action as Disconnect |
+| `active`                                  | Yes                                                    | No (already connected)                    | —                         |
+| `failed`                                  | Yes (clears the stale row)                             | Yes (`connect()` again)                   | —                         |
+| `expired`                                 | Yes, after a confirm step                              | Yes (`connect()` again)                   | —                         |
+| `expired`, replaced by a newer active one | Remove only, after a confirm step; never automatically | No (would 409)                            | —                         |
+| `removed`                                 | No-op if attempted                                     | Yes (`connect()` again; nothing to clear) | —                         |
 
 ## Composio's return trip
 
@@ -116,11 +138,16 @@ connection itself (`Connection.status_reason`), fetched separately with
 `getConnection`. `parseConnectReturn()` reads exactly these two parameters
 and nothing else.
 
-`web-next` has no `/app/connections`-equivalent route yet (Tools currently
-lives inside the Home workspace shell), so this package does not hardcode a
-`return_to` path the way `web/`'s `connectReturnTo()` did. Whoever builds
-the Tools/Apps UI needs to decide the route and build
-`` `${window.location.origin}${thatRoute}` `` itself.
+`web-next` has no `/app/connections`-equivalent route (Tools lives inside
+the Home workspace shell), so this package does not hardcode a `return_to`
+path the way `web/`'s `connectReturnTo()` did. Tools builds it with
+`connectReturnTo()` in `components/workspace-tool-helpers.ts`: the current
+page with `?org=<the organization it connected in>&view=tools`. On the way
+back it reads the two parameters once with `parseConnectReturn()`, takes
+them off the address with `history.replaceState` (TanStack Router's history
+wraps it, so the router follows), opens that connection, and shows
+`connectReturnNotice(value, { name, reason })`, with the reason read from
+`getConnection` and put in a member's words by `connectionReasonText()`.
 
 ## Error codes (`ApiError.code`)
 
