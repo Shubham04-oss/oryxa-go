@@ -497,7 +497,9 @@ function AgentsHere({
         const role = agentRole(agent.id, agent.ownerId, agents, reader)
         return (
           <li key={agent.id} title={`${agent.name} · ${role}`}>
-            <IdentityAvatar identity={agentIdentity(agent.id, agent.name)} />
+            <span className="workspace-side-agents-avatar" aria-hidden="true">
+              <IdentityAvatar identity={agentIdentity(agent.id, agent.name)} />
+            </span>
             <span className="sr-only">
               {agent.name}, {role}
             </span>
@@ -723,11 +725,15 @@ function RequestCard({
   const noteRef = useRef<HTMLInputElement>(null)
   const noteId = useId()
   const mineAsked = card.requesterId === reader.viewerId
-  const agent = card.targetAgentName || "their agent"
+  const agent =
+    card.targetAgentName ||
+    (card.targetId === reader.viewerId
+      ? "your agent"
+      : `${reader.peer.short}'s agent`)
   const role = agentRole(card.targetAgentId, card.targetId, agents, reader)
   const state = cardState(card, reader)
   // Only its owner decides a request held for them, from their own view.
-  const deciding =
+  const decidable =
     canAct &&
     card.targetId === reader.viewerId &&
     card.approval === "owner" &&
@@ -812,7 +818,7 @@ function RequestCard({
           </>
         )}
       </p>
-      {deciding && (
+      {decidable && (
         <div className="workspace-side-card-decide">
           {noting ? (
             <label className="workspace-side-card-note" htmlFor={noteId}>

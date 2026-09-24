@@ -129,6 +129,7 @@
   box-shadow: 0 0 0 2px var(--workspace-base, #111);
 }
 .workspace-side-agents li:first-child { margin-left: 0; }
+.workspace-side-agents-avatar { display: inline-flex; }
 .workspace-dm-bar .workspace-side-agents .workspace-avatar { width: 22px; height: 22px; }
 .workspace-side-agents-more {
   align-items: center;
