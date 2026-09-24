@@ -193,14 +193,16 @@ type Document struct {
 	// ingest worker, not part of the public API.
 	OriginalBucket string `json:"-"`
 	OriginalKey    string `json:"-"`
-	// KBSyncedHash is the ContentSHA256 that was last handed to a Bedrock
-	// knowledge base for this document. Ingestion there is asynchronous, so
-	// the ingest worker claims a document many times before the knowledge
-	// base reports it indexed; comparing this to the current ContentSHA256
-	// is how a claim knows whether to submit again — never submitted, or the
-	// content changed since it last was — or only to poll for the outcome of
-	// a submission already running. Meaningless outside a bedrock-kb corpus,
-	// and not part of the public API.
+	// KBSyncedHash marks what was last handed to a Bedrock knowledge base for
+	// this document: knowledgebase.SyncMarker, a digest of the content and of
+	// every attribute sent with it (access and provenance included).
+	// Ingestion there is asynchronous, so the ingest worker claims a document
+	// many times before the knowledge base reports it indexed; comparing this
+	// to the document's current marker is how a claim knows whether to
+	// submit again — never submitted, the content or an attribute changed
+	// since it last was, or an older build submitted it — or only to poll for
+	// the outcome of a submission already running. Meaningless outside a
+	// bedrock-kb corpus, and not part of the public API.
 	KBSyncedHash string `json:"-"`
 	// KBSubmittedAt is when KBSyncedHash was handed over, so the ingest
 	// worker can tell a submission the knowledge base is still working on

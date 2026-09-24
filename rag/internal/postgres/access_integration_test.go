@@ -35,8 +35,8 @@ func TestUpsertDocumentWithoutAccessKeepsTheStoredAccess(t *testing.T) {
 
 	payroll := domain.Source{Kind: domain.SourceExternal, Ref: "payroll"}
 	restricted, _ := offer(payroll, "salary bands", domain.AccessAdmins)
-	if err := store.MarkDocumentReady(ctx, restricted.ID, 0, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil {
-		t.Fatal(err)
+	if marked, err := store.MarkDocumentReady(ctx, restricted, 0, time.Now().UTC(), testEvent(t, "rag.document.indexed.v1")); err != nil || !marked {
+		t.Fatal(marked, err)
 	}
 	same, outcome := offer(payroll, "salary bands", "")
 	if outcome != UpsertUnchanged || same.ID != restricted.ID || same.Access != domain.AccessAdmins {
