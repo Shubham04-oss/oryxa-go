@@ -253,7 +253,7 @@ func (service *Service) CreateCorpus(ctx context.Context, credentials authclient
 	if err != nil {
 		return domain.Corpus{}, err
 	}
-	if err := input.Metadata.Validate(); err != nil {
+	if err := input.Metadata.ValidateCallerCorpus(); err != nil {
 		return domain.Corpus{}, err
 	}
 
@@ -394,7 +394,7 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 	if err := input.Source.Validate(); err != nil {
 		return domain.Document{}, err
 	}
-	if err := input.Metadata.Validate(); err != nil {
+	if err := input.Metadata.ValidateCallerDocument(); err != nil {
 		return domain.Document{}, err
 	}
 	// No access named is passed on as none: the store keeps the label a

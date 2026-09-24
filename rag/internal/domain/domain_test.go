@@ -218,6 +218,48 @@ func TestMetadataValidate(t *testing.T) {
 	}
 }
 
+// TestCallerMetadataCannotClaimKnowledgeProvenance: the keys rag's Knowledge
+// bridge writes say where a document came from, and origin says a corpus is
+// the bridge's own. A caller may set none of them, or a note of their own
+// could cite as a Gmail financial record. The bridge checks what it writes
+// with Validate, so they must still pass there.
+func TestCallerMetadataCannotClaimKnowledgeProvenance(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"provider", "knowledge_source_id", "knowledge_document_id", "document_kind", "category"} {
+		metadata := Metadata{key: "forged"}
+		if err := metadata.Validate(); err != nil {
+			t.Fatalf("Validate refused %q, which rag's Knowledge bridge writes: %v", key, err)
+		}
+		if err := metadata.ValidateCallerDocument(); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("a caller's document metadata carried %q: %v", key, err)
+		}
+	}
+	origin := Metadata{"origin": "knowledge"}
+	if err := origin.Validate(); err != nil {
+		t.Fatalf("Validate refused origin, which rag's Knowledge bridge writes: %v", err)
+	}
+	if err := origin.ValidateCallerCorpus(); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("a caller's corpus metadata carried origin: %v", err)
+	}
+
+	// What a caller could always set still passes, and every other rule
+	// still holds for them.
+	if err := (Metadata{"team": "platform", "origin": "import"}).ValidateCallerDocument(); err != nil {
+		t.Fatalf("ordinary document metadata refused: %v", err)
+	}
+	if err := (Metadata{"team": "platform"}).ValidateCallerCorpus(); err != nil {
+		t.Fatalf("ordinary corpus metadata refused: %v", err)
+	}
+	for _, metadata := range []Metadata{{"document_id": "doc_1"}, {"Team": "platform"}, {"note": strings.Repeat("x", MaxMetadataValue+1)}} {
+		if err := metadata.ValidateCallerDocument(); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("ValidateCallerDocument(%v) = %v, want ErrInvalid", metadata, err)
+		}
+		if err := metadata.ValidateCallerCorpus(); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("ValidateCallerCorpus(%v) = %v, want ErrInvalid", metadata, err)
+		}
+	}
+}
+
 func TestMetadataTooManyKeys(t *testing.T) {
 	t.Parallel()
 	metadata := Metadata{}

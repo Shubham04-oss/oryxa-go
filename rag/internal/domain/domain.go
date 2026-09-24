@@ -162,10 +162,50 @@ var reservedMetadataKeys = []string{
 	"organization_id", "source_kind", "source_ref", "title",
 }
 
+// knowledgeProvenanceKeys are what rag's Knowledge bridge writes on a document
+// it indexes from Knowledge: which Knowledge document and source it is, the
+// app it was read from, what kind of thing it is, and what Knowledge's judge
+// classified it as. Search results and citations show them, and filters
+// narrow on them, so a caller who could set them could make a note of their
+// own cite as, say, a Gmail financial record. The bridge checks its own
+// metadata with Validate, which lets them through; ValidateCallerDocument
+// does not.
+var knowledgeProvenanceKeys = []string{
+	"category", "document_kind", "knowledge_document_id", "knowledge_source_id", "provider",
+}
+
+// corpusOriginKey marks a corpus rag's Knowledge bridge built. The bridge
+// trusts it when it looks for its own corpus, and the web app shows it, so a
+// caller may not set it; see ValidateCallerCorpus.
+const corpusOriginKey = "origin"
+
 type Metadata map[string]string
 
-// Validate reports whether metadata is within the bounds every backend shares.
+// Validate reports whether metadata is within the bounds every backend shares
+// and stays off the keys the pipeline writes on every chunk. It is the check
+// for metadata rag writes itself. Metadata a caller sends goes through
+// ValidateCallerDocument or ValidateCallerCorpus instead, which also keep a
+// caller off the keys only rag may set.
 func (metadata Metadata) Validate() error {
+	return metadata.validate(nil)
+}
+
+// ValidateCallerDocument is Validate for the metadata a caller sends with a
+// document. The Knowledge provenance keys are refused too, so only a document
+// rag indexed from Knowledge can carry them.
+func (metadata Metadata) ValidateCallerDocument() error {
+	return metadata.validate(knowledgeProvenanceKeys)
+}
+
+// ValidateCallerCorpus is Validate for the metadata a caller sends with a
+// corpus. origin is refused too: it marks a corpus rag built from Knowledge,
+// which only rag may say.
+func (metadata Metadata) ValidateCallerCorpus() error {
+	return metadata.validate([]string{corpusOriginKey})
+}
+
+// validate is Validate, refusing callerReserved as well.
+func (metadata Metadata) validate(callerReserved []string) error {
 	if len(metadata) > MaxMetadataKeys {
 		return fmt.Errorf("metadata may carry at most %d keys: %w", MaxMetadataKeys, ErrInvalid)
 	}
@@ -174,7 +214,7 @@ func (metadata Metadata) Validate() error {
 		if !metadataKeyPattern.MatchString(key) {
 			return fmt.Errorf("metadata key %q must be lowercase letters, digits and underscores, at most %d characters: %w", key, MaxMetadataKeyLength, ErrInvalid)
 		}
-		if slices.Contains(reservedMetadataKeys, key) {
+		if slices.Contains(reservedMetadataKeys, key) || slices.Contains(callerReserved, key) {
 			return fmt.Errorf("metadata key %q is reserved for provenance: %w", key, ErrInvalid)
 		}
 		if !utf8.ValidString(value) {

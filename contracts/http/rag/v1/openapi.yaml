@@ -244,7 +244,7 @@ components:
     Metadata:
       type: object
       additionalProperties: { type: string }
-      description: Knowledge documents include provider and knowledge_source_id; document_kind and category are present when known. This data never grants access.
+      description: Knowledge documents include provider and knowledge_source_id; document_kind and category are present when known. Only rag sets these keys, so a document that carries them came from Knowledge. This data never grants access.
     Answer:
       type: object
       required: [text, citations, model, usage, grounded]

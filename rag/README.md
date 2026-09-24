@@ -361,10 +361,14 @@ For example, `{"query":"September invoices","filter":{"conditions":[{"key":"prov
 searches Gmail financial records in the corpora the caller may access.
 Metadata is bounded to 16 keys and 2 KiB total, which is the tighter of the two
 backends' budgets, so a corpus indexed on one is portable to the other. Keys
-the pipeline writes itself — `chunk_id`, `document_id`, `corpus_id`,
+the pipeline writes itself — `access`, `chunk_id`, `document_id`, `corpus_id`,
 `organization_id`, `heading_path`, `title`, `source_kind`, `source_ref` — are
 reserved, so a caller cannot forge provenance and make a citation point
-elsewhere.
+elsewhere. A document a caller adds also may not carry the keys rag writes on
+a Knowledge document — `provider`, `knowledge_source_id`,
+`knowledge_document_id`, `document_kind`, `category` — so a citation naming a
+provider always came from Knowledge. A corpus a caller creates may not carry
+`origin`, which marks a corpus rag built from Knowledge.
 
 ## Events
 

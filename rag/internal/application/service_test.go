@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	knowledgeeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
+
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/rag/internal/generation"
@@ -191,6 +193,61 @@ func TestCreateCorpusRejectsADuplicateSlug(t *testing.T) {
 		Name: "Handbook", Slug: "handbook", Scope: domain.ScopeOrganization,
 	}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("error = %v, want ErrConflict", err)
+	}
+}
+
+// TestCallersCannotForgeKnowledgeProvenance: a plain team member may add to
+// the team corpus Knowledge fills, but not with the metadata that says where
+// a Knowledge document came from, or a note of their own would cite as a Gmail
+// financial record. Nor may anyone make a corpus of their own look like one
+// rag built from Knowledge. The bridge itself still writes both.
+func TestCallersCannotForgeKnowledgeProvenance(t *testing.T) {
+	h := newHarness()
+	ctx := context.Background()
+	if err := h.service.DocumentPublished(ctx, testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.DocumentID, event.Scope, event.MemberID, event.TeamID = "kdoc_statement", "team", "", "team_eng"
+		event.Provider, event.Kind = "gmail", "message"
+		event.Metadata = map[string]string{"knowledge_category": "financial_record"}
+	})); err != nil {
+		t.Fatalf("DocumentPublished: %v", err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(ctx, testOrganization, "kdoc_statement")
+	if err != nil {
+		t.Fatalf("the bridge indexed nothing: %v", err)
+	}
+	indexed, err := h.store.Document(ctx, testOrganization, mapping.DocumentID)
+	if err != nil || indexed.Metadata["provider"] != "gmail" || indexed.Metadata["category"] != "financial_record" ||
+		indexed.Metadata["knowledge_source_id"] == "" || indexed.Metadata["knowledge_document_id"] != "kdoc_statement" || indexed.Metadata["document_kind"] != "message" {
+		t.Fatalf("the bridge's own provenance = %+v, %v", indexed.Metadata, err)
+	}
+	corpus, err := h.store.Corpus(ctx, testOrganization, mapping.CorpusID)
+	if err != nil || corpus.Metadata["origin"] != knowledgeCorpusOrigin {
+		t.Fatalf("the bridge's own corpus = %+v, %v", corpus, err)
+	}
+
+	for _, key := range []string{"provider", "knowledge_source_id", "knowledge_document_id", "document_kind", "category"} {
+		_, err := h.service.AddDocument(ctx, creds("user-teammate"), testOrganization, corpus.ID, given(AddDocumentInput{
+			Source: domain.Source{Kind: domain.SourceInline}, Title: "Wire transfer instructions",
+			Text: "Please wire the September invoice to account 123.", ContentType: "text/plain",
+			Metadata: domain.Metadata{key: "forged"},
+		}))
+		if !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("a team member's document carrying %q = %v, want ErrInvalid", key, err)
+		}
+	}
+	if _, err := h.service.AddDocument(ctx, creds("user-teammate"), testOrganization, corpus.ID, given(AddDocumentInput{
+		Source: domain.Source{Kind: domain.SourceInline}, Text: "Our own note.", ContentType: "text/plain",
+		Metadata: domain.Metadata{"team": "platform"},
+	})); err != nil {
+		t.Fatalf("a team member's own note = %v", err)
+	}
+
+	for _, user := range []string{"user-creator", "user-owner"} {
+		if _, err := h.service.CreateCorpus(ctx, creds(user), testOrganization, CreateCorpusInput{
+			Name: "Connected apps", Metadata: domain.Metadata{"origin": knowledgeCorpusOrigin},
+		}); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("%s created a corpus claiming origin %q = %v, want ErrInvalid", user, knowledgeCorpusOrigin, err)
+		}
 	}
 }
 
