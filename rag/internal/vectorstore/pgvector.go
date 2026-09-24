@@ -133,9 +133,11 @@ func (store *Pgvector) Search(ctx context.Context, corpus domain.Corpus, search 
 	arguments := []any{embeddingValue(corpus.Spec.Dimensions, search.Vector), corpus.ID, corpus.OrganizationID}
 	where := []string{"corpus_id = $2", "organization_id = $3"}
 	if !search.IncludeAdminOnly {
-		where = append(where, `EXISTS (SELECT 1 FROM rag_chunks AS acl_chunk
-			JOIN rag_documents AS acl_document ON acl_document.id = acl_chunk.document_id
-			WHERE acl_chunk.id = chunk_id AND acl_document.access = 'members')`)
+		// The vector row names its own document, so its access is one
+		// primary-key lookup per candidate rather than one through its chunk
+		// first.
+		where = append(where, `EXISTS (SELECT 1 FROM rag_documents AS acl_document
+			WHERE acl_document.id = candidate.document_id AND acl_document.access = 'members')`)
 	}
 	where, arguments, err = appendFilter(where, arguments, search.Filter)
 	if err != nil {
@@ -144,7 +146,7 @@ func (store *Pgvector) Search(ctx context.Context, corpus domain.Corpus, search 
 	arguments = append(arguments, search.TopK)
 	statement := fmt.Sprintf(`
 		SELECT chunk_id, embedding %s $1 AS distance
-		FROM %s
+		FROM %s AS candidate
 		WHERE %s
 		ORDER BY embedding %s $1
 		LIMIT $%d`, operator, Table(corpus.Spec.Dimensions), strings.Join(where, " AND "), operator, len(arguments))
