@@ -43,6 +43,16 @@ A caller who is not in the organization gets `404`, as auth conceals which
 organizations exist. A team the caller cannot see is `404`, as teams conceals
 it. A corpus the caller may not search is `404` for the same reason.
 
+"Org admin" above means a person's own session, such as a chat they are
+watching. A token auth minted for an agent, which it answers with
+`agent: true`, gets a plain member's reach whatever its member's role, because
+the agent can be answering someone else: a teammate's interaction request, a
+room it was mentioned in. It reaches its member's own member corpora, the
+corpora of teams its member is actually on, and organization corpora with
+their `access: members` documents only. It manages a team's corpora only when
+its member is that team's own admin, copies a team's file only when its member
+is on that team, and writes to no organization corpus.
+
 Documents in an organization corpus also have an ACL. `access: members` is
 the default and is visible to every member allowed into that corpus.
 `access: admins` is visible only to organization owners and admins. An admin
@@ -330,12 +340,10 @@ source names one and `category` when judged. Answer returns `{answer, matches}`;
 `text`, `citations`, `model`, `usage` and `grounded`. Each citation carries
 the same document metadata so a caller can identify its origin without a
 second lookup. Scope and admin access are derived from the caller's token;
-neither can be supplied in the request body. An agent's token, which auth
-answers with `agent: true`, reads only what every member may: an agent acting
-for an org admin may be answering someone else, such as a teammate's
-interaction request or a room it was mentioned in, so its searches, answers,
-document lists, document reads and counts leave out `access: admins`
-documents. The admin's own session still sees them.
+neither can be supplied in the request body. An agent's token never carries
+an org admin's reach, so its searches, answers, document lists, document reads
+and counts leave out `access: admins` documents; see
+[What a corpus is](#what-a-corpus-is).
 
 A request that adds a document may be up to 24 MiB; every other request body,
 a corpus's settings or a query and its filters, at most 1 MiB. Past its limit

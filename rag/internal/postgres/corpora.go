@@ -138,11 +138,6 @@ type CorpusQuery struct {
 	TeamID   string
 	MemberID string
 	Admin    bool
-	// IncludeAdminOnly counts the documents only org admins may read, and
-	// their chunks, in each corpus's totals. It is apart from Admin because
-	// an agent acting for an admin reaches the same corpora as the admin but
-	// reads only what every member may.
-	IncludeAdminOnly bool
 }
 
 // listedCorpusRow is a corpus as a listing reads it: with its counts, taken in
@@ -164,7 +159,7 @@ func (store *Store) Corpora(ctx context.Context, organizationID string, query Co
 		(SELECT count(*) FROM rag_chunks AS c JOIN rag_documents AS d ON d.id = c.document_id
 		 WHERE c.corpus_id = rag_corpora.id AND ($2 OR d.access = 'members')) AS chunk_count
 		FROM rag_corpora WHERE organization_id = $1`
-	arguments := []any{organizationID, query.IncludeAdminOnly}
+	arguments := []any{organizationID, query.Admin}
 	switch query.Scope {
 	case domain.ScopeTeam:
 		arguments = append(arguments, query.TeamID)

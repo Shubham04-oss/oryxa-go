@@ -718,6 +718,187 @@ func TestAnAdminsAgentReadsOnlyWhatEveryMemberMay(t *testing.T) {
 	}
 }
 
+// TestAnAdminsAgentCannotSearchAColleaguesPrivateKnowledge: a member can ask
+// an org admin's agent, through an interaction request, to search a
+// colleague's private Knowledge corpus by the slug anyone can work out from
+// the colleague's user id. The agent runs on a token of its own, which gets a
+// plain member's reach, so it is refused exactly as the member asking would
+// be. The admin's own session, a watched chat, still reaches it, and so does
+// the colleague's own agent.
+func TestAnAdminsAgentCannotSearchAColleaguesPrivateKnowledge(t *testing.T) {
+	h := newHarness()
+	ctx := context.Background()
+	if err := h.service.DocumentPublished(ctx, testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.DocumentID, event.MemberID, event.Provider, event.Kind = "kdoc_payslip", "user-creator", "gmail", "message"
+	})); err != nil {
+		t.Fatalf("DocumentPublished: %v", err)
+	}
+	slug, err := knowledgeCorpusSlug(domain.ScopeMember, "", "user-creator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := h.store.CorpusBySlug(ctx, testOrganization, slug)
+	if err != nil || private.Scope != domain.ScopeMember || private.MemberID != "user-creator" {
+		t.Fatalf("the colleague's Knowledge corpus = %+v, %v", private, err)
+	}
+	h.retriever.results = retrieval.Results{Matches: []domain.Match{{Chunk: domain.Chunk{ID: "chk_payslip"}, Score: 0.9}}}
+
+	agent := agentCreds("user-admin")
+	for _, reference := range []string{slug, private.ID} {
+		if _, err := h.service.Search(ctx, agent, testOrganization, reference, domain.Query{Text: "salary"}); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("the admin's agent searching %s = %v, want ErrNotFound", reference, err)
+		}
+		if _, err := h.service.Answer(ctx, agent, testOrganization, reference, domain.Query{Text: "salary"}); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("the admin's agent asking %s = %v, want ErrNotFound", reference, err)
+		}
+		if _, err := h.service.Corpus(ctx, agent, testOrganization, reference); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("the admin's agent reading %s = %v, want ErrNotFound", reference, err)
+		}
+		if _, err := h.service.Documents(ctx, agent, testOrganization, reference, "", "", 0); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("the admin's agent listing %s = %v, want ErrNotFound", reference, err)
+		}
+		if _, err := h.service.AddDocument(ctx, agent, testOrganization, reference, given(AddDocumentInput{
+			Source: domain.Source{Kind: domain.SourceInline}, Text: "planted", ContentType: "text/plain",
+		})); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("the admin's agent adding to %s = %v, want ErrNotFound", reference, err)
+		}
+		if err := h.service.DeleteCorpus(ctx, agent, testOrganization, reference); !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("the admin's agent deleting %s = %v, want ErrNotFound", reference, err)
+		}
+	}
+
+	if _, err := h.service.Search(ctx, creds("user-admin"), testOrganization, slug, domain.Query{Text: "salary"}); err != nil {
+		t.Fatalf("the admin's own session searching = %v", err)
+	}
+	if _, err := h.service.Search(ctx, agentCreds("user-creator"), testOrganization, slug, domain.Query{Text: "salary"}); err != nil {
+		t.Fatalf("the colleague's own agent searching = %v", err)
+	}
+}
+
+// TestAnAdminsAgentReachesOnlyTheTeamsItsMemberIsOn: teams shows every team
+// to an org admin and says they can manage it, but an agent gets a plain
+// member's reach. An admin's agent reaches a team's corpora only when the
+// admin is on the team, and manages them only by holding the team's own admin
+// role. A member's agent reaches their teams exactly as they do.
+func TestAnAdminsAgentReachesOnlyTheTeamsItsMemberIsOn(t *testing.T) {
+	h := newHarness()
+	ctx := context.Background()
+	eng := seedCorpus(h.store, domain.Corpus{Slug: "eng-notes", Scope: domain.ScopeTeam, TeamID: "team_eng", CreatedBy: "user-teammate"})
+	ops := seedCorpus(h.store, domain.Corpus{Slug: "ops-notes", Scope: domain.ScopeTeam, TeamID: "team_ops", CreatedBy: "user-owner"})
+	admin := agentCreds("user-admin")
+	query := domain.Query{Text: "on-call"}
+
+	// user-admin is not on team_eng.
+	if _, err := h.service.Search(ctx, admin, testOrganization, eng.ID, query); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the admin's agent searching another team's corpus = %v, want ErrNotFound", err)
+	}
+	if _, err := h.service.Corpora(ctx, admin, testOrganization, ListFilter{Scope: domain.ScopeTeam, TeamID: "team_eng"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the admin's agent listing another team's corpora = %v, want ErrNotFound", err)
+	}
+	if _, err := h.service.AddDocument(ctx, admin, testOrganization, eng.ID, given(AddDocumentInput{
+		Source: domain.Source{Kind: domain.SourceInline}, Text: "planted", ContentType: "text/plain",
+	})); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the admin's agent adding to another team's corpus = %v, want ErrNotFound", err)
+	}
+	if _, err := h.service.CreateCorpus(ctx, admin, testOrganization, CreateCorpusInput{
+		Name: "Eng notes", Scope: domain.ScopeTeam, TeamID: "team_eng",
+	}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the admin's agent creating a corpus for another team = %v, want ErrNotFound", err)
+	}
+	if err := h.service.DeleteCorpus(ctx, admin, testOrganization, eng.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the admin's agent deleting another team's corpus = %v, want ErrNotFound", err)
+	}
+
+	// user-admin is on team_ops as a plain member: the agent reads it, but
+	// teams' can_manage there is only the org admin's.
+	if _, err := h.service.Search(ctx, admin, testOrganization, ops.ID, query); err != nil {
+		t.Fatalf("the admin's agent searching its member's own team = %v", err)
+	}
+	listed, err := h.service.Corpora(ctx, admin, testOrganization, ListFilter{Scope: domain.ScopeTeam, TeamID: "team_ops"})
+	if err != nil || len(listed) != 1 || listed[0].ID != ops.ID {
+		t.Fatalf("the admin's agent listing its member's own team = %+v, %v", listed, err)
+	}
+	if err := h.service.DeleteCorpus(ctx, admin, testOrganization, ops.ID); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("the admin's agent deleting a team corpus it may not manage = %v, want ErrForbidden", err)
+	}
+
+	// The admin's own session keeps an org admin's reach.
+	if _, err := h.service.Search(ctx, creds("user-admin"), testOrganization, eng.ID, query); err != nil {
+		t.Fatalf("the admin's own session searching team_eng = %v", err)
+	}
+	// A member's agent reaches their team, and a team admin's agent manages it.
+	if _, err := h.service.Search(ctx, agentCreds("user-teammate"), testOrganization, eng.ID, query); err != nil {
+		t.Fatalf("a team member's agent searching their team = %v", err)
+	}
+	if err := h.service.DeleteCorpus(ctx, agentCreds("user-teamlead"), testOrganization, eng.ID); err != nil {
+		t.Fatalf("a team admin's agent deleting their team's corpus = %v", err)
+	}
+}
+
+// TestAnAdminsAgentCannotCopyAnotherTeamsFileIntoItsOwnCorpus: files serves
+// an org admin's agent every team's files, as it serves the admin, so a copy
+// into the agent's own member corpus would hand it, and whoever it answers, a
+// team its member is not on. For an agent, a team file goes into its member's
+// corpus only when teams says the member is on the team.
+func TestAnAdminsAgentCannotCopyAnotherTeamsFileIntoItsOwnCorpus(t *testing.T) {
+	h := newHarness()
+	ctx := context.Background()
+	adminCorpus := seedCorpus(h.store, domain.Corpus{Slug: "admin", Scope: domain.ScopeMember, MemberID: "user-admin"})
+	teammateCorpus := seedCorpus(h.store, domain.Corpus{Slug: "teammate", Scope: domain.ScopeMember, MemberID: "user-teammate"})
+	h.files.content = domain.SourceContent{ID: "file_eng", Filename: "eng.md", ContentType: "text/markdown",
+		Body: "# Eng\n\nThe on-call rota.", Scope: domain.ScopeTeam, TeamID: "team_eng"}
+	add := given(AddDocumentInput{Source: domain.Source{Kind: domain.SourceFile, Ref: "file_eng"}})
+
+	if _, err := h.service.AddDocument(ctx, agentCreds("user-admin"), testOrganization, adminCorpus.ID, add); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("the admin's agent copying team_eng's file into its member's corpus = %v, want ErrNotFound", err)
+	}
+	if _, err := h.service.AddDocument(ctx, agentCreds("user-teammate"), testOrganization, teammateCorpus.ID, add); err != nil {
+		t.Fatalf("a team member's agent copying their team's file into their own corpus = %v", err)
+	}
+	if _, err := h.service.AddDocument(ctx, creds("user-admin"), testOrganization, adminCorpus.ID, add); err != nil {
+		t.Fatalf("the admin's own session copying a team file into their own corpus = %v", err)
+	}
+}
+
+// TestAnAdminsAgentWritesOnlyWhereAMemberMay: an agent acting for an org
+// admin may read the organization's corpora, members-level documents only,
+// but writing to them, deleting them or creating one is an admin's act, and
+// the agent gets a member's reach. Its own member's corpora are still its to
+// use.
+func TestAnAdminsAgentWritesOnlyWhereAMemberMay(t *testing.T) {
+	h := newHarness()
+	ctx := context.Background()
+	shared := seedCorpus(h.store, domain.Corpus{Slug: "shared", Scope: domain.ScopeOrganization})
+	agent := agentCreds("user-admin")
+	add := given(AddDocumentInput{Source: domain.Source{Kind: domain.SourceInline}, Text: "A note.", ContentType: "text/plain"})
+
+	if _, err := h.service.Corpus(ctx, agent, testOrganization, shared.ID); err != nil {
+		t.Fatalf("the admin's agent reading the organization's corpus = %v", err)
+	}
+	if _, err := h.service.AddDocument(ctx, agent, testOrganization, shared.ID, add); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("the admin's agent adding to the organization's corpus = %v, want ErrForbidden", err)
+	}
+	if err := h.service.DeleteCorpus(ctx, agent, testOrganization, shared.ID); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("the admin's agent deleting the organization's corpus = %v, want ErrForbidden", err)
+	}
+	if _, err := h.service.CreateCorpus(ctx, agent, testOrganization, CreateCorpusInput{
+		Name: "Company handbook", Scope: domain.ScopeOrganization,
+	}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("the admin's agent creating an organization corpus = %v, want ErrForbidden", err)
+	}
+
+	own, err := h.service.CreateCorpus(ctx, agent, testOrganization, CreateCorpusInput{Name: "Admin's notes"})
+	if err != nil || own.MemberID != "user-admin" {
+		t.Fatalf("the admin's agent creating its member's own corpus = %+v, %v", own, err)
+	}
+	if _, err := h.service.AddDocument(ctx, agent, testOrganization, own.ID, add); err != nil {
+		t.Fatalf("the admin's agent adding to its member's own corpus = %v", err)
+	}
+	if _, err := h.service.AddDocument(ctx, creds("user-admin"), testOrganization, shared.ID, add); err != nil {
+		t.Fatalf("the admin's own session adding to the organization's corpus = %v", err)
+	}
+}
+
 // TestReAddingADocumentWithoutAccessKeepsItsAccess: a pipeline re-delivering
 // what it indexed before need not repeat who may read it. Leaving access out
 // keeps what the stored document has, so an admin-only document is never

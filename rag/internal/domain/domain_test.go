@@ -521,16 +521,16 @@ func TestChunkProvenanceCannotBeForged(t *testing.T) {
 	}
 }
 
-// TestAnAgentActingForAnAdminSeesWhatEveryMemberMay: an admin's own session
-// reads admin-only documents; an agent acting for that admin does not, since
-// what it reads can reach members who may not. Documents every member may
-// read stay readable to everyone, and a label this service does not know is
-// read by nobody.
-func TestAnAgentActingForAnAdminSeesWhatEveryMemberMay(t *testing.T) {
+// TestOnlyAPersonsOwnSessionActsAsAdmin: an admin's own session gets an org
+// admin's reach, admin-only documents included; an agent acting for that
+// admin does not, since what it reads can reach members who may not.
+// Documents every member may read stay readable to everyone, and a label
+// this service does not know is read by nobody.
+func TestOnlyAPersonsOwnSessionActsAsAdmin(t *testing.T) {
 	t.Parallel()
 	callers := map[string]struct {
-		membership    OrgMembership
-		seesAdminOnly bool
+		membership  OrgMembership
+		actsAsAdmin bool
 	}{
 		"owner":                 {OrgMembership{Role: OrgRoleOwner}, true},
 		"admin":                 {OrgMembership{Role: OrgRoleAdmin}, true},
@@ -543,11 +543,11 @@ func TestAnAgentActingForAnAdminSeesWhatEveryMemberMay(t *testing.T) {
 		"nothing known of them": {OrgMembership{}, false},
 	}
 	for name, caller := range callers {
-		if got := caller.membership.SeesAdminOnly(); got != caller.seesAdminOnly {
-			t.Errorf("%s: SeesAdminOnly() = %v, want %v", name, got, caller.seesAdminOnly)
+		if got := caller.membership.ActsAsAdmin(); got != caller.actsAsAdmin {
+			t.Errorf("%s: ActsAsAdmin() = %v, want %v", name, got, caller.actsAsAdmin)
 		}
 		for access, want := range map[DocumentAccess]bool{
-			"": true, AccessMembers: true, AccessAdmins: caller.seesAdminOnly, "owners": false,
+			"": true, AccessMembers: true, AccessAdmins: caller.actsAsAdmin, "owners": false,
 		} {
 			if got := (Document{Access: access}).VisibleTo(caller.membership); got != want {
 				t.Errorf("%s: VisibleTo(access %q) = %v, want %v", name, access, got, want)

@@ -148,7 +148,7 @@ const (
 // Query is one search against one corpus.
 type Query struct {
 	// IncludeAdminOnly is assigned by the application from the caller's
-	// verified membership (see OrgMembership.SeesAdminOnly): an org admin's
+	// verified membership (see OrgMembership.ActsAsAdmin): an org admin's
 	// own session, never an agent acting for one. It is never accepted from
 	// a request body.
 	IncludeAdminOnly bool       `json:"-"`

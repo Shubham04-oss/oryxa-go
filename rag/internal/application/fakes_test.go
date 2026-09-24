@@ -57,13 +57,15 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 	return membership, nil
 }
 
-// fakeTeams knows one team, team_eng. user-creator and user-teammate can both
-// see it as plain members; user-teamlead can see it and manage it. An org
+// fakeTeams knows two teams. On team_eng, user-creator and user-teammate are
+// plain members; user-teamlead is its team admin, so can manage it. An org
 // owner or admin sees and can manage every team whether or not they are a
 // member of it — teams.CanSeeTeam and teams.CanManageTeam grant both
 // automatically to org.IsOrgAdmin() — so user-owner and user-admin are here
 // too, unlike user-outsider, an organization member in good standing who
-// simply never joined team_eng and so cannot see it at all.
+// simply never joined team_eng and so cannot see it at all. user-admin also
+// sits on team_ops as a plain member, where teams still says they can manage
+// it, only because they are an org admin.
 type fakeTeams struct {
 	access map[string]domain.TeamAccess
 	err    error
@@ -73,9 +75,10 @@ func newFakeTeams() *fakeTeams {
 	return &fakeTeams{access: map[string]domain.TeamAccess{
 		"user-creator/team_eng":  {TeamID: "team_eng", CanManage: false, Member: true},
 		"user-teammate/team_eng": {TeamID: "team_eng", CanManage: false, Member: true},
-		"user-teamlead/team_eng": {TeamID: "team_eng", CanManage: true, Member: true},
+		"user-teamlead/team_eng": {TeamID: "team_eng", CanManage: true, Member: true, TeamAdmin: true},
 		"user-owner/team_eng":    {TeamID: "team_eng", CanManage: true, Member: false},
 		"user-admin/team_eng":    {TeamID: "team_eng", CanManage: true, Member: false},
+		"user-admin/team_ops":    {TeamID: "team_ops", CanManage: true, Member: true},
 	}}
 }
 
@@ -209,7 +212,7 @@ func (store *fakeStore) Corpora(_ context.Context, organizationID string, query 
 	var result []domain.Corpus
 	for _, corpus := range store.corpora {
 		if corpus.OrganizationID == organizationID && matchesCorpusQuery(corpus, query) {
-			corpus.DocumentCount = store.countDocuments(corpus.ID, query.IncludeAdminOnly)
+			corpus.DocumentCount = store.countDocuments(corpus.ID, query.Admin)
 			result = append(result, corpus)
 		}
 	}

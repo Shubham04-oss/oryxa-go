@@ -34,11 +34,18 @@ type teamResponse struct {
 	Team struct {
 		ID string `json:"id"`
 	} `json:"team"`
+	// Membership is the caller's own place on the team, and null when they
+	// see it only as an org admin.
 	Membership *struct {
 		UserID string `json:"user_id"`
+		Role   string `json:"role"`
 	} `json:"membership"`
 	CanManage bool `json:"can_manage"`
 }
+
+// teamAdminRole is teams' name for the role that manages a team in its own
+// right, whatever the holder's role in the organization.
+const teamAdminRole = "admin"
 
 func (client *Client) Team(ctx context.Context, organizationID, teamID string, credentials authclient.Credentials) (domain.TeamAccess, error) {
 	if strings.TrimSpace(organizationID) == "" || strings.TrimSpace(teamID) == "" {
@@ -52,10 +59,12 @@ func (client *Client) Team(ctx context.Context, organizationID, teamID string, c
 	if decoded.Team.ID != teamID {
 		return domain.TeamAccess{}, fmt.Errorf("teams answered for a different team")
 	}
+	member := decoded.Membership != nil && decoded.Membership.UserID != ""
 	return domain.TeamAccess{
 		TeamID:    decoded.Team.ID,
 		CanManage: decoded.CanManage,
-		Member:    decoded.Membership != nil && decoded.Membership.UserID != "",
+		Member:    member,
+		TeamAdmin: member && decoded.Membership.Role == teamAdminRole,
 	}, nil
 }
 

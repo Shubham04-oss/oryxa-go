@@ -592,7 +592,7 @@ func TestDocumentACLFiltersPagesAndReferences(t *testing.T) {
 	if err != nil || len(listed) != 1 || listed[0].DocumentCount != 1 {
 		t.Fatalf("member corpora = %+v, %v", listed, err)
 	}
-	listed, err = store.Corpora(ctx, organizationID, CorpusQuery{Scope: domain.ScopeOrganization, Admin: true, IncludeAdminOnly: true})
+	listed, err = store.Corpora(ctx, organizationID, CorpusQuery{Scope: domain.ScopeOrganization, Admin: true})
 	if err != nil || len(listed) != 1 || listed[0].DocumentCount != 2 {
 		t.Fatalf("admin corpora = %+v, %v", listed, err)
 	}

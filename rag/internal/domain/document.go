@@ -228,7 +228,7 @@ func (document Document) VisibleTo(member OrgMembership) bool {
 	case "", AccessMembers:
 		return true
 	case AccessAdmins:
-		return member.SeesAdminOnly()
+		return member.ActsAsAdmin()
 	default:
 		return false
 	}

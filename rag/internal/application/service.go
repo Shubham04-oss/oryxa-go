@@ -301,15 +301,12 @@ func (service *Service) Corpora(ctx context.Context, credentials authclient.Cred
 	if err != nil {
 		return nil, err
 	}
-	query := postgres.CorpusQuery{
-		Scope: filter.Scope, MemberID: member.UserID,
-		Admin: member.Role.IsOrgAdmin(), IncludeAdminOnly: member.SeesAdminOnly(),
-	}
+	query := postgres.CorpusQuery{Scope: filter.Scope, MemberID: member.UserID, Admin: member.ActsAsAdmin()}
 	if filter.Scope == domain.ScopeTeam {
-		if member.Role.IsOrgAdmin() {
+		if member.ActsAsAdmin() {
 			query.TeamID = filter.TeamID
 		} else {
-			access, err := service.teamAccess(ctx, credentials, organizationID, filter.TeamID)
+			access, err := service.teamAccess(ctx, credentials, member, organizationID, filter.TeamID)
 			if err != nil {
 				return nil, err
 			}
@@ -325,7 +322,7 @@ func (service *Service) Corpus(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return domain.Corpus{}, err
 	}
-	documents, chunks, err := service.store.CorpusCounts(ctx, corpus.ID, member.SeesAdminOnly())
+	documents, chunks, err := service.store.CorpusCounts(ctx, corpus.ID, member.ActsAsAdmin())
 	if err != nil {
 		return domain.Corpus{}, err
 	}
@@ -408,7 +405,7 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 	if access != "" && !access.Valid() {
 		return domain.Document{}, fmt.Errorf("document access is not allowed: %w", domain.ErrInvalid)
 	}
-	if access == domain.AccessAdmins && (corpus.Scope != domain.ScopeOrganization || !member.Role.IsOrgAdmin()) {
+	if access == domain.AccessAdmins && (corpus.Scope != domain.ScopeOrganization || !member.ActsAsAdmin()) {
 		return domain.Document{}, domain.ErrForbidden
 	}
 	title, err := domain.Title(input.Title)
@@ -441,6 +438,14 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 		// may not read it could find it.
 		if !fileFits(corpus, object, fileAccess, member.UserID) {
 			return domain.Document{}, domain.ErrNotFound
+		}
+		// Files serves an org admin's agent every team's files, as it serves
+		// the admin, so for an agent, files having served a team file does not
+		// show that its member is on the team. Teams is asked instead.
+		if member.Agent && object.Scope == domain.ScopeTeam && corpus.Scope == domain.ScopeMember {
+			if _, err := service.teamAccess(ctx, credentials, member, organizationID, object.TeamID); err != nil {
+				return domain.Document{}, err
+			}
 		}
 		if input.Access == domain.AccessAdmins && fileAccess == domain.AccessMembers {
 			return domain.Document{}, fmt.Errorf("set admin access on the file in Files first: %w", domain.ErrInvalid)
@@ -514,7 +519,8 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 //
 // A team file also fits the member corpus of whoever is copying it: files has
 // just served it to them, so they can read it. Whether any other member can,
-// rag cannot ask, so a team file goes into nobody else's member corpus.
+// rag cannot ask, so a team file goes into nobody else's member corpus. For
+// an agent, files serving it proves less (see AddDocument).
 func fileFits(corpus domain.Corpus, file domain.SourceContent, access domain.DocumentAccess, callerID string) bool {
 	if access == domain.AccessAdmins {
 		return file.Scope == domain.ScopeOrganization && corpus.Scope == domain.ScopeOrganization
@@ -560,7 +566,7 @@ func (service *Service) Documents(ctx context.Context, credentials authclient.Cr
 	if limit <= 0 || limit > MaxDocumentsPerPage {
 		limit = MaxDocumentsPerPage
 	}
-	documents, nextCursor, err := service.store.Documents(ctx, organizationID, corpus.ID, status, cursor, limit, member.SeesAdminOnly())
+	documents, nextCursor, err := service.store.Documents(ctx, organizationID, corpus.ID, status, cursor, limit, member.ActsAsAdmin())
 	if err != nil {
 		return DocumentPage{}, err
 	}
@@ -625,7 +631,7 @@ func (service *Service) Search(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return retrieval.Results{}, err
 	}
-	query.IncludeAdminOnly = member.SeesAdminOnly()
+	query.IncludeAdminOnly = member.ActsAsAdmin()
 	return service.retriever.Search(ctx, corpus, query)
 }
 
@@ -645,7 +651,7 @@ func (service *Service) Answer(ctx context.Context, credentials authclient.Crede
 	if err != nil {
 		return Answered{}, err
 	}
-	query.IncludeAdminOnly = member.SeesAdminOnly()
+	query.IncludeAdminOnly = member.ActsAsAdmin()
 	results, err := service.retriever.Search(ctx, corpus, query)
 	if err != nil {
 		return Answered{}, err
@@ -704,20 +710,22 @@ func (service *Service) lookup(ctx context.Context, organizationID, reference st
 }
 
 // mayRead decides who can search a corpus. Placement mirrors files exactly.
+// An org admin's reach is a person's own: an agent acting for one reaches
+// what a plain member would (see domain.OrgMembership.ActsAsAdmin).
 func (service *Service) mayRead(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) error {
 	switch corpus.Scope {
 	case domain.ScopeOrganization:
 		return nil
 	case domain.ScopeMember:
-		if corpus.MemberID == member.UserID || member.Role.IsOrgAdmin() {
+		if corpus.MemberID == member.UserID || member.ActsAsAdmin() {
 			return nil
 		}
 		return domain.ErrNotFound
 	case domain.ScopeTeam:
-		if member.Role.IsOrgAdmin() {
+		if member.ActsAsAdmin() {
 			return nil
 		}
-		if _, err := service.teamAccess(ctx, credentials, corpus.OrganizationID, corpus.TeamID); err != nil {
+		if _, err := service.teamAccess(ctx, credentials, member, corpus.OrganizationID, corpus.TeamID); err != nil {
 			return err
 		}
 		return nil
@@ -733,20 +741,20 @@ func (service *Service) mayRead(ctx context.Context, credentials authclient.Cred
 func (service *Service) mayWrite(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) error {
 	switch corpus.Scope {
 	case domain.ScopeOrganization:
-		if member.Role.IsOrgAdmin() {
+		if member.ActsAsAdmin() {
 			return nil
 		}
 		return domain.ErrForbidden
 	case domain.ScopeMember:
-		if corpus.MemberID == member.UserID || member.Role.IsOrgAdmin() {
+		if corpus.MemberID == member.UserID || member.ActsAsAdmin() {
 			return nil
 		}
 		return domain.ErrNotFound
 	case domain.ScopeTeam:
-		if member.Role.IsOrgAdmin() {
+		if member.ActsAsAdmin() {
 			return nil
 		}
-		if _, err := service.teamAccess(ctx, credentials, corpus.OrganizationID, corpus.TeamID); err != nil {
+		if _, err := service.teamAccess(ctx, credentials, member, corpus.OrganizationID, corpus.TeamID); err != nil {
 			return err
 		}
 		return nil
@@ -758,7 +766,7 @@ func (service *Service) mayWrite(ctx context.Context, credentials authclient.Cre
 // mayDelete decides who can remove a whole corpus, which is a larger act than
 // removing one document from it.
 func (service *Service) mayDelete(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, corpus domain.Corpus) error {
-	if member.Role.IsOrgAdmin() {
+	if member.ActsAsAdmin() {
 		return nil
 	}
 	switch corpus.Scope {
@@ -768,7 +776,7 @@ func (service *Service) mayDelete(ctx context.Context, credentials authclient.Cr
 		}
 		return domain.ErrNotFound
 	case domain.ScopeTeam:
-		access, err := service.teamAccess(ctx, credentials, corpus.OrganizationID, corpus.TeamID)
+		access, err := service.teamAccess(ctx, credentials, member, corpus.OrganizationID, corpus.TeamID)
 		if err != nil {
 			return err
 		}
@@ -784,12 +792,12 @@ func (service *Service) mayDelete(ctx context.Context, credentials authclient.Cr
 func (service *Service) mayCreate(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, scope domain.Scope, teamID string) error {
 	switch scope {
 	case domain.ScopeOrganization:
-		if !member.Role.IsOrgAdmin() {
+		if !member.ActsAsAdmin() {
 			return domain.ErrForbidden
 		}
 		return nil
 	case domain.ScopeTeam:
-		_, err := service.teamAccess(ctx, credentials, member.OrganizationID, teamID)
+		_, err := service.teamAccess(ctx, credentials, member, member.OrganizationID, teamID)
 		return err
 	default:
 		return nil
@@ -798,7 +806,13 @@ func (service *Service) mayCreate(ctx context.Context, credentials authclient.Cr
 
 // teamAccess asks teams. A team the caller cannot see reads as missing,
 // because teams conceals it and so does rag.
-func (service *Service) teamAccess(ctx context.Context, credentials authclient.Credentials, organizationID, teamID string) (domain.TeamAccess, error) {
+//
+// Teams answers an agent's token as its member, so for an agent acting for an
+// org admin it shows every team and says the agent can manage each one. An
+// agent gets a plain member's reach, so for one only its member's own place
+// on the team counts: it reaches a team its member is on, and manages one
+// its member is a team admin of.
+func (service *Service) teamAccess(ctx context.Context, credentials authclient.Credentials, member domain.OrgMembership, organizationID, teamID string) (domain.TeamAccess, error) {
 	if service.teams == nil {
 		return domain.TeamAccess{}, fmt.Errorf("this deployment cannot reach the teams service, so team corpora are unavailable: %w", domain.ErrInvalid)
 	}
@@ -808,6 +822,12 @@ func (service *Service) teamAccess(ctx context.Context, credentials authclient.C
 	}
 	if !access.CanSee() {
 		return domain.TeamAccess{}, domain.ErrNotFound
+	}
+	if member.Agent {
+		if !access.Member {
+			return domain.TeamAccess{}, domain.ErrNotFound
+		}
+		access.CanManage = access.TeamAdmin
 	}
 	return access, nil
 }

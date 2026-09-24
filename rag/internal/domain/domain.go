@@ -112,24 +112,34 @@ type OrgMembership struct {
 	// the member themselves, which auth says of every token it mints for an
 	// agent. An agent may run with its member absent, answering someone
 	// else: a teammate's interaction request, a room it was mentioned in.
-	// What it reads can end up in front of any of them.
+	// What it reads can end up in front of any of them, so it gets a plain
+	// member's reach whatever its member's role; see ActsAsAdmin.
 	Agent bool
 }
 
-// SeesAdminOnly reports whether the caller may read documents only org
-// owners and admins may read. An admin's own session may. An agent acting for
-// an admin may not, because what it reads can reach members who may not. It
-// says nothing about which corpora the caller may reach.
-func (membership OrgMembership) SeesAdminOnly() bool {
+// ActsAsAdmin reports whether the caller acts with an org admin's reach:
+// every member's corpora, every team's whether or not they are on it, the
+// organization's corpora to write to, and the documents only org owners and
+// admins may read. Only a person's own session does. An agent acting for an
+// admin gets what a plain member would: its member's own corpora, the teams
+// its member is actually on, and the organization's members-level documents.
+func (membership OrgMembership) ActsAsAdmin() bool {
 	return membership.Role.IsOrgAdmin() && !membership.Agent
 }
 
 // TeamAccess is what teams answers about one team. An empty TeamID means the
 // caller cannot see it, which the caller must report as not found.
 type TeamAccess struct {
-	TeamID    string
+	TeamID string
+	// CanManage is teams' own answer, which is true for every org admin as
+	// well as for the team's own admins.
 	CanManage bool
-	Member    bool
+	// Member says the caller is on the team. Teams also shows every team to
+	// an org admin who is not.
+	Member bool
+	// TeamAdmin says the caller holds the team's admin role themselves,
+	// rather than managing it as an org admin.
+	TeamAdmin bool
 }
 
 func (access TeamAccess) CanSee() bool { return access.TeamID != "" }
