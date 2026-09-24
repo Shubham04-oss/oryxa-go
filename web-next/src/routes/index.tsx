@@ -17,25 +17,27 @@ import {
   acceptReceivedInvitation,
   getReceivedInvitations,
 } from "@/lib/auth/invitations"
+import { isNameId } from "@/lib/dms/names"
 
 export const Route = createFileRoute("/")({
   validateSearch: (search: Record<string, unknown>) => ({
     org: typeof search.org === "string" ? search.org : undefined,
     view: typeof search.view === "string" ? search.view : undefined,
-    preview: typeof search.preview === "string" ? search.preview : undefined,
+    // The person whose DM is open in the main canvas, so a refresh returns
+    // to it (the organization is `org`).
+    dm: isNameId(search.dm) ? search.dm : undefined,
   }),
   component: Home,
 })
 
 function Home() {
-  const { org, preview } = Route.useSearch()
-  const showPeoplePreview = import.meta.env.DEV && preview === "people"
+  const { org, dm } = Route.useSearch()
+  const navigate = Route.useNavigate()
   const session = useQuery({
     queryKey: ["auth", "session"],
     queryFn: getSession,
     retry: false,
     staleTime: 60_000,
-    enabled: !showPeoplePreview,
   })
   const selectedOrganization =
     session.data?.organizations.find(
@@ -45,23 +47,18 @@ function Home() {
   const role = useQuery({
     queryKey: ["auth", "role", organizationId],
     queryFn: () => getOrganizationRole(organizationId!),
-    enabled: Boolean(organizationId) && !showPeoplePreview,
+    enabled: Boolean(organizationId),
     retry: false,
   })
 
   useEffect(() => {
-    if (showPeoplePreview) return
     if (!(session.error instanceof ApiError) || session.error.status !== 401)
       return
     const destination = `${window.location.pathname}${window.location.search}${window.location.hash}`
     window.location.replace(
       `/auth/sign-in?redirect=${encodeURIComponent(destination)}`
     )
-  }, [session.error, showPeoplePreview])
-
-  if (showPeoplePreview) {
-    return <WorkspaceShell preview initialMode="team" initialSection="people" />
-  }
+  }, [session.error])
 
   if (
     session.isPending ||
@@ -99,6 +96,14 @@ function Home() {
       role={workspaceRole}
       organizationRole={role.data}
       selectedOrganization={selectedOrganization}
+      initialDirectMessage={dm}
+      onDirectMessageChange={(peerId) =>
+        void navigate({
+          to: "/",
+          search: (previous) => ({ ...previous, dm: peerId ?? undefined }),
+          replace: true,
+        })
+      }
     />
   )
 }

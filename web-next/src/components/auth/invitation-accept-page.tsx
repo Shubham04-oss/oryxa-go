@@ -97,7 +97,7 @@ export function InvitationAcceptPage({ token }: { token?: string }) {
       <p className="auth-footer">
         <Link
           to="/"
-          search={{ org: undefined, view: undefined, preview: undefined }}
+          search={{ org: undefined, view: undefined, dm: undefined }}
         >
           Back to workspace
         </Link>
