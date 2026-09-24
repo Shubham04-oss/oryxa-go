@@ -314,6 +314,12 @@ that path needs no origin check.
 | `POST` | `.../corpora/{corpus}/search` | Per placement | `{query, top_k, mode, min_score, diversity, rerank, over_fetch, filter}` |
 | `POST` | `.../corpora/{corpus}/answer` | Per placement | The same body; returns the answer, its citations and the matches |
 
+A corpus created without a slug gets one made from its name. Slugs beginning
+`knowledge-` are kept for the corpora rag builds from connected apps (see
+[Knowledge documents](#knowledge-documents)), since anyone could work those out
+and take one first: choosing one is `400`, and a name that would make one gets
+`corpus-` in front, so `Knowledge base` becomes `corpus-knowledge-base`.
+
 The search and answer request field is `query` (a string), with optional
 `filter: {document_ids: [...], conditions: [{key, operator, values}]}`.
 Search returns `{matches, usage, reranked}`. Each match has `chunk`,

@@ -200,6 +200,9 @@ func (service *Service) CreateCorpus(ctx context.Context, credentials authclient
 	if err != nil {
 		return domain.Corpus{}, err
 	}
+	if reservedSlug(slug) {
+		return domain.Corpus{}, fmt.Errorf("slugs beginning %q are kept for the corpora rag builds from connected apps: %w", reservedSlugPrefix, domain.ErrInvalid)
+	}
 	scope := input.Scope
 	if scope == "" {
 		scope = domain.ScopeMember
@@ -915,8 +918,29 @@ func conceal(err error) error {
 	return err
 }
 
+// reservedSlugPrefix begins the slug of every corpus rag's Knowledge bridge
+// makes: knowledge-organization, knowledge-team-<hash>,
+// knowledge-member-<hash>, and the readable forms it made before (see
+// knowledgeCorpusSlug). Anyone can work those out in advance, and a corpus
+// someone else made under one first would leave Knowledge unable to index
+// anything for that placement, so no caller may create a corpus under the
+// prefix.
+const reservedSlugPrefix = "knowledge-"
+
+// derivedSlugPrefix goes in front of a slug made from a corpus's name when it
+// would otherwise begin with reservedSlugPrefix, so a corpus named "Knowledge
+// base" gets corpus-knowledge-base rather than a refusal.
+const derivedSlugPrefix = "corpus-"
+
+// reservedSlug reports whether a slug, as domain.Slug normalizes it, is one
+// only rag's Knowledge bridge may use.
+func reservedSlug(slug string) bool {
+	return strings.HasPrefix(slug, reservedSlugPrefix)
+}
+
 // slugify makes a usable slug out of a name, for a caller who did not choose
-// one.
+// one. It never makes a reserved one: a name that would slug under
+// reservedSlugPrefix gets derivedSlugPrefix in front.
 func slugify(name string) string {
 	var builder strings.Builder
 	previousHyphen := false
@@ -931,6 +955,9 @@ func slugify(name string) string {
 		}
 	}
 	slug := strings.Trim(builder.String(), "-")
+	if reservedSlug(slug) {
+		slug = derivedSlugPrefix + slug
+	}
 	if len(slug) > 63 {
 		slug = strings.Trim(slug[:63], "-")
 	}

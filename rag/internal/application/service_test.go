@@ -196,6 +196,115 @@ func TestCreateCorpusRejectsADuplicateSlug(t *testing.T) {
 	}
 }
 
+// TestNobodyMayChooseAKnowledgeCorpusSlug: rag's Knowledge bridge files each
+// placement's documents under a slug anyone can work out in advance, so a
+// corpus someone else made under one first would leave Knowledge unable to
+// index anything for that placement. Slugs under the prefix are refused as
+// asked for, whatever their case or spacing, and to org admins too.
+func TestNobodyMayChooseAKnowledgeCorpusSlug(t *testing.T) {
+	hashedTeam, err := knowledgeCorpusSlug(domain.ScopeTeam, "team_eng", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashedMember, err := knowledgeCorpusSlug(domain.ScopeMember, "", "user-creator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, slug := range []string{"knowledge-organization", "Knowledge-Organization", " knowledge-team-eng ", "knowledge-anything", hashedTeam, hashedMember} {
+		for _, user := range []string{"user-creator", "user-owner"} {
+			h := newHarness()
+			if _, err := h.service.CreateCorpus(context.Background(), creds(user), testOrganization, CreateCorpusInput{
+				Name: "My notes", Slug: slug,
+			}); !errors.Is(err, domain.ErrInvalid) {
+				t.Fatalf("%s choosing slug %q = %v, want ErrInvalid", user, slug, err)
+			}
+		}
+	}
+}
+
+// TestASlugMadeFromANameStaysClearOfKnowledgeSlugs: a caller who names a
+// corpus without choosing a slug gets one made from the name, which must not
+// land on a slug Knowledge's bridge uses either. A name that would slug under
+// the reserved prefix gets corpus- in front instead of a refusal.
+func TestASlugMadeFromANameStaysClearOfKnowledgeSlugs(t *testing.T) {
+	names := map[string]string{
+		"Knowledge Organization": "corpus-knowledge-organization",
+		"Knowledge base":         "corpus-knowledge-base",
+		"  KNOWLEDGE -- team!":   "corpus-knowledge-team",
+		"Knowledge":              "knowledge",
+		"Knowledgebase":          "knowledgebase",
+		"Team knowledge":         "team-knowledge",
+	}
+	// A long name is cut to the 63 characters a slug may hold after the
+	// prefix goes on, not before.
+	names["Knowledge "+strings.Repeat("x", 80)] = "corpus-knowledge-" + strings.Repeat("x", 46)
+	for name, want := range names {
+		h := newHarness()
+		corpus, err := h.service.CreateCorpus(context.Background(), creds("user-creator"), testOrganization, CreateCorpusInput{Name: name})
+		if err != nil || corpus.Slug != want {
+			t.Fatalf("slug for %q = %q, %v; want %q", name, corpus.Slug, err, want)
+		}
+	}
+}
+
+// TestAMemberCorpusNamedLikeKnowledgesLeavesKnowledgeItsSlug is the squat the
+// reservation exists for: a member's own corpus named "Knowledge
+// Organization" used to take knowledge-organization, and every
+// organization-wide document Knowledge published after it failed with a
+// conflict.
+func TestAMemberCorpusNamedLikeKnowledgesLeavesKnowledgeItsSlug(t *testing.T) {
+	h := newHarness()
+	ctx := context.Background()
+	mine, err := h.service.CreateCorpus(ctx, creds("user-creator"), testOrganization, CreateCorpusInput{Name: "Knowledge Organization"})
+	if err != nil {
+		t.Fatalf("CreateCorpus: %v", err)
+	}
+	if err := h.service.DocumentPublished(ctx, testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.Scope, event.MemberID = "organization", ""
+	})); err != nil {
+		t.Fatalf("an organization-wide Knowledge document after a member's corpus named like Knowledge's = %v", err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(ctx, testOrganization, "doc_1")
+	if err != nil {
+		t.Fatalf("nothing was indexed: %v", err)
+	}
+	corpus, err := h.store.Corpus(ctx, testOrganization, mapping.CorpusID)
+	if err != nil || corpus.ID == mine.ID || corpus.Slug != "knowledge-organization" || corpus.Scope != domain.ScopeOrganization {
+		t.Fatalf("indexed into %+v, %v; want Knowledge's own organization corpus", corpus, err)
+	}
+}
+
+// TestEveryKnowledgeCorpusSlugIsReserved ties the reservation to the slugs
+// Knowledge's bridge actually makes, today's and the earlier readable ones it
+// still looks up, so a change to either that left the reserved prefix fails
+// here rather than reopening the squat.
+func TestEveryKnowledgeCorpusSlugIsReserved(t *testing.T) {
+	for _, placement := range []struct {
+		scope            domain.Scope
+		teamID, memberID string
+	}{
+		{domain.ScopeOrganization, "", ""},
+		{domain.ScopeTeam, "team_eng", ""},
+		{domain.ScopeTeam, "TEAM_Eng.with.dots", ""},
+		{domain.ScopeMember, "", "user-creator"},
+		{domain.ScopeMember, "", "0b6a5f3c-8a1e-4a57-9d0b-" + strings.Repeat("f", 60)},
+	} {
+		hashed, err := knowledgeCorpusSlug(placement.scope, placement.teamID, placement.memberID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		legacy, err := legacyKnowledgeCorpusSlug(placement.scope, placement.teamID, placement.memberID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, slug := range []string{hashed, legacy} {
+			if !reservedSlug(slug) {
+				t.Fatalf("Knowledge's slug %q for %+v is not reserved", slug, placement)
+			}
+		}
+	}
+}
+
 // TestCallersCannotForgeKnowledgeProvenance: a plain team member may add to
 // the team corpus Knowledge fills, but not with the metadata that says where
 // a Knowledge document came from, or a note of their own would cite as a Gmail
