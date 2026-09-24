@@ -1,11 +1,16 @@
 // A stand-in for the Agents SDK's `useAgent`, for the tests of the pages
-// on realtime objects (the teamspace room, the specialist chat): each mount
-// gets a socket the test opens, closes and speaks through as the Durable
-// Object would. Use it with
+// on realtime objects (the teamspace room, the specialist chat, a DM, an
+// inbox): each mount gets a socket the test opens, closes and speaks
+// through as the Durable Object would. Use it with
 // `vi.mock("agents/react", async () => (await import("@/test/room-socket")).agentsReact)`,
 // and, for a chat, src/test/agent-chat.ts for `useAgentChat`.
 import { act } from "@testing-library/react"
 import { useRef } from "react"
+import type {
+  DmClientMessage,
+  DmServerMessage,
+  InboxServerMessage,
+} from "@/lib/dms/protocol"
 import type {
   RoomClientMessage,
   RoomServerMessage,
@@ -15,6 +20,12 @@ import type { SpecialistChatState } from "@/lib/specialists/chat-messages"
 
 /** What an object syncs to its sockets. */
 type SyncedState = TeamspaceRoomState | SpecialistChatState
+
+/** What a page says on a socket. */
+type ClientMessage = RoomClientMessage | DmClientMessage
+
+/** What an object says on one. */
+type ServerMessage = RoomServerMessage | DmServerMessage | InboxServerMessage
 
 type Options = {
   agent: string
@@ -31,12 +42,12 @@ export class FakeRoomSocket {
   readonly OPEN = 1
   readyState = 0
   /** What the page said, oldest first, whether or not the socket was open (PartySocket queues it). */
-  readonly sent: RoomClientMessage[] = []
+  readonly sent: ClientMessage[] = []
   reconnects = 0
   private readonly openListeners = new Set<() => void>()
 
   send(data: string) {
-    this.sent.push(JSON.parse(data) as RoomClientMessage)
+    this.sent.push(JSON.parse(data) as ClientMessage)
   }
 
   addEventListener(type: string, listener: () => void) {
@@ -72,8 +83,8 @@ export class FakeRoomSocket {
     })
   }
 
-  /** The room says something on it. */
-  says(message: RoomServerMessage) {
+  /** The object says something on it. */
+  says(message: ServerMessage) {
     act(() => {
       this.options.onMessage?.({ data: JSON.stringify(message) })
     })
@@ -95,9 +106,9 @@ export class FakeRoomSocket {
   }
 
   /** What the page said of one kind. */
-  said<TType extends RoomClientMessage["type"]>(type: TType) {
+  said<TType extends ClientMessage["type"]>(type: TType) {
     return this.sent.filter(
-      (message): message is Extract<RoomClientMessage, { type: TType }> =>
+      (message): message is Extract<ClientMessage, { type: TType }> =>
         message.type === type
     )
   }
