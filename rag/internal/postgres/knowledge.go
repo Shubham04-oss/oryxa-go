@@ -100,6 +100,21 @@ func (store *Store) DeleteKnowledgeDocumentMapping(ctx context.Context, organiza
 	return nil
 }
 
+// knowledgeRemovalRetention is how long a knowledge document's removal is
+// remembered. A tombstone exists to refuse a publish that was sent before
+// the removal and is delivered after it, and nothing on the bus is delivered
+// that late: SQS keeps a message at most fourteen days, however often it is
+// redriven from a dead-letter queue. Past this, a tombstone can refuse
+// nothing, and it is let go.
+const knowledgeRemovalRetention = 30 * 24 * time.Hour
+
+// knowledgeRemovalPruneBatch bounds how many expired tombstones one recorded
+// removal lets go, so a backlog is worked off a batch at a time rather than
+// in one long statement.
+const knowledgeRemovalPruneBatch = 500
+
+// KnowledgeDocumentRemovedAt reads when a knowledge document was last
+// removed, so a publish sent before that removal can be refused.
 func (store *Store) KnowledgeDocumentRemovedAt(ctx context.Context, organizationID, knowledgeDocumentID string) (time.Time, error) {
 	var removedAt time.Time
 	err := store.db.GetContext(ctx, &removedAt, `
@@ -114,17 +129,40 @@ func (store *Store) KnowledgeDocumentRemovedAt(ctx context.Context, organization
 	return removedAt, nil
 }
 
+// RecordKnowledgeDocumentRemoval remembers that a knowledge document was
+// removed, keeping the latest removal when one is already remembered.
+//
+// It also lets go of tombstones past knowledgeRemovalRetention, whichever
+// organization they belong to. Removals are the only thing that creates
+// tombstones, so recording one is when old ones are cleared — including an
+// organization's that was deleted and will record no more, whose documents
+// knowledge retracts, one removal each, after rag has already wiped its
+// corpora.
 func (store *Store) RecordKnowledgeDocumentRemoval(ctx context.Context, organizationID, knowledgeDocumentID string, removedAt time.Time) error {
-	_, err := store.db.ExecContext(ctx, `
-		INSERT INTO rag_knowledge_removals (organization_id, knowledge_document_id, removed_at)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (organization_id, knowledge_document_id) DO UPDATE
-		SET removed_at = GREATEST(rag_knowledge_removals.removed_at, EXCLUDED.removed_at)`,
-		organizationID, knowledgeDocumentID, removedAt)
-	if err != nil {
-		return fmt.Errorf("record knowledge document removal: %w", err)
-	}
-	return nil
+	return store.inTx(ctx, func(tx *sqlx.Tx) error {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO rag_knowledge_removals (organization_id, knowledge_document_id, removed_at)
+			VALUES ($1, $2, $3)
+			ON CONFLICT (organization_id, knowledge_document_id) DO UPDATE
+			SET removed_at = GREATEST(rag_knowledge_removals.removed_at, EXCLUDED.removed_at)`,
+			organizationID, knowledgeDocumentID, removedAt); err != nil {
+			return fmt.Errorf("record knowledge document removal: %w", err)
+		}
+		// SKIP LOCKED: a tombstone another replica is writing or clearing
+		// right now is left to it, rather than waited on.
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM rag_knowledge_removals
+			WHERE ctid IN (
+				SELECT ctid FROM rag_knowledge_removals
+				WHERE removed_at < $1
+				ORDER BY removed_at
+				LIMIT $2
+				FOR UPDATE SKIP LOCKED)`,
+			time.Now().Add(-knowledgeRemovalRetention), knowledgeRemovalPruneBatch); err != nil {
+			return fmt.Errorf("clear expired knowledge document removals: %w", err)
+		}
+		return nil
+	})
 }
 
 // WithKnowledgeDocumentLock serializes publishes and removals of the same

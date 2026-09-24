@@ -102,6 +102,40 @@ func TestKnowledgeDocumentRemovalTimestampIsScopedAndMonotonic(t *testing.T) {
 	}
 }
 
+// A tombstone only has to outlive the latest publish that could still be
+// delivered after it, so recording a removal lets go of ones past that,
+// whichever organization they belong to: one deleted long ago records no
+// removals of its own any more.
+func TestRecordingAKnowledgeRemovalLetsExpiredOnesGo(t *testing.T) {
+	store, ctx := openTestStore(t)
+	deleted, live := uniqueOrganization(), uniqueOrganization()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	expired := now.Add(-knowledgeRemovalRetention - time.Hour)
+	kept := now.Add(-knowledgeRemovalRetention + time.Hour)
+	t.Cleanup(func() {
+		_, _ = store.db.ExecContext(context.Background(),
+			`DELETE FROM rag_knowledge_removals WHERE organization_id IN ($1, $2)`, deleted, live)
+	})
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO rag_knowledge_removals (organization_id, knowledge_document_id, removed_at)
+		VALUES ($1, 'kdoc_expired', $2), ($1, 'kdoc_kept', $3)`, deleted, expired, kept); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.RecordKnowledgeDocumentRemoval(ctx, live, "kdoc_fresh", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.KnowledgeDocumentRemovedAt(ctx, deleted, "kdoc_expired"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an expired tombstone survived a later removal: %v", err)
+	}
+	if got, err := store.KnowledgeDocumentRemovedAt(ctx, deleted, "kdoc_kept"); err != nil || !got.Equal(kept) {
+		t.Fatalf("a tombstone still inside its retention = %v, %v", got, err)
+	}
+	if got, err := store.KnowledgeDocumentRemovedAt(ctx, live, "kdoc_fresh"); err != nil || !got.Equal(now) {
+		t.Fatalf("the removal just recorded = %v, %v", got, err)
+	}
+}
+
 // The lock is released however the work under it ends, so a failed handler
 // never leaves the next delivery of the same document waiting.
 func TestKnowledgeDocumentLockIsReleasedWhenTheWorkFails(t *testing.T) {

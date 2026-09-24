@@ -6,3 +6,8 @@ CREATE TABLE IF NOT EXISTS rag_knowledge_removals (
     removed_at timestamptz NOT NULL,
     PRIMARY KEY (organization_id, knowledge_document_id)
 );
+
+-- Recording a removal lets go of tombstones old enough that no publish sent
+-- before them can still be delivered; this is how it finds them.
+CREATE INDEX IF NOT EXISTS rag_knowledge_removals_removed_at_idx
+    ON rag_knowledge_removals (removed_at);
