@@ -5,12 +5,8 @@
 // the organization's members (useDmPeople).
 import { useEffect, useId, useRef, useState } from "react"
 import { ArrowLeft, Search, SquarePen } from "lucide-react"
-import {
-  DirectMessageView,
-  PersonAvatar,
-  UnreadCount,
-  signInAgain,
-} from "./direct-message"
+import { signInAgain } from "./conversation-log"
+import { DirectMessageView, PersonAvatar, UnreadCount } from "./direct-message"
 import { conversationPreview, listTime } from "./direct-message-format"
 import { filterPeople, personContext } from "./direct-message-people"
 import type { DmPeople } from "./direct-message-people"

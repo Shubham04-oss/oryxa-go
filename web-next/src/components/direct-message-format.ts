@@ -93,17 +93,29 @@ export function messageKey(message: DmMessage): string {
 
 export type DmDay = { kind: "day"; key: string; label: string }
 
-export type DmGroup = {
+export type DmGroup<TMessage extends DmMessage = DmMessage> = {
   kind: "group"
   key: string
   authorId: string
   mine: boolean
   /** When its first message was said. */
   at: string
-  messages: DmMessage[]
+  messages: TMessage[]
 }
 
+/**
+ * Something in a log that stands on its own rather than in a person's
+ * group: in a side conversation, an agent's message, a request's card or a
+ * quiet line. One entry per kind of item, so `item` narrows by its `kind`.
+ */
+export type DmEntry<TItem> = TItem extends unknown
+  ? { kind: "entry"; key: string; item: TItem }
+  : never
+
 export type DmTimelineItem = DmDay | DmGroup
+
+/** What a log may hold beside people's messages. */
+type Standalone = { id: string; createdAt: string; clientId?: string }
 
 /**
  * The conversation as it reads: a separator as each day starts, and each
@@ -115,44 +127,72 @@ export function dmTimeline(
   viewerId: string,
   now = Date.now()
 ): DmTimelineItem[] {
-  const items: DmTimelineItem[] = []
-  let group: DmGroup | undefined
+  return conversationTimeline<DmMessage, never>(
+    messages,
+    viewerId,
+    (_item): _item is DmMessage => true,
+    now
+  )
+}
+
+/**
+ * A log of people's messages and other items, as it reads: a separator as
+ * each day starts; each person's consecutive messages in the same minute as
+ * one group, as a DM's; and each other item (`isMessage` false) on its own,
+ * which ends the group before it.
+ */
+export function conversationTimeline<
+  TMessage extends DmMessage,
+  TOther extends Standalone,
+>(
+  items: ReadonlyArray<TMessage | TOther>,
+  viewerId: string,
+  isMessage: (item: TMessage | TOther) => item is TMessage,
+  now = Date.now()
+): Array<DmDay | DmGroup<TMessage> | DmEntry<TOther>> {
+  const timeline: Array<DmDay | DmGroup<TMessage> | DmEntry<TOther>> = []
+  let group: DmGroup<TMessage> | undefined
   let groupMinute: number | undefined
   let currentDay: string | undefined
-  for (const message of messages) {
-    const at = parsed(message.createdAt)
+  for (const item of items) {
+    const at = parsed(item.createdAt)
     // A time that does not parse stays with what came before it.
     const dayOf = at ? localDay(at) : currentDay
     const minuteOf = at ? Math.floor(at.getTime() / minute) : groupMinute
     if (dayOf !== undefined && dayOf !== currentDay) {
       currentDay = dayOf
-      items.push({
+      timeline.push({
         kind: "day",
         key: `day:${dayOf}`,
-        label: dayLabel(message.createdAt, now),
+        label: dayLabel(item.createdAt, now),
       })
       group = undefined
     }
-    if (
-      group &&
-      group.authorId === message.authorId &&
-      groupMinute === minuteOf
-    ) {
-      group.messages.push(message)
+    if (!isMessage(item)) {
+      group = undefined
+      timeline.push({
+        kind: "entry",
+        key: `entry:${item.clientId ?? item.id}`,
+        item,
+      } as DmEntry<TOther>)
+      continue
+    }
+    if (group && group.authorId === item.authorId && groupMinute === minuteOf) {
+      group.messages.push(item)
       continue
     }
     group = {
       kind: "group",
-      key: `group:${messageKey(message)}`,
-      authorId: message.authorId,
-      mine: message.authorId === viewerId,
-      at: message.createdAt,
-      messages: [message],
+      key: `group:${messageKey(item)}`,
+      authorId: item.authorId,
+      mine: item.authorId === viewerId,
+      at: item.createdAt,
+      messages: [item],
     }
     groupMinute = minuteOf
-    items.push(group)
+    timeline.push(group)
   }
-  return items
+  return timeline
 }
 
 /**
