@@ -22,8 +22,8 @@ import {
 } from "lucide-react"
 import { WorkspaceFocus, workItems } from "./workspace-focus"
 import type { WorkId, WorkItem } from "./workspace-focus"
-import { initialKnowledgeBases, KnowledgeBases } from "./knowledge-bases"
-import type { KnowledgeBase } from "./knowledge-bases"
+import { KnowledgeBases } from "./knowledge-bases"
+import type { SelectedKnowledgeBase } from "./knowledge-bases"
 import {
   initialTeamspaces,
   TeamspacesManagement,
@@ -166,11 +166,9 @@ export function WorkspaceShell({
     [initialMode]: initialSection || defaultSections[initialMode],
   })
   const [focusedWork, setFocusedWork] = useState<WorkItem | null>(null)
-  const [knowledgeBases, setKnowledgeBases] = useState(initialKnowledgeBases)
   const [teamspaces, setTeamspaces] = useState(initialTeamspaces)
-  const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState<
-    string | null
-  >(null)
+  const [knowledgeBaseSelection, setKnowledgeBaseSelection] =
+    useState<SelectedKnowledgeBase | null>(null)
   const [selectedTeamspaceId, setSelectedTeamspaceId] = useState<string | null>(
     null
   )
@@ -250,9 +248,7 @@ export function WorkspaceShell({
       ? sharedPeople.find((person) => person.id === activeConversationId)
       : undefined
   const selectedKnowledgeBase =
-    section === "knowledge"
-      ? knowledgeBases.find((base) => base.id === selectedKnowledgeBaseId)
-      : undefined
+    section === "knowledge" ? (knowledgeBaseSelection ?? undefined) : undefined
   const selectedTeamspace =
     section === "teamspaces"
       ? teamspaces.find((space) => space.id === selectedTeamspaceId)
@@ -280,7 +276,7 @@ export function WorkspaceShell({
     setActiveMode(nextMode)
     setFocusedWork(null)
     if (nextMode !== activeMode) {
-      setSelectedKnowledgeBaseId(null)
+      setKnowledgeBaseSelection(null)
       setSelectedTeamspaceId(null)
     }
   }
@@ -288,7 +284,7 @@ export function WorkspaceShell({
   function selectSection(nextSection: Section) {
     setFocusedWork(null)
     setActiveConversationId(null)
-    setSelectedKnowledgeBaseId(null)
+    setKnowledgeBaseSelection(null)
     setSelectedTeamspaceId(null)
     setSectionsByMode((current) => ({
       ...current,
@@ -349,7 +345,7 @@ export function WorkspaceShell({
 
   function closeDetail() {
     if (selectedPerson) setActiveConversationId(null)
-    if (selectedKnowledgeBase) setSelectedKnowledgeBaseId(null)
+    if (selectedKnowledgeBase) setKnowledgeBaseSelection(null)
     if (selectedTeamspace) setSelectedTeamspaceId(null)
   }
 
@@ -693,12 +689,13 @@ export function WorkspaceShell({
             >
               {section === "knowledge" && (
                 <KnowledgeBases
-                  bases={knowledgeBases}
-                  selectedId={selectedKnowledgeBaseId}
-                  onSelect={setSelectedKnowledgeBaseId}
-                  onCreate={(base: KnowledgeBase) =>
-                    setKnowledgeBases((current) => [base, ...current])
-                  }
+                  organizationId={selectedOrganization?.id}
+                  organizationName={selectedOrganization?.name}
+                  organizationRole={organizationRole}
+                  userId={session?.user.id}
+                  selected={selectedKnowledgeBase ?? null}
+                  onSelect={setKnowledgeBaseSelection}
+                  onOpenTools={() => selectSection("tools")}
                 />
               )}
               {section === "tools" && (

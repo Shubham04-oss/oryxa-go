@@ -164,6 +164,8 @@ No `getAuthConfig`/Google-provider-detection call exists in `web/` at all — it
 
 The **only** module using true cursor pagination wired to `infiniteQueryOptions` (`getNextPageParam: p=>p.next_cursor`, page size 50) — the pattern to copy for any other paginated list ported into web-next. `externalSourceLink` only links `http:`/`https:` targets (XSS guard); `isFromConnectedApps` checks `metadata.origin==="knowledge"`.
 
+**Ported to web-next as `src/lib/rag/client.ts`**, with the rest of the handler: `getCapabilities` (`GET /v1/capabilities`; `answering` decides answer or search), `createCorpus` (`{name,slug,scope,team_id?,metadata?}`), `deleteCorpus`, `addDocument` (`{source:{kind,ref?},title?,content_type?,text?}` → 202 `pending`), `addFileDocument` (a files upload in the corpus's own scope, then a `file` document; the upload is deleted if rag refuses it), `deleteDocument`, `searchCorpus`/`answerCorpus` (`{query,top_k?}`), policy helpers mirroring `mayWrite`/`mayDelete`/`mayCreate`, and `ragKeys` with query options. `documentsInfiniteQueryOptions` polls only while a loaded document is `pending`/`ingesting`: every 3 s, every 15 s once it has taken two minutes, every 30 s while only a retry is awaited. Checked against Go: the corpora list is wrapped (`{corpora}`) and leaves out team corpora unless asked per team; a corpus has **no description field** (the decoder refuses unknown fields), so web-next keeps it in `metadata.description`; slugs are unique across the whole organization, so the client sends its own and retries a 409 with a suffix; `updated_at` never moves after creation; rag indexes text only (plain, Markdown, HTML, CSV, JSON), with no multipart upload, no URL fetching and no PDF/Office extraction; `answer` is a 400 when no answering model is configured.
+
 **`rooms/client.ts`**
 
 | Function | Endpoint | Request → response |
@@ -362,17 +364,18 @@ Seven of `teams`' 20 endpoints (`tools`, `directory`, `teams/search`, `teams/nea
 ### rag
 | Endpoint | web | web-next |
 |---|---|---|
-| `GET /v1/capabilities` | — | — |
-| `GET/POST .../corpora`, `GET .../corpora/{id}` | W (GET only) | — |
-| `DELETE .../corpora/{id}` | — | — |
-| `GET/POST .../corpora/{id}/documents` | W (GET only) | — |
-| `GET/DELETE .../corpora/{id}/documents/{did}` | — | — |
-| `POST .../corpora/{id}/search`, `.../answer` | — (agent-side, not browser-fetched) | — |
+| `GET /v1/capabilities` | — | N |
+| `GET/POST .../corpora`, `GET .../corpora/{id}` | W (GET only) | N |
+| `DELETE .../corpora/{id}` | — | N |
+| `GET/POST .../corpora/{id}/documents` | W (GET only) | N |
+| `GET .../corpora/{id}/documents/{did}` | — | — (the list carries everything the page shows) |
+| `DELETE .../corpora/{id}/documents/{did}` | — | N |
+| `POST .../corpora/{id}/search`, `.../answer` | — (agent-side, not browser-fetched) | N (a knowledge base's ask field: answer when `capabilities.answering`, else search) |
 
-web-next's Knowledge Bases surface calls **none** of these — it is 100% local example state (see §4).
+web-next's Knowledge Bases page (`components/knowledge-bases.tsx`, `knowledge-base-detail.tsx`) calls these through `lib/rag/client.ts`.
 
 ### files
-All 6 endpoints: **W** for `list/create/get/delete/content`; `download-url` — **—** (unused, web uses the plain content URL instead). **web-next has no Files surface at all — every endpoint is N: —.**
+All 6 endpoints: **W** for `list/create/get/delete/content`; `download-url` — **—** (unused, web uses the plain content URL instead). **web-next has no Files surface**; its only callers are the Knowledge Bases page, which uploads a document's file (`POST .../files`) and deletes it again if rag refuses the document (`DELETE .../files/{id}`), both through `lib/files`.
 
 ### billing
 `GET .../plans`, `GET .../organizations/{id}`, `POST .../checkout`, `POST .../portal` — **W and N** (both apps fully wired). `POST .../webhooks/dodo` — neither (Dodo→Go).
@@ -390,7 +393,7 @@ Per `web-next/DESIGN.md` §2–3: three primary modes (Home/Team/Agents) drive a
 |---|---|---|
 | `/`, `/auth/*`, `/invitations/accept` | `routes/index.tsx`, `routes/auth.*.tsx`, `components/auth/auth-pages.tsx`, `invitation-accept-page.tsx` | **Wired** — session (`/v1/auth/me`), sign-in/up, forgot/reset/verify, Google, invitation accept, create-workspace (`NewWorkspace` in `index.tsx`, replaces `/onboarding` but has no "invite first members" step) |
 | Home → Overview | `components/workspace-shell.tsx` (`savedViews` const) | **Example data** — hard-coded saved views. The right panel's mock activity feed, "5 online" and quick-note form were removed when it became the agent panel |
-| Home → Knowledge bases | `components/knowledge-bases.tsx` (`initialKnowledgeBases`) | **Example data** — "New knowledge base" creates a `crypto.randomUUID()` entry in local state only; no `rag`/`knowledge` call exists anywhere in this file |
+| Home → Knowledge bases | `components/knowledge-bases.tsx`, `knowledge-base-detail.tsx`, `knowledge-format.ts`, `knowledge-bases.css`; `lib/rag/client.ts` | **Wired** — the member's corpora (own and the organization's) with real descriptions, counts and times; create (member scope, or the whole workspace for owners/admins); a base's documents with honest statuses (pending with retry attempts, indexing, ready, failed with its reason), load more, and where each came from (note, link, file, connected app); add a note, a link with its text, or a text file; remove a document and delete a base behind a confirm step; an ask field that answers with citations, or searches when the deployment has no answering model. The connected-apps corpus is read-only here and points to Tools. No example data; without a workspace or the rag service it shows a "Layout preview" notice and nothing else |
 | Home → Tools | `components/workspace-tools.tsx`, `workspace-tool-connection.tsx`, `workspace-tools-api.ts`, `workspace-tools-data.ts` | **Wired** — catalog browse/search/pagination, connect, events (triggers), indexing (sources, sync now), sync runs, all against real `apps`/`knowledge` endpoints, in the organization chosen in the header and through the shared API client (both since #83). No disconnect, reconnect or cancel yet. Falls back to `previewToolkits`/`previewConnections` with a "Layout preview" notice when `GET /v1/apps/catalog?limit=1` fails. |
 | Team → Teamspaces | `components/teamspaces-management.tsx` (`initialTeamspaces`) | **Example data** — create/pause/resume are local-state-only mutations with no API call |
 | Team → People | `components/people-directory.tsx` | **Example data / new concept** — a DM directory derived from teamspace membership example data; messaging only works when `preview` is true (local-only). No member-to-member messaging endpoint exists anywhere in the Go surface (§3) — this is a **new** concept, not a ported one |
@@ -425,7 +428,7 @@ One row per member capability. "Build" names the DESIGN.md location, the client 
 | Agent requests | `app.agents.tsx?tab=requests` | `agent-requests/*` | **Missing** | Needs a home in Agents mode; inbox/sent + decide/respond |
 | Teamspaces (CRUD + room + entries) | `app.teamspaces.tsx` | `teamspaces/*`, `rooms/*` | Example, `teamspaces-management.tsx` | Team mode → Teamspaces. Port `lib/teamspaces/client.ts` + `lib/rooms/client.ts` (keep the 5s presence-poll); replace fabricated create/pause/resume with real mutations first — cheapest fix to stop violating "never fake success" |
 | Teams (org hierarchy) | `app.teams.tsx` + `.../organization/teams` | `teams/*` | **Wired**, `workspace-teams-settings.tsx` | Already ported and consolidated into Settings per DESIGN.md — no action beyond verifying parity with `web/`'s per-team notification switch (present) |
-| Knowledge bases/corpora | `app.knowledge*.tsx` | `rag/*`, part of `knowledge/*` | Example, `knowledge-bases.tsx` | Home → Knowledge bases (DESIGN.md §3). Port `lib/rag/client.ts` including its infinite-query document pagination |
+| Knowledge bases/corpora | `app.knowledge*.tsx` | `rag/*`, `files` upload/delete | **Wired**, `knowledge-bases.tsx`, `knowledge-base-detail.tsx`, `lib/rag/client.ts` | Beyond `web/`: create, add/remove content, delete, ask. Still open: team corpora (the list only returns them per team, and the page offers no team scope yet); a team manager who didn't create a team corpus isn't offered its delete; backend gaps (no corpus description field or rename, `updated_at` frozen at creation, no PDF/Office or URL ingestion, uploaded files expire with files' 30-day default) |
 | Files | `app.files.tsx` | `files/*` | **Missing** | No DESIGN.md-named destination yet — needs a placement decision (a Home destination, by the pattern of Knowledge bases/Tools) before building. Port `lib/files/client.ts`, but route `fileContentUrl`/download through a refresh-safe path or explicitly accept the no-refresh tradeoff |
 | Apps & connections (browse/connect/events/indexing/runs) | `app.connections.tsx` + dialogs | `apps/*`, part of `knowledge/*` | **Wired**, `workspace-tools*.tsx` | Add disconnect/reconnect and cancel for pending or failed connections, and show Composio's return (`?app_connection=&status=`) the way `web/`'s `/app/connections` does |
 | Org-wide tool rollup | `.../organization/tools` | `apps/*?scope=organization` | **Wired** | None |
@@ -439,12 +442,12 @@ One row per member capability. "Build" names the DESIGN.md location, the client 
 
 ### Suggested build order
 
-1. **Stop the DESIGN.md violations first** (cheap, high-trust-impact): label or gate Knowledge Bases' and Teamspaces' "create" actions as examples, or wire their real (already-simple) `POST` endpoints — both are small services with few fields.
+1. **Stop the DESIGN.md violations first** (cheap, high-trust-impact): label or gate Teamspaces' "create" actions as examples, or wire their real (already-simple) `POST` endpoints. (Knowledge Bases is wired.)
 2. **Close the Tools dead ends** — disconnect/reconnect, cancel a pending connection, show a failed return — so the one wired app surface never strands a member.
 3. **Primary-agent conversations** — done in the right panel's Agents tab, through the `ThreadChatAgent` Durable Object (Worker routing, purge after Go's delete, session-expiry resend). Left: the history list and a delete control.
 4. **Teamspaces + rooms**, reusing the primary-thread timeline/confirmation UI once it exists.
 5. **Agents/Specialists/Teams/Workflows/Requests** — same order as `web/`'s own tabs, since later tabs depend on earlier ones existing (workflows need teams; teams need specialists).
-6. **Knowledge bases (real corpora) and Files** — both are comparatively simple CRUD+list surfaces with no streaming dependency; can be built any time, but are lower-risk to save for last since nothing else depends on them.
+6. **Files** — a comparatively simple CRUD+list surface with no streaming dependency; can be built any time. (Knowledge bases, the other one listed here, is wired.)
 7. **Search** once threads exist to search.
 
 ---

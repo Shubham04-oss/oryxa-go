@@ -955,7 +955,9 @@
     padding: 8px 56px;
   }
   .workspace-header-back { left: 56px; }
-  .workspace-header-detail { max-width: calc(100% - 200px); }
+  /* The header's padding already clears the side buttons; this clears the
+     back button beside the left one, so a title stays centered. */
+  .workspace-header-detail { max-width: calc(100% - 88px); }
   .workspace-header:has(.workspace-organization-switcher) { flex-direction: column; gap: 4px; min-height: 82px; }
   .workspace-header:has(.workspace-organization-switcher) > h1 { max-width: 100%; }
   .workspace-organization-switcher { position: static; margin: 0 auto; }
