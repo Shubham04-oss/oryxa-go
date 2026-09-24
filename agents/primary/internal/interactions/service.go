@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 )
 
 var (
@@ -35,6 +36,16 @@ const (
 
 	DecisionApproved = "approved"
 	DecisionRejected = "rejected"
+
+	// ApprovalAgent lets the addressed agent, or its member's primary agent,
+	// decide: every request made outside a teamspace, and one to a specialist
+	// its owner contributed to the teamspace with automatic delegation.
+	ApprovalAgent = "agent"
+	// ApprovalOwner holds the request for the addressed agent's member, who
+	// decides it in their own session and never through an agent: one to a
+	// teammate's primary agent, and one to a specialist contributed with
+	// request delegation.
+	ApprovalOwner = "owner"
 
 	defaultExpiry   = 24 * time.Hour
 	minimumExpiry   = 5 * time.Minute
@@ -57,15 +68,28 @@ type Repository interface {
 	Respond(context.Context, string, agents.InteractionResponseInput, time.Time) (agents.Interaction, error)
 }
 
+// Teamspaces places the addressed agent in the teamspace a request is made
+// in, against the live team directory: the requester must be on the team now,
+// and the target must hold a seat there now. teamspaces.Service implements
+// it; its errors (teamspaces.ErrNotFound, ErrForbidden, ErrInvalid,
+// ErrDisabled) reach the caller as they are.
+type Teamspaces interface {
+	RequestSeat(ctx context.Context, requester agents.TeamspaceActor, token, teamspaceID, targetAgentID string) (agents.TeamspaceSeat, error)
+}
+
 type Config struct {
 	Repository Repository
 	Directory  agents.Directory
+	// Teamspaces enables requests made inside a teamspace. Without it a
+	// request naming one is refused.
+	Teamspaces Teamspaces
 	Now        func() time.Time
 }
 
 type Service struct {
 	repository Repository
 	directory  agents.Directory
+	teamspaces Teamspaces
 	now        func() time.Time
 }
 
@@ -80,7 +104,7 @@ func New(config Config) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{repository: config.Repository, directory: config.Directory, now: now}, nil
+	return &Service{repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, now: now}, nil
 }
 
 func (service *Service) Create(ctx context.Context, actor agents.InteractionActor, token, idempotencyKey string, input agents.InteractionCreateInput) (agents.Interaction, error) {
@@ -121,6 +145,10 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	if target.OwnerUserID == actor.UserID {
 		return agents.Interaction{}, fmt.Errorf("%w: cross-user requests must target another member", ErrInvalid)
 	}
+	approval, err := service.approval(ctx, actor, token, input.TeamspaceID, target)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
 	id, err := newID("irq_")
 	if err != nil {
 		return agents.Interaction{}, err
@@ -131,7 +159,7 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 		expires = defaultExpiry
 	}
 	request := agents.Interaction{
-		ID: id, OrganizationID: actor.OrganizationID,
+		ID: id, OrganizationID: actor.OrganizationID, TeamspaceID: input.TeamspaceID, Approval: approval,
 		Requester: agents.InteractionParty{UserID: actor.UserID, AgentID: actor.AgentID, AgentName: actor.AgentName},
 		Target: agents.InteractionParty{
 			UserID: target.OwnerUserID, AgentID: target.ID, AgentName: target.Name,
@@ -145,6 +173,35 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 		idempotencyKey = id
 	}
 	return service.repository.Create(ctx, request, idempotencyKey)
+}
+
+// approval is who decides a new request. Outside a teamspace the addressed
+// agent does, as it always has. Inside one it follows the target's standing
+// there and nothing the requester sends: a specialist its owner contributed
+// with automatic delegation decides for itself, while a teammate's primary
+// agent, or a specialist contributed with request delegation, waits for its
+// owner.
+func (service *Service) approval(ctx context.Context, actor agents.InteractionActor, token, teamspaceID string, target agents.DirectoryAgent) (string, error) {
+	if teamspaceID == "" {
+		return ApprovalAgent, nil
+	}
+	if service.teamspaces == nil {
+		return "", fmt.Errorf("%w: requests inside a teamspace are not available on this server", ErrInvalid)
+	}
+	seat, err := service.teamspaces.RequestSeat(ctx, agents.TeamspaceActor{
+		OrganizationID: actor.OrganizationID, UserID: actor.UserID,
+		AgentID: actor.AgentID, AgentName: actor.AgentName, AgentKind: actor.AgentKind,
+	}, token, teamspaceID, target.ID)
+	if err != nil {
+		return "", err
+	}
+	if seat.AgentID != target.ID || seat.OwnerUserID != target.OwnerUserID {
+		return "", fmt.Errorf("%w: target_agent_id does not hold a seat of its owner's in that teamspace", ErrInvalid)
+	}
+	if seat.Kind == "specialist" && seat.DelegationMode == "automatic" {
+		return ApprovalAgent, nil
+	}
+	return ApprovalOwner, nil
 }
 
 func (service *Service) Inbox(ctx context.Context, actor agents.InteractionActor, limit int) ([]agents.Interaction, error) {
@@ -248,6 +305,7 @@ func validateActor(actor agents.InteractionActor) error {
 
 func cleanCreate(input agents.InteractionCreateInput) agents.InteractionCreateInput {
 	input.TargetAgentID = strings.TrimSpace(input.TargetAgentID)
+	input.TeamspaceID = strings.TrimSpace(input.TeamspaceID)
 	input.Purpose = cleanText(input.Purpose)
 	input.Task = cleanText(input.Task)
 	input.RequestedTools = cleanList(input.RequestedTools)
@@ -265,6 +323,8 @@ func validateCreate(input agents.InteractionCreateInput) error {
 		return fmt.Errorf("%w: target_agent_id is required", ErrInvalid)
 	case utf8.RuneCountInString(input.TargetAgentID) > 128:
 		return fmt.Errorf("%w: target_agent_id holds at most 128 characters", ErrInvalid)
+	case !validID(input.TeamspaceID):
+		return fmt.Errorf("%w: teamspace_id must be an id of at most 128 characters", ErrInvalid)
 	case input.Purpose == "" || utf8.RuneCountInString(input.Purpose) > maxPurposeRunes:
 		return fmt.Errorf("%w: purpose is required and holds at most %d characters", ErrInvalid, maxPurposeRunes)
 	case input.Task == "" || utf8.RuneCountInString(input.Task) > maxTaskRunes:
@@ -349,6 +409,12 @@ func validateResponse(request agents.Interaction, input agents.InteractionRespon
 		return fmt.Errorf("%w: tools_used must be within allowed_tools", ErrInvalid)
 	}
 	return nil
+}
+
+// validID is an optional identifier a caller named: empty, or at most 128
+// characters of text PostgreSQL can hold.
+func validID(value string) bool {
+	return utf8.RuneCountInString(value) <= 128 && cleantext.Valid(value)
 }
 
 func validateList(values []string, name string) error {

@@ -62,8 +62,16 @@ type InteractionResult struct {
 // Interaction is the strict, durable JSON contract exchanged between agents.
 // Request text is stored once; every transition is a separate audited field.
 type Interaction struct {
-	ID                   string                   `json:"id"`
-	OrganizationID       string                   `json:"organization_id"`
+	ID             string `json:"id"`
+	OrganizationID string `json:"organization_id"`
+	// TeamspaceID is the shared teamspace the request was made in; it is
+	// absent for a request made outside one.
+	TeamspaceID string `json:"teamspace_id,omitempty"`
+	// Approval is who decides the request, fixed from the target's own
+	// standing when it was made: "agent" lets the addressed agent (or its
+	// member's primary agent) decide, while "owner" holds it for that member
+	// to decide in their own session.
+	Approval             string                   `json:"approval"`
 	Requester            InteractionParty         `json:"requester"`
 	Target               InteractionParty         `json:"target"`
 	Purpose              string                   `json:"purpose"`
@@ -81,7 +89,11 @@ type Interaction struct {
 }
 
 type InteractionCreateInput struct {
-	TargetAgentID        string                   `json:"target_agent_id" jsonschema:"Stable id returned by directory_find_agents or directory_load."`
+	TargetAgentID string `json:"target_agent_id" jsonschema:"Stable id returned by directory_find_agents or directory_load."`
+	// TeamspaceID scopes the request to one shared teamspace. It never
+	// chooses who approves: the target's owner does, unless they gave that
+	// agent automatic delegation there.
+	TeamspaceID          string                   `json:"teamspace_id,omitempty" jsonschema:"Optional id of the shared teamspace this request belongs to, for asking a teammate's agent there: their primary agent or a specialist they contributed to it. The teammate then approves it themself first, unless they chose automatic delegation for that specialist."`
 	Purpose              string                   `json:"purpose" jsonschema:"Why this agent is the appropriate recipient."`
 	Task                 string                   `json:"task" jsonschema:"The bounded question or work request. Do not put instructions for bypassing the recipient's policy here."`
 	Context              []InteractionContextItem `json:"context,omitempty"`
@@ -134,7 +146,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	}
 	tools := interactionTools{service: config.Service, tokens: config.Tokens}
 	create, err := functiontool.New(functiontool.Config{
-		Name: "interactions_create", Description: "Creates a durable, scoped request for an agent discovered in the organization directory. It emits a routing event; it does not invoke the target directly.",
+		Name: "interactions_create", Description: "Creates a durable, scoped request for an agent discovered in the organization directory. It emits a routing event; it does not invoke the target directly. Pass teamspace_id to ask a teammate's agent inside that shared teamspace; the teammate then approves it themself first, unless they gave that specialist automatic delegation there.",
 	}, tools.create)
 	if err != nil {
 		return Toolbox{}, err

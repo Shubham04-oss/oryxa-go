@@ -189,21 +189,21 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		logger.Warn("TEAMS_URL is not set: agents cannot discover people or teams")
 	}
 	var interactionService *agentinteractions.Service
-	if organizationDirectory != nil {
-		interactionService, err = agentinteractions.New(agentinteractions.Config{
-			Repository: interactionStore, Directory: organizationDirectory,
-		})
-		if err != nil {
-			sessionStore.Close()
-			return host.Service{}, err
-		}
-	}
 	var teamspaceService *teamspaces.Service
 	teamspaceStore := teamspaces.NewStore(platform.Database)
 	roomStore := rooms.NewStore(platform.Database)
 	teamRoomStore := agentteamrooms.NewStore(platform.Database)
 	if organizationDirectory != nil {
 		teamspaceService, err = teamspaces.New(teamspaceStore, organizationDirectory)
+		if err != nil {
+			sessionStore.Close()
+			return host.Service{}, err
+		}
+		// A request made inside a teamspace is approved as the target's
+		// owner chose there, so the ledger asks the teamspace for its seat.
+		interactionService, err = agentinteractions.New(agentinteractions.Config{
+			Repository: interactionStore, Directory: organizationDirectory, Teamspaces: teamspaceService,
+		})
 		if err != nil {
 			sessionStore.Close()
 			return host.Service{}, err

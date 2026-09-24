@@ -43,20 +43,25 @@ func (store *Store) Create(ctx context.Context, request agents.Interaction, idem
 	if err != nil {
 		return agents.Interaction{}, err
 	}
+	// A request that names no approval is decided by its agent, as every
+	// request made before teamspaces was; the service always names one.
+	if request.Approval == "" {
+		request.Approval = ApprovalAgent
+	}
 	err = pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
 			INSERT INTO agents_primary.agent_interactions
 				(id, organization_id, requester_user_id, requester_agent_id, requester_agent_name,
 				 target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
 				 purpose, task, context, requested_tools, requested_permissions, status, idempotency_key,
-				 revision, expires_at, created_at, updated_at)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20)
+				 revision, expires_at, created_at, updated_at, teamspace_id, approval)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22)
 			ON CONFLICT (organization_id, requester_agent_id, idempotency_key) DO NOTHING
 			RETURNING `+selectColumns,
 			request.ID, request.OrganizationID, request.Requester.UserID, request.Requester.AgentID, request.Requester.AgentName,
 			request.Target.UserID, request.Target.AgentID, request.Target.AgentName, request.Target.UserEmail, request.Target.UserDisplayName,
 			request.Purpose, request.Task, contextJSON, toolsJSON, permissionsJSON, request.Status, idempotencyKey,
-			request.Revision, request.ExpiresAt, request.CreatedAt)
+			request.Revision, request.ExpiresAt, request.CreatedAt, request.TeamspaceID, request.Approval)
 		if err := scanInteraction(row, &request); errors.Is(err, pgx.ErrNoRows) {
 			return scanInteraction(tx.QueryRow(ctx, `SELECT `+selectColumns+` FROM agents_primary.agent_interactions
 				WHERE organization_id=$1 AND requester_agent_id=$2 AND idempotency_key=$3`,
@@ -207,7 +212,8 @@ const selectColumns = `
 	requester_user_id, requester_agent_id, requester_agent_name,
 	target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
 	purpose, task, context, requested_tools, requested_permissions,
-	status, decision, result, revision, expires_at, created_at, updated_at`
+	status, decision, result, revision, expires_at, created_at, updated_at,
+	teamspace_id, approval`
 
 type scanner interface{ Scan(...any) error }
 
@@ -220,6 +226,7 @@ func scanInteraction(row scanner, target *agents.Interaction) error {
 		&target.Target.UserID, &target.Target.AgentID, &target.Target.AgentName, &target.Target.UserEmail, &target.Target.UserDisplayName,
 		&target.Purpose, &target.Task, &contextJSON, &toolsJSON, &permissionsJSON,
 		&target.Status, &decisionJSON, &resultJSON, &target.Revision, &target.ExpiresAt, &target.CreatedAt, &target.UpdatedAt,
+		&target.TeamspaceID, &target.Approval,
 	)
 	if err != nil {
 		return err
