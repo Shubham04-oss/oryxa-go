@@ -297,8 +297,12 @@ export function SideConversationPanel({
         <div className="workspace-dm-bar-name">
           <h2>{peer.name}</h2>
           <small>
-            {teamspaceName}
-            {side.peer.online && " · Online"}
+            {[
+              side.teamspace.name || knownName,
+              side.peer.online ? "Online" : undefined,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           </small>
         </div>
         <AgentsHere agents={agents} reader={reader} />

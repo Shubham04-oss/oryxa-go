@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { ComponentType, KeyboardEvent, ReactNode } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowLeft,
   ArrowRight,
@@ -32,7 +32,8 @@ import { primaryAgent, specialistAgents } from "@/lib/agents/policy"
 import { agentsQueryOptions } from "@/lib/agents/queries"
 import type { Inbox } from "@/lib/dms"
 import { isNameId, sideConversationName } from "@/lib/dms/names"
-import { teamspaceQueryOptions } from "@/lib/teamspaces/queries"
+import type { Teamspace } from "@/lib/teamspaces/client"
+import { teamspaceKeys, teamspaceQueryOptions } from "@/lib/teamspaces/queries"
 import { cn } from "@/lib/utils"
 
 export type AgentPanelTab = "agents" | "dms" | "teams"
@@ -51,7 +52,12 @@ export type PanelDirectMessages = {
 }
 
 /** A side conversation open in the Agents tab: with whom (as the teamspace names them), in which teamspace. */
-type OpenSide = { teamspaceId: string; peerId: string; peerName: string }
+type OpenSide = {
+  teamspaceId: string
+  teamspaceName?: string
+  peerId: string
+  peerName: string
+}
 
 /**
  * The shell asking the panel to chat with one of the member's specialists
@@ -157,11 +163,16 @@ export function WorkspaceAgentPanel({
   })
   const viewerId = directMessages?.viewerId
   // On a teamspace page, its teammates: read as the page reads it (one
-  // query, shared with the focused view).
+  // query, shared with the focused view), what the list knows shown at once.
+  const queryClient = useQueryClient()
   const offersTeammates = Boolean(organizationId && viewerId && teamspaceId)
   const space = useQuery({
     ...teamspaceQueryOptions(organizationId ?? "", teamspaceId ?? ""),
     enabled: offersTeammates,
+    placeholderData: () =>
+      queryClient
+        .getQueryData<Teamspace[]>(teamspaceKeys.list(organizationId ?? ""))
+        ?.find((listed) => listed.id === teamspaceId),
   })
   const primary = agents.data ? primaryAgent(agents.data) : undefined
   const agentName = primary?.name
@@ -231,6 +242,8 @@ export function WorkspaceAgentPanel({
     }
     setAgentsSide({
       teamspaceId,
+      teamspaceName:
+        space.data?.id === teamspaceId ? space.data.name : undefined,
       peerId: teammate.userId,
       peerName: teammate.name,
     })
@@ -389,7 +402,7 @@ export function WorkspaceAgentPanel({
                       teamspaceName={
                         space.data?.id === agentsSide.teamspaceId
                           ? space.data.name
-                          : undefined
+                          : agentsSide.teamspaceName
                       }
                       drafts={sideDrafts}
                       onDraftChange={changeSideDraft}
@@ -397,8 +410,11 @@ export function WorkspaceAgentPanel({
                       autoFocus={sidePicked}
                       onBack={() => {
                         setSidePicked(false)
-                        setSideReturnTo(agentsSide.peerId)
                         setAgentsSide(null)
+                        // Back to the teammate it was with, or, away from
+                        // their teamspace now, to the tab.
+                        if (offersTeammates) setSideReturnTo(agentsSide.peerId)
+                        else tabRefs.current.agents?.focus()
                       }}
                     />
                   )}

@@ -549,6 +549,26 @@ describe("The Agents tab on a teamspace page", () => {
     )
   })
 
+  it("keeps the conversation open when the member leaves the teamspace, and goes back to the tab", async () => {
+    const { rerender } = renderPanel({ teamspaceId: "tsp_launch" })
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Talk with Priya Shah" })
+    )
+    rerender({ teamspaceId: undefined })
+    const view = screen.getByRole("region", {
+      name: "Side conversation with Priya Shah in Launch room",
+    })
+    fireEvent.click(
+      within(view).getByRole("button", { name: "Back to agents" })
+    )
+    expect(
+      screen.queryByRole("region", { name: "In this teamspace" })
+    ).toBeNull()
+    expect(document.activeElement).toBe(
+      screen.getByRole("tab", { name: "Agents" })
+    )
+  })
+
   it("opens it asking the teammate's agent that was picked, once the conversation says who is here", async () => {
     renderPanel({ teamspaceId: "tsp_launch" })
     fireEvent.click(
