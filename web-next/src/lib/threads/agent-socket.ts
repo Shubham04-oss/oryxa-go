@@ -31,7 +31,7 @@ export function reopenSocket(
     }
     const timer = setTimeout(() => {
       stop()
-      reject(new Error("Could not reconnect to your primary agent. Try again."))
+      reject(new Error("Could not reconnect to your agent. Try again."))
     }, timeoutMs)
     socket.addEventListener("open", opened)
     try {

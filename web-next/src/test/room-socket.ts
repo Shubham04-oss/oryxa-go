@@ -1,7 +1,9 @@
-// A stand-in for the Agents SDK's `useAgent`, for the teamspace room's
-// tests: each mount gets a socket the test opens, closes and speaks through
-// as the room's Durable Object would. Use it with
-// `vi.mock("agents/react", async () => (await import("@/test/room-socket")).agentsReact)`.
+// A stand-in for the Agents SDK's `useAgent`, for the tests of the pages
+// on realtime objects (the teamspace room, the specialist chat): each mount
+// gets a socket the test opens, closes and speaks through as the Durable
+// Object would. Use it with
+// `vi.mock("agents/react", async () => (await import("@/test/room-socket")).agentsReact)`,
+// and, for a chat, src/test/agent-chat.ts for `useAgentChat`.
 import { act } from "@testing-library/react"
 import { useRef } from "react"
 import type {
@@ -9,6 +11,10 @@ import type {
   RoomServerMessage,
   TeamspaceRoomState,
 } from "@/lib/rooms/room-agent"
+import type { SpecialistChatState } from "@/lib/specialists/chat-messages"
+
+/** What an object syncs to its sockets. */
+type SyncedState = TeamspaceRoomState | SpecialistChatState
 
 type Options = {
   agent: string
@@ -17,7 +23,7 @@ type Options = {
   onOpen?: (event: Event) => void
   onClose?: (event: { code: number; target: unknown }) => void
   onMessage?: (event: { data: string }) => void
-  onStateUpdate?: (state: TeamspaceRoomState, source: "server") => void
+  onStateUpdate?: (state: SyncedState, source: "server") => void
 }
 
 export class FakeRoomSocket {
@@ -73,8 +79,8 @@ export class FakeRoomSocket {
     })
   }
 
-  /** The room's synced state changes. */
-  state(state: TeamspaceRoomState) {
+  /** The object's synced state changes. */
+  state(state: SyncedState) {
     act(() => {
       this.options.onStateUpdate?.(state, "server")
     })
@@ -103,6 +109,10 @@ export const roomSockets = {
     const socket = this.all.at(-1)
     if (!socket) throw new Error("no room socket was asked for")
     return socket
+  },
+  /** Every socket on the object with this name, oldest first. */
+  named(name: string): FakeRoomSocket[] {
+    return this.all.filter((socket) => socket.options.name === name)
   },
   reset() {
     this.all.length = 0

@@ -785,6 +785,10 @@
 .workspace-agent-message[data-from="agent"] { white-space: normal; }
 .workspace-agent-author { margin: 0 0 2px; color: #8d8d8d; font-size: 11px; font-weight: 600; }
 .workspace-agent-note { margin: 4px 0 0; color: #858585; font-size: 11px; line-height: 1.4; }
+/* A specialist's work result under its answer: tools, files, hand-offs. */
+.workspace-agent-result { margin: 6px 0 0; color: #858585; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.workspace-agent-result[data-status="needs_input"],
+.workspace-agent-result[data-status="blocked"] { color: #a9a9a9; }
 .workspace-agent-text-button { padding: 0; border: 0; background: none; color: #bdbdbd; font: inherit; font-size: 11px; text-decoration: underline; text-underline-offset: 2px; }
 .workspace-agent-text-button:hover { color: #f2f2f2; }
 .workspace-agent-working { margin: 0; color: #858585; font-size: 12px; animation: workspace-agent-pulse 1.6s ease-in-out infinite; }
@@ -847,7 +851,7 @@
 .workspace-agent-artifact-file { display: inline-flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; padding: 7px 12px; border: 1px solid #333; border-radius: 10px; color: #d6d6d6; font-size: 12px; text-decoration: none; }
 .workspace-agent-artifact-file svg { flex: none; }
 .workspace-agent-artifact-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-agent-artifact-file:hover { background: #222; color: #fff; }
+.workspace-agent-artifact-file:is(a):hover { background: #222; color: #fff; }
 
 .workspace-agent-apps { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 10px; border: 1px solid #2e2e2e; border-radius: 12px; }
 .workspace-agent-apps-label { display: flex; align-items: center; gap: 6px; margin: 0; color: #8d8d8d; font-size: 11px; font-weight: 600; }

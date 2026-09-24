@@ -207,3 +207,10 @@ The right agent panel (DESIGN.md §2) is location-aware. Its tabs, Agents,
 DMs and Teams, stay the same everywhere. On Home the Agents tab switches
 between the member's own agents. On a teamspace page it also offers that
 teamspace's teammates' agents, each opening a side conversation.
+
+A specialist's chat (`components/specialist-chat.tsx`) is one component in
+two places: its focused view's conversation column, and the Agents tab once
+the quick switch (or a team's Members tab Chat) selects it. Each is its own
+socket on the specialist's one object, so both show the same conversation:
+the object sends every socket the member's messages, the turn as it
+streams, and a start-over.

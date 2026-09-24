@@ -85,7 +85,13 @@ conversation (REALTIME.md says why it is not one per conversation).
    `useAgentChat({ agent, getInitialMessages: () =>
    getSpecialistChatMessages(org, agentId) })`. The Worker answers 404 for a
    specialist that is not the member's (or for their primary agent, whose
-   chat is its threads).
+   chat is its threads). When two views of one page hold the same chat (a
+   specialist's focused view and the agent panel do,
+   `components/specialist-chat.tsx`), each reads the transcript itself and
+   passes it as `messages` with `getInitialMessages: null`: `useAgentChat`
+   caches that read once per object name for the whole page and drops it
+   when any view unmounts, so a second view would start from the first
+   view's old copy, and the one left behind would suspend to read again.
 2. **The conversation**: `agent.state.threadId` (or `onStateUpdate`) is the
    Go thread the chat continues; null until the first message, and after it
    starts over. With it, `getSpecialistThread(org, agentId, threadId)` gives

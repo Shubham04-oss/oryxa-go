@@ -25,6 +25,17 @@ import type { FakeAgentsBackend } from "./agents-fake-backend"
 import type { Session } from "@/lib/auth/client"
 import type { AgentWorkflow } from "@/lib/agents/agent-workflows"
 
+// A specialist's focused view holds its chat object's socket; the Agents
+// SDK stands in (src/test/room-socket.ts, src/test/agent-chat.ts).
+vi.mock(
+  "agents/react",
+  async () => (await import("@/test/room-socket")).agentsReact
+)
+vi.mock(
+  "@cloudflare/ai-chat/react",
+  async () => (await import("@/test/agent-chat")).aiChatReact
+)
+
 const session: Session = {
   user: { id: VIEWER, email: "member@example.com", display_name: "Member" },
   organizations: [{ id: ORG, name: "Simulated Org", slug: "sim" }],
@@ -294,7 +305,7 @@ describe("Agents mode without a workspace", () => {
 })
 
 describe("The chat seam", () => {
-  it("turns the coming-soon chat into a button once the shell passes onChat", async () => {
+  it("offers Chat for a team's specialists, and a specialist's view is its chat", async () => {
     const backend = fakeAgentsBackend({
       agents: [primary, scout],
       teams: [crew],
@@ -317,10 +328,14 @@ describe("The chat seam", () => {
       </QueryClientProvider>
     )
 
-    fireEvent.click(
-      await screen.findByRole("button", { name: "Chat with Scout" })
-    )
-    expect(onChat).toHaveBeenLastCalledWith(scout.id)
+    // Its conversation column is the chat itself, so it needs no button.
+    const column = await screen.findByRole("region", {
+      name: "Chat with Scout",
+    })
+    expect(
+      within(column).getByRole("textbox", { name: "Message Scout" })
+    ).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "Chat with Scout" })).toBeNull()
     expect(screen.queryByText(/opens in the agent panel soon/)).toBeNull()
 
     rerender(
@@ -336,7 +351,7 @@ describe("The chat seam", () => {
     )
     fireEvent.click(await screen.findByRole("button", { name: "Members" }))
     fireEvent.click(screen.getByRole("button", { name: "Chat with Scout" }))
-    expect(onChat).toHaveBeenCalledTimes(2)
+    expect(onChat).toHaveBeenCalledExactlyOnceWith(scout.id)
     // The coordinator is chatted with in the agent panel's own tab.
     expect(screen.queryByRole("button", { name: "Chat with Leo" })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "Open Scout" }))
