@@ -2,12 +2,14 @@ package application
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 
+	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/filesclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/sources"
@@ -171,5 +173,57 @@ func TestAFilesSourceIsNotRetiredForWhatTryingAgainCanFix(t *testing.T) {
 				t.Fatalf("source = %s, failed %q; want it active and backed off", store.sources[source.ID].Status, store.failedReason)
 			}
 		})
+	}
+}
+
+// A member who cannot read a placement cannot register a source for it:
+// every pass would be refused, and while it stood, nobody who can read the
+// placement could have it indexed. Files is asked, as the member the source
+// would read as, before anything is stored.
+func TestAFilesSourceIsRegisteredOnlyForWhatItsMemberCanRead(t *testing.T) {
+	store := newFakeStore()
+	files := &fakeFilesClient{refused: map[string]error{"token-user-2": domain.ErrNotFound}}
+	outsider := member()
+	outsider.UserID = "user-2"
+	service, _ := realFilesService(t, store, files, outsider)
+	team := RegisterInput{Provider: "files", Target: map[string]string{"team": "team_eng"}}
+
+	_, err := service.RegisterSource(context.Background(), authclient.Credentials{Authorization: "Bearer token-user-2"}, "org_1", team)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("a member off the team registered its files: %v", err)
+	}
+	if len(store.sources) != 0 {
+		t.Fatalf("sources = %+v, want none stored", store.sources)
+	}
+	if len(files.listed) != 1 || files.listed[0] != "token-user-2" {
+		t.Fatalf("files was asked as %v, want the member registering", files.listed)
+	}
+
+	// Their attempt holds nothing, so the team's next upload is indexed as
+	// its uploader, who can read it.
+	service.directory.(*fakeDirectory).membership = member()
+	upload := storedFile("team")
+	upload.TeamID, upload.CreatedBy = "team_eng", "user-1"
+	if err := service.FileStored(context.Background(), upload); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.sources) != 1 {
+		t.Fatalf("sources after the team's upload = %d, want the uploader's", len(store.sources))
+	}
+	for _, source := range store.sources {
+		if source.CreatedBy != "user-1" || source.TeamID != "team_eng" {
+			t.Fatalf("source = %+v, want user-1's for team_eng", source)
+		}
+	}
+
+	// A member signed in with the web app's cookie is asked as the same
+	// token the cookie carries.
+	files.listed = nil
+	if _, err := service.RegisterSource(context.Background(), authclient.Credentials{AccessCookie: "token-user-1"}, "org_1",
+		RegisterInput{Provider: "files", Target: map[string]string{"member": "self"}}); err != nil {
+		t.Fatalf("RegisterSource(cookie) = %v", err)
+	}
+	if len(files.listed) != 1 || files.listed[0] != "token-user-1" {
+		t.Fatalf("files was asked as %v, want the cookie's token", files.listed)
 	}
 }

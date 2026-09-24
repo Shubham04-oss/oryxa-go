@@ -88,6 +88,16 @@ type Extractor interface {
 	Fetch(ctx context.Context, request Request) (Page, error)
 }
 
+// Checker is an extractor that can say, before a source is registered,
+// whether the member it would read as can read what it names at all. A
+// source its member cannot read would hold the name for nothing: every pass
+// refused, and nobody who can read it able to register it instead.
+type Checker interface {
+	// Check answers nil when request.Credential can read what
+	// request.Source names, and the refusal otherwise.
+	Check(ctx context.Context, request Request) error
+}
+
 // Registry is the extractors this build knows, by provider.
 type Registry map[string]Extractor
 

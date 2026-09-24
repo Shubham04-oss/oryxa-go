@@ -167,6 +167,7 @@ registration, while a member is still present to be told:
 | A provider nothing reads | Nothing would ever run |
 | A target the extractor does not understand | The first pass would fail and keep failing |
 | `files` with a `connection_id` | It reads the organization's own storage, not a connected app |
+| `files` for a placement Files will not list for the member (a team they are not on) | Every pass would be refused, and the source would hold the placement against members who can read it |
 | GitHub, Notion or Slack with no `connection_id` | There is nothing to proxy calls through |
 | A connection for a different toolkit, one that is not `active`, or one that is not the caller's own | It could only ever fail once a run finally reached it |
 

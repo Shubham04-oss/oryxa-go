@@ -430,3 +430,31 @@ func TestFilesSaysWhenItsMemberCannotReadThePlacement(t *testing.T) {
 		t.Fatalf("Fetch() with one file gone = %v, want it stepped over", err)
 	}
 }
+
+// TestFilesChecksAPlacementWithTheListingItsPassesWouldMake: registering
+// asks Files for exactly what every pass would, as the member it reads as,
+// and reads no file's bytes to do it.
+func TestFilesChecksAPlacementWithTheListingItsPassesWouldMake(t *testing.T) {
+	files := &fakeFiles{objects: []filesclient.Object{storedFile("file_1", "notes.md", "text/markdown")}}
+	request := filesRequest()
+	request.Source.Scope, request.Source.TeamID = domain.ScopeTeam, "team_1"
+	request.Source.Target = map[string]string{"team": "team_1", "purpose": "report"}
+	if err := NewFiles(files).Check(context.Background(), request); err != nil {
+		t.Fatalf("Check() = %v", err)
+	}
+	if files.listedAs != (filesclient.Query{Scope: "team", TeamID: "team_1", Purpose: "report"}) || len(files.fetched) != 0 {
+		t.Fatalf("Check() listed %+v and read %v, want the team listing and no bytes", files.listedAs, files.fetched)
+	}
+
+	files.listErr = domain.ErrNotFound
+	if err := NewFiles(files).Check(context.Background(), request); !errors.Is(err, domain.ErrNotFound) || !errors.Is(err, domain.ErrUnreadable) {
+		t.Fatalf("Check(refused) = %v, want the member unable to read it", err)
+	}
+
+	unowned := filesRequest()
+	unowned.Source.Scope, unowned.Source.Target = domain.ScopeMember, map[string]string{"member": "self"}
+	files = &fakeFiles{}
+	if err := NewFiles(files).Check(context.Background(), unowned); !errors.Is(err, domain.ErrInvalid) || files.listedAs.Scope != "" {
+		t.Fatalf("Check(no owner) = %v after listing %+v, want it refused before asking Files", err, files.listedAs)
+	}
+}
