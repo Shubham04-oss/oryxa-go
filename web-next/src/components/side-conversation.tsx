@@ -74,7 +74,6 @@ import type {
 } from "@/lib/side"
 import { codePoints } from "@/lib/dms/protocol"
 import { SIDE_MAX_DECISION_MESSAGE } from "@/lib/side/protocol"
-import { cn } from "@/lib/utils"
 
 /**
  * What the member has written in a side conversation, and whom it goes to.
@@ -999,11 +998,13 @@ function TargetPicker({
   /** A choice was made: the composer takes focus back. */
   onChosen: () => void
 }) {
-  const [open, setOpen] = useState(false)
+  const [opened, setOpen] = useState(false)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const menuId = useId()
   const openable = !disabled && selected !== undefined && options.length > 1
+  // A conversation that turns read-only (paused, refused) closes the menu.
+  const open = opened && openable
 
   // The menu takes focus on its checked choice, and closes on a press
   // anywhere else.
@@ -1100,14 +1101,11 @@ function TargetPicker({
           onKeyDown={onMenuKeyDown}
         >
           {options.map((option) => {
-            const checked = option.key === selected?.key
+            const checked = option.key === selected.key
             return (
               <button
                 key={option.key}
-                className={cn(
-                  "workspace-side-target-option",
-                  checked && "is-checked"
-                )}
+                className="workspace-side-target-option"
                 type="button"
                 role="menuitemradio"
                 aria-checked={checked}
