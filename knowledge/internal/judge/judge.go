@@ -203,12 +203,10 @@ func verdictOf(response *genai.GenerateContentResponse) domain.Verdict {
 	return domain.Verdict{Keep: *answer.Keep, Reason: strings.TrimSpace(answer.Reason), Category: category}
 }
 
+// categoryNames are the categories the model chooses among: every kind a
+// member can choose to index, and the three no member chooses.
 func categoryNames() []string {
-	names := make([]string, 0, len(domain.Kinds)+3)
-	for _, kind := range domain.Kinds {
-		names = append(names, kind.Name)
-	}
-	return append(names, "spam", "empty", "other")
+	return append(domain.KindNames(), "spam", "empty", "other")
 }
 
 // describe is what the model reads about a document: where it comes from,

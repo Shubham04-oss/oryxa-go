@@ -382,9 +382,9 @@ func (s *Service) SetSourceKinds(ctx context.Context, credentials authclient.Cre
 		}
 		// Kept in the order kinds are shown, once each.
 		include = include[:0:0]
-		for _, kind := range domain.Kinds {
-			if chosen[kind.Name] {
-				include = append(include, kind.Name)
+		for _, name := range domain.KindNames() {
+			if chosen[name] {
+				include = append(include, name)
 			}
 		}
 		if len(include) == 0 {

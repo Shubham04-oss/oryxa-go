@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // Candidate is what a judge sees of a document when deciding whether it is
 // worth indexing: whether a member would ever want Krude to find it.
@@ -67,6 +70,15 @@ var Kinds = []KindInfo{
 	{Name: "routine_notification", Label: "Routine notices", Hint: "Codes, sign-in alerts, welcome mail, invitations, trials and reminders"},
 }
 
+// KindNames are the names of Kinds, in the order kinds are shown.
+func KindNames() []string {
+	names := make([]string, 0, len(Kinds))
+	for _, kind := range Kinds {
+		names = append(names, kind.Name)
+	}
+	return names
+}
+
 // DefaultKinds are what a source indexes unless its member chooses.
 func DefaultKinds() []string {
 	var names []string
@@ -92,12 +104,9 @@ func IncludedKinds(chosen []string) map[string]bool {
 
 // ValidateKinds refuses a choice naming a kind no member can choose.
 func ValidateKinds(chosen []string) error {
-	known := map[string]bool{}
-	for _, kind := range Kinds {
-		known[kind.Name] = true
-	}
+	known := KindNames()
 	for _, name := range chosen {
-		if !known[name] {
+		if !slices.Contains(known, name) {
 			return fmt.Errorf("%q is not a kind of document a source can index: %w", name, ErrInvalid)
 		}
 	}

@@ -126,3 +126,25 @@ func TestRetryAfterDoublesUntilItIsCapped(t *testing.T) {
 		t.Fatalf("RetryAfter(-1) = %s, want %s", got, MinInterval)
 	}
 }
+
+func TestKindNamesAreEveryKindInTheOrderShown(t *testing.T) {
+	names := KindNames()
+	if len(names) != len(Kinds) {
+		t.Fatalf("KindNames() = %d names, want one for each of %d kinds", len(names), len(Kinds))
+	}
+	for index, kind := range Kinds {
+		if names[index] != kind.Name {
+			t.Fatalf("KindNames()[%d] = %q, want %q", index, names[index], kind.Name)
+		}
+	}
+	names[0] = "changed"
+	if Kinds[0].Name == "changed" || KindNames()[0] == "changed" {
+		t.Fatal("KindNames() handed out something a caller can change underneath every other")
+	}
+	if err := ValidateKinds([]string{"booking", "conversation"}); err != nil {
+		t.Fatalf("ValidateKinds(known kinds) = %v", err)
+	}
+	if err := ValidateKinds([]string{"spam"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("ValidateKinds(spam) = %v, want ErrInvalid: no member chooses it", err)
+	}
+}
