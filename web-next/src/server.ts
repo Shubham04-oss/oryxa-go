@@ -1,11 +1,13 @@
 import handler from "@tanstack/react-start/server-entry"
 import { getAgentByName, routeAgentRequest } from "agents"
+import { parseTeamspaceRoomAgentName } from "./lib/rooms/room-agent"
 import { parseSpecialistAgentName } from "./lib/specialists/chat-messages"
 import { parseThreadAgentName } from "./lib/threads/chat-messages"
 import {
   SpecialistChatAgent,
   specialistRequestHeaders,
 } from "./specialist-chat-agent"
+import { TeamspaceRoomAgent, roomRequestHeaders } from "./teamspace-room-agent"
 import { ThreadChatAgent, chatRequestHeaders } from "./thread-chat-agent"
 import type { ThreadChatEnv } from "./thread-chat-agent"
 
@@ -16,9 +18,10 @@ import type { ThreadChatEnv } from "./thread-chat-agent"
 export interface Env extends ThreadChatEnv {
   ThreadChatAgent: DurableObjectNamespace<ThreadChatAgent>
   SpecialistChatAgent: DurableObjectNamespace<SpecialistChatAgent>
+  TeamspaceRoomAgent: DurableObjectNamespace<TeamspaceRoomAgent>
 }
 
-export { SpecialistChatAgent, ThreadChatAgent }
+export { SpecialistChatAgent, TeamspaceRoomAgent, ThreadChatAgent }
 
 /** An error in Go's shape, which the app's `requestError` reads. */
 function failure(
@@ -292,6 +295,9 @@ const threadPath = (ids: { organizationId: string; threadId: string }) =>
 const agentPath = (ids: { organizationId: string; agentId: string }) =>
   `${organizationPath(ids.organizationId)}/agents/${encodeURIComponent(ids.agentId)}`
 
+const teamspacePath = (ids: { organizationId: string; teamspaceId: string }) =>
+  `${organizationPath(ids.organizationId)}/teamspaces/${encodeURIComponent(ids.teamspaceId)}`
+
 /**
  * Whether the agent Go answered with is a specialist. Go's `getAgent`
  * answers only the member's own agents, so the status has already said it
@@ -311,9 +317,32 @@ async function isSpecialist(accepted: Response): Promise<Response | undefined> {
 }
 
 /**
+ * Whether the member is on the teamspace's team. Go shows a teamspace to
+ * whoever manages its team too, and would let such a manager read the room
+ * and be counted present in it, but the room is the team's: a manager who
+ * is not on the team has no seat, and the page keeps them out
+ * (`canUseRoom`), so the Worker does as well.
+ */
+async function isOnTheTeam(accepted: Response): Promise<Response | undefined> {
+  let space: { is_member?: unknown }
+  try {
+    space = await accepted.json()
+  } catch {
+    return badGateway()
+  }
+  if (space.is_member !== true) {
+    return failure(
+      403,
+      "forbidden",
+      "Only the teamspace's team can open its room."
+    )
+  }
+  return undefined
+}
+
+/**
  * Every realtime object, by the path segment its binding is served at. A
- * new one (REALTIME.md: the teamspace room, a side conversation, a DM) is
- * one more entry.
+ * new one (REALTIME.md: a side conversation, a DM) is one more entry.
  */
 const realtimeObjects = new Map(
   [
@@ -358,6 +387,22 @@ const realtimeObjects = new Map(
         },
       },
       unavailable: "Your specialist's conversation is unavailable.",
+    }),
+    // A teamspace's room, `{organization}~{teamspace}`, shared by everyone
+    // on its team who has it open. Go keeps the room and deletes it with
+    // the teamspace, so there is no DELETE; the object lets go of its copy
+    // itself (REALTIME.md).
+    realtimeObject({
+      binding: "TeamspaceRoomAgent",
+      reads: [],
+      parseName: parseTeamspaceRoomAgentName,
+      checkAccess: (ids, ask) => ask(teamspacePath(ids), isOnTheTeam),
+      identity: (ids, cookie) => ({
+        [roomRequestHeaders.cookie]: cookie,
+        [roomRequestHeaders.organization]: ids.organizationId,
+        [roomRequestHeaders.teamspace]: ids.teamspaceId,
+      }),
+      unavailable: "This teamspace's room is unavailable.",
     }),
   ].map((route) => [route.segment, route])
 )

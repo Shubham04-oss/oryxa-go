@@ -1,26 +1,33 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import type { ReactNode } from "react"
 import { useTeamspaceRoom } from "./use-teamspace-room"
 import { teamspaceKeys } from "@/lib/teamspaces/queries"
 import type { Teamspace } from "@/lib/teamspaces/client"
+import type { RoomMessage } from "@/lib/rooms/client"
+import { roomGoneCloseCode } from "@/lib/rooms/room-agent"
+import { roomSockets } from "@/test/room-socket"
 import {
   apiError,
-  deferred,
   json,
   mockApi,
   org,
-  orgPath,
   roomMessage,
   seatsFor,
   teamspace,
   viewerId,
 } from "@/test/teamspaces"
 
-const roomPath = `${orgPath}/teamspaces/tsp_launch`
+vi.mock(
+  "agents/react",
+  async () => (await import("@/test/room-socket")).agentsReact
+)
+
+const roomName = `${org}~tsp_launch`
+const check = `/agents/teamspace-room-agent/${roomName}`
 
 function setup(
   space: Teamspace | undefined,
@@ -42,37 +49,36 @@ function setup(
   return { ...hook, queryClient }
 }
 
-/** A room that answers reads as rooms.Service does, from `messages`. */
-function liveRoom(
-  space = teamspace(),
-  messages = [] as ReturnType<typeof roomMessage>[]
-) {
-  const seats = seatsFor(space, [viewerId, "user-ada"])
-  const held = [...messages]
-  const api = mockApi(({ method, url }) => {
-    if (url.pathname === `${roomPath}/catchup`) {
-      return json({
-        brief: { room_id: space.id, revision: 0, through_seq: 0 },
-        messages: held,
-      })
-    }
-    if (method === "GET" && url.pathname === `${roomPath}/messages`) {
-      const after = Number(url.searchParams.get("after") ?? 0)
-      return json({ messages: held.filter((item) => item.seq > after), seats })
-    }
-    return undefined
-  })
-  return { ...api, seats, held, space }
+const seats = seatsFor(teamspace(), [viewerId])
+const [memberSeat, , adaSeat, junoSeat] = seats
+
+/** The room as its object sends it when the socket opens. */
+function openRoom(messages: RoomMessage[] = [], here = [viewerId]) {
+  const socket = roomSockets.latest
+  socket.open()
+  socket.state({ seats, here })
+  socket.says({ type: "room-snapshot", messages, pending: [], results: [] })
+  return socket
 }
+
+let visibility: DocumentVisibilityState = "visible"
+
+beforeEach(() => {
+  roomSockets.reset()
+  visibility = "visible"
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => visibility,
+  })
+})
 
 afterEach(() => {
   cleanup()
-  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
 describe("useTeamspaceRoom", () => {
-  it("reads nothing when there is nothing it may open", () => {
+  it("opens nothing it may not use", () => {
     const api = mockApi(() => undefined)
 
     expect(setup(undefined).result.current.status.connection).toBe("closed")
@@ -85,71 +91,153 @@ describe("useTeamspaceRoom", () => {
     ).toBe("not-member")
 
     // Reading a room marks the member present in it, so a room the member
-    // may not use is never read at all.
+    // may not use is never opened at all.
+    expect(roomSockets.all.every((socket) => !socket.options.enabled)).toBe(
+      true
+    )
+    expect(roomSockets.all.flatMap((socket) => socket.sent)).toEqual([])
     expect(api.calls).toEqual([])
   })
 
-  it("reads the room's latest page, then who is here and the member's own seat", async () => {
-    const room = liveRoom(teamspace(), [])
-    room.held.push(roomMessage(1, room.seats[2], "Morning, everyone"))
-    const { result } = setup(room.space)
-
+  it("opens the teamspace's room object, says whether the tab is visible, and is live once the room arrives", () => {
+    const { result } = setup(teamspace())
+    const socket = roomSockets.latest
+    expect(socket.options).toMatchObject({
+      agent: "TeamspaceRoomAgent",
+      name: roomName,
+      enabled: true,
+    })
     expect(result.current.status.connection).toBe("connecting")
-    await waitFor(() => expect(result.current.status.connection).toBe("live"))
 
-    expect(room.calls.map((call) => call.path)).toEqual([
-      `${roomPath}/catchup`,
-      `${roomPath}/messages?after=0&limit=200`,
-    ])
+    socket.open()
+    expect(socket.sent).toEqual([{ type: "room-visibility", visible: true }])
+    expect(result.current.status.connection).toBe("connecting")
+
+    openRoom([roomMessage(1, adaSeat, "Morning, everyone")])
+    expect(result.current.status.connection).toBe("live")
     expect(result.current.messages.map((item) => item.body)).toEqual([
       "Morning, everyone",
     ])
     expect(result.current.presence.here.map((seat) => seat.handle)).toEqual([
       "member",
-      "ada",
     ])
     expect(result.current.presence.me?.user_id).toBe(viewerId)
     expect(result.current.status.canPost).toBe(true)
   })
 
-  it("keeps reading every 5 s from where it got to, which keeps the member present", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    const room = liveRoom(teamspace(), [])
-    room.held.push(roomMessage(1, room.seats[2], "First"))
-    const { result } = setup(room.space)
-    await waitFor(() => expect(result.current.status.connection).toBe("live"))
+  it("tells the room whenever the tab is hidden or visible again, while the socket is open", () => {
+    setup(teamspace())
+    const socket = openRoom()
 
-    room.held.push(roomMessage(2, room.seats[3], "An agent's answer"))
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000)
+    visibility = "hidden"
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"))
     })
+    visibility = "visible"
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+    expect(socket.said("room-visibility")).toEqual([
+      { type: "room-visibility", visible: true },
+      { type: "room-visibility", visible: false },
+      { type: "room-visibility", visible: true },
+    ])
 
-    await waitFor(() => expect(result.current.messages).toHaveLength(2))
-    expect(room.calls.at(-1)?.path).toBe(
-      `${roomPath}/messages?after=1&limit=200`
-    )
+    // A closed socket is told as it opens again, not queued a stale word.
+    socket.drop()
+    visibility = "hidden"
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+    expect(socket.said("room-visibility")).toHaveLength(3)
+    socket.open()
+    expect(socket.said("room-visibility").at(-1)).toEqual({
+      type: "room-visibility",
+      visible: false,
+    })
   })
 
-  it("sends, shows the post as outgoing until the room answers, then its replies", async () => {
-    const room = liveRoom()
-    const answer = deferred<Response>()
-    const posts: unknown[] = []
-    const reads = room.fetchMock.getMockImplementation()!
-    room.fetchMock.mockImplementation(async (input, init = {}) => {
-      if (init.method === "POST") {
-        posts.push(JSON.parse(String(init.body)))
-        return answer.promise
-      }
-      return reads(input, init)
+  it("adds what the room records once per seq, and starts over from a reopened socket's room when it cannot join it up", () => {
+    const { result } = setup(teamspace())
+    const socket = openRoom([roomMessage(1, adaSeat, "One")])
+
+    socket.says({
+      type: "room-messages",
+      messages: [
+        roomMessage(2, junoSeat, "Two"),
+        roomMessage(1, adaSeat, "One"),
+      ],
     })
-    const { result } = setup(room.space)
-    await waitFor(() => expect(result.current.status.canPost).toBe(true))
+    expect(result.current.messages.map((item) => item.seq)).toEqual([1, 2])
+
+    // Reopened after a while: the room's recent messages meet what the page
+    // holds, so they join up.
+    socket.drop()
+    socket.open()
+    socket.says({
+      type: "room-snapshot",
+      messages: [
+        roomMessage(2, junoSeat, "Two"),
+        roomMessage(3, adaSeat, "Three"),
+      ],
+      pending: [],
+      results: [],
+    })
+    expect(result.current.messages.map((item) => item.seq)).toEqual([1, 2, 3])
+
+    // Reopened after so long that messages would be missing between them.
+    socket.drop()
+    socket.open()
+    socket.says({
+      type: "room-snapshot",
+      messages: [roomMessage(400, adaSeat, "Much later")],
+      pending: [],
+      results: [],
+    })
+    expect(result.current.messages.map((item) => item.seq)).toEqual([400])
+  })
+
+  it("counts somebody with the room open and visible as here at once, and Go's word for everybody else", () => {
+    const { result } = setup(teamspace())
+    const socket = openRoom()
+    expect(result.current.presence.here.map((seat) => seat.handle)).toEqual([
+      "member",
+    ])
+
+    socket.state({ seats, here: [viewerId, "user-ada"] })
+    expect(result.current.presence.here.map((seat) => seat.handle)).toEqual([
+      "member",
+      "ada",
+    ])
+    expect(
+      result.current.presence.seats.find((seat) => seat.handle === "ada")
+        ?.present
+    ).toBe(true)
+
+    // Gone from view, but read by Go in the last 90 s: still here.
+    socket.state({
+      seats: seatsFor(teamspace(), [viewerId, "user-ada"]),
+      here: [viewerId],
+    })
+    expect(result.current.presence.here).toHaveLength(2)
+  })
+
+  it("sends a post, shows it as outgoing until the room records it, then takes the room's answer", async () => {
+    const { result, queryClient } = setup(teamspace())
+    const socket = openRoom()
+    const entries = teamspaceKeys.entries(org, "tsp_launch", 100)
+    queryClient.setQueryData(entries, [])
 
     let sent: Promise<boolean> | undefined
     act(() => {
       sent = result.current.send("  Can someone check the rollout?  ")
     })
-    expect(posts).toEqual([{ body: "Can someone check the rollout?" }])
+    const [posted] = socket.said("room-post")
+    expect(posted).toEqual({
+      type: "room-post",
+      id: expect.any(String),
+      body: "Can someone check the rollout?",
+    })
     expect(result.current.status.outgoing).toEqual([
       expect.objectContaining({
         body: "Can someone check the rollout?",
@@ -157,73 +245,113 @@ describe("useTeamspaceRoom", () => {
       }),
     ])
 
-    const mine = roomMessage(1, room.seats[0], "Can someone check the rollout?")
-    const reply = roomMessage(
-      2,
-      room.seats[3],
-      "Juno here: the rollout is ready."
-    )
-    room.held.push(mine, reply)
-    await act(async () => {
-      answer.resolve(json({ messages: [mine, reply] }, 201))
-      expect(await sent).toBe(true)
-    })
+    const mine = roomMessage(1, memberSeat, "Can someone check the rollout?")
+    socket.says({ type: "room-messages", messages: [mine] })
+    expect(result.current.status.outgoing).toEqual([
+      expect.objectContaining({ landed: true }),
+    ])
 
-    expect(result.current.status.outgoing).toEqual([])
+    const reply = roomMessage(2, junoSeat, "Juno here: the rollout is ready.")
+    socket.says({
+      type: "room-posted",
+      result: { id: posted.id, ok: true, messages: [mine, reply] },
+    })
+    expect(await sent).toBe(true)
+    await waitFor(() => expect(result.current.status.outgoing).toEqual([]))
     expect(result.current.status.sendError).toBeUndefined()
     expect(result.current.messages.map((item) => item.seq)).toEqual([1, 2])
+    // The room publishes what it concludes to the ledger.
+    expect(queryClient.getQueryState(entries)?.isInvalidated).toBe(true)
   })
 
-  it("keeps the draft when the room never got the message, and says why", async () => {
-    const room = liveRoom()
-    const reads = room.fetchMock.getMockImplementation()!
-    room.fetchMock.mockImplementation(async (input, init = {}) =>
-      init.method === "POST"
-        ? apiError(500, "internal", "internal server error")
-        : reads(input, init)
-    )
-    const { result } = setup(room.space)
-    await waitFor(() => expect(result.current.status.canPost).toBe(true))
+  it("keeps the draft and says why when the room refuses a post", async () => {
+    const { result, queryClient } = setup(teamspace())
+    const socket = openRoom()
+    const detail = teamspaceKeys.teamspace(org, "tsp_launch")
+    queryClient.setQueryData(detail, teamspace())
+    mockApi(() => json(teamspace()))
 
-    let kept = true
-    await act(async () => {
-      kept = await result.current.send("Hello")
-    })
-
-    expect(kept).toBe(false)
-    expect(result.current.status.sendError).toBe(
-      "Couldn't send your message. Try again."
-    )
-    expect(result.current.status.outgoing).toEqual([])
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [
+        {
+          status: 403,
+          code: "forbidden",
+          message: "room is not available to this member",
+        },
+        "Only teammates with an active agent can post in this room.",
+      ],
+      [
+        {
+          status: 400,
+          code: "invalid_request",
+          message: "a message is at most 4000 characters",
+        },
+        "A message is at most 4000 characters.",
+      ],
+      [
+        { status: 404, code: "not_found", message: "room not found" },
+        "This room is no longer available to you.",
+      ],
+      [
+        {
+          status: 429,
+          code: "rate_limited",
+          message: "Too many messages at once.",
+        },
+        "Too many messages at once. Try again in a moment.",
+      ],
+      [
+        { status: 503, code: "rooms_unavailable", message: "not configured" },
+        "Rooms aren't available on this server.",
+      ],
+      [
+        { status: 0, message: "The room could not be reached." },
+        "Couldn't send your message. Try again.",
+      ],
+    ]
+    for (const [refusal, words] of cases) {
+      let kept: Promise<boolean> | undefined
+      act(() => {
+        kept = result.current.send("Hello")
+      })
+      const posted = socket.said("room-post").at(-1)!
+      socket.says({
+        type: "room-posted",
+        result: { id: posted.id, ok: false, ...refusal } as never,
+      })
+      expect(await kept).toBe(false)
+      await waitFor(() => expect(result.current.status.sendError).toBe(words))
+      expect(result.current.status.outgoing).toEqual([])
+    }
+    // A 400 is the teamspace changing: the page's copy is re-read.
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true)
   })
 
   it("counts a post that failed after it landed as said", async () => {
-    const room = liveRoom()
-    const reads = room.fetchMock.getMockImplementation()!
-    const holder: { client?: QueryClient } = {}
-    room.fetchMock.mockImplementation(async (input, init = {}) => {
-      if (init.method === "POST") {
-        // The room recorded the message and a poll showed it, then the
-        // answer was lost (a proxy timing out while the agents were still
-        // talking, say).
-        room.held.push(roomMessage(1, room.seats[0], "Hello"))
-        await holder.client?.refetchQueries({
-          queryKey: teamspaceKeys.room(org, "tsp_launch"),
-        })
-        return apiError(502, "bad_gateway", "upstream unavailable")
-      }
-      return reads(input, init)
-    })
-    const { result, queryClient } = setup(room.space)
-    holder.client = queryClient
-    await waitFor(() => expect(result.current.status.canPost).toBe(true))
+    const { result } = setup(teamspace())
+    const socket = openRoom()
 
-    let kept = false
-    await act(async () => {
-      kept = await result.current.send("Hello")
+    let kept: Promise<boolean> | undefined
+    act(() => {
+      kept = result.current.send("Hello")
     })
-
-    expect(kept).toBe(true)
+    const posted = socket.said("room-post")[0]
+    // The room recorded it, then the answer was lost.
+    socket.says({
+      type: "room-messages",
+      messages: [roomMessage(1, memberSeat, "Hello")],
+    })
+    socket.says({
+      type: "room-posted",
+      result: {
+        id: posted.id,
+        ok: false,
+        status: 502,
+        code: "bad_gateway",
+        message: "upstream unavailable",
+      },
+    })
+    expect(await kept).toBe(true)
     await waitFor(() =>
       expect(result.current.status.sendError).toBe(
         "Your message is in the room, but the agents' answers didn't come back."
@@ -231,136 +359,289 @@ describe("useTeamspaceRoom", () => {
     )
   })
 
-  it("marks a post landed once a read shows it, while its answer is still out", async () => {
-    const room = liveRoom()
-    const answer = deferred<Response>()
-    const reads = room.fetchMock.getMockImplementation()!
-    room.fetchMock.mockImplementation(async (input, init = {}) =>
-      init.method === "POST" ? answer.promise : reads(input, init)
-    )
-    const { result, queryClient } = setup(room.space)
-    await waitFor(() => expect(result.current.status.canPost).toBe(true))
-
-    act(() => {
-      void result.current.send("Status?")
-    })
-    room.held.push(roomMessage(1, room.seats[0], "Status?"))
-    await act(async () => {
-      await queryClient.refetchQueries({
-        queryKey: teamspaceKeys.room(org, "tsp_launch"),
-      })
-    })
-
-    await waitFor(() =>
-      expect(result.current.status.outgoing).toEqual([
-        expect.objectContaining({ body: "Status?", landed: true }),
-      ])
-    )
-    await act(async () => {
-      answer.resolve(json({ messages: [room.held[0]] }, 201))
-    })
-    await waitFor(() => expect(result.current.status.outgoing).toEqual([]))
-  })
-
-  it("answers a paused room's 400 as paused and re-reads the teamspace", async () => {
-    const api = mockApi(({ url }) => {
-      if (url.pathname.startsWith(roomPath + "/")) {
-        return apiError(400, "invalid_request", "this room is paused")
-      }
-      if (url.pathname === roomPath)
-        return json(teamspace({ status: "disabled" }))
-      return json({ teamspaces: [] })
-    })
-    const { result, queryClient } = setup(teamspace())
-    const detail = teamspaceKeys.teamspace(org, "tsp_launch")
-    queryClient.setQueryData(detail, teamspace())
-
-    await waitFor(() => expect(result.current.status.connection).toBe("paused"))
-    expect(result.current.status.canPost).toBe(false)
-    // The page's own copy of the teamspace is re-read, so its header and
-    // gates learn it was paused.
-    await waitFor(() =>
-      expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true)
-    )
-    expect(api.calls.every((call) => call.method === "GET")).toBe(true)
-  })
-
-  it("stops reading a room the member may no longer open", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
+  it("says a post again, once, with a fresh session when the socket's cookie had expired", async () => {
     const api = mockApi(({ url }) =>
-      url.pathname.startsWith(roomPath + "/")
-        ? apiError(404, "not_found", "room not found")
-        : json({ teamspaces: [] })
-    )
-    const { result } = setup(teamspace())
-
-    await waitFor(() => expect(result.current.status.connection).toBe("gone"))
-    const reads = () =>
-      api.calls.filter((call) => call.path.startsWith(roomPath + "/")).length
-    const before = reads()
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000)
-    })
-    expect(reads()).toBe(before)
-  })
-
-  it("keeps trying a room that failed for a reason that may pass", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    const api = mockApi(({ url }) =>
-      url.pathname.startsWith(roomPath + "/")
-        ? apiError(503, "unavailable", "auth is unavailable")
+      url.pathname === "/v1/auth/me"
+        ? json({ user: { id: viewerId }, organizations: [] })
         : undefined
     )
     const { result } = setup(teamspace())
+    const socket = openRoom()
 
-    await waitFor(() => expect(result.current.status.connection).toBe("error"))
-    expect(result.current.status.error).toBe("Couldn't reach the room.")
-    const before = api.calls.length
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5_000)
+    let kept: Promise<boolean> | undefined
+    act(() => {
+      kept = result.current.send("Hello")
     })
-    expect(api.calls.length).toBeGreaterThan(before)
+    const first = socket.said("room-post")[0]
+    socket.says({
+      type: "room-posted",
+      result: {
+        id: first.id,
+        ok: false,
+        status: 401,
+        code: "session_expired",
+        message: "Your session has ended.",
+      },
+    })
+    // The session is read (which refreshes the cookie), the socket reopens
+    // with it, and the post goes again under a new id.
+    await waitFor(() => expect(socket.said("room-post")).toHaveLength(2))
+    expect(api.calls.map((call) => call.path)).toEqual(["/v1/auth/me"])
+    expect(socket.reconnects).toBe(1)
+    const second = socket.said("room-post")[1]
+    expect(second.id).not.toBe(first.id)
+    expect(second.body).toBe("Hello")
+    socket.says({
+      type: "room-posted",
+      result: {
+        id: second.id,
+        ok: true,
+        messages: [roomMessage(1, memberSeat, "Hello")],
+      },
+    })
+    expect(await kept).toBe(true)
   })
 
-  it("stops reading once the session has ended, and says so", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true })
-    const api = mockApi(({ url }) =>
+  it("renews the session when the room says it ended, and says so when it cannot be", async () => {
+    mockApi(({ url }) =>
       url.pathname === "/v1/auth/refresh"
         ? new Response(null, { status: 401 })
         : apiError(401, "unauthorized", "session expired")
     )
     const { result } = setup(teamspace())
+    const socket = openRoom()
 
-    await waitFor(() => expect(result.current.status.connection).toBe("error"))
-    expect(result.current.status.error).toBe(
-      "Your session has ended. Sign in again to read this room."
+    socket.says({ type: "room-status", status: "session_expired" })
+    await waitFor(() =>
+      expect(result.current.status).toMatchObject({
+        connection: "error",
+        error: "Your session has ended. Sign in again to read this room.",
+      })
     )
-    const before = api.calls.length
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000)
-    })
-    expect(api.calls.length).toBe(before)
+    expect(socket.options.enabled).toBe(false)
+    expect(socket.reconnects).toBe(0)
   })
 
-  it("says so when the server does not run rooms", async () => {
-    mockApi(() => apiError(503, "rooms_unavailable", "not configured"))
-    const { result } = setup(teamspace())
+  it("answers a paused room as paused and re-reads the teamspace", async () => {
+    mockApi(() => json(teamspace({ status: "disabled" })))
+    const { result, queryClient } = setup(teamspace())
+    const detail = teamspaceKeys.teamspace(org, "tsp_launch")
+    queryClient.setQueryData(detail, teamspace())
+    const socket = openRoom([roomMessage(1, adaSeat, "Before the pause")])
+
+    socket.says({
+      type: "room-status",
+      status: "paused",
+      message: "this room is paused",
+    })
+    expect(result.current.status).toMatchObject({
+      connection: "paused",
+      canPost: false,
+    })
     await waitFor(() =>
-      expect(result.current.status.connection).toBe("unavailable")
+      expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true)
     )
+    // What was said stays on screen.
+    expect(result.current.messages).toHaveLength(1)
+
+    // Resumed: the room says it is live again.
+    socket.says({ type: "room-status", status: "live" })
+    expect(result.current.status.connection).toBe("live")
+  })
+
+  it("stops at a room the member may no longer open, by the room's word or its close", async () => {
+    mockApi(() => json(teamspace()))
+    for (const turnAway of [
+      (socket: typeof roomSockets.latest) =>
+        socket.says({
+          type: "room-status",
+          status: "gone",
+          message: "room not found",
+        }),
+      (socket: typeof roomSockets.latest) => socket.drop(roomGoneCloseCode),
+    ]) {
+      const { result, queryClient, unmount } = setup(teamspace())
+      const detail = teamspaceKeys.teamspace(org, "tsp_launch")
+      queryClient.setQueryData(detail, teamspace())
+      const socket = openRoom()
+      turnAway(socket)
+      expect(result.current.status).toMatchObject({
+        connection: "gone",
+        canPost: false,
+      })
+      expect(socket.options.enabled).toBe(false)
+      await waitFor(() =>
+        expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true)
+      )
+      unmount()
+    }
+  })
+
+  it("says so when the server does not run rooms", () => {
+    const { result } = setup(teamspace())
+    const socket = openRoom()
+    socket.says({
+      type: "room-status",
+      status: "unavailable",
+      message: "not configured",
+    })
+    expect(result.current.status.connection).toBe("unavailable")
+    expect(socket.options.enabled).toBe(false)
+  })
+
+  it("says the room is reconnecting while Go cannot be read, and live once it can", () => {
+    const { result } = setup(teamspace())
+    const socket = openRoom()
+    socket.says({ type: "room-status", status: "error" })
+    expect(result.current.status).toMatchObject({
+      connection: "error",
+      error: "Couldn't reach the room.",
+      canPost: true,
+    })
+    socket.says({ type: "room-status", status: "live" })
+    expect(result.current.status.connection).toBe("live")
+  })
+
+  it("asks the Worker why a socket closed, since a browser is never told", async () => {
+    const answers: Response[] = [new Response(null, { status: 204 })]
+    const api = mockApi(({ url }) =>
+      url.pathname === check ? answers.shift() : undefined
+    )
+    const { result } = setup(teamspace())
+    const socket = openRoom()
+
+    // Something that may pass: the socket keeps trying.
+    socket.drop()
+    expect(result.current.status).toMatchObject({
+      connection: "error",
+      error: "Couldn't reach the room.",
+    })
+    await waitFor(() =>
+      expect(api.calls.map((call) => call.path)).toEqual([check])
+    )
+    expect(socket.options.enabled).toBe(true)
+
+    // Go no longer lets the member in.
+    answers.push(apiError(404, "not_found", "teamspace not found"))
+    socket.drop()
+    await waitFor(() => expect(result.current.status.connection).toBe("gone"))
+    expect(socket.options.enabled).toBe(false)
+  })
+
+  it("says it is trying again when the socket cannot open, rather than connecting for ever", async () => {
+    const api = mockApi(({ url }) =>
+      url.pathname === check ? new Response(null, { status: 204 }) : undefined
+    )
+    const { result } = setup(teamspace())
+    expect(result.current.status.connection).toBe("connecting")
+    roomSockets.latest.drop(1000)
+    expect(result.current.status).toMatchObject({
+      connection: "error",
+      error: "Couldn't reach the room.",
+    })
+    await waitFor(() => expect(api.calls).toHaveLength(1))
+    expect(roomSockets.latest.options.enabled).toBe(true)
+
+    openRoom()
+    expect(result.current.status.connection).toBe("live")
+  })
+
+  it("stops once the Worker says the session has ended", async () => {
+    mockApi(({ url }) =>
+      url.pathname === "/v1/auth/refresh"
+        ? new Response(null, { status: 401 })
+        : apiError(401, "unauthorized", "Sign in to open this conversation.")
+    )
+    const { result } = setup(teamspace())
+    roomSockets.latest.drop()
+    await waitFor(() =>
+      expect(result.current.status).toMatchObject({
+        connection: "error",
+        error: "Your session has ended. Sign in again to read this room.",
+      })
+    )
+    expect(roomSockets.latest.options.enabled).toBe(false)
+  })
+
+  it("learns from a reopened socket what became of posts sent on an earlier one", async () => {
+    const { result } = setup(teamspace())
+    const socket = openRoom()
+
+    const sends: Array<Promise<boolean>> = []
+    act(() => {
+      sends.push(result.current.send("Answered while away"))
+      sends.push(result.current.send("Still out"))
+      sends.push(result.current.send("Never arrived"))
+    })
+    const [answered, out, lost] = socket.said("room-post")
+    socket.drop()
+    socket.open()
+    // Said on this socket, after it opened: not the snapshot's to judge.
+    act(() => {
+      sends.push(result.current.send("Said just now"))
+    })
+    const now = socket.said("room-post")[3]
+    socket.says({
+      type: "room-snapshot",
+      messages: [roomMessage(1, memberSeat, "Answered while away")],
+      pending: [out.id],
+      results: [
+        {
+          id: answered.id,
+          ok: true,
+          messages: [roomMessage(1, memberSeat, "Answered while away")],
+        },
+      ],
+    })
+    expect(await sends[0]).toBe(true)
+    expect(await sends[2]).toBe(false)
+    await waitFor(() =>
+      expect(result.current.status.outgoing.map((item) => item.body)).toEqual([
+        "Still out",
+        "Said just now",
+      ])
+    )
+    expect(result.current.status.sendError).toBe(
+      "Couldn't send your message. Try again."
+    )
+    expect(lost.body).toBe("Never arrived")
+
+    socket.says({
+      type: "room-posted",
+      result: {
+        id: out.id,
+        ok: true,
+        messages: [roomMessage(2, memberSeat, "Still out")],
+      },
+    })
+    socket.says({
+      type: "room-posted",
+      result: {
+        id: now.id,
+        ok: true,
+        messages: [roomMessage(3, memberSeat, "Said just now")],
+      },
+    })
+    expect(await sends[1]).toBe(true)
+    expect(await sends[3]).toBe(true)
   })
 
   it("lets a member without a seat read but not post", async () => {
-    const space = teamspace()
-    const seats = seatsFor(space).filter((seat) => seat.user_id !== viewerId)
-    mockApi(({ url }) =>
-      url.pathname === `${roomPath}/catchup`
-        ? json({ brief: { through_seq: 0 }, messages: [] })
-        : json({ messages: [], seats })
-    )
-    const { result } = setup(space)
+    const { result } = setup(teamspace())
+    const socket = roomSockets.latest
+    socket.open()
+    socket.state({
+      seats: seats.filter((seat) => seat.user_id !== viewerId),
+      here: [],
+    })
+    socket.says({
+      type: "room-snapshot",
+      messages: [],
+      pending: [],
+      results: [],
+    })
 
-    await waitFor(() => expect(result.current.status.connection).toBe("live"))
+    expect(result.current.status.connection).toBe("live")
     expect(result.current.presence.me).toBeUndefined()
     expect(result.current.status.canPost).toBe(false)
     let kept = true
@@ -368,5 +649,6 @@ describe("useTeamspaceRoom", () => {
       kept = await result.current.send("Hello")
     })
     expect(kept).toBe(false)
+    expect(socket.said("room-post")).toEqual([])
   })
 })

@@ -17,6 +17,7 @@ vi.mock("@tanstack/react-start/server-entry", () => ({
 }))
 
 vi.mock("agents", () => ({
+  Agent: class {},
   getAgentByName: sdk.getAgentByName,
   routeAgentRequest: sdk.routeAgentRequest,
   getCurrentAgent: () => ({ connection: undefined }),

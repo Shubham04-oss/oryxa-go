@@ -17,6 +17,7 @@ vi.mock("@tanstack/react-start/server-entry", () => ({
 }))
 
 vi.mock("agents", () => ({
+  Agent: class {},
   getAgentByName: sdk.getAgentByName,
   routeAgentRequest: sdk.routeAgentRequest,
   getCurrentAgent: () => ({ connection: undefined }),
@@ -31,6 +32,7 @@ const env = {
   ORYXA_API_ORIGIN: "http://go.test",
   ThreadChatAgent: { idFromName: () => "thread-id" },
   SpecialistChatAgent: { idFromName: () => "specialist-id" },
+  TeamspaceRoomAgent: { idFromName: () => "room-id" },
 } as unknown as Env
 
 function json(body: unknown, status: number): Response {
@@ -46,7 +48,11 @@ function goError(status: number, code: string, message: string): Response {
 
 type RealtimeCase = {
   segment: string
-  binding: "ThreadChatAgent" | "SpecialistChatAgent"
+  binding: "ThreadChatAgent" | "SpecialistChatAgent" | "TeamspaceRoomAgent"
+  /** What a page may GET beneath it, besides the socket. */
+  reads: string[]
+  /** Whether a page may DELETE it. */
+  deletes: boolean
   /** A name the object's builder makes. */
   name: string
   /** Names it could not have made. */
@@ -65,6 +71,8 @@ const objects: RealtimeCase[] = [
   {
     segment: "thread-chat-agent",
     binding: "ThreadChatAgent",
+    reads: ["get-messages"],
+    deletes: true,
     name: "org_sim~thread_1",
     invalidNames: [
       "org_sim",
@@ -85,6 +93,8 @@ const objects: RealtimeCase[] = [
   {
     segment: "specialist-chat-agent",
     binding: "SpecialistChatAgent",
+    reads: ["get-messages"],
+    deletes: true,
     name: "org_sim~agt_Sa-l3s_x",
     invalidNames: [
       "org_sim",
@@ -105,6 +115,32 @@ const objects: RealtimeCase[] = [
     },
     foreignHeader: "X-Oryxa-Thread",
   },
+  {
+    segment: "teamspace-room-agent",
+    binding: "TeamspaceRoomAgent",
+    reads: [],
+    deletes: false,
+    name: "org_sim~tsp_Jixq-Qo1",
+    invalidNames: [
+      "org_sim",
+      "org_sim~",
+      "~tsp_launch",
+      "org_sim~tsp_launch~user-ada",
+      "org_sim%7Etsp_launch",
+      "org_sim~tsp%20launch",
+      "org.sim~tsp_launch",
+    ],
+    accessUrl:
+      "http://go.test/v1/organizations/org_sim/teamspaces/tsp_Jixq-Qo1",
+    accepted: () =>
+      json({ id: "tsp_Jixq-Qo1", is_member: true, status: "active" }, 200),
+    identity: {
+      "X-Oryxa-Cookie": cookie,
+      "X-Oryxa-Organization": "org_sim",
+      "X-Oryxa-Teamspace": "tsp_Jixq-Qo1",
+    },
+    foreignHeader: "X-Oryxa-Thread",
+  },
 ]
 
 /** The Worker's answer. A test's request has no `cf` properties; the Worker never reads them. */
@@ -122,6 +158,12 @@ async function errorOf(
 
 function pathOf(object: RealtimeCase, name = object.name) {
   return `${app}/agents/${object.segment}/${name}`
+}
+
+/** A plain GET the object serves: its first read, or, without one, the object itself. */
+function readPathOf(object: RealtimeCase) {
+  const [read] = object.reads
+  return read ? `${pathOf(object)}/${read}` : pathOf(object)
 }
 
 function socketRequest(url: string, headers: Record<string, string> = {}) {
@@ -183,16 +225,21 @@ describe.each(objects)("the $segment route", (object) => {
   })
 
   it("refuses a cross-site socket or DELETE by its Origin", async () => {
+    const deletes = object.deletes
+      ? [
+          deleteRequest(pathOf(object), { Origin: "https://evil.test" }),
+          new Request(pathOf(object), {
+            method: "DELETE",
+            headers: { Cookie: cookie },
+          }),
+        ]
+      : []
     for (const request of [
       socketRequest(pathOf(object), { Origin: "https://evil.test" }),
       new Request(pathOf(object), {
         headers: { Upgrade: "websocket", Cookie: cookie },
       }),
-      deleteRequest(pathOf(object), { Origin: "https://evil.test" }),
-      new Request(pathOf(object), {
-        method: "DELETE",
-        headers: { Cookie: cookie },
-      }),
+      ...deletes,
     ]) {
       const response = await send(request)
       expect(response.status).toBe(403)
@@ -204,9 +251,11 @@ describe.each(objects)("the $segment route", (object) => {
 
   it("requires a cookie", async () => {
     for (const request of [
-      new Request(`${pathOf(object)}/get-messages`),
+      new Request(readPathOf(object)),
       socketRequest(pathOf(object), { Cookie: "" }),
-      deleteRequest(pathOf(object), { Cookie: "" }),
+      ...(object.deletes
+        ? [deleteRequest(pathOf(object), { Cookie: "" })]
+        : []),
     ]) {
       const response = await send(request)
       expect(response.status).toBe(401)
@@ -215,24 +264,30 @@ describe.each(objects)("the $segment route", (object) => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it("allows only the socket, its reads, and DELETE of the conversation", async () => {
+  it("allows only the socket, its reads, and DELETE when it has one", async () => {
+    const allowed = object.deletes ? "GET, DELETE" : "GET"
     const refused: Array<[Request, string]> = [
       [
         new Request(pathOf(object), {
           method: "POST",
           headers: { Cookie: cookie },
         }),
-        "GET, DELETE",
+        allowed,
       ],
       [
         new Request(pathOf(object), {
           method: "PUT",
           headers: { Cookie: cookie },
         }),
-        "GET, DELETE",
+        allowed,
       ],
-      [deleteRequest(`${pathOf(object)}/get-messages`), "GET"],
-      [socketRequest(`${pathOf(object)}/get-messages`), "GET"],
+      ...object.reads.flatMap((read): Array<[Request, string]> => [
+        [deleteRequest(`${pathOf(object)}/${read}`), "GET"],
+        [socketRequest(`${pathOf(object)}/${read}`), "GET"],
+      ]),
+      ...(object.deletes
+        ? []
+        : [[deleteRequest(pathOf(object)), "GET"] as [Request, string]]),
     ]
     for (const [request, allow] of refused) {
       const response = await send(request)
@@ -246,6 +301,9 @@ describe.each(objects)("the $segment route", (object) => {
     for (const path of [
       `${pathOf(object)}/purge`,
       `${pathOf(object)}/get-messages/extra`,
+      ...(object.reads.includes("get-messages")
+        ? []
+        : [`${pathOf(object)}/get-messages`]),
     ]) {
       const response = await send(
         new Request(path, { headers: { Cookie: cookie } })
@@ -258,7 +316,7 @@ describe.each(objects)("the $segment route", (object) => {
 
   it("asks Go with the member's cookie before routing", async () => {
     const response = await send(
-      new Request(`${pathOf(object)}/get-messages`, {
+      new Request(readPathOf(object), {
         headers: { Cookie: cookie },
       })
     )
@@ -340,12 +398,12 @@ describe.each(objects)("the $segment route", (object) => {
     expect(routedEnv).toBe(env)
   })
 
-  it("routes the stored transcript's GET to the object", async () => {
+  it("routes a page's GET beside the socket to the object", async () => {
     sdk.routeAgentRequest.mockResolvedValueOnce(
       json([{ id: "user_1", role: "user", parts: [] }], 200)
     )
     const response = await send(
-      new Request(`${pathOf(object)}/get-messages`, {
+      new Request(readPathOf(object), {
         headers: { Cookie: cookie },
       })
     )
@@ -354,7 +412,7 @@ describe.each(objects)("the $segment route", (object) => {
     ])
     const [routed] = sdk.routeAgentRequest.mock.calls[0] as [Request]
     expect(new URL(routed.url).pathname).toBe(
-      `/agents/${object.segment}/${object.name}/get-messages`
+      new URL(readPathOf(object)).pathname
     )
   })
 
@@ -503,10 +561,81 @@ describe("the specialist chat", () => {
   })
 })
 
+describe("the teamspace room", () => {
+  const roomPath = `${app}/agents/teamspace-room-agent/org_sim~tsp_launch`
+  const goTeamspace =
+    "http://go.test/v1/organizations/org_sim/teamspaces/tsp_launch"
+
+  it("is only for the teamspace's team: a manager who is not on it is kept out", async () => {
+    fetchMock.mockImplementation(async () =>
+      json(
+        {
+          id: "tsp_launch",
+          is_member: false,
+          can_manage: true,
+          status: "active",
+        },
+        200
+      )
+    )
+    for (const request of [
+      socketRequest(roomPath),
+      new Request(roomPath, { headers: { Cookie: cookie } }),
+    ]) {
+      const response = await send(request)
+      expect(response.status).toBe(403)
+      expect(await errorOf(response)).toEqual({
+        code: "forbidden",
+        message: "Only the teamspace's team can open its room.",
+      })
+    }
+    const [url] = fetchMock.mock.calls[0] as [URL]
+    expect(String(url)).toBe(goTeamspace)
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("opens for a paused teamspace: the room itself tells its sockets it is paused", async () => {
+    fetchMock.mockResolvedValue(
+      json({ id: "tsp_launch", is_member: true, status: "disabled" }, 200)
+    )
+    expect((await send(socketRequest(roomPath))).status).toBe(200)
+    expect(sdk.routeAgentRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it("passes on Go's 404 for a teamspace the member is not on, or one deleted", async () => {
+    fetchMock.mockResolvedValue(
+      goError(404, "not_found", "teamspace not found")
+    )
+    const response = await send(
+      new Request(roomPath, { headers: { Cookie: cookie } })
+    )
+    expect(response.status).toBe(404)
+    expect(await errorOf(response)).toEqual({
+      code: "not_found",
+      message: "teamspace not found",
+    })
+  })
+
+  it("reports Go accepting with something that is not a teamspace as a bad gateway", async () => {
+    fetchMock.mockResolvedValue(new Response("<html>ok</html>"))
+    const response = await send(socketRequest(roomPath))
+    expect(response.status).toBe(502)
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("has no DELETE: Go deletes the room with its teamspace", async () => {
+    const response = await send(deleteRequest(roomPath))
+    expect(response.status).toBe(405)
+    expect(response.headers.get("Allow")).toBe("GET")
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(sdk.getAgentByName).not.toHaveBeenCalled()
+  })
+})
+
 describe("paths the table does not hold", () => {
   it("answers 404 for an object it does not route, and serves the rest of the app", async () => {
     const unknown = await send(
-      new Request(`${app}/agents/teamspace-room-agent/org_sim~space_1`, {
+      new Request(`${app}/agents/direct-message-agent/org_sim~user_1~user_2`, {
         headers: { Cookie: cookie },
       })
     )

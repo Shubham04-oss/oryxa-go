@@ -24,7 +24,7 @@ conversation) live only in the Durable Object's SQLite.
 |---|---|---|---|---|
 | `ThreadChatAgent` | `org~thread` | the member | `POST …/threads/{id}/runs` (SSE) | DO transcript; Go thread canonical |
 | `SpecialistChatAgent` | `org~agent` | the member, own specialists only | `POST …/agents/{id}/runs` (SSE), with the `thread_id` the object keeps | DO transcript of the current conversation; Go threads canonical |
-| teamspace room | `org~teamspace` | the teamspace's members | `…/teamspaces/{id}/messages`, `/catchup` | Go room canonical; DO live + presence |
+| `TeamspaceRoomAgent` | `org~teamspace` | the teamspace's team | `…/teamspaces/{id}/messages` (read and post), `/catchup`, as each member | Go room canonical; DO keeps the recent window, fan-out, live presence |
 | side conversation | `org~teamspace~userA~userB` (ids sorted) | those two members | agent requests: create, decide, respond | DO SQLite for human messages; Go for agent work |
 | DM | `org~userA~userB` (ids sorted) | those two members | none | DO SQLite only |
 
@@ -69,6 +69,85 @@ through that object, so the object holds one conversation at a time:
   input, so a message it would refuse would leave an empty conversation
   behind.
 
+## Teamspace rooms
+
+`TeamspaceRoomAgent` (`src/teamspace-room-agent.ts`) is a teamspace's room,
+one object per teamspace, shared by everyone on its team who has the room
+open; the page's side is `useTeamspaceRoom`, whose `{ messages, send,
+presence, status }` is all a page sees. Go keeps the room: who may read it,
+what was said, and who is present. The object never decides any of that; it
+reads and posts as members, with each member's own cookie (kept in their
+socket's attachment, so hibernation keeps it), and fans out what Go
+answers. What travels on the socket is in `src/lib/rooms/room-agent.ts`.
+
+- **Reading.** A read is `GET …/messages?after=` as one member. Go returns
+  the same messages to every member (`Read` filters nobody), so what one
+  member's read returns goes to every socket, each message once, by `seq`.
+  The object keeps the latest 200 messages and the highest `seq` read
+  through in its storage (SQLite-backed KV), and a socket that opens is
+  sent that window once the room has been read. A room with nothing held
+  starts from `catchup`, which says where the room ends.
+- **Posting.** A post (`room-post`, with the page's own id) goes to Go as
+  the socket's member: the author is whoever that cookie is, whatever the
+  page sends. `POST …/messages` answers only once the room's agents have (a
+  real-model post took 96 s), while Go records the member's message and each
+  reply as they happen. So while a post is out the object reads every
+  second until the member's message is recorded, then every couple of
+  seconds, and each reply reaches every socket as Go records it. The
+  answer is merged by `seq` and sent to all of the author's sockets
+  (`room-posted`); a socket that reopens is told in its snapshot which of
+  its member's posts are still out and what became of those that finished
+  in the last two minutes, so a page never waits on an answer it missed.
+  The page keeps its "Sending…" until a read shows the message, as before.
+- **Scheduling.** Reads are woken by the SDK's schedule (an alarm), never a
+  timer, so the object hibernates between them. While a post is out, and
+  for two minutes after one, the room is read every couple of seconds;
+  otherwise every 12 seconds while at least one tab is visible; not at all
+  once none is. Only one tick is set at a time, never less than a second
+  after the last. The SDK keeps a schedule's time in whole seconds, rounded
+  down, so a tick can run up to a second early; a read due by then is read,
+  or the tick would set itself again for the same second and spin.
+- **Presence.** Go counts a member present for 90 s after their last read,
+  catch-up or post (`Watch`, `presentWithin`), and a present member's agent
+  does not answer over them. So the object reads Go as each member with at
+  least one visible tab at least every 30 s, and never as a member whose
+  tabs are all hidden or closed: the page says `room-visibility` when its
+  socket opens and whenever its tab is hidden or shown, and a socket is
+  treated as hidden until it says. A member coming back is read at once.
+  A hidden tab that opens is sent what the room holds without a read, or
+  waits for somebody who is looking. Who has the room open and visible
+  right now is the synced state's `here` (by user id, learned from
+  `GET /v1/auth/me` with the socket's cookie), beside Go's `seats`; the page
+  counts a person present when either says so, so arrival shows at once and
+  leaving shows when Go's window lapses, which is also when their agent may
+  answer for them.
+- **Refusals**, per member: a 401 on a member's read or post tells that
+  cookie's sockets `session_expired`, and the object never uses the cookie
+  again (the page refreshes the session and reopens its socket; a post
+  refused that way goes again once). A 403 or 404 on a read, or a 404 on a
+  post, tells the member's sockets `gone` and closes them (code 4404, which
+  the SDK does not reopen); a 403 on a post is a member without a seat, not
+  gone. Go answers 404 to everyone once a teamspace is deleted, so the other
+  members here are asked for the teamspace itself (which marks nobody
+  present); once none of them may open it, the object clears what it
+  holds. A paused room (400) tells every socket `paused`, and a server
+  without rooms (503 `rooms_unavailable`) `unavailable`; either stops the
+  reads until a member's read succeeds again, which happens when somebody
+  comes back to the room. Any other failure tells the sockets `error` once,
+  and the reads go on.
+- **Letting go.** The object is a cache of Go's room: ten minutes after the
+  last socket closes, it clears what it holds, and the next socket reads
+  the room afresh. Go deletes a room with its teamspace and tells nobody,
+  so this is also how a deleted teamspace's messages leave the object.
+- **A socket that will not open.** A browser is never told why an upgrade
+  was refused, so when the socket closes without the page closing it, the
+  page asks the Worker (`checkTeamspaceRoom`: a plain GET of the object,
+  which makes the socket's own check with Go and, when it lets the member
+  in, reaches the object's 204): 401 ends the session's room, 403 or 404 is
+  gone, and anything else leaves the socket to keep trying. There is no
+  second transport behind the socket: a page never reads or posts to Go's
+  room itself.
+
 ## Side conversations
 
 On a teamspace page the left panel is the group room. The right panel's
@@ -103,14 +182,16 @@ any other failure answers 502, and a Go it cannot reach 503.
 |---|---|
 | `ThreadChatAgent` | `GET …/threads/{thread}` |
 | `SpecialistChatAgent` | `GET …/agents/{agent}`: Go loads only the owner's agents (404 otherwise), and it must be a specialist (the primary agent's chat is its threads) |
-| teamspace room | `GET …/teamspaces/{id}`, member of it |
+| `TeamspaceRoomAgent` | `GET …/teamspaces/{id}` with `is_member`: Go shows a teamspace to a manager who is not on its team too, and would let them read the room and count as present in it, but the room is the team's (no DELETE: Go deletes the room with its teamspace) |
 | side conversation | the teamspace check, the caller is one of the two, the other is a member of it |
 | DM | the caller is one of the two (`GET /v1/auth/me`), both are members of the organization |
 
 ## Lifecycle
 
 - An agent run interrupted by a Durable Object restart is never replayed;
-  the next connect reads what Go stored.
+  the next connect reads what Go stored. A room post cut off the same way
+  is not sent again either: the page learns from its reopened socket that
+  the room does not know it, and keeps the draft unless the message landed.
 - Deleting a thread deletes it in Go, then purges its `ThreadChatAgent`.
   A specialist chat can only start over (Go keeps its conversations).
   Deleting a specialist in Go leaves its chat's transcript behind,
