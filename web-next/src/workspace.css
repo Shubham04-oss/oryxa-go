@@ -342,6 +342,9 @@
 }
 .workspace-composer-send:hover:not(:disabled) { background: #fff; }
 .workspace-composer-send:disabled { cursor: default; opacity: .45; }
+/* A control inside the pill before the field (a side conversation's "who
+   this goes to") sits as far in as the send button does on the right. */
+.workspace-composer[data-leading="true"] { padding-left: 6px; }
 
 .workspace-middle { display: flex; flex-direction: column; background: var(--workspace-base); }
 .workspace-header {

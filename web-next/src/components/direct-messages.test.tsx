@@ -238,11 +238,9 @@ const panelPeople = peopleOf([
 function renderPanel({
   inbox,
   expanded = true,
-  onOpenSide = vi.fn(),
 }: {
   inbox: Inbox
   expanded?: boolean
-  onOpenSide?: (name: string) => void
 }) {
   // The Agents tab reads the member's agents; nobody answers here.
   mockApi(() => undefined)
@@ -256,7 +254,6 @@ function renderPanel({
         viewerId,
         inbox,
         people: panelPeople,
-        onOpenSide,
       }}
     />
   )
@@ -620,8 +617,7 @@ describe("The DMs tab", () => {
   const inbox: Inbox = { conversations, unreadTotal: 13, status: "live" }
 
   it("lists each conversation: who, the last message, when, and what is unread; a side conversation with its teamspace", () => {
-    const onOpenSide = vi.fn()
-    renderPanel({ inbox, onOpenSide })
+    renderPanel({ inbox })
     fireEvent.click(screen.getByRole("tab", { name: "DMs, 13 unread" }))
 
     const list = screen.getByRole("list", { name: "Conversations" })
@@ -645,10 +641,16 @@ describe("The DMs tab", () => {
         ?.textContent
     ).toBe("See you at 3")
 
+    // A side conversation opens in the tab too (side-conversations.test.tsx).
     fireEvent.click(rows[2])
-    expect(onOpenSide).toHaveBeenCalledWith(
-      `${org}~tsp_launch~user-member~user-owen`
-    )
+    expect(
+      screen.getByRole("region", {
+        name: "Side conversation with Owen Park in Launch room",
+      })
+    ).toBeTruthy()
+    expect(
+      roomSockets.named(`${org}~tsp_launch~user-member~user-owen`)
+    ).toHaveLength(1)
   })
 
   it("opens a conversation in its compact layout, and goes back to the list with focus on its row", () => {
@@ -751,7 +753,6 @@ describe("The DMs tab", () => {
             viewerId,
             inbox: value,
             people: panelPeople,
-            onOpenSide: vi.fn(),
           }}
         />
       </QueryClientProvider>
@@ -788,7 +789,6 @@ describe("The DMs tab", () => {
             viewerId,
             inbox: value,
             people: panelPeople,
-            onOpenSide: vi.fn(),
           }}
         />
       </QueryClientProvider>

@@ -249,6 +249,11 @@ export function WorkspaceShell({
   const isFocused = Boolean(
     agentWork || (teamspaces.openId && selectedOrganization)
   )
+  // The teamspace on the page: the agent panel offers its teammates.
+  const pageTeamspaceId =
+    !agentWork && selectedOrganization && teamspaces.openId
+      ? teamspaces.openId
+      : undefined
   // The DM in the main canvas, while People is on screen.
   const canvasPeerId =
     section === "people" && dmOrganizationId && viewerId ? dmPeerId : null
@@ -341,15 +346,6 @@ export function WorkspaceShell({
   function showAllConversations() {
     expandAgentPanel()
     setTabRequest({ tab: "dms" })
-  }
-
-  /**
-   * A side conversation picked in the DMs list. Its view (a teammate, both
-   * agents, in a teamspace: REALTIME.md, "Side conversations") is built
-   * with the teamspace page and wires in here.
-   */
-  function openSideConversation(name: string) {
-    void name
   }
 
   function openWork(target: AgentsFocusTarget) {
@@ -766,15 +762,9 @@ export function WorkspaceShell({
         chatRequest={chatRequest}
         tabRequest={tabRequest}
         directMessages={
-          viewerId
-            ? {
-                viewerId,
-                inbox,
-                people: dmPeople,
-                onOpenSide: openSideConversation,
-              }
-            : undefined
+          viewerId ? { viewerId, inbox, people: dmPeople } : undefined
         }
+        teamspaceId={pageTeamspaceId}
       />
       {settingsOpen && (
         <WorkspaceSettings

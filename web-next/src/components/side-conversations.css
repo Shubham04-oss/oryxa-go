@@ -1,0 +1,371 @@
+/* Side conversations (DESIGN.md §3, "Side conversations"): a teamspace's
+   teammates in the agent panel's Agents tab, and the conversation itself,
+   which is a DM's compact layout (direct-messages.css) with agents'
+   messages, request cards, quiet lines and a composer that says whom a
+   message goes to. */
+
+/* The Agents tab keeps the member's own agents while a side conversation
+   is open in their place. */
+.workspace-agents-home { display: contents; }
+.workspace-agents-home[hidden] { display: none; }
+
+/* A teamspace's teammates, below the member's own agents. */
+.workspace-side-teammates {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 40%;
+  min-height: 0;
+  margin: 2px 0 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: #444 transparent;
+  scrollbar-width: thin;
+}
+.workspace-side-teammates:focus { outline: none; }
+.workspace-side-teammates-heading {
+  margin: 0;
+  padding: 6px 2px 2px;
+  color: #858585;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.workspace-side-teammates-note {
+  margin: 0 2px 4px;
+  color: #8d8d8d;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.workspace-side-teammate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.workspace-side-teammate { display: flex; flex-direction: column; gap: 1px; padding-bottom: 5px; }
+.workspace-side-teammate-main {
+  --presence-ring: var(--workspace-base, #111);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: #e3e3e3;
+  text-align: left;
+}
+.workspace-side-teammate-main:hover { --presence-ring: #1d1d1d; background: #1d1d1d; color: #fff; }
+.workspace-side-teammate-main .workspace-avatar { width: 28px; height: 28px; }
+.workspace-side-teammate-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-side-teammate-main > svg { flex: none; color: #767676; }
+.workspace-side-teammate[data-unread="true"] .workspace-side-teammate-name { color: #fff; font-weight: 650; }
+.workspace-side-teammate-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  /* Under the name: the row's padding, its avatar and gap. */
+  padding: 0 8px 0 46px;
+  list-style: none;
+}
+.workspace-side-teammate-agents li { min-width: 0; max-width: 100%; }
+.workspace-side-teammate-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  height: 24px;
+  padding: 0 8px 0 3px;
+  border: 1px solid #303030;
+  border-radius: 999px;
+  background: transparent;
+  color: #c9c9c9;
+  font-size: 11px;
+}
+.workspace-side-teammate-agent:hover { border-color: #454545; background: #1d1d1d; color: #fff; }
+.workspace-side-teammate-agent .workspace-avatar { width: 18px; height: 18px; }
+.workspace-side-teammate-agent span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-side-teammate-agent small { flex: none; color: #7f7f7f; font-size: 10px; }
+
+/* The conversation's bar: the teammate, the teamspace, the agents here. */
+.workspace-side-bar .workspace-dm-bar-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-side-agents {
+  display: flex;
+  flex: none;
+  align-items: center;
+  margin: 0;
+  padding: 0 0 0 4px;
+  list-style: none;
+}
+.workspace-side-agents li {
+  display: inline-flex;
+  margin-left: -6px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px var(--workspace-base, #111);
+}
+.workspace-side-agents li:first-child { margin-left: 0; }
+.workspace-dm-bar .workspace-side-agents .workspace-avatar { width: 22px; height: 22px; }
+.workspace-side-agents-more {
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 5px;
+  background: #262626;
+  color: #a5a5a5;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+/* A person's message that asked their own agent. */
+.workspace-side-asked { margin: 0 4px 2px; color: #858585; font-size: 10px; line-height: 1.4; }
+
+/* An agent's message: avatar, whose it is, its Markdown. */
+.workspace-side-agent { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.workspace-side-agent > .workspace-avatar { flex: none; width: 26px; height: 26px; }
+.workspace-side-agent-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  color: #dedede;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.workspace-side-agent-meta {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  margin: 0;
+  color: #858585;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.workspace-side-agent-meta strong {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  color: #d8d8d8;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+.workspace-side-agent-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.workspace-side-agent-meta time { flex: none; margin-left: 6px; color: #6f6f6f; font-size: 10px; }
+.workspace-side-agent .workspace-agent-note,
+.workspace-side-agent .workspace-agent-error { margin: 0; }
+.workspace-side-via { margin: 2px 0 0; color: #858585; font-size: 11px; line-height: 1.4; }
+.workspace-side-confirmations { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+
+/* A request to an agent: who asked which agent what, and where it stands. */
+.workspace-side-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid #333;
+  border-radius: 12px;
+  background: #1b1b1b;
+}
+.workspace-side-card:focus { outline: none; }
+.workspace-side-card:focus-visible { outline: 2px solid #d6d6d6; outline-offset: 2px; }
+.workspace-side-card-head { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.workspace-side-card-head .workspace-avatar { flex: none; width: 26px; height: 26px; }
+.workspace-side-card-title {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+}
+.workspace-side-card-title strong {
+  color: #ececec;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.workspace-side-card-title span { color: #8d8d8d; font-size: 11px; line-height: 1.4; }
+.workspace-side-card-head time { flex: none; color: #6f6f6f; font-size: 10px; line-height: 1.8; }
+.workspace-side-card-task {
+  margin: 0;
+  color: #d2d2d2;
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.workspace-side-card-task[data-folded="true"] {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+.workspace-side-card > .workspace-agent-text-button { align-self: flex-start; margin-top: -4px; }
+.workspace-side-card-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  color: #a9a9a9;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.workspace-side-card-status svg { flex: none; }
+.workspace-side-card[data-tone="done"] .workspace-side-card-status svg { color: #7fcf98; }
+.workspace-side-card[data-tone="ended"] .workspace-side-card-status { color: #8d8d8d; }
+.workspace-side-card[data-tone="failed"] .workspace-side-card-status { color: #e4aaa6; }
+.workspace-side-card-decide {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.workspace-side-card-decide .workspace-agent-confirmation-actions { margin-left: auto; }
+.workspace-side-card-note { flex: 1 1 100%; }
+.workspace-side-card-note input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  background: #242424;
+  color: #f1f1f1;
+  font: inherit;
+  font-size: 12px;
+}
+.workspace-side-card-note input::placeholder { color: #8a8a8a; }
+.workspace-side-card-note input:focus-visible { border-color: #777; outline: none; }
+.workspace-side-card-note input:disabled { opacity: .6; }
+
+/* A request that ended without a result: one quiet line. */
+.workspace-side-status {
+  margin: 0;
+  padding: 0 12px;
+  color: #858585;
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.workspace-side-status time { color: #6a6a6a; font-size: 10px; white-space: nowrap; }
+
+/* Whom a message goes to: a pill inside the composer, and its menu. */
+.workspace-side-target { position: relative; display: flex; flex: none; }
+.workspace-side-target-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 116px;
+  height: 32px;
+  padding: 0 8px 0 4px;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  background: #2c2c2c;
+  color: #e6e6e6;
+  font-size: 12px;
+  font-weight: 560;
+}
+.workspace-side-target-button .workspace-avatar { width: 22px; height: 22px; }
+.workspace-side-target-button svg { flex: none; color: #9a9a9a; }
+.workspace-side-target-button:hover:not(:disabled),
+.workspace-side-target-button[aria-expanded="true"] { border-color: #5a5a5a; background: #353535; color: #fff; }
+.workspace-side-target-button:disabled { cursor: default; opacity: .55; }
+.workspace-side-target-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-side-target-waiting {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #3a3a3a;
+  animation: workspace-agent-pulse 1.6s ease-in-out infinite;
+}
+.workspace-side-target-menu {
+  position: absolute;
+  z-index: 8;
+  bottom: calc(100% + 12px);
+  /* Level with the composer's own left edge. */
+  left: -6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: min(300px, calc(100vw - 56px));
+  max-height: min(320px, 55vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid #393939;
+  border-radius: 14px;
+  background: #242424;
+  box-shadow: 0 12px 34px #0008;
+}
+.workspace-side-target-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #dcdcdc;
+  text-align: left;
+}
+.workspace-side-target-option:hover,
+.workspace-side-target-option:focus-visible { background: #343434; color: #fff; }
+.workspace-shell .workspace-side-target-option:focus-visible { outline-offset: -2px; }
+.workspace-side-target-option .workspace-avatar { width: 26px; height: 26px; }
+.workspace-side-target-option > svg { flex: none; color: #d6d6d6; }
+.workspace-side-target-copy { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
+.workspace-side-target-copy strong {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-side-target-copy small { color: #8f8f8f; font-size: 11px; line-height: 1.35; }
+
+@media (max-width: 800px) {
+  /* iOS zooms into a field under 16px when it gains focus. */
+  .workspace-side-card-note input { font-size: 16px; }
+  .workspace-side-target-option { min-height: 48px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-side-target-waiting { animation: none; }
+}

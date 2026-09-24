@@ -11,8 +11,11 @@ import { conversationPreview, listTime } from "./direct-message-format"
 import { filterPeople, personContext } from "./direct-message-people"
 import type { DmPeople } from "./direct-message-people"
 import { usePeerOnline } from "./direct-message-presence"
+import { SideConversationView, emptySideDraft } from "./side-conversation"
+import type { SideDraft } from "./side-conversation"
 import { fullTime } from "./teamspace-format"
 import type { Conversation, Inbox } from "@/lib/dms"
+import { parseSideConversationName, peerIn } from "@/lib/dms/names"
 import { cn } from "@/lib/utils"
 
 /** How many of the latest DMs Team's left navigation shows (DESIGN.md §2). */
@@ -163,18 +166,26 @@ function RecentConversation({
   )
 }
 
-/** What the DMs tab shows: its list, the picker for a new message, or one conversation. */
-export type DmPanelView = { peerId: string | null; picking: boolean }
+/**
+ * What the DMs tab shows: its list, the picker for a new message, one DM
+ * (`peerId`), or one side conversation (`side`, its object's name).
+ */
+export type DmPanelView = {
+  peerId: string | null
+  picking: boolean
+  side?: string
+}
 
 export const dmPanelList: DmPanelView = { peerId: null, picking: false }
 
-type FocusTarget = { peerId: string } | "new" | null
+type FocusTarget = { peerId: string } | { side: string } | "new" | null
 
 /**
  * The agent panel's DMs tab (DESIGN.md §2): the member's conversations,
- * "New message" to pick anyone in the organization, and a conversation in
- * its compact layout with the way back to the list. Its place (`view`) and
- * drafts are the panel's, so they outlast the panel collapsing.
+ * "New message" to pick anyone in the organization, and a conversation (a
+ * DM, or a side conversation in a teamspace) in its compact layout with the
+ * way back to the list. Its place (`view`) and drafts are the panel's, so
+ * they outlast the panel collapsing.
  */
 export function DirectMessagesTab({
   organizationId,
@@ -185,8 +196,9 @@ export function DirectMessagesTab({
   onViewChange,
   drafts,
   onDraftChange,
+  sideDrafts,
+  onSideDraftChange,
   onComposingChange,
-  onOpenSide,
 }: {
   organizationId: string
   viewerId: string
@@ -196,9 +208,10 @@ export function DirectMessagesTab({
   onViewChange: (view: DmPanelView) => void
   drafts: Partial<Record<string, string>>
   onDraftChange: (peerId: string, draft: string) => void
+  /** Side conversations' drafts, by the conversation's name. */
+  sideDrafts: Partial<Record<string, SideDraft>>
+  onSideDraftChange: (name: string, draft: SideDraft) => void
   onComposingChange?: (composing: boolean) => void
-  /** A side conversation, picked from the list; its view is the teamspace's (REALTIME.md, "Side conversations"). */
-  onOpenSide: (name: string) => void
 }) {
   const [focusTarget, setFocusTarget] = useState<FocusTarget>(null)
   // The member opened this conversation just now (not the tab returning to it).
@@ -209,6 +222,63 @@ export function DirectMessagesTab({
     onViewChange({ peerId, picking: false })
   }
 
+  function openSide(name: string) {
+    setPicked(true)
+    onViewChange({ peerId: null, picking: false, side: name })
+  }
+
+  if (view.side) {
+    const name = view.side
+    // The conversation's object needs only its ids, whichever page is open.
+    const ids = parseSideConversationName(name)
+    const peerId = ids ? peerIn(ids, viewerId) : undefined
+    const peer = peerId ? people.peer(peerId) : undefined
+    const back = () => {
+      setPicked(false)
+      setFocusTarget({ side: name })
+      onViewChange(dmPanelList)
+    }
+    if (!ids || !peerId) {
+      return (
+        <p className="workspace-agent-empty" role="status">
+          This conversation isn't available.{" "}
+          <button
+            className="workspace-agent-text-button"
+            type="button"
+            onClick={back}
+          >
+            Back to conversations
+          </button>
+        </p>
+      )
+    }
+    if (!peer) {
+      return (
+        <p className="workspace-agent-empty" role="status">
+          Loading the conversation…
+        </p>
+      )
+    }
+    return (
+      <SideConversationView
+        key={name}
+        organizationId={organizationId}
+        viewerId={viewerId}
+        teamspaceId={ids.teamspaceId}
+        peer={peer}
+        teamspaceName={
+          inbox.conversations.find((conversation) => conversation.name === name)
+            ?.teamspaceName
+        }
+        draft={sideDrafts[name] ?? emptySideDraft}
+        onDraftChange={(draft) => onSideDraftChange(name, draft)}
+        onComposingChange={onComposingChange}
+        autoFocus={picked}
+        backLabel="Back to conversations"
+        onBack={back}
+      />
+    )
+  }
   if (view.peerId) {
     const peerId = view.peerId
     const peer = people.peer(peerId)
@@ -258,7 +328,7 @@ export function DirectMessagesTab({
       focusTarget={focusTarget}
       onFocused={() => setFocusTarget(null)}
       onOpen={open}
-      onOpenSide={onOpenSide}
+      onOpenSide={openSide}
       onNew={() => onViewChange({ peerId: null, picking: true })}
     />
   )
@@ -290,14 +360,17 @@ function InboxList({
   // Back from a conversation or the picker, focus returns to where it left.
   useEffect(() => {
     if (!focusTarget) return
+    const rows = Array.from(
+      listRef.current?.querySelectorAll<HTMLButtonElement>(
+        ".workspace-dm-row"
+      ) ?? []
+    )
     const row =
       focusTarget === "new"
         ? undefined
-        : Array.from(
-            listRef.current?.querySelectorAll<HTMLButtonElement>(
-              "[data-dm-peer]"
-            ) ?? []
-          ).find((button) => button.dataset.dmPeer === focusTarget.peerId)
+        : "side" in focusTarget
+          ? rows.find((button) => button.dataset.dmSide === focusTarget.side)
+          : rows.find((button) => button.dataset.dmPeer === focusTarget.peerId)
     ;(row ?? newRef.current)?.focus()
     onFocused()
   }, [focusTarget, onFocused])
@@ -408,6 +481,7 @@ function InboxRow({
       type="button"
       data-unread={unread > 0 ? "true" : undefined}
       data-dm-peer={side ? undefined : conversation.peerId}
+      data-dm-side={side ? conversation.name : undefined}
       aria-label={unread > 0 ? `${label}, ${unread} unread` : label}
       aria-describedby={previewId}
       onClick={() =>

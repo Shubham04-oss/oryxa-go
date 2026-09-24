@@ -22,6 +22,7 @@ export function AgentComposer({
   streaming = false,
   onStop,
   status,
+  leading,
   onFocus,
   onBlur,
 }: {
@@ -36,6 +37,8 @@ export function AgentComposer({
   streaming?: boolean
   onStop?: () => void
   status?: ReactNode
+  /** A control inside the pill, before the field: a side conversation's "who this goes to". */
+  leading?: ReactNode
   onFocus?: () => void
   onBlur?: () => void
 }) {
@@ -105,7 +108,9 @@ export function AgentComposer({
       <div
         className="workspace-composer workspace-agent-composer-field"
         data-multiline={multiline ? "true" : "false"}
+        data-leading={leading ? "true" : undefined}
       >
+        {leading}
         <textarea
           ref={textareaRef}
           rows={1}

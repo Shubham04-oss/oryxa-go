@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import type { ComponentType, KeyboardEvent } from "react"
+import type { ComponentType, KeyboardEvent, ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import {
   ArrowLeft,
@@ -14,10 +14,14 @@ import { AgentComposer } from "./agent-composer"
 import { AgentConversation } from "./agent-conversation"
 import { AgentSwitcher, FALLBACK_AGENT_NAME } from "./agent-switcher"
 import type { AgentSwitcherEntry } from "./agent-switcher"
-import { countLabel } from "./direct-message-format"
+import { countLabel, firstName } from "./direct-message-format"
 import { DirectMessagesTab, dmPanelList } from "./direct-message-inbox"
 import type { DmPanelView } from "./direct-message-inbox"
 import type { DmPeople } from "./direct-message-people"
+import { SideConversationView, emptySideDraft } from "./side-conversation"
+import type { SideDraft } from "./side-conversation"
+import type { Teammate } from "./side-conversation-format"
+import { TeamspaceTeammates } from "./side-conversation-teammates"
 import { SpecialistChat } from "./specialist-chat"
 import type { ChatSpecialist } from "./specialist-chat"
 import { IdentityAvatar } from "./workspace-avatar"
@@ -27,6 +31,8 @@ import type { ManagedAgent } from "@/lib/agents/managed-agents"
 import { primaryAgent, specialistAgents } from "@/lib/agents/policy"
 import { agentsQueryOptions } from "@/lib/agents/queries"
 import type { Inbox } from "@/lib/dms"
+import { isNameId, sideConversationName } from "@/lib/dms/names"
+import { teamspaceQueryOptions } from "@/lib/teamspaces/queries"
 import { cn } from "@/lib/utils"
 
 export type AgentPanelTab = "agents" | "dms" | "teams"
@@ -42,9 +48,10 @@ export type PanelDirectMessages = {
   viewerId: string
   inbox: Inbox
   people: DmPeople
-  /** A side conversation picked from the list; the teamspace's side-conversation view wires in here. */
-  onOpenSide: (name: string) => void
 }
+
+/** A side conversation open in the Agents tab: with whom (as the teamspace names them), in which teamspace. */
+type OpenSide = { teamspaceId: string; peerId: string; peerName: string }
 
 /**
  * The shell asking the panel to chat with one of the member's specialists
@@ -85,6 +92,7 @@ export function WorkspaceAgentPanel({
   chatRequest,
   tabRequest,
   directMessages,
+  teamspaceId,
 }: {
   expanded: boolean
   onExpand: () => void
@@ -97,6 +105,11 @@ export function WorkspaceAgentPanel({
   tabRequest?: AgentPanelTabRequest | null
   /** The member's direct messages; without them (no session) the DMs tab says what it will hold. */
   directMessages?: PanelDirectMessages
+  /**
+   * The teamspace the page shows, when it shows one: the Agents tab then
+   * offers its teammates, each opening a side conversation.
+   */
+  teamspaceId?: string
 }) {
   const [tab, setTab] = useState<AgentPanelTab>("agents")
   // Whom the Agents tab talks to: one of the member's specialists by id,
@@ -104,10 +117,20 @@ export function WorkspaceAgentPanel({
   const [agentId, setAgentId] = useState<string | null>(null)
   const [answeredRequest, setAnsweredRequest] =
     useState<AgentPanelChatRequest | null>(null)
+  // A side conversation open in the Agents tab, in place of the member's
+  // own agents until they go back; its drafts (by the conversation's name,
+  // shared with the DMs tab) outlast it.
+  const [agentsSide, setAgentsSide] = useState<OpenSide | null>(null)
+  const [sidePicked, setSidePicked] = useState(false)
+  const [sideReturnTo, setSideReturnTo] = useState<string | null>(null)
+  const [sideDrafts, setSideDrafts] = useState<
+    Partial<Record<string, SideDraft>>
+  >({})
   if (chatRequest && chatRequest !== answeredRequest) {
     setAnsweredRequest(chatRequest)
     setTab("agents")
     setAgentId(chatRequest.agentId)
+    setAgentsSide(null)
   }
   // The DMs tab's place (its list, the picker, or a conversation) and its
   // drafts, kept here so they outlast the panel collapsing.
@@ -131,6 +154,14 @@ export function WorkspaceAgentPanel({
   const agents = useQuery({
     ...agentsQueryOptions(organizationId ?? ""),
     enabled: Boolean(organizationId),
+  })
+  const viewerId = directMessages?.viewerId
+  // On a teamspace page, its teammates: read as the page reads it (one
+  // query, shared with the focused view).
+  const offersTeammates = Boolean(organizationId && viewerId && teamspaceId)
+  const space = useQuery({
+    ...teamspaceQueryOptions(organizationId ?? "", teamspaceId ?? ""),
+    enabled: offersTeammates,
   })
   const primary = agents.data ? primaryAgent(agents.data) : undefined
   const agentName = primary?.name
@@ -165,6 +196,46 @@ export function WorkspaceAgentPanel({
   useEffect(() => {
     if (tabRequest) tabRefs.current[tabRequest.tab]?.focus()
   }, [tabRequest])
+
+  /** The side conversation's object name with `peerId` in `teamspace`, when the ids can make one. */
+  function sideName(teamspace: string, peerId: string): string | undefined {
+    if (
+      !isNameId(organizationId) ||
+      !isNameId(viewerId) ||
+      !isNameId(teamspace) ||
+      !isNameId(peerId) ||
+      viewerId === peerId
+    ) {
+      return undefined
+    }
+    return sideConversationName(organizationId, teamspace, viewerId, peerId)
+  }
+
+  function changeSideDraft(name: string, draft: SideDraft) {
+    setSideDrafts((current) => ({ ...current, [name]: draft }))
+  }
+
+  /** Opens the side conversation with a teammate here, asking one of their agents when one was picked. */
+  function openTeammate(teammate: Teammate, pickedAgentId?: string) {
+    if (!teamspaceId) return
+    const name = sideName(teamspaceId, teammate.userId)
+    if (!name) return
+    if (pickedAgentId) {
+      setSideDrafts((current) => ({
+        ...current,
+        [name]: {
+          ...(current[name] ?? emptySideDraft),
+          target: `agent:${pickedAgentId}`,
+        },
+      }))
+    }
+    setAgentsSide({
+      teamspaceId,
+      peerId: teammate.userId,
+      peerName: teammate.name,
+    })
+    setSidePicked(true)
+  }
 
   function openTab(next: AgentPanelTab) {
     setTab(next)
@@ -302,15 +373,79 @@ export function WorkspaceAgentPanel({
             hidden={tab !== item.key}
           >
             {item.key === "agents" ? (
-              <AgentsView
-                organizationId={organizationId}
-                agents={agents.data}
-                agentId={agentId}
-                onSelectAgent={setAgentId}
-                agentName={agentName}
-                agentSeed={agentSeed}
-                onComposingChange={setComposing}
-              />
+              <>
+                {/* Mounted only while it shows, as a DM is: an open
+                    conversation is what makes the member online in it. */}
+                {agentsSide &&
+                  organizationId &&
+                  directMessages &&
+                  tab === "agents" && (
+                    <AgentsTabSide
+                      key={`${agentsSide.teamspaceId}~${agentsSide.peerId}`}
+                      organizationId={organizationId}
+                      directMessages={directMessages}
+                      open={agentsSide}
+                      name={sideName(agentsSide.teamspaceId, agentsSide.peerId)}
+                      teamspaceName={
+                        space.data?.id === agentsSide.teamspaceId
+                          ? space.data.name
+                          : undefined
+                      }
+                      drafts={sideDrafts}
+                      onDraftChange={changeSideDraft}
+                      onComposingChange={setComposing}
+                      autoFocus={sidePicked}
+                      onBack={() => {
+                        setSidePicked(false)
+                        setSideReturnTo(agentsSide.peerId)
+                        setAgentsSide(null)
+                      }}
+                    />
+                  )}
+                <div
+                  className="workspace-agents-home"
+                  hidden={Boolean(agentsSide)}
+                >
+                  <AgentsView
+                    organizationId={organizationId}
+                    agents={agents.data}
+                    agentId={agentId}
+                    onSelectAgent={setAgentId}
+                    agentName={agentName}
+                    agentSeed={agentSeed}
+                    onComposingChange={setComposing}
+                    teammates={
+                      offersTeammates && directMessages ? (
+                        <TeamspaceTeammates
+                          space={
+                            space.data?.id === teamspaceId
+                              ? space.data
+                              : undefined
+                          }
+                          failed={space.isError}
+                          viewerId={directMessages.viewerId}
+                          nameOf={(userId) =>
+                            directMessages.people.find(userId)?.name
+                          }
+                          unreadOf={(peerId) => {
+                            const name = teamspaceId
+                              ? sideName(teamspaceId, peerId)
+                              : undefined
+                            return (
+                              directMessages.inbox.conversations.find(
+                                (conversation) => conversation.name === name
+                              )?.unread ?? 0
+                            )
+                          }}
+                          onOpen={openTeammate}
+                          focusPeerId={agentsSide ? null : sideReturnTo}
+                          onFocused={() => setSideReturnTo(null)}
+                        />
+                      ) : undefined
+                    }
+                  />
+                </div>
+              </>
             ) : item.key === "dms" && organizationId && directMessages ? (
               // Mounted only while it shows: an open conversation is what
               // makes the member online in it (REALTIME.md, "Presence").
@@ -326,8 +461,9 @@ export function WorkspaceAgentPanel({
                   onDraftChange={(peerId, draft) =>
                     setDmDrafts((current) => ({ ...current, [peerId]: draft }))
                   }
+                  sideDrafts={sideDrafts}
+                  onSideDraftChange={changeSideDraft}
                   onComposingChange={setComposing}
-                  onOpenSide={directMessages.onOpenSide}
                 />
               )
             ) : (
@@ -380,10 +516,61 @@ function UnreadBadge({ count }: { count: number }) {
 }
 
 /**
+ * A side conversation opened from the Agents tab's teammates: the teammate
+ * as the members list names them (the teamspace's name for them until it
+ * can), with the way back to the tab.
+ */
+function AgentsTabSide({
+  organizationId,
+  directMessages,
+  open,
+  name,
+  teamspaceName,
+  drafts,
+  onDraftChange,
+  onComposingChange,
+  autoFocus,
+  onBack,
+}: {
+  organizationId: string
+  directMessages: PanelDirectMessages
+  open: OpenSide
+  /** The conversation's object name, the key of its draft. */
+  name: string | undefined
+  teamspaceName?: string
+  drafts: Partial<Record<string, SideDraft>>
+  onDraftChange: (name: string, draft: SideDraft) => void
+  onComposingChange: (composing: boolean) => void
+  autoFocus: boolean
+  onBack: () => void
+}) {
+  const known = directMessages.people.find(open.peerId)?.name
+  const peerName = known ?? open.peerName
+  return (
+    <SideConversationView
+      organizationId={organizationId}
+      viewerId={directMessages.viewerId}
+      teamspaceId={open.teamspaceId}
+      peer={{ id: open.peerId, name: peerName, short: firstName(peerName) }}
+      teamspaceName={teamspaceName}
+      draft={(name ? drafts[name] : undefined) ?? emptySideDraft}
+      onDraftChange={(draft) => {
+        if (name) onDraftChange(name, draft)
+      }}
+      onComposingChange={onComposingChange}
+      autoFocus={autoFocus}
+      backLabel="Back to agents"
+      onBack={onBack}
+    />
+  )
+}
+
+/**
  * The Agents tab: the quick switch between the member's own agents (their
- * primary agent and their active specialists, DESIGN.md §2), and the chat
- * with the one in use: the primary agent's thread chat, or a specialist's
- * chat object (REALTIME.md).
+ * primary agent and their active specialists, DESIGN.md §2), on a teamspace
+ * page that teamspace's teammates (`teammates`), and the chat with the one
+ * in use: the primary agent's thread chat, or a specialist's chat object
+ * (REALTIME.md).
  */
 function AgentsView({
   organizationId,
@@ -393,6 +580,7 @@ function AgentsView({
   agentName,
   agentSeed,
   onComposingChange,
+  teammates,
 }: {
   organizationId?: string
   /** The member's agents, once read. */
@@ -403,6 +591,8 @@ function AgentsView({
   agentName?: string
   agentSeed: string
   onComposingChange: (composing: boolean) => void
+  /** On a teamspace page: its teammates, below the switch. */
+  teammates?: ReactNode
 }) {
   const specialists = agents ? specialistAgents(agents) : []
   const selectedId = agentId === agentSeed ? null : agentId
@@ -440,6 +630,7 @@ function AgentsView({
         selectedId={selectedId ?? agentSeed}
         onSelect={(id) => onSelectAgent(id === agentSeed ? null : id)}
       />
+      {teammates}
       {organizationId && inUse ? (
         <SpecialistChat
           key={inUse.id}
