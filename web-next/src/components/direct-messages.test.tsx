@@ -793,6 +793,11 @@ describe("The DMs tab", () => {
         />
       </QueryClientProvider>
     )
+    // A phone has no rail: its edge control says so instead.
+    expect(
+      screen.getByRole("button", { name: "Expand agent panel, 13 unread" })
+    ).toBeTruthy()
+    expect(container.querySelector(".workspace-panel-unread")).toBeTruthy()
     rerender(panel({ ...inbox, unreadTotal: 3 }))
     expect(
       within(
@@ -801,7 +806,11 @@ describe("The DMs tab", () => {
     ).toBeTruthy()
     rerender(panel({ ...inbox, unreadTotal: 0 }))
     expect(screen.getByRole("button", { name: "Open DMs" })).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Expand agent panel" })
+    ).toBeTruthy()
     expect(container.querySelector(".workspace-unread-badge")).toBeNull()
+    expect(container.querySelector(".workspace-panel-unread")).toBeNull()
   })
 })
 

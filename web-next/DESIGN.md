@@ -134,7 +134,8 @@ not permission to copy every incidental value into a new component.
     start of the conversation says so.
   - Unread is a count on a DMs row, a dot on a recent conversation in Team's
     navigation, and a badge on the DMs tab and its rail icon ("9+" past
-    nine). A DM counts as read while it is on screen, at its end, in a
+    nine); a phone, which has no rail, puts a dot on the panel's edge
+    control. A DM counts as read while it is on screen, at its end, in a
     visible tab.
   - States: loading; empty ("Say hello to Priya"); "You can't message this
     person" once they have left; session ended, with Sign in; and "Can't

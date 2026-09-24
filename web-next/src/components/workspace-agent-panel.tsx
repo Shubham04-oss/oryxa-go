@@ -245,7 +245,13 @@ export function WorkspaceAgentPanel({
         <button
           className="workspace-icon-button"
           type="button"
-          aria-label={expanded ? "Collapse agent panel" : "Expand agent panel"}
+          aria-label={
+            expanded
+              ? "Collapse agent panel"
+              : unread > 0
+                ? `Expand agent panel, ${unread} unread`
+                : "Expand agent panel"
+          }
           aria-controls="workspace-agent-panel"
           aria-expanded={expanded}
           onClick={expanded ? onCollapse : onExpand}
@@ -275,6 +281,10 @@ export function WorkspaceAgentPanel({
                 size={17}
                 strokeWidth={1.7}
               />
+              {/* A phone has no rail, so its edge control carries the DMs' unread. */}
+              {unread > 0 && (
+                <span className="workspace-panel-unread" aria-hidden="true" />
+              )}
             </>
           )}
         </button>
