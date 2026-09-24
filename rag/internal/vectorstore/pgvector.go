@@ -66,7 +66,8 @@ type Pgvector struct {
 	pool *pgxpool.Pool
 	// iterativeScan turns on pgvector 0.8's iterative index scan. It matters
 	// for exactly the case this service always has: a search that also
-	// filters. Without it the index returns its nearest ef_search rows and the
+	// filters, whether by the caller's metadata filter or by a member's
+	// access. Without it the index returns its nearest ef_search rows and the
 	// filter is applied afterwards, so a narrow filter can return far fewer
 	// rows than asked for, or none, from a corpus that plainly contains them.
 	iterativeScan bool
@@ -193,13 +194,15 @@ func (store *Pgvector) Search(ctx context.Context, corpus domain.Corpus, search 
 // ef_search is how many candidates HNSW keeps while descending; the default of
 // 40 is below what a top-k of any size with a filter needs. Iterative scan
 // then lets the index keep going when the filter rejects what it found, which
-// is what stops a filtered search from silently coming back short.
+// is what stops a filtered search from silently coming back short. A member's
+// search is always filtered, by access: the admin-only chunks nearest a
+// question would otherwise use up every candidate the index hands back.
 func (store *Pgvector) tune(ctx context.Context, transaction pgx.Tx, search Search) error {
 	efSearch := min(max(search.TopK*4, 40), 1000)
 	if _, err := transaction.Exec(ctx, "SET LOCAL hnsw.ef_search = "+strconv.Itoa(efSearch)); err != nil {
 		return fmt.Errorf("set hnsw.ef_search: %w", err)
 	}
-	if store.iterativeScan && !search.Filter.Empty() {
+	if store.iterativeScan && (!search.Filter.Empty() || !search.IncludeAdminOnly) {
 		if _, err := transaction.Exec(ctx, "SET LOCAL hnsw.iterative_scan = 'relaxed_order'"); err != nil {
 			return fmt.Errorf("set hnsw.iterative_scan: %w", err)
 		}
