@@ -20,12 +20,17 @@ Realtime makes the call. The Worker serves it. Both sides implement exactly this
 POST {REALTIME_WORKER_URL}/internal/realtime/purge
 Content-Type: application/json
 X-Oryxa-Timestamp: 1790208000
-X-Oryxa-Signature: v1=a6f400c72318e7a142e5fcc51f04f98fad8ffae7864549a902cadfa96b584067
+X-Oryxa-Signature: v1=ee12ee93bb00fb5e9901c4a0ac8ed193a85539bfb2c76241f9182f2fcc71b90e
 
-{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f"}
+{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","removed_at":"2026-09-24T10:00:00Z"}
 ```
 
-- **Body:** `event_id` is the auth event's own id (the envelope's `event_id`). It stays the same however many times the event is delivered or published. `user_id` is the member whose conversations go. It is `""` when the organization was deleted, and then everything the organization kept goes. All three keys are always present, in that order.
+- **Body:** compact JSON, with all five keys always present, in this order:
+  - `event_id` is the auth event's own id (the envelope's `event_id`). It stays the same however many times the event is delivered or published.
+  - `organization_id` is the organization.
+  - `scope` is `member` or `organization`. The scope is always stated, so an empty `user_id` can never mean the whole organization by accident.
+  - `user_id` is the member whose conversations go. It is `""` when `scope` is `organization`.
+  - `removed_at` is when the membership ended (the event's `removed_at`), or when the organization was deleted (its `deleted_at`). It is written in UTC, in RFC 3339, with as many digits of a fraction of a second as the event had, up to nine. Auth's timestamps have them, so most real bodies carry a fraction. It has none when the time is a whole second. The Worker deletes only what was written at or before `removed_at`, so a purge that runs late, after a member was invited back, leaves what they wrote since.
 - **`X-Oryxa-Timestamp`:** when this attempt was signed, in Unix seconds. Every retry is signed afresh, so the Worker can refuse one signed too long ago. The Worker's side allows five minutes.
 - **`X-Oryxa-Signature`:** `v1=` followed by the lowercase hex HMAC-SHA256 of the timestamp in decimal, a `.`, and the body exactly as sent. The key is `REALTIME_PURGE_SECRET`'s characters as written. It is not decoded from hex or base64, even when it looks like hex.
 - **User-Agent:** `oryxa-realtime/1`. Redirects are not followed.
@@ -48,20 +53,24 @@ The Worker's verification can be tested against these. `internal/purge/purge_tes
 | --- | --- |
 | Secret | `5f2b8e1c9a7d4036b1e8c2f94a6d0e3b7c1f5a9d2e8b4c6f0a3d7e1b9c5f2a84` (64 characters, used as they are) |
 | Timestamp | `1790208000` (2026-09-24T00:00:00Z) |
-| Member body | `{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f"}` |
-| Its signature | `v1=a6f400c72318e7a142e5fcc51f04f98fad8ffae7864549a902cadfa96b584067` |
-| Organization body | `{"event_id":"evt_Qm4sT8vY1bN6cX3zL0pK7g","organization_id":"org_2fQx9LmR7vTk4WcA","user_id":""}` |
-| Its signature | `v1=c35da0ee0a92d26cf07903fcfd3118d42b0517920abe31cf13a0f818b9004314` |
+| Member body | `{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","removed_at":"2026-09-24T10:00:00Z"}` |
+| Its signature | `v1=ee12ee93bb00fb5e9901c4a0ac8ed193a85539bfb2c76241f9182f2fcc71b90e` |
+| Organization body | `{"event_id":"evt_Qm4sT8vY1bN6cX3zL0pK7g","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"organization","user_id":"","removed_at":"2026-09-24T10:00:00Z"}` |
+| Its signature | `v1=ec0202dfc34ba5b946ce5e384b187d7358b3609549a049b3b3bfb51ef73d2177` |
+| A real event's shape: the member body with a fraction of a second | `{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","removed_at":"2026-09-24T10:00:00.123456789Z"}` |
+| Its signature | `v1=0828ea12f32328f23603c3f910c57474459a38a6fe79fce8afcfa12bf5780548` |
+
+The Worker's side agreed on the first two vectors. The third is here so that the Worker's parsing of `removed_at` can be tested on what auth actually sends. JavaScript's `Date.parse` reads it, to the millisecond.
 
 ## Events
 
 | Detail type | Purge |
 | --- | --- |
-| `auth.member.removed.v1`, `reason` `left` or `removed` | That member's conversations in that organization: `user_id` set |
+| `auth.member.removed.v1`, `reason` `left` or `removed` | That member's conversations in that organization: `scope` `member`, their `user_id`, and `removed_at` from the event's `removed_at` |
 | `auth.member.removed.v1`, `reason` `organization_deleted` | None. Deleting an organization removes every member, each with an event of their own, and the organization's purge already takes everything, so these make no calls. |
-| `auth.organization.deleted.v1` | Everything the organization kept: `user_id` empty |
+| `auth.organization.deleted.v1` | Everything the organization kept: `scope` `organization`, `user_id` `""`, and `removed_at` from the event's `deleted_at` |
 
-The envelope's signature is checked before anything in an event is used, as in every consumer (`internal/eventauth`). By default a signature that does not check out is logged and the event handled anyway (`ORYXA_EVENT_SIGNATURES=report`). With `enforce` it is refused. An event realtime cannot read, meaning one that is not JSON, not a subscribed type from `oryxa.auth`, not envelope version 1, missing its organization or member, or refused for its signature, stays on the queue and ends in the dead-letter queue, as in every consumer.
+The envelope's signature is checked before anything in an event is used, as in every consumer (`internal/eventauth`). By default a signature that does not check out is logged and the event handled anyway (`ORYXA_EVENT_SIGNATURES=report`). With `enforce` it is refused. An event realtime cannot read, meaning one that is not JSON, not a subscribed type from `oryxa.auth`, not envelope version 1, missing its organization, member or time, or refused for its signature, stays on the queue and ends in the dead-letter queue, as in every consumer.
 
 Realtime remembers the last 1,024 events it purged. A message delivered again after its purge succeeded is then deleted without a second call. This only saves calls. It does not guarantee anything, because it forgets on restart. The Worker's idempotence is the guarantee.
 
@@ -104,5 +113,5 @@ Realtime deploys in the single `oryxa` image. Its identity needs `sqs:ReceiveMes
 
 ## Limits
 
-- A purge carries no time. If a member is removed, rejoins, and writes something before a delayed purge runs (the Worker down, the message waiting on retries), that purge removes what they wrote since too.
+- `removed_at` comes from auth's clock, and the Worker's messages are stamped by Cloudflare's. The two clocks agree only to within a few milliseconds, so a message written in the same instant as the removal may fall on either side of it.
 - A dropped purge is gone. Its log line names the event. In production the bus archives every event for a week, so one can be replayed to realtime's rule once whatever the Worker refused is fixed.

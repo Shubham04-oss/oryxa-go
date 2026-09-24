@@ -58,17 +58,33 @@ func authEvent(signer *eventauth.Signer, detailType, eventID string, version int
 		eventID, detailType, eventID, version, occurredAt, data, signature)
 }
 
+// When the events say the membership and the organization ended. Neither is
+// the envelope's occurred_at, and both have fractions of a second, as auth's
+// clock gives them, so a purge's removed_at shows where it came from.
+const (
+	removedAt = "2026-09-24T11:59:58.123456789Z"
+	deletedAt = "2026-09-24T11:59:59.5Z"
+)
+
+func at(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		panic(err)
+	}
+	return parsed
+}
+
 func memberRemoved(eventID, organizationID, userID, reason string) string {
 	signer, _ := authHarness()
 	return authEvent(signer, autheventsv1.MemberRemovedDetailType, eventID, 1, fmt.Sprintf(
-		`{"organization_id":%q,"organization_name":"Acme","user_id":%q,"email":"ben@example.com","previous_role":"member","reason":%q,"removed_by":"user-1","removed_at":"2026-09-24T12:00:00Z"}`,
-		organizationID, userID, reason))
+		`{"organization_id":%q,"organization_name":"Acme","user_id":%q,"email":"ben@example.com","previous_role":"member","reason":%q,"removed_by":"user-1","removed_at":%q}`,
+		organizationID, userID, reason, removedAt))
 }
 
 func organizationDeleted(eventID, organizationID string) string {
 	signer, _ := authHarness()
 	return authEvent(signer, autheventsv1.OrganizationDeletedDetailType, eventID, 1, fmt.Sprintf(
-		`{"organization_id":%q,"name":"Acme","slug":"acme","deleted_by":"user-1","deleted_at":"2026-09-24T12:00:00Z"}`, organizationID))
+		`{"organization_id":%q,"name":"Acme","slug":"acme","deleted_by":"user-1","deleted_at":%q}`, organizationID, deletedAt))
 }
 
 // fakePurger records every purge it is asked for, and answers with what
@@ -90,6 +106,14 @@ func (fake *fakePurger) asked() []purge.Request {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	return slices.Clone(fake.requests)
+}
+
+// samePurges compares requests field by field, and their times as instants.
+func samePurges(got, want []purge.Request) bool {
+	return slices.EqualFunc(got, want, func(a, b purge.Request) bool {
+		return a.EventID == b.EventID && a.OrganizationID == b.OrganizationID && a.Scope == b.Scope &&
+			a.UserID == b.UserID && a.RemovedAt.Equal(b.RemovedAt)
+	})
 }
 
 func newConsumer(t *testing.T, purger Purger) *Consumer {
@@ -116,8 +140,8 @@ func TestConsumerPurgesAMemberWhoseMembershipEnded(t *testing.T) {
 			if err := newConsumer(t, purger).Handle(context.Background(), memberRemoved("evt_1", "org_1", "user-2", reason)); err != nil {
 				t.Fatal(err)
 			}
-			want := []purge.Request{{EventID: "evt_1", OrganizationID: "org_1", UserID: "user-2"}}
-			if got := purger.asked(); !slices.Equal(got, want) {
+			want := []purge.Request{{EventID: "evt_1", OrganizationID: "org_1", Scope: purge.ScopeMember, UserID: "user-2", RemovedAt: at(removedAt)}}
+			if got := purger.asked(); !samePurges(got, want) {
 				t.Fatalf("purges = %+v, want %+v", got, want)
 			}
 		})
@@ -129,8 +153,8 @@ func TestConsumerPurgesADeletedOrganization(t *testing.T) {
 	if err := newConsumer(t, purger).Handle(context.Background(), organizationDeleted("evt_2", "org_1")); err != nil {
 		t.Fatal(err)
 	}
-	want := []purge.Request{{EventID: "evt_2", OrganizationID: "org_1"}}
-	if got := purger.asked(); !slices.Equal(got, want) {
+	want := []purge.Request{{EventID: "evt_2", OrganizationID: "org_1", Scope: purge.ScopeOrganization, RemovedAt: at(deletedAt)}}
+	if got := purger.asked(); !samePurges(got, want) {
 		t.Fatalf("purges = %+v, want %+v", got, want)
 	}
 }
@@ -141,6 +165,12 @@ func TestConsumerLeavesAMemberOfADeletedOrganizationToTheOrganizationsPurge(t *t
 	purger := &fakePurger{}
 	consumer := newConsumer(t, purger)
 	if err := consumer.Handle(context.Background(), memberRemoved("evt_3", "org_1", "user-2", autheventsv1.MemberRemovedReasonOrganizationDeleted)); err != nil {
+		t.Fatal(err)
+	}
+	// Needing no purge, it needs no time either.
+	signer, _ := authHarness()
+	untimed := authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_4", 1, `{"organization_id":"org_1","user_id":"user-3","reason":"organization_deleted"}`)
+	if err := consumer.Handle(context.Background(), untimed); err != nil {
 		t.Fatal(err)
 	}
 	if got := purger.asked(); len(got) != 0 {
@@ -154,7 +184,7 @@ func TestConsumerRefusesWhatItCannotHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	orgData := `{"organization_id":"org_1","name":"Acme"}`
+	orgData := `{"organization_id":"org_1","name":"Acme","deleted_at":"2026-09-24T12:00:00Z"}`
 	tests := map[string]string{
 		"not json":          "{",
 		"unsubscribed type": authEvent(signer, autheventsv1.MemberJoinedDetailType, "evt_1", 1, `{"organization_id":"org_1","user_id":"user-2"}`),
@@ -163,9 +193,11 @@ func TestConsumerRefusesWhatItCannotHandle(t *testing.T) {
 		"future version":         authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 2, orgData),
 		"no event id":            authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "", 1, orgData),
 		"bad data":               authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"organization_id":42}`),
-		"no organization":        authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"name":"Acme"}`),
-		"member without user":    authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"organization_id":"org_1","reason":"left"}`),
-		"member without org":     authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"user_id":"user-2","reason":"left"}`),
+		"no organization":        authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"name":"Acme","deleted_at":"2026-09-24T12:00:00Z"}`),
+		"no deleted_at":          authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"organization_id":"org_1","name":"Acme"}`),
+		"member without user":    authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"organization_id":"org_1","reason":"left","removed_at":"2026-09-24T12:00:00Z"}`),
+		"member without org":     authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"user_id":"user-2","reason":"left","removed_at":"2026-09-24T12:00:00Z"}`),
+		"member without time":    authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"organization_id":"org_1","user_id":"user-2","reason":"left"}`),
 		"signed by someone else": authEvent(stranger, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, orgData),
 		"unsigned": `{"id":"eb-1","detail-type":"auth.organization.deleted.v1","source":"oryxa.auth",` +
 			`"detail":{"event_id":"evt_1","version":1,"occurred_at":"2026-09-24T12:00:00Z","data":{"organization_id":"org_1"}}}`,
@@ -191,7 +223,8 @@ func TestConsumerFollowsTheRegistrysSignaturePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	forged := authEvent(stranger, autheventsv1.OrganizationDeletedDetailType, "evt_forged", 1, `{"organization_id":"org_1"}`)
+	orgData := `{"organization_id":"org_1","deleted_at":"2026-09-24T12:00:00Z"}`
+	forged := authEvent(stranger, autheventsv1.OrganizationDeletedDetailType, "evt_forged", 1, orgData)
 
 	for _, reporting := range []bool{true, false} {
 		registry := eventauth.NewRegistry(nil, time.Now)
@@ -208,7 +241,7 @@ func TestConsumerFollowsTheRegistrysSignaturePolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := consumer.Handle(context.Background(), authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_signed", 1, `{"organization_id":"org_1"}`)); err != nil {
+		if err := consumer.Handle(context.Background(), authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_signed", 1, orgData)); err != nil {
 			t.Fatalf("reporting=%v: a correctly signed event = %v", reporting, err)
 		}
 		err = consumer.Handle(context.Background(), forged)
@@ -374,10 +407,10 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 		t.Fatalf("deleted = %v, want %v", queue.deleted, want)
 	}
 	wantBodies := []string{
-		`{"event_id":"evt_left","organization_id":"org_1","user_id":"user-2"}`,
-		`{"event_id":"evt_deleted","organization_id":"org_1","user_id":""}`,
-		`{"event_id":"evt_refused","organization_id":"org_gone","user_id":""}`,
-		`{"event_id":"evt_down","organization_id":"org_down","user_id":""}`,
+		`{"event_id":"evt_left","organization_id":"org_1","scope":"member","user_id":"user-2","removed_at":"2026-09-24T11:59:58.123456789Z"}`,
+		`{"event_id":"evt_deleted","organization_id":"org_1","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
+		`{"event_id":"evt_refused","organization_id":"org_gone","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
+		`{"event_id":"evt_down","organization_id":"org_down","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
 	}
 	if !slices.Equal(bodies, wantBodies) {
 		t.Fatalf("the Worker was sent %v, want %v", bodies, wantBodies)

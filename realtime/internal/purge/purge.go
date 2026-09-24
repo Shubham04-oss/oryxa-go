@@ -1,7 +1,8 @@
 // Package purge asks the web app's Worker to purge realtime conversations:
 // the direct messages and teamspace side conversations it keeps only in its
-// Durable Objects. One call purges what a member kept in an organization, or,
-// without a member, everything the organization kept.
+// Durable Objects. One call purges what a member wrote in an organization, or
+// everything the organization kept, up to when the membership or the
+// organization ended.
 //
 // Every call is signed with a secret the Worker holds too, so nothing but
 // this service can make the Worker delete anything:
@@ -11,7 +12,7 @@
 //	X-Oryxa-Timestamp: <Unix seconds>
 //	X-Oryxa-Signature: v1=<lowercase hex HMAC-SHA256(secret, timestamp + "." + body)>
 //
-//	{"event_id":"…","organization_id":"…","user_id":"…"}
+//	{"event_id":"…","organization_id":"…","scope":"member"|"organization","user_id":"…","removed_at":"<RFC 3339, UTC>"}
 //
 // The Worker answers 204 once the purge is done. The purge is idempotent, so
 // sending one again is always safe.
@@ -57,15 +58,33 @@ const (
 	userAgent = "oryxa-realtime/1"
 )
 
-// Request is one purge. UserID names the member whose conversations go; it is
-// empty when the organization itself was deleted, and everything it kept
-// goes. EventID is the auth event that asked for the purge, by which the
-// Worker can tell a repeat. Every field is always sent, UserID included when
-// it is empty.
+// Scope says what a purge takes: one member's conversations in the
+// organization, or all of the organization's. It is always sent, so an empty
+// user_id can never be read as the whole organization by accident.
+type Scope string
+
+const (
+	// ScopeMember purges what UserID kept in the organization.
+	ScopeMember Scope = "member"
+	// ScopeOrganization purges everything the organization kept. UserID is
+	// empty.
+	ScopeOrganization Scope = "organization"
+)
+
+// Request is one purge, sent as JSON with its keys in this order and every
+// one present, UserID included when it is empty. EventID is the auth event
+// that asked for the purge, by which the Worker can tell a repeat. RemovedAt
+// is when the membership or the organization ended: the Worker deletes only
+// what was written then or before, so a purge that runs late, after the
+// member was invited back, leaves what they wrote since. It is sent in UTC,
+// in RFC 3339 with as much of a fraction of a second as it has, and none when
+// it has none.
 type Request struct {
-	EventID        string `json:"event_id"`
-	OrganizationID string `json:"organization_id"`
-	UserID         string `json:"user_id"`
+	EventID        string    `json:"event_id"`
+	OrganizationID string    `json:"organization_id"`
+	Scope          Scope     `json:"scope"`
+	UserID         string    `json:"user_id"`
+	RemovedAt      time.Time `json:"removed_at"`
 }
 
 // Sign is the X-Oryxa-Signature value for body sent at timestamp: v1= and the
@@ -141,11 +160,21 @@ func New(config Config) (*Client, error) {
 // unreachable, slow or failing, or it refused the signature, which is the
 // secret or the clock being wrong, not the purge.
 func (client *Client) Purge(ctx context.Context, request Request) error {
-	// A purge without an organization has nothing to scope it. Nothing here
-	// sends one, and nothing ever should.
-	if request.EventID == "" || request.OrganizationID == "" {
+	// Nothing here builds a purge the Worker could read more widely than it
+	// was meant, and nothing ever should: each is refused before it is sent.
+	switch {
+	case request.EventID == "" || request.OrganizationID == "":
 		return errors.New("a purge names the event that asked for it and its organization")
+	case request.Scope == ScopeMember && request.UserID == "":
+		return errors.New("a member's purge names the member")
+	case request.Scope == ScopeOrganization && request.UserID != "":
+		return errors.New("an organization's purge names no member")
+	case request.Scope != ScopeMember && request.Scope != ScopeOrganization:
+		return fmt.Errorf("a purge's scope is member or organization, not %q", request.Scope)
+	case request.RemovedAt.IsZero():
+		return errors.New("a purge says when the membership ended")
 	}
+	request.RemovedAt = request.RemovedAt.UTC()
 	body, err := json.Marshal(request)
 	if err != nil {
 		return fmt.Errorf("encode the purge: %w", err)

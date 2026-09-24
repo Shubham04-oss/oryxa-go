@@ -2,7 +2,6 @@ package purge
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -15,14 +14,25 @@ import (
 )
 
 // The golden vectors: what the Worker's own tests check its verification
-// against, and what both sides must agree on byte for byte. The secret is
-// used as the characters it is written in, not decoded from hex. The
-// signatures were computed outside Go as well:
+// against, and what both sides must agree on byte for byte, the body
+// included. The secret is used as the characters it is written in, not
+// decoded from hex. The signatures were computed outside Go as well:
 //
 //	printf '%s' "$timestamp.$body" | openssl dgst -sha256 -hmac "$secret"
+//
+// The first two are the ones agreed with the Worker's side. The third is the
+// shape a real event takes: auth's clock reads nanoseconds, and removed_at
+// keeps them.
 const (
 	goldenSecret    = "5f2b8e1c9a7d4036b1e8c2f94a6d0e3b7c1f5a9d2e8b4c6f0a3d7e1b9c5f2a84"
 	goldenTimestamp = int64(1790208000) // 2026-09-24T00:00:00Z
+)
+
+var (
+	removedAt = time.Date(2026, time.September, 24, 10, 0, 0, 0, time.UTC)
+	// India Standard Time, which auth's clock is not in, but which proves the
+	// body is written in UTC whatever zone the time arrived in.
+	ist = time.FixedZone("IST", 5*60*60+30*60)
 )
 
 var goldenVectors = []struct {
@@ -32,30 +42,33 @@ var goldenVectors = []struct {
 	signature string
 }{
 	{
-		name:      "a member removed",
-		request:   Request{EventID: "evt_Zx8rP0kQ3mB7tY2wN5cV1A", OrganizationID: "org_2fQx9LmR7vTk4WcA", UserID: "6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f"},
-		body:      `{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f"}`,
-		signature: "v1=a6f400c72318e7a142e5fcc51f04f98fad8ffae7864549a902cadfa96b584067",
+		name: "a member removed",
+		request: Request{EventID: "evt_Zx8rP0kQ3mB7tY2wN5cV1A", OrganizationID: "org_2fQx9LmR7vTk4WcA",
+			Scope: ScopeMember, UserID: "6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f", RemovedAt: removedAt},
+		body:      `{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","removed_at":"2026-09-24T10:00:00Z"}`,
+		signature: "v1=ee12ee93bb00fb5e9901c4a0ac8ed193a85539bfb2c76241f9182f2fcc71b90e",
 	},
 	{
-		name:      "an organization deleted",
-		request:   Request{EventID: "evt_Qm4sT8vY1bN6cX3zL0pK7g", OrganizationID: "org_2fQx9LmR7vTk4WcA"},
-		body:      `{"event_id":"evt_Qm4sT8vY1bN6cX3zL0pK7g","organization_id":"org_2fQx9LmR7vTk4WcA","user_id":""}`,
-		signature: "v1=c35da0ee0a92d26cf07903fcfd3118d42b0517920abe31cf13a0f818b9004314",
+		name: "an organization deleted",
+		request: Request{EventID: "evt_Qm4sT8vY1bN6cX3zL0pK7g", OrganizationID: "org_2fQx9LmR7vTk4WcA",
+			Scope: ScopeOrganization, RemovedAt: removedAt},
+		body:      `{"event_id":"evt_Qm4sT8vY1bN6cX3zL0pK7g","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"organization","user_id":"","removed_at":"2026-09-24T10:00:00Z"}`,
+		signature: "v1=ec0202dfc34ba5b946ce5e384b187d7358b3609549a049b3b3bfb51ef73d2177",
+	},
+	{
+		name: "a member removed within a second, from another zone",
+		request: Request{EventID: "evt_Zx8rP0kQ3mB7tY2wN5cV1A", OrganizationID: "org_2fQx9LmR7vTk4WcA",
+			Scope: ScopeMember, UserID: "6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f",
+			RemovedAt: time.Date(2026, time.September, 24, 15, 30, 0, 123456789, ist)},
+		body:      `{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","removed_at":"2026-09-24T10:00:00.123456789Z"}`,
+		signature: "v1=0828ea12f32328f23603c3f910c57474459a38a6fe79fce8afcfa12bf5780548",
 	},
 }
 
 func TestSignMatchesTheGoldenVectors(t *testing.T) {
 	for _, vector := range goldenVectors {
 		t.Run(vector.name, func(t *testing.T) {
-			body, err := json.Marshal(vector.request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(body) != vector.body {
-				t.Fatalf("body = %s, want %s", body, vector.body)
-			}
-			if got := Sign(goldenSecret, goldenTimestamp, body); got != vector.signature {
+			if got := Sign(goldenSecret, goldenTimestamp, []byte(vector.body)); got != vector.signature {
 				t.Fatalf("Sign() = %s, want %s", got, vector.signature)
 			}
 		})
@@ -283,16 +296,28 @@ func TestPurgeDoesNotFollowARedirect(t *testing.T) {
 	}
 }
 
+// Nothing the Worker could read as more than was meant is ever sent: above
+// all, an empty user_id is never taken for the whole organization, because
+// the scope says which it is.
 func TestPurgeRefusesAPurgeWithoutItsScope(t *testing.T) {
 	fake := newWorker(t, http.StatusNoContent, "")
 	client := goldenClient(t, fake.URL)
-	for name, request := range map[string]Request{
-		"no organization": {EventID: "evt_1", UserID: "user-1"},
-		"no event":        {OrganizationID: "org_1", UserID: "user-1"},
-		"nothing":         {},
+	member := Request{EventID: "evt_1", OrganizationID: "org_1", Scope: ScopeMember, UserID: "user-1", RemovedAt: removedAt}
+	for name, edit := range map[string]func(*Request){
+		"no organization":            func(request *Request) { request.OrganizationID = "" },
+		"no event":                   func(request *Request) { request.EventID = "" },
+		"no scope":                   func(request *Request) { request.Scope = "" },
+		"no scope and no member":     func(request *Request) { request.Scope, request.UserID = "", "" },
+		"another scope":              func(request *Request) { request.Scope = "team" },
+		"a member's without them":    func(request *Request) { request.UserID = "" },
+		"an organization's with one": func(request *Request) { request.Scope = ScopeOrganization },
+		"no time":                    func(request *Request) { request.RemovedAt = time.Time{} },
+		"nothing":                    func(request *Request) { *request = Request{} },
 	} {
+		request := member
+		edit(&request)
 		if err := client.Purge(context.Background(), request); err == nil {
-			t.Errorf("%s: Purge() = nil", name)
+			t.Errorf("%s: Purge(%+v) = nil", name, request)
 		}
 	}
 	if fake.calls.Load() != 0 {

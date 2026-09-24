@@ -193,8 +193,12 @@ realtime drops every purge that gets one. In this order:
    npx wrangler secret put REALTIME_PURGE_SECRET --env production
    ```
 
-   The key is the value's characters as written, not decoded from hex.
-   `realtime/README.md` has golden vectors to test the Worker's check against.
+   The key is the value's characters as written, not decoded from hex. The
+   Worker must take the body with `scope` and `removed_at`, and accept a
+   `removed_at` that has a fraction of a second, which almost every real one
+   has. A Worker built on the earlier body, without `scope`, must not be the
+   one live when realtime is on. `realtime/README.md` has golden vectors to
+   test the Worker's check against, one of them with a fraction.
 2. Switch it on, and create the secret's container:
 
    ```sh

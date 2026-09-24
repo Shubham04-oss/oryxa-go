@@ -149,7 +149,7 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 		return fmt.Errorf("event %s: %s%s: %w", detail.EventID, event.DetailType, scope(request), err)
 	}
 	consumer.logger.InfoContext(ctx, outcome, "event_id", detail.EventID, "detail_type", event.DetailType,
-		"organization_id", request.OrganizationID, "member", request.UserID != "")
+		"organization_id", request.OrganizationID, "scope", string(request.Scope))
 	return nil
 }
 
@@ -162,10 +162,10 @@ func scope(request purge.Request) string {
 	return " for organization " + request.OrganizationID
 }
 
-// requestFor is the purge an event asks for. needed is false for a member
-// removed because their organization was deleted: that organization's own
-// event purges everything it kept, so the member's purge would only repeat
-// part of it.
+// requestFor is the purge an event asks for, bounded by when the membership
+// or the organization ended. needed is false for a member removed because
+// their organization was deleted: that organization's own event purges
+// everything it kept, so the member's purge would only repeat part of it.
 func requestFor(detailType, eventID string, data json.RawMessage) (request purge.Request, needed bool, err error) {
 	switch detailType {
 	case autheventsv1.MemberRemovedDetailType:
@@ -176,17 +176,31 @@ func requestFor(detailType, eventID string, data json.RawMessage) (request purge
 		if removed.OrganizationID == "" || removed.UserID == "" {
 			return purge.Request{}, false, errors.New("member event has no organization_id or user_id")
 		}
-		request = purge.Request{EventID: eventID, OrganizationID: removed.OrganizationID, UserID: removed.UserID}
-		return request, removed.Reason != autheventsv1.MemberRemovedReasonOrganizationDeleted, nil
+		request = purge.Request{
+			EventID: eventID, OrganizationID: removed.OrganizationID,
+			Scope: purge.ScopeMember, UserID: removed.UserID, RemovedAt: removed.RemovedAt,
+		}
+		if removed.Reason == autheventsv1.MemberRemovedReasonOrganizationDeleted {
+			return request, false, nil
+		}
+		// Without the time, the Worker could not tell what the member wrote
+		// before from what they wrote after being invited back.
+		if removed.RemovedAt.IsZero() {
+			return purge.Request{}, false, errors.New("member event has no removed_at")
+		}
+		return request, true, nil
 	case autheventsv1.OrganizationDeletedDetailType:
 		var deleted autheventsv1.OrganizationDeleted
 		if err := json.Unmarshal(data, &deleted); err != nil {
 			return purge.Request{}, false, fmt.Errorf("decode event data: %w", err)
 		}
-		if deleted.OrganizationID == "" {
-			return purge.Request{}, false, errors.New("organization event has no organization_id")
+		if deleted.OrganizationID == "" || deleted.DeletedAt.IsZero() {
+			return purge.Request{}, false, errors.New("organization event has no organization_id or deleted_at")
 		}
-		return purge.Request{EventID: eventID, OrganizationID: deleted.OrganizationID}, true, nil
+		return purge.Request{
+			EventID: eventID, OrganizationID: deleted.OrganizationID,
+			Scope: purge.ScopeOrganization, RemovedAt: deleted.DeletedAt,
+		}, true, nil
 	}
 	return purge.Request{}, false, fmt.Errorf("no purge for %s", detailType)
 }
