@@ -1,6 +1,7 @@
 package vectorstore
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -188,6 +189,9 @@ func (store *Pgvector) Search(ctx context.Context, corpus domain.Corpus, search 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read vector matches: %w", err)
 	}
+	// Iterative scan in relaxed order can hand rows back slightly out of
+	// distance order, and a ranked list is what the caller fuses by position.
+	slices.SortStableFunc(hits, func(a, b Hit) int { return cmp.Compare(a.Distance, b.Distance) })
 	return hits, nil
 }
 
