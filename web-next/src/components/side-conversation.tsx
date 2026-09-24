@@ -444,7 +444,11 @@ function failures(
   })
 }
 
-/** The agents in the conversation, in the bar: the other person's first, then the member's own. */
+/**
+ * The agents in the conversation, in the bar: both people's own agents
+ * first (the other person's, then the member's), then the specialists the
+ * other person contributed.
+ */
 function AgentsHere({
   agents,
   reader,
@@ -453,8 +457,9 @@ function AgentsHere({
   reader: SideReader
 }) {
   const all: AgentRef[] = [
-    ...agents.theirs,
+    ...agents.theirs.filter((agent) => agent.kind === "primary"),
     ...(agents.mine ? [agents.mine] : []),
+    ...agents.theirs.filter((agent) => agent.kind !== "primary"),
   ]
   if (all.length === 0) return null
   const more = all.length - headerAgents
