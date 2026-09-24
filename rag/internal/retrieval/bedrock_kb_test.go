@@ -276,9 +276,11 @@ func TestManagedKnowledgeBaseSearchesThroughManagedSearch(t *testing.T) {
 	if !ok || aws.ToString(corpus.Value.Key) != "corpus_id" || filterValue(t, corpus.Value.Value) != "cor_1" {
 		t.Fatalf("second condition = %#v, want Equals(corpus_id, cor_1)", andAll.Value[1])
 	}
-	access, ok := andAll.Value[2].(*agenttypes.RetrievalFilterMemberEquals)
-	if !ok || aws.ToString(access.Value.Key) != "access" || filterValue(t, access.Value.Value) != "members" {
-		t.Fatalf("third condition = %#v, want Equals(access, members)", andAll.Value[2])
+	// NotEquals(access, admins) rather than Equals(access, members): Bedrock
+	// also matches a document submitted before the attribute existed.
+	access, ok := andAll.Value[2].(*agenttypes.RetrievalFilterMemberNotEquals)
+	if !ok || aws.ToString(access.Value.Key) != "access" || filterValue(t, access.Value.Value) != "admins" {
+		t.Fatalf("third condition = %#v, want NotEquals(access, admins)", andAll.Value[2])
 	}
 	// Not asked to rerank, so reranking is turned off by name rather than
 	// left to whatever the service would choose.
@@ -522,7 +524,7 @@ func TestSearchFilterKeepsEveryListWithinWhatBedrockTakes(t *testing.T) {
 			var filter domain.Filter
 			want := []string{"equals:organization_id", "equals:corpus_id"}
 			if !includeAdminOnly {
-				want = append(want, "equals:access")
+				want = append(want, "notEquals:access")
 			}
 			conditions := callerFilters
 			if callerFilters > 0 {

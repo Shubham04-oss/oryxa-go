@@ -185,8 +185,13 @@ func searchFilter(organizationID string, corpusIDs []string, filter domain.Filte
 	}
 	conditions := tenantConditions(organizationID, corpusIDs)
 	if !includeAdminOnly {
-		conditions = append(conditions, &agenttypes.RetrievalFilterMemberEquals{Value: agenttypes.FilterAttribute{
-			Key: aws.String("access"), Value: kbdoc.NewLazyDocument(string(domain.AccessMembers)),
+		// Not admin-only, rather than members: Bedrock's notEquals also
+		// matches a document submitted before the access attribute existed,
+		// so a member's search keeps finding those while the knowledge base
+		// is resynced. PostgreSQL's access check in searchKnowledgeBase still
+		// drops any admin-only document the knowledge base's copy is stale on.
+		conditions = append(conditions, &agenttypes.RetrievalFilterMemberNotEquals{Value: agenttypes.FilterAttribute{
+			Key: aws.String("access"), Value: kbdoc.NewLazyDocument(string(domain.AccessAdmins)),
 		}})
 	}
 	conditions = append(conditions, grouped(caller, maxFilterGroup-len(conditions))...)
