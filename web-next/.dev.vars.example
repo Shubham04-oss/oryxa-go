@@ -3,3 +3,10 @@
 # Object call the Go API; wrangler.jsonc defaults it to http://localhost:8080.
 # The local stand-in backend (auth stub and proxy) listens on 18096.
 ORYXA_API_ORIGIN=http://127.0.0.1:18096
+
+# The HMAC-SHA256 secret Go signs POST /internal/realtime/purge with (see
+# REALTIME.md): at least 32 characters, the same value Go is given. Without
+# it (as here, empty) the Worker refuses every purge. Deployed, it is a
+# Worker secret: `wrangler secret put REALTIME_PURGE_SECRET`. Make one with
+# `openssl rand -hex 32`.
+REALTIME_PURGE_SECRET=
