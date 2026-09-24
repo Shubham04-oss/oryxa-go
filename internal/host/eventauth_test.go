@@ -17,7 +17,7 @@ import (
 
 // mountOrder is cmd/oryxa's: the order services mount in, each taking its
 // signer and then a verifier for its consumer, as every real Mount does.
-var mountOrder = []string{"auth", "teams", "billing", "files", "knowledge", "rag", "apps", "batching", "email", "agents"}
+var mountOrder = []string{"auth", "teams", "billing", "files", "knowledge", "rag", "apps", "batching", "email", "agents", "realtime"}
 
 type identities struct {
 	signers   map[string]*eventauth.Signer
