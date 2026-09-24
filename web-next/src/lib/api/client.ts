@@ -46,12 +46,25 @@ export async function apiFetch(
   path: string,
   { body, method, refreshSession: canRefresh = true, signal }: ApiOptions = {}
 ): Promise<Response> {
+  // A FormData body (a multipart upload) is sent exactly as given:
+  // stringifying it would lose the file, and setting Content-Type ourselves
+  // would drop the boundary the browser generates when it serializes the
+  // body. FormData is a plain value, not a stream, so the same instance can
+  // be read again on a refresh-and-retry below.
+  const isFormData = body instanceof FormData
   const send = () =>
     fetch(apiUrl(path), {
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body:
+        body === undefined
+          ? undefined
+          : isFormData
+            ? body
+            : JSON.stringify(body),
       credentials: "include",
       headers:
-        body === undefined ? undefined : { "Content-Type": "application/json" },
+        body === undefined || isFormData
+          ? undefined
+          : { "Content-Type": "application/json" },
       method: method || (body === undefined ? "GET" : "POST"),
       signal,
     })
@@ -72,13 +85,14 @@ export async function apiRequest<T = void>(
   if (!response.headers.get("Content-Type")?.includes("application/json")) {
     return undefined as T
   }
-  return (await response.json()) as T
+  const data: T = await response.json()
+  return data
 }
 
 export async function requestError(response: Response): Promise<ApiError> {
   let body: ErrorBody = {}
   try {
-    body = (await response.json()) as ErrorBody
+    body = await response.json()
   } catch {
     // The HTTP status is still useful when a proxy returns no JSON.
   }

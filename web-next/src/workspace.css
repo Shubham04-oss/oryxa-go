@@ -77,6 +77,7 @@
   transition: background 180ms ease, color 180ms ease, transform 180ms ease;
 }
 .workspace-switcher-item svg { flex: none; }
+.workspace-switcher-item .workspace-avatar { width: 22px; height: 22px; }
 .workspace-switcher-item:hover { background: #272727; color: #eee; }
 .workspace-switcher-item.is-selected {
   width: auto;
@@ -273,6 +274,74 @@
 }
 .workspace-avatar .workspace-planet-fallback { overflow: hidden; padding: 0; }
 .workspace-planet-art { display: block; width: 100%; height: 100%; border-radius: 50%; }
+
+/* Shared chat composer: a pill-shaped field with a circular icon send
+   button. Reused by the focused-work composer, the DM composer, and the
+   agent panel composer so all three share one look (see DESIGN.md §1). */
+.workspace-composer {
+  --composer-send-size: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 6px 6px 16px;
+  border: 1px solid #3a3a3a;
+  border-radius: 999px;
+  background: #242424;
+  transition: border-radius 160ms ease, border-color 160ms ease;
+}
+.workspace-composer:focus-within { border-color: #777; }
+.workspace-composer:has(input:disabled),
+.workspace-composer:has(textarea:disabled) {
+  border-color: #303030;
+  background: #1e1e1e;
+}
+/* Softens to a large radius once the field grows past one line, so wrapped
+   text doesn't look squeezed into a full pill. */
+.workspace-composer[data-multiline="true"] {
+  align-items: flex-end;
+  border-radius: 22px;
+}
+.workspace-composer-attach {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  color: #8f8f8f;
+}
+.workspace-composer input,
+.workspace-composer textarea {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #f1f1f1;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+.workspace-composer textarea { resize: none; }
+.workspace-composer input::placeholder,
+.workspace-composer textarea::placeholder { color: #8a8a8a; }
+.workspace-composer input:disabled,
+.workspace-composer textarea:disabled { cursor: not-allowed; }
+.workspace-shell .workspace-composer input:focus-visible,
+.workspace-shell .workspace-composer textarea:focus-visible { outline: none; }
+.workspace-composer-send {
+  display: grid;
+  flex: none;
+  width: var(--composer-send-size);
+  height: var(--composer-send-size);
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: #e9e9e9;
+  color: #1e1e1e;
+}
+.workspace-composer-send:hover:not(:disabled) { background: #fff; }
+.workspace-composer-send:disabled { cursor: default; opacity: .45; }
 
 .workspace-middle { display: flex; flex-direction: column; background: var(--workspace-base); }
 .workspace-header {
@@ -566,34 +635,8 @@
 .workspace-message-meta strong { overflow: hidden; color: #eee; font-size: 12px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-message-meta time { flex: none; color: #858585; font-size: 10px; }
 .workspace-message-body p { margin: 3px 0 0; color: #dedede; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
-.workspace-message-composer { position: relative; display: flex; align-items: center; gap: 10px; min-height: 36px; }
-.workspace-message-composer > svg { position: absolute; margin-left: 12px; color: #888; pointer-events: none; }
-.workspace-message-composer input {
-  flex: 1;
-  min-width: 0;
-  height: 36px;
-  padding: 0 12px 0 37px;
-  border: 1px solid #353535;
-  border-radius: 999px;
-  outline: none;
-  background: #1e1e1e;
-  color: #f1f1f1;
-  font: inherit;
-  font-size: 12px;
-}
-.workspace-message-composer input::placeholder { color: #8e8e8e; }
-.workspace-message-composer input:focus-visible { border-color: #777; }
-.workspace-message-composer button {
-  height: 32px;
-  padding: 0 13px;
-  border: 0;
-  border-radius: 9px;
-  background: #eee;
-  color: #1e1e1e;
-  font-size: 11px;
-  font-weight: 600;
-}
-.workspace-message-composer button:disabled { cursor: default; opacity: .5; }
+/* Container/field/button look now comes from the shared .workspace-composer
+   classes; this class is kept only as a semantic hook on the form. */
 
 .workspace-work-column {
   position: relative;
@@ -612,6 +655,9 @@
   border-radius: 17px;
   background: #1e1e1e;
 }
+/* Pinned to sit directly above the work panel, in the header's own 56px
+   band, so the tabs land on its centre row (y=28) like the back button and
+   title — not a separate strip with its own offset. */
 .workspace-work-tabs {
   position: absolute;
   right: 0;
@@ -620,7 +666,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 76px;
+  height: 56px;
   padding: 0 24px;
 }
 .workspace-work-tab {
@@ -665,122 +711,159 @@
   display: flex;
   flex-direction: column;
   overflow: visible;
-  padding: 16px 4px 24px;
+  padding: 0 4px 24px;
   background: var(--workspace-base);
 }
 .workspace-shell[data-right="expanded"] .workspace-right {
   overflow: hidden;
-  padding: 16px 24px 24px;
+  padding: 0 24px 24px;
 }
+/* The panel's top row is the header's 56px row, so its tabs and toggle sit
+   level with the page title. */
 .workspace-right-top {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
-  min-height: 64px;
+  min-height: 56px;
 }
-.workspace-right-top .workspace-icon-button { align-self: center; }
-.workspace-right-top h2 { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.35; }
-.workspace-right-top p { margin: 3px 0 0; color: #898989; font-size: 12px; }
 .workspace-shell[data-right="collapsed"] .workspace-right-top .workspace-icon-button {
   margin: 0 auto;
 }
 
-.workspace-activity-body { display: flex; flex: 1; flex-direction: column; min-height: 0; }
-.workspace-online {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding-top: 16px;
-  color: #a2a2a2;
-  font-size: 12px;
-}
-.workspace-avatar-row { display: flex; margin-top: 15px; padding-left: 3px; }
-.workspace-avatar-row .workspace-avatar {
-  width: 35px;
-  height: 35px;
-  margin-left: -3px;
-  border: 2px solid #f4f4f4;
-}
-.workspace-avatar-row .workspace-avatar-more { border-color: #242424; background: #242a26; font-size: 10px; }
-.workspace-activity-list { display: flex; flex-direction: column; gap: 16px; margin-top: 22px; overflow-y: auto; }
-.workspace-activity-item { display: flex; align-items: flex-start; gap: 11px; }
-.workspace-activity-item .workspace-avatar { width: 34px; height: 34px; }
-.workspace-activity-item > div:not([data-slot="avatar"]) { min-width: 0; padding-top: 1px; }
-.workspace-activity-item p { margin: 0; color: #eee; font-size: 12px; line-height: 1.4; }
-.workspace-activity-item strong { font-weight: 500; }
-.workspace-activity-item small { display: block; margin-top: 4px; overflow: hidden; color: #8c8c8c; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-
-.workspace-quick-note {
-  display: flex;
-  flex-direction: column;
-  min-height: 142px;
-  margin-top: auto;
-  padding: 13px 14px 10px;
-  border: 1px solid #3a3a3a;
-  border-radius: 17px;
-  background: #2a2a2a;
-}
-.workspace-quick-note label { color: #f1f1f1; font-size: 12px; font-weight: 600; }
-.workspace-quick-note textarea {
-  flex: 1;
+.workspace-right-rail { display: flex; flex-direction: column; gap: 3px; margin-top: 9px; }
+.workspace-rail-button {
+  display: grid;
   width: 100%;
-  min-height: 46px;
-  margin-top: 9px;
-  padding: 0;
-  resize: none;
+  min-height: 45px;
+  place-items: center;
   border: 0;
+  border-radius: 11px;
   background: transparent;
-  color: #f3f3f3;
-  font: inherit;
-  font-size: 12px;
-  outline: none;
+  color: #aaa;
 }
-.workspace-quick-note textarea::placeholder { color: #999; }
-.workspace-note-actions { display: flex; align-items: center; justify-content: space-between; color: #929292; }
-.workspace-note-actions button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 31px;
-  height: 29px;
-  border: 0;
-  border-radius: 9px;
-  background: #f1f1f1;
-  color: #1b1b1b;
-}
-.workspace-note-actions button:disabled { cursor: default; opacity: .55; }
+.workspace-rail-button:hover { background: #222; color: #efefef; }
+.workspace-rail-button .workspace-avatar { width: 26px; height: 26px; }
 
-.workspace-right-rail {
+.workspace-agent-view { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.workspace-agent-view:focus-visible { outline: 2px solid #d6d6d6; outline-offset: 2px; }
+.workspace-agent-identity { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; min-height: 44px; }
+.workspace-agent-conversation {
   display: flex;
   flex: 1;
   flex-direction: column;
-  align-items: center;
+  gap: 14px;
   min-height: 0;
+  overflow-y: auto;
+  padding: 12px 0;
+  scrollbar-color: #444 transparent;
+  scrollbar-width: thin;
 }
-.workspace-rail-label {
-  margin-top: 8px;
-  color: #888;
-  font-size: 10px;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  writing-mode: vertical-rl;
+.workspace-agent-empty { margin: auto 0; color: #929292; font-size: 12px; line-height: 1.5; text-align: center; }
+.workspace-agent-message { margin: 0; color: #dedede; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.workspace-agent-message[data-from="member"] { align-self: flex-end; max-width: 85%; padding: 8px 12px; border-radius: 14px; background: #242424; }
+.workspace-agent-error { margin: 0; color: #e4aaa6; font-size: 12px; line-height: 1.45; }
+
+/* The Agents tab's conversation (DESIGN.md §3). The row above it names the
+   conversation and starts a new one. */
+.workspace-agent-thread-bar { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.workspace-agent-thread-title { flex: 1; min-width: 0; margin: 0; overflow: hidden; color: #929292; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-agent-new {
+  display: grid;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #303030;
+  border-radius: 50%;
+  background: transparent;
+  color: #a8a8a8;
 }
-.workspace-rail-avatars {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: auto;
-}
-.workspace-rail-avatars .workspace-avatar {
-  width: 31px;
-  height: 31px;
-  border: 2px solid #ddd;
-  background: #1e1e1e;
-}
+.workspace-agent-new:hover:not(:disabled) { background: #242424; color: #f2f2f2; }
+.workspace-agent-new:disabled { cursor: default; opacity: .4; }
+.workspace-agent-message[data-from="agent"] { white-space: normal; }
+.workspace-agent-author { margin: 0 0 2px; color: #8d8d8d; font-size: 11px; font-weight: 600; }
+.workspace-agent-note { margin: 4px 0 0; color: #858585; font-size: 11px; line-height: 1.4; }
+/* A specialist's work result under its answer: tools, files, hand-offs. */
+.workspace-agent-result { margin: 6px 0 0; color: #858585; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.workspace-agent-result[data-status="needs_input"],
+.workspace-agent-result[data-status="blocked"] { color: #a9a9a9; }
+.workspace-agent-text-button { padding: 0; border: 0; background: none; color: #bdbdbd; font: inherit; font-size: 11px; text-decoration: underline; text-underline-offset: 2px; }
+.workspace-agent-text-button:hover { color: #f2f2f2; }
+.workspace-agent-working { margin: 0; color: #858585; font-size: 12px; animation: workspace-agent-pulse 1.6s ease-in-out infinite; }
+@keyframes workspace-agent-pulse { 50% { opacity: .4; } }
+.workspace-agent-conversation a:focus-visible { outline: 2px solid #d6d6d6; outline-offset: 2px; }
+
+.workspace-agent-markdown { overflow-wrap: anywhere; }
+.workspace-agent-markdown > :first-child { margin-top: 0; }
+.workspace-agent-markdown > :last-child { margin-bottom: 0; }
+.workspace-agent-markdown p { margin: 0 0 8px; }
+.workspace-agent-markdown ul,
+.workspace-agent-markdown ol { margin: 0 0 8px; padding-left: 18px; }
+.workspace-agent-markdown ul { list-style: disc; }
+.workspace-agent-markdown ol { list-style: decimal; }
+.workspace-agent-markdown li::marker { color: #8d8d8d; }
+.workspace-agent-markdown li + li { margin-top: 3px; }
+.workspace-agent-markdown h1,
+.workspace-agent-markdown h2,
+.workspace-agent-markdown h3,
+.workspace-agent-markdown h4 { margin: 12px 0 6px; color: #efefef; font-size: 13px; font-weight: 600; }
+.workspace-agent-markdown strong { color: #efefef; font-weight: 600; }
+.workspace-agent-markdown a { color: #f2f2f2; text-decoration: underline; text-decoration-color: #777; text-underline-offset: 2px; }
+.workspace-agent-markdown code { padding: 1px 4px; border-radius: 4px; background: #242424; font-size: 12px; }
+.workspace-agent-markdown pre { margin: 0 0 8px; padding: 8px 10px; overflow-x: auto; border: 1px solid #2c2c2c; border-radius: 8px; background: #1a1a1a; font-size: 12px; line-height: 1.45; }
+.workspace-agent-markdown pre code { padding: 0; background: none; }
+.workspace-agent-markdown blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 2px solid #3a3a3a; color: #bdbdbd; }
+.workspace-agent-markdown table { display: block; max-width: 100%; margin: 0 0 8px; overflow-x: auto; border-collapse: collapse; font-size: 12px; }
+.workspace-agent-markdown th,
+.workspace-agent-markdown td { padding: 4px 8px; border: 1px solid #333; text-align: left; }
+.workspace-agent-markdown hr { margin: 10px 0; border: 0; border-top: 1px solid #333; }
+
+.workspace-agent-tools { display: flex; align-items: center; gap: 8px; min-width: 0; color: #9b9b9b; font-size: 12px; line-height: 1.4; }
+.workspace-agent-tools svg { flex: none; }
+.workspace-agent-tools[data-state="failed"] svg { color: #e4aaa6; }
+.workspace-agent-tools-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-agent-tools-status { flex: none; color: #777; font-size: 11px; }
+.workspace-agent-spin { animation: workspace-agent-spin 1s linear infinite; }
+@keyframes workspace-agent-spin { to { transform: rotate(360deg); } }
+
+.workspace-agent-confirmation { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid #333; border-radius: 12px; background: #1b1b1b; }
+.workspace-agent-confirmation-title { display: flex; align-items: center; gap: 7px; margin: 0; color: #ececec; font-size: 12px; font-weight: 600; }
+.workspace-agent-confirmation-hint { margin: 0; color: #a9a9a9; font-size: 12px; line-height: 1.45; }
+.workspace-agent-confirmation details { color: #8d8d8d; font-size: 11px; }
+.workspace-agent-confirmation summary { width: fit-content; cursor: pointer; }
+.workspace-agent-confirmation pre { max-height: 180px; margin: 6px 0 0; padding: 8px; overflow: auto; border-radius: 8px; background: #141414; color: #c9c9c9; font-size: 11px; white-space: pre-wrap; }
+.workspace-agent-confirmation-actions,
+.workspace-agent-answers { display: flex; justify-content: flex-end; gap: 6px; }
+.workspace-agent-confirmation-status { align-self: flex-end; margin: 0; color: #8d8d8d; font-size: 11px; }
+.workspace-agent-pill { min-height: 28px; padding: 0 12px; border: 1px solid #3a3a3a; border-radius: 999px; background: transparent; color: #d6d6d6; font-size: 12px; }
+.workspace-agent-pill:hover:not(:disabled) { background: #262626; color: #fff; }
+.workspace-agent-pill[aria-pressed="true"] { border-color: #9a9a9a; background: #303030; color: #fff; }
+.workspace-agent-pill[data-primary="true"] { border-color: #e9e9e9; background: #e9e9e9; color: #1e1e1e; }
+.workspace-agent-pill[data-primary="true"]:hover:not(:disabled) { background: #fff; color: #111; }
+.workspace-agent-pill:disabled { cursor: default; opacity: .45; }
+
+.workspace-agent-artifact { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.workspace-agent-artifact figcaption { color: #858585; font-size: 11px; }
+.workspace-agent-artifact-image { display: block; width: fit-content; max-width: 100%; overflow: hidden; border: 1px solid #2f2f2f; border-radius: 10px; }
+.workspace-agent-artifact-image img { display: block; max-width: 100%; max-height: 200px; object-fit: contain; }
+.workspace-agent-artifact-file { display: inline-flex; align-items: center; gap: 8px; width: fit-content; max-width: 100%; padding: 7px 12px; border: 1px solid #333; border-radius: 10px; color: #d6d6d6; font-size: 12px; text-decoration: none; }
+.workspace-agent-artifact-file svg { flex: none; }
+.workspace-agent-artifact-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-agent-artifact-file:is(a):hover { background: #222; color: #fff; }
+
+.workspace-agent-apps { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 10px; border: 1px solid #2e2e2e; border-radius: 12px; }
+.workspace-agent-apps-label { display: flex; align-items: center; gap: 6px; margin: 0; color: #8d8d8d; font-size: 11px; font-weight: 600; }
+.workspace-agent-apps-text { margin: 0; color: #c9c9c9; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+.workspace-agent-composer { display: flex; flex-direction: column; gap: 7px; padding-top: 12px; }
+/* Field/button look now comes from the shared .workspace-composer classes;
+   this class is kept as a semantic hook and for the data-multiline toggle. */
+.workspace-agent-composer-status { margin: 0 14px; color: #858585; font-size: 11px; line-height: 1.4; }
 
 @media (min-width: 801px) and (max-width: 1250px) {
-  .workspace-switcher-item.is-selected span { display: none; }
+  .workspace-left .workspace-switcher-item.is-selected span { display: none; }
 }
 
 @media (max-width: 800px) {
@@ -868,12 +951,17 @@
     padding-inline: 16px;
     box-shadow: -12px 0 40px #0009;
   }
+  /* iOS zooms into a field under 16px when it gains focus. */
+  .workspace-composer input,
+  .workspace-composer textarea { font-size: 16px; line-height: 22px; }
   .workspace-header {
     min-height: 56px;
     padding: 8px 56px;
   }
   .workspace-header-back { left: 56px; }
-  .workspace-header-detail { max-width: calc(100% - 200px); }
+  /* The header's padding already clears the side buttons; this clears the
+     back button beside the left one, so a title stays centered. */
+  .workspace-header-detail { max-width: calc(100% - 88px); }
   .workspace-header:has(.workspace-organization-switcher) { flex-direction: column; gap: 4px; min-height: 82px; }
   .workspace-header:has(.workspace-organization-switcher) > h1 { max-width: 100%; }
   .workspace-organization-switcher { position: static; margin: 0 auto; }
@@ -942,6 +1030,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .workspace-agent-working,
+  .workspace-agent-spin { animation: none; }
   .workspace-shell { transition: none; }
   .workspace-switcher-item { transition: none; }
   .workspace-switcher-item.is-selected { transform: none; }
