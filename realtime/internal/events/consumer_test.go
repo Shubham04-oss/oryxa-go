@@ -284,7 +284,7 @@ type fakeQueue struct {
 }
 
 func (fake *fakeQueue) ReceiveMessage(ctx context.Context, input *sqs.ReceiveMessageInput, _ ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error) {
-	if input.MaxNumberOfMessages != receiveBatch {
+	if input.MaxNumberOfMessages != ReceiveBatch {
 		return nil, fmt.Errorf("asked for %d messages", input.MaxNumberOfMessages)
 	}
 	if len(fake.batches) == 0 {

@@ -196,11 +196,10 @@ type queueAPI interface {
 	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
 }
 
-// receiveBatch is how many messages Poll takes at once. Each may wait up to
-// purge.Timeout on the Worker, one after another, so five stay well inside the
-// queue's five-minute visibility timeout (see the provisioner) even when the
-// Worker answers none of them.
-const receiveBatch = 5
+// ReceiveBatch is how many messages Poll takes at once. Each may wait up to
+// purge.Timeout on the Worker, one after another, so the queue's visibility
+// timeout, which its provisioner sets, must outlast that many.
+const ReceiveBatch = 5
 
 // receiveBackoff is how long Poll waits after a failed receive before trying
 // again. A var so tests can shorten it instead of waiting for real time.
@@ -219,7 +218,7 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 	for {
 		output, err := client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 			QueueUrl:            aws.String(queueURL),
-			MaxNumberOfMessages: receiveBatch,
+			MaxNumberOfMessages: ReceiveBatch,
 			WaitTimeSeconds:     20,
 		})
 		if ctx.Err() != nil {
