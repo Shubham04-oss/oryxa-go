@@ -721,7 +721,7 @@ func TestRemoveSourceRetractsWhatItHeld(t *testing.T) {
 	}
 
 	var retracted int
-	err := store.RemoveSource(ctx, "org_1", source.ID, testClock, func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
+	err := store.RemoveSource(ctx, "org_1", source.ID, "source_removed", testClock, func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
 		retracted = len(documents)
 		events := make([]domain.Event, 0, len(documents))
 		for range documents {
@@ -743,7 +743,7 @@ func TestRemoveSourceRetractsWhatItHeld(t *testing.T) {
 	if read.Status != domain.StatusRemoved {
 		t.Fatalf("Source() status = %s, want removed", read.Status)
 	}
-	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock, nil); !errors.Is(err, domain.ErrNotFound) {
+	if err := store.RemoveSource(ctx, "org_1", source.ID, "source_removed", testClock, nil); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("RemoveSource(again) error = %v, want ErrNotFound", err)
 	}
 }
@@ -799,7 +799,7 @@ func TestSourcesAnswersRemovedOnesOnlyWhenAsked(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 	source := testSource(t, store, "org_1")
-	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock, nil); err != nil {
+	if err := store.RemoveSource(ctx, "org_1", source.ID, "source_removed", testClock, nil); err != nil {
 		t.Fatalf("RemoveSource() error = %v", err)
 	}
 
@@ -892,7 +892,7 @@ func TestRemoveSourcesByConnectionRetractsWhatItHeld(t *testing.T) {
 	}
 
 	var retracted int
-	removed, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, testClock,
+	removed, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, "connection_removed", testClock,
 		func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
 			retracted = len(documents)
 			events := make([]domain.Event, 0, len(documents))
@@ -928,7 +928,7 @@ func TestRemoveSourcesByConnectionRetractsWhatItHeld(t *testing.T) {
 
 	// Running it again finds nothing further: a redelivered event is
 	// harmless.
-	again, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, testClock, nil)
+	again, err := store.RemoveSourcesByConnection(ctx, source.ConnectionID, "connection_removed", testClock, nil)
 	if err != nil || len(again) != 0 {
 		t.Fatalf("RemoveSourcesByConnection(again) = %d, %v, want none", len(again), err)
 	}
@@ -960,7 +960,7 @@ func TestRemoveSourcesByTeamRetiresOnlyThatTeam(t *testing.T) {
 	}
 
 	var retracted int
-	removed, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", testClock,
+	removed, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", "team_deleted", testClock,
 		func(_ domain.Source, documents []domain.Document) ([]domain.Event, error) {
 			retracted = len(documents)
 			events := make([]domain.Event, 0, len(documents))
@@ -983,7 +983,7 @@ func TestRemoveSourcesByTeamRetiresOnlyThatTeam(t *testing.T) {
 	}
 
 	// A redelivered event finds nothing further.
-	if again, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", testClock, nil); err != nil || len(again) != 0 {
+	if again, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", "team_deleted", testClock, nil); err != nil || len(again) != 0 {
 		t.Fatalf("RemoveSourcesByTeam(again) = %d, %v, want none", len(again), err)
 	}
 }
@@ -1459,7 +1459,7 @@ func TestHastenSourceLeavesWhatIsNotItsToMove(t *testing.T) {
 
 	// One that is not active has something wrong with it that hurrying does
 	// not fix.
-	if err := store.RemoveSource(ctx, "org_1", source.ID, testClock,
+	if err := store.RemoveSource(ctx, "org_1", source.ID, "source_removed", testClock,
 		func(domain.Source, []domain.Document) ([]domain.Event, error) { return nil, nil }); err != nil {
 		t.Fatalf("RemoveSource() error = %v", err)
 	}
@@ -1558,6 +1558,74 @@ func TestDocumentsToRedecideFindsWhatAJudgeDecided(t *testing.T) {
 	for _, document := range found {
 		if document.Judgment == nil || document.Body == "" {
 			t.Fatalf("document %s = judgment %s, body %q; want both, to decide it again", document.ExternalID, document.Judgment, document.Body)
+		}
+	}
+}
+
+// TestEveryRemovalRecordsItsReason pins what knowledge decides by: a source
+// retired because its member left may be taken over by the next uploader,
+// and only the reason on its row can say that is why it went.
+func TestEveryRemovalRecordsItsReason(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	failing := func(source domain.Source) {
+		t.Helper()
+		// A reason left over from a failed pass must not survive a removal.
+		if _, err := store.pool.Exec(ctx, `UPDATE knowledge_sources SET reason = 'provider_unavailable' WHERE id = $1`, source.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	left := testSource(t, store, "org_1")
+	if _, err := store.pool.Exec(ctx, `UPDATE knowledge_sources SET created_by = 'user-left' WHERE id = $1`, left.ID); err != nil {
+		t.Fatal(err)
+	}
+	failing(left)
+	removed := testSource(t, store, "org_1")
+	failing(removed)
+	disconnected := testSource(t, store, "org_1")
+	failing(disconnected)
+	team := domain.Source{
+		ID: "src_" + randomHex(8), OrganizationID: "org_1", Provider: "files",
+		Target: map[string]string{"team": "team_gone"}, Scope: domain.ScopeTeam, TeamID: "team_gone",
+		CreatedBy: "user-1", Status: domain.StatusActive, Interval: time.Hour, SyncAt: &testClock, CreatedAt: testClock,
+	}
+	if err := store.CreateSource(ctx, team, nil); err != nil {
+		t.Fatal(err)
+	}
+	failing(team)
+	organization := testSource(t, store, "org_2")
+	failing(organization)
+
+	if _, err := store.RemoveSources(ctx, "org_1", "user-left", "member_left", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RemoveSource(ctx, "org_1", removed.ID, "source_removed", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RemoveSourcesByConnection(ctx, disconnected.ConnectionID, "connection_removed", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RemoveSourcesByTeam(ctx, "org_1", "team_gone", "team_deleted", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RemoveSources(ctx, "org_2", "", "organization_deleted", testClock, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []struct {
+		organizationID, sourceID, reason string
+	}{
+		{"org_1", left.ID, "member_left"},
+		{"org_1", removed.ID, "source_removed"},
+		{"org_1", disconnected.ID, "connection_removed"},
+		{"org_1", team.ID, "team_deleted"},
+		{"org_2", organization.ID, "organization_deleted"},
+	} {
+		read, err := store.Source(ctx, want.organizationID, want.sourceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if read.Status != domain.StatusRemoved || read.Reason != want.reason {
+			t.Errorf("%s: status %s, reason %q; want removed as %q", want.sourceID, read.Status, read.Reason, want.reason)
 		}
 	}
 }

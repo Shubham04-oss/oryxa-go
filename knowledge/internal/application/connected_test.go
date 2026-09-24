@@ -9,8 +9,10 @@ import (
 	"time"
 
 	appsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/apps/v1"
+	authv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	filesv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/files/v1"
 	knowledgev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
+	teamsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/teams/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/knowledge/internal/domain"
@@ -622,6 +624,108 @@ func TestTeamFilesSourceRetiredWithItsUploaderCanBeReplaced(t *testing.T) {
 	}
 	if len(store.sources) != 2 {
 		t.Fatalf("team source was not replaced after its uploader left: %+v", store.sources)
+	}
+}
+
+// The first uploader owns what a placement's files source reads as. When they
+// leave the organization their sources go with them, and the next member to
+// upload there takes the placement over: a departure is not somebody saying
+// the placement should stop being indexed.
+func TestAPlacementWhoseUploaderLeftIsTakenOverByTheNextUploader(t *testing.T) {
+	for _, scope := range []string{"organization", "team"} {
+		t.Run(scope, func(t *testing.T) {
+			store := newFakeStore()
+			service, grants := filesService(t, store)
+			first := storedFile(scope)
+			first.TeamID = map[string]string{"team": "team_eng"}[scope]
+			first.CreatedBy = "user-departed"
+			service.directory.(*fakeDirectory).membership.UserID = "user-departed"
+			if err := service.FileStored(context.Background(), first); err != nil {
+				t.Fatal(err)
+			}
+			if len(store.sources) != 1 {
+				t.Fatalf("the first upload registered %d sources, want 1", len(store.sources))
+			}
+
+			if err := service.MemberRemoved(context.Background(), authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-departed"}); err != nil {
+				t.Fatal(err)
+			}
+			for _, source := range store.sources {
+				if source.Status != domain.StatusRemoved || source.Reason != knowledgev1.RemovedReasonMemberLeft {
+					t.Fatalf("the departed member's source = %s, reason %q; want it retired as member_left", source.Status, source.Reason)
+				}
+			}
+
+			next := first
+			next.FileID, next.CreatedBy = "fil_2", "user-1"
+			service.directory.(*fakeDirectory).membership.UserID = "user-1"
+			if err := service.FileStored(context.Background(), next); err != nil {
+				t.Fatal(err)
+			}
+			live := 0
+			for _, source := range store.sources {
+				if source.Status == domain.StatusActive {
+					live++
+					if source.CreatedBy != "user-1" || string(source.Scope) != scope {
+						t.Fatalf("replacement = %+v, want user-1's %s source", source, scope)
+					}
+				}
+			}
+			if live != 1 {
+				t.Fatalf("live sources after the next upload = %d, want the next uploader's", live)
+			}
+			if got := grants.members[len(grants.members)-1]; got != "org_1/user-1" {
+				t.Fatalf("the replacement reads as %s, want the next uploader", got)
+			}
+		})
+	}
+}
+
+// Every way a source is retired records why, so what decides whether to
+// register one again can tell a member saying no from anything else.
+func TestEveryRetirementRecordsItsReason(t *testing.T) {
+	store := newFakeStore()
+	service, _ := filesService(t, store)
+	seed := func(id string, change func(*domain.Source)) {
+		source := domain.Source{
+			ID: id, OrganizationID: "org_1", Provider: "github", ConnectionID: "apc_" + id,
+			Scope: domain.ScopeMember, MemberID: "user-" + id, CreatedBy: "user-" + id, Status: domain.StatusActive,
+			Reason: knowledgev1.SyncErrorProviderUnavailable,
+		}
+		if change != nil {
+			change(&source)
+		}
+		store.sources[id] = source
+	}
+	seed("left", nil)
+	seed("disconnected", nil)
+	seed("team", func(source *domain.Source) {
+		source.Provider, source.ConnectionID, source.Scope, source.MemberID, source.TeamID = "files", "", domain.ScopeTeam, "", "team_gone"
+	})
+	seed("removed", nil)
+	ctx := context.Background()
+	if err := service.MemberRemoved(ctx, authv1.MemberRemoved{OrganizationID: "org_1", UserID: "user-left"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConnectionRemoved(ctx, appsv1.ConnectionRemoved{ConnectionID: "apc_disconnected"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.TeamDeleted(ctx, teamsv1.TeamDeleted{OrganizationID: "org_1", TeamID: "team_gone"}); err != nil {
+		t.Fatal(err)
+	}
+	service.directory.(*fakeDirectory).membership.UserID = "user-removed"
+	if err := service.RemoveSource(ctx, authclient.Credentials{Authorization: "Bearer t"}, "org_1", "removed"); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{
+		"left":         knowledgev1.RemovedReasonMemberLeft,
+		"disconnected": knowledgev1.RemovedReasonConnectionRemoved,
+		"team":         knowledgev1.RemovedReasonTeamDeleted,
+		"removed":      knowledgev1.RemovedReasonSourceRemoved,
+	} {
+		if source := store.sources[id]; source.Status != domain.StatusRemoved || source.Reason != want {
+			t.Errorf("%s: status %s, reason %q; want removed as %q", id, source.Status, source.Reason, want)
+		}
 	}
 }
 

@@ -238,7 +238,8 @@ func (s *Service) RemoveSource(ctx context.Context, credentials authclient.Crede
 		return domain.ErrNotFound
 	}
 	pending := &pendingOriginals{}
-	if err := s.store.RemoveSource(ctx, organizationID, sourceID, s.now(), s.retractions(knowledgev1.RemovedReasonSourceRemoved, pending)); err != nil {
+	if err := s.store.RemoveSource(ctx, organizationID, sourceID, knowledgev1.RemovedReasonSourceRemoved, s.now(),
+		s.retractions(knowledgev1.RemovedReasonSourceRemoved, pending)); err != nil {
 		return err
 	}
 	s.deleteOriginals(ctx, pending)

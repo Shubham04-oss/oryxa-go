@@ -169,16 +169,18 @@ func (store *Store) FailSource(ctx context.Context, sourceID, leaseToken, reason
 }
 
 // RemoveSources retires every source an organization, or one of its members,
-// no longer has, and retracts what they held in the same transaction.
-func (store *Store) RemoveSources(ctx context.Context, organizationID, createdBy string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+// no longer has, and retracts what they held in the same transaction. reason
+// is recorded on each: a source retired because its member left is one the
+// next uploader may take over, unlike one a member removed.
+func (store *Store) RemoveSources(ctx context.Context, organizationID, createdBy, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	sql := `
 		UPDATE knowledge_sources
-		SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		SET status = 'removed', reason = $3, sync_at = NULL, lease_token = NULL, lease_until = NULL,
 		    updated_at = $2, version = version + 1
 		WHERE organization_id = $1 AND status <> 'removed'`
-	args := []any{organizationID, now}
+	args := []any{organizationID, now, reason}
 	if createdBy != "" {
-		sql += ` AND created_by = $3`
+		sql += ` AND created_by = $4`
 		args = append(args, createdBy)
 	}
 	return store.removeSources(ctx, sql+` RETURNING `+sourceColumns, args, now, events)
@@ -188,13 +190,13 @@ func (store *Store) RemoveSources(ctx context.Context, organizationID, createdBy
 // connection, and retracts what they held in the same transaction. Unlike
 // RemoveSources, which retires by organization or creator, this runs when the
 // connection itself is gone for good: apps.connection.removed.v1.
-func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	return store.removeSources(ctx, `
 		UPDATE knowledge_sources
-		SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		SET status = 'removed', reason = $3, sync_at = NULL, lease_token = NULL, lease_until = NULL,
 		    updated_at = $2, version = version + 1
 		WHERE connection_id = $1 AND status <> 'removed'
-		RETURNING `+sourceColumns, []any{connectionID, now}, now, events)
+		RETURNING `+sourceColumns, []any{connectionID, now, reason}, now, events)
 }
 
 // RemoveSourcesByTeam retires every source a deleted team held, and retracts
@@ -202,13 +204,13 @@ func (store *Store) RemoveSourcesByConnection(ctx context.Context, connectionID 
 // running, a deleted team's sources would go on publishing its documents,
 // and rag — which removes the team's corpora when the team goes — would build
 // it a new one from them.
-func (store *Store) RemoveSourcesByTeam(ctx context.Context, organizationID, teamID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *Store) RemoveSourcesByTeam(ctx context.Context, organizationID, teamID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	return store.removeSources(ctx, `
 		UPDATE knowledge_sources
-		SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+		SET status = 'removed', reason = $4, sync_at = NULL, lease_token = NULL, lease_until = NULL,
 		    updated_at = $2, version = version + 1
 		WHERE organization_id = $1 AND scope = 'team' AND team_id = $3 AND status <> 'removed'
-		RETURNING `+sourceColumns, []any{organizationID, now, teamID}, now, events)
+		RETURNING `+sourceColumns, []any{organizationID, now, teamID, reason}, now, events)
 }
 
 // removeSources runs a statement that retires sources and returns them, then
@@ -321,15 +323,15 @@ func (store *Store) PauseSources(ctx context.Context, connectionID, reason strin
 }
 
 // RemoveSource retires one source a member asked to stop indexing, retracting
-// its documents with it.
-func (store *Store) RemoveSource(ctx context.Context, organizationID, sourceID string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error {
+// its documents with it, and records reason on it.
+func (store *Store) RemoveSource(ctx context.Context, organizationID, sourceID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error {
 	return store.inTx(ctx, func(tx pgx.Tx) error {
 		sources, err := querySources(ctx, tx, `
 			UPDATE knowledge_sources
-			SET status = 'removed', sync_at = NULL, lease_token = NULL, lease_until = NULL,
+			SET status = 'removed', reason = $4, sync_at = NULL, lease_token = NULL, lease_until = NULL,
 			    updated_at = $3, version = version + 1
 			WHERE organization_id = $1 AND id = $2 AND status <> 'removed'
-			RETURNING `+sourceColumns, organizationID, sourceID, now)
+			RETURNING `+sourceColumns, organizationID, sourceID, now, reason)
 		if err != nil {
 			return err
 		}

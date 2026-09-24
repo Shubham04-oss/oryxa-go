@@ -161,19 +161,26 @@ func (store *fakeStore) Sources(_ context.Context, _ string, query domain.Source
 	return listed, nil
 }
 
-func (store *fakeStore) RemoveSource(_ context.Context, _, sourceID string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error {
+// retire marks a source removed the way every real removal does: with its
+// reason, and nothing left scheduled.
+func retire(source domain.Source, reason string) domain.Source {
+	source.Status, source.Reason, source.SyncAt = domain.StatusRemoved, reason, nil
+	return source
+}
+
+func (store *fakeStore) RemoveSource(_ context.Context, _, sourceID, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	source, ok := store.sources[sourceID]
-	if !ok {
+	if !ok || source.Status == domain.StatusRemoved {
 		return domain.ErrNotFound
 	}
-	source.Status = domain.StatusRemoved
+	source = retire(source, reason)
 	store.sources[sourceID] = source
 	return store.retractAll(source, events)
 }
 
-func (store *fakeStore) RemoveSources(_ context.Context, organizationID, createdBy string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *fakeStore) RemoveSources(_ context.Context, organizationID, createdBy, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	removed := []domain.Source{}
@@ -184,7 +191,7 @@ func (store *fakeStore) RemoveSources(_ context.Context, organizationID, created
 		if createdBy != "" && source.CreatedBy != createdBy {
 			continue
 		}
-		source.Status = domain.StatusRemoved
+		source = retire(source, reason)
 		store.sources[id] = source
 		removed = append(removed, source)
 		if err := store.retractAll(source, events); err != nil {
@@ -217,7 +224,7 @@ func (store *fakeStore) retractAll(source domain.Source, events func(domain.Sour
 	return nil
 }
 
-func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionID string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionID, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	removed := []domain.Source{}
@@ -225,7 +232,7 @@ func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionI
 		if source.ConnectionID != connectionID || source.Status == domain.StatusRemoved {
 			continue
 		}
-		source.Status = domain.StatusRemoved
+		source = retire(source, reason)
 		store.sources[id] = source
 		removed = append(removed, source)
 		if err := store.retractAll(source, events); err != nil {
@@ -235,7 +242,7 @@ func (store *fakeStore) RemoveSourcesByConnection(_ context.Context, connectionI
 	return removed, nil
 }
 
-func (store *fakeStore) RemoveSourcesByTeam(_ context.Context, organizationID, teamID string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
+func (store *fakeStore) RemoveSourcesByTeam(_ context.Context, organizationID, teamID, reason string, _ time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	removed := []domain.Source{}
@@ -243,7 +250,7 @@ func (store *fakeStore) RemoveSourcesByTeam(_ context.Context, organizationID, t
 		if source.OrganizationID != organizationID || source.Scope != domain.ScopeTeam || source.TeamID != teamID || source.Status == domain.StatusRemoved {
 			continue
 		}
-		source.Status = domain.StatusRemoved
+		source = retire(source, reason)
 		store.sources[id] = source
 		removed = append(removed, source)
 		if err := store.retractAll(source, events); err != nil {

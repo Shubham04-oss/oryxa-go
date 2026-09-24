@@ -30,11 +30,15 @@ type Store interface {
 	CreateSource(context.Context, domain.Source, *domain.Event) error
 	Source(context.Context, string, string) (domain.Source, error)
 	Sources(context.Context, string, domain.SourceQuery) ([]domain.Source, error)
-	RemoveSource(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) error
-	RemoveSources(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	// Every removal records its reason on what it retires (one of
+	// knowledgev1's RemovedReason values), so what decides whether to
+	// register a source again can tell a member saying no from a member
+	// leaving.
+	RemoveSource(ctx context.Context, organizationID, sourceID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) error
+	RemoveSources(ctx context.Context, organizationID, createdBy, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
 	// RemoveSourcesByConnection retires every source reading through one
 	// connection: apps.connection.removed.v1, which is gone for good.
-	RemoveSourcesByConnection(context.Context, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	RemoveSourcesByConnection(ctx context.Context, connectionID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
 	// HastenSources brings forward the next sweep of a connection's live
 	// sources, no sooner than floor after their last.
 	HastenSources(ctx context.Context, connectionID string, at time.Time, floor time.Duration) (int64, error)
@@ -44,7 +48,7 @@ type Store interface {
 	HastenSource(ctx context.Context, organizationID, sourceID string, at time.Time) (bool, error)
 	// RemoveSourcesByTeam retires every source a deleted team held, and
 	// retracts what they held in the same transaction.
-	RemoveSourcesByTeam(context.Context, string, string, time.Time, func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
+	RemoveSourcesByTeam(ctx context.Context, organizationID, teamID, reason string, now time.Time, events func(domain.Source, []domain.Document) ([]domain.Event, error)) ([]domain.Source, error)
 	// PauseSources stops every live source reading through one connection:
 	// apps.connection.expired.v1, or a run that just discovered the same
 	// thing the hard way.
