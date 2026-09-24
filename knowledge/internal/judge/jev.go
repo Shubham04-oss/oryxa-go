@@ -238,6 +238,9 @@ func (jev *Jev) Judge(ctx context.Context, candidate domain.Candidate) (domain.V
 		kept := decodeJudgment(verdict.Judgment)
 		kept.Jev = &result
 		verdict.Judgment = kept.encode()
+		// The escalation read what Jev was unsure of, so its category is the
+		// document's, as Redecide will also answer from the same judgment.
+		verdict.Category = kept.category()
 		return verdict, nil
 	}
 	if certainty < jev.escalateBelow {
@@ -245,9 +248,11 @@ func (jev *Jev) Judge(ctx context.Context, candidate domain.Candidate) (domain.V
 		// than keeping something that does not.
 		keep = true
 	}
+	kept := judgment{Jev: &result}
 	return domain.Verdict{
 		Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", reason, result.Model, certainty*100),
-		Judgment: judgment{Jev: &result}.encode(),
+		Category: kept.category(),
+		Judgment: kept.encode(),
 	}, nil
 }
 
@@ -264,7 +269,8 @@ func (jev *Jev) Redecide(kept []byte, include []string) (domain.Verdict, bool) {
 				keep = true
 			}
 			return domain.Verdict{
-				Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", reason, given.Jev.Model, certainty*100), Judgment: kept,
+				Keep: keep, Reason: fmt.Sprintf("%s (%s, %.0f%% sure)", reason, given.Jev.Model, certainty*100),
+				Category: given.category(), Judgment: kept,
 			}, true
 		}
 	}

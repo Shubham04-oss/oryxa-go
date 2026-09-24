@@ -31,6 +31,27 @@ func TestMembershipForwardsCredentials(t *testing.T) {
 	}
 }
 
+// TestMembershipReadsWhetherTheCallerIsAnAgent: auth answers a token it
+// minted for an agent with "agent": true, and a member's own session without
+// the field at all. Rag must carry the difference through, since an agent
+// acting for an admin may not read what only admins may.
+func TestMembershipReadsWhetherTheCallerIsAnAgent(t *testing.T) {
+	agentBody := `{"organization":{"id":"org_1","name":"Acme"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"admin"},"agent":true}`
+	for body, wantAgent := range map[string]bool{agentBody: true, organizationBody: false} {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(body))
+		}))
+		membership, err := New(server.URL).Membership(context.Background(), "org_1", Credentials{Authorization: "Bearer token-1"})
+		server.Close()
+		if err != nil {
+			t.Fatalf("Membership() error = %v", err)
+		}
+		if membership.Agent != wantAgent {
+			t.Fatalf("Agent = %v, want %v for %s", membership.Agent, wantAgent, body)
+		}
+	}
+}
+
 func TestMembershipFallsBackToTheAccessCookie(t *testing.T) {
 	// A bearer token is not sent by a browser on its own, so the cookie is
 	// what a browser session actually carries.

@@ -74,6 +74,27 @@ func TestStoreLifecycle(t *testing.T) {
 	if err != nil || len(teamListed) != 1 || teamListed[0].ID != teamFile.ID {
 		t.Fatalf("team Objects() = %+v, err = %v", teamListed, err)
 	}
+	restricted := domain.Object{
+		ID: fileID + "-restricted", OrganizationID: organizationID, Scope: domain.ScopeOrganization,
+		Filename: "strategy.txt", ContentType: "text/plain", Purpose: domain.PurposeUpload, Access: domain.AccessAdmins,
+		SizeBytes: 6, SHA256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+		CreatedBy: "user-1", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour),
+	}
+	if err := store.CreateObject(ctx, "Acme", restricted, testEvent(eventPrefix+"-restricted", "files.object.created.v1", now)); err != nil {
+		t.Fatal(err)
+	}
+	readRestricted, err := store.Object(ctx, organizationID, restricted.ID, now)
+	if err != nil || readRestricted.Access != domain.AccessAdmins {
+		t.Fatalf("restricted row = %+v, %v", readRestricted, err)
+	}
+	memberOrganization, err := store.Objects(ctx, organizationID, now, domain.ObjectQuery{Scope: domain.ScopeOrganization})
+	if err != nil || len(memberOrganization) != 0 {
+		t.Fatalf("member org files = %+v, %v", memberOrganization, err)
+	}
+	adminOrganization, err := store.Objects(ctx, organizationID, now, domain.ObjectQuery{Scope: domain.ScopeOrganization, Admin: true})
+	if err != nil || len(adminOrganization) != 1 || adminOrganization[0].ID != restricted.ID {
+		t.Fatalf("admin org files = %+v, %v", adminOrganization, err)
+	}
 	hidden, err := store.Objects(ctx, organizationID, now, domain.ObjectQuery{MemberID: "user-1"})
 	if err != nil || len(hidden) != 1 || hidden[0].ID != fileID {
 		t.Fatalf("default Objects() should hide the team file = %+v, err = %v", hidden, err)

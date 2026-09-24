@@ -48,8 +48,8 @@ func (s *Service) MemberRemoved(ctx context.Context, event authv1.MemberRemoved)
 // new corpus from them.
 func (s *Service) TeamDeleted(ctx context.Context, event teamsv1.TeamDeleted) error {
 	pending := &pendingOriginals{}
-	removed, err := s.store.RemoveSourcesByTeam(ctx, event.OrganizationID, event.TeamID, s.now(),
-		s.retractions(knowledgev1.RemovedReasonTeamDeleted, pending))
+	removed, err := s.store.RemoveSourcesByTeam(ctx, event.OrganizationID, event.TeamID,
+		knowledgev1.RemovedReasonTeamDeleted, s.now(), s.retractions(knowledgev1.RemovedReasonTeamDeleted, pending))
 	if err != nil {
 		return err
 	}
@@ -74,7 +74,7 @@ func (s *Service) pause(ctx context.Context, connectionID, reason string) error 
 
 func (s *Service) retire(ctx context.Context, organizationID, createdBy, reason string) error {
 	pending := &pendingOriginals{}
-	removed, err := s.store.RemoveSources(ctx, organizationID, createdBy, s.now(), s.retractions(reason, pending))
+	removed, err := s.store.RemoveSources(ctx, organizationID, createdBy, reason, s.now(), s.retractions(reason, pending))
 	if err != nil {
 		return err
 	}
@@ -87,7 +87,7 @@ func (s *Service) retire(ctx context.Context, organizationID, createdBy, reason 
 
 func (s *Service) retireByConnection(ctx context.Context, connectionID, reason string) error {
 	pending := &pendingOriginals{}
-	removed, err := s.store.RemoveSourcesByConnection(ctx, connectionID, s.now(), s.retractions(reason, pending))
+	removed, err := s.store.RemoveSourcesByConnection(ctx, connectionID, reason, s.now(), s.retractions(reason, pending))
 	if err != nil {
 		return err
 	}

@@ -77,7 +77,7 @@ Each service owns a lowercase, hyphen-free directory at the repository root. The
 ├── rag/                   # Corpora, chunking, embeddings and grounded answers
 ├── teams/                 # Teams service
 ├── cmd/oryxa/             # The one binary every service runs in
-├── contracts/             # Versioned event contracts services publish
+├── contracts/             # Versioned event and retrieval HTTP contracts
 ├── internal/              # Module-private shared runtime boundaries
 ├── test/                  # k6 stack journey for teams, files, and email
 └── <service>/             # One directory per future service
@@ -112,26 +112,14 @@ are away.
 entitlements they grant, which auth enforces as member limits. `/email`
 remains a delivery boundary: it sends what auth, billing and teams events call
 for but never performs their transitions. A team-call notice goes out only
-when that member's `notify_email` switch is on. `/files` owns organization object storage: a
-private S3
-bucket, PostgreSQL metadata, and credential-free `oryxa.files` events. Other
-services never talk to the bucket; they ask files. `/knowledge` owns what has
-been extracted for retrieval and when: the sources a member asks to have
-indexed, the scheduled passes that read them a page at a time, and the
-`oryxa.knowledge` events a retrieval pipeline holds. A document is published
-only when its content hash changes, and it carries the scope of who may read
-it. GitHub, Notion and Slack read through a member's Composio connection, so
-knowledge holds no credential of its own; its files source waits on an agent
-grant to read as the member, so an organization's own documents are the one
-thing it cannot index yet. Its contract lives in `knowledge/README.md`. `/rag` owns
-retrieval: corpora and the documents in them, the chunks they become, the vectors behind
-those, and the grounded answers they support. A corpus pins its embedding
-provider, model, width and metric at creation and never changes them, because
-vectors from two models do not share a space. Vectors live in pgvector or in
-Amazon S3 Vectors; the chunk text stays in PostgreSQL either way, so a citation
-addresses a byte range of a document still on disk. Rag takes extracted text
-and says so: turning a PDF or a page into text stays upstream. Its contract
-lives in `rag/README.md`. `/teams` owns teams inside an
+when that member's `notify_email` switch is on. `/files` owns organization
+object storage: a private S3 bucket, PostgreSQL metadata, and credential-free
+`oryxa.files` events. Other services ask Files for objects rather than reading
+its bucket. `/knowledge` extracts documents from connected apps and Files,
+classifies connected-app documents, and publishes versioned document events. `/rag` places those
+documents into scoped corpora, indexes them, retrieves passages, and generates
+grounded answers with citations. See [Knowledge and retrieval](#knowledge-and-retrieval),
+[Knowledge](knowledge/README.md), and [RAG](rag/README.md). `/teams` owns teams inside an
 organization and who is on them: organization admins and team admins share the
 same control. An AI has three tools: `list_teams`, `call_team`, and
 `call_team_members`. It publishes as `oryxa.teams` and consumes from its own
@@ -162,6 +150,45 @@ where Krude works as the member it assists. It runs in the binary as the
 development UI and benchmark are commands of their own; see
 `agents/primary/README.md`.
 
+## Knowledge and retrieval
+
+Knowledge reads GitHub, Notion, Slack, Google Drive, and Gmail through a
+member's Composio connection; it stores no provider credential. Connecting an
+app can register bounded indexing sources automatically. With the uploader's
+standing grant, Files uploads can create or refresh sources for organization,
+team, or private member documents. Knowledge normalizes text and judges
+connected-app documents to exclude low-value material and classify what
+remains. It publishes again when content **or searchable provenance** changes.
+Large text is read back through a narrow service-authenticated endpoint; PDF
+and Office originals can be handed to the managed knowledge base for parsing.
+
+RAG keeps one Knowledge corpus per owner within an organization: one for the
+organization, one for each team that has documents, and one for each member
+that has documents. Organization boundaries are enforced on storage and
+retrieval. Team members and organization admins can search team documents;
+private member documents are available to that member and organization admins.
+Organization documents default to `access: members`; an admin can mark a
+document `access: admins`. Files' access label follows the document into RAG,
+and retrieval applies the ACL before a passage reaches reranking or generation.
+
+The production configuration selects an Amazon Bedrock **Managed Knowledge
+Base** for new corpora. One knowledge base serves the deployment, with
+organization, corpus, and access filters on every retrieval; corpus separation
+does not require a knowledge base per organization or member. RAG sends
+retrieved passages to Gemini on Vertex AI for grounded answers. Existing
+corpora retain their recorded backend. Local development uses pgvector; direct
+S3 Vectors and Bedrock Converse remain available as alternative paths.
+
+Matches and citations carry the originating provider, Knowledge source ID,
+document kind, and semantic category when present. The agent's Knowledge tool
+passes provider, kind, and category through with its search passages. The
+versioned event types are in `contracts/events/knowledge/v1` and
+`contracts/events/rag/v1`; the retrieval HTTP contracts are in
+[`contracts/http`](contracts/http/README.md). Targeted tests and live Gemini
+and Bedrock smoke tests have exercised the pipeline. Deployment still needs
+to apply the ACL/provenance migrations and reindex existing documents before
+the new metadata is guaranteed in production search results.
+
 ## Agents and third-party apps
 
 An agent acts as the member it works for, with that member's own Cognito
@@ -171,8 +198,8 @@ short-lived token under the grant they gave (`agents/primary/internal/memberauth
 
 Third-party apps are the `/apps` service, on Composio. The `connections` and
 `integrations` services, their event contracts, the generated provider clients,
-knowledge's GitHub, Notion and Slack sources, and Krude's integrations
-toolboxes were archived on 2026-09-17; the code is at tag
+knowledge's former direct-provider GitHub, Notion and Slack sources, and
+Krude's integrations toolboxes were archived on 2026-09-17; the code is at tag
 `archive/connections-and-integrations-2026-09-17`, and a `git checkout` of that
 tag restores any of it.
 

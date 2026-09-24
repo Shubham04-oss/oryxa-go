@@ -1,0 +1,290 @@
+openapi: 3.1.0
+info:
+  title: Oryxa RAG retrieval API
+  version: 1.0.0
+  description: Search and grounded answering for a corpus the authenticated member may read.
+paths:
+  /v1/organizations/{organizationID}/corpora/{corpusID}/search:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationID'
+      - $ref: '#/components/parameters/CorpusID'
+    post:
+      operationId: searchCorpus
+      summary: Retrieve passages from one corpus
+      description: Organization, corpus, team, member and document ACLs are derived from the caller. Query filters can only narrow the result.
+      security:
+        - bearerAuth: []
+        - memberCookie: []
+      requestBody:
+        $ref: '#/components/requestBodies/Query'
+      responses:
+        '200':
+          description: Passages the caller may read; matches is an empty array when nothing qualifies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SearchResponse'
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '415': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+  /v1/organizations/{organizationID}/corpora/{corpusID}/answer:
+    parameters:
+      - $ref: '#/components/parameters/OrganizationID'
+      - $ref: '#/components/parameters/CorpusID'
+    post:
+      operationId: answerFromCorpus
+      summary: Retrieve passages and generate a grounded answer
+      description: The answer cites only passages the caller may read. grounded is false when no usable source supports an answer.
+      security:
+        - bearerAuth: []
+        - memberCookie: []
+      requestBody:
+        $ref: '#/components/requestBodies/Query'
+      responses:
+        '200':
+          description: Answer and the retrieved passages it was built from.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnswerResponse'
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '413': { $ref: '#/components/responses/Error' }
+        '415': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    memberCookie:
+      type: apiKey
+      in: cookie
+      name: oryxa_access
+  parameters:
+    OrganizationID:
+      in: path
+      name: organizationID
+      required: true
+      schema: { type: string }
+    CorpusID:
+      in: path
+      name: corpusID
+      required: true
+      description: Corpus id or slug.
+      schema: { type: string }
+  requestBodies:
+    Query:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/QueryRequest'
+  responses:
+    Error:
+      description: The request was refused. A resource outside the caller's scope can return 404.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    QueryRequest:
+      type: object
+      additionalProperties: false
+      required: [query]
+      properties:
+        query:
+          type: string
+          minLength: 1
+          x-maxBytes: 4096
+          description: The question or search text, at most 4096 UTF-8 bytes. Whitespace-only values are refused.
+        top_k:
+          type: integer
+          minimum: 0
+          maximum: 100
+          default: 8
+          description: Zero also selects the default.
+        mode:
+          type: string
+          enum: ['', hybrid, dense, lexical]
+          default: hybrid
+        min_score:
+          type: number
+          minimum: 0
+          maximum: 1
+          default: 0
+        diversity:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+        rerank:
+          type: boolean
+          default: false
+        over_fetch:
+          type: integer
+          minimum: 0
+          maximum: 20
+          default: 4
+          description: Zero also selects the default.
+        filter:
+          $ref: '#/components/schemas/Filter'
+    Filter:
+      type: object
+      additionalProperties: false
+      properties:
+        document_ids:
+          type: array
+          maxItems: 128
+          items:
+            type: string
+            pattern: '^doc_'
+        conditions:
+          type: array
+          maxItems: 16
+          items:
+            $ref: '#/components/schemas/Condition'
+    Condition:
+      type: object
+      additionalProperties: false
+      required: [key, operator, values]
+      properties:
+        key:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{0,62}$'
+        operator:
+          type: string
+          enum: [eq, ne, in, nin]
+        values:
+          type: array
+          minItems: 1
+          maxItems: 64
+          items:
+            type: string
+            x-maxBytes: 1024
+      description: Conditions are combined with AND. eq and ne require exactly one value. Bedrock KB accepts only source_kind, provider, knowledge_source_id, document_kind and category.
+    SearchResponse:
+      type: object
+      required: [matches, usage, reranked]
+      properties:
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/Match'
+        usage:
+          $ref: '#/components/schemas/Usage'
+        reranked:
+          type: boolean
+    AnswerResponse:
+      type: object
+      required: [answer, matches]
+      properties:
+        answer:
+          $ref: '#/components/schemas/Answer'
+        matches:
+          type: array
+          items:
+            $ref: '#/components/schemas/Match'
+    Match:
+      type: object
+      required: [chunk, document, score]
+      properties:
+        chunk:
+          $ref: '#/components/schemas/Chunk'
+        document:
+          $ref: '#/components/schemas/DocumentRef'
+        score: { type: number }
+        dense_score: { type: number }
+        lexical_score: { type: number }
+        rerank_score: { type: number }
+        dense_rank: { type: integer }
+        lexical_rank: { type: integer }
+    Chunk:
+      type: object
+      required: [id, document_id, corpus_id, organization_id, ordinal, text, token_count, start_byte, end_byte, sha256]
+      properties:
+        id: { type: string }
+        document_id: { type: string }
+        corpus_id: { type: string }
+        organization_id: { type: string }
+        ordinal: { type: integer }
+        text: { type: string }
+        token_count: { type: integer }
+        heading_path:
+          type: array
+          items: { type: string }
+        start_byte: { type: integer }
+        end_byte: { type: integer }
+        sha256: { type: string }
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+    DocumentRef:
+      type: object
+      required: [id, source]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        source:
+          $ref: '#/components/schemas/Source'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+    Source:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [inline, file, external]
+        ref: { type: string }
+    Metadata:
+      type: object
+      additionalProperties: { type: string }
+      description: Knowledge documents include provider and knowledge_source_id; document_kind and category are present when known. Only rag sets these keys, so a document that carries them came from Knowledge. This data never grants access.
+    Answer:
+      type: object
+      required: [text, citations, model, usage, grounded]
+      properties:
+        text: { type: string }
+        citations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Citation'
+        model: { type: string }
+        usage:
+          $ref: '#/components/schemas/Usage'
+        grounded: { type: boolean }
+    Citation:
+      type: object
+      required: [index, chunk_id, document_id, source, start_byte, end_byte, score]
+      properties:
+        index: { type: integer }
+        chunk_id: { type: string }
+        document_id: { type: string }
+        title: { type: string }
+        source:
+          $ref: '#/components/schemas/Source'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        heading_path:
+          type: array
+          items: { type: string }
+        start_byte: { type: integer }
+        end_byte: { type: integer }
+        score: { type: number }
+    Usage:
+      type: object
+      properties:
+        input_tokens: { type: integer }
+        output_tokens: { type: integer }
+        embedded_texts: { type: integer }
+        embedding_tokens: { type: integer }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }

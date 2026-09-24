@@ -77,6 +77,17 @@ func match(title, source, text string, score float64, headings ...string) ragcli
 	return found
 }
 
+func TestKnowledgePassageCarriesIndexedProvenance(t *testing.T) {
+	found := match("September invoice", "https://mail.google.com/mail/u/0/#all/42", "Invoice due September 30.", 0.9)
+	found.Document.Metadata = map[string]string{
+		"provider": "gmail", "document_kind": "message", "category": "financial_record",
+	}
+	passage := passageOf("corpus_org", found)
+	if passage.Provider != "gmail" || passage.DocumentKind != "message" || passage.Category != "financial_record" {
+		t.Fatalf("passage lost provenance: %+v", passage)
+	}
+}
+
 type fakeTokens struct{ token string }
 
 type fakeKnowledgeSources struct {

@@ -22,7 +22,7 @@ func TestMembershipCarriesABearerToken(t *testing.T) {
 	var seen *http.Request
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		seen = request
-		_, _ = writer.Write([]byte(`{"membership":{"user_id":"user-1","role":"member"}}`))
+		_, _ = writer.Write([]byte(`{"organization":{"id":"org_1"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"member"}}`))
 	}))
 	defer server.Close()
 
@@ -48,7 +48,7 @@ func TestMembershipCarriesTheAccessCookieInstead(t *testing.T) {
 	var seen *http.Request
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		seen = request
-		_, _ = writer.Write([]byte(`{"membership":{"user_id":"user-1","role":"member"}}`))
+		_, _ = writer.Write([]byte(`{"organization":{"id":"org_1"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"member"}}`))
 	}))
 	defer server.Close()
 
@@ -66,7 +66,7 @@ func TestMembershipCarriesTheAccessCookieInstead(t *testing.T) {
 
 func TestMembershipReadsWhetherTheCallerIsAnAgent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		_, _ = writer.Write([]byte(`{"membership":{"user_id":"user-1","role":"admin"},"agent":true}`))
+		_, _ = writer.Write([]byte(`{"organization":{"id":"org_1"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"admin"},"agent":true}`))
 	}))
 	defer server.Close()
 
@@ -89,6 +89,22 @@ func TestMembershipRefusesAnAnswerWithNoMember(t *testing.T) {
 
 	if _, err := New(server.URL).Membership(context.Background(), "org_1", Credentials{Authorization: "Bearer t"}); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("Membership() error = %v, want ErrForbidden", err)
+	}
+}
+
+func TestMembershipRefusesAnAnswerForAnotherOrganization(t *testing.T) {
+	for _, answer := range []string{
+		`{"organization":{"id":"org_2"},"membership":{"organization_id":"org_1","user_id":"user-1","role":"admin"}}`,
+		`{"organization":{"id":"org_1"},"membership":{"organization_id":"org_2","user_id":"user-1","role":"admin"}}`,
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(answer))
+		}))
+		_, err := New(server.URL).Membership(context.Background(), "org_1", Credentials{Authorization: "Bearer t"})
+		server.Close()
+		if !errors.Is(err, domain.ErrForbidden) {
+			t.Fatalf("Membership() for a foreign organization = %v, want ErrForbidden", err)
+		}
 	}
 }
 

@@ -165,23 +165,24 @@ func Hash(text string) string {
 
 // Document is one source item inside a corpus.
 type Document struct {
-	ID             string       `json:"id"`
-	CorpusID       string       `json:"corpus_id"`
-	OrganizationID string       `json:"organization_id"`
-	Source         Source       `json:"source"`
-	Title          string       `json:"title,omitempty"`
-	ContentType    string       `json:"content_type"`
-	ContentSHA256  string       `json:"content_sha256"`
-	ByteSize       int64        `json:"byte_size"`
-	Metadata       Metadata     `json:"metadata,omitempty"`
-	Status         IngestStatus `json:"status"`
-	FailureReason  string       `json:"failure_reason,omitempty"`
-	ChunkCount     int          `json:"chunk_count"`
-	Attempts       int          `json:"attempts"`
-	CreatedBy      string       `json:"created_by"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
-	IngestedAt     *time.Time   `json:"ingested_at,omitempty"`
+	ID             string         `json:"id"`
+	CorpusID       string         `json:"corpus_id"`
+	OrganizationID string         `json:"organization_id"`
+	Access         DocumentAccess `json:"access"`
+	Source         Source         `json:"source"`
+	Title          string         `json:"title,omitempty"`
+	ContentType    string         `json:"content_type"`
+	ContentSHA256  string         `json:"content_sha256"`
+	ByteSize       int64          `json:"byte_size"`
+	Metadata       Metadata       `json:"metadata,omitempty"`
+	Status         IngestStatus   `json:"status"`
+	FailureReason  string         `json:"failure_reason,omitempty"`
+	ChunkCount     int            `json:"chunk_count"`
+	Attempts       int            `json:"attempts"`
+	CreatedBy      string         `json:"created_by"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	IngestedAt     *time.Time     `json:"ingested_at,omitempty"`
 
 	// OriginalBucket and OriginalKey locate a document's own bytes in S3, for
 	// a document indexed with no extracted text of its own — a PDF, an
@@ -192,19 +193,47 @@ type Document struct {
 	// ingest worker, not part of the public API.
 	OriginalBucket string `json:"-"`
 	OriginalKey    string `json:"-"`
-	// KBSyncedHash is the ContentSHA256 that was last handed to a Bedrock
-	// knowledge base for this document. Ingestion there is asynchronous, so
-	// the ingest worker claims a document many times before the knowledge
-	// base reports it indexed; comparing this to the current ContentSHA256
-	// is how a claim knows whether to submit again — never submitted, or the
-	// content changed since it last was — or only to poll for the outcome of
-	// a submission already running. Meaningless outside a bedrock-kb corpus,
-	// and not part of the public API.
+	// KBSyncedHash marks what was last handed to a Bedrock knowledge base for
+	// this document: knowledgebase.SyncMarker, a digest of the content and of
+	// every attribute sent with it (access and provenance included).
+	// Ingestion there is asynchronous, so the ingest worker claims a document
+	// many times before the knowledge base reports it indexed; comparing this
+	// to the document's current marker is how a claim knows whether to
+	// submit again — never submitted, the content or an attribute changed
+	// since it last was, or an older build submitted it — or only to poll for
+	// the outcome of a submission already running. Meaningless outside a
+	// bedrock-kb corpus, and not part of the public API.
 	KBSyncedHash string `json:"-"`
 	// KBSubmittedAt is when KBSyncedHash was handed over, so the ingest
 	// worker can tell a submission the knowledge base is still working on
 	// from one it will never finish. Nil when nothing is outstanding.
 	KBSubmittedAt *time.Time `json:"-"`
+}
+
+// DocumentAccess is the organization-level ACL on an individual document.
+// Corpus placement still applies first; an admins document is visible only
+// to organization owners and admins within that placement.
+type DocumentAccess string
+
+const (
+	AccessMembers DocumentAccess = "members"
+	AccessAdmins  DocumentAccess = "admins"
+)
+
+func (access DocumentAccess) Valid() bool { return access == AccessMembers || access == AccessAdmins }
+
+// VisibleTo reports whether a caller already allowed into this document's
+// corpus may read the document itself. An access label this service does not
+// know is refused rather than guessed at.
+func (document Document) VisibleTo(member OrgMembership) bool {
+	switch document.Access {
+	case "", AccessMembers:
+		return true
+	case AccessAdmins:
+		return member.ActsAsAdmin()
+	default:
+		return false
+	}
 }
 
 // HasOriginal reports whether a document was indexed with no extracted text
@@ -323,4 +352,9 @@ type SourceContent struct {
 	Filename    string
 	ContentType string
 	Body        string
+	Scope       Scope
+	TeamID      string
+	MemberID    string
+	Purpose     string
+	Access      DocumentAccess
 }

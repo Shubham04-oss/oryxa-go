@@ -25,8 +25,12 @@ package knowledgebase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -124,22 +128,21 @@ func StagingKey(organizationID, corpusID, documentID, contentSHA256 string) stri
 // any other backend; it is empty exactly when document.HasOriginal() is
 // true, meaning the document has no extracted text at all and its own bytes
 // — a PDF, an Office file — are what the knowledge base must parse instead.
+//
+// What it writes is what SyncMarker describes, so a caller that records
+// SyncMarker once Submit returns has recorded exactly this submission.
 func (client *Client) Submit(ctx context.Context, corpus domain.Corpus, document domain.Document, text string) error {
+	if document.Access != "" && !document.Access.Valid() {
+		return fmt.Errorf("document access is not allowed: %w", domain.ErrInvalid)
+	}
 	content, err := client.documentContent(ctx, corpus, document, text)
 	if err != nil {
 		return err
 	}
-	attributes := []agenttypes.MetadataAttribute{
-		stringAttribute("organization_id", corpus.OrganizationID),
-		stringAttribute("corpus_id", corpus.ID),
-		stringAttribute("document_id", document.ID),
-		stringAttribute("source_kind", string(document.Source.Kind)),
-	}
-	if document.Title != "" {
-		attributes = append(attributes, stringAttribute("title", document.Title))
-	}
-	if document.Source.Ref != "" {
-		attributes = append(attributes, stringAttribute("source_ref", document.Source.Ref))
+	pairs := documentAttributes(corpus, document)
+	attributes := make([]agenttypes.MetadataAttribute, 0, len(pairs))
+	for _, pair := range pairs {
+		attributes = append(attributes, stringAttribute(pair.key, pair.value))
 	}
 	_, err = client.ingest.IngestKnowledgeBaseDocuments(ctx, &bedrockagent.IngestKnowledgeBaseDocumentsInput{
 		KnowledgeBaseId: aws.String(client.config.KnowledgeBaseID),
@@ -156,6 +159,81 @@ func (client *Client) Submit(ctx context.Context, corpus domain.Corpus, document
 		return fmt.Errorf("ingest document %s into the knowledge base: %w", document.ID, err)
 	}
 	return nil
+}
+
+// submittedAttribute is one metadata attribute Submit writes onto a document
+// in the knowledge base.
+type submittedAttribute struct {
+	key, value string
+}
+
+// documentAttributes is every attribute Submit writes for a document, in the
+// order it writes them. A document with no access recorded is written as
+// member-visible, the same default rag applies everywhere else.
+func documentAttributes(corpus domain.Corpus, document domain.Document) []submittedAttribute {
+	access := document.Access
+	if access == "" {
+		access = domain.AccessMembers
+	}
+	attributes := []submittedAttribute{
+		{"organization_id", corpus.OrganizationID},
+		{"corpus_id", corpus.ID},
+		{"document_id", document.ID},
+		{"access", string(access)},
+		{"source_kind", string(document.Source.Kind)},
+	}
+	if document.Title != "" {
+		attributes = append(attributes, submittedAttribute{"title", document.Title})
+	}
+	if document.Source.Ref != "" {
+		attributes = append(attributes, submittedAttribute{"source_ref", document.Source.Ref})
+	}
+	// These are stable, bounded classification fields supplied by Knowledge.
+	// Provider-specific details such as Gmail addresses and labels stay in
+	// Knowledge; they are not copied into the shared Bedrock index.
+	for _, key := range []string{"provider", "knowledge_source_id", "document_kind", "category"} {
+		if value := document.Metadata[key]; value != "" {
+			attributes = append(attributes, submittedAttribute{key, value})
+		}
+	}
+	return attributes
+}
+
+// SyncMarkerPrefix begins every SyncMarker this build writes. It changes
+// whenever what Submit writes does — a new attribute, a different default —
+// so that no document submitted under the old attribute set can look synced
+// to this one. A marker without it, such as the bare content hash rag
+// recorded before markers existed, never matches.
+const SyncMarkerPrefix = "v2:"
+
+// SyncMarker is what a document's kb_synced_hash records once Submit has
+// handed it over: a digest of its content hash and every attribute Submit
+// wrote with it, access and provenance included.
+//
+// Comparing it with the marker for the document as it is now is how the
+// ingest worker knows whether the knowledge base holds this document as it
+// is: a change to the content, or to any attribute a search filters on,
+// gives a different marker and the document is submitted again, while an
+// unchanged one is only polled.
+func SyncMarker(corpus domain.Corpus, document domain.Document) string {
+	attributes := documentAttributes(corpus, document)
+	pairs := make([][2]string, 0, len(attributes))
+	for _, attribute := range attributes {
+		pairs = append(pairs, [2]string{attribute.key, attribute.value})
+	}
+	slices.SortFunc(pairs, func(a, b [2]string) int { return strings.Compare(a[0], b[0]) })
+	// JSON keeps the encoding unambiguous whatever a title or a reference
+	// contains.
+	encoded, err := json.Marshal(struct {
+		Content    string      `json:"content"`
+		Attributes [][2]string `json:"attributes"`
+	}{document.ContentSHA256, pairs})
+	if err != nil {
+		// Strings and slices of them always encode; this cannot happen.
+		panic(fmt.Sprintf("encode a knowledge base sync marker: %v", err))
+	}
+	sum := sha256.Sum256(encoded)
+	return SyncMarkerPrefix + hex.EncodeToString(sum[:])
 }
 
 // documentContent decides how a document's bytes reach the knowledge base:

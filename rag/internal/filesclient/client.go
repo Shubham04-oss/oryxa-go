@@ -38,9 +38,14 @@ func New(baseURL string) *Client {
 }
 
 type metadataResponse struct {
-	ID          string `json:"id"`
-	Filename    string `json:"filename"`
-	ContentType string `json:"content_type"`
+	ID          string                `json:"id"`
+	Filename    string                `json:"filename"`
+	ContentType string                `json:"content_type"`
+	Scope       domain.Scope          `json:"scope"`
+	TeamID      string                `json:"team_id"`
+	MemberID    string                `json:"member_id"`
+	Purpose     string                `json:"purpose"`
+	Access      domain.DocumentAccess `json:"access"`
 }
 
 // Fetch reads a file's metadata and its bytes as the caller.
@@ -65,6 +70,7 @@ func (client *Client) Fetch(ctx context.Context, organizationID, fileID string, 
 		Filename:    metadata.Filename,
 		ContentType: metadata.ContentType,
 		Body:        string(content),
+		Scope:       metadata.Scope, TeamID: metadata.TeamID, MemberID: metadata.MemberID, Purpose: metadata.Purpose, Access: metadata.Access,
 	}, nil
 }
 

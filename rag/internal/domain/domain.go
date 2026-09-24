@@ -108,14 +108,38 @@ type OrgMembership struct {
 	Email            string
 	DisplayName      string
 	Role             OrgRole
+	// Agent says the caller is an agent acting for this member rather than
+	// the member themselves, which auth says of every token it mints for an
+	// agent. An agent may run with its member absent, answering someone
+	// else: a teammate's interaction request, a room it was mentioned in.
+	// What it reads can end up in front of any of them, so it gets a plain
+	// member's reach whatever its member's role; see ActsAsAdmin.
+	Agent bool
+}
+
+// ActsAsAdmin reports whether the caller acts with an org admin's reach:
+// every member's corpora, every team's whether or not they are on it, the
+// organization's corpora to write to, and the documents only org owners and
+// admins may read. Only a person's own session does. An agent acting for an
+// admin gets what a plain member would: its member's own corpora, the teams
+// its member is actually on, and the organization's members-level documents.
+func (membership OrgMembership) ActsAsAdmin() bool {
+	return membership.Role.IsOrgAdmin() && !membership.Agent
 }
 
 // TeamAccess is what teams answers about one team. An empty TeamID means the
 // caller cannot see it, which the caller must report as not found.
 type TeamAccess struct {
-	TeamID    string
+	TeamID string
+	// CanManage is teams' own answer, which is true for every org admin as
+	// well as for the team's own admins.
 	CanManage bool
-	Member    bool
+	// Member says the caller is on the team. Teams also shows every team to
+	// an org admin who is not.
+	Member bool
+	// TeamAdmin says the caller holds the team's admin role themselves,
+	// rather than managing it as an org admin.
+	TeamAdmin bool
 }
 
 func (access TeamAccess) CanSee() bool { return access.TeamID != "" }
@@ -144,14 +168,54 @@ var metadataKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 // reservedMetadataKeys are the keys the pipeline writes itself. A caller that
 // set them could shadow provenance and make a citation lie about its source.
 var reservedMetadataKeys = []string{
-	"chunk_id", "chunk_ordinal", "corpus_id", "document_id", "heading_path",
+	"access", "chunk_id", "chunk_ordinal", "corpus_id", "document_id", "heading_path",
 	"organization_id", "source_kind", "source_ref", "title",
 }
 
+// knowledgeProvenanceKeys are what rag's Knowledge bridge writes on a document
+// it indexes from Knowledge: which Knowledge document and source it is, the
+// app it was read from, what kind of thing it is, and what Knowledge's judge
+// classified it as. Search results and citations show them, and filters
+// narrow on them, so a caller who could set them could make a note of their
+// own cite as, say, a Gmail financial record. The bridge checks its own
+// metadata with Validate, which lets them through; ValidateCallerDocument
+// does not.
+var knowledgeProvenanceKeys = []string{
+	"category", "document_kind", "knowledge_document_id", "knowledge_source_id", "provider",
+}
+
+// corpusOriginKey marks a corpus rag's Knowledge bridge built. The bridge
+// trusts it when it looks for its own corpus, and the web app shows it, so a
+// caller may not set it; see ValidateCallerCorpus.
+const corpusOriginKey = "origin"
+
 type Metadata map[string]string
 
-// Validate reports whether metadata is within the bounds every backend shares.
+// Validate reports whether metadata is within the bounds every backend shares
+// and stays off the keys the pipeline writes on every chunk. It is the check
+// for metadata rag writes itself. Metadata a caller sends goes through
+// ValidateCallerDocument or ValidateCallerCorpus instead, which also keep a
+// caller off the keys only rag may set.
 func (metadata Metadata) Validate() error {
+	return metadata.validate(nil)
+}
+
+// ValidateCallerDocument is Validate for the metadata a caller sends with a
+// document. The Knowledge provenance keys are refused too, so only a document
+// rag indexed from Knowledge can carry them.
+func (metadata Metadata) ValidateCallerDocument() error {
+	return metadata.validate(knowledgeProvenanceKeys)
+}
+
+// ValidateCallerCorpus is Validate for the metadata a caller sends with a
+// corpus. origin is refused too: it marks a corpus rag built from Knowledge,
+// which only rag may say.
+func (metadata Metadata) ValidateCallerCorpus() error {
+	return metadata.validate([]string{corpusOriginKey})
+}
+
+// validate is Validate, refusing callerReserved as well.
+func (metadata Metadata) validate(callerReserved []string) error {
 	if len(metadata) > MaxMetadataKeys {
 		return fmt.Errorf("metadata may carry at most %d keys: %w", MaxMetadataKeys, ErrInvalid)
 	}
@@ -160,7 +224,7 @@ func (metadata Metadata) Validate() error {
 		if !metadataKeyPattern.MatchString(key) {
 			return fmt.Errorf("metadata key %q must be lowercase letters, digits and underscores, at most %d characters: %w", key, MaxMetadataKeyLength, ErrInvalid)
 		}
-		if slices.Contains(reservedMetadataKeys, key) {
+		if slices.Contains(reservedMetadataKeys, key) || slices.Contains(callerReserved, key) {
 			return fmt.Errorf("metadata key %q is reserved for provenance: %w", key, ErrInvalid)
 		}
 		if !utf8.ValidString(value) {

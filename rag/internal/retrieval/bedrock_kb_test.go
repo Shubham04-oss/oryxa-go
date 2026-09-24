@@ -3,6 +3,7 @@ package retrieval
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -77,7 +78,7 @@ func TestTenantFilterMultipleCorpora(t *testing.T) {
 // conditions that must always be present.
 func TestSearchFilterAddsDocumentIDsWithinTheTenantFilter(t *testing.T) {
 	t.Parallel()
-	filter, err := searchFilter("org_1", []string{"cor_1"}, domain.Filter{DocumentIDs: []string{"doc_1"}})
+	filter, err := searchFilter("org_1", []string{"cor_1"}, domain.Filter{DocumentIDs: []string{"doc_1"}}, true)
 	if err != nil {
 		t.Fatalf("searchFilter: %v", err)
 	}
@@ -99,12 +100,35 @@ func TestSearchFilterRefusesMetadataConditions(t *testing.T) {
 	t.Parallel()
 	_, err := searchFilter("org_1", []string{"cor_1"}, domain.Filter{
 		Conditions: []domain.Condition{{Key: "team", Operator: domain.OperatorEqual, Values: []string{"platform"}}},
-	})
+	}, true)
 	if err == nil {
 		t.Fatal("a metadata condition was silently accepted for a bedrock-kb corpus")
 	}
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("error = %v, want ErrInvalid", err)
+	}
+}
+
+func TestSearchFilterNarrowsByKnowledgeProvenance(t *testing.T) {
+	t.Parallel()
+	filter, err := searchFilter("org_1", []string{"cor_1"}, domain.Filter{Conditions: []domain.Condition{
+		{Key: "provider", Operator: domain.OperatorEqual, Values: []string{"gmail"}},
+		{Key: "category", Operator: domain.OperatorIn, Values: []string{"booking", "financial_record"}},
+	}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := filter.(*agenttypes.RetrievalFilterMemberAndAll).Value
+	if len(all) != 4 {
+		t.Fatalf("conditions = %d, want tenant pair and provenance pair", len(all))
+	}
+	provider, ok := all[2].(*agenttypes.RetrievalFilterMemberEquals)
+	if !ok || aws.ToString(provider.Value.Key) != "provider" || filterValue(t, provider.Value.Value) != "gmail" {
+		t.Fatalf("provider filter = %#v", all[2])
+	}
+	category, ok := all[3].(*agenttypes.RetrievalFilterMemberIn)
+	if !ok || aws.ToString(category.Value.Key) != "category" {
+		t.Fatalf("category filter = %#v", all[3])
 	}
 }
 
@@ -241,8 +265,8 @@ func TestManagedKnowledgeBaseSearchesThroughManagedSearch(t *testing.T) {
 		t.Fatalf("number of results = %d, want it clamped to %d", got, retrieveLimit)
 	}
 	andAll, ok := managed.Filter.(*agenttypes.RetrievalFilterMemberAndAll)
-	if !ok || len(andAll.Value) != 2 {
-		t.Fatalf("filter = %#v, want the tenant filter", managed.Filter)
+	if !ok || len(andAll.Value) != 3 {
+		t.Fatalf("filter = %#v, want tenant and member ACL filters", managed.Filter)
 	}
 	org, ok := andAll.Value[0].(*agenttypes.RetrievalFilterMemberEquals)
 	if !ok || aws.ToString(org.Value.Key) != "organization_id" || filterValue(t, org.Value.Value) != "org_1" {
@@ -252,10 +276,33 @@ func TestManagedKnowledgeBaseSearchesThroughManagedSearch(t *testing.T) {
 	if !ok || aws.ToString(corpus.Value.Key) != "corpus_id" || filterValue(t, corpus.Value.Value) != "cor_1" {
 		t.Fatalf("second condition = %#v, want Equals(corpus_id, cor_1)", andAll.Value[1])
 	}
+	// NotEquals(access, admins) rather than Equals(access, members): Bedrock
+	// also matches a document submitted before the attribute existed.
+	access, ok := andAll.Value[2].(*agenttypes.RetrievalFilterMemberNotEquals)
+	if !ok || aws.ToString(access.Value.Key) != "access" || filterValue(t, access.Value.Value) != "admins" {
+		t.Fatalf("third condition = %#v, want NotEquals(access, admins)", andAll.Value[2])
+	}
 	// Not asked to rerank, so reranking is turned off by name rather than
 	// left to whatever the service would choose.
 	if managed.RerankingModelType != agenttypes.RerankingModelTypeNone || managed.RerankingConfiguration != nil {
 		t.Fatalf("reranking = %q %+v, want NONE", managed.RerankingModelType, managed.RerankingConfiguration)
+	}
+}
+
+func TestManagedKnowledgeBaseAdminQueryIncludesRestrictedDocuments(t *testing.T) {
+	api := &fakeKnowledgeBaseAPI{}
+	knowledgeBase, err := NewManagedKnowledgeBase(api, "kb-managed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = knowledgeBase.retrieve(context.Background(), "org_1", []string{"cor_1"}, domain.Query{Text: "payroll", IncludeAdminOnly: true}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter := api.lastInput.RetrievalConfiguration.ManagedSearchConfiguration.Filter
+	andAll, ok := filter.(*agenttypes.RetrievalFilterMemberAndAll)
+	if !ok || len(andAll.Value) != 2 {
+		t.Fatalf("admin filter = %#v, want only org and corpus", filter)
 	}
 }
 
@@ -322,7 +369,7 @@ func TestSearchKnowledgeBaseHydratesFromPostgresAndHonoursTopK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewKnowledgeBase: %v", err)
 	}
-	chunks := &fakeChunks{}
+	chunks := &fakeChunks{metadata: map[string]domain.Metadata{"doc_1": {"provider": "gmail", "category": "financial_record"}}}
 	vectors := &fakeVectorStore{}
 	retriever := New(chunks, fakeVectors{vectors}, fakeEmbedders{&fakeEmbedder{}}, nil, knowledgeBase, nil)
 
@@ -345,6 +392,10 @@ func TestSearchKnowledgeBaseHydratesFromPostgresAndHonoursTopK(t *testing.T) {
 	}
 	if results.Matches[0].Chunk.DocumentID != "doc_1" || results.Matches[0].Document.Title != "Title doc_1" {
 		t.Fatalf("first match = %+v, want it hydrated from PostgreSQL's document refs", results.Matches[0])
+	}
+	if results.Matches[0].Document.Metadata["provider"] != "gmail" || results.Matches[0].Chunk.Metadata["category"] != "financial_record" ||
+		domain.Citations(results.Matches)[0].Metadata["provider"] != "gmail" {
+		t.Fatalf("provenance was not returned with match and citation: %+v", results.Matches[0])
 	}
 	// The chunk id is derived, not random, so the same passage cites the
 	// same way if it is retrieved again.
@@ -423,5 +474,153 @@ func TestSearchKnowledgeBaseFailsByNameWithoutOne(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrInvalid) {
 		t.Fatalf("error = %v, want it to wrap domain.ErrInvalid", err)
+	}
+}
+
+// filterLeaves flattens a filter into its comparisons, checking on the way
+// the shape Bedrock takes: at most maxFilterGroup filters in any andAll, at
+// least two, and groups nested one level deep at most.
+func filterLeaves(t *testing.T, filter agenttypes.RetrievalFilter, depth int) []string {
+	t.Helper()
+	andAll, ok := filter.(*agenttypes.RetrievalFilterMemberAndAll)
+	if !ok {
+		switch leaf := filter.(type) {
+		case *agenttypes.RetrievalFilterMemberEquals:
+			return []string{"equals:" + aws.ToString(leaf.Value.Key)}
+		case *agenttypes.RetrievalFilterMemberNotEquals:
+			return []string{"notEquals:" + aws.ToString(leaf.Value.Key)}
+		case *agenttypes.RetrievalFilterMemberIn:
+			return []string{"in:" + aws.ToString(leaf.Value.Key)}
+		case *agenttypes.RetrievalFilterMemberNotIn:
+			return []string{"notIn:" + aws.ToString(leaf.Value.Key)}
+		default:
+			t.Fatalf("unexpected filter %T", filter)
+			return nil
+		}
+	}
+	if depth > 1 {
+		t.Fatalf("an andAll nested %d levels deep; Bedrock takes one", depth)
+	}
+	if len(andAll.Value) < 2 || len(andAll.Value) > maxFilterGroup {
+		t.Fatalf("an andAll of %d filters; Bedrock takes 2 to %d", len(andAll.Value), maxFilterGroup)
+	}
+	var leaves []string
+	for _, member := range andAll.Value {
+		leaves = append(leaves, filterLeaves(t, member, depth+1)...)
+	}
+	return leaves
+}
+
+// Bedrock takes at most five filters in one andAll, one level of nesting
+// deep. A member's search already spends three on organization, corpus and
+// access, so a flat list of a caller's conditions beside them was refused
+// as soon as there were three. Every filter a caller may send now fits, for
+// a member and an admin alike, and one that cannot fit is refused by name.
+func TestSearchFilterKeepsEveryListWithinWhatBedrockTakes(t *testing.T) {
+	t.Parallel()
+	keys := []string{"provider", "knowledge_source_id", "document_kind", "category", "source_kind"}
+	for _, includeAdminOnly := range []bool{false, true} {
+		for callerFilters := 0; callerFilters <= maxCallerFilters; callerFilters++ {
+			var filter domain.Filter
+			want := []string{"equals:organization_id", "equals:corpus_id"}
+			if !includeAdminOnly {
+				want = append(want, "notEquals:access")
+			}
+			conditions := callerFilters
+			if callerFilters > 0 {
+				filter.DocumentIDs = []string{"doc_1", "doc_2"}
+				want = append(want, "in:document_id")
+				conditions--
+			}
+			for index := range conditions {
+				key := keys[index%len(keys)]
+				filter.Conditions = append(filter.Conditions, domain.Condition{Key: key, Operator: domain.OperatorNotIn, Values: []string{"x"}})
+				want = append(want, "notIn:"+key)
+			}
+			built, err := searchFilter("org_1", []string{"cor_1"}, filter, includeAdminOnly)
+			if err != nil {
+				t.Fatalf("admin=%v with %d filters: %v", includeAdminOnly, callerFilters, err)
+			}
+			got := filterLeaves(t, built, 0)
+			slices.Sort(got)
+			slices.Sort(want)
+			if !slices.Equal(got, want) {
+				t.Fatalf("admin=%v with %d filters: leaves %v, want %v", includeAdminOnly, callerFilters, got, want)
+			}
+		}
+		tooMany := domain.Filter{DocumentIDs: []string{"doc_1"}}
+		for index := range maxCallerFilters {
+			tooMany.Conditions = append(tooMany.Conditions, domain.Condition{Key: keys[index%len(keys)], Operator: domain.OperatorEqual, Values: []string{"x"}})
+		}
+		if _, err := searchFilter("org_1", []string{"cor_1"}, tooMany, includeAdminOnly); !errors.Is(err, domain.ErrInvalid) {
+			t.Fatalf("admin=%v with %d filters = %v, want ErrInvalid", includeAdminOnly, maxCallerFilters+1, err)
+		}
+	}
+}
+
+// The knowledge base filters on the attributes it was last given, which lag
+// PostgreSQL's until a changed document is submitted again. A passage whose
+// document no longer satisfies the caller's filter as PostgreSQL has it is
+// left out, so a reclassified document cannot answer for the category it
+// left.
+func TestSearchKnowledgeBaseHoldsPassagesToTheFilterAsPostgresHasIt(t *testing.T) {
+	t.Parallel()
+	api := &fakeKnowledgeBaseAPI{output: &bedrockagentruntime.RetrieveOutput{RetrievalResults: []agenttypes.KnowledgeBaseRetrievalResult{
+		textResult("doc_reclassified", "invoice 128 due", 0.99),
+		textResult("doc_financial", "invoice 256 due", 0.90),
+	}}}
+	knowledgeBase, err := NewManagedKnowledgeBase(api, "kb-managed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunks := &fakeChunks{metadata: map[string]domain.Metadata{
+		"doc_reclassified": {"provider": "gmail", "category": "account_record"},
+		"doc_financial":    {"provider": "gmail", "category": "financial_record"},
+	}}
+	retriever := New(chunks, fakeVectors{&fakeVectorStore{}}, fakeEmbedders{&fakeEmbedder{}}, nil, knowledgeBase, nil)
+	corpus := testCorpus()
+	corpus.Backend = domain.BackendBedrockKB
+	results, err := retriever.Search(context.Background(), corpus, domain.Query{Text: "invoice", Filter: domain.Filter{Conditions: []domain.Condition{
+		{Key: "category", Operator: domain.OperatorEqual, Values: []string{"financial_record"}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results.Matches) != 1 || results.Matches[0].Document.ID != "doc_financial" {
+		t.Fatalf("matches = %+v, want only the document that is still financial_record", results.Matches)
+	}
+}
+
+// refMatches gives each operator the meaning PostgreSQL's filters give it,
+// so a bedrock-kb corpus answers a filter as the other backends do.
+func TestRefMatchesMirrorsThePostgresFilters(t *testing.T) {
+	t.Parallel()
+	gmail := domain.Ref{ID: "doc_1", Source: domain.Source{Kind: domain.SourceExternal}, Metadata: domain.Metadata{"provider": "gmail"}}
+	condition := func(key string, operator domain.Operator, values ...string) domain.Filter {
+		return domain.Filter{Conditions: []domain.Condition{{Key: key, Operator: operator, Values: values}}}
+	}
+	for name, tc := range map[string]struct {
+		filter domain.Filter
+		want   bool
+	}{
+		"no filter":                     {domain.Filter{}, true},
+		"eq matches":                    {condition("provider", domain.OperatorEqual, "gmail"), true},
+		"eq differs":                    {condition("provider", domain.OperatorEqual, "slack"), false},
+		"eq on a missing key":           {condition("category", domain.OperatorEqual, "booking"), false},
+		"ne differs":                    {condition("provider", domain.OperatorNotEqual, "slack"), true},
+		"ne matches":                    {condition("provider", domain.OperatorNotEqual, "gmail"), false},
+		"ne on a missing key":           {condition("category", domain.OperatorNotEqual, "booking"), true},
+		"in lists it":                   {condition("provider", domain.OperatorIn, "slack", "gmail"), true},
+		"in does not list it":           {condition("provider", domain.OperatorIn, "slack"), false},
+		"nin lists it":                  {condition("provider", domain.OperatorNotIn, "gmail"), false},
+		"nin on a missing key":          {condition("category", domain.OperatorNotIn, "booking"), true},
+		"source kind is its own column": {condition("source_kind", domain.OperatorEqual, "external"), true},
+		"another source kind":           {condition("source_kind", domain.OperatorEqual, "file"), false},
+		"named document":                {domain.Filter{DocumentIDs: []string{"doc_1"}}, true},
+		"another document":              {domain.Filter{DocumentIDs: []string{"doc_2"}}, false},
+	} {
+		if got := refMatches(gmail, tc.filter); got != tc.want {
+			t.Errorf("%s: refMatches = %v, want %v", name, got, tc.want)
+		}
 	}
 }

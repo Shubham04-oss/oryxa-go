@@ -77,16 +77,133 @@ func TestKnowledgeDocumentMappingNotFound(t *testing.T) {
 	}
 }
 
+func TestKnowledgeDocumentRemovalTimestampIsScopedAndMonotonic(t *testing.T) {
+	store, ctx := openTestStore(t)
+	org := uniqueOrganization()
+	id := "kdoc_removed_" + org
+	first := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := store.KnowledgeDocumentRemovedAt(ctx, org, id); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("missing removal = %v", err)
+	}
+	for _, at := range []time.Time{first, first.Add(-time.Hour), first.Add(time.Hour)} {
+		if err := store.RecordKnowledgeDocumentRemoval(ctx, org, id, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.KnowledgeDocumentRemovedAt(ctx, org, id)
+	if err != nil || !got.Equal(first.Add(time.Hour)) {
+		t.Fatalf("removal timestamp = %v, %v", got, err)
+	}
+	if _, err := store.KnowledgeDocumentRemovedAt(ctx, org+"other", id); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("another organization's removal = %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM rag_knowledge_removals WHERE organization_id = $1 AND knowledge_document_id = $2`, org, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A tombstone only has to outlive the latest publish that could still be
+// delivered after it, so recording a removal lets go of ones past that,
+// whichever organization they belong to: one deleted long ago records no
+// removals of its own any more.
+func TestRecordingAKnowledgeRemovalLetsExpiredOnesGo(t *testing.T) {
+	store, ctx := openTestStore(t)
+	deleted, live := uniqueOrganization(), uniqueOrganization()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	expired := now.Add(-knowledgeRemovalRetention - time.Hour)
+	kept := now.Add(-knowledgeRemovalRetention + time.Hour)
+	t.Cleanup(func() {
+		_, _ = store.db.ExecContext(context.Background(),
+			`DELETE FROM rag_knowledge_removals WHERE organization_id IN ($1, $2)`, deleted, live)
+	})
+	if _, err := store.db.ExecContext(ctx, `
+		INSERT INTO rag_knowledge_removals (organization_id, knowledge_document_id, removed_at)
+		VALUES ($1, 'kdoc_expired', $2), ($1, 'kdoc_kept', $3)`, deleted, expired, kept); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.RecordKnowledgeDocumentRemoval(ctx, live, "kdoc_fresh", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.KnowledgeDocumentRemovedAt(ctx, deleted, "kdoc_expired"); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("an expired tombstone survived a later removal: %v", err)
+	}
+	if got, err := store.KnowledgeDocumentRemovedAt(ctx, deleted, "kdoc_kept"); err != nil || !got.Equal(kept) {
+		t.Fatalf("a tombstone still inside its retention = %v, %v", got, err)
+	}
+	if got, err := store.KnowledgeDocumentRemovedAt(ctx, live, "kdoc_fresh"); err != nil || !got.Equal(now) {
+		t.Fatalf("the removal just recorded = %v, %v", got, err)
+	}
+}
+
+// The lock is released however the work under it ends, so a failed handler
+// never leaves the next delivery of the same document waiting.
+func TestKnowledgeDocumentLockIsReleasedWhenTheWorkFails(t *testing.T) {
+	store, ctx := openTestStore(t)
+	failure := errors.New("the handler failed")
+	if err := store.WithKnowledgeDocumentLock(ctx, "org_lock_fail", "doc_1", func() error { return failure }); !errors.Is(err, failure) {
+		t.Fatalf("WithKnowledgeDocumentLock = %v, want the handler's error", err)
+	}
+	again, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := store.WithKnowledgeDocumentLock(again, "org_lock_fail", "doc_1", func() error { return nil }); err != nil {
+		t.Fatalf("the lock was still held after the work failed: %v", err)
+	}
+}
+
+func TestKnowledgeDocumentLockSerializesTheSameDocument(t *testing.T) {
+	store, ctx := openTestStore(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- store.WithKnowledgeDocumentLock(ctx, "org_lock", "doc_1", func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		t.Fatal("first document lock was not acquired")
+	}
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+
+	// A different document can progress while this one is held.
+	if err := store.WithKnowledgeDocumentLock(ctx, "org_lock", "doc_2", func() error { return nil }); err != nil {
+		t.Fatalf("another document was blocked: %v", err)
+	}
+	blocked, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+	if err := store.WithKnowledgeDocumentLock(blocked, "org_lock", "doc_1", func() error {
+		t.Error("same document entered the critical section while locked")
+		return nil
+	}); err == nil {
+		t.Fatal("same document did not wait for the first handler")
+	}
+	close(release)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUpsertKnowledgeDocumentMappingUpdatesInPlace(t *testing.T) {
 	store, ctx := openTestStore(t)
 	organizationID := uniqueOrganization()
-	_, firstDocument := testKnowledgeDocument(t, store, ctx, organizationID)
+	firstCorpus, firstDocument := testKnowledgeDocument(t, store, ctx, organizationID)
 	secondCorpus, secondDocument := testKnowledgeDocument(t, store, ctx, organizationID)
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	first := domain.KnowledgeDocumentMapping{
 		KnowledgeDocumentID: "kdoc_1", OrganizationID: organizationID,
-		CorpusID: secondCorpus.ID, DocumentID: firstDocument.ID,
+		CorpusID: firstCorpus.ID, DocumentID: firstDocument.ID,
 		ContentHash: "hash-1", ExtractedAt: now, UpdatedAt: now,
 	}
 	if err := store.UpsertKnowledgeDocumentMapping(ctx, first); err != nil {

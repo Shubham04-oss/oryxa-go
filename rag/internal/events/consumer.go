@@ -69,11 +69,16 @@ type application interface {
 	MemberRemoved(context.Context, autheventsv1.MemberRemoved) error
 	TeamDeleted(context.Context, teamseventsv1.TeamDeleted) error
 	ObjectDeleted(context.Context, fileseventsv1.ObjectDeleted) error
-	DocumentPublished(context.Context, knowledgeeventsv1.DocumentPublished) error
+	// DocumentPublishedAt is also handed the envelope's occurred_at: when
+	// knowledge published this version, which a republish of something it
+	// read earlier carries forward and its payload's extracted_at does not.
+	DocumentPublishedAt(context.Context, knowledgeeventsv1.DocumentPublished, time.Time) error
 	DocumentRemoved(context.Context, knowledgeeventsv1.DocumentRemoved) error
 }
 
-type handler func(context.Context, json.RawMessage) error
+// handler runs one event's payload. occurredAt is the envelope's signed
+// occurred_at, zero when it did not parse.
+type handler func(ctx context.Context, data json.RawMessage, occurredAt time.Time) error
 
 type subscription struct {
 	source string
@@ -112,7 +117,7 @@ func NewConsumer(app application, verifier *eventauth.Verifier, logger *slog.Log
 			autheventsv1.MemberRemovedDetailType:          {source: autheventsv1.Source, handle: decode(app.MemberRemoved)},
 			teamseventsv1.TeamDeletedDetailType:           {source: teamseventsv1.Source, handle: decode(app.TeamDeleted)},
 			fileseventsv1.ObjectDeletedDetailType:         {source: fileseventsv1.Source, handle: decode(app.ObjectDeleted)},
-			knowledgeeventsv1.DocumentPublishedDetailType: {source: knowledgeeventsv1.Source, handle: decode(app.DocumentPublished)},
+			knowledgeeventsv1.DocumentPublishedDetailType: {source: knowledgeeventsv1.Source, handle: decodeAt(app.DocumentPublishedAt)},
 			knowledgeeventsv1.DocumentRemovedDetailType:   {source: knowledgeeventsv1.Source, handle: decode(app.DocumentRemoved)},
 		},
 		logger:   logger,
@@ -174,7 +179,7 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 
 	ctx, span := observability.StartConsumerSpan(ctx, detail.TraceCarrier, consumer.queueName, event.DetailType, detail.EventID)
 	started := time.Now()
-	err := subscribed.handle(ctx, detail.Data)
+	err := subscribed.handle(ctx, detail.Data, occurredAt)
 	observability.EndSpan(span, err)
 	consumer.metrics.Record(ctx, component, event.DetailType, occurredAt, receivedAt, started, err)
 	if err != nil {
@@ -185,12 +190,24 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 }
 
 func decode[T any](handle func(context.Context, T) error) handler {
-	return func(ctx context.Context, data json.RawMessage) error {
+	return func(ctx context.Context, data json.RawMessage, _ time.Time) error {
 		var event T
 		if err := json.Unmarshal(data, &event); err != nil {
 			return fmt.Errorf("decode event data: %w", err)
 		}
 		return handle(ctx, event)
+	}
+}
+
+// decodeAt is decode for a handler that also needs to know when the event
+// happened, as its publisher signed it into the envelope.
+func decodeAt[T any](handle func(context.Context, T, time.Time) error) handler {
+	return func(ctx context.Context, data json.RawMessage, occurredAt time.Time) error {
+		var event T
+		if err := json.Unmarshal(data, &event); err != nil {
+			return fmt.Errorf("decode event data: %w", err)
+		}
+		return handle(ctx, event, occurredAt)
 	}
 }
 

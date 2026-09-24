@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -16,7 +18,7 @@ const documentColumns = `
 	id, corpus_id, organization_id, source_kind, source_ref, title, content_type,
 	content_sha256, byte_size, metadata, status, failure_reason, chunk_count,
 	attempts, created_by, created_at, updated_at, ingested_at,
-	original_bucket, original_key, kb_synced_hash, kb_submitted_at`
+	original_bucket, original_key, kb_synced_hash, kb_submitted_at, access`
 
 // documentColumnsQualified is the same list for a statement that also has
 // another relation in scope, where a bare "id" is ambiguous.
@@ -27,12 +29,13 @@ const documentColumnsQualified = `
 	document.chunk_count, document.attempts, document.created_by, document.created_at,
 	document.updated_at, document.ingested_at,
 	document.original_bucket, document.original_key, document.kb_synced_hash,
-	document.kb_submitted_at`
+	document.kb_submitted_at, document.access`
 
 type documentRow struct {
 	ID             string     `db:"id"`
 	CorpusID       string     `db:"corpus_id"`
 	OrganizationID string     `db:"organization_id"`
+	Access         string     `db:"access"`
 	SourceKind     string     `db:"source_kind"`
 	SourceRef      string     `db:"source_ref"`
 	Title          string     `db:"title"`
@@ -63,6 +66,7 @@ func (row documentRow) document() (domain.Document, error) {
 		ID:             row.ID,
 		CorpusID:       row.CorpusID,
 		OrganizationID: row.OrganizationID,
+		Access:         domain.DocumentAccess(row.Access),
 		Source:         domain.Source{Kind: domain.SourceKind(row.SourceKind), Ref: row.SourceRef},
 		Title:          row.Title,
 		ContentType:    row.ContentType,
@@ -104,7 +108,14 @@ const (
 // The body is stored alongside the metadata because a citation addresses a
 // byte range of it. Recording the row and the event together means a document
 // cannot exist without the ingest work having been announced.
+//
+// A document offered with no access label keeps the one it already has, and
+// a new one gets members; see settledAccess.
 func (store *Store) UpsertDocument(ctx context.Context, document domain.Document, body string, event domain.Event) (domain.Document, Upsert, error) {
+	requestedAccess := document.Access
+	if requestedAccess != "" && !requestedAccess.Valid() {
+		return domain.Document{}, 0, fmt.Errorf("document access is not allowed: %w", domain.ErrInvalid)
+	}
 	metadata, err := encodeMetadata(document.Metadata)
 	if err != nil {
 		return domain.Document{}, 0, err
@@ -114,12 +125,27 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 		outcome Upsert
 	)
 	err = store.inTx(ctx, func(tx *sqlx.Tx) error {
+		var corpusOrganization string
+		if err := tx.GetContext(ctx, &corpusOrganization, `
+			SELECT organization_id FROM rag_corpora WHERE id = $1 FOR KEY SHARE`, document.CorpusID); err != nil {
+			if isNoRows(err) {
+				return domain.ErrConflict
+			}
+			return fmt.Errorf("read document's corpus: %w", err)
+		}
+		if corpusOrganization != document.OrganizationID {
+			return domain.ErrConflict
+		}
 		existing, found, err := findDocument(ctx, tx, document.CorpusID, document.Source, document.ContentSHA256)
 		if err != nil {
 			return err
 		}
+		document.Access = settledAccess(requestedAccess, existing, found)
+		attributesChanged := found && (existing.Title != document.Title || existing.ContentType != document.ContentType ||
+			!maps.Equal(existing.Metadata, document.Metadata))
 		switch {
-		case found && existing.ContentSHA256 == document.ContentSHA256 && existing.Status == domain.StatusReady:
+		case found && existing.ContentSHA256 == document.ContentSHA256 && existing.Access == document.Access &&
+			!attributesChanged && existing.Status == domain.StatusReady:
 			stored, outcome = existing, UpsertUnchanged
 			return nil
 		case found:
@@ -134,12 +160,14 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 				SET title = $2, content_type = $3, content_sha256 = $4, byte_size = $5,
 				    body = $6, metadata = $7, status = 'pending', failure_reason = '',
 				    attempts = 0, locked_until = NULL, updated_at = $8, ingested_at = NULL,
-				    original_bucket = $9, original_key = $10
+				    original_bucket = $9, original_key = $10, access = $11,
+				    kb_synced_hash = CASE WHEN access = $11 AND NOT $12 THEN kb_synced_hash ELSE '' END,
+				    kb_submitted_at = CASE WHEN access = $11 AND NOT $12 THEN kb_submitted_at ELSE NULL END
 				WHERE id = $1
 				RETURNING `+documentColumns,
 				existing.ID, document.Title, document.ContentType, document.ContentSHA256,
 				document.ByteSize, body, metadata, document.UpdatedAt,
-				document.OriginalBucket, document.OriginalKey); err != nil {
+				document.OriginalBucket, document.OriginalKey, document.Access, attributesChanged); err != nil {
 				return mapWriteError("update document", err)
 			}
 			stored, err = row.document()
@@ -153,14 +181,14 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 				INSERT INTO rag_documents (
 					id, corpus_id, organization_id, source_kind, source_ref, title,
 					content_type, content_sha256, byte_size, body, metadata, status,
-					created_by, created_at, updated_at, original_bucket, original_key)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13, $13, $14, $15)
+					created_by, created_at, updated_at, original_bucket, original_key, access)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', $12, $13, $13, $14, $15, $16)
 				RETURNING `+documentColumns,
 				document.ID, document.CorpusID, document.OrganizationID,
 				document.Source.Kind, document.Source.Ref, document.Title,
 				document.ContentType, document.ContentSHA256, document.ByteSize, body, metadata,
 				document.CreatedBy, document.CreatedAt,
-				document.OriginalBucket, document.OriginalKey); err != nil {
+				document.OriginalBucket, document.OriginalKey, document.Access); err != nil {
 				return mapWriteError("insert document", err)
 			}
 			stored, err = row.document()
@@ -178,6 +206,21 @@ func (store *Store) UpsertDocument(ctx context.Context, document domain.Document
 		return domain.Document{}, 0, err
 	}
 	return stored, outcome, nil
+}
+
+// settledAccess is who may read a document being offered: the label the
+// caller named, or, when they named none, the one the document already held
+// has. Offering an admin-only document again without saying so must never
+// open it to every member. Only a document never held before gets members.
+func settledAccess(requested domain.DocumentAccess, existing domain.Document, found bool) domain.DocumentAccess {
+	switch {
+	case requested != "":
+		return requested
+	case found:
+		return existing.Access
+	default:
+		return domain.AccessMembers
+	}
 }
 
 // findDocument looks for the document a source already has. Inline text has no
@@ -280,9 +323,9 @@ func decodeDocumentCursor(cursor string) (documentCursor, error) {
 // the listing from exactly where that page ended; the returned cursor is
 // empty once there is nothing more to read, which is what tells a caller to
 // stop asking.
-func (store *Store) Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int) ([]domain.Document, string, error) {
-	statement := `SELECT ` + documentColumns + ` FROM rag_documents WHERE organization_id = $1 AND corpus_id = $2`
-	arguments := []any{organizationID, corpusID}
+func (store *Store) Documents(ctx context.Context, organizationID, corpusID string, status domain.IngestStatus, cursor string, limit int, includeAdminOnly bool) ([]domain.Document, string, error) {
+	statement := `SELECT ` + documentColumns + ` FROM rag_documents WHERE organization_id = $1 AND corpus_id = $2 AND ($3 OR access = 'members')`
+	arguments := []any{organizationID, corpusID, includeAdminOnly}
 	if status != "" {
 		arguments = append(arguments, string(status))
 		statement += fmt.Sprintf(` AND status = $%d`, len(arguments))
@@ -392,57 +435,172 @@ func (store *Store) ClaimDocuments(ctx context.Context, limit int, lease time.Du
 	return documents, nil
 }
 
-// MarkDocumentReady records a finished ingest and its event together.
-func (store *Store) MarkDocumentReady(ctx context.Context, documentID string, chunkCount int, at time.Time, event domain.Event) error {
-	return store.inTx(ctx, func(tx *sqlx.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
+// stillAsIndexed is the condition that a document's row still holds what an
+// ingest worked from: the content, and every attribute an index keeps with
+// it. UpsertDocument changing any of these is the one thing that makes the
+// result of an ingest already under way stale, and it puts the document back
+// in the queue for exactly that reason, so a result is recorded only while
+// this holds and is dropped otherwise, rather than written over the change.
+// The worker's own bookkeeping — claims, rechecks, retries, submissions —
+// touches none of these columns, so it never makes its own result stale.
+//
+// It appends its values to arguments and returns the clause that tests them.
+func stillAsIndexed(document domain.Document, arguments []any) (string, []any, error) {
+	metadata, err := encodeMetadata(document.Metadata)
+	if err != nil {
+		return "", nil, err
+	}
+	access := document.Access
+	if access == "" {
+		access = domain.AccessMembers
+	}
+	first := len(arguments) + 1
+	arguments = append(arguments, document.ContentSHA256, string(access), document.Title, document.ContentType,
+		document.Source.Ref, metadata, document.OriginalBucket, document.OriginalKey)
+	clause := fmt.Sprintf(`content_sha256 = $%d AND access = $%d AND title = $%d AND content_type = $%d
+		AND source_ref = $%d AND metadata = $%d::jsonb AND original_bucket = $%d AND original_key = $%d`,
+		first, first+1, first+2, first+3, first+4, first+5, first+6, first+7)
+	return clause, arguments, nil
+}
+
+// MarkDocumentReady records a finished ingest and its event together, and
+// reports whether it did.
+//
+// document is the version the ingest worked from. If the row has changed
+// since (see stillAsIndexed), nothing is recorded: the change already put the
+// document back in the queue, and marking it ready would leave the change
+// never indexed.
+func (store *Store) MarkDocumentReady(ctx context.Context, document domain.Document, chunkCount int, at time.Time, event domain.Event) (bool, error) {
+	var marked bool
+	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
+		current, arguments, err := stillAsIndexed(document, []any{document.ID, chunkCount, at})
+		if err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `
 			UPDATE rag_documents
 			SET status = 'ready', chunk_count = $2, failure_reason = '',
 			    locked_until = NULL, ingested_at = $3, updated_at = $3
-			WHERE id = $1`, documentID, chunkCount, at); err != nil {
+			WHERE id = $1 AND `+current, arguments...)
+		if err != nil {
 			return fmt.Errorf("mark document ready: %w", err)
+		}
+		if marked, err = affectedOne(result); err != nil || !marked {
+			return err
 		}
 		return insertEvents(ctx, tx, []domain.Event{event})
 	})
+	return marked && err == nil, err
 }
 
 // MarkDocumentFailed keeps the failure with its reason rather than deleting
-// the row, so it can be seen and retried instead of quietly disappearing.
-func (store *Store) MarkDocumentFailed(ctx context.Context, documentID, reason string, at time.Time, event domain.Event) error {
-	return store.inTx(ctx, func(tx *sqlx.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
+// the row, so it can be seen and retried instead of quietly disappearing. Like
+// MarkDocumentReady, it records nothing for a document that has changed since
+// the attempt that failed: the change deserves an attempt of its own.
+func (store *Store) MarkDocumentFailed(ctx context.Context, document domain.Document, reason string, at time.Time, event domain.Event) (bool, error) {
+	var marked bool
+	err := store.inTx(ctx, func(tx *sqlx.Tx) error {
+		current, arguments, err := stillAsIndexed(document, []any{document.ID, reason, at})
+		if err != nil {
+			return err
+		}
+		result, err := tx.ExecContext(ctx, `
 			UPDATE rag_documents
 			SET status = 'failed', failure_reason = left($2, 1000),
 			    locked_until = NULL, updated_at = $3
-			WHERE id = $1`, documentID, reason, at); err != nil {
+			WHERE id = $1 AND `+current, arguments...)
+		if err != nil {
 			return fmt.Errorf("mark document failed: %w", err)
+		}
+		if marked, err = affectedOne(result); err != nil || !marked {
+			return err
 		}
 		return insertEvents(ctx, tx, []domain.Event{event})
 	})
+	return marked && err == nil, err
 }
 
-// MarkKnowledgeBaseSubmitted records that a document's current content has
-// been handed to a Bedrock knowledge base, without otherwise disturbing its
-// status or its lease: the document stays 'ingesting' until the ingest
-// worker's next claim polls the knowledge base for the outcome, exactly as
-// the lease that claim already holds intends. Recording this separately from
-// MarkDocumentReady is what lets a claim tell "never submitted, or the
-// content changed since it last was" from "already submitted, only the
-// outcome is still unknown" without resubmitting on every poll.
+// MarkKnowledgeBaseSubmitted records that a document has been handed to a
+// Bedrock knowledge base, without otherwise disturbing its status or its
+// lease: the document stays 'ingesting' until the ingest worker's next claim
+// polls the knowledge base for the outcome, exactly as the lease that claim
+// already holds intends. Recording this separately from MarkDocumentReady is
+// what lets a claim tell "never submitted as it is now" from "already
+// submitted, only the outcome is still unknown" without resubmitting on every
+// poll.
 //
-// The time goes with the hash, so the worker can tell how long a submission
-// has been outstanding. An empty hash forgets both: nothing is outstanding.
-func (store *Store) MarkKnowledgeBaseSubmitted(ctx context.Context, documentID, contentSHA256 string, at time.Time) error {
-	if _, err := store.db.ExecContext(ctx, `
+// marker is knowledgebase.SyncMarker of what was submitted: the content and
+// every attribute written with it. The time goes with it, so the worker can
+// tell how long a submission has been outstanding. An empty marker forgets
+// both: nothing is outstanding.
+//
+// document is the version that was submitted. If the row has changed since
+// (see stillAsIndexed), nothing is recorded and it reports false: the change
+// is submitted on the claim it queued.
+func (store *Store) MarkKnowledgeBaseSubmitted(ctx context.Context, document domain.Document, marker string, at time.Time) (bool, error) {
+	current, arguments, err := stillAsIndexed(document, []any{document.ID, marker, at})
+	if err != nil {
+		return false, err
+	}
+	result, err := store.db.ExecContext(ctx, `
 		UPDATE rag_documents
 		SET kb_synced_hash = $2,
 		    kb_submitted_at = CASE WHEN $2 = '' THEN NULL ELSE $3::timestamptz END,
 		    updated_at = $3
-		WHERE id = $1`,
-		documentID, contentSHA256, at); err != nil {
-		return fmt.Errorf("mark document submitted to the knowledge base: %w", err)
+		WHERE id = $1 AND `+current, arguments...)
+	if err != nil {
+		return false, fmt.Errorf("mark document submitted to the knowledge base: %w", err)
 	}
-	return nil
+	return affectedOne(result)
+}
+
+// knowledgeBaseSyncedPrefix is knowledgebase.SyncMarkerPrefix, written out
+// again here and in the partial index RequeueUnsyncedKnowledgeBaseDocuments
+// is served by (migration 013), because an index predicate cannot take a
+// parameter. A test keeps the three the same.
+const knowledgeBaseSyncedPrefix = "v2:"
+
+// RequeueUnsyncedKnowledgeBaseDocuments puts back in the queue up to limit
+// ready documents whose knowledge base submission was recorded under an
+// older marker format than this build writes, and reports how many.
+//
+// A marker is written by whichever build submitted the document. During a
+// rolling deploy the build being replaced can still claim, submit and mark
+// ready a document with the attributes it knew — without access, before
+// access existed — and a ready document is never claimed again to notice.
+// The ingest worker runs this every so often, so such a document is
+// resubmitted soon after the last old task stops; the marker it then gets
+// never matches this query again. Only a bedrock-kb document ever has a
+// marker, so no other document is touched.
+func (store *Store) RequeueUnsyncedKnowledgeBaseDocuments(ctx context.Context, limit int) (int64, error) {
+	result, err := store.db.ExecContext(ctx, `
+		UPDATE rag_documents AS document
+		SET status = 'pending', failure_reason = '', attempts = 0, locked_until = NULL, updated_at = now()
+		FROM (
+			SELECT id FROM rag_documents
+			WHERE status = 'ready' AND kb_synced_hash <> '' AND kb_synced_hash NOT LIKE '`+knowledgeBaseSyncedPrefix+`%'
+			ORDER BY id
+			LIMIT $1
+			FOR UPDATE SKIP LOCKED
+		) AS stale
+		WHERE document.id = stale.id`, limit)
+	if err != nil {
+		return 0, fmt.Errorf("requeue documents synced under an older marker: %w", err)
+	}
+	requeued, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("requeue documents synced under an older marker: %w", err)
+	}
+	return requeued, nil
+}
+
+// affectedOne reports whether an update keyed on one document's id found it.
+func affectedOne(result sql.Result) (bool, error) {
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("count updated documents: %w", err)
+	}
+	return affected == 1, nil
 }
 
 // RecheckDocumentAt leaves a document ingesting but claimable again at at:

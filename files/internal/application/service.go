@@ -47,6 +47,7 @@ type CreateInput struct {
 	Filename      string
 	ContentType   string
 	Purpose       domain.Purpose
+	Access        domain.Access
 	Scope         domain.Scope
 	TeamID        string
 	RetentionDays int
@@ -120,6 +121,19 @@ func (s *Service) Create(ctx context.Context, credentials authclient.Credentials
 	if err := purpose.Fits(scope); err != nil {
 		return domain.Object{}, err
 	}
+	access := input.Access
+	if access == "" {
+		access = domain.AccessMembers
+	}
+	if !access.Valid() {
+		return domain.Object{}, fmt.Errorf("access is not allowed: %w", domain.ErrInvalid)
+	}
+	if purpose == domain.PurposeBillingAttachment {
+		access = domain.AccessAdmins
+	}
+	if access == domain.AccessAdmins && (scope != domain.ScopeOrganization || !org.Role.IsOrgAdmin()) {
+		return domain.Object{}, domain.ErrForbidden
+	}
 	teamID, memberID, err := domain.Place(scope, input.TeamID, org.UserID)
 	if err != nil {
 		return domain.Object{}, err
@@ -149,6 +163,7 @@ func (s *Service) Create(ctx context.Context, credentials authclient.Credentials
 		Filename:       filename,
 		ContentType:    contentType,
 		Purpose:        purpose,
+		Access:         access,
 		SizeBytes:      int64(len(input.Content)),
 		SHA256:         hex.EncodeToString(sum[:]),
 		CreatedBy:      org.UserID,
@@ -168,6 +183,7 @@ func (s *Service) Create(ctx context.Context, credentials authclient.Credentials
 		Filename:       object.Filename,
 		ContentType:    object.ContentType,
 		Purpose:        string(object.Purpose),
+		Access:         string(object.Access),
 		SizeBytes:      object.SizeBytes,
 		SHA256:         object.SHA256,
 		CreatedBy:      object.CreatedBy,
@@ -199,8 +215,10 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 		return nil, err
 	}
 	if filter.Scope == domain.ScopeTeam {
-		if _, err := s.teamAccess(ctx, credentials, organizationID, filter.TeamID); err != nil {
-			return nil, err
+		if !org.Role.IsOrgAdmin() {
+			if _, err := s.teamAccess(ctx, credentials, organizationID, filter.TeamID); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return s.store.Objects(ctx, organizationID, s.now().UTC(), domain.ObjectQuery{
@@ -369,11 +387,14 @@ func (s *Service) canSee(ctx context.Context, credentials authclient.Credentials
 		}
 		return domain.ErrNotFound
 	case domain.ScopeOrganization:
-		if object.Purpose == domain.PurposeBillingAttachment && !org.Role.IsOrgAdmin() {
+		if object.EffectiveAccess() != domain.AccessMembers && !org.Role.IsOrgAdmin() {
 			return domain.ErrNotFound
 		}
 		return nil
 	case domain.ScopeTeam:
+		if org.Role.IsOrgAdmin() {
+			return nil
+		}
 		_, err := s.teamAccess(ctx, credentials, object.OrganizationID, object.TeamID)
 		return err
 	default:

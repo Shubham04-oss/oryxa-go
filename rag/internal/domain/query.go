@@ -147,9 +147,14 @@ const (
 
 // Query is one search against one corpus.
 type Query struct {
-	Text string     `json:"text"`
-	TopK int        `json:"top_k,omitempty"`
-	Mode SearchMode `json:"mode,omitempty"`
+	// IncludeAdminOnly is assigned by the application from the caller's
+	// verified membership (see OrgMembership.ActsAsAdmin): an org admin's
+	// own session, never an agent acting for one. It is never accepted from
+	// a request body.
+	IncludeAdminOnly bool       `json:"-"`
+	Text             string     `json:"text"`
+	TopK             int        `json:"top_k,omitempty"`
+	Mode             SearchMode `json:"mode,omitempty"`
 	// Filter narrows the candidates before ranking.
 	Filter Filter `json:"filter,omitempty"`
 	// MinScore drops weak matches. It is compared against the fused score, so
@@ -247,9 +252,10 @@ type Match struct {
 // Ref is the little about a document that travels with every match, so a
 // citation can be rendered without a second lookup.
 type Ref struct {
-	ID     string `json:"id"`
-	Title  string `json:"title,omitempty"`
-	Source Source `json:"source"`
+	ID       string   `json:"id"`
+	Title    string   `json:"title,omitempty"`
+	Source   Source   `json:"source"`
+	Metadata Metadata `json:"metadata,omitempty"`
 }
 
 // Citation is one passage an answer leaned on.
@@ -259,6 +265,7 @@ type Citation struct {
 	DocumentID  string   `json:"document_id"`
 	Title       string   `json:"title,omitempty"`
 	Source      Source   `json:"source"`
+	Metadata    Metadata `json:"metadata,omitempty"`
 	HeadingPath []string `json:"heading_path,omitempty"`
 	StartByte   int      `json:"start_byte"`
 	EndByte     int      `json:"end_byte"`
@@ -307,6 +314,7 @@ func Citations(matches []Match) []Citation {
 			DocumentID:  match.Chunk.DocumentID,
 			Title:       match.Document.Title,
 			Source:      match.Document.Source,
+			Metadata:    match.Document.Metadata,
 			HeadingPath: slices.Clone(match.Chunk.HeadingPath),
 			StartByte:   match.Chunk.StartByte,
 			EndByte:     match.Chunk.EndByte,

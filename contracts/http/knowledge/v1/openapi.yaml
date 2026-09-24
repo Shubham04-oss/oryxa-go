@@ -1,0 +1,70 @@
+openapi: 3.1.0
+info:
+  title: Oryxa Knowledge internal document API
+  version: 1.0.0
+  description: Narrow service-to-service contract for reading a body omitted from a Knowledge publication event.
+paths:
+  /v1/internal/organizations/{organizationID}/documents/{documentID}/body:
+    get:
+      operationId: getPublishedDocumentBody
+      summary: Read one indexed document's full body
+      description: A service with a token for audience knowledge and purpose documents may fetch one document in the named organization. The caller must compare content_hash with the event before indexing.
+      security:
+        - serviceToken: []
+      parameters:
+        - in: path
+          name: organizationID
+          required: true
+          schema: { type: string }
+        - in: path
+          name: documentID
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: The current body, which may be newer than the event that prompted the fetch.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DocumentBody'
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '500': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    serviceToken:
+      type: apiKey
+      in: header
+      name: X-Oryxa-Service-Token
+  responses:
+    Error:
+      description: The request could not be served.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    DocumentBody:
+      type: object
+      required: [id, source_id, external_id, mime, content_hash, body, byte_size]
+      properties:
+        id: { type: string }
+        source_id: { type: string }
+        external_id: { type: string }
+        mime: { type: string }
+        content_hash: { type: string }
+        body: { type: string }
+        byte_size: { type: integer }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }

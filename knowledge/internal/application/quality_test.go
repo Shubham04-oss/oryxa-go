@@ -82,6 +82,20 @@ func completedRuns(t *testing.T, store *fakeStore) []knowledgev1.SyncCompleted {
 	return completed
 }
 
+func TestClassificationKeepsProviderMetadataAndDetectsLabelChanges(t *testing.T) {
+	provider := map[string]string{"labels": "INBOX"}
+	classified := withCategory(domain.Document{Metadata: provider}, &domain.Verdict{Category: "financial_record"})
+	if classified.Metadata[categoryMetadataKey] != "financial_record" || provider[categoryMetadataKey] != "" {
+		t.Fatalf("classification = %v, provider metadata = %v", classified.Metadata, provider)
+	}
+	if !sourceMetadataEqual(classified.Metadata, provider) {
+		t.Fatal("the generated category made unchanged provider metadata look different")
+	}
+	if sourceMetadataEqual(classified.Metadata, map[string]string{"labels": "IMPORTANT"}) {
+		t.Fatal("a changed Gmail label was treated as unchanged")
+	}
+}
+
 func TestSyncExcludesWhatTheJudgeCallsNoiseAndPublishesTheRest(t *testing.T) {
 	store := newFakeStore()
 	judge := &fakeJudge{verdicts: map[string]domain.Verdict{
@@ -337,5 +351,78 @@ func TestSyncKeepsTheJudgmentAndAnExcludedDocumentsText(t *testing.T) {
 	}
 	if plan := documentNamed(t, store, "m2"); string(plan.Judgment) != `{"jev":{"kind":"conversation"}}` {
 		t.Fatalf("kept judgment = %s", plan.Judgment)
+	}
+}
+
+// A GitHub issue's comment count and state, a Gmail message's labels: what a
+// provider says about a document moves while what it says does not. The
+// verdict it was given stands, drawn again from its kept judgment instead of
+// paying the judge for the same content twice, and what moved is written
+// but not published: nothing a consumer indexes changed.
+func TestAMetadataOnlyChangeIsNotJudgedOrPublishedAgain(t *testing.T) {
+	store := newFakeStore()
+	judge := &fakeJudge{verdicts: map[string]domain.Verdict{
+		"Fix login":        {Keep: true, Reason: "work material", Category: "work_material", Judgment: []byte("work_material")},
+		"Fix login, again": {Keep: true, Reason: "work material", Category: "work_material", Judgment: []byte("work_material")},
+		"Summer sale":      {Keep: false, Reason: "promotion", Category: "promotion", Judgment: []byte("promotion")},
+	}}
+	updated := testClock.Add(-time.Hour)
+	issue := func(title, comments string) sources.Item {
+		return sources.Item{
+			ExternalID: "42", Kind: knowledgev1.KindIssue, Title: title,
+			URL: "https://github.com/acme/app/issues/42", MIME: transform.MIMEMarkdown,
+			Content:  []byte("Login fails when the session cookie expires."),
+			Metadata: map[string]string{"state": "open", "number": "42", "comments": comments}, UpdatedAt: &updated,
+		}
+	}
+	promotion := func(labels string) sources.Item {
+		return sources.Item{
+			ExternalID: "m1", Kind: knowledgev1.KindMessage, Title: "Summer sale", MIME: transform.MIMEPlain,
+			Content: []byte("Everything is 40% off."), Metadata: map[string]string{"labels": labels}, UpdatedAt: &updated,
+		}
+	}
+	page := func(items ...sources.Item) sources.Page { return sources.Page{Items: items, Watermark: &updated} }
+	extractor := &fakeExtractor{provider: "github", pages: []sources.Page{
+		page(issue("Fix login", "1"), promotion("INBOX")),
+		page(issue("Fix login", "2"), promotion("INBOX, CATEGORY_PROMOTIONS")),
+		page(issue("Fix login", "2"), promotion("INBOX, CATEGORY_PROMOTIONS")),
+		page(issue("Fix login", "3"), promotion("CATEGORY_PROMOTIONS")),
+	}}
+	now := testClock
+	service := judgedService(t, store, extractor, judge, nil, func() time.Time { return now })
+	source := activeSource(store, "github")
+	for pass := 1; pass <= 4; pass++ {
+		now = testClock.Add(time.Duration(pass) * time.Hour)
+		if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+			t.Fatalf("pass %d: %v", pass, err)
+		}
+	}
+	if judge.called() != 2 {
+		t.Fatalf("judge called %d times, want once for each document: only their metadata moved", judge.called())
+	}
+	if got := store.published(knowledgev1.DocumentPublishedDetailType); got != 1 {
+		t.Fatalf("published %d, want only the issue's first sight", got)
+	}
+	kept := documentNamed(t, store, "42")
+	if kept.RemovedAt != nil || kept.Metadata["comments"] != "3" || kept.Metadata[categoryMetadataKey] != "work_material" ||
+		!kept.LastSeenAt.Equal(now) {
+		t.Fatalf("issue = %+v, want it live with the latest comment count and its category", kept)
+	}
+	excluded := documentNamed(t, store, "m1")
+	if excluded.RemovedAt == nil || excluded.Metadata["labels"] != "CATEGORY_PROMOTIONS" {
+		t.Fatalf("promotion = %+v, want it still excluded, with its latest labels", excluded)
+	}
+	if got := store.published(knowledgev1.DocumentRemovedDetailType); got != 0 {
+		t.Fatalf("removals = %d, want none: the promotion was never live", got)
+	}
+
+	// A new title is not metadata: the judge reads it, so it is asked again.
+	extractor.pages = append(extractor.pages, page(issue("Fix login, again", "3"), promotion("CATEGORY_PROMOTIONS")))
+	now = now.Add(time.Hour)
+	if err := service.Sync(context.Background(), source, "lease-a"); err != nil {
+		t.Fatal(err)
+	}
+	if judge.called() != 3 || judge.calls[2].Title != "Fix login, again" {
+		t.Fatalf("judge calls = %d, want the retitled issue judged again", judge.called())
 	}
 }

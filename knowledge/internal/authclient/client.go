@@ -47,9 +47,13 @@ func New(baseURL string) *Client {
 }
 
 type organizationResponse struct {
+	Organization struct {
+		ID string `json:"id"`
+	} `json:"organization"`
 	Membership struct {
-		UserID string `json:"user_id"`
-		Role   string `json:"role"`
+		OrganizationID string `json:"organization_id"`
+		UserID         string `json:"user_id"`
+		Role           string `json:"role"`
 	} `json:"membership"`
 	Agent bool `json:"agent"`
 }
@@ -90,7 +94,10 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 	if err := json.Unmarshal(payload, &decoded); err != nil {
 		return domain.OrgMembership{}, fmt.Errorf("decode auth response")
 	}
-	if decoded.Membership.UserID == "" {
+	if decoded.Organization.ID != organizationID ||
+		decoded.Membership.OrganizationID != organizationID || decoded.Membership.UserID == "" {
+		// A successful Auth response for a different organization cannot
+		// authorize this organization's sources or document bodies.
 		return domain.OrgMembership{}, domain.ErrForbidden
 	}
 	return domain.OrgMembership{

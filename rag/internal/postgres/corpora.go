@@ -155,10 +155,11 @@ type listedCorpusRow struct {
 // files lists.
 func (store *Store) Corpora(ctx context.Context, organizationID string, query CorpusQuery) ([]domain.Corpus, error) {
 	statement := `SELECT ` + corpusColumns + `,
-		(SELECT count(*) FROM rag_documents WHERE corpus_id = rag_corpora.id) AS document_count,
-		(SELECT count(*) FROM rag_chunks WHERE corpus_id = rag_corpora.id) AS chunk_count
+		(SELECT count(*) FROM rag_documents AS d WHERE d.corpus_id = rag_corpora.id AND ($2 OR d.access = 'members')) AS document_count,
+		(SELECT count(*) FROM rag_chunks AS c JOIN rag_documents AS d ON d.id = c.document_id
+		 WHERE c.corpus_id = rag_corpora.id AND ($2 OR d.access = 'members')) AS chunk_count
 		FROM rag_corpora WHERE organization_id = $1`
-	arguments := []any{organizationID}
+	arguments := []any{organizationID, query.Admin}
 	switch query.Scope {
 	case domain.ScopeTeam:
 		arguments = append(arguments, query.TeamID)
@@ -196,15 +197,16 @@ func (store *Store) Corpora(ctx context.Context, organizationID string, query Co
 
 // CorpusCounts reads the document and chunk totals for one corpus, counted as
 // Corpora counts each corpus it lists.
-func (store *Store) CorpusCounts(ctx context.Context, corpusID string) (documents, chunks int64, err error) {
+func (store *Store) CorpusCounts(ctx context.Context, corpusID string, includeAdminOnly bool) (documents, chunks int64, err error) {
 	row := struct {
 		Documents int64 `db:"documents"`
 		Chunks    int64 `db:"chunks"`
 	}{}
 	if err := store.db.GetContext(ctx, &row, `
 		SELECT
-			(SELECT count(*) FROM rag_documents WHERE corpus_id = $1) AS documents,
-			(SELECT count(*) FROM rag_chunks WHERE corpus_id = $1) AS chunks`, corpusID); err != nil {
+			(SELECT count(*) FROM rag_documents WHERE corpus_id = $1 AND ($2 OR access = 'members')) AS documents,
+			(SELECT count(*) FROM rag_chunks AS c JOIN rag_documents AS d ON d.id = c.document_id
+			 WHERE c.corpus_id = $1 AND ($2 OR d.access = 'members')) AS chunks`, corpusID, includeAdminOnly); err != nil {
 		return 0, 0, fmt.Errorf("count corpus contents: %w", err)
 	}
 	return row.Documents, row.Chunks, nil
