@@ -1,7 +1,7 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
 import { ArrowRight, ArrowUp, Search } from "lucide-react"
-import type { Teamspace } from "./teamspaces-management"
+import type { SharedSpace } from "./people-spaces"
 import { IdentityAvatar } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
 
@@ -14,7 +14,7 @@ export function PeopleDirectory({
   onOpenConversation,
   onSendMessage,
 }: {
-  spaces: Teamspace[]
+  spaces: SharedSpace[]
   currentIdentity: AvatarIdentity
   preview: boolean
   selectedId: string | null
@@ -150,14 +150,17 @@ export function PeopleDirectory({
   )
 }
 
-function getSharedSpaces(spaces: Teamspace[], currentIdentity: AvatarIdentity) {
+function getSharedSpaces(
+  spaces: SharedSpace[],
+  currentIdentity: AvatarIdentity
+) {
   return spaces.filter((space) =>
     space.members.some((member) => member.id === currentIdentity.id)
   )
 }
 
 export function getSharedPeople(
-  spaces: Teamspace[],
+  spaces: SharedSpace[],
   currentIdentity: AvatarIdentity
 ): AvatarIdentity[] {
   return Array.from(

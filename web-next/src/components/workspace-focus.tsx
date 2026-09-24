@@ -7,17 +7,12 @@ import {
   FileText,
   Paperclip,
 } from "lucide-react"
-import {
-  agents,
-  IdentityAvatar,
-  people,
-  TeamspaceAvatar,
-} from "./workspace-avatar"
+import { agents, IdentityAvatar, people } from "./workspace-avatar"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { useVisibleHeight } from "@/hooks/use-visible-height"
 import { cn } from "@/lib/utils"
 
-export type WorkId = "product-sync" | "launch-crew" | "research-specialist"
+export type WorkId = "launch-crew" | "research-specialist"
 
 type WorkMessage = {
   author: string
@@ -41,47 +36,6 @@ export type WorkItem = {
 }
 
 export const workItems: Record<WorkId, WorkItem> = {
-  "product-sync": {
-    id: "product-sync",
-    title: "Product sync",
-    kind: "Teamspace",
-    description:
-      "A shared space for the product team's handoffs and decisions.",
-    status: "Online",
-    participants: [people.avery, people.jordan, people.sam],
-    summary:
-      "Review the handoff notes, confirm the checklist, and keep the conversation visible in the chat pane.",
-    tasks: [
-      "Confirm the launch checklist",
-      "Review the handoff notes",
-      "Share the final update",
-    ],
-    files: ["Onboarding checklist", "Handoff notes"],
-    activity: [
-      "Jordan added the final handoff notes",
-      "Sam started reviewing the checklist",
-    ],
-    messages: [
-      {
-        author: "Avery Morgan",
-        avatar: people.avery,
-        time: "9:12 AM",
-        text: "Can we confirm the onboarding checklist before the handoff?",
-      },
-      {
-        author: "Jordan Lee",
-        avatar: people.jordan,
-        time: "9:14 AM",
-        text: "Yes — I added the final notes and the review checklist is ready.",
-      },
-      {
-        author: "Sam Kim",
-        avatar: people.sam,
-        time: "9:16 AM",
-        text: "I'll review the checklist now and confirm with the team.",
-      },
-    ],
-  },
   "launch-crew": {
     id: "launch-crew",
     title: "Launch crew",
@@ -165,12 +119,7 @@ export function WorkspaceFocus({
   const [messages, setMessages] = useState(work.messages)
   const [isComposing, setIsComposing] = useState(false)
   const visibleHeight = useVisibleHeight(isComposing)
-  const panelTitle =
-    tab === "Overview"
-      ? work.id === "product-sync"
-        ? "Onboarding checklist"
-        : work.title
-      : tabTitles[tab]
+  const panelTitle = tab === "Overview" ? work.title : tabTitles[tab]
 
   function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -208,12 +157,6 @@ export function WorkspaceFocus({
         >
           <ArrowLeft size={17} strokeWidth={1.7} />
         </button>
-        {work.kind === "Teamspace" && (
-          <TeamspaceAvatar
-            name={work.title}
-            className="workspace-focus-team-avatar"
-          />
-        )}
         <div>
           <h1>{work.title}</h1>
           <p>{work.kind}</p>
