@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { signPurge } from "./realtime-purge"
 import worker from "./server"
 import type { Env } from "./server"
 
@@ -10,6 +11,7 @@ const sdk = vi.hoisted(() => ({
   routeAgentRequest: vi.fn(),
   getAgentByName: vi.fn(),
   purgeTranscript: vi.fn(),
+  purge: vi.fn(),
 }))
 
 vi.mock("@tanstack/react-start/server-entry", () => ({
@@ -28,11 +30,17 @@ vi.mock("@cloudflare/ai-chat", () => ({ AIChatAgent: class {} }))
 const app = "http://localhost:3003"
 const cookie = "oryxa_access=token; sidebar_state=true"
 
+const purgeSecret = "0123456789abcdef0123456789abcdef"
+
 const env = {
   ORYXA_API_ORIGIN: "http://go.test",
+  REALTIME_PURGE_SECRET: purgeSecret,
   ThreadChatAgent: { idFromName: () => "thread-id" },
   SpecialistChatAgent: { idFromName: () => "specialist-id" },
   TeamspaceRoomAgent: { idFromName: () => "room-id" },
+  DirectMessageAgent: { idFromName: () => "dm-id" },
+  InboxAgent: { idFromName: () => "inbox-id" },
+  RealtimeRegistryAgent: { idFromName: () => "registry-id" },
 } as unknown as Env
 
 function json(body: unknown, status: number): Response {
@@ -48,7 +56,12 @@ function goError(status: number, code: string, message: string): Response {
 
 type RealtimeCase = {
   segment: string
-  binding: "ThreadChatAgent" | "SpecialistChatAgent" | "TeamspaceRoomAgent"
+  binding:
+    | "ThreadChatAgent"
+    | "SpecialistChatAgent"
+    | "TeamspaceRoomAgent"
+    | "DirectMessageAgent"
+    | "InboxAgent"
   /** What a page may GET beneath it, besides the socket. */
   reads: string[]
   /** Whether a page may DELETE it. */
@@ -57,14 +70,37 @@ type RealtimeCase = {
   name: string
   /** Names it could not have made. */
   invalidNames: string[]
-  /** Go's access check. */
-  accessUrl: string
-  /** Go's answer letting the member in. */
-  accepted: () => Response
+  /** Go's access check: every URL it asks, in order. */
+  accessUrls: string[]
+  /** Go's answer letting the member in, for each of them. */
+  accepted: (url: string) => Response
   /** The headers the object trusts. */
   identity: Record<string, string>
-  /** An `X-Oryxa-*` header only the other object reads. */
+  /** An `X-Oryxa-*` header only another object reads. */
   foreignHeader: string
+}
+
+/** Go's `GET /v1/organizations/{org}` for the member, and the organization's members. */
+function organizationAnswer(url: string, members = ["user-ada", "user-bo"]) {
+  if (url.endsWith("/members")) {
+    return json(
+      {
+        members: members.map((userId) => ({
+          organization_id: "org_sim",
+          user_id: userId,
+          role: "member",
+        })),
+      },
+      200
+    )
+  }
+  return json(
+    {
+      organization: { id: "org_sim", name: "Simulated Org" },
+      membership: { organization_id: "org_sim", user_id: "user-ada" },
+    },
+    200
+  )
 }
 
 const objects: RealtimeCase[] = [
@@ -81,7 +117,7 @@ const objects: RealtimeCase[] = [
       "org_sim%7Ethread_1",
       "org.sim~thread_1",
     ],
-    accessUrl: "http://go.test/v1/organizations/org_sim/threads/thread_1",
+    accessUrls: ["http://go.test/v1/organizations/org_sim/threads/thread_1"],
     accepted: () => json({ id: "thread_1", items: [] }, 200),
     identity: {
       "X-Oryxa-Cookie": cookie,
@@ -105,7 +141,7 @@ const objects: RealtimeCase[] = [
       "org_sim~agt%20sales",
       "org_sim~agt.sales",
     ],
-    accessUrl: "http://go.test/v1/organizations/org_sim/agents/agt_Sa-l3s_x",
+    accessUrls: ["http://go.test/v1/organizations/org_sim/agents/agt_Sa-l3s_x"],
     accepted: () =>
       json({ id: "agt_Sa-l3s_x", kind: "specialist", status: "active" }, 200),
     identity: {
@@ -130,8 +166,9 @@ const objects: RealtimeCase[] = [
       "org_sim~tsp%20launch",
       "org.sim~tsp_launch",
     ],
-    accessUrl:
+    accessUrls: [
       "http://go.test/v1/organizations/org_sim/teamspaces/tsp_Jixq-Qo1",
+    ],
     accepted: () =>
       json({ id: "tsp_Jixq-Qo1", is_member: true, status: "active" }, 200),
     identity: {
@@ -140,6 +177,59 @@ const objects: RealtimeCase[] = [
       "X-Oryxa-Teamspace": "tsp_Jixq-Qo1",
     },
     foreignHeader: "X-Oryxa-Thread",
+  },
+  {
+    segment: "direct-message-agent",
+    binding: "DirectMessageAgent",
+    reads: [],
+    deletes: false,
+    name: "org_sim~user-ada~user-bo",
+    invalidNames: [
+      "org_sim",
+      "org_sim~user-ada",
+      "org_sim~user-bo~user-ada",
+      "org_sim~user-ada~user-ada",
+      "org_sim~~user-bo",
+      "org_sim~user-ada~user-bo~user-cy",
+      "org_sim%7Euser-ada%7Euser-bo",
+      "org_sim~user-ada~user%20bo",
+      "org.sim~user-ada~user-bo",
+      `org_sim~user-ada~${"b".repeat(129)}`,
+    ],
+    accessUrls: [
+      "http://go.test/v1/organizations/org_sim",
+      "http://go.test/v1/organizations/org_sim/members",
+    ],
+    accepted: (url) => organizationAnswer(url),
+    identity: {
+      "X-Oryxa-Organization": "org_sim",
+      "X-Oryxa-User": "user-ada",
+    },
+    // A DM never calls Go, so it is not handed the member's cookie.
+    foreignHeader: "X-Oryxa-Cookie",
+  },
+  {
+    segment: "inbox-agent",
+    binding: "InboxAgent",
+    reads: [],
+    deletes: false,
+    name: "org_sim~user-ada",
+    invalidNames: [
+      "org_sim",
+      "org_sim~",
+      "~user-ada",
+      "org_sim~user-ada~user-bo~x",
+      "org_sim%7Euser-ada",
+      "org_sim~user%20ada",
+      "org.sim~user-ada",
+    ],
+    accessUrls: ["http://go.test/v1/organizations/org_sim"],
+    accepted: (url) => organizationAnswer(url),
+    identity: {
+      "X-Oryxa-Organization": "org_sim",
+      "X-Oryxa-User": "user-ada",
+    },
+    foreignHeader: "X-Oryxa-Cookie",
   },
 ]
 
@@ -209,7 +299,9 @@ afterEach(() => {
 
 describe.each(objects)("the $segment route", (object) => {
   beforeEach(() => {
-    fetchMock.mockImplementation(async () => object.accepted())
+    fetchMock.mockImplementation(async (url: URL | string) =>
+      object.accepted(String(url))
+    )
   })
 
   it("refuses a name its builder could not have made, before asking Go", async () => {
@@ -321,14 +413,17 @@ describe.each(objects)("the $segment route", (object) => {
       })
     )
     expect(response.status).toBe(200)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    const [url, init] = fetchMock.mock.calls[0] as [URL, RequestInit]
-    expect(String(url)).toBe(object.accessUrl)
-    expect(init.method ?? "GET").toBe("GET")
-    expect(init.headers).toEqual({ Cookie: cookie })
-    expect(fetchMock.mock.invocationCallOrder[0]).toBeLessThan(
-      sdk.routeAgentRequest.mock.invocationCallOrder[0]
-    )
+    const calls = fetchMock.mock.calls as Array<[URL, RequestInit]>
+    expect(calls.map(([url]) => String(url))).toEqual(object.accessUrls)
+    for (const [, init] of calls) {
+      expect(init.method ?? "GET").toBe("GET")
+      expect(init.headers).toEqual({ Cookie: cookie })
+    }
+    for (const order of fetchMock.mock.invocationCallOrder) {
+      expect(order).toBeLessThan(
+        sdk.routeAgentRequest.mock.invocationCallOrder[0]
+      )
+    }
   })
 
   it("passes on Go's refusals the page can act on, with Go's code", async () => {
@@ -373,6 +468,7 @@ describe.each(objects)("the $segment route", (object) => {
         "X-Oryxa-Organization": "org_other",
         "X-Oryxa-Thread": "thread_other",
         "X-Oryxa-Agent": "agt_other",
+        "X-Oryxa-User": "user-forged",
         "x-oryxa-anything": "forged",
       })
     )
@@ -632,16 +728,201 @@ describe("the teamspace room", () => {
   })
 })
 
-describe("paths the table does not hold", () => {
-  it("answers 404 for an object it does not route, and serves the rest of the app", async () => {
-    const unknown = await send(
-      new Request(`${app}/agents/direct-message-agent/org_sim~user_1~user_2`, {
+describe("the direct messages", () => {
+  const dm = `${app}/agents/direct-message-agent/org_sim~user-ada~user-bo`
+
+  it("is only for its two people: anyone else is refused as not a participant", async () => {
+    fetchMock.mockImplementation(async (url: URL | string) => {
+      const answer = String(url)
+      if (answer.endsWith("/members")) return organizationAnswer(answer)
+      return json(
+        { membership: { organization_id: "org_sim", user_id: "user-cy" } },
+        200
+      )
+    })
+    for (const request of [
+      socketRequest(dm),
+      new Request(dm, { headers: { Cookie: cookie } }),
+    ]) {
+      const response = await send(request)
+      expect(response.status).toBe(403)
+      expect(await errorOf(response)).toEqual({
+        code: "not_participant",
+        message: "Only the two people in a conversation can open it.",
+      })
+    }
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("is refused when the other person is not in the organization", async () => {
+    fetchMock.mockImplementation(async (url: URL | string) =>
+      organizationAnswer(String(url), ["user-ada", "user-cy"])
+    )
+    const response = await send(socketRequest(dm))
+    expect(response.status).toBe(404)
+    expect(await errorOf(response)).toEqual({
+      code: "peer_not_found",
+      message: "This person is not in your organization.",
+    })
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("passes on Go's refusal of a member outside the organization before anything else", async () => {
+    fetchMock.mockImplementation(async () =>
+      goError(404, "not_found", "resource not found")
+    )
+    const response = await send(socketRequest(dm))
+    expect(response.status).toBe(404)
+    expect(await errorOf(response)).toEqual({
+      code: "not_found",
+      message: "resource not found",
+    })
+  })
+
+  it("refuses an agent's token: DMs are between people", async () => {
+    fetchMock.mockImplementation(async (url: URL | string) => {
+      const answer = String(url)
+      if (answer.endsWith("/members")) return organizationAnswer(answer)
+      return json(
+        {
+          membership: { organization_id: "org_sim", user_id: "user-ada" },
+          agent: true,
+        },
+        200
+      )
+    })
+    const response = await send(socketRequest(dm))
+    expect(response.status).toBe(403)
+    expect((await errorOf(response)).code).toBe("forbidden")
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("reports Go answering with something else as a bad gateway", async () => {
+    for (const [membership, members] of [
+      [json({ membership: {} }, 200), organizationAnswer("/members")],
+      [
+        json({ membership: { user_id: "user ada" } }, 200),
+        organizationAnswer("/members"),
+      ],
+      [organizationAnswer("/org"), json({ members: "everyone" }, 200)],
+      [organizationAnswer("/org"), new Response("<html>ok</html>")],
+    ] as Array<[Response, Response]>) {
+      fetchMock.mockReset()
+      fetchMock.mockResolvedValueOnce(membership).mockResolvedValueOnce(members)
+      const response = await send(socketRequest(dm))
+      expect(response.status).toBe(502)
+    }
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe("a member's inbox", () => {
+  const inbox = `${app}/agents/inbox-agent/org_sim~user-bo`
+
+  it("is only its own member's", async () => {
+    fetchMock.mockImplementation(async (url: URL | string) =>
+      organizationAnswer(String(url))
+    )
+    const response = await send(socketRequest(inbox))
+    expect(response.status).toBe(403)
+    expect(await errorOf(response)).toEqual({
+      code: "forbidden",
+      message: "This is another member's inbox.",
+    })
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+
+  it("refuses an agent's token", async () => {
+    fetchMock.mockResolvedValue(
+      json({ membership: { user_id: "user-bo" }, agent: true }, 200)
+    )
+    const response = await send(socketRequest(inbox))
+    expect(response.status).toBe(403)
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
+  })
+})
+
+describe("the purge", () => {
+  const purgePath = `${app}/internal/realtime/purge`
+  const body = JSON.stringify({
+    event_id: "evt_1",
+    organization_id: "org_sim",
+    user_id: "user-ada",
+  })
+
+  async function signed(timestamp = Math.floor(Date.now() / 1000)) {
+    return new Request(purgePath, {
+      method: "POST",
+      headers: {
+        "X-Oryxa-Timestamp": String(timestamp),
+        "X-Oryxa-Signature": await signPurge(
+          purgeSecret,
+          String(timestamp),
+          body
+        ),
+      },
+      body,
+    })
+  }
+
+  it("takes a signed purge without a cookie, and hands it to the organization's registry", async () => {
+    sdk.getAgentByName.mockResolvedValueOnce({ purge: sdk.purge })
+    sdk.purge.mockResolvedValueOnce("purged")
+    const response = await send(await signed())
+    expect(response.status).toBe(204)
+    expect(sdk.getAgentByName).toHaveBeenCalledWith(
+      env.RealtimeRegistryAgent,
+      "org_sim"
+    )
+    expect(sdk.purge).toHaveBeenCalledWith("evt_1", "user-ada")
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(sdk.startFetch).not.toHaveBeenCalled()
+  })
+
+  it("refuses one that is not signed, and anything but a POST", async () => {
+    const unsigned = await send(
+      new Request(purgePath, {
+        method: "POST",
+        body,
         headers: { Cookie: cookie },
       })
     )
-    expect(unknown.status).toBe(404)
+    expect(unsigned.status).toBe(401)
+    const stale = await send(await signed(Math.floor(Date.now() / 1000) - 600))
+    expect(stale.status).toBe(401)
+    const get = await send(new Request(purgePath))
+    expect(get.status).toBe(405)
+    expect(sdk.getAgentByName).not.toHaveBeenCalled()
+  })
+
+  it("leaves every other internal path to the app", async () => {
+    const response = await send(
+      new Request(`${purgePath}/more`, { method: "POST" })
+    )
+    expect(await response.text()).toBe("the app")
+  })
+})
+
+describe("paths the table does not hold", () => {
+  it("answers 404 for an object it does not route, the registry among them, and serves the rest of the app", async () => {
+    for (const path of [
+      "/agents/realtime-registry-agent/org_sim",
+      "/agents/other-agent/org_sim~user-ada",
+    ]) {
+      const unknown = await send(
+        new Request(`${app}${path}`, {
+          headers: {
+            Cookie: cookie,
+            Upgrade: "websocket",
+            Origin: app,
+          },
+        })
+      )
+      expect(unknown.status).toBe(404)
+    }
     const page = await send(new Request(`${app}/agents`))
     expect(await page.text()).toBe("the app")
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(sdk.routeAgentRequest).not.toHaveBeenCalled()
   })
 })
