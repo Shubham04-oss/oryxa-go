@@ -538,8 +538,22 @@ describe("The Agents tab on a teamspace page", () => {
       )
     ).toBeTruthy()
 
+    // Another tab and back: it opens again where it was, without taking
+    // focus from the tab.
+    fireEvent.click(screen.getByRole("tab", { name: "DMs" }))
+    expect(
+      screen.queryByRole("region", { name: /^Side conversation/ })
+    ).toBeNull()
+    const agentsTab = screen.getByRole("tab", { name: "Agents" })
+    agentsTab.focus()
+    fireEvent.click(agentsTab)
+    const again = screen.getByRole("region", {
+      name: "Side conversation with Priya Shah in Launch room",
+    })
+    expect(document.activeElement).toBe(agentsTab)
+
     fireEvent.click(
-      within(view).getByRole("button", { name: "Back to agents" })
+      within(again).getByRole("button", { name: "Back to agents" })
     )
     expect(
       screen.queryByRole("region", { name: /^Side conversation/ })

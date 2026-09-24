@@ -208,6 +208,12 @@ export function WorkspaceAgentPanel({
     if (tabRequest) tabRefs.current[tabRequest.tab]?.focus()
   }, [tabRequest])
 
+  // The member opened the side conversation just now: focus goes into it
+  // then, not when the tab or the panel comes back to it later.
+  useEffect(() => {
+    if (tab !== "agents" || !expanded) setSidePicked(false)
+  }, [tab, expanded])
+
   /** The side conversation's object name with `peerId` in `teamspace`, when the ids can make one. */
   function sideName(teamspace: string, peerId: string): string | undefined {
     if (
