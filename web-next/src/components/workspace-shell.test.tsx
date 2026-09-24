@@ -510,57 +510,112 @@ describe("WorkspaceShell navigation", () => {
     expect(screen.getByRole("button", { name: "Open teamspace" })).toBeTruthy()
   })
 
-  it("searches, opens, and creates knowledge bases in the local workspace", () => {
-    render(<WorkspaceShell />)
+  it("opens a real knowledge base and names it in the header", async () => {
+    const organization = { id: "org_1", name: "Acme", slug: "acme" }
+    const handbook = {
+      id: "cor_1",
+      organization_id: "org_1",
+      slug: "product-handbook",
+      name: "Product handbook",
+      scope: "member",
+      member_id: "user-1",
+      embedding: {
+        provider: "vertex",
+        model: "text-embedding-005",
+        dimensions: 768,
+        metric: "cosine",
+      },
+      backend: "pgvector",
+      chunking: { strategy: "structure", max_tokens: 512, overlap_tokens: 76 },
+      metadata: { description: "Principles, specs and decisions." },
+      document_count: 1,
+      chunk_count: 2,
+      created_by: "user-1",
+      created_at: "2026-09-20T10:00:00Z",
+      updated_at: "2026-09-20T10:00:00Z",
+    }
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        headers: { "Content-Type": "application/json" },
+      })
+    const routes: Record<string, unknown> = {
+      "/v1/capabilities": { answering: true, content_types: [] },
+      "/v1/organizations/org_1/corpora": { corpora: [handbook] },
+      "/v1/organizations/org_1/corpora/cor_1": handbook,
+      "/v1/organizations/org_1/corpora/cor_1/documents": {
+        documents: [
+          {
+            id: "doc_1",
+            corpus_id: "cor_1",
+            organization_id: "org_1",
+            source: { kind: "inline" },
+            title: "Design principles",
+            content_type: "text/plain",
+            content_sha256: "",
+            byte_size: 512,
+            status: "ready",
+            chunk_count: 2,
+            attempts: 1,
+            created_by: "user-1",
+            created_at: "2026-09-20T10:00:00Z",
+            updated_at: "2026-09-20T10:00:00Z",
+          },
+        ],
+      },
+    }
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const path = new URL(String(input), "http://localhost").pathname
+        return path in routes
+          ? json(routes[path])
+          : new Response(null, { status: 404 })
+      })
+    )
+    render(
+      <WorkspaceShell
+        session={{
+          user: { id: "user-1", email: "avery@example.com" },
+          organizations: [organization],
+        }}
+        selectedOrganization={organization}
+        organizationRole="member"
+      />
+    )
     fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
 
-    expect(
-      screen.getByRole("button", { name: "Open Product handbook" })
-    ).toBeTruthy()
-    const search = screen.getByRole("searchbox", {
-      name: "Search knowledge bases",
-    })
-    fireEvent.change(search, { target: { value: "customer" } })
-    expect(
-      screen.getByRole("button", { name: "Open Customer insights" })
-    ).toBeTruthy()
-    expect(
-      screen.queryByRole("button", { name: "Open Product handbook" })
-    ).toBeNull()
-
-    fireEvent.change(search, { target: { value: "" } })
     fireEvent.click(
-      screen.getByRole("button", { name: "Open Product handbook" })
+      await screen.findByRole("button", { name: "Open Product handbook" })
     )
     expect(
       screen.getByRole("heading", { name: "Product handbook", level: 1 })
     ).toBeTruthy()
+    expect(screen.getByText("Knowledge base")).toBeTruthy()
     expect(
       screen.queryByRole("heading", { name: "Knowledge bases", level: 1 })
     ).toBeNull()
-    expect(screen.getByText("Design principles")).toBeTruthy()
+    expect(await screen.findByText("Design principles")).toBeTruthy()
+
     fireEvent.click(screen.getByRole("button", { name: "All knowledge bases" }))
-
-    fireEvent.click(screen.getByRole("button", { name: "New knowledge base" }))
-    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
-    expect(screen.getByText("Use at least 2 characters.")).toBeTruthy()
-    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
-      target: { value: "Engineering handbook" },
-    })
-    fireEvent.change(screen.getByRole("textbox", { name: "Description" }), {
-      target: { value: "Technical decisions and guides." },
-    })
-    fireEvent.click(screen.getByRole("button", { name: "Create base" }))
     expect(
-      screen.getByRole("heading", { name: "Engineering handbook" })
+      screen.getByRole("heading", { name: "Knowledge bases", level: 1 })
     ).toBeTruthy()
-    expect(screen.getByText("No sources yet")).toBeTruthy()
+    expect(
+      screen.getByRole("button", { name: "Open Product handbook" })
+    ).toBeTruthy()
+  })
 
-    fireEvent.click(screen.getByRole("button", { name: "Overview" }))
+  it("shows no example knowledge bases without a workspace", () => {
+    render(<WorkspaceShell />)
     fireEvent.click(screen.getByRole("button", { name: "Knowledge bases" }))
     expect(
-      screen.getByRole("button", { name: "Open Engineering handbook" })
+      screen.getByText(/Sign in to a workspace to see its knowledge bases/)
     ).toBeTruthy()
+    const canvas = screen.getByRole("main", { name: "Knowledge bases canvas" })
+    expect(within(canvas).queryByRole("button", { name: /^Open / })).toBeNull()
+    expect(
+      within(canvas).queryByRole("button", { name: "New knowledge base" })
+    ).toBeNull()
   })
 
   it("uses the visible mobile viewport for chat while composing", () => {

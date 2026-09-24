@@ -7,6 +7,7 @@
 @import "./components/people-management.css";
 @import "./components/people-directory.css";
 @import "./components/workspace-settings.css";
+@import "./components/knowledge-bases.css";
 @import "./components/auth/auth.css";
 
 @custom-variant dark (&:is(.dark *));
