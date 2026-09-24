@@ -92,8 +92,10 @@ type fakeApplication struct {
 	teams     []teamseventsv1.TeamDeleted
 	objects   []fileseventsv1.ObjectDeleted
 	published []knowledgeeventsv1.DocumentPublished
-	forgotten []knowledgeeventsv1.DocumentRemoved
-	err       error
+	// publishedAt is the envelope time each publish was handed with.
+	publishedAt []time.Time
+	forgotten   []knowledgeeventsv1.DocumentRemoved
+	err         error
 }
 
 func (fake *fakeApplication) OrganizationCreated(_ context.Context, data autheventsv1.OrganizationCreated) error {
@@ -126,8 +128,9 @@ func (fake *fakeApplication) ObjectDeleted(_ context.Context, data fileseventsv1
 	return fake.err
 }
 
-func (fake *fakeApplication) DocumentPublished(_ context.Context, data knowledgeeventsv1.DocumentPublished) error {
+func (fake *fakeApplication) DocumentPublishedAt(_ context.Context, data knowledgeeventsv1.DocumentPublished, occurredAt time.Time) error {
 	fake.published = append(fake.published, data)
+	fake.publishedAt = append(fake.publishedAt, occurredAt)
 	return fake.err
 }
 
@@ -245,6 +248,11 @@ func TestHandleDispatchesEachSubscribedEventToItsOwnMethod(t *testing.T) {
 	if len(app.published) != 1 || app.published[0].DocumentID != "doc_1" || app.published[0].MemberID != "user-1" ||
 		app.published[0].Access != "members" || app.published[0].Metadata["knowledge_category"] != "work_material" {
 		t.Fatalf("DocumentPublished = %+v", app.published)
+	}
+	// A publish is ordered by when knowledge published it, which only the
+	// signed envelope says: its payload's extracted_at can be older.
+	if want := time.Date(2026, time.September, 14, 12, 0, 0, 0, time.UTC); len(app.publishedAt) != 1 || !app.publishedAt[0].Equal(want) {
+		t.Fatalf("DocumentPublished was handed occurred_at %v, want %v", app.publishedAt, want)
 	}
 	if len(app.forgotten) != 1 || app.forgotten[0].DocumentID != "doc_1" {
 		t.Fatalf("DocumentRemoved = %+v", app.forgotten)

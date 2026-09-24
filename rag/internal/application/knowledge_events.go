@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/url"
 	"strings"
+	"time"
 
 	knowledgeeventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/knowledge/v1"
 	rageventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/rag/v1"
@@ -62,13 +63,50 @@ const knowledgeServiceCreator = "svc_knowledge"
 // is safe to repeat: a re-delivery of what is already indexed does nothing, a
 // genuinely new hash replaces the indexed text, and an event older than what
 // is already recorded is ignored rather than regressing it.
+//
+// It has only the event's own ExtractedAt to order it by; the bus delivers
+// through DocumentPublishedAt, which also knows when the event was published.
 func (service *Service) DocumentPublished(ctx context.Context, event knowledgeeventsv1.DocumentPublished) error {
+	return service.DocumentPublishedAt(ctx, event, time.Time{})
+}
+
+// DocumentPublishedAt is DocumentPublished for a delivery that says when
+// knowledge published the event: occurredAt, the envelope's signed
+// occurred_at.
+//
+// That, rather than ExtractedAt, is what a publish is ordered by, against a
+// removal and against the version already indexed. Knowledge republishes a
+// document it read earlier with that earlier ExtractedAt — re-including one
+// that a change of kinds had excluded does exactly this — so ordered by
+// ExtractedAt, a republish that undoes a removal reads as older than the
+// removal and is dropped for good. A publish that really is stale, such as a
+// redelivery of one sent before the removal, was also published before it,
+// and is still refused.
+func (service *Service) DocumentPublishedAt(ctx context.Context, event knowledgeeventsv1.DocumentPublished, occurredAt time.Time) error {
+	publishedAt := knowledgePublishedAt(event, occurredAt)
 	return service.store.WithKnowledgeDocumentLock(ctx, event.OrganizationID, event.DocumentID, func() error {
-		return service.documentPublished(ctx, event)
+		return service.documentPublished(ctx, event, publishedAt)
 	})
 }
 
-func (service *Service) documentPublished(ctx context.Context, event knowledgeeventsv1.DocumentPublished) error {
+// knowledgePublishedAt is the time a publish is ordered by: when knowledge
+// published it, where the delivery says, and when knowledge read the
+// document otherwise. Knowledge builds the event after reading the document,
+// so the envelope's time is the later of the two; taking the later one either
+// way means a disagreeing clock can only order an event later than its own
+// extraction, never earlier.
+//
+// The mapping keeps this time as its ExtractedAt, which is documented as
+// knowledge's time for the version the mapping reflects, and a removal is
+// compared against it.
+func knowledgePublishedAt(event knowledgeeventsv1.DocumentPublished, occurredAt time.Time) time.Time {
+	if occurredAt.After(event.ExtractedAt) {
+		return occurredAt.UTC()
+	}
+	return event.ExtractedAt
+}
+
+func (service *Service) documentPublished(ctx context.Context, event knowledgeeventsv1.DocumentPublished, publishedAt time.Time) error {
 	access := domain.DocumentAccess(event.Access)
 	if access == "" {
 		access = domain.AccessMembers
@@ -98,9 +136,9 @@ func (service *Service) documentPublished(ctx context.Context, event knowledgeev
 		return nil
 	}
 	removedAt, err := service.store.KnowledgeDocumentRemovedAt(ctx, event.OrganizationID, event.DocumentID)
-	if err == nil && !event.ExtractedAt.After(removedAt) {
+	if err == nil && !publishedAt.After(removedAt) {
 		service.logger.InfoContext(ctx, "ignoring a knowledge publish older than its removal",
-			"document_id", event.DocumentID, "extracted_at", event.ExtractedAt, "removed_at", removedAt)
+			"document_id", event.DocumentID, "published_at", publishedAt, "removed_at", removedAt)
 		return nil
 	}
 	if err != nil && !isMissing(err) {
@@ -111,12 +149,10 @@ func (service *Service) documentPublished(ctx context.Context, event knowledgeev
 	if err != nil {
 		return err
 	}
-	if found {
-		if event.ExtractedAt.Before(mapping.ExtractedAt) {
-			service.logger.InfoContext(ctx, "an out-of-order knowledge document event arrived; ignoring it",
-				"document_id", event.DocumentID, "event_extracted_at", event.ExtractedAt, "mapped_extracted_at", mapping.ExtractedAt)
-			return nil
-		}
+	if found && publishedAt.Before(mapping.ExtractedAt) {
+		service.logger.InfoContext(ctx, "an out-of-order knowledge document event arrived; ignoring it",
+			"document_id", event.DocumentID, "published_at", publishedAt, "mapped_at", mapping.ExtractedAt)
+		return nil
 	}
 
 	contentType, err := domain.ContentType(event.MIME)
@@ -217,8 +253,8 @@ func (service *Service) documentPublished(ctx context.Context, event knowledgeev
 		case previousErr == nil && mapping.CorpusID == corpus.ID && previous.Source.Ref == ref &&
 			event.ContentHash == mapping.ContentHash && previous.Access == access &&
 			previous.Title == title && previous.ContentType == contentType && maps.Equal(previous.Metadata, metadata):
-			if event.ExtractedAt.After(mapping.ExtractedAt) {
-				mapping.ExtractedAt = event.ExtractedAt
+			if publishedAt.After(mapping.ExtractedAt) {
+				mapping.ExtractedAt = publishedAt
 				mapping.UpdatedAt = service.now().UTC()
 				return service.store.UpsertKnowledgeDocumentMapping(ctx, mapping)
 			}
@@ -269,7 +305,7 @@ func (service *Service) documentPublished(ctx context.Context, event knowledgeev
 	return service.store.UpsertKnowledgeDocumentMapping(ctx, domain.KnowledgeDocumentMapping{
 		KnowledgeDocumentID: event.DocumentID, OrganizationID: event.OrganizationID,
 		CorpusID: corpus.ID, DocumentID: stored.ID,
-		ContentHash: event.ContentHash, ExtractedAt: event.ExtractedAt, UpdatedAt: now,
+		ContentHash: event.ContentHash, ExtractedAt: publishedAt, UpdatedAt: now,
 	})
 }
 

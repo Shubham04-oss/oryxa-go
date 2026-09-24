@@ -1015,3 +1015,99 @@ func TestKnowledgeBeingUnreachableIsWorthAnotherDelivery(t *testing.T) {
 		t.Fatalf("a deployment knowledge does not admit was reported as a failure: %v", err)
 	}
 }
+
+// Knowledge republishes a document it had excluded when a change of kinds
+// re-includes it, and it does so with the ExtractedAt of when it last read
+// it: before the exclusion that removed it. Ordered by that, the republish
+// read as older than its removal and the document never came back.
+func TestAReincludedKnowledgeDocumentReturnsAfterItsRemoval(t *testing.T) {
+	h := newHarness()
+	extractedAt := testClock.Add(-24 * time.Hour)
+	first := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.ExtractedAt = extractedAt
+	})
+	if err := h.service.DocumentPublishedAt(context.Background(), first, extractedAt.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	excluded := knowledgeeventsv1.DocumentRemoved{
+		DocumentID: first.DocumentID, OrganizationID: testOrganization, SourceID: first.SourceID,
+		Reason: knowledgeeventsv1.RemovedReasonExcluded, RemovedAt: testClock,
+	}
+	if err := h.service.DocumentRemoved(context.Background(), excluded); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.store.documents) != 0 {
+		t.Fatal("the exclusion did not remove the document")
+	}
+
+	// Re-included: the same ExtractedAt, published after the exclusion.
+	if err := h.service.DocumentPublishedAt(context.Background(), first, testClock.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, first.DocumentID)
+	if err != nil {
+		t.Fatalf("the re-included document was not indexed again: %v", err)
+	}
+	if _, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID); err != nil {
+		t.Fatalf("the re-included document is missing: %v", err)
+	}
+
+	// The exclusion delivered again must not take it away a second time: it
+	// is older than the publish that brought the document back.
+	if err := h.service.DocumentRemoved(context.Background(), excluded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.Document(context.Background(), testOrganization, mapping.DocumentID); err != nil {
+		t.Fatalf("a redelivered exclusion removed the re-included document: %v", err)
+	}
+}
+
+// A publish that went out before its removal and arrives after it, such as
+// a redelivery, is still refused: it was published before the removal.
+func TestAPublishSentBeforeItsRemovalStaysRefused(t *testing.T) {
+	h := newHarness()
+	publish := testDocumentPublished(nil)
+	publishedAt := testClock.Add(time.Minute)
+	if err := h.service.DocumentPublishedAt(context.Background(), publish, publishedAt); err != nil {
+		t.Fatal(err)
+	}
+	removal := knowledgeeventsv1.DocumentRemoved{
+		DocumentID: publish.DocumentID, OrganizationID: testOrganization, SourceID: publish.SourceID,
+		RemovedAt: testClock.Add(time.Hour),
+	}
+	if err := h.service.DocumentRemoved(context.Background(), removal); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.service.DocumentPublishedAt(context.Background(), publish, publishedAt); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.store.documents) != 0 {
+		t.Fatal("a publish sent before its removal brought the removed document back")
+	}
+	if _, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, publish.DocumentID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("a refused publish left a mapping: %v", err)
+	}
+}
+
+// A publish is ordered by when it was published, not only by when knowledge
+// read the document: an older publish delivered late cannot displace the
+// version a later one indexed, even when both read the document at the same
+// time.
+func TestAnOlderPublishOfTheSameReadCannotDisplaceALaterOne(t *testing.T) {
+	h := newHarness()
+	later := testDocumentPublished(func(event *knowledgeeventsv1.DocumentPublished) {
+		event.ContentHash = "hash-2"
+		event.Body = "# Fix the bug\n\nThe later version."
+	})
+	if err := h.service.DocumentPublishedAt(context.Background(), later, testClock.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	earlier := testDocumentPublished(nil)
+	if err := h.service.DocumentPublishedAt(context.Background(), earlier, testClock.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := h.store.KnowledgeDocumentMapping(context.Background(), testOrganization, later.DocumentID)
+	if err != nil || mapping.ContentHash != "hash-2" || !mapping.ExtractedAt.Equal(testClock.Add(2*time.Hour)) {
+		t.Fatalf("mapping = %+v, %v; want the later publish's version", mapping, err)
+	}
+}
