@@ -27,7 +27,11 @@ function entries(organizationId: string, teamspaceId: string, limit?: number) {
   return limit === undefined ? prefix : ([...prefix, limit] as const)
 }
 
-/** The teamspace's room; lib/rooms reads and writes it. */
+/**
+ * What a page reads of the teamspace's room beside its Durable Object: the
+ * catch-up brief (lib/rooms). The room itself arrives over the object's
+ * socket (useTeamspaceRoom), not as a query.
+ */
 function room(organizationId: string, teamspaceId: string) {
   return [...teamspace(organizationId, teamspaceId), "room"] as const
 }
@@ -114,8 +118,9 @@ export async function afterDeleteTeamspace(
 /**
  * After `addTeamspaceContribution`, `updateTeamspaceContribution` or
  * `deleteTeamspaceContribution`, each of which answers with the whole
- * teamspace: caches it, refreshes the list, and re-reads the room, whose
- * seats include every active contributed specialist.
+ * teamspace: caches it, refreshes the list, and re-reads what the page holds
+ * of the room (its catch-up). The room's seats, which include every active
+ * contributed specialist, come from its Durable Object's next read of Go.
  */
 export async function afterTeamspaceContributionChange(
   queryClient: QueryClient,

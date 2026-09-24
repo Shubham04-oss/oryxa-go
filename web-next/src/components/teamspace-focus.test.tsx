@@ -16,10 +16,10 @@ import { TeamspaceFocus } from "./teamspace-focus"
 import { withMention } from "./teamspace-room"
 import type { RoomMessage } from "@/lib/rooms/client"
 import type { Teamspace } from "@/lib/teamspaces/client"
+import { roomSockets } from "@/test/room-socket"
 import {
   apiError,
   contribution,
-  deferred,
   entry,
   json,
   mockApi,
@@ -29,6 +29,13 @@ import {
   teamspace,
   viewerId,
 } from "@/test/teamspaces"
+
+// The room arrives over its Durable Object's socket; the stand-in socket
+// speaks for the object (src/test/room-socket.ts).
+vi.mock(
+  "agents/react",
+  async () => (await import("@/test/room-socket")).agentsReact
+)
 
 vi.mock("./workspace-avatar", async (importOriginal) => {
   const actual = await importOriginal<typeof AvatarModule>()
@@ -50,46 +57,40 @@ const spacePath = `${orgPath}/teamspaces/tsp_launch`
 
 type Options = {
   space?: Teamspace
-  messages?: RoomMessage[]
-  post?: (body: unknown) => Response | Promise<Response>
-  roomAnswer?: () => Response | undefined
   entries?: unknown[]
   files?: unknown[]
 }
 
 function backend({
   space = teamspace({ contributions: [contribution()] }),
-  messages = [],
-  post,
-  roomAnswer,
   entries = [],
   files = [],
 }: Options = {}) {
   const seats = seatsFor(space, [viewerId, "user-ada"])
-  const held = [...messages]
-  const api = mockApi(({ method, url, body }) => {
+  const api = mockApi(({ url }) => {
     const path = url.pathname
     if (path === spacePath) return json(space)
-    if (path.startsWith(`${spacePath}/`) && roomAnswer) {
-      const answer = roomAnswer()
-      if (answer) return answer
-    }
-    if (path === `${spacePath}/catchup`) {
-      return json({ brief: { through_seq: 0 }, messages: held })
-    }
-    if (path === `${spacePath}/messages` && method === "GET") {
-      const after = Number(url.searchParams.get("after") ?? 0)
-      return json({ messages: held.filter((item) => item.seq > after), seats })
-    }
-    if (path === `${spacePath}/messages` && method === "POST" && post) {
-      return post(body)
-    }
     if (path === `${spacePath}/entries`) return json({ entries })
     if (path === `${orgPath}/files`) return json({ files })
     if (path.startsWith(`${orgPath}/files/`)) return json(files[0])
     return undefined
   })
-  return { ...api, seats, held, space }
+  return { ...api, seats, space }
+}
+
+/** The room's socket, once the page has opened it: it opens, and the room arrives. */
+async function openRoom(
+  seats: ReturnType<typeof seatsFor>,
+  messages: RoomMessage[] = []
+) {
+  await waitFor(() =>
+    expect(roomSockets.all.some((socket) => socket.options.enabled)).toBe(true)
+  )
+  const socket = roomSockets.latest
+  socket.open()
+  socket.state({ seats, here: [viewerId] })
+  socket.says({ type: "room-snapshot", messages, pending: [], results: [] })
+  return socket
 }
 
 function render(onBack = vi.fn()) {
@@ -109,15 +110,20 @@ function render(onBack = vi.fn()) {
   return { client, onBack }
 }
 
-function roomReads(calls: { path: string }[]) {
-  return calls.filter(
-    (call) =>
-      call.path.startsWith(`${spacePath}/messages`) ||
-      call.path.startsWith(`${spacePath}/catchup`)
+/** Whether the page ever asked for the room: its socket, or Go's room directly. */
+function roomAsked(calls: { path: string }[]) {
+  return (
+    roomSockets.all.some((socket) => socket.options.enabled) ||
+    calls.some(
+      (call) =>
+        call.path.startsWith(`${spacePath}/messages`) ||
+        call.path.startsWith(`${spacePath}/catchup`)
+    )
   )
 }
 
 beforeEach(() => {
+  roomSockets.reset()
   // Focusing the composer asks whether this is a phone (DESIGN.md §5).
   vi.stubGlobal("matchMedia", () => ({
     matches: false,
@@ -135,17 +141,17 @@ describe("TeamspaceFocus", () => {
   it("shows the real title and status, and the room with people and agents told apart", async () => {
     const api = backend()
     const [member, , ada, juno, pricing] = api.seats
-    api.held.push(
-      roomMessage(1, ada, "Morning! Can someone check the rollout?"),
-      roomMessage(2, juno, "**Ready.** The rollout checklist is done."),
-      roomMessage(3, member, "Thanks, Juno."),
-      roomMessage(4, pricing, "Pricing looks right.")
-    )
     render()
 
     expect(
       await screen.findByRole("heading", { name: "Launch room", level: 1 })
     ).toBeTruthy()
+    await openRoom(api.seats, [
+      roomMessage(1, ada, "Morning! Can someone check the rollout?"),
+      roomMessage(2, juno, "**Ready.** The rollout checklist is done."),
+      roomMessage(3, member, "Thanks, Juno."),
+      roomMessage(4, pricing, "Pricing looks right."),
+    ])
     expect(screen.getByText("Teamspace · Active")).toBeTruthy()
 
     const conversation = screen.getByRole("region", {
@@ -193,26 +199,28 @@ describe("TeamspaceFocus", () => {
   })
 
   it("posts through the pill composer, and shows sending while the room's agents answer", async () => {
-    const answer = deferred<Response>()
-    const api = backend({ post: () => answer.promise })
+    const api = backend()
     render()
     const field = await screen.findByRole("textbox", {
       name: "Message Launch room",
     })
+    const socket = await openRoom(api.seats)
     await waitFor(() => expect(field.hasAttribute("disabled")).toBe(false))
 
     fireEvent.change(field, { target: { value: "  Is the rollout ready?  " } })
     fireEvent.keyDown(field, { key: "Enter" })
 
     await waitFor(() =>
-      expect(api.calls.filter((call) => call.method === "POST")).toEqual([
+      expect(socket.said("room-post")).toEqual([
         {
-          method: "POST",
-          path: `${spacePath}/messages`,
-          body: { body: "Is the rollout ready?" },
+          type: "room-post",
+          id: expect.any(String),
+          body: "Is the rollout ready?",
         },
       ])
     )
+    // Only the room's object talks to Go.
+    expect(api.calls.filter((call) => call.method === "POST")).toEqual([])
     expect((field as HTMLTextAreaElement).value).toBe("")
     const conversation = screen.getByRole("region", {
       name: "Launch room conversation",
@@ -226,8 +234,17 @@ describe("TeamspaceFocus", () => {
     const [member, , , juno] = api.seats
     const mine = roomMessage(1, member, "Is the rollout ready?")
     const reply = roomMessage(2, juno, "Yes: every step is checked.")
-    api.held.push(mine, reply)
-    answer.resolve(json({ messages: [mine, reply] }, 201))
+    // The room relays each message as Go records it, then the post's answer.
+    socket.says({ type: "room-messages", messages: [mine] })
+    socket.says({ type: "room-messages", messages: [reply] })
+    socket.says({
+      type: "room-posted",
+      result: {
+        id: socket.said("room-post")[0].id,
+        ok: true,
+        messages: [mine, reply],
+      },
+    })
 
     expect(
       await within(conversation).findByText("Yes: every step is checked.")
@@ -244,18 +261,27 @@ describe("TeamspaceFocus", () => {
   })
 
   it("keeps the draft and says why when the room refuses a post", async () => {
-    backend({
-      post: () =>
-        apiError(403, "forbidden", "room is not available to this member"),
-    })
+    const api = backend()
     render()
     const field = await screen.findByRole("textbox", {
       name: "Message Launch room",
     })
+    const socket = await openRoom(api.seats)
     await waitFor(() => expect(field.hasAttribute("disabled")).toBe(false))
 
     fireEvent.change(field, { target: { value: "Hello" } })
     fireEvent.click(screen.getByRole("button", { name: "Send message" }))
+    await waitFor(() => expect(socket.said("room-post")).toHaveLength(1))
+    socket.says({
+      type: "room-posted",
+      result: {
+        id: socket.said("room-post")[0].id,
+        ok: false,
+        status: 403,
+        code: "forbidden",
+        message: "room is not available to this member",
+      },
+    })
 
     expect(
       await screen.findByText(
@@ -266,11 +292,12 @@ describe("TeamspaceFocus", () => {
   })
 
   it("mentions a seat from the presence row", async () => {
-    backend()
+    const api = backend()
     render()
     const field = await screen.findByRole("textbox", {
       name: "Message Launch room",
     })
+    await openRoom(api.seats)
     await waitFor(() => expect(field.hasAttribute("disabled")).toBe(false))
 
     fireEvent.click(
@@ -298,7 +325,7 @@ describe("TeamspaceFocus", () => {
         .getByRole("textbox", { name: "Message Launch room" })
         .hasAttribute("disabled")
     ).toBe(true)
-    expect(roomReads(api.calls)).toEqual([])
+    expect(roomAsked(api.calls)).toBe(false)
   })
 
   it("keeps someone who manages the team without being on it out of the room and its work", async () => {
@@ -316,13 +343,19 @@ describe("TeamspaceFocus", () => {
         "Only members of the Launch team can read its shared work."
       )
     ).toBeTruthy()
-    expect(roomReads(api.calls)).toEqual([])
+    expect(roomAsked(api.calls)).toBe(false)
     expect(api.calls.some((call) => call.path.includes("/entries"))).toBe(false)
   })
 
   it("says so when the room turns the member away", async () => {
-    backend({ roomAnswer: () => apiError(404, "not_found", "room not found") })
+    const api = backend()
     render()
+    const socket = await openRoom(api.seats)
+    socket.says({
+      type: "room-status",
+      status: "gone",
+      message: "room not found",
+    })
     expect(
       await screen.findByText("This room is no longer available to you.")
     ).toBeTruthy()

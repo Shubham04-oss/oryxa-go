@@ -110,7 +110,7 @@ describe("teamspace mutation helpers", () => {
     expect(invalidated(queryClient)).toEqual(["list"])
   })
 
-  it("re-read the room's seats after a contribution changes", async () => {
+  it("re-read what the page holds of the room after a contribution changes", async () => {
     const queryClient = seeded()
     await afterTeamspaceContributionChange(queryClient, org, updated)
     expect(queryClient.getQueryData(keys.teamspace)).toBe(updated)

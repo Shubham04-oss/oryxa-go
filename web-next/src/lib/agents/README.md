@@ -44,8 +44,12 @@ Each domain lists its calls, then its query options.
   - `teamspacesQueryOptions`, `teamspaceQueryOptions`,
     `teamspaceEntriesQueryOptions`.
 - **Rooms**, `../rooms/client.ts`:
-  - `readRoom`, `sayInRoom`, `catchUpOnRoom`;
-  - `roomQueryOptions`, `roomCatchUpQueryOptions`.
+  - `roomApi(request)`: `read`, `say`, `catchUp` and `readAfter`, made
+    through `request`. The room's Durable Object makes them as each member
+    (`src/teamspace-room-agent.ts`); a page reads and posts through
+    `useTeamspaceRoom` and never calls them itself;
+  - `catchUpOnRoom` and `roomCatchUpQueryOptions`, for the catch-up brief;
+  - `checkTeamspaceRoom`, the Worker's check behind the room's socket.
 
 Across all three:
 
@@ -89,7 +93,6 @@ Call `afterCreateAgent` either way.
 
 | Query                                | Re-reads                                    |
 | ------------------------------------ | ------------------------------------------- |
-| `roomQueryOptions`                   | every 5 s, never in a background tab        |
 | `agentTeamMessagesQueryOptions`      | every 5 s (the latest 200 messages)         |
 | `agentRequestsQueryOptions`          | every 10 s                                  |
 | `workflowExecution(s)QueryOptions`   | every 2 s while one is queued or running, else never |
@@ -97,26 +100,29 @@ Call `afterCreateAgent` either way.
 
 **Reading a room is presence.** Every read, catch-up and post marks the
 member present. After 90 s without one they count as away, and their own
-agent may answer for them. So a page must keep the room query mounted while
-the room is on screen. Enable it only when `canUseRoom(space)` holds.
+agent may answer for them. A page does not read the room itself: the room
+is a Durable Object (`TeamspaceRoomAgent`, REALTIME.md) that reads Go as
+each member with the room open in a visible tab, and never as a member
+whose tabs are all hidden. `useTeamspaceRoom` holds its socket; open it
+only when `canUseRoom(space)` holds.
 
 - A paused room answers 400.
 - Someone neither on the team nor managing it gets 404.
-- A manager who is not on the team can read but gets 403 on a post.
+- A manager who is not on the team can read but gets 403 on a post; the
+  Worker keeps them out of the room's socket.
 - Only people with a seat may post: team members whose primary agent is
   active.
 
-**The room query reads incrementally.** A read without `after` starts at the
-room's *first* message, so the old app's `?limit=200` poll froze on messages
-1–200 once a room grew past that.
+**A room is read incrementally** (`readAfter`). A read without `after`
+starts at the room's *first* message, so the old app's `?limit=200` poll
+froze on messages 1–200 once a room grew past that.
 
-- On first open, the query calls `catchup` to find where the room ends, then
+- With nothing held, it calls `catchup` to find where the room ends, then
   reads its latest page.
-- Later polls read only after `readThrough`, the last seq a read returned.
-- The cache keeps the newest 1,000 messages.
-- `mergeIntoRoom` and `afterSayInRoom` add a post's answer without moving
-  `readThrough`, because another member's message can sit between the seqs
-  a post returns.
+- Later reads start after `readThrough`, the last seq a read returned, page
+  by page (at most ten a time).
+- A post's answer is merged by seq without moving `readThrough`, because
+  another member's message can sit between the seqs a post returns.
 
 Team thread pointers (`agent-threads`) are not polled. Only posting to the
 team changes them, and `afterPostAgentTeamMessage` refreshes them.
@@ -124,12 +130,12 @@ team changes them, and `afterPostAgentTeamMessage` refreshes them.
 ## After a mutation
 
 Call the matching helper from the mutation's `onSuccess`. The helpers are in
-`invalidation.ts`, `../teamspaces/queries.ts` and `../rooms/queries.ts`.
+`invalidation.ts` and `../teamspaces/queries.ts`.
 
 | Mutation | Helper | What it does |
 | --- | --- | --- |
 | `createAgent` | `afterCreateAgent` | agent list |
-| `updateAgent` | `afterUpdateAgent` | caches the agent; agent list, **all agent teams** (members and coordinator shown by live name and status), **all teamspaces** (whisperers, contributions, room seats) |
+| `updateAgent` | `afterUpdateAgent` | caches the agent; agent list, **all agent teams** (members and coordinator shown by live name and status), **all teamspaces** (whisperers, contributions; a room's seats follow on its Durable Object's next read) |
 | `deleteAgent` | `afterDeleteAgent` | drops the agent; agent list. Its threads belong to `lib/specialists`. |
 | `createAgentTeam` / `updateAgentTeam` | `afterCreateAgentTeam` / `afterUpdateAgentTeam` | caches the team; team list |
 | `deleteAgentTeam` | `afterDeleteAgentTeam` | drops the team, its conversation and thread pointers; team list |
@@ -141,9 +147,9 @@ Call the matching helper from the mutation's `onSuccess`. The helpers are in
 | `updateOrganizationAgent` | `afterUpdateOrganizationAgent` | caches it; **all teamspaces**, which embed it (its status gates publishing) |
 | `createTeamspace` / `updateTeamspace` | `afterCreateTeamspace` / `afterUpdateTeamspace` | caches the space; teamspace list |
 | `deleteTeamspace` | `afterDeleteTeamspace` | drops the space, its ledger and room; teamspace list |
-| any contribution change | `afterTeamspaceContributionChange` | caches the returned space; list; its room (seats) |
+| any contribution change | `afterTeamspaceContributionChange` | caches the returned space; list; its room's catch-up (the room's seats follow on its Durable Object's next read, within 12 s) |
 | `publishTeamspaceEntry` | `afterPublishTeamspaceEntry` | that ledger. The organization context updates later, from an event. |
-| `sayInRoom` | `afterSayInRoom` | merges the answer; re-reads the room and its ledger (the room publishes what it concludes) |
+| a room post (`useTeamspaceRoom().send`) | in the hook | merges the answer; re-reads the ledger (the room publishes what it concludes) |
 
 ## What a page must handle
 
@@ -169,7 +175,10 @@ Call the matching helper from the mutation's `onSuccess`. The helpers are in
 - **Slow posts.** Both answer only after the agents have replied, so don't
   show them optimistically:
   - `postAgentTeamMessage` can take up to about 90 s (up to 4 agent turns);
-  - `sayInRoom` takes up to 20 s of agent turns, plus a brief rewrite.
+  - a room post (`roomApi().say`) spends up to 20 s on agent turns (checked
+    only between turns: one real-model post took 96 s), plus a brief
+    rewrite. The room's Durable Object reads the room while it waits, so
+    each message reaches the page as Go records it.
 - **Workflows need AWS.** Starting one needs an orchestrator, and a
   workflow with a schedule needs EventBridge Scheduler. Otherwise the server
   answers `503 agent_workflows_unavailable`; locally, set
