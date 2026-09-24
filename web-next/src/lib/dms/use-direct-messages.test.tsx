@@ -585,6 +585,34 @@ describe("useDirectMessages: refusals", () => {
     }
   })
 
+  it("opens the socket again at once when asked while it is down, and only then", async () => {
+    const api = mockApi(({ path: asked }) =>
+      asked === path ? json(undefined, 204) : undefined
+    )
+    const { result } = setup()
+    const socket = open([wire(1)])
+    act(() => result.current.reconnect())
+    expect(socket.reconnects).toBe(0)
+
+    socket.drop()
+    await waitFor(() => expect(api.calls).toHaveLength(1))
+    expect(result.current.status).toBe("error")
+    act(() => result.current.send("While away"))
+    act(() => result.current.reconnect())
+    expect(socket.reconnects).toBe(1)
+    await waitFor(() => expect(socket.readyState).toBe(socket.OPEN))
+    socket.says(snapshot([wire(1)]))
+    expect(result.current.status).toBe("live")
+    // What waited goes on the reopened socket.
+    expect(socket.said("dm-send").map((message) => message.body)).toEqual([
+      "While away",
+    ])
+
+    socket.says({ type: "dm-gone" })
+    act(() => result.current.reconnect())
+    expect(socket.reconnects).toBe(1)
+  })
+
   it("is not allowed once the conversation was purged, without asking", () => {
     const api = mockApi(() => undefined)
     const { result } = setup()

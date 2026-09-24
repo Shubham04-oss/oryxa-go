@@ -58,6 +58,8 @@ export type DirectMessages = {
   peer: { online: boolean; typing: boolean; lastReadSeq: number }
   /** Says the viewer is typing (again every few seconds while true), or stopped. */
   setTyping: (typing: boolean) => void
+  /** Opens the socket again now rather than at its next try, while it is not open (`connecting` or `error`); what is waiting to send goes once it opens. */
+  reconnect: () => void
   status: DirectMessagesStatus
 }
 
@@ -97,7 +99,12 @@ type Live = {
 }
 
 /** The part of the SDK's socket the view uses. */
-type Socket = { readyState: number; OPEN: number; send: (data: string) => void }
+type Socket = {
+  readyState: number
+  OPEN: number
+  send: (data: string) => void
+  reconnect?: () => void
+}
 
 function initialLive(name: string): Live {
   return {
@@ -324,6 +331,11 @@ class DirectMessagesView {
     this.saidTyping = true
     this.typedAt = now
     this.say({ type: "dm-typing", typing: true })
+  }
+
+  readonly reconnect = (): void => {
+    if (!this.live.name || this.settled || this.live.open) return
+    this.socket?.reconnect?.()
   }
 
   readonly loadOlder = (): Promise<void> => {
@@ -714,6 +726,7 @@ export function useDirectMessages(
     markRead: view.markRead,
     peer: view.peer(),
     setTyping: view.setTyping,
+    reconnect: view.reconnect,
     status: view.status(),
   }
 }
