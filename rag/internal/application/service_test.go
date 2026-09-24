@@ -635,6 +635,77 @@ func TestFileCannotBeCopiedIntoWiderCorpus(t *testing.T) {
 	}
 }
 
+// TestAFileGoesOnlyWhereEveryReaderCanAlreadyReadIt is the table for which
+// corpora a file may be copied into: any whose readers can all read the file
+// in files already, so indexing it shows it to nobody new. Org admins read
+// every team and member corpus, and every team and member file, so they are
+// never the reader a copy widens to; an admin-only document may live only in
+// an organization corpus. Rag can only vouch for the caller being able to
+// read a file (files just served it to them), so a team file goes into no
+// other member's corpus.
+func TestAFileGoesOnlyWhereEveryReaderCanAlreadyReadIt(t *testing.T) {
+	var (
+		orgFile      = domain.SourceContent{Scope: domain.ScopeOrganization, Purpose: "upload", Access: domain.AccessMembers}
+		orgAdminFile = domain.SourceContent{Scope: domain.ScopeOrganization, Purpose: "upload", Access: domain.AccessAdmins}
+		invoiceFile  = domain.SourceContent{Scope: domain.ScopeOrganization, Purpose: "billing.attachment"}
+		teamFile     = domain.SourceContent{Scope: domain.ScopeTeam, TeamID: "team_eng"}
+		creatorFile  = domain.SourceContent{Scope: domain.ScopeMember, MemberID: "user-creator"}
+		unplacedFile = domain.SourceContent{}
+
+		creatorCorpus  = domain.Corpus{Slug: "creator", Scope: domain.ScopeMember, MemberID: "user-creator"}
+		teammateCorpus = domain.Corpus{Slug: "teammate", Scope: domain.ScopeMember, MemberID: "user-teammate"}
+		adminCorpus    = domain.Corpus{Slug: "admin", Scope: domain.ScopeMember, MemberID: "user-admin"}
+		engCorpus      = domain.Corpus{Slug: "eng", Scope: domain.ScopeTeam, TeamID: "team_eng"}
+		opsCorpus      = domain.Corpus{Slug: "ops", Scope: domain.ScopeTeam, TeamID: "team_ops"}
+		orgCorpus      = domain.Corpus{Slug: "org", Scope: domain.ScopeOrganization}
+	)
+	tests := []struct {
+		name       string
+		user       string
+		corpus     domain.Corpus
+		file       domain.SourceContent
+		wantErr    error
+		wantAccess domain.DocumentAccess
+	}{
+		{"an org file into the caller's own member corpus", "user-creator", creatorCorpus, orgFile, nil, domain.AccessMembers},
+		{"an org file into a team corpus", "user-teammate", engCorpus, orgFile, nil, domain.AccessMembers},
+		{"an org file into the organization corpus", "user-admin", orgCorpus, orgFile, nil, domain.AccessMembers},
+		{"an org file into another member's corpus, by an admin", "user-admin", creatorCorpus, orgFile, nil, domain.AccessMembers},
+		{"an admin-only org file into the organization corpus", "user-admin", orgCorpus, orgAdminFile, nil, domain.AccessAdmins},
+		{"an invoice into the organization corpus", "user-admin", orgCorpus, invoiceFile, nil, domain.AccessAdmins},
+		{"an admin-only org file into a team corpus", "user-admin", engCorpus, orgAdminFile, domain.ErrNotFound, ""},
+		{"an admin-only org file into the admin's own member corpus", "user-admin", adminCorpus, orgAdminFile, domain.ErrNotFound, ""},
+		{"an invoice into a member corpus", "user-admin", adminCorpus, invoiceFile, domain.ErrNotFound, ""},
+		{"a team file into its team's corpus", "user-teammate", engCorpus, teamFile, nil, domain.AccessMembers},
+		{"a team file into the caller's own member corpus", "user-teammate", teammateCorpus, teamFile, nil, domain.AccessMembers},
+		{"a team file into another member's corpus, by an admin", "user-admin", creatorCorpus, teamFile, domain.ErrNotFound, ""},
+		{"a team file into another team's corpus", "user-admin", opsCorpus, teamFile, domain.ErrNotFound, ""},
+		{"a team file into the organization corpus", "user-admin", orgCorpus, teamFile, domain.ErrNotFound, ""},
+		{"a member file into its owner's corpus", "user-creator", creatorCorpus, creatorFile, nil, domain.AccessMembers},
+		{"a member file into its owner's corpus, by an admin", "user-admin", creatorCorpus, creatorFile, nil, domain.AccessMembers},
+		{"a member file into an admin's own corpus", "user-admin", adminCorpus, creatorFile, domain.ErrNotFound, ""},
+		{"a member file into a team corpus", "user-creator", engCorpus, creatorFile, domain.ErrNotFound, ""},
+		{"a member file into the organization corpus", "user-admin", orgCorpus, creatorFile, domain.ErrNotFound, ""},
+		{"a file files placed nowhere", "user-creator", creatorCorpus, unplacedFile, domain.ErrNotFound, ""},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			h := newHarness()
+			corpus := seedCorpus(h.store, test.corpus)
+			h.files.content = test.file
+			h.files.content.ID, h.files.content.Filename = "file_1", "notes.md"
+			h.files.content.ContentType, h.files.content.Body = "text/markdown", "# Notes\n\nWhat the file says."
+			document, err := h.service.AddDocument(context.Background(), creds(test.user), testOrganization, corpus.ID, given(AddDocumentInput{
+				Source: domain.Source{Kind: domain.SourceFile, Ref: "file_1"},
+			}))
+			wantErr(t, err, test.wantErr)
+			if test.wantErr == nil && document.Access != test.wantAccess {
+				t.Fatalf("access = %q, want %q", document.Access, test.wantAccess)
+			}
+		})
+	}
+}
+
 func TestAddDocumentFromAFileNeedsFilesConfigured(t *testing.T) {
 	h := newHarness()
 	h.service = New(h.store, fakeDirectory{}, h.teams, nil, nil, h.vectors, h.retriever, h.generator, h.knowledgeBase, Defaults{}, nil)

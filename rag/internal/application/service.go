@@ -424,11 +424,6 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 		if err != nil {
 			return domain.Document{}, err
 		}
-		// A readable private file must never be copied into a wider corpus.
-		if object.Scope != corpus.Scope || (corpus.Scope == domain.ScopeTeam && object.TeamID != corpus.TeamID) ||
-			(corpus.Scope == domain.ScopeMember && object.MemberID != corpus.MemberID) {
-			return domain.Document{}, domain.ErrNotFound
-		}
 		fileAccess := object.Access
 		if fileAccess == "" {
 			fileAccess = domain.AccessMembers
@@ -438,6 +433,11 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 		}
 		if !fileAccess.Valid() {
 			return domain.Document{}, fmt.Errorf("file access is invalid: %w", domain.ErrConflict)
+		}
+		// A file the caller may read must never be copied where someone who
+		// may not read it could find it.
+		if !fileFits(corpus, object, fileAccess, member.UserID) {
+			return domain.Document{}, domain.ErrNotFound
 		}
 		if input.Access == domain.AccessAdmins && fileAccess == domain.AccessMembers {
 			return domain.Document{}, fmt.Errorf("set admin access on the file in Files first: %w", domain.ErrInvalid)
@@ -495,6 +495,44 @@ func (service *Service) AddDocument(ctx context.Context, credentials authclient.
 			"document_id", stored.ID, "corpus_id", corpus.ID)
 	}
 	return stored, nil
+}
+
+// fileFits reports whether everyone who can read corpus can already read the
+// file in files, so copying it there shows it to nobody new.
+//
+// Files lets any member read an organization file with members access, only
+// org owners and admins read an admin-only one, whoever can see a team (and
+// every org admin) read that team's files, and a member (and every org admin)
+// read that member's own. mayRead gives a corpus the same readers by its
+// placement, org admins included, so an organization file with members access
+// fits any corpus, a team file fits its own team's corpus, and a member's file
+// fits only that member's own corpus. An admin-only document may live only in
+// an organization corpus, whose document ACL keeps it to admins there.
+//
+// A team file also fits the member corpus of whoever is copying it: files has
+// just served it to them, so they can read it. Whether any other member can,
+// rag cannot ask, so a team file goes into nobody else's member corpus.
+func fileFits(corpus domain.Corpus, file domain.SourceContent, access domain.DocumentAccess, callerID string) bool {
+	if access == domain.AccessAdmins {
+		return file.Scope == domain.ScopeOrganization && corpus.Scope == domain.ScopeOrganization
+	}
+	switch file.Scope {
+	case domain.ScopeOrganization:
+		return true
+	case domain.ScopeTeam:
+		switch corpus.Scope {
+		case domain.ScopeTeam:
+			return file.TeamID != "" && corpus.TeamID == file.TeamID
+		case domain.ScopeMember:
+			return callerID != "" && corpus.MemberID == callerID
+		default:
+			return false
+		}
+	case domain.ScopeMember:
+		return corpus.Scope == domain.ScopeMember && file.MemberID != "" && corpus.MemberID == file.MemberID
+	default:
+		return false
+	}
 }
 
 // DocumentPage is one page of a corpus's documents, newest first.

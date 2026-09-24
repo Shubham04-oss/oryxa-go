@@ -47,8 +47,12 @@ Documents in an organization corpus also have an ACL. `access: members` is
 the default and is visible to every member allowed into that corpus.
 `access: admins` is visible only to organization owners and admins. An admin
 can set this field when adding an inline or external document. A Files
-document uses its scope and access from Files: it cannot be copied into a
-wider corpus or be reclassified in RAG. Admin-only shared files must be
+document takes its access from Files and cannot be reclassified in RAG. It
+goes only into a corpus whose readers can all read the file already: an
+organization file with members access into any corpus, an admin-only one into
+an organization corpus alone, a team file into that team's corpus or the
+member corpus of whoever adds it, and a member's file into that member's own
+corpus. Anywhere else it is `404`. Admin-only shared files must be
 uploaded with `access: admins` in Files; a `billing.attachment` is always
 admin-only. Knowledge carries that label into its publication event. The ACL applies
 to document lists and reads, and to matches before reranking or generation.
