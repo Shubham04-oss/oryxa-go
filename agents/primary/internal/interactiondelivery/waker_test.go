@@ -363,9 +363,9 @@ func TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded(t *testing.T) {
 
 // TestOnlyApprovedWorkReadsTheMembersApps: the member is not here, so what
 // their agent may reach is what it has already approved. Deciding on a new
-// request, and reporting an outcome to one's own member, run without the
-// apps toolbox at all; and every delivery runs as one, offered nothing that
-// lists the member's other requests.
+// request runs without the apps toolbox at all, and reporting an outcome to
+// one's own member reads the request alone; and every delivery runs as one,
+// offered nothing that lists the member's other requests.
 func TestOnlyApprovedWorkReadsTheMembersApps(t *testing.T) {
 	cases := []struct {
 		kind  string
@@ -373,8 +373,8 @@ func TestOnlyApprovedWorkReadsTheMembersApps(t *testing.T) {
 	}{
 		{KindTargetRequested, managedagents.DeliveryQuiet},
 		{KindTargetApproved, managedagents.DeliveryReads},
-		{KindRequesterRejected, managedagents.DeliveryQuiet},
-		{KindRequesterCompleted, managedagents.DeliveryQuiet},
+		{KindRequesterRejected, managedagents.DeliveryReport},
+		{KindRequesterCompleted, managedagents.DeliveryReport},
 	}
 	for _, testCase := range cases {
 		got := reach(testCase.kind)

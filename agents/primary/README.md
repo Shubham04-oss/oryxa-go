@@ -424,25 +424,30 @@ is told (see [Wake-ups](#wake-ups)).
 there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
 what it may reach follows what their own agent has already allowed:
 
-- **Deciding** on a new request, and **reporting** a finished one back to its
-  own member, run without the apps toolbox at all. Nothing another member
-  wrote can read this member's connected apps before their agent has approved
-  it. A request held for its owner is never delivered for deciding at all.
+- **Deciding** on a new request runs without the apps toolbox at all, with
+  the organization's knowledge, read-only, beside the request, so an approval
+  whose work needs no more can be finished in the same run. Nothing another
+  member wrote can read this member's connected apps before their agent has
+  approved it. A request held for its owner is never delivered for deciding
+  at all.
+- **Reporting** a rejection or a result back to the member who asked reads
+  the request alone: neither their apps nor their knowledge.
 - **Doing approved work** runs with the read-only apps toolbox (the same one
-  a wake-up gets) and never the writing one. The run is not narrowed to the
-  decision's `allowed_tools`: it has the whole read-only toolbox and is only
-  told to keep to what was allowed. The ledger checks only the response's own
-  account of it, that `tools_used` is within `allowed_tools`.
+  a wake-up gets) and never the writing one, beside the read-only knowledge.
+  The run is not narrowed to the decision's `allowed_tools`: it has the whole
+  read-only toolbox and is only told to keep to what was allowed. The ledger
+  checks only the response's own account of it, that `tools_used` is within
+  `allowed_tools`.
 - No unwatched run may start an interaction of its own: `interactions_create`
   is left out, so a request cannot fan out into requests on other members.
 - A delivery is about its one request. Its run gets an interactions toolbox
-  of its own (`managedagents.DeliveryReads` and `DeliveryQuiet`, the reach
-  above) with `interactions_get`, `interactions_decide` and
-  `interactions_respond` only: `interactions_inbox` and `interactions_sent`
-  are not there, so the model cannot browse the member's other requests
-  whatever it makes of the request. Nothing a delivery does needs them, since
-  its message names the request. App wake-ups and a room's stand-in keep the
-  toolbox they had.
+  of its own (`managedagents.DeliveryReads`, `DeliveryQuiet` and
+  `DeliveryReport`, the reach above) with `interactions_get`,
+  `interactions_decide` and `interactions_respond` only: `interactions_inbox`
+  and `interactions_sent` are not there, so the model cannot browse the
+  member's other requests whatever it makes of the request. Nothing a
+  delivery does needs them, since its message names the request. App
+  wake-ups and a room's stand-in keep the toolbox they had.
 
 Each create, decision, and response is committed with an EventBridge outbox
 event. The event contains routing identities and lifecycle state, not the task,
@@ -465,10 +470,49 @@ repeat events deduplicate by `event_id`. Runs carry no member access token, do
 not read or write long-term memory, and remain subject to the normal tool
 authorization and confirmation boundaries.
 
-A delivery run starts with the interactions toolbox already loaded
-(`threads.RunInput.Toolboxes`), its skill in the instruction, so the first
-model call goes straight to `interactions_get` rather than to `list_tools` and
-`load_tools`; the run's other toolboxes stay loadable as ever.
+A delivery run starts with all it may reach already loaded: every toolbox of
+its reach has its tools declared, and its skill in the instruction, from the
+first model call, and the run has no `list_tools` or `load_tools`, so no
+model call goes to finding what it could use (`assembly.Krude.Delivering` for
+Krude, `ManagedDelivering` for a specialist). Approved work starts with the
+read-only apps, the read-only knowledge and the request's interactions
+toolbox; deciding a new request with the knowledge and the interactions
+toolbox; a report with the interactions toolbox alone.
+
+That puts the whole reach on every call. For approved work it is 4.7 KB of
+tool declarations and 4.8 KB of skills that the interactions toolbox alone
+did not carry, less the 2 KB that `list_tools`, `load_tools` and
+`get_user_details` (below) took: about 1,900 tokens more per call, 1,100 more
+to decide, and 500 fewer for a report. Against that, every measured delivery
+spent a model call on `list_tools`, 2.8 to 37 seconds, and approved work that
+reads the member's apps spent another on `load_tools`, each call sending the
+whole conversation again. A run's prefix no longer changes midway either, so
+when it is large enough for an explicit prompt cache, one cache serves every
+call rather than a second after a toolbox loaded. The waker still marks the
+interactions toolbox loaded in the delivery's thread
+(`threads.RunInput.Toolboxes`), so a member who carries that thread on in
+their own chat has it there. App wake-ups, a room's stand-in and a member's
+own runs find and load toolboxes as before.
+
+The message that wakes the agent says where the request comes from, so the
+agent need not look it up. The agent asked to decide it, or to do its work,
+is told the agent that asked and the member it asked for, by the name they
+chose and their sign-in address, as auth keeps them: auth has no other
+handle for a person, and a room's `@handle` exists only inside that room.
+Both sides are told the teamspace it was made in (`interactiondelivery.Config`
+`Members` and `Teamspaces`). A report to the member who asked names no one:
+the one who asked is that member, whom the run's instruction already names.
+Each name is one quoted line of at most 60 characters, and the message
+treats the names as it does the request, as untrusted data. None of it is
+the request's content, which stays behind `interactions_get`. A name that
+cannot be read is left out, and the agent is woken all the same.
+
+So a delivery run is not offered `get_user_details` either. Everything it
+returns, the name, role, sign-in address and organization of the member the
+agent works for, is in the run's instruction from its first call; a delivery
+thread is too short for any of it to scroll out of sight; and it never
+described the member who asked. Two of three measured runs called it, at 7 to
+16 seconds each, and learned nothing their instruction did not say.
 
 The addressed agent's delivery run ends on the call that settles it:
 `interactions_respond`, or `interactions_decide` rejecting. That call sets
@@ -1131,6 +1175,25 @@ Set `AGENTS_PRIMARY_MODEL` and `AGENTS_PRIMARY_MODEL_LITE` to change the two
 models; a policy missing a role is refused at startup, so a new role cannot
 silently get no model.
 
+**Thinking on a delivery.** `AGENTS_PRIMARY_DELIVERY_THINKING` asks the model
+for a thinking level on every call of a run that delivers an agent request
+(see [Agent interactions toolbox](#agent-interactions-toolbox)): `minimal`,
+`low`, `medium` or `high`, in any case. That is how Gemini 3 is told how much
+to think, genai's `ThinkingConfig.ThinkingLevel`, set on the delivering
+agents' `GenerateContentConfig`, which ADK copies into each of their
+requests. A token budget (`ThinkingBudget`) is not offered: it is Gemini
+2.5's control, Gemini 3 is tuned by level, and a request may not carry both.
+Unset, no request carries a thinking config and each model thinks as it does
+by default, as before the setting existed: `gemini-3.8-flash` at medium,
+`gemini-3.5-flash-lite` at minimal. A member's own chat, an app wake-up, a
+room's stand-in, a team room, a workflow and the organization agent never
+carry it. Krude answers a request on the main model and a specialist on the
+lite one, and Vertex refuses a level a model does not take with `400
+INVALID_ARGUMENT`, so the service refuses to start on anything but a level,
+and on a level Google documents either model as not taking:
+`gemini-3.8-flash`, `gemini-3.7-flash` and `gemini-3.1-pro-preview` take no
+`minimal`, and `gemini-3-pro-preview` only `low` and `high`.
+
 ## Prompt caching
 
 `internal/modelcache` wraps each model. When a request's stable prefix — the
@@ -1589,6 +1652,7 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | --- | --- | --- |
 | `AGENTS_PRIMARY_MODEL` | `gemini-3.5-flash-lite` | Main model: conversation and grounded research |
 | `AGENTS_PRIMARY_MODEL_LITE` | `gemini-3.5-flash-lite` | Lite model: planning and bulk single-turn work |
+| `AGENTS_PRIMARY_DELIVERY_THINKING` | unset | Thinking level asked of the model on every call of a run delivering an agent request, and no other run: `minimal`, `low`, `medium` or `high`. Unset, each model thinks as it does by default. A level either model does not take refuses to start (see [Models and routing](#models-and-routing)) |
 | `AGENTS_PRIMARY_PROMPT_CACHE` | `true` | Use explicit Vertex cached contents for large stable prefixes |
 | `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |
 | `AGENTS_PRIMARY_CACHE_MIN_TOKENS` | `4096` | Smallest prefix worth an explicit cache; Vertex's floor for these models. Below it, implicit caching applies |

@@ -160,7 +160,7 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 		Name:                RootName,
 		Description:         "Krude, a member's assistant.",
 		Model:               router.For(modelrouter.RoleChat),
-		InstructionProvider: instructionFrom(krudeInstruction, catalog),
+		InstructionProvider: instructionFrom(krudeInstruction, catalog, false),
 		SubAgents:           subAgents,
 		Tools:               tools,
 		Toolsets:            []tool.Toolset{catalog.loaded(), subagents},
@@ -179,6 +179,43 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 // It answers to the same name as Root, since it takes turns with Root in the
 // same thread.
 func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
+	return unattendedRoot(router, toolboxes, nil)
+}
+
+// delivery is how a run that delivers one interaction runs.
+type delivery struct {
+	// thinking is the thinking level asked of the model on each of the run's
+	// calls; none leaves the model's own default.
+	thinking genai.ThinkingLevel
+}
+
+// config is the generation config of the run's model calls: none, as for
+// every other run, unless a thinking level is set.
+func (delivery *delivery) config() *genai.GenerateContentConfig {
+	if delivery == nil || delivery.thinking == "" {
+		return nil
+	}
+	return &genai.GenerateContentConfig{ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: delivery.thinking}}
+}
+
+// DeliveringRoot returns UnattendedRoot for a run that delivers one
+// interaction. What such a run may reach is decided before it starts, by
+// what the member's agent has allowed, so every toolbox given is loaded, with
+// its skill, from the run's first model call, and there is nothing to list or
+// load: no list_tools or load_tools, and no model call spent on either. Nor
+// is it offered get_user_details: its instruction carries every detail of the
+// member it works for, the run is too short for them to scroll out of sight,
+// and the message that wakes it names the member on the other side of the
+// request, whom get_user_details never described.
+//
+// thinking, when set, is the thinking level asked of the model on each of
+// the run's calls, as a Gemini 3 model takes it; left empty, the request
+// carries no thinking config and the model thinks as it does by default.
+func DeliveringRoot(router *modelrouter.Router, toolboxes []Toolbox, thinking genai.ThinkingLevel) (agent.Agent, error) {
+	return unattendedRoot(router, toolboxes, &delivery{thinking: thinking})
+}
+
+func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering *delivery) (agent.Agent, error) {
 	if router == nil {
 		return nil, errors.New("a model router is required")
 	}
@@ -186,17 +223,23 @@ func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agen
 	if err != nil {
 		return nil, err
 	}
-	tools, err := buildTools(catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool)
+	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool}
+	if delivering != nil {
+		catalog.preloaded = true
+		builders = []func() (tool.Tool, error){loadArtifactsTool}
+	}
+	tools, err := buildTools(builders...)
 	if err != nil {
 		return nil, err
 	}
 	return llmagent.New(llmagent.Config{
-		Name:                RootName,
-		Description:         "Krude, reporting to a member who is away.",
-		Model:               router.For(modelrouter.RoleChat),
-		InstructionProvider: instructionFrom(unattendedInstruction, catalog),
-		Tools:               tools,
-		Toolsets:            []tool.Toolset{catalog.loaded()},
+		Name:                  RootName,
+		Description:           "Krude, reporting to a member who is away.",
+		Model:                 router.For(modelrouter.RoleChat),
+		GenerateContentConfig: delivering.config(),
+		InstructionProvider:   instructionFrom(unattendedInstruction, catalog, delivering != nil),
+		Tools:                 tools,
+		Toolsets:              []tool.Toolset{catalog.loaded()},
 	})
 }
 
@@ -227,17 +270,25 @@ func buildTools(builders ...func() (tool.Tool, error)) ([]tool.Tool, error) {
 
 // instructionFrom renders an instruction of Krude's for the member in this
 // session, then appends the skill of every loaded toolbox, so a toolbox that
-// is loaded brings its usage instructions with it.
-func instructionFrom(instruction *template.Template, catalog *toolCatalog) func(agent.ReadonlyContext) (string, error) {
+// is loaded brings its usage instructions with it. delivering is whether the
+// run delivers one interaction (DeliveringRoot).
+func instructionFrom(instruction *template.Template, catalog *toolCatalog, delivering bool) func(agent.ReadonlyContext) (string, error) {
 	return func(ctx agent.ReadonlyContext) (string, error) {
 		state := ctx.ReadonlyState()
 		var rendered strings.Builder
-		err := instruction.Execute(&rendered, struct{ UserName, UserAbout, OrgName, Member, AgentName string }{
-			UserName:  stateText(state, UserNameKey, "the member you are talking with"),
-			UserAbout: stateText(state, UserAboutKey, ""),
-			OrgName:   stateText(state, OrgNameKey, "their organization"),
-			Member:    memberDetails(state),
-			AgentName: stateText(state, AgentNameKey, "Krude"),
+		err := instruction.Execute(&rendered, struct {
+			UserName, UserAbout, OrgName, Member, AgentName string
+			// Delivering is a run that delivers one interaction: every
+			// toolbox it may use is loaded already, and it has no
+			// get_user_details.
+			Delivering bool
+		}{
+			UserName:   stateText(state, UserNameKey, "the member you are talking with"),
+			UserAbout:  stateText(state, UserAboutKey, ""),
+			OrgName:    stateText(state, OrgNameKey, "their organization"),
+			Member:     memberDetails(state),
+			AgentName:  stateText(state, AgentNameKey, "Krude"),
+			Delivering: delivering,
 		})
 		if err != nil {
 			return "", err
@@ -271,7 +322,7 @@ func memberDetails(state session.ReadonlyState) string {
 // instruction.
 func appendToolboxSkills(rendered *strings.Builder, catalog *toolCatalog, state session.ReadonlyState) {
 	var skills []string
-	for _, name := range loadedToolboxes(state) {
+	for _, name := range catalog.loadedNames(state) {
 		box, ok := catalog.find(name)
 		if !ok || strings.TrimSpace(box.Instructions) == "" {
 			continue

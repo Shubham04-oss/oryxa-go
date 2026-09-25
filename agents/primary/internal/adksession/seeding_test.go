@@ -286,3 +286,19 @@ func TestSeedingPreservesAllCallerKeys(t *testing.T) {
 		}
 	}
 }
+
+// TestAMemberIsReadOnlyInTheOrganizationNamed: reading a member names both
+// the organization and the member, and a blank one of either reads nobody,
+// never the member's first organization, so nothing about them in one
+// organization reaches another.
+func TestAMemberIsReadOnlyInTheOrganizationNamed(t *testing.T) {
+	store := &Store{}
+	for _, blank := range [][2]string{{"", "user_1"}, {"org_1", ""}} {
+		if _, err := store.Member(context.Background(), blank[0], blank[1]); !errors.Is(err, ErrMemberNotFound) {
+			t.Errorf("Member(%q, %q) = %v, want ErrMemberNotFound without reading auth's tables", blank[0], blank[1], err)
+		}
+		if member, err := store.IsMember(context.Background(), blank[0], blank[1]); member || err != nil {
+			t.Errorf("IsMember(%q, %q) = %t, %v, want false", blank[0], blank[1], member, err)
+		}
+	}
+}

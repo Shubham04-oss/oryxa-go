@@ -199,6 +199,21 @@ func (store *Store) Get(ctx context.Context, organizationID, id string) (Space, 
 	return space, nil
 }
 
+// Name is the name of teamspace id in the organization, or ErrNotFound. It
+// reads nothing else about the space, and nobody's standing in it.
+func (store *Store) Name(ctx context.Context, organizationID, id string) (string, error) {
+	var name string
+	err := store.database.Pool.QueryRow(ctx, `SELECT name FROM agents_primary.teamspaces
+		WHERE organization_id=$1 AND id=$2`, organizationID, id).Scan(&name)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("read teamspace name: %w", err)
+	}
+	return name, nil
+}
+
 func (store *Store) Update(ctx context.Context, organizationID, id string, input UpdateInput) (Space, error) {
 	var result Space
 	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {

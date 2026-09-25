@@ -66,10 +66,7 @@ func (r memberReader) Member(ctx context.Context, userID, organizationID string)
 // auth's tables. Work that nobody asked for in person, such as a wake-up,
 // checks it first: a member who left must not have threads made for them.
 func (s *Store) IsMember(ctx context.Context, organizationID, userID string) (bool, error) {
-	if organizationID == "" || userID == "" {
-		return false, nil
-	}
-	_, err := memberReader{database: s.database}.Member(ctx, userID, organizationID)
+	_, err := s.Member(ctx, organizationID, userID)
 	if errors.Is(err, ErrMemberNotFound) {
 		return false, nil
 	}
@@ -77,4 +74,15 @@ func (s *Store) IsMember(ctx context.Context, organizationID, userID string) (bo
 		return false, err
 	}
 	return true, nil
+}
+
+// Member reads userID as a member of organizationID from auth's tables: the
+// name they chose, their sign-in address, and their role there. It is
+// ErrMemberNotFound for someone who does not belong to it, and for a blank
+// organization or user, rather than their first organization's record.
+func (s *Store) Member(ctx context.Context, organizationID, userID string) (Member, error) {
+	if organizationID == "" || userID == "" {
+		return Member{}, ErrMemberNotFound
+	}
+	return memberReader{database: s.database}.Member(ctx, userID, organizationID)
 }

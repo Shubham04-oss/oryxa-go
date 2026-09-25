@@ -88,6 +88,24 @@ func MemberTokens(settings serviceconfig.Config, awsConfig aws.Config) memberaut
 	})
 }
 
+// DeliveryReach is how far a run that delivers one interaction may reach,
+// which is also every toolbox it starts with: such a run lists and loads
+// nothing, so what it may use is loaded, with its skill, from its first
+// model call.
+type DeliveryReach int
+
+const (
+	// DeliveryReport reads the request alone, for telling the member who
+	// asked that it was rejected or answered.
+	DeliveryReport DeliveryReach = iota
+	// DeliveryQuiet adds the organization's knowledge, read-only, and never
+	// the member's apps, for deciding a new request and doing the approved
+	// work at once when that needs no more.
+	DeliveryQuiet
+	// DeliveryReads adds the member's apps, read-only, for approved work.
+	DeliveryReads
+)
+
 // Krude is the assembled agent with what it runs with.
 type Krude struct {
 	// Root is Krude, the agent every conversation starts with.
@@ -98,15 +116,9 @@ type Krude struct {
 	// else.
 	Unattended agent.Agent
 	// UnattendedQuiet is Unattended without the apps toolbox, for a run that
-	// has not been allowed to read the member's apps: an interaction nobody
-	// has approved yet, and the reports that follow a finished one.
+	// has not been allowed to read the member's apps, such as a room's
+	// stand-in.
 	UnattendedQuiet agent.Agent
-	// Delivering and DeliveringQuiet are Unattended and UnattendedQuiet for
-	// a run that delivers one interaction: their interactions toolbox holds
-	// only what that request needs, and none of what lists the member's
-	// other requests.
-	Delivering      agent.Agent
-	DeliveringQuiet agent.Agent
 	// Artifacts keeps what conversations produce: S3 when Settings names a
 	// bucket, memory otherwise.
 	Artifacts artifact.Service
@@ -121,8 +133,14 @@ type Krude struct {
 	toolboxes       []agents.Toolbox
 	unattended      []agents.Toolbox
 	unattendedQuiet []agents.Toolbox
-	delivering      []agents.Toolbox
-	deliveringQuiet []agents.Toolbox
+	// deliveryToolboxes are the toolboxes of each reach a run delivering one
+	// interaction may have, and delivering is Krude for each (Delivering).
+	deliveryToolboxes map[DeliveryReach][]agents.Toolbox
+	delivering        map[DeliveryReach]agent.Agent
+	// deliveryThinking is the thinking level asked of the model on every call
+	// of a run delivering one interaction, and of no other run; empty leaves
+	// each model its own default.
+	deliveryThinking genai.ThinkingLevel
 
 	// closers stops everything Build opened, kept in the order Build opened
 	// them. Close runs them in reverse — the same order devui's own defers
@@ -276,7 +294,8 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	// this member's agent has approved anything.
 	var unattendedQuiet []agents.Toolbox
 	// deliveringInteractions replaces the interactions toolbox in both lists
-	// for a run that delivers one interaction.
+	// for a run that delivers one interaction, and is all a report of one's
+	// outcome has (deliveryToolboxes).
 	var deliveringInteractions *agents.Toolbox
 	if settings.AppsURL != "" {
 		httpClient := options.HTTP
@@ -382,8 +401,12 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	krude.toolboxes = toolboxes
 	krude.unattended = unattended
 	krude.unattendedQuiet = unattendedQuiet
-	krude.delivering = replaceToolbox(unattended, deliveringInteractions)
-	krude.deliveringQuiet = replaceToolbox(unattendedQuiet, deliveringInteractions)
+	krude.deliveryToolboxes = deliveryToolboxes(unattended, unattendedQuiet, deliveringInteractions)
+	krude.deliveryThinking = settings.DeliveryThinking
+	if settings.DeliveryThinking != "" {
+		logger.InfoContext(ctx, "runs delivering an agent request think at a set level; every other run as its model does by default",
+			"thinking_level", settings.DeliveryThinking)
+	}
 
 	// Memory is built before the agents, because whether Krude is given
 	// load_memory depends on there being a memory service to answer it.
@@ -414,31 +437,9 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		logger.InfoContext(ctx, "Krude remembers nothing between threads; set AGENTS_PRIMARY_MEMORY_AGENT_ENGINE to give it memory")
 	}
 
-	root, err := agents.Root(router, toolboxes, krude.Memory != nil)
-	if err != nil {
-		return fail("root agent", err)
+	if err := krude.buildAgents(); err != nil {
+		return fail("agents", err)
 	}
-	krude.Root = root
-	unattendedRoot, err := agents.UnattendedRoot(router, unattended)
-	if err != nil {
-		return fail("unattended root agent", err)
-	}
-	krude.Unattended = unattendedRoot
-	quietRoot, err := agents.UnattendedRoot(router, unattendedQuiet)
-	if err != nil {
-		return fail("unattended root agent without apps", err)
-	}
-	krude.UnattendedQuiet = quietRoot
-	deliveringRoot, err := agents.UnattendedRoot(router, krude.delivering)
-	if err != nil {
-		return fail("root agent delivering an interaction", err)
-	}
-	krude.Delivering = deliveringRoot
-	deliveringQuietRoot, err := agents.UnattendedRoot(router, krude.deliveringQuiet)
-	if err != nil {
-		return fail("root agent delivering an interaction without apps", err)
-	}
-	krude.DeliveringQuiet = deliveringQuietRoot
 
 	artifacts := artifact.InMemoryService()
 	if settings.ArtifactBucket != "" {
@@ -472,9 +473,10 @@ func (krude *Krude) Managed(spec agents.ManagedSpec) (agent.Agent, error) {
 // ManagedUnattended builds the same specialist for a run nobody is watching:
 // the reduced toolboxes Krude itself gets when it is woken, and no memory,
 // because what steers such a run is text somebody else wrote. withApps says
-// whether the run may read the member's connected apps; an interaction that
-// has not been approved may not. The agent answers to the same name as the
-// attended one, which is what binds the two in a run.
+// whether the run may read the member's connected apps; a room's stand-in
+// may not, and an interaction's delivery has ManagedDelivering. The agent
+// answers to the same name as the attended one, which is what binds the two
+// in a run.
 func (krude *Krude) ManagedUnattended(spec agents.ManagedSpec, withApps bool) (agent.Agent, error) {
 	toolboxes := krude.unattendedQuiet
 	if withApps {
@@ -483,14 +485,72 @@ func (krude *Krude) ManagedUnattended(spec agents.ManagedSpec, withApps bool) (a
 	return agents.Managed(krude.router, toolboxes, false, spec)
 }
 
-// ManagedDelivering is ManagedUnattended for a run that delivers one
-// interaction, as Delivering is Unattended.
-func (krude *Krude) ManagedDelivering(spec agents.ManagedSpec, withApps bool) (agent.Agent, error) {
-	toolboxes := krude.deliveringQuiet
-	if withApps {
-		toolboxes = krude.delivering
+// buildAgents builds Krude, for every kind of run, from the router and the
+// toolboxes Build gathered.
+func (krude *Krude) buildAgents() error {
+	root, err := agents.Root(krude.router, krude.toolboxes, krude.Memory != nil)
+	if err != nil {
+		return fmt.Errorf("root agent: %w", err)
 	}
-	return agents.Managed(krude.router, toolboxes, false, spec)
+	krude.Root = root
+	if krude.Unattended, err = agents.UnattendedRoot(krude.router, krude.unattended); err != nil {
+		return fmt.Errorf("unattended root agent: %w", err)
+	}
+	if krude.UnattendedQuiet, err = agents.UnattendedRoot(krude.router, krude.unattendedQuiet); err != nil {
+		return fmt.Errorf("unattended root agent without apps: %w", err)
+	}
+	krude.delivering = map[DeliveryReach]agent.Agent{}
+	for _, reach := range []DeliveryReach{DeliveryReport, DeliveryQuiet, DeliveryReads} {
+		delivering, err := agents.DeliveringRoot(krude.router, krude.toolboxesFor(reach), krude.deliveryThinking)
+		if err != nil {
+			return fmt.Errorf("root agent delivering an interaction: %w", err)
+		}
+		krude.delivering[reach] = delivering
+	}
+	return nil
+}
+
+// Delivering is Krude for a run that delivers one interaction, reaching as
+// far as reach and starting with all of it loaded. Its interactions toolbox
+// holds only what that one request needs, and none of what lists the
+// member's other requests. Its model thinks at Settings' DeliveryThinking
+// level, when one is set.
+func (krude *Krude) Delivering(reach DeliveryReach) agent.Agent {
+	if delivering, ok := krude.delivering[reach]; ok {
+		return delivering
+	}
+	return krude.delivering[DeliveryReport]
+}
+
+// ManagedDelivering is the specialist for a run that delivers one
+// interaction, as Delivering is Krude.
+func (krude *Krude) ManagedDelivering(spec agents.ManagedSpec, reach DeliveryReach) (agent.Agent, error) {
+	return agents.ManagedDelivering(krude.router, krude.toolboxesFor(reach), spec, krude.deliveryThinking)
+}
+
+// toolboxesFor is what a run delivering one interaction with reach starts
+// with; a reach this does not know gets the least.
+func (krude *Krude) toolboxesFor(reach DeliveryReach) []agents.Toolbox {
+	if toolboxes, ok := krude.deliveryToolboxes[reach]; ok {
+		return toolboxes
+	}
+	return krude.deliveryToolboxes[DeliveryReport]
+}
+
+// deliveryToolboxes are the toolboxes of each reach: approved work has an
+// unwatched run's, and deciding a new request those without the apps, each
+// with the interactions toolbox swapped for the delivering one; a report has
+// the delivering interactions toolbox alone.
+func deliveryToolboxes(unattended, unattendedQuiet []agents.Toolbox, delivering *agents.Toolbox) map[DeliveryReach][]agents.Toolbox {
+	report := []agents.Toolbox{}
+	if delivering != nil {
+		report = append(report, *delivering)
+	}
+	return map[DeliveryReach][]agents.Toolbox{
+		DeliveryReads:  replaceToolbox(unattended, delivering),
+		DeliveryQuiet:  replaceToolbox(unattendedQuiet, delivering),
+		DeliveryReport: report,
+	}
 }
 
 // replaceToolbox is toolboxes with the one named like replacement swapped

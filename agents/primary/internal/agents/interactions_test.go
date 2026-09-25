@@ -183,7 +183,7 @@ func TestADeliveryRunCannotBrowseTheInbox(t *testing.T) {
 	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
 		return genai.NewContentFromText("Read it.", genai.RoleModel)
 	})
-	unattendedHarness(t, llm, delivering).turn("user_b", deliveryState(), "Deliver irq_1.")
+	deliveringHarness(t, llm, delivering).turn("user_b", deliveryState(), "Deliver irq_1.")
 	declared := declaredFunctions(llm.requestsFor(RootName)[0])
 	if !slices.Contains(declared, "interactions_get") {
 		t.Fatalf("the first call declared %v, want interactions_get among them", declared)
@@ -242,7 +242,11 @@ func TestADeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 				}
 				return functionCalls(testCase.call)
 			})
-			said := unattendedHarness(t, llm, toolbox).turn("user_b", deliveryState(), "Deliver irq_1.")
+			running := unattendedHarness
+			if testCase.delivering {
+				running = deliveringHarness
+			}
+			said := running(t, llm, toolbox).turn("user_b", deliveryState(), "Deliver irq_1.")
 			if calls := len(llm.requestsFor(RootName)); calls != testCase.calls {
 				t.Fatalf("the model was called %d times, want %d", calls, testCase.calls)
 			}
@@ -273,9 +277,9 @@ func TestASpecialistsDeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	specialist, err := Managed(router, []Toolbox{toolbox}, false, ManagedSpec{
+	specialist, err := ManagedDelivering(router, []Toolbox{toolbox}, ManagedSpec{
 		ID: "agt_sales", Name: "Sales", Description: "Reviews pipeline", Instructions: "Answer requests about the pipeline.",
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

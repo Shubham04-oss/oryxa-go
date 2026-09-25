@@ -134,7 +134,7 @@ func TestAHeldRequestTheOwnerRejectsReachesOnlyTheRequester(t *testing.T) {
 		t.Fatalf("after the rejection: calls=%+v done=%v, want one run for the requester", runs.calls, store.done)
 	}
 	told := runs.calls[0]
-	if told.agentID != "agt_a" || told.member.UserID != "user_a" || told.reach != managedagents.DeliveryQuiet || told.input.Message != Message(rejected) {
+	if told.agentID != "agt_a" || told.member.UserID != "user_a" || told.reach != managedagents.DeliveryReport || told.input.Message != Message(rejected) {
 		t.Fatalf("told=%+v, want the requester's agent told of the rejection as before", told)
 	}
 }
@@ -163,13 +163,13 @@ func TestADelegatedTeamspaceRequestWakesItsAgentAsBefore(t *testing.T) {
 func TestOnlyApprovedWorkIsToldItsOwnerApproved(t *testing.T) {
 	held := decidedBy(requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner), byTheMember)
 	for _, kind := range []string{KindTargetRequested, KindRequesterRejected, KindRequesterCompleted} {
-		if message := messageFor(testDelivery("evt_1", kind, 1), held); message != Message(testDelivery("evt_1", kind, 1)) {
+		if message := messageFor(testDelivery("evt_1", kind, 1), held, between{}); message != Message(testDelivery("evt_1", kind, 1)) {
 			t.Errorf("%s was reworded for a request held for its owner: %s", kind, message)
 		}
 	}
 	approved := testDelivery("evt_1", KindTargetApproved, 2)
-	if strings.Contains(Message(approved), "themself") || !strings.Contains(messageFor(approved, held), "themself") {
-		t.Fatalf("Message=%q messageFor=%q", Message(approved), messageFor(approved, held))
+	if strings.Contains(Message(approved), "themself") || !strings.Contains(messageFor(approved, held, between{}), "themself") {
+		t.Fatalf("Message=%q messageFor=%q", Message(approved), messageFor(approved, held, between{}))
 	}
 }
 
@@ -225,7 +225,7 @@ func TestTheOwnerApprovedWordingFollowsWhoDecided(t *testing.T) {
 		"held, approved by another member":        {decidedBy(held, &agents.InteractionDecider{Kind: interactions.DecidedByMember, UserID: "user_a"}), false},
 		"outside a teamspace, approved by member": {decidedBy(outside, byTheMember), true},
 	} {
-		if told := strings.Contains(messageFor(approved, testCase.request), "approved this request themself"); told != testCase.owner {
+		if told := strings.Contains(messageFor(approved, testCase.request, between{}), "approved this request themself"); told != testCase.owner {
 			t.Errorf("%s: told the member approved = %t, want %t", name, told, testCase.owner)
 		}
 	}
