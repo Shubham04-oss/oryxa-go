@@ -67,9 +67,11 @@ type Purger interface {
 // organization, and of organizations that were deleted.
 type Consumer struct {
 	purger Purger
-	// verifier proves who published each event. Nil is a build error caught
-	// at mount: a consumer that cannot check signatures would purge whatever
-	// a queue handed it.
+	// verifier checks who published each event before anything in it is
+	// used. NewConsumer refuses a nil one, so the check is never left out by
+	// omission. Whether an event that fails it is refused or only reported is
+	// the verifier's registry's to say, and by default it is only reported
+	// (eventauth.Registry.ReportOnly).
 	verifier *eventauth.Verifier
 	logger   *slog.Logger
 	metrics  observability.ConsumerMetrics
@@ -85,7 +87,7 @@ func NewConsumer(purger Purger, verifier *eventauth.Verifier, logger *slog.Logge
 		return nil, errors.New("realtime needs the Worker to purge through")
 	}
 	if verifier == nil {
-		return nil, errors.New("realtime cannot consume unsigned events: a signature verifier is required")
+		return nil, errors.New("realtime needs a verifier to check its events' signatures with")
 	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
