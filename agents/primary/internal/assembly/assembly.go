@@ -137,6 +137,10 @@ type Krude struct {
 	// interaction may have, and delivering is Krude for each (Delivering).
 	deliveryToolboxes map[DeliveryReach][]agents.Toolbox
 	delivering        map[DeliveryReach]agent.Agent
+	// deliveryThinking is the thinking level asked of the model on every call
+	// of a run delivering one interaction, and of no other run; empty leaves
+	// each model its own default.
+	deliveryThinking genai.ThinkingLevel
 
 	// closers stops everything Build opened, kept in the order Build opened
 	// them. Close runs them in reverse — the same order devui's own defers
@@ -398,6 +402,11 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	krude.unattended = unattended
 	krude.unattendedQuiet = unattendedQuiet
 	krude.deliveryToolboxes = deliveryToolboxes(unattended, unattendedQuiet, deliveringInteractions)
+	krude.deliveryThinking = settings.DeliveryThinking
+	if settings.DeliveryThinking != "" {
+		logger.InfoContext(ctx, "runs delivering an agent request think at a set level; every other run as its model does by default",
+			"thinking_level", settings.DeliveryThinking)
+	}
 
 	// Memory is built before the agents, because whether Krude is given
 	// load_memory depends on there being a memory service to answer it.
@@ -492,7 +501,7 @@ func (krude *Krude) buildAgents() error {
 	}
 	krude.delivering = map[DeliveryReach]agent.Agent{}
 	for _, reach := range []DeliveryReach{DeliveryReport, DeliveryQuiet, DeliveryReads} {
-		delivering, err := agents.DeliveringRoot(krude.router, krude.toolboxesFor(reach))
+		delivering, err := agents.DeliveringRoot(krude.router, krude.toolboxesFor(reach), krude.deliveryThinking)
 		if err != nil {
 			return fmt.Errorf("root agent delivering an interaction: %w", err)
 		}
@@ -504,7 +513,8 @@ func (krude *Krude) buildAgents() error {
 // Delivering is Krude for a run that delivers one interaction, reaching as
 // far as reach and starting with all of it loaded. Its interactions toolbox
 // holds only what that one request needs, and none of what lists the
-// member's other requests.
+// member's other requests. Its model thinks at Settings' DeliveryThinking
+// level, when one is set.
 func (krude *Krude) Delivering(reach DeliveryReach) agent.Agent {
 	if delivering, ok := krude.delivering[reach]; ok {
 		return delivering
@@ -515,7 +525,7 @@ func (krude *Krude) Delivering(reach DeliveryReach) agent.Agent {
 // ManagedDelivering is the specialist for a run that delivers one
 // interaction, as Delivering is Krude.
 func (krude *Krude) ManagedDelivering(spec agents.ManagedSpec, reach DeliveryReach) (agent.Agent, error) {
-	return agents.ManagedDelivering(krude.router, krude.toolboxesFor(reach), spec)
+	return agents.ManagedDelivering(krude.router, krude.toolboxesFor(reach), spec, krude.deliveryThinking)
 }
 
 // toolboxesFor is what a run delivering one interaction with reach starts

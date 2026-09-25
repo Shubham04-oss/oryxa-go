@@ -48,19 +48,21 @@ var managedResultSchema = &genai.Schema{
 // strict result envelope. Its interactions toolbox, when configured, creates
 // durable requests; the specialist never receives a direct peer invocation.
 func Managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, spec ManagedSpec) (agent.Agent, error) {
-	return managed(router, toolboxes, remembers, spec, false)
+	return managed(router, toolboxes, remembers, spec, nil)
 }
 
 // ManagedDelivering returns the specialist for a run that delivers one
 // interaction, as DeliveringRoot does Krude: every toolbox given is loaded
 // from the first model call, with its skill, and it has no list_tools,
 // load_tools or get_user_details, whose every detail its instruction already
-// carries. Such a run is unwatched, so it has no memory either.
-func ManagedDelivering(router *modelrouter.Router, toolboxes []Toolbox, spec ManagedSpec) (agent.Agent, error) {
-	return managed(router, toolboxes, false, spec, true)
+// carries. Such a run is unwatched, so it has no memory either. thinking,
+// when set, is the thinking level asked of the model on each call, as for
+// DeliveringRoot.
+func ManagedDelivering(router *modelrouter.Router, toolboxes []Toolbox, spec ManagedSpec, thinking genai.ThinkingLevel) (agent.Agent, error) {
+	return managed(router, toolboxes, false, spec, &delivery{thinking: thinking})
 }
 
-func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, spec ManagedSpec, delivering bool) (agent.Agent, error) {
+func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, spec ManagedSpec, delivering *delivery) (agent.Agent, error) {
 	if router == nil {
 		return nil, errors.New("a model router is required")
 	}
@@ -72,7 +74,7 @@ func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 		return nil, err
 	}
 	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool, saveArtifactTool}
-	if delivering {
+	if delivering != nil {
 		catalog.preloaded = true
 		builders = []func() (tool.Tool, error){loadArtifactsTool, saveArtifactTool}
 	}
@@ -111,7 +113,7 @@ func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 	return llmagent.New(llmagent.Config{
 		Name: machineName(spec.ID), Description: spec.Description,
 		Model: router.For(modelrouter.RoleWork), InstructionProvider: instruction,
-		OutputSchema: managedResultSchema, Tools: tools,
+		OutputSchema: managedResultSchema, Tools: tools, GenerateContentConfig: delivering.config(),
 		// A persistent specialist is the root of its own durable thread. ADK
 		// reserves task mode for a child delegated by a chat coordinator and
 		// rejects it as a runner root, so standalone and team-dispatched turns

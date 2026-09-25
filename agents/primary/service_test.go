@@ -69,6 +69,21 @@ func TestMountRefusesInvalidConfiguration(t *testing.T) {
 	}
 }
 
+// TestMountRefusesADeliveryThinkingLevelItCannotUse: the service does not
+// start on a thinking level that is none, or that the model a delivery runs
+// on would refuse, rather than fail every delivery once it has started.
+func TestMountRefusesADeliveryThinkingLevelItCannotUse(t *testing.T) {
+	for _, values := range []map[string]string{
+		{"AGENTS_PRIMARY_DELIVERY_THINKING": "a little"},
+		{"AGENTS_PRIMARY_DELIVERY_THINKING": "minimal", "AGENTS_PRIMARY_MODEL": "gemini-3.8-flash"},
+	} {
+		values["GOOGLE_CLOUD_PROJECT"] = "oryxa-test"
+		if _, err := Mount(context.Background(), platform(values, nil)); err == nil || !strings.Contains(err.Error(), "AGENTS_PRIMARY_DELIVERY_THINKING") {
+			t.Errorf("Mount() with %v = %v, want it refused, naming the setting", values, err)
+		}
+	}
+}
+
 // TestADeliveryReachesAsFarAsItsProfile: approved work reads the member's
 // apps, a new request only their knowledge, and a report, or a delivering
 // profile this does not know, the request alone.

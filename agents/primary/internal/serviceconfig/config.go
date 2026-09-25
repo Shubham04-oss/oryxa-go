@@ -3,10 +3,14 @@ package serviceconfig
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"google.golang.org/genai"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 )
@@ -23,6 +27,10 @@ type Config struct {
 	// cheaper model planning and bulk work are routed to.
 	Model     string
 	ModelLite string
+	// DeliveryThinking is the Gemini 3 thinking level asked of the model on
+	// every call of a run that delivers an agent request, and of no other
+	// run. Empty leaves each model its own default, as before it was set.
+	DeliveryThinking genai.ThinkingLevel
 	// GoogleCloudProject and GoogleCloudLocation are where Vertex AI serves
 	// the models.
 	GoogleCloudProject  string
@@ -226,9 +234,20 @@ func FromEnv(getenv func(string) string) (Config, error) {
 	if _, err := pricing.ParseOverrides(modelPrices); err != nil {
 		return Config{}, err
 	}
+	model := valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL", "gemini-3.5-flash-lite")
+	modelLite := valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL_LITE", "gemini-3.5-flash-lite")
+	// Krude answers a request on the main model and a specialist on the lite
+	// one, so the level has to be one both take.
+	deliveryThinking, err := thinkingLevel(getenv, "AGENTS_PRIMARY_DELIVERY_THINKING", map[string]string{
+		"AGENTS_PRIMARY_MODEL": model, "AGENTS_PRIMARY_MODEL_LITE": modelLite,
+	})
+	if err != nil {
+		return Config{}, err
+	}
 	return Config{
-		Model:               valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL", "gemini-3.5-flash-lite"),
-		ModelLite:           valueOrDefault(getenv, "AGENTS_PRIMARY_MODEL_LITE", "gemini-3.5-flash-lite"),
+		Model:               model,
+		ModelLite:           modelLite,
+		DeliveryThinking:    deliveryThinking,
 		GoogleCloudProject:  strings.TrimSpace(getenv("GOOGLE_CLOUD_PROJECT")),
 		GoogleCloudLocation: googleCloudLocation,
 		DatabaseURL:         strings.TrimSpace(getenv("DATABASE_URL")),
@@ -283,6 +302,58 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		WakeupBatchSize:          wakeupBatchSize,
 		WakeupMaxWait:            wakeupMaxWait,
 	}, nil
+}
+
+// thinkingLevels are the thinking levels a setting may name: Gemini 3's, as
+// genai.ThinkingLevel has them.
+var thinkingLevels = map[string]genai.ThinkingLevel{
+	"minimal": genai.ThinkingLevelMinimal,
+	"low":     genai.ThinkingLevelLow,
+	"medium":  genai.ThinkingLevelMedium,
+	"high":    genai.ThinkingLevelHigh,
+}
+
+// thinkingLevelsTaken are the levels Google documents the Gemini 3 models
+// that do not take all four as taking (ai.google.dev/gemini-api/docs/thinking,
+// 2026-09-26). Vertex refuses any other with 400 INVALID_ARGUMENT, "Thinking
+// level is unsupported", so every run asking it would fail. A model not
+// listed is not checked.
+var thinkingLevelsTaken = map[string][]string{
+	"gemini-3.8-flash":       {"low", "medium", "high"},
+	"gemini-3.7-flash":       {"low", "medium", "high"},
+	"gemini-3.1-pro-preview": {"low", "medium", "high"},
+	"gemini-3-pro-preview":   {"low", "high"},
+}
+
+// thinkingLevel reads a thinking level: minimal, low, medium or high, in any
+// case, or nothing. It refuses a level one of the models it is for, named by
+// the variables that set them, does not take, rather than let every run on
+// that model fail.
+func thinkingLevel(getenv func(string) string, name string, models map[string]string) (genai.ThinkingLevel, error) {
+	value := strings.ToLower(strings.TrimSpace(getenv(name)))
+	if value == "" {
+		return "", nil
+	}
+	level, ok := thinkingLevels[value]
+	if !ok {
+		return "", fmt.Errorf("%s must be minimal, low, medium or high, a Gemini 3 thinking level, or unset", name)
+	}
+	variables := slices.Sorted(maps.Keys(models))
+	for _, variable := range variables {
+		taken, known := thinkingLevelsTaken[models[variable]]
+		if known && !slices.Contains(taken, value) {
+			return "", fmt.Errorf("%s is %s, which %s, the model %s names, does not take: set %s", name, value, models[variable], variable, orList(taken))
+		}
+	}
+	return level, nil
+}
+
+// orList is values as "a, b or c".
+func orList(values []string) string {
+	if len(values) < 2 {
+		return strings.Join(values, "")
+	}
+	return strings.Join(values[:len(values)-1], ", ") + " or " + values[len(values)-1]
 }
 
 // originList reads a comma-separated list of absolute origins, such as

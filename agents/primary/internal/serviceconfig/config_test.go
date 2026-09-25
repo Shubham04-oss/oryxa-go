@@ -1,8 +1,11 @@
 package serviceconfig
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/genai"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/pricing"
 )
@@ -50,6 +53,64 @@ func TestFromEnvDefaults(t *testing.T) {
 	}
 	if config.KnowledgeMinRelevance != 0 {
 		t.Fatalf("knowledge min relevance = %v, want off", config.KnowledgeMinRelevance)
+	}
+	if config.DeliveryThinking != "" {
+		t.Fatalf("delivery thinking = %q, want none: every model thinks as it does by default", config.DeliveryThinking)
+	}
+}
+
+// TestFromEnvReadsTheDeliveryThinkingLevel: a delivery's thinking level is
+// one of Gemini 3's four, named in any case.
+func TestFromEnvReadsTheDeliveryThinkingLevel(t *testing.T) {
+	for value, want := range map[string]genai.ThinkingLevel{
+		" Low ":   genai.ThinkingLevelLow,
+		"minimal": genai.ThinkingLevelMinimal,
+		"MEDIUM":  genai.ThinkingLevelMedium,
+		"high":    genai.ThinkingLevelHigh,
+		"":        "",
+		"   ":     "",
+	} {
+		config, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_DELIVERY_THINKING": value}))
+		if err != nil || config.DeliveryThinking != want {
+			t.Errorf("AGENTS_PRIMARY_DELIVERY_THINKING=%q: %q, %v, want %q", value, config.DeliveryThinking, err, want)
+		}
+	}
+}
+
+// TestFromEnvRefusesADeliveryThinkingLevelItCannotUse: anything but a
+// thinking level refuses to start, a token budget included, and so does a
+// level either model a delivery runs on does not take, which Vertex would
+// refuse on every delivery; a model whose levels are not documented here is
+// not second-guessed.
+func TestFromEnvRefusesADeliveryThinkingLevelItCannotUse(t *testing.T) {
+	for _, value := range []string{"extreme", "none", "off", "0", "1024", "-1", "low,high"} {
+		_, err := FromEnv(env(map[string]string{"AGENTS_PRIMARY_DELIVERY_THINKING": value}))
+		if err == nil || !strings.Contains(err.Error(), "AGENTS_PRIMARY_DELIVERY_THINKING must be minimal, low, medium or high") {
+			t.Errorf("AGENTS_PRIMARY_DELIVERY_THINKING=%q: error = %v, want one naming the levels", value, err)
+		}
+	}
+	for name, values := range map[string]map[string]string{
+		"the main model": {"AGENTS_PRIMARY_MODEL": "gemini-3.8-flash"},
+		"the lite model": {"AGENTS_PRIMARY_MODEL_LITE": "gemini-3.7-flash"},
+		"a pro model":    {"AGENTS_PRIMARY_MODEL": "gemini-3-pro-preview"},
+	} {
+		level := "minimal"
+		if name == "a pro model" {
+			level = "medium"
+		}
+		values["AGENTS_PRIMARY_DELIVERY_THINKING"] = level
+		_, err := FromEnv(env(values))
+		if err == nil || !strings.Contains(err.Error(), "does not take") {
+			t.Errorf("%s with %s: error = %v, want a refusal to start", name, level, err)
+		}
+	}
+	for _, values := range []map[string]string{
+		{"AGENTS_PRIMARY_MODEL": "gemini-3.8-flash", "AGENTS_PRIMARY_DELIVERY_THINKING": "low"},
+		{"AGENTS_PRIMARY_MODEL": "gemini-9-flash", "AGENTS_PRIMARY_DELIVERY_THINKING": "minimal"},
+	} {
+		if _, err := FromEnv(env(values)); err != nil {
+			t.Errorf("%v: error = %v, want it accepted", values, err)
+		}
 	}
 }
 

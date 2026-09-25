@@ -127,8 +127,9 @@ func (noInteractions) Respond(context.Context, agents.InteractionActor, string, 
 }
 
 // assembledKrude is Krude built on llm the way Build builds it, with the
-// member's apps and knowledge and the interactions toolboxes.
-func assembledKrude(t *testing.T, llm model.LLM) *Krude {
+// member's apps and knowledge and the interactions toolboxes, and runs
+// delivering a request thinking at thinking.
+func assembledKrude(t *testing.T, llm model.LLM, thinking genai.ThinkingLevel) *Krude {
 	t.Helper()
 	router, err := modelrouter.New(llm, llm)
 	if err != nil {
@@ -152,6 +153,7 @@ func assembledKrude(t *testing.T, llm model.LLM) *Krude {
 		unattended:        unattended,
 		unattendedQuiet:   unattendedQuiet,
 		deliveryToolboxes: deliveryToolboxes(unattended, unattendedQuiet, &delivering),
+		deliveryThinking:  thinking,
 	}
 	if err := krude.buildAgents(); err != nil {
 		t.Fatal(err)
@@ -167,7 +169,7 @@ func assembledKrude(t *testing.T, llm model.LLM) *Krude {
 // its instruction already names.
 func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 	llm := &recordingModel{}
-	krude := assembledKrude(t, llm)
+	krude := assembledKrude(t, llm, "")
 	request := []string{"interactions_get", "interactions_decide", "interactions_respond"}
 	for name, reach := range map[string]struct {
 		reach   DeliveryReach
@@ -203,7 +205,7 @@ func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 // member, as they did.
 func TestOnlyDeliveriesStartLoaded(t *testing.T) {
 	llm := &recordingModel{}
-	krude := assembledKrude(t, llm)
+	krude := assembledKrude(t, llm, "")
 	stood, err := krude.ManagedUnattended(agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, false)
 	if err != nil {
 		t.Fatal(err)
@@ -258,12 +260,67 @@ func TestDeliveryToolboxesGiveEachReachItsOwn(t *testing.T) {
 // with what a report has, never more.
 func TestAReachNobodyKnowsGetsTheLeast(t *testing.T) {
 	llm := &recordingModel{}
-	krude := assembledKrude(t, llm)
+	krude := assembledKrude(t, llm, "")
 	offered := declared(llm.firstCall(t, krude.Delivering(DeliveryReach(99))))
 	if slices.Contains(offered, "apps_run_read_tool") || slices.Contains(offered, "knowledge_search") || !slices.Contains(offered, "interactions_get") {
 		t.Fatalf("an unknown reach offered %v, want a report's", offered)
 	}
 	if got := krude.toolboxesFor(DeliveryReach(99)); len(got) != 1 || got[0].Name != "interactions" {
 		t.Fatalf("an unknown reach's toolboxes = %v, want a report's", got)
+	}
+}
+
+// TestOnlyDeliveriesThinkAtTheLevelSet: the thinking level set for
+// deliveries reaches the model on every run delivering a request, Krude's
+// and a specialist's, whatever its reach, and never a member's own chat, an
+// app wake-up, a room's stand-in, a workflow or the organization agent,
+// which send no thinking config at all. Set to nothing, no run sends one.
+func TestOnlyDeliveriesThinkAtTheLevelSet(t *testing.T) {
+	spec := agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}
+	for _, thinking := range []genai.ThinkingLevel{genai.ThinkingLevelLow, ""} {
+		llm := &recordingModel{}
+		krude := assembledKrude(t, llm, thinking)
+		thinks := func(name string, built agent.Agent, want genai.ThinkingLevel) {
+			t.Helper()
+			config := llm.firstCall(t, built).Config
+			switch {
+			case want == "" && config.ThinkingConfig != nil:
+				t.Errorf("with %q set, %s sent a thinking config: %+v", thinking, name, config.ThinkingConfig)
+			case want != "" && (config.ThinkingConfig == nil || config.ThinkingConfig.ThinkingLevel != want):
+				t.Errorf("with %q set, %s asked for %+v, want %s", thinking, name, config.ThinkingConfig, want)
+			}
+		}
+		for reach, name := range map[DeliveryReach]string{DeliveryReads: "approved work", DeliveryQuiet: "a new request", DeliveryReport: "a report"} {
+			thinks("Krude delivering "+name, krude.Delivering(reach), thinking)
+			specialist, err := krude.ManagedDelivering(spec, reach)
+			if err != nil {
+				t.Fatal(err)
+			}
+			thinks("a specialist delivering "+name, specialist, thinking)
+		}
+		member, err := krude.Managed(spec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reading, err := krude.ManagedUnattended(spec, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		standing, err := krude.ManagedUnattended(spec, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		organization, err := krude.OrganizationAgent(agents.OrganizationSpec{ID: "oag_1", Name: "Org", Instructions: "Keep the organization's context."})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, built := range map[string]agent.Agent{
+			"a member's chat with Krude": krude.Root, "a member's chat with a specialist": member,
+			"an app wake-up": krude.Unattended, "a room's stand-in": krude.UnattendedQuiet,
+			"a specialist's workflow": reading, "a specialist standing in": standing,
+			"the organization agent": organization,
+		} {
+			thinks(name, built, "")
+		}
 	}
 }

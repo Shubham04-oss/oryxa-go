@@ -279,7 +279,7 @@ func TestASpecialistsDeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 	}
 	specialist, err := ManagedDelivering(router, []Toolbox{toolbox}, ManagedSpec{
 		ID: "agt_sales", Name: "Sales", Description: "Reviews pipeline", Instructions: "Answer requests about the pipeline.",
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

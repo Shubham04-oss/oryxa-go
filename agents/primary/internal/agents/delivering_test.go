@@ -19,11 +19,18 @@ import (
 // deliveringHarness runs Krude as a run delivering one interaction runs it.
 func deliveringHarness(t *testing.T, llm model.LLM, toolboxes ...Toolbox) *harness {
 	t.Helper()
+	return thinkingHarness(t, llm, "", toolboxes...)
+}
+
+// thinkingHarness is deliveringHarness with its model asked to think at
+// thinking.
+func thinkingHarness(t *testing.T, llm model.LLM, thinking genai.ThinkingLevel, toolboxes ...Toolbox) *harness {
+	t.Helper()
 	router, err := modelrouter.New(llm, llm)
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := DeliveringRoot(router, toolboxes)
+	root, err := DeliveringRoot(router, toolboxes, thinking)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +128,7 @@ func TestASpecialistsDeliveryRunStartsWithAllItMayReach(t *testing.T) {
 	}
 	specialist, err := ManagedDelivering(router, approvedReach(t), ManagedSpec{
 		ID: "agt_sales", Name: "Sales", Description: "Reviews pipeline", Instructions: "Answer requests about the pipeline.",
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +216,60 @@ func runSpecialist(t *testing.T, specialist agent.Agent, state map[string]any) {
 	for _, err := range turns.Run(context.Background(), "user_b", created.Session.ID(), genai.NewContentFromText("Deliver irq_1.", genai.RoleUser), agent.RunConfig{}) {
 		if err != nil {
 			t.Fatalf("run the specialist: %v", err)
+		}
+	}
+}
+
+// thinkingOf is the thinking level a model request asks for, or none.
+func thinkingOf(request *model.LLMRequest) genai.ThinkingLevel {
+	if request.Config == nil || request.Config.ThinkingConfig == nil {
+		return ""
+	}
+	return request.Config.ThinkingConfig.ThinkingLevel
+}
+
+// TestADeliveryRunThinksAtTheLevelItIsGiven: every model call of a delivery
+// run, Krude's or a specialist's, asks for the thinking level the run was
+// built with, and a run built with none sends no thinking config at all, so
+// the model thinks as it does by default.
+func TestADeliveryRunThinksAtTheLevelItIsGiven(t *testing.T) {
+	for _, thinking := range []genai.ThinkingLevel{genai.ThinkingLevelLow, ""} {
+		// Krude reads the request, then answers: two calls.
+		llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+			if hasFunctionResponse(request) {
+				return genai.NewContentFromText("Read it.", genai.RoleModel)
+			}
+			return functionCalls(&genai.FunctionCall{ID: "read", Name: "interactions_get", Args: map[string]any{"request_id": "irq_1"}})
+		})
+		thinkingHarness(t, llm, thinking, approvedReach(t)...).turn("user_b", memberState("agt_b", "Carl", "primary"), "Deliver irq_1.")
+		calls := llm.requestsFor(RootName)
+		if len(calls) != 2 {
+			t.Fatalf("the model was called %d times, want twice", len(calls))
+		}
+		for index, call := range calls {
+			if got := thinkingOf(call); got != thinking {
+				t.Errorf("Krude's call %d asked for thinking %q, want %q", index, got, thinking)
+			}
+			if thinking == "" && call.Config.ThinkingConfig != nil {
+				t.Errorf("Krude's call %d carried a thinking config with none set: %+v", index, call.Config.ThinkingConfig)
+			}
+		}
+
+		specialistLLM := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
+			return genai.NewContentFromText(`{"status":"completed","summary":"Answered.","tools_used":[],"artifacts":[],"handoffs":[]}`, genai.RoleModel)
+		})
+		router, err := modelrouter.New(specialistLLM, specialistLLM)
+		if err != nil {
+			t.Fatal(err)
+		}
+		specialist, err := ManagedDelivering(router, approvedReach(t), ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, thinking)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runSpecialist(t, specialist, memberState("agt_sales", "Sales", "specialist"))
+		first := specialistLLM.requestsFor("subagent")[0]
+		if got := thinkingOf(first); got != thinking || (thinking == "" && first.Config.ThinkingConfig != nil) {
+			t.Errorf("a specialist's delivery asked for thinking %q (%+v), want %q", got, first.Config.ThinkingConfig, thinking)
 		}
 	}
 }

@@ -179,7 +179,23 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 // It answers to the same name as Root, since it takes turns with Root in the
 // same thread.
 func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
-	return unattendedRoot(router, toolboxes, false)
+	return unattendedRoot(router, toolboxes, nil)
+}
+
+// delivery is how a run that delivers one interaction runs.
+type delivery struct {
+	// thinking is the thinking level asked of the model on each of the run's
+	// calls; none leaves the model's own default.
+	thinking genai.ThinkingLevel
+}
+
+// config is the generation config of the run's model calls: none, as for
+// every other run, unless a thinking level is set.
+func (delivery *delivery) config() *genai.GenerateContentConfig {
+	if delivery == nil || delivery.thinking == "" {
+		return nil
+	}
+	return &genai.GenerateContentConfig{ThinkingConfig: &genai.ThinkingConfig{ThinkingLevel: delivery.thinking}}
 }
 
 // DeliveringRoot returns UnattendedRoot for a run that delivers one
@@ -191,11 +207,15 @@ func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agen
 // member it works for, the run is too short for them to scroll out of sight,
 // and the message that wakes it names the member on the other side of the
 // request, whom get_user_details never described.
-func DeliveringRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
-	return unattendedRoot(router, toolboxes, true)
+//
+// thinking, when set, is the thinking level asked of the model on each of
+// the run's calls, as a Gemini 3 model takes it; left empty, the request
+// carries no thinking config and the model thinks as it does by default.
+func DeliveringRoot(router *modelrouter.Router, toolboxes []Toolbox, thinking genai.ThinkingLevel) (agent.Agent, error) {
+	return unattendedRoot(router, toolboxes, &delivery{thinking: thinking})
 }
 
-func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering bool) (agent.Agent, error) {
+func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering *delivery) (agent.Agent, error) {
 	if router == nil {
 		return nil, errors.New("a model router is required")
 	}
@@ -204,7 +224,7 @@ func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering 
 		return nil, err
 	}
 	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool}
-	if delivering {
+	if delivering != nil {
 		catalog.preloaded = true
 		builders = []func() (tool.Tool, error){loadArtifactsTool}
 	}
@@ -213,12 +233,13 @@ func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering 
 		return nil, err
 	}
 	return llmagent.New(llmagent.Config{
-		Name:                RootName,
-		Description:         "Krude, reporting to a member who is away.",
-		Model:               router.For(modelrouter.RoleChat),
-		InstructionProvider: instructionFrom(unattendedInstruction, catalog, delivering),
-		Tools:               tools,
-		Toolsets:            []tool.Toolset{catalog.loaded()},
+		Name:                  RootName,
+		Description:           "Krude, reporting to a member who is away.",
+		Model:                 router.For(modelrouter.RoleChat),
+		GenerateContentConfig: delivering.config(),
+		InstructionProvider:   instructionFrom(unattendedInstruction, catalog, delivering != nil),
+		Tools:                 tools,
+		Toolsets:              []tool.Toolset{catalog.loaded()},
 	})
 }
 

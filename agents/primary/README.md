@@ -1175,6 +1175,25 @@ Set `AGENTS_PRIMARY_MODEL` and `AGENTS_PRIMARY_MODEL_LITE` to change the two
 models; a policy missing a role is refused at startup, so a new role cannot
 silently get no model.
 
+**Thinking on a delivery.** `AGENTS_PRIMARY_DELIVERY_THINKING` asks the model
+for a thinking level on every call of a run that delivers an agent request
+(see [Agent interactions toolbox](#agent-interactions-toolbox)): `minimal`,
+`low`, `medium` or `high`, in any case. That is how Gemini 3 is told how much
+to think, genai's `ThinkingConfig.ThinkingLevel`, set on the delivering
+agents' `GenerateContentConfig`, which ADK copies into each of their
+requests. A token budget (`ThinkingBudget`) is not offered: it is Gemini
+2.5's control, Gemini 3 is tuned by level, and a request may not carry both.
+Unset, no request carries a thinking config and each model thinks as it does
+by default, as before the setting existed: `gemini-3.8-flash` at medium,
+`gemini-3.5-flash-lite` at minimal. A member's own chat, an app wake-up, a
+room's stand-in, a team room, a workflow and the organization agent never
+carry it. Krude answers a request on the main model and a specialist on the
+lite one, and Vertex refuses a level a model does not take with `400
+INVALID_ARGUMENT`, so the service refuses to start on anything but a level,
+and on a level Google documents either model as not taking:
+`gemini-3.8-flash`, `gemini-3.7-flash` and `gemini-3.1-pro-preview` take no
+`minimal`, and `gemini-3-pro-preview` only `low` and `high`.
+
 ## Prompt caching
 
 `internal/modelcache` wraps each model. When a request's stable prefix — the
@@ -1633,6 +1652,7 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | --- | --- | --- |
 | `AGENTS_PRIMARY_MODEL` | `gemini-3.5-flash-lite` | Main model: conversation and grounded research |
 | `AGENTS_PRIMARY_MODEL_LITE` | `gemini-3.5-flash-lite` | Lite model: planning and bulk single-turn work |
+| `AGENTS_PRIMARY_DELIVERY_THINKING` | unset | Thinking level asked of the model on every call of a run delivering an agent request, and no other run: `minimal`, `low`, `medium` or `high`. Unset, each model thinks as it does by default. A level either model does not take refuses to start (see [Models and routing](#models-and-routing)) |
 | `AGENTS_PRIMARY_PROMPT_CACHE` | `true` | Use explicit Vertex cached contents for large stable prefixes |
 | `AGENTS_PRIMARY_CACHE_TTL_SECONDS` | `3600` | How long a created cache lives; 60–86400 seconds |
 | `AGENTS_PRIMARY_CACHE_MIN_TOKENS` | `4096` | Smallest prefix worth an explicit cache; Vertex's floor for these models. Below it, implicit caching applies |
