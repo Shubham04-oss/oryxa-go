@@ -372,19 +372,32 @@ agent is involved.
   is refused (`already_decided`) and its card shows how it stands.
 - **The owner reviews** an answer the answer guard held for them (status
   `review`: Bedrock found an email address, a phone number or a street
-  address in it, or could not check it). Go shows the held answer to its
-  owner alone, as it would be shared and fully masked: the object reads the
-  request as them while they are here (Go's `result_review`, its `stored`
-  and `masked`; `HELD_ANSWER_FIELDS` in `src/lib/side/asking.ts` is the one
-  place that names them), keeps both in memory only, never in its storage,
-  an inbox, an event or an agent's transcript, and sends them, with what the
-  guard found (`guard`), to the owner's sockets alone. An instance that
-  lost them (a restart) reads them again as the owner, and a Go that shows
-  none is asked again at most every 15 s. The owner's `side-review` (the
-  hook's `review`) calls `POST …/agent-requests/{id}/review` with `{"action":
-  "send" | "send_masked" | "withhold"}` as them, from their own socket, as a
-  decision is; an answer reviewed already, or expired, is refused
-  (`already_decided`). The one who asked is sent only that it waits.
+  address in it, the kinds `guard.kinds` lists, or could not check it,
+  `UNCHECKED`). Go shows the held answer to its owner's reads alone, and
+  only while it is in review: `held.result`, the answer as it would be
+  shared, and `held.masked_result`, fully masked, each a whole result
+  (`HELD_ANSWER_FIELDS` in `src/lib/side/asking.ts` is the one place that
+  names them). An answer Go could not check has no masked version, so its
+  owner has no Send masked (the page, the object and Go each refuse it). The
+  object reads the request as the owner while they are here, keeps both
+  versions (each its summary, then its content) in memory only, never in
+  its storage, an inbox, an event or an agent's transcript, and sends them,
+  with what the guard found (`guard`), to the owner's sockets alone. An
+  instance that lost them (a restart) reads them again as the owner, and a
+  Go that shows none is asked again at most every 15 s. The owner's
+  `side-review` (the hook's `review`) calls `POST
+  …/agent-requests/{id}/review` with `{"action": "send" | "send_masked" |
+  "withhold"}` as them, from their own socket, as a decision is; Go records
+  `review: {action, decided_by: {kind: "member", user_id}, decided_at}`. A
+  held answer may be its agent's failure: shared, it fails the request, and
+  the one who asked reads its summary in the failure's quiet line. Go's
+  refusals are said on the card: 400 `invalid_request` ("That review wasn't
+  understood"), 403 (not the owner's, or an agent's), 404 (not there), 409
+  `invalid_state` (reviewed already, or no masked version) and 409
+  `request_expired`; a 409 reads the request again, so the card shows how it
+  stands. The one who asked is sent only that it waits: Go shows them the
+  status alone in review, the status and `review` once withheld, and the
+  result, `guard` and `review` once it was sent, never `held`.
 - **Reading Go.** While any card is open (`pending`, `approved` or
   `review`) and a socket with a cookie Go takes is here, the object reads
   `GET …/agent-requests?teamspace_id=&with_user=` as that person (both
@@ -400,8 +413,9 @@ agent is involved.
   (`reviewedBy`; masked, it is the masked answer Go delivers). A decline
   ("Priya declined the request to Nia: …"), a failure, an expiry and an
   answer not shared ("Priya chose not to share Nia's answer.", or "Nia's
-  answer expired before Priya reviewed it." once Go withheld it for time)
-  leave a quiet `status` line. Each once.
+  answer expired before Priya reviewed it." once Oryxa withheld it for time:
+  `review.decided_by` `{"kind": "system"}`, `reason` "expired before
+  review") leave a quiet `status` line. Each once.
 - **Requests from elsewhere.** A request between the two in this teamspace
   that either's agent filed since the conversation first opened (less a
   minute, for the two clocks) shows as a card too; older ones and other

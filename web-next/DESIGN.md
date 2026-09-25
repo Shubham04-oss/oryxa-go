@@ -186,10 +186,14 @@ not permission to copy every incidental value into a new component.
     and a phone number. Review it before it's shared.", or "couldn't be
     checked automatically"), the answer, a preview of it masked ("Send
     masked shares:"), and Don't send, Send and Send masked (the primary).
-    Send and Send masked wait until the answer has loaded; Don't send never
-    does. The one who asked sees only that it waits; a result shared after
-    review says "reviewed by Priya" in its quiet line, and one not shared
-    leaves "Priya chose not to share Nia's answer."
+    An answer that could not be checked has no masked version, so neither
+    the preview nor Send masked; one that was its agent's failure says so
+    above it ("Nia couldn't finish the request, and says:"). Send and Send
+    masked wait until the answer has loaded; Don't send never does. A
+    refused review says why on the card. The one who asked sees only that
+    it waits; a result shared after review says "reviewed by Priya" in its
+    quiet line, and one not shared leaves "Priya chose not to share Nia's
+    answer."
   - The composer is the shared pill with a smaller pill inside it, before the
     field, naming whom the message goes to: the teammate (the default), "Ask
     my agent", or one of the teammate's agents, picked from a small menu. The

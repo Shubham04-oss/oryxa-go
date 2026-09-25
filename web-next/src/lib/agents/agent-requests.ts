@@ -46,7 +46,8 @@ export type AgentRequestToolbox = (typeof AGENT_REQUEST_TOOLBOXES)[number]
  */
 export type AgentRequestGuard = {
   state: "clear" | "masked" | "held"
-  kinds: string[]
+  /** Absent when it found nothing; for a held answer, only the kinds it holds it for. */
+  kinds?: string[]
 }
 
 /** The target member's choice for a held answer: share it, share it fully masked, or not at all. */
@@ -59,11 +60,16 @@ export type AgentRequestDecider = {
   agent_id?: string
 }
 
-/** The target member's review of a held answer. */
+/**
+ * The target member's review of a held answer: made by them (`decided_by`
+ * a `member`), or by Oryxa (`system`, `withhold`) for a request that expired
+ * in review, with `reason` "expired before review".
+ */
 export type AgentRequestReview = {
   action: AgentRequestReviewAction
-  decided_by?: AgentRequestDecider
+  decided_by: AgentRequestDecider
   decided_at: string
+  reason?: string
 }
 
 export type AgentRequestParty = {
@@ -119,9 +125,14 @@ export type AgentRequest = {
   requested_permissions: string[]
   status: AgentRequestStatus
   decision?: AgentRequestDecision
-  /** Absent for the requester while the answer is in `review`, and once it is `withheld`. */
+  /**
+   * Absent for the requester while the answer is in `review`, and once it
+   * is `withheld`. While it is in review the target member's reads carry
+   * the held answer instead, which `src/lib/side/asking.ts` reads
+   * (`HELD_ANSWER_FIELDS`).
+   */
   result?: AgentRequestResult
-  /** The answer guard's finding, once the target's agent answered. */
+  /** The answer guard's finding, once the target's agent answered: the requester reads it only beside a result. */
   guard?: AgentRequestGuard
   /** The target member's review of a held answer, once they made it. */
   review?: AgentRequestReview

@@ -172,9 +172,11 @@ Call the matching helper from the mutation's `onSuccess`. The helpers are in
   names, `AGENT_REQUEST_TOOLBOXES`: `apps` and `knowledge`. An answer the
   answer guard holds leaves the request in `review` until its target
   member reviews it (`POST …/agent-requests/{id}/review`, from their own
-  session), then `completed` or `withheld`; the requester reads no
-  `result` in either `review` or `withheld`. A side conversation's cards
-  do this through their object (REALTIME.md).
+  session), then `completed` (or `failed`, for a held failure) or
+  `withheld`, which Oryxa also does when it expires in review. The target
+  member's reads carry the held answer while it is in review (`held`); the
+  requester reads no `result` or `guard` in `review` or `withheld`. A side
+  conversation's cards do this through their object (REALTIME.md).
 - **Strict bodies.** Every body is decoded strictly, nested objects too: an
   unknown field is a 400. The calls copy only the fields each handler reads,
   so passing `team.members` or a whole workflow is safe. Calling
