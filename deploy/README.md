@@ -158,20 +158,30 @@ Realtime (`realtime/README.md`) has the web app's Worker purge a member's
 direct messages and teamspace side conversations when they leave an
 organization or it is deleted. It calls
 `https://app.oryxa.in/internal/realtime/purge`, signed with
-`REALTIME_PURGE_SECRET`, a new secret that the Worker holds too. It ships off.
-`realtime_purge` turns it on.
+`REALTIME_PURGE_SECRET`, a secret the Worker holds too. It ships off, and
+`realtime_purge` in `production/realtime.auto.tfvars.json`, committed as
+`false`, turns it on.
 
-Releasing it needs nothing first. A production start requires realtime's
-queue only once `REALTIME_WORKER_URL` or `REALTIME_PURGE_SECRET` is set, and
-while `realtime_purge` is off neither is, so a release carrying realtime starts
+**It stays off until web-next serves `app.oryxa.in`.** Production's
+`app.oryxa.in` is served by the old `web/` Worker, which has no purge route and
+answers `404`, so realtime turned on now would send every purge to its
+dead-letter queue. web-next, which has the route, has no production
+environment yet: its `wrangler.jsonc` has no `env.production`, so there is no
+production Worker to give the secret to, and step 2 below waits for one.
+
+Releasing realtime needs nothing first. A production start requires its queue
+only once `REALTIME_WORKER_URL` or `REALTIME_PURGE_SECRET` is set, and while
+`realtime_purge` is off neither is, so a release carrying realtime starts
 whether or not an apply has given the task `REALTIME_EVENTS_QUEUE_URL`. The
 task logs `realtime is off`, naming what is not set. The next `tofu apply`,
-whenever it runs, gives the task the queue's variable and lets it read that
-queue.
+whenever it runs, gives the task the queue's variable, lets it read that queue,
+adds the dead-letter queue's alarm and makes the secret's empty container. The
+queue's backlog alarm waits for the switch, since nothing reads the queue until
+then. Once `provision-app.sh` has made the queue and its rule, events wait
+there, for up to 14 days each, for realtime to be turned on.
 
-**Turning it on.** The Worker's endpoint must be live, holding the secret,
-before realtime is on. Until then the Worker answers `404` to the purge, and
-every purge is retried into the dead-letter queue. In this order:
+**Turning it on**, once web-next serves `app.oryxa.in` with
+`POST /internal/realtime/purge`. In this order:
 
 1. Make the secret, and put it in the repository's `.env` as
    `REALTIME_PURGE_SECRET=…`, exactly the 64 hex characters this prints, with
@@ -181,37 +191,36 @@ every purge is retried into the dead-letter queue. In this order:
    openssl rand -hex 32
    ```
 
-   Give the Worker the same value (its production environment, in its own
-   project), and deploy the Worker with `POST /internal/realtime/purge`:
+2. Give the Worker the same 64 characters, in web-next's production
+   environment, which does not exist yet, and deploy the Worker with the
+   route:
 
    ```sh
    npx wrangler secret put REALTIME_PURGE_SECRET --env production
    ```
 
-   The Worker must hold the same 64 hex characters. The key is the value's
-   characters as written, not decoded from hex. The Worker must take the body
-   with `scope` and `removed_at`, and accept a `removed_at` that has a
-   fraction of a second, which almost every real one has. A Worker built on
-   the earlier body, without `scope`, must not be the one live when realtime
-   is on. `realtime/README.md` has golden vectors to test the Worker's check
-   against, one of them with a fraction.
-2. Store the secret, then make the queue, its dead-letter queue and the rule
-   that feeds it. The secret's container exists from any apply, whatever
-   `realtime_purge` says. The other provisioners run again too, and change
-   nothing. The tasks cannot start while a secret they name holds no value, so
-   store it before the next step:
+   The key is the value's characters as written, not decoded from hex. The
+   Worker must take the body with `scope` and `removed_at`, and accept a
+   `removed_at` that has a fraction of a second, which almost every real one
+   has. A Worker built on the earlier body, without `scope`, must not be the
+   one live when realtime is on. `realtime/README.md` has golden vectors to
+   test the Worker's check against, one of them with a fraction.
+3. Store the secret, then make the queue, its dead-letter queue and the rule
+   that feeds it, if they are not there yet. The other provisioners run again
+   too, and change nothing. `provision-app.sh` stops before provisioning
+   anything if OpenTofu's state names no queue for a service yet, saying to
+   apply first. The tasks cannot start while a secret they name holds no
+   value, so store it before the next step:
 
    ```sh
    deploy/scripts/put-secrets.sh
    deploy/scripts/provision-app.sh
    ```
 
-3. Switch it on in `deploy/production/realtime.auto.tfvars.json`, and apply.
-   The task gets `REALTIME_WORKER_URL=https://app.oryxa.in` and the secret, and
-   restarts with realtime on. The apply also adds the queue's backlog alarm,
-   which is not there while realtime is off, since nothing reads the queue
-   then. It may mail once while realtime works through the events that
-   waited:
+4. Switch it on, and apply. The task gets
+   `REALTIME_WORKER_URL=https://app.oryxa.in` and the secret, and restarts
+   with realtime on. The apply also adds the queue's backlog alarm, which may
+   mail once while realtime works through the events that waited:
 
    ```sh
    echo '{"realtime_purge": true}' | jq . > deploy/production/realtime.auto.tfvars.json
@@ -221,16 +230,16 @@ every purge is retried into the dead-letter queue. In this order:
    Then commit the file, so an apply from any other checkout keeps realtime
    on.
 
-4. Check it. The task logs `realtime mounted` with
+5. Check it. The task logs `realtime mounted` with
    `worker_url=https://app.oryxa.in`. Remove a member from a test
    organization. Realtime then logs `realtime conversations purged`, and the
    Worker logs a `204`. `realtime purge dropped` means the Worker refused the
-   purge; the log line carries the Worker's answer. If the Worker never sees
-   the call, look at Cloudflare's security events for `app.oryxa.in`: a bot or
-   WAF challenge answers `403`. A `401` means the two secrets differ. Those
-   purges, like a `404`'s, are retried into
-   `oryxa-production-realtime-events-dlq`, whose alarm mails, and can be
-   redriven once that is put right:
+   purge's body, or its `removed_at` lay ahead; the log line carries the
+   purge whole, and the reason. If the Worker never sees the call, look at
+   Cloudflare's security events for `app.oryxa.in`: a bot or WAF challenge
+   answers `403`. A `401` means the two secrets differ. Those purges, like a
+   `404`'s, are retried into `oryxa-production-realtime-events-dlq`, whose
+   alarm mails, and can be redriven once that is put right:
 
    ```sh
    aws sqs start-message-move-task --region us-west-2 \
@@ -238,11 +247,10 @@ every purge is retried into the dead-letter queue. In this order:
    ```
 
 To turn it off, set `realtime_purge` to `false`, apply and commit. The stored
-secret stays, so turning it on again is step 3. The rule keeps filling the
-queue, which holds each event for 14 days, and the queue's backlog alarm,
-which exists only while realtime is on, goes with the switch. Turned on again
-within those 14 days, realtime purges everything that waited, and the backlog
-alarm, made again by the apply, may mail once while it does.
+secret stays, so turning it on again is step 4. The rule keeps filling the
+queue, which holds each event for 14 days, and the backlog alarm goes with the
+switch. Turned on again within those 14 days, realtime purges everything that
+waited.
 
 ## Looking at it
 
