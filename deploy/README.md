@@ -174,7 +174,8 @@ before realtime is on. Until then the Worker answers `404` to the purge, and
 every purge is retried into the dead-letter queue. In this order:
 
 1. Make the secret, and put it in the repository's `.env` as
-   `REALTIME_PURGE_SECRET=…`:
+   `REALTIME_PURGE_SECRET=…`, exactly the 64 hex characters this prints, with
+   no quotes or comment. `put-secrets.sh` refuses anything else:
 
    ```sh
    openssl rand -hex 32
@@ -187,12 +188,13 @@ every purge is retried into the dead-letter queue. In this order:
    npx wrangler secret put REALTIME_PURGE_SECRET --env production
    ```
 
-   The key is the value's characters as written, not decoded from hex. The
-   Worker must take the body with `scope` and `removed_at`, and accept a
-   `removed_at` that has a fraction of a second, which almost every real one
-   has. A Worker built on the earlier body, without `scope`, must not be the
-   one live when realtime is on. `realtime/README.md` has golden vectors to
-   test the Worker's check against, one of them with a fraction.
+   The Worker must hold the same 64 hex characters. The key is the value's
+   characters as written, not decoded from hex. The Worker must take the body
+   with `scope` and `removed_at`, and accept a `removed_at` that has a
+   fraction of a second, which almost every real one has. A Worker built on
+   the earlier body, without `scope`, must not be the one live when realtime
+   is on. `realtime/README.md` has golden vectors to test the Worker's check
+   against, one of them with a fraction.
 2. Store the secret, then make the queue, its dead-letter queue and the rule
    that feeds it. The secret's container exists from any apply, whatever
    `realtime_purge` says. The other provisioners run again too, and change

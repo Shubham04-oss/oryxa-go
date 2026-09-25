@@ -19,6 +19,17 @@ value_of() {
   fi
 }
 
+# Realtime's secret is an HMAC key the Worker holds too, character for
+# character, and neither side strips the quotes, or the comment after the
+# value, that .env can carry with it. So it is stored only as openssl rand
+# -hex 32 makes it, and checked before anything else is stored.
+realtime_purge_secret=$(value_of REALTIME_PURGE_SECRET)
+if [[ -n $realtime_purge_secret && ! $realtime_purge_secret =~ ^[0-9a-fA-F]{64}$ ]]; then
+  echo "REALTIME_PURGE_SECRET must be exactly 64 hex characters, as openssl rand -hex 32 makes, with no quotes, spaces or comment in .env; nothing was stored" >&2
+  exit 1
+fi
+unset realtime_purge_secret
+
 for variable in COMPOSIO_API_KEY; do
   slug=$(tr '[:upper:]_' '[:lower:]-' <<<"$variable")
   if [[ -z "$(value_of "$variable")" ]]; then
@@ -37,8 +48,8 @@ if [[ -n "$(value_of TYPESAFE_API_KEY)" ]]; then
 fi
 
 # Realtime signs every purge it asks the web app's Worker for with this, and
-# the Worker holds the same value. Its secret exists once realtime_purge is
-# on: create that first (tofu apply -target), then run this.
+# the Worker holds the same 64 characters. Its secret's container exists
+# whatever realtime_purge says.
 if [[ -n "$(value_of REALTIME_PURGE_SECRET)" ]]; then
   value_of REALTIME_PURGE_SECRET | put_secret "$(secret_id realtime-purge-secret)"
   step "stored REALTIME_PURGE_SECRET"

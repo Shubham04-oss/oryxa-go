@@ -85,7 +85,7 @@ To consume another event: add it to `AuthSubscriptions` and `requestFor` in `int
 | Variable | What it is |
 | --- | --- |
 | `REALTIME_WORKER_URL` | The web app's origin, where the Worker serves `/internal/realtime/purge`. `https://app.oryxa.in` in production. Locally, web-next's `http://localhost:3001`. It has no path: realtime appends the route, which the Worker matches exactly, so a URL with a path is refused. |
-| `REALTIME_PURGE_SECRET` | The key every call is signed with. The Worker holds the same value. At least 32 characters: `openssl rand -hex 32`. Surrounding whitespace is trimmed. |
+| `REALTIME_PURGE_SECRET` | The key every call is signed with. The Worker holds the same value. Realtime takes any 32 characters or more, but make it with `openssl rand -hex 32`: in production, `deploy/scripts/put-secrets.sh` stores only exactly 64 hex characters, and the Worker must hold the same 64 hex characters, since each side uses them as written. Surrounding whitespace is trimmed here but not by the Worker, and neither side strips quotes. |
 | `REALTIME_EVENTS_QUEUE_URL` | The queue the provisioner prints |
 | `REALTIME_EVENTS_QUEUE_NAME` | The provisioner's name for that queue: `realtime-events` unless set |
 
