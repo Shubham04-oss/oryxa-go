@@ -134,21 +134,26 @@ type Interaction struct {
 	// to decide in their own session. A request made in a teamspace becomes
 	// "owner" if its member later takes deciding back; nothing turns "owner"
 	// back into "agent".
-	Approval             string                   `json:"approval"`
-	Requester            InteractionParty         `json:"requester"`
-	Target               InteractionParty         `json:"target"`
-	Purpose              string                   `json:"purpose"`
-	Task                 string                   `json:"task"`
-	Context              []InteractionContextItem `json:"context"`
-	RequestedTools       []string                 `json:"requested_tools"`
-	RequestedPermissions []string                 `json:"requested_permissions"`
-	Status               string                   `json:"status"`
-	Decision             *InteractionDecision     `json:"decision,omitempty"`
-	Result               *InteractionResult       `json:"result,omitempty"`
-	Revision             int64                    `json:"revision"`
-	ExpiresAt            time.Time                `json:"expires_at"`
-	CreatedAt            time.Time                `json:"created_at"`
-	UpdatedAt            time.Time                `json:"updated_at"`
+	Approval       string                   `json:"approval"`
+	Requester      InteractionParty         `json:"requester"`
+	Target         InteractionParty         `json:"target"`
+	Purpose        string                   `json:"purpose"`
+	Task           string                   `json:"task"`
+	Context        []InteractionContextItem `json:"context"`
+	RequestedTools []string                 `json:"requested_tools"`
+	// ToolsJudgedBy is who chose RequestedTools: "requester" for the
+	// requester naming them, "jev" for Jev judging what a request made in a
+	// teamspace that named none needs, and "none" when nobody did, so it
+	// asks for none. It is absent from a request made before it was kept.
+	ToolsJudgedBy        string               `json:"tools_judged_by,omitempty"`
+	RequestedPermissions []string             `json:"requested_permissions"`
+	Status               string               `json:"status"`
+	Decision             *InteractionDecision `json:"decision,omitempty"`
+	Result               *InteractionResult   `json:"result,omitempty"`
+	Revision             int64                `json:"revision"`
+	ExpiresAt            time.Time            `json:"expires_at"`
+	CreatedAt            time.Time            `json:"created_at"`
+	UpdatedAt            time.Time            `json:"updated_at"`
 }
 
 type InteractionCreateInput struct {

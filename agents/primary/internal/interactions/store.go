@@ -60,14 +60,14 @@ func (store *Store) Create(ctx context.Context, request agents.Interaction, idem
 				(id, organization_id, requester_user_id, requester_agent_id, requester_agent_name,
 				 target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
 				 purpose, task, context, requested_tools, requested_permissions, status, idempotency_key,
-				 revision, expires_at, created_at, updated_at, teamspace_id, approval)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22)
+				 revision, expires_at, created_at, updated_at, teamspace_id, approval, tools_judged_by)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22,$23)
 			ON CONFLICT (organization_id, requester_agent_id, idempotency_key) DO NOTHING
 			RETURNING `+selectColumns,
 			request.ID, request.OrganizationID, request.Requester.UserID, request.Requester.AgentID, request.Requester.AgentName,
 			request.Target.UserID, request.Target.AgentID, request.Target.AgentName, request.Target.UserEmail, request.Target.UserDisplayName,
 			request.Purpose, request.Task, contextJSON, toolsJSON, permissionsJSON, request.Status, idempotencyKey,
-			request.Revision, request.ExpiresAt, request.CreatedAt, request.TeamspaceID, request.Approval)
+			request.Revision, request.ExpiresAt, request.CreatedAt, request.TeamspaceID, request.Approval, request.ToolsJudgedBy)
 		if err := scanInteraction(row, &request); errors.Is(err, pgx.ErrNoRows) {
 			// The key is taken: return what it names, which the service
 			// compares with what it was asked to create.
@@ -473,7 +473,8 @@ const selectColumns = `
 	target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
 	purpose, task, context, requested_tools, requested_permissions,
 	status, decision, result, revision, expires_at, created_at, updated_at,
-	teamspace_id, approval, decided_by_kind, decided_by_user_id, decided_by_agent_id`
+	teamspace_id, approval, decided_by_kind, decided_by_user_id, decided_by_agent_id,
+	tools_judged_by`
 
 type scanner interface{ Scan(...any) error }
 
@@ -488,6 +489,7 @@ func scanInteraction(row scanner, target *agents.Interaction) error {
 		&target.Purpose, &target.Task, &contextJSON, &toolsJSON, &permissionsJSON,
 		&target.Status, &decisionJSON, &resultJSON, &target.Revision, &target.ExpiresAt, &target.CreatedAt, &target.UpdatedAt,
 		&target.TeamspaceID, &target.Approval, &decider.Kind, &decider.UserID, &decider.AgentID,
+		&target.ToolsJudgedBy,
 	)
 	if err != nil {
 		return err

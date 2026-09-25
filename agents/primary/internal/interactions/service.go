@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 )
 
 var (
@@ -144,6 +146,14 @@ type Config struct {
 	// watching. Without it, or without their grant, such a request cannot
 	// be read again and is held for them rather than decided by an agent.
 	Tokens memberauth.TokenSource
+	// Jev judges which of its target's toolboxes a request made in a
+	// teamspace that names none needs (judgeTools); (*jev.Client).Ask is it.
+	// Without it, no TYPESAFE_API_KEY, such a request asks for none.
+	Jev func(context.Context, jev.Request) (jev.Result, error)
+	// JevTimeout bounds asking Jev; DefaultJevTimeout when zero.
+	JevTimeout time.Duration
+	// Logger records what Jev judged; discarded when nil.
+	Logger *slog.Logger
 	Now    func() time.Time
 }
 
@@ -152,6 +162,9 @@ type Service struct {
 	directory  agents.Directory
 	teamspaces Teamspaces
 	tokens     memberauth.TokenSource
+	jev        func(context.Context, jev.Request) (jev.Result, error)
+	jevTimeout time.Duration
+	logger     *slog.Logger
 	now        func() time.Time
 }
 
@@ -166,7 +179,18 @@ func New(config Config) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens, now: now}, nil
+	jevTimeout := config.JevTimeout
+	if jevTimeout <= 0 {
+		jevTimeout = DefaultJevTimeout
+	}
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &Service{
+		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens,
+		jev: config.Jev, jevTimeout: jevTimeout, logger: logger, now: now,
+	}, nil
 }
 
 func (service *Service) Create(ctx context.Context, actor agents.InteractionActor, token, idempotencyKey string, input agents.InteractionCreateInput) (agents.Interaction, error) {
@@ -223,6 +247,9 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	if err != nil {
 		return agents.Interaction{}, err
 	}
+	// Only once the request is known to be one that may be made is Jev
+	// asked what it needs; whatever Jev says, or fails to, it is made.
+	tools, toolsJudgedBy := service.requestedTools(ctx, input)
 	id, err := newID("irq_")
 	if err != nil {
 		return agents.Interaction{}, err
@@ -240,7 +267,7 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 			UserEmail: target.OwnerEmail, UserDisplayName: target.OwnerDisplayName,
 		},
 		Purpose: input.Purpose, Task: input.Task, Context: nonNilContext(input.Context),
-		RequestedTools: nonNilStrings(input.RequestedTools), RequestedPermissions: nonNilStrings(input.RequestedPermissions),
+		RequestedTools: nonNilStrings(tools), ToolsJudgedBy: toolsJudgedBy, RequestedPermissions: nonNilStrings(input.RequestedPermissions),
 		Status: StatusPending, Revision: 1, ExpiresAt: now.Add(expires), CreatedAt: now, UpdatedAt: now,
 	}
 	if idempotencyKey == "" {
@@ -271,14 +298,25 @@ func (service *Service) replay(actor agents.InteractionActor, stored agents.Inte
 // sameRequest is whether a stored request is the one input asks for again:
 // the same requester, target, teamspace, purpose, task, context and asks.
 // Both sides are compared as cleaned, which is how the request was stored.
+// The tools compared are the ones its requester named: what Jev judged a
+// request that named none needs is not something the requester sent.
 func sameRequest(actor agents.InteractionActor, stored agents.Interaction, input agents.InteractionCreateInput) bool {
 	return stored.OrganizationID == actor.OrganizationID &&
 		stored.Requester.UserID == actor.UserID && stored.Requester.AgentID == actor.AgentID &&
 		stored.Target.AgentID == input.TargetAgentID && stored.TeamspaceID == input.TeamspaceID &&
 		stored.Purpose == input.Purpose && stored.Task == input.Task &&
 		slices.Equal(stored.Context, input.Context) &&
-		slices.EqualFunc(stored.RequestedTools, input.RequestedTools, strings.EqualFold) &&
+		slices.EqualFunc(namedByRequester(stored), input.RequestedTools, strings.EqualFold) &&
 		slices.Equal(stored.RequestedPermissions, input.RequestedPermissions)
+}
+
+// namedByRequester is the tools a stored request's requester named: none
+// when Jev, or nobody, chose what it asks for.
+func namedByRequester(stored agents.Interaction) []string {
+	if stored.ToolsJudgedBy == ToolsJudgedByJev || stored.ToolsJudgedBy == ToolsJudgedByNone {
+		return nil
+	}
+	return stored.RequestedTools
 }
 
 // HeldForOwner is whether only the addressed agent's member may decide a

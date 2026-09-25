@@ -320,7 +320,26 @@ are read in any case and kept spelled as here (`agents.RequestTool`). Any
 other value is accepted, as it always was, and grants nothing.
 `allowed_tools` must be a subset of `requested_tools`, or the decision is
 `400 invalid_request`, and an approval that leaves it out allows none:
-nothing grants a tool implicitly. These grants describe the
+nothing grants a tool implicitly.
+
+**Jev chooses what a request made in a teamspace needs.** A request made in
+a teamspace that names no `requested_tools` gets them from Jev as it is
+created (`interactions.Service.requestedTools`): one Choice over the
+requester's own words, the task and its context, and never anything of the
+member asked, between `none`, `knowledge`, `apps` and `apps_and_knowledge`.
+Its owner's approval then shows what would be read, and allows it or not.
+A choice with a confidence below 0.5 (`interactions.ToolsConfidence`) asks
+for none. Over four options that is a choice holding at least 62.5% of the
+probability: the least TypeSafe's guidance acts on at all, and acting on it
+is safe here because it only proposes what the owner approves in person.
+No Jev (`TYPESAFE_API_KEY` unset), one that does not answer within 3 seconds,
+and one that fails ask for none as well, and the request is made all the
+same. A requester who names tools keeps them as given. `tools_judged_by`
+says who chose: `requester`, `jev` (which may have chosen none), or `none`,
+nobody (a request made outside a teamspace that names none, or Jev unsure,
+unset, silent or failing). A request made before this has nobody on record,
+and the field is absent. Sent again under its `Idempotency-Key`, a request
+whose tools Jev chose is compared as it was sent, naming none. These grants describe the
 interaction envelope; they never bypass a tool's existing authorization or
 human-confirmation requirements, and they are not enforced on the run that
 does the approved work either (see below).
@@ -1691,6 +1710,8 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_SERVICE_KEY_ID` | unset | KMS key agents signs its service tokens with, to ask auth for an agent token on a member's behalf |
 | `AGENTS_ALLOWED_ORIGINS` | unset | Origins, comma-separated, whose cookie-authenticated requests may start runs and change threads; the web app's |
 | `AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS` | `600` | Longest one run may take; 60–3600 seconds |
+| `TYPESAFE_API_KEY` | unset | TypeSafe's key, for Jev: a room's judgment of every message, and what a request made in a teamspace that names no tools needs (see [Agent interactions toolbox](#agent-interactions-toolbox)). Unset, rooms fall back to rules and such a request asks for none |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | TypeSafe's API: HTTPS, or plain HTTP to this machine |
 | `AGENTS_PRIMARY_GUARDRAIL_ID` | unset | Bedrock guardrail that screens the member's conversation; unset turns screening off |
 | `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
 | `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
