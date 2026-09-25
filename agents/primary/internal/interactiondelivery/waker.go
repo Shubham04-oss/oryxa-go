@@ -23,6 +23,16 @@ const (
 	// expiredPerPoll bounds how many expired approvals one poll closes; the
 	// rest wait for the next.
 	expiredPerPoll = 20
+	// expiredWithin is how long after its expiry an approval is still closed.
+	// The poll closes one seconds after it runs out, so the window only has
+	// to cover the time nothing polls at all: a deploy, a restart, a database
+	// gone for a while. An hour covers those with room to spare, and keeps
+	// what one poll after a longer outage, or after the release that brought
+	// this in, may close to approvals that ran out lately: nobody is told of
+	// one that ran out weeks ago, old requests do not jump to the top of every
+	// listing, and no burst of reports takes the slots ahead of new work. One
+	// that ran out before that reads as expired, as it always has.
+	expiredWithin = time.Hour
 )
 
 // What a request Oryxa closed says, to both members, as its failed result,
@@ -62,8 +72,9 @@ type Requests interface {
 	// recording the completed event that tells the member who asked; any
 	// request not approved is left as it is (interactions.ErrConflict).
 	CloseApproved(ctx context.Context, id, reason string, at time.Time) (agents.Interaction, error)
-	// CloseExpired does the same for approved requests whose expiry passed.
-	CloseExpired(ctx context.Context, reason string, at time.Time, limit int) ([]agents.Interaction, error)
+	// CloseExpired does the same for approved requests whose expiry passed
+	// after since and by at.
+	CloseExpired(ctx context.Context, reason string, since, at time.Time, limit int) ([]agents.Interaction, error)
 }
 
 // Standing reads a request made in a teamspace again, live, before an agent
@@ -158,14 +169,15 @@ func (waker *Waker) WakeDue(ctx context.Context) error {
 }
 
 // tidy is what a pass does on the poll: it forgets deliveries handled long
-// ago, and closes approved requests that expired with their work unanswered,
-// which nothing else would: no answer can be recorded for them any more,
-// whether their delivery ran out of time or never arrived.
+// ago, and closes approved requests that expired lately with their work
+// unanswered, which nothing else would: no answer can be recorded for them
+// any more, whether their delivery ran out of time or never arrived.
 func (waker *Waker) tidy(ctx context.Context) {
 	if err := waker.store.Purge(ctx, handledRetention); err != nil {
 		waker.logger.WarnContext(ctx, "purge handled interaction deliveries", "error", err)
 	}
-	closed, err := waker.requests.CloseExpired(ctx, closedExpired, time.Now(), expiredPerPoll)
+	now := time.Now()
+	closed, err := waker.requests.CloseExpired(ctx, closedExpired, now.Add(-expiredWithin), now, expiredPerPoll)
 	if err != nil && ctx.Err() == nil {
 		waker.logger.ErrorContext(ctx, "close approved interactions that expired unanswered", "error", err)
 	}

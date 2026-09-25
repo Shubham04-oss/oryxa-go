@@ -134,13 +134,13 @@ func (requests *fakeRequests) CloseApproved(_ context.Context, id, reason string
 	return request, nil
 }
 
-// CloseExpired closes every approved request past its expiry, the longest
-// expired first, as the ledger does.
-func (requests *fakeRequests) CloseExpired(ctx context.Context, reason string, at time.Time, limit int) ([]agents.Interaction, error) {
+// CloseExpired closes every approved request whose expiry passed after
+// since and by at, the longest expired first, as the ledger does.
+func (requests *fakeRequests) CloseExpired(ctx context.Context, reason string, since, at time.Time, limit int) ([]agents.Interaction, error) {
 	requests.mu.Lock()
 	var expired []agents.Interaction
 	for _, request := range requests.requests {
-		if request.Status == interactions.StatusApproved && !request.ExpiresAt.After(at) {
+		if request.Status == interactions.StatusApproved && !request.ExpiresAt.After(at) && request.ExpiresAt.After(since) {
 			expired = append(expired, request)
 		}
 	}

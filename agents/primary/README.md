@@ -417,8 +417,8 @@ screen: the member finds it only by listing their requests. A pending request
 that expires records no event, so nothing tells the member who asked that a
 held request ran out unanswered (reads show it `expired`). Both are follow-ups
 that need a Requests screen. An approved request that expires unanswered is
-different: Oryxa closes it, failed, and the member who asked is told (see
-[Wake-ups](#wake-ups)).
+different: Oryxa closes it, failed, within seconds, and the member who asked
+is told (see [Wake-ups](#wake-ups)).
 
 **What a delivered request may reach.** The member whose agent is woken is not
 there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
@@ -1073,14 +1073,21 @@ gives up on an `approved` delivery (its runs failed three times, not counting
 a run the waker's own stop cut short, or its agent no longer exists or has
 been disabled) it closes the request, failed, with why as the result's
 summary; and every poll closes, the same way, the approved requests whose
-expiry passed unanswered, since none can be answered any more, whatever became
-of their delivery (`interactions.Store.CloseApproved` and `CloseExpired`,
-which fail an approved request as `Close` does). Each is the ordinary
-completed event, so the member who asked hears of it as of any failed result,
-and a side conversation shows it as the agent's failure with the reason.
-Nothing else is closed: a new request whose deciding run was given up stays
-pending, for its member to decide or to expire, and a failed report to the
-member who asked changes nothing about the request.
+expiry passed unanswered in the last hour, since none can be answered any
+more, whatever became of their delivery (`interactions.Store.CloseApproved`
+and `CloseExpired`, which fail an approved request as `Close` does). Each is
+the ordinary completed event, so the member who asked hears of it as of any
+failed result, and a side conversation shows it as the agent's failure with
+the reason. Nothing else is closed: a new request whose deciding run was given
+up stays pending, for its member to decide or to expire, and a failed report
+to the member who asked changes nothing about the request.
+
+The poll closes an approval seconds after it runs out, so the hour is only for
+the time nothing polls: a deploy, a restart or an outage. An approval that ran
+out before that, every one that expired before this was released among them,
+is left as it was: it reads as `expired`, as it always has, with no event, and
+its `updated_at` does not move, so an old request keeps its place in every
+listing and wakes nobody.
 
 A delivery starts as soon as it is recorded. The consumer nudges the waker as
 it records one, and the waker claims what is due while it has room, four runs

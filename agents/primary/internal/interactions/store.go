@@ -403,13 +403,16 @@ func (store *Store) CloseApproved(ctx context.Context, id, reason string, at tim
 }
 
 // CloseExpired closes, as CloseApproved does, up to limit approved requests
-// whose expiry passed with their work unanswered, the longest expired first,
-// and returns those it closed. Nothing else would close such a request, and
-// no answer can be recorded for it any more. One answered or closed
-// meanwhile, by another replica say, is passed over.
-func (store *Store) CloseExpired(ctx context.Context, reason string, at time.Time, limit int) ([]agents.Interaction, error) {
+// whose expiry passed with their work unanswered after since and by at, the
+// longest expired first, and returns those it closed. Nothing else would
+// close such a request, and no answer can be recorded for it any more. One
+// that expired by since is left as it is, still read as expired, with no
+// event. One answered or closed meanwhile, by another replica say, is passed
+// over.
+func (store *Store) CloseExpired(ctx context.Context, reason string, since, at time.Time, limit int) ([]agents.Interaction, error) {
 	rows, err := store.database.Pool.Query(ctx, `SELECT id FROM agents_primary.agent_interactions
-		WHERE status='approved' AND expires_at <= $1 ORDER BY expires_at, id LIMIT $2`, at, limit)
+		WHERE status='approved' AND expires_at > $1 AND expires_at <= $2
+		ORDER BY expires_at, id LIMIT $3`, since, at, limit)
 	if err != nil {
 		return nil, fmt.Errorf("find expired approved agent requests: %w", err)
 	}

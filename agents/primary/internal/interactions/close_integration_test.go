@@ -85,39 +85,49 @@ func TestCloseApprovedFailsOnlyAnApprovedRequestEvenPastItsExpiry(t *testing.T) 
 	}
 }
 
-// TestCloseExpiredClosesOnlyApprovalsThatRanOut: an approved request whose
-// expiry passed unanswered is failed, saying so, with its completed event;
-// one still in time, and a pending one that ran out, are left. The requests
+// TestCloseExpiredClosesOnlyApprovalsThatRanOutLately: an approved request
+// whose expiry passed unanswered within the window is failed, saying so,
+// with its completed event. One that ran out before the window, such as
+// every approval that expired before this build, is left exactly as it was:
+// still read as expired, with no event and its updated_at untouched. One
+// still in time, and a pending one that ran out, are left too. The requests
 // here expire in 2001, so a closing at 2001's times reaches no one else's.
-func TestCloseExpiredClosesOnlyApprovalsThatRanOut(t *testing.T) {
+func TestCloseExpiredClosesOnlyApprovalsThatRanOutLately(t *testing.T) {
 	database, store := openInteractionStore(t)
 	organizationID := testOrganization(t, database)
 	ctx := context.Background()
 	made := time.Date(2001, time.January, 1, 9, 0, 0, 0, time.UTC)
 
 	ranOut := approvedRequest(t, store, organizationID, organizationID+"_ran_out", made)
+	longAgo := approvedRequest(t, store, organizationID, organizationID+"_long_ago", made.Add(-48*time.Hour))
 	inTime := approvedRequest(t, store, organizationID, organizationID+"_in_time", made.Add(3*time.Hour))
 	pending, err := store.Create(ctx, storedRequest(organizationID, organizationID+"_pending", "user_a", "user_b", made), "pending")
 	if err != nil {
 		t.Fatal(err)
 	}
-	at := made.Add(2 * time.Hour) // after ranOut's and pending's expiry, before inTime's
+	// ranOut and pending expired at 10:00, longAgo two days before, and
+	// inTime expires at 13:00; the window is the hour before 10:30.
+	at := made.Add(90 * time.Minute)
+	since := at.Add(-time.Hour)
 	reason := "Oryxa closed this request because it expired before the approved work was done."
-	closed, err := store.CloseExpired(ctx, reason, at, 100)
+	closed, err := store.CloseExpired(ctx, reason, since, at, 100)
 	if err != nil || len(closed) != 1 || closed[0].ID != ranOut.ID || closed[0].Status != StatusFailed ||
 		closed[0].Result == nil || closed[0].Result.Summary != reason {
-		t.Fatalf("closed = %+v, %v; want only the approval that ran out, failed saying so", closed, err)
+		t.Fatalf("closed = %+v, %v; want only the approval that ran out within the window, failed saying so", closed, err)
 	}
 	if count, status := completedEvents(t, database, ranOut.ID); count != 1 || status != StatusFailed {
 		t.Fatalf("%d completed events, the newest %q; want one, failed", count, status)
 	}
-	for _, left := range []agents.Interaction{inTime, pending} {
+	for _, left := range []agents.Interaction{longAgo, inTime, pending} {
 		stored, err := store.Get(ctx, left.ID)
-		if err != nil || stored.Status != left.Status || stored.Revision != left.Revision {
-			t.Fatalf("%s = %+v, %v; want it left %s", left.ID, stored, err, left.Status)
+		if err != nil || stored.Status != left.Status || stored.Revision != left.Revision || !stored.UpdatedAt.Equal(left.UpdatedAt) {
+			t.Fatalf("%s = %+v, %v; want it left %s, as it was", left.ID, stored, err, left.Status)
+		}
+		if count, _ := completedEvents(t, database, left.ID); count != 0 {
+			t.Fatalf("%s has %d completed events, want none", left.ID, count)
 		}
 	}
-	if again, err := store.CloseExpired(ctx, reason, at, 100); err != nil || len(again) != 0 {
+	if again, err := store.CloseExpired(ctx, reason, since, at, 100); err != nil || len(again) != 0 {
 		t.Fatalf("closing again = %+v, %v; want nothing left to close", again, err)
 	}
 }

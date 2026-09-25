@@ -127,9 +127,10 @@ func TestOnlyApprovedWorkIsClosedWhenDropped(t *testing.T) {
 }
 
 // TestAnApprovalThatExpiredUnansweredIsClosedOnThePoll: an approved request
-// whose expiry passed before anyone answered it can never be answered, so
-// the poll closes it, saying so, whether or not a delivery is still about.
-// A pending request that ran out, and an approval still in time, are left.
+// whose expiry passed lately before anyone answered it can never be
+// answered, so the poll closes it, saying so, whether or not a delivery is
+// still about. One that ran out longer ago than the window, a pending request
+// that ran out, and an approval still in time, are left.
 func TestAnApprovalThatExpiredUnansweredIsClosedOnThePoll(t *testing.T) {
 	expiredApproval := testRequest(interactions.StatusApproved)
 	expiredApproval.ExpiresAt = time.Now().Add(-time.Minute)
@@ -137,7 +138,9 @@ func TestAnApprovalThatExpiredUnansweredIsClosedOnThePoll(t *testing.T) {
 	expiredPending.ID, expiredPending.ExpiresAt = "irq_2", time.Now().Add(-time.Minute)
 	inTime := testRequest(interactions.StatusApproved)
 	inTime.ID = "irq_3"
-	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": expiredApproval, "irq_2": expiredPending, "irq_3": inTime}}
+	longAgo := testRequest(interactions.StatusApproved)
+	longAgo.ID, longAgo.ExpiresAt = "irq_4", time.Now().Add(-expiredWithin-time.Minute)
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": expiredApproval, "irq_2": expiredPending, "irq_3": inTime, "irq_4": longAgo}}
 	runs := &fakeAgentRuns{}
 	waker := NewWaker(&fakeDeliveries{}, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
@@ -145,11 +148,15 @@ func TestAnApprovalThatExpiredUnansweredIsClosedOnThePoll(t *testing.T) {
 	}
 	closed := requests.get("irq_1")
 	if len(requests.closed) != 1 || closed.Status != interactions.StatusFailed || closed.Result == nil || closed.Result.Summary != closedExpired {
-		t.Fatalf("closed %v, irq_1 %+v; want only the expired approval failed, saying it expired", requests.closed, closed)
+		t.Fatalf("closed %v, irq_1 %+v; want only the lately expired approval failed, saying it expired", requests.closed, closed)
 	}
-	if requests.get("irq_2").Status != interactions.StatusPending || requests.get("irq_3").Status != interactions.StatusApproved || len(runs.calls) != 0 {
-		t.Fatalf("irq_2=%s irq_3=%s runs=%d, want both left as they were and nothing run",
-			requests.get("irq_2").Status, requests.get("irq_3").Status, len(runs.calls))
+	for id, status := range map[string]string{"irq_2": interactions.StatusPending, "irq_3": interactions.StatusApproved, "irq_4": interactions.StatusApproved} {
+		if got := requests.get(id); got.Status != status || got.Result != nil {
+			t.Fatalf("%s = %+v, want it left %s", id, got, status)
+		}
+	}
+	if len(runs.calls) != 0 {
+		t.Fatalf("runs=%d, want nothing run", len(runs.calls))
 	}
 }
 
