@@ -26,8 +26,11 @@ const (
 	// It never covers streaming, typing, request cards or failures.
 	MessagePostedDetailType = "realtime.message.posted.v1"
 	// ConversationReadDetailType is published when a member's read position
-	// in a conversation advances. The Worker coalesces them: only the newest
-	// position it had not yet sent for a reader is published.
+	// in a conversation advances because they read what someone else posted.
+	// Posting a message moves its author's position too, but the posted event
+	// already says as much, so no read event is sent for it. The Worker
+	// coalesces them: only the newest position it had not yet sent for a
+	// reader is published.
 	ConversationReadDetailType = "realtime.conversation.read.v1"
 	// PurgeCompletedDetailType is published once the Worker has purged what
 	// a member kept in an organization, or everything the organization kept,

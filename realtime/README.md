@@ -159,7 +159,7 @@ Realtime publishes on source `oryxa.realtime`, in the envelope every Oryxa publi
 | Detail type | When | Data |
 | --- | --- | --- |
 | `realtime.message.posted.v1` | The Worker stored a finished message: a person's, or an agent's final answer in a side conversation. Never streaming, typing, request cards or failures. | `organization_id`, `conversation` (`kind`, `id`, and `teamspace_id` for a side one), `participant_user_ids` (the two, sorted), `message` (`id`, `seq`), `author` (`kind`, `user_id`, and `agent_id` for an agent), `posted_at` |
-| `realtime.conversation.read.v1` | A member's read position advanced. The Worker sends only the newest it had not sent. | `organization_id`, `conversation`, `reader_user_id`, `read_through_seq`, `read_at` |
+| `realtime.conversation.read.v1` | A member's read position advanced because they read what someone else posted. An author's own post moves their position without a read event, since the posted event says it. The Worker sends only the newest it had not sent. | `organization_id`, `conversation`, `reader_user_id`, `read_through_seq`, `read_at` |
 | `realtime.purge.completed.v1` | The Worker answered `204` to a purge: the deletion's audit trail | `organization_id`, `scope` (`member` or `organization`), `user_id` (for a member's), `removed_at`, `source_event_id` (auth's event), `completed_at` |
 
 An event happened, as the envelope's `occurred_at` says, at its `posted_at`, `read_at` or `completed_at`. Its `event_id` is derived from what it is about, rather than drawn at random: from the Worker's id for the Worker's events, and from auth's event for a completed purge. So an event recorded twice is one row in the outbox and one `event_id` to a consumer.
