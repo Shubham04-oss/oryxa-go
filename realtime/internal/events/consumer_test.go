@@ -451,6 +451,63 @@ func TestPollLogsADroppedPurgeWhole(t *testing.T) {
 	}
 }
 
+// A removal still to come did not happen: purged up to it, a member would
+// lose what they wrote after being invited back. Within a few minutes it is
+// only two clocks disagreeing.
+func TestConsumerDropsARemovalStillToCome(t *testing.T) {
+	for name, event := range map[string]struct {
+		body string
+		at   time.Time
+	}{
+		"a member's":        {memberRemoved("evt_member", "org_1", "user-2", autheventsv1.MemberRemovedReasonRemoved), at(removedAt)},
+		"an organization's": {organizationDeleted("evt_organization", "org_1"), at(deletedAt)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			purger := &fakePurger{}
+			consumer := newConsumer(t, purger)
+			request, err := consumer.handle(context.Background(), event.body, event.at.Add(-maxClockSkew-time.Second))
+			if !errors.Is(err, errFutureRemoval) || !request.RemovedAt.Equal(event.at) || len(purger.asked()) != 0 {
+				t.Fatalf("handle() = %+v, %v; purges %+v; want the purge named, refused and not sent", request, err, purger.asked())
+			}
+			if _, err := consumer.handle(context.Background(), event.body, event.at.Add(-maxClockSkew+time.Second)); err != nil || len(purger.asked()) != 1 {
+				t.Fatalf("within the skew: handle() = %v, purges %+v; want it purged", err, purger.asked())
+			}
+		})
+	}
+}
+
+func TestPollDropsARemovalStillToComeLoudly(t *testing.T) {
+	signer, _ := authHarness()
+	future := authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_future", 1,
+		`{"organization_id":"org_1","user_id":"user-2","reason":"removed","removed_at":"2099-01-01T00:00:00Z"}`)
+	purger := &fakePurger{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{{message("future", future)}}}
+	var logs strings.Builder
+	_, verifier := authHarness()
+	consumer, err := NewConsumer(purger, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer.Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
+
+	if !slices.Equal(queue.deleted, []string{"future"}) || len(purger.asked()) != 0 {
+		t.Fatalf("deleted = %v, purges %+v; want it dropped unsent", queue.deleted, purger.asked())
+	}
+	dropped := logged(t, logs.String(), "realtime purge dropped")
+	for key, want := range map[string]string{
+		"event_id": "evt_future", "scope": "member", "organization_id": "org_1", "user_id": "user-2", "removed_at": "2099-01-01T00:00:00Z",
+	} {
+		if got := dropped[key]; got != want {
+			t.Errorf("the dropped purge's %s = %v, want %q", key, got, want)
+		}
+	}
+	if !strings.Contains(fmt.Sprint(dropped["error"]), "still to come") {
+		t.Errorf("the drop's error = %v, want it to say why", dropped["error"])
+	}
+}
+
 // logged is the JSON log record whose message starts with prefix.
 func logged(t *testing.T, logs, prefix string) map[string]any {
 	t.Helper()

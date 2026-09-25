@@ -37,6 +37,17 @@ func AuthSubscriptions() []string {
 	}
 }
 
+// maxClockSkew is how far after an event was received the removal it names
+// may lie. Auth's clock and this one agree far more closely than that, so a
+// removal later still did not happen then, and a purge up to it would take
+// what the member wrote after being invited back.
+const maxClockSkew = 5 * time.Minute
+
+// errFutureRemoval marks an event whose removal lies more than maxClockSkew
+// after it was received. Its purge is dropped, not sent: retried until that
+// time had passed, it would take whatever the member wrote in between.
+var errFutureRemoval = errors.New("its removed_at is still to come")
+
 // Purger is what a purge is sent through; *purge.Client is one.
 type Purger interface {
 	Purge(context.Context, purge.Request) error
@@ -97,9 +108,11 @@ type receivedEnvelope struct {
 }
 
 // Handle processes one SQS message body: an EventBridge event from auth. It
-// returns nil once the message is done with: purged, or purged already. An error wrapping purge.ErrPermanent means the Worker
-// refused the purge for good, and Poll drops the message; any other error
-// leaves it for the queue to deliver again.
+// returns nil once the message is done with: purged, or purged already. An
+// error wrapping purge.ErrPermanent means the Worker refused the purge for
+// good, and one for an event whose removed_at lies more than maxClockSkew
+// ahead means no purge should be sent; Poll drops the message for either. Any
+// other error leaves it for the queue to deliver again.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	_, err := consumer.handle(ctx, body, time.Now())
 	return err
@@ -133,6 +146,10 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 	ctx, span := observability.StartConsumerSpan(ctx, detail.TraceCarrier, consumer.queueName, event.DetailType, detail.EventID)
 	started := time.Now()
 	request, err := requestFor(event.DetailType, detail.EventID, detail.Data)
+	if err == nil && request.RemovedAt.After(receivedAt.Add(maxClockSkew)) {
+		err = fmt.Errorf("%w: %s is more than %s after the event was received", errFutureRemoval,
+			request.RemovedAt.UTC().Format(time.RFC3339Nano), maxClockSkew)
+	}
 	outcome := "realtime conversations purged"
 	switch {
 	case err != nil:
@@ -218,8 +235,8 @@ const ReceiveBatch = 5
 var receiveBackoff = 5 * time.Second
 
 // Poll consumes the queue until ctx is cancelled. A message is deleted once
-// it is done with, or once the Worker refused its purge for good, which is
-// logged as dropped. Any other failure leaves the message to come back after
+// it is done with, or once its purge is given up for good, which is logged as
+// dropped. Any other failure leaves the message to come back after
 // its visibility timeout, and the redrive policy moves one that keeps failing
 // to the dead-letter queue.
 func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL string) {
@@ -258,10 +275,11 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 			request, err := consumer.handle(ctx, aws.ToString(message.Body), receivedAt)
 			switch {
 			case err == nil:
-			case errors.Is(err, purge.ErrPermanent):
-				// The purge whole, as the Worker was sent it, so it can be sent
-				// again by hand once whatever refused it is put right.
-				consumer.logger.ErrorContext(ctx, "realtime purge dropped: the Worker refused it, and sending it again cannot change that",
+			case errors.Is(err, purge.ErrPermanent), errors.Is(err, errFutureRemoval):
+				// The purge whole, as the Worker was or would have been sent it,
+				// so it can be sent by hand once whatever stopped it is put
+				// right.
+				consumer.logger.ErrorContext(ctx, "realtime purge dropped for good: the error says why",
 					"sqs_message_id", aws.ToString(message.MessageId), "event_id", request.EventID, "scope", string(request.Scope),
 					"organization_id", request.OrganizationID, "user_id", request.UserID,
 					"removed_at", request.RemovedAt.UTC().Format(time.RFC3339Nano), "error", err)
