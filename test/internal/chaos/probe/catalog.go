@@ -21,6 +21,7 @@ func Catalog() []ServiceOps {
 		{"knowledge", KnowledgeOps()},
 		{"apps", AppsOps()},
 		{"agents", AgentsOps()},
+		{"realtime", RealtimeOps()},
 	}
 }
 
