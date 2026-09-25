@@ -4,6 +4,7 @@ import {
   askedAgentName,
   cardState,
   isSideNews,
+  reviewHeadline,
   sideNews,
   spokenMarkdown,
   sideTimeline,
@@ -300,6 +301,100 @@ describe("cardState", () => {
     expect(cardState({ ...forMe, status: "rejected" }, reader).text).toBe(
       "Declined by you."
     )
+  })
+})
+
+describe("an answer held for review", () => {
+  it("tells the one who asked only that its owner reviews it, and how it ended", () => {
+    expect(cardState(card({ status: "review" }), reader)).toEqual({
+      tone: "waiting",
+      text: "Waiting for Priya to review the answer.",
+    })
+    // What the guard found is not the asker's to see, even were it sent.
+    expect(
+      cardState(
+        card({
+          status: "review",
+          guard: { state: "held", kinds: ["EMAIL"] },
+        }),
+        reader
+      ).text
+    ).toBe("Waiting for Priya to review the answer.")
+    expect(
+      cardState(
+        card({
+          status: "withheld",
+          review: { action: "withhold", decidedAt: local(9, 9) },
+        }),
+        reader
+      )
+    ).toEqual({
+      tone: "ended",
+      text: "Priya chose not to share the answer.",
+    })
+    expect(cardState(card({ status: "withheld" }), reader)).toEqual({
+      tone: "ended",
+      text: "Expired before Priya reviewed the answer.",
+    })
+  })
+
+  it("tells its owner why it waits for them, in plain words", () => {
+    const forMe = card({
+      requesterId: priya,
+      targetId: viewerId,
+      targetAgentId: "agt_leo",
+      targetAgentName: "Leo",
+      status: "review",
+      guard: { state: "held", kinds: ["EMAIL", "PHONE"] },
+    })
+    expect(cardState(forMe, reader)).toEqual({
+      tone: "waiting",
+      text: "Leo's answer includes an email address and a phone number. Review it before it's shared.",
+    })
+    expect(
+      cardState(
+        {
+          ...forMe,
+          status: "withheld",
+          review: { action: "withhold", decidedAt: local(9, 9) },
+        },
+        reader
+      ).text
+    ).toBe("You chose not to share the answer.")
+    expect(cardState({ ...forMe, status: "withheld" }, reader).text).toBe(
+      "Expired before you reviewed the answer."
+    )
+  })
+
+  it("says each kind the guard found in plain words, never its code", () => {
+    expect(reviewHeadline("Nia", ["EMAIL", "PHONE"])).toBe(
+      "Nia's answer includes an email address and a phone number. Review it before it's shared."
+    )
+    expect(reviewHeadline("Nia", ["UNCHECKED"])).toBe(
+      "Nia's answer couldn't be checked automatically. Review it before it's shared."
+    )
+    expect(
+      reviewHeadline("Nia", ["ADDRESS", "EMAIL", "PASSWORD", "EMAIL"])
+    ).toBe(
+      "Nia's answer includes a street address, an email address and a password. Review it before it's shared."
+    )
+    expect(reviewHeadline("Nia", ["PHONE", "UNCHECKED"])).toBe(
+      "Nia's answer includes a phone number, and couldn't be checked automatically. Review it before it's shared."
+    )
+    // A kind this page does not know, however many, reads as one thing.
+    expect(reviewHeadline("Nia", ["LICENSE_PLATE", "constructor"])).toBe(
+      "Nia's answer includes other personal details. Review it before it's shared."
+    )
+    // Nothing said about what was found: it still waits for the owner.
+    expect(reviewHeadline("your agent")).toBe(
+      "Review your agent's answer before it's shared."
+    )
+    expect(reviewHeadline("your agent", ["EMAIL"])).toBe(
+      "Your agent's answer includes an email address. Review it before it's shared."
+    )
+    for (const kinds of [["UNCHECKED"], ["EMAIL", "UNCHECKED", "SWIFT_CODE"]]) {
+      expect(reviewHeadline("Nia", kinds)).not.toMatch(/[A-Z]{2,}_|UNCHECKED/)
+    }
   })
 })
 
