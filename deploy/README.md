@@ -193,34 +193,30 @@ every purge is retried into the dead-letter queue. In this order:
    has. A Worker built on the earlier body, without `scope`, must not be the
    one live when realtime is on. `realtime/README.md` has golden vectors to
    test the Worker's check against, one of them with a fraction.
-2. Switch it on, and create the secret's container:
-
-   ```sh
-   echo '{"realtime_purge": true}' > deploy/production/realtime.auto.tfvars.json
-   (cd deploy/production && tofu apply -target='aws_secretsmanager_secret.external["REALTIME_PURGE_SECRET"]')
-   ```
-
-3. Store the secret, then make the queue, its dead-letter queue and the rule
-   that feeds it. The other provisioners run again too, and change nothing.
-   The tasks cannot start while a secret they name holds no value, so store it
-   before the next step:
+2. Store the secret, then make the queue, its dead-letter queue and the rule
+   that feeds it. The secret's container exists from any apply, whatever
+   `realtime_purge` says. The other provisioners run again too, and change
+   nothing. The tasks cannot start while a secret they name holds no value, so
+   store it before the next step:
 
    ```sh
    deploy/scripts/put-secrets.sh
    deploy/scripts/provision-app.sh
    ```
 
-4. Apply. The task gets `REALTIME_WORKER_URL=https://app.oryxa.in` and the
-   secret, and restarts with realtime on:
+3. Switch it on in `deploy/production/realtime.auto.tfvars.json`, and apply.
+   The task gets `REALTIME_WORKER_URL=https://app.oryxa.in` and the secret, and
+   restarts with realtime on:
 
    ```sh
+   echo '{"realtime_purge": true}' | jq . > deploy/production/realtime.auto.tfvars.json
    (cd deploy/production && tofu apply)
    ```
 
-   Then commit `realtime.auto.tfvars.json`: an apply from a checkout without
-   it turns realtime off again.
+   Then commit the file, so an apply from any other checkout keeps realtime
+   on.
 
-5. Check it. The task logs `realtime mounted` with
+4. Check it. The task logs `realtime mounted` with
    `worker_url=https://app.oryxa.in`. Remove a member from a test
    organization. Realtime then logs `realtime conversations purged`, and the
    Worker logs a `204`. `realtime purge dropped` means the Worker refused the
@@ -236,11 +232,11 @@ every purge is retried into the dead-letter queue. In this order:
      --source-arn "arn:aws:sqs:us-west-2:$(aws sts get-caller-identity --query Account --output text):oryxa-production-realtime-events-dlq"
    ```
 
-To turn it off, set `realtime_purge` to `false` and apply. That also deletes
-the stored secret, at once, so turning it on again repeats steps 2 to 4. The
-rule keeps filling the queue, which holds each event for 14 days, and the
-backlog alarm mails after ten minutes. Turned on again within those 14 days,
-realtime purges everything that waited.
+To turn it off, set `realtime_purge` to `false`, apply and commit. The stored
+secret stays, so turning it on again is step 3. The rule keeps filling the
+queue, which holds each event for 14 days, and the backlog alarm mails after
+ten minutes. Turned on again within those 14 days, realtime purges everything
+that waited.
 
 ## Looking at it
 

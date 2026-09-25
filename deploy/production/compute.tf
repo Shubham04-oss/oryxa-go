@@ -153,7 +153,7 @@ locals {
 
   app_secrets = merge(
     { DATABASE_URL = aws_secretsmanager_secret.database_url.arn },
-    { for variable, _ in local.external_secrets : variable => aws_secretsmanager_secret.external[variable].arn },
+    { for variable, _ in local.task_secrets : variable => aws_secretsmanager_secret.external[variable].arn },
   )
 
   log_options = { for name, group in aws_cloudwatch_log_group.task : name => {
