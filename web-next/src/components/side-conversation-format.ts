@@ -16,6 +16,8 @@ import type {
   SideRequestCard,
   SideStatusLine,
 } from "@/lib/side"
+import { AGENT_REQUEST_TOOLBOXES } from "@/lib/agents/agent-requests"
+import type { AgentRequestToolbox } from "@/lib/agents/agent-requests"
 import type { Teamspace } from "@/lib/teamspaces/client"
 
 /** Who reads the conversation, and the other person, in full and in a sentence. */
@@ -85,12 +87,15 @@ export function askedAgentName(
 
 /**
  * A request's result, in one quiet line: whom the agent worked for and who
- * approved it, or that it ran without asking (automatic delegation).
+ * approved it, or that it ran without asking (automatic delegation), and
+ * who reviewed it when the answer guard held it for them first.
  */
 export function viaLine(
   via: NonNullable<SideAgentMessage["via"]>,
   reader: SideReader
 ): string {
+  const who = (userId: string) =>
+    userId === reader.viewerId ? "you" : reader.peer.short
   const behalf =
     via.onBehalfOf === reader.viewerId
       ? "on your behalf"
@@ -98,8 +103,35 @@ export function viaLine(
   const approval =
     via.approvedBy === undefined
       ? "ran without asking"
-      : `approved by ${via.approvedBy === reader.viewerId ? "you" : reader.peer.short}`
-  return `${behalf} · ${approval}`
+      : `approved by ${who(via.approvedBy)}`
+  const review =
+    via.reviewedBy === undefined ? "" : ` · reviewed by ${who(via.reviewedBy)}`
+  return `${behalf} · ${approval}${review}`
+}
+
+/** Each toolbox a request may ask for, as its owner reads what it opens. */
+const toolboxWords: Record<AgentRequestToolbox, string> = {
+  apps: "your connected apps",
+  knowledge: "team knowledge",
+}
+
+/**
+ * What approving a request lets its agent read, as its owner is asked: the
+ * toolboxes among what it asked for ("Nia may read your connected apps and
+ * team knowledge."), or nothing when it asked for none. Other names grant
+ * nothing, so they are not said.
+ */
+export function toolsLine(
+  agentName: string,
+  requestedTools: readonly string[] | undefined
+): string | undefined {
+  const asked = new Set(requestedTools)
+  const read = AGENT_REQUEST_TOOLBOXES.filter((toolbox) =>
+    asked.has(toolbox)
+  ).map((toolbox) => toolboxWords[toolbox])
+  return read.length > 0
+    ? `${capitalized(agentName)} may read ${listWords(read)}.`
+    : undefined
 }
 
 /** How a card's status reads: its tone (for its icon), and its words. */
@@ -129,15 +161,10 @@ export function cardState(
             text: `Waiting for ${owner} to review the answer.`,
           }
     case "withheld":
+      // Its quiet line says who chose, or that time ran out first.
       return card.review
-        ? {
-            tone: "ended",
-            text: `${capitalized(owner)} chose not to share the answer.`,
-          }
-        : {
-            tone: "ended",
-            text: `Expired before ${owner} reviewed the answer.`,
-          }
+        ? { tone: "ended", text: `Not shared by ${owner}.` }
+        : { tone: "ended", text: "Expired." }
     case "sending":
       return { tone: "waiting", text: "Sending…" }
     case "not_filed":

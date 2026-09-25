@@ -40,6 +40,7 @@ import type { DmPeer } from "./direct-message-people"
 import {
   agentRole,
   askedAgentName,
+  capitalized,
   cardState,
   delegationWords,
   isSideMessage,
@@ -47,6 +48,7 @@ import {
   sideNews,
   sideTimeline,
   targetOptions,
+  toolsLine,
   viaLine,
 } from "./side-conversation-format"
 import type {
@@ -70,6 +72,7 @@ import type {
   SideItem,
   SideMessage,
   SideRequestCard,
+  SideReviewAction,
   SideStatusLine,
 } from "@/lib/side"
 import { codePoints } from "@/lib/dms/protocol"
@@ -230,7 +233,10 @@ export function SideConversationPanel({
       if (was === undefined || was === item.status) continue
       if (item.kind === "agent-message" && item.status !== "streaming") {
         announce(spoken(sideNews(item, reader)))
-      } else if (item.kind === "request-card" && item.status === "approved") {
+      } else if (
+        item.kind === "request-card" &&
+        (item.status === "approved" || item.status === "review")
+      ) {
         announce(cardState(item, reader).text)
       }
     }
@@ -390,6 +396,7 @@ export function SideConversationPanel({
                     agents={agents}
                     canAct={!readOnly}
                     onDecide={side.decide}
+                    onReview={side.review}
                     onRetry={side.retry}
                   />
                 )
@@ -449,11 +456,6 @@ export function SideConversationPanel({
       </div>
     </section>
   )
-}
-
-/** A name that starts a sentence: "this person" is "This person" there. */
-function capitalized(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 /** The longest an answer is said aloud: the rest is in the log. */
@@ -720,10 +722,16 @@ function CardIcon({ tone }: { tone: CardState["tone"] }) {
   }
 }
 
+/** Which of a card's buttons its owner pressed, while what it sends is on its way. */
+type CardPress = "approve" | "approve-bare" | "decline" | SideReviewAction
+
 /**
  * A request to one of the two people's agents: who asked which agent what,
  * where it stands, and, for the agent's owner while it waits on them,
- * Approve and Decline with an optional note.
+ * what approving lets it read, and Approve (with those tools), Approve
+ * without tools and Decline, with an optional note. An answer the answer
+ * guard holds for its owner shows them why, the answer, and Send, Send
+ * masked and Don't send.
  */
 function RequestCard({
   card,
@@ -731,19 +739,21 @@ function RequestCard({
   agents,
   canAct,
   onDecide,
+  onReview,
   onRetry,
 }: {
   card: SideRequestCard
   reader: SideReader
   agents: SideAgents
-  /** The conversation takes decisions and retries now (not read-only). */
+  /** The conversation takes decisions, reviews and retries now (not read-only). */
   canAct: boolean
   onDecide: SideConversation["decide"]
+  onReview: SideConversation["review"]
   onRetry: (clientId: string) => void
 }) {
   const [note, setNote] = useState("")
   const [noting, setNoting] = useState(false)
-  const [pressed, setPressed] = useState<"approved" | "rejected">()
+  const [pressed, setPressed] = useState<CardPress>()
   const [expanded, setExpanded] = useState(false)
   const cardRef = useRef<HTMLElement>(null)
   const noteRef = useRef<HTMLInputElement>(null)
@@ -756,13 +766,15 @@ function RequestCard({
       : `${reader.peer.short}'s agent`)
   const role = agentRole(card.targetAgentId, card.targetId, agents, reader)
   const state = cardState(card, reader)
-  // Only its owner decides a request held for them, from their own view.
-  const decidable =
-    canAct &&
-    card.targetId === reader.viewerId &&
-    card.approval === "owner" &&
-    card.status === "pending" &&
-    card.requestId !== ""
+  const forMe = card.targetId === reader.viewerId
+  // Only its owner decides a request held for them, from their own view,
+  // and is told what approving it lets their agent read.
+  const heldForMe =
+    forMe && card.approval === "owner" && card.status === "pending"
+  const decidable = canAct && heldForMe && card.requestId !== ""
+  const tools = heldForMe ? toolsLine(agent, card.requestedTools) : undefined
+  // Only its owner reviews an answer held for them.
+  const inReview = forMe && card.status === "review"
   const long =
     codePoints(card.task) > longTask || card.task.split("\n").length > 6
   const requesterName = mineAsked ? "you" : reader.peer.name
@@ -771,12 +783,11 @@ function RequestCard({
     if (noting) noteRef.current?.focus()
   }, [noting])
 
-  function decide(decision: "approved" | "rejected") {
-    setPressed(decision)
-    onDecide(card.requestId, decision, note).then(
+  function settled(sent: Promise<void>) {
+    sent.then(
       () => {
         setPressed(undefined)
-        // The buttons go with the decision; focus stays with the card.
+        // The buttons go with what was sent; focus stays with the card.
         cardRef.current?.focus()
       },
       () => {
@@ -784,6 +795,26 @@ function RequestCard({
         setPressed(undefined)
       }
     )
+  }
+
+  function decide(press: "approve" | "approve-bare" | "decline") {
+    setPressed(press)
+    settled(
+      press === "decline"
+        ? onDecide(card.requestId, "rejected", note)
+        : // Approve allows what the request asked for; without tools, none.
+          onDecide(
+            card.requestId,
+            "approved",
+            note,
+            press === "approve" ? (card.requestedTools ?? []) : []
+          )
+    )
+  }
+
+  function review(action: SideReviewAction) {
+    setPressed(action)
+    settled(onReview(card.requestId, action))
   }
 
   return (
@@ -842,6 +873,17 @@ function RequestCard({
           </>
         )}
       </p>
+      {tools && <p className="workspace-side-card-tools">{tools}</p>}
+      {inReview && (
+        <HeldAnswer
+          card={card}
+          agent={agent}
+          requesterName={requesterName}
+          canAct={canAct}
+          pressed={pressed}
+          onReview={review}
+        />
+      )}
       {decidable && (
         <div className="workspace-side-card-decide">
           {noting ? (
@@ -875,21 +917,34 @@ function RequestCard({
               type="button"
               aria-label={`Decline ${agent}'s request from ${requesterName}`}
               disabled={card.deciding}
-              onClick={() => decide("rejected")}
+              onClick={() => decide("decline")}
             >
-              {card.deciding && pressed === "rejected"
+              {card.deciding && pressed === "decline"
                 ? "Declining…"
                 : "Decline"}
             </button>
+            {tools && (
+              <button
+                className="workspace-agent-pill"
+                type="button"
+                aria-label={`Approve ${agent}'s request from ${requesterName} without tools`}
+                disabled={card.deciding}
+                onClick={() => decide("approve-bare")}
+              >
+                {card.deciding && pressed === "approve-bare"
+                  ? "Approving…"
+                  : "Approve without tools"}
+              </button>
+            )}
             <button
               className="workspace-agent-pill"
               type="button"
               data-primary="true"
               aria-label={`Approve ${agent}'s request from ${requesterName}`}
               disabled={card.deciding}
-              onClick={() => decide("approved")}
+              onClick={() => decide("approve")}
             >
-              {card.deciding && pressed === "approved"
+              {card.deciding && pressed === "approve"
                 ? "Approving…"
                 : "Approve"}
             </button>
@@ -902,6 +957,112 @@ function RequestCard({
         </p>
       )}
     </article>
+  )
+}
+
+/**
+ * An answer the answer guard holds for its owner, on their card: the
+ * answer as Send shares it, a preview of what Send masked shares, and the
+ * three choices. Send and Send masked wait for the answer: nobody shares
+ * what they have not seen. Don't send never does.
+ */
+function HeldAnswer({
+  card,
+  agent,
+  requesterName,
+  canAct,
+  pressed,
+  onReview,
+}: {
+  card: SideRequestCard
+  agent: string
+  requesterName: string
+  canAct: boolean
+  /** The choice on its way, if any. */
+  pressed: CardPress | undefined
+  onReview: (action: SideReviewAction) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const held = card.heldAnswer
+  const long =
+    held !== undefined &&
+    (codePoints(held.stored) > longTask || held.stored.split("\n").length > 6)
+  const folded = long && !expanded
+  const busy = card.deciding === true
+  const to = `${agent}'s answer to ${requesterName}`
+  return (
+    <div className="workspace-side-card-held">
+      {held ? (
+        <>
+          <div
+            className="workspace-side-card-answer"
+            data-folded={folded ? "true" : undefined}
+          >
+            <AgentMarkdown text={held.stored} />
+          </div>
+          <p className="workspace-side-card-masked-label">
+            Send masked shares:
+          </p>
+          <div
+            className="workspace-side-card-answer"
+            data-masked="true"
+            data-folded={folded ? "true" : undefined}
+          >
+            <AgentMarkdown text={held.masked} />
+          </div>
+          {long && (
+            <button
+              className="workspace-agent-text-button"
+              type="button"
+              aria-expanded={expanded}
+              onClick={() => setExpanded((open) => !open)}
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          )}
+        </>
+      ) : (
+        <p className="workspace-agent-note" role="status">
+          Loading the answer…
+        </p>
+      )}
+      {canAct && card.requestId !== "" && (
+        <div className="workspace-agent-confirmation-actions">
+          <button
+            className="workspace-agent-pill"
+            type="button"
+            aria-label={`Don't send ${to}`}
+            disabled={busy}
+            onClick={() => onReview("withhold")}
+          >
+            {busy && pressed === "withhold" ? "Withholding…" : "Don't send"}
+          </button>
+          {held && (
+            <>
+              <button
+                className="workspace-agent-pill"
+                type="button"
+                aria-label={`Send ${to}`}
+                disabled={busy}
+                onClick={() => onReview("send")}
+              >
+                {busy && pressed === "send" ? "Sending…" : "Send"}
+              </button>
+              <button
+                className="workspace-agent-pill"
+                type="button"
+                data-primary="true"
+                aria-label={`Send ${to}, masked`}
+                disabled={busy}
+                onClick={() => onReview("send_masked")}
+              >
+                {busy && pressed === "send_masked" ? "Sending…" : "Send masked"}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -10,6 +10,7 @@ import {
   sideTimeline,
   targetOptions,
   teammatesOf,
+  toolsLine,
   viaLine,
 } from "./side-conversation-format"
 import type { SideAgents, SideReader } from "./side-conversation-format"
@@ -231,6 +232,56 @@ describe("who an agent is to the reader", () => {
       )
     ).toBe("on your behalf · approved by you")
   })
+
+  it("says who reviewed a result the answer guard held for them", () => {
+    expect(
+      viaLine(
+        {
+          requestId: "irq_1",
+          onBehalfOf: priya,
+          approvedBy: priya,
+          reviewedBy: priya,
+        },
+        reader
+      )
+    ).toBe("on behalf of Priya · approved by Priya · reviewed by Priya")
+    expect(
+      viaLine(
+        { requestId: "irq_1", onBehalfOf: priya, reviewedBy: priya },
+        reader
+      )
+    ).toBe("on behalf of Priya · ran without asking · reviewed by Priya")
+    expect(
+      viaLine(
+        {
+          requestId: "irq_1",
+          onBehalfOf: viewerId,
+          approvedBy: viewerId,
+          reviewedBy: viewerId,
+        },
+        reader
+      )
+    ).toBe("on your behalf · approved by you · reviewed by you")
+  })
+})
+
+describe("toolsLine", () => {
+  it("says what approving lets the agent read, from the toolboxes it asked for", () => {
+    expect(toolsLine("Nia", ["apps", "knowledge"])).toBe(
+      "Nia may read your connected apps and team knowledge."
+    )
+    expect(toolsLine("Nia", ["knowledge", "apps"])).toBe(
+      "Nia may read your connected apps and team knowledge."
+    )
+    expect(toolsLine("Nia", ["apps"])).toBe("Nia may read your connected apps.")
+    expect(toolsLine("your agent", ["knowledge"])).toBe(
+      "Your agent may read team knowledge."
+    )
+    // Nothing asked for, or nothing that opens anything: no line.
+    for (const tools of [undefined, [], ["github.search"]]) {
+      expect(toolsLine("Nia", tools)).toBeUndefined()
+    }
+  })
 })
 
 describe("cardState", () => {
@@ -328,13 +379,11 @@ describe("an answer held for review", () => {
         }),
         reader
       )
-    ).toEqual({
-      tone: "ended",
-      text: "Priya chose not to share the answer.",
-    })
+    ).toEqual({ tone: "ended", text: "Not shared by Priya." })
+    // Withheld as nobody reviewed it in time: its quiet line says so.
     expect(cardState(card({ status: "withheld" }), reader)).toEqual({
       tone: "ended",
-      text: "Expired before Priya reviewed the answer.",
+      text: "Expired.",
     })
   })
 
@@ -360,9 +409,9 @@ describe("an answer held for review", () => {
         },
         reader
       ).text
-    ).toBe("You chose not to share the answer.")
+    ).toBe("Not shared by you.")
     expect(cardState({ ...forMe, status: "withheld" }, reader).text).toBe(
-      "Expired before you reviewed the answer."
+      "Expired."
     )
   })
 
