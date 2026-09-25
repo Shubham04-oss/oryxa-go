@@ -273,18 +273,29 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		},
 		// What answers when nobody is watching the run: the same agent with
 		// the reduced toolboxes and no memory, and without the member's apps
-		// at all until their agent has approved the request that woke it.
+		// at all until their agent has approved the request that woke it. A
+		// run delivering one interaction is offered nothing that lists the
+		// member's other requests.
 		Unattended: func(definition managedagents.Definition, profile managedagents.UnattendedProfile) (agent.Agent, error) {
-			withApps := profile == managedagents.UnattendedReads
+			withApps := profile.ReadsApps()
 			if definition.Kind == managedagents.KindPrimary {
-				if withApps {
+				switch {
+				case profile.Delivers() && withApps:
+					return krude.Delivering, nil
+				case profile.Delivers():
+					return krude.DeliveringQuiet, nil
+				case withApps:
 					return krude.Unattended, nil
 				}
 				return krude.UnattendedQuiet, nil
 			}
-			return krude.ManagedUnattended(agents.ManagedSpec{
+			spec := agents.ManagedSpec{
 				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
-			}, withApps)
+			}
+			if profile.Delivers() {
+				return krude.ManagedDelivering(spec, withApps)
+			}
+			return krude.ManagedUnattended(spec, withApps)
 		},
 		Sessions: sessions, Artifacts: krude.Artifacts, Memory: krude.Memory,
 		Runs: runstore.New(platform.Database), Prices: priceTable, Logger: logger,

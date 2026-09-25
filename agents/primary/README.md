@@ -433,6 +433,14 @@ what it may reach follows what their own agent has already allowed:
   account of it, that `tools_used` is within `allowed_tools`.
 - No unwatched run may start an interaction of its own: `interactions_create`
   is left out, so a request cannot fan out into requests on other members.
+- A delivery is about its one request. Its run gets an interactions toolbox
+  of its own (`managedagents.DeliveryReads` and `DeliveryQuiet`, the reach
+  above) with `interactions_get`, `interactions_decide` and
+  `interactions_respond` only: `interactions_inbox` and `interactions_sent`
+  are not there, so the model cannot browse the member's other requests
+  whatever it makes of the request. Nothing a delivery does needs them, since
+  its message names the request. App wake-ups and a room's stand-in keep the
+  toolbox they had.
 
 Each create, decision, and response is committed with an EventBridge outbox
 event. The event contains routing identities and lifecycle state, not the task,

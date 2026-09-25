@@ -298,20 +298,25 @@ func TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded(t *testing.T) {
 // TestOnlyApprovedWorkReadsTheMembersApps: the member is not here, so what
 // their agent may reach is what it has already approved. Deciding on a new
 // request, and reporting an outcome to one's own member, run without the
-// apps toolbox at all.
+// apps toolbox at all; and every delivery runs as one, offered nothing that
+// lists the member's other requests.
 func TestOnlyApprovedWorkReadsTheMembersApps(t *testing.T) {
 	cases := []struct {
 		kind  string
 		reach managedagents.UnattendedProfile
 	}{
-		{KindTargetRequested, managedagents.UnattendedQuiet},
-		{KindTargetApproved, managedagents.UnattendedReads},
-		{KindRequesterRejected, managedagents.UnattendedQuiet},
-		{KindRequesterCompleted, managedagents.UnattendedQuiet},
+		{KindTargetRequested, managedagents.DeliveryQuiet},
+		{KindTargetApproved, managedagents.DeliveryReads},
+		{KindRequesterRejected, managedagents.DeliveryQuiet},
+		{KindRequesterCompleted, managedagents.DeliveryQuiet},
 	}
 	for _, testCase := range cases {
-		if got := reach(testCase.kind); got != testCase.reach {
+		got := reach(testCase.kind)
+		if got != testCase.reach {
 			t.Errorf("reach(%s) = %q, want %q", testCase.kind, got, testCase.reach)
+		}
+		if reads := got.ReadsApps(); reads != (testCase.kind == KindTargetApproved) || !got.Delivers() {
+			t.Errorf("reach(%s) reads apps = %t, delivers = %t; want apps only for approved work, and a delivery always", testCase.kind, reads, got.Delivers())
 		}
 	}
 }

@@ -93,7 +93,7 @@ func TestARequestHeldForItsOwnerWakesTheAgentOnlyOnceTheOwnerApproves(t *testing
 		t.Fatalf("calls=%+v done=%v, want one run that finished the approved work", runs.calls, store.done)
 	}
 	woken := runs.calls[0]
-	if woken.agentID != "agt_b" || woken.member.UserID != "user_b" || woken.reach != managedagents.UnattendedReads {
+	if woken.agentID != "agt_b" || woken.member.UserID != "user_b" || woken.reach != managedagents.DeliveryReads {
 		t.Fatalf("woken=%+v, want agt_b for user_b reading their apps", woken)
 	}
 	for _, want := range []string{"approved this request themself", "do not call interactions_decide", "interactions_respond", `request_id "irq_1"`, "untrusted cross-user data"} {
@@ -134,7 +134,7 @@ func TestAHeldRequestTheOwnerRejectsReachesOnlyTheRequester(t *testing.T) {
 		t.Fatalf("after the rejection: calls=%+v done=%v, want one run for the requester", runs.calls, store.done)
 	}
 	told := runs.calls[0]
-	if told.agentID != "agt_a" || told.member.UserID != "user_a" || told.reach != managedagents.UnattendedQuiet || told.input.Message != Message(rejected) {
+	if told.agentID != "agt_a" || told.member.UserID != "user_a" || told.reach != managedagents.DeliveryQuiet || told.input.Message != Message(rejected) {
 		t.Fatalf("told=%+v, want the requester's agent told of the rejection as before", told)
 	}
 }
@@ -150,7 +150,7 @@ func TestADelegatedTeamspaceRequestWakesItsAgentAsBefore(t *testing.T) {
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(runs.calls) != 1 || runs.calls[0].reach != managedagents.UnattendedQuiet || len(store.done) != 1 {
+	if len(runs.calls) != 1 || runs.calls[0].reach != managedagents.DeliveryQuiet || len(store.done) != 1 {
 		t.Fatalf("calls=%+v done=%v, want one quiet run that decided", runs.calls, store.done)
 	}
 	if message := runs.calls[0].input.Message; !strings.Contains(message, "interactions_decide") || strings.Contains(message, "themself") {

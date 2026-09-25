@@ -237,3 +237,20 @@ func TestAnUnwatchedRunAnswersOnTheRestrictedAgent(t *testing.T) {
 		t.Fatal("engine() ran on with no restricted agent to fall back to")
 	}
 }
+
+// TestAProfileSaysWhatItReachesAndWhetherItDelivers: only the reading
+// profiles reach the member's apps, and only the delivery profiles belong to
+// a run delivering one interaction. A profile nobody knows reaches neither.
+func TestAProfileSaysWhatItReachesAndWhetherItDelivers(t *testing.T) {
+	for profile, want := range map[UnattendedProfile]struct{ apps, delivers bool }{
+		UnattendedReads: {apps: true},
+		UnattendedQuiet: {},
+		DeliveryReads:   {apps: true, delivers: true},
+		DeliveryQuiet:   {delivers: true},
+		"everything":    {},
+	} {
+		if profile.ReadsApps() != want.apps || profile.Delivers() != want.delivers {
+			t.Errorf("%q: reads apps %t, delivers %t; want %t, %t", profile, profile.ReadsApps(), profile.Delivers(), want.apps, want.delivers)
+		}
+	}
+}

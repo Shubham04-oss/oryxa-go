@@ -175,6 +175,12 @@ type InteractionConfig struct {
 	// run may read, decide and respond; starting fresh requests on other
 	// members is the member's own business, in a conversation they are in.
 	Answering bool
+	// Delivering is for a run that delivers one interaction, to the agent
+	// that has to decide it, answer it or hear its outcome. It offers only
+	// what one request needs, reading it, deciding it and answering it: none
+	// of the member's other requests are the run's to browse, and it starts
+	// none.
+	Delivering bool
 }
 
 // InteractionToolbox lets agents exchange durable requests without giving
@@ -222,7 +228,11 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	}
 	offered := []tool.Tool{create, inbox, sent, get, decide, respond}
 	description := "Durable agent-to-agent requests: send, inspect, approve or reject, and answer through an audited JSON contract without direct invocation."
-	if config.Answering {
+	switch {
+	case config.Delivering:
+		offered = []tool.Tool{get, decide, respond}
+		description = "The one agent-to-agent request being delivered to this agent: read it, approve or reject it, and answer it through an audited JSON contract."
+	case config.Answering:
 		offered = []tool.Tool{inbox, sent, get, decide, respond}
 		description = "Durable agent-to-agent requests addressed to this member: inspect, approve or reject, and answer through an audited JSON contract."
 	}

@@ -203,7 +203,7 @@ func TestAnOwnerHeldRequestLivesItsWholeLifeAgainstTheDatabase(t *testing.T) {
 		t.Fatalf("the approval's delivery: runs=%+v handled=%v, want one run that answered", runs.calls, handled(approvedDelivery.EventID))
 	}
 	woken := runs.calls[0]
-	if woken.agentID != "agt_b" || woken.member.UserID != "user_b" || woken.reach != managedagents.UnattendedReads ||
+	if woken.agentID != "agt_b" || woken.member.UserID != "user_b" || woken.reach != managedagents.DeliveryReads ||
 		!strings.Contains(woken.input.Message, "approved this request themself") {
 		t.Fatalf("woken=%+v, want B's agent reading B's apps, told B approved", woken)
 	}

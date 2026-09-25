@@ -52,7 +52,25 @@ const (
 	// UnattendedQuiet keeps the member's apps out of the run altogether, for
 	// a request nobody has approved yet.
 	UnattendedQuiet UnattendedProfile = "quiet"
+	// DeliveryReads and DeliveryQuiet reach as far as UnattendedReads and
+	// UnattendedQuiet, for a run that delivers one interaction: its
+	// interactions toolbox holds only what that request needs, reading,
+	// deciding and answering it, and nothing that lists the member's other
+	// requests.
+	DeliveryReads UnattendedProfile = "delivery_reads"
+	DeliveryQuiet UnattendedProfile = "delivery_quiet"
 )
+
+// ReadsApps is whether a run on this profile may read the member's apps.
+func (profile UnattendedProfile) ReadsApps() bool {
+	return profile == UnattendedReads || profile == DeliveryReads
+}
+
+// Delivers is whether this profile is for a run that delivers one
+// interaction.
+func (profile UnattendedProfile) Delivers() bool {
+	return profile == DeliveryReads || profile == DeliveryQuiet
+}
 
 // UnattendedFactory builds the restricted runtime a profile allows. It must
 // answer to the same name as [Factory] for the same definition: a run picks
@@ -236,7 +254,7 @@ func (service *Service) StartRun(ctx context.Context, member threads.Member, id,
 
 // StartUnattendedRun starts a run whose origin makes it unwatched, saying how
 // far the reduced agent may reach. A caller delivering what another member's
-// agent asked for passes [UnattendedQuiet] until this member's agent has
+// agent asked for passes [DeliveryQuiet] until this member's agent has
 // approved the request, so nothing unapproved reads their apps.
 func (service *Service) StartUnattendedRun(ctx context.Context, member threads.Member, id, threadID string, input threads.RunInput, profile UnattendedProfile) (StartedRun, error) {
 	return service.startRun(ctx, member, id, threadID, input, profile)
