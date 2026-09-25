@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/events"
+	"github.com/Shubham04-oss/oryxa-go/realtime/internal/postgres"
 )
 
 // platform is what a host hands realtime. Its database never connects:
@@ -95,8 +97,9 @@ func TestRealtimeIsOnOnceEitherOfItsOwnSettingsIsSet(t *testing.T) {
 	}
 }
 
-// Once configured, realtime runs its consumer and the dispatcher that
-// publishes its outbox, and signs what it publishes as itself.
+// Once configured, realtime runs its consumer, the dispatcher that publishes
+// its outbox and the worker that forgets old ids, serves the Worker's route,
+// and signs what it publishes as itself.
 func TestMountRunsRealtimeOnceConfigured(t *testing.T) {
 	var logs bytes.Buffer
 	on := platform(configured(), &logs)
@@ -104,8 +107,8 @@ func TestMountRunsRealtimeOnceConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(service.Workers) != 2 || service.Handler != nil || len(service.Routes) != 0 {
-		t.Fatalf("service = %d workers, handler %v, routes %v; want the consumer and the dispatcher",
+	if len(service.Workers) != 3 || service.Handler == nil || !slices.Equal(service.Routes, []string{"POST /v1/realtime/events"}) {
+		t.Fatalf("service = %d workers, handler %v, routes %v; want the consumer, the dispatcher and the forgetting, and the route",
 			len(service.Workers), service.Handler, service.Routes)
 	}
 	if !strings.Contains(logs.String(), "realtime mounted") || !strings.Contains(logs.String(), "worker_url=http://127.0.0.1:3001") {
@@ -183,7 +186,7 @@ func TestMountRefusesToStartWhenAskedForByNameWithoutWhatItNeeds(t *testing.T) {
 	}
 	values := configured()
 	values["ORYXA_SERVICES"] = "realtime"
-	if service, err := Mount(context.Background(), platform(values, &bytes.Buffer{})); err != nil || len(service.Workers) != 2 {
+	if service, err := Mount(context.Background(), platform(values, &bytes.Buffer{})); err != nil || len(service.Workers) != 3 {
 		t.Fatalf("ORYXA_SERVICES=realtime, configured: Mount() = %d workers, %v", len(service.Workers), err)
 	}
 	for services, want := range map[string]bool{"": false, "all": false, "auth,teams": false, "realtimes": false, "realtime": true, "teams, realtime": true} {
@@ -238,19 +241,100 @@ func TestRealtimeVerifiesAPurgeForAsLongAsItCanWait(t *testing.T) {
 	}
 }
 
-// Realtime serves no route, so it shares the process's listener with any
-// service; the host answers for it on /healthz.
+// The host serves realtime's route only while realtime is on; off, the path
+// is nobody's. Either way the host answers for it on /healthz.
 func TestTheHostAssemblesRealtime(t *testing.T) {
-	for name, values := range map[string]map[string]string{"off": {}, "on": configured()} {
-		handler, closeAll, err := host.Assemble(context.Background(), platform(values, &bytes.Buffer{}), []host.Definition{Definition})
+	for name, test := range map[string]struct {
+		values map[string]string
+		route  int
+	}{
+		"off": {map[string]string{}, http.StatusNotFound},
+		// On, a call the Worker did not sign is refused.
+		"on": {configured(), http.StatusUnauthorized},
+	} {
+		handler, closeAll, err := host.Assemble(context.Background(), platform(test.values, &bytes.Buffer{}), []host.Definition{Definition})
 		if err != nil {
 			t.Fatalf("%s: Assemble() = %v", name, err)
 		}
-		recorder := httptest.NewRecorder()
-		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		health := httptest.NewRecorder()
+		handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		route := httptest.NewRecorder()
+		handler.ServeHTTP(route, httptest.NewRequest(http.MethodPost, "/v1/realtime/events", strings.NewReader(`{"events":[]}`)))
 		closeAll()
-		if recorder.Code != http.StatusNoContent {
-			t.Fatalf("%s: /healthz = %d", name, recorder.Code)
+		if health.Code != http.StatusNoContent || route.Code != test.route {
+			t.Fatalf("%s: /healthz = %d, POST /v1/realtime/events = %d %s; want 204 and %d", name, health.Code, route.Code, route.Body.String(), test.route)
 		}
+	}
+}
+
+// fakeForgetter deletes up to limit of the ids it holds at each call, or
+// fails.
+type fakeForgetter struct {
+	mu      sync.Mutex
+	left    int
+	calls   int
+	befores []time.Time
+	err     error
+}
+
+func (fake *fakeForgetter) ForgetAccepted(_ context.Context, before time.Time, limit int) (int, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.calls++
+	fake.befores = append(fake.befores, before)
+	if fake.err != nil {
+		return 0, fake.err
+	}
+	deleted := min(limit, fake.left)
+	fake.left -= deleted
+	return deleted, nil
+}
+
+// Old ids are deleted a batch at a time until none are left, every hour, and
+// only those accepted more than a week ago.
+func TestTheWorkersOldIdsAreForgotten(t *testing.T) {
+	store := &fakeForgetter{left: 2*forgetBatch + 5}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	before := time.Now().Add(-postgres.AcceptedRetention)
+	forget(context.Background(), store, before, logger)
+	if store.left != 0 || store.calls != 3 {
+		t.Fatalf("after forgetting: %d left, %d calls; want every old id gone in three batches", store.left, store.calls)
+	}
+
+	failing := &fakeForgetter{left: forgetBatch * 3, err: errors.New("the database is unreachable")}
+	forget(context.Background(), failing, before, logger)
+	if failing.calls != 1 || !strings.Contains(logs.String(), "the database is unreachable") {
+		t.Fatalf("a failure: %d calls, logs %s; want one attempt, logged", failing.calls, logs.String())
+	}
+
+	// The worker forgets once at once, and stops when told.
+	ctx, cancel := context.WithCancel(context.Background())
+	worker := &fakeForgetter{left: 3}
+	done := make(chan struct{})
+	started := time.Now()
+	go func() {
+		forgetAccepted(worker, logger)(ctx)
+		close(done)
+	}()
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		worker.mu.Lock()
+		calls := worker.calls
+		worker.mu.Unlock()
+		if calls > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	worker.mu.Lock()
+	defer worker.mu.Unlock()
+	if worker.left != 0 || len(worker.befores) != 1 {
+		t.Fatalf("the worker: %d left, forgot before %v; want the old ids gone at once", worker.left, worker.befores)
+	}
+	if cutoff := worker.befores[0]; cutoff.After(started.Add(-postgres.AcceptedRetention).Add(time.Second)) ||
+		cutoff.Before(started.Add(-postgres.AcceptedRetention).Add(-time.Second)) {
+		t.Fatalf("forgot what was accepted before %s, want a week before %s", cutoff, started)
 	}
 }
