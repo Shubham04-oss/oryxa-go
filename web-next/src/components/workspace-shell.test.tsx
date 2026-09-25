@@ -16,6 +16,13 @@ import { WorkspaceShell } from "./workspace-shell"
 import type { Session } from "@/lib/auth/client"
 import { json, mockApi, orgPath, teamspace, viewerId } from "@/test/teamspaces"
 
+// A signed-in shell holds the member's DM inbox open, and a teamspace its
+// room: their sockets are stand-ins (src/test/room-socket.ts).
+vi.mock(
+  "agents/react",
+  async () => (await import("@/test/room-socket")).agentsReact
+)
+
 function render(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -131,68 +138,14 @@ describe("WorkspaceShell navigation", () => {
     expect(screen.queryByText("Work is better together.")).toBeNull()
     expect(screen.queryByText("Your people, together in one place.")).toBeNull()
     expect(screen.queryByText("Preview")).toBeNull()
+    // Without a workspace there is nobody to message, and never examples.
     expect(
-      screen.getByRole("button", { name: "Message Jordan Lee" })
+      screen.getByText("Sign in to a workspace to message its people.")
     ).toBeTruthy()
+    expect(screen.queryByRole("button", { name: /^Message / })).toBeNull()
     expect(
       screen.queryByRole("heading", { name: "Make room for someone new." })
     ).toBeNull()
-    expect(
-      screen.queryByRole("button", {
-        name: "Open conversation with Jordan Lee",
-      })
-    ).toBeNull()
-
-    fireEvent.click(screen.getByRole("button", { name: "Message Jordan Lee" }))
-    expect(
-      screen.getByRole("heading", { name: "Jordan Lee", level: 1 })
-    ).toBeTruthy()
-    expect(
-      screen.queryByRole("heading", { name: "People", level: 1 })
-    ).toBeNull()
-    expect(
-      screen.getByRole("button", { name: "Open conversation with Jordan Lee" })
-    ).toBeTruthy()
-    fireEvent.change(
-      screen.getByRole("textbox", { name: "Message Jordan Lee" }),
-      {
-        target: { value: "Hello Jordan" },
-      }
-    )
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }))
-    expect(
-      within(screen.getByLabelText("Conversation with Jordan Lee")).getByText(
-        "Hello Jordan"
-      )
-    ).toBeTruthy()
-    expect(
-      within(screen.getByLabelText("Conversations")).getByText("Hello Jordan")
-    ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Back to people" }))
-    expect(
-      screen.getByRole("heading", { name: "People", level: 1 })
-    ).toBeTruthy()
-    expect(screen.getByRole("button", { name: "Message Sam Kim" })).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Message Sam Kim" }))
-    expect(
-      screen.getByRole("button", { name: "Open conversation with Sam Kim" })
-    ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: /^Teamspaces/ }))
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open conversation with Jordan Lee" })
-    )
-    expect(
-      within(screen.getByLabelText("Conversation with Jordan Lee")).getByText(
-        "Hello Jordan"
-      )
-    ).toBeTruthy()
-    fireEvent.click(
-      screen.getByRole("button", { name: "Collapse left sidebar" })
-    )
-    expect(
-      screen.getByRole("button", { name: "Open conversation with Sam Kim" })
-    ).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
 
     fireEvent.click(screen.getByRole("button", { name: "Open user menu" }))
     fireEvent.click(screen.getByRole("menuitem", { name: "Settings" }))
@@ -230,7 +183,7 @@ describe("WorkspaceShell navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Close settings" }))
     expect(screen.queryByRole("dialog", { name: "Settings" })).toBeNull()
     expect(
-      screen.getByRole("heading", { name: "Jordan Lee", level: 1 })
+      screen.getByRole("heading", { name: "People", level: 1 })
     ).toBeTruthy()
   })
 
@@ -459,30 +412,6 @@ describe("WorkspaceShell navigation", () => {
       )
       expect(screen.queryByRole("tab", { name })).toBeNull()
     }
-  })
-
-  it("closes the mobile sidebar after selecting a conversation", () => {
-    vi.stubGlobal("matchMedia", () => ({
-      matches: true,
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-    }))
-    const { container } = render(
-      <WorkspaceShell preview initialMode="team" initialSection="people" />
-    )
-    const shell = container.querySelector(".workspace-shell")
-
-    fireEvent.click(screen.getByRole("button", { name: "Message Jordan Lee" }))
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    fireEvent.click(screen.getByRole("button", { name: "Expand left sidebar" }))
-    expect(shell?.getAttribute("data-left")).toBe("expanded")
-    fireEvent.click(
-      screen.getByRole("button", { name: "Open conversation with Jordan Lee" })
-    )
-    expect(shell?.getAttribute("data-left")).toBe("collapsed")
-    expect(
-      screen.getByRole("textbox", { name: "Message Jordan Lee" })
-    ).toBeTruthy()
   })
 
   it("names the selected teamspace in the header and counts the real ones", async () => {

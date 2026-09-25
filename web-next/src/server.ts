@@ -1,8 +1,28 @@
 import handler from "@tanstack/react-start/server-entry"
 import { getAgentByName, routeAgentRequest } from "agents"
+import { conversationRequestHeaders } from "./conversation-env"
+import type { ConversationEnv } from "./conversation-env"
+import { DirectMessageAgent } from "./direct-message-agent"
+import { InboxAgent } from "./inbox-agent"
+import {
+  isNameId,
+  parseDirectMessageName,
+  parseInboxName,
+  parseSideConversationName,
+  peerIn,
+} from "./lib/dms/names"
 import { parseTeamspaceRoomAgentName } from "./lib/rooms/room-agent"
+import { encodeRoster } from "./lib/side/protocol"
+import type { SideRoster } from "./lib/side/protocol"
+import { rosterOf } from "./lib/side/roster"
 import { parseSpecialistAgentName } from "./lib/specialists/chat-messages"
 import { parseThreadAgentName } from "./lib/threads/chat-messages"
+import { REALTIME_PURGE_PATH, handlePurge } from "./realtime-purge"
+import { RealtimeRegistryAgent } from "./realtime-registry-agent"
+import {
+  SideConversationAgent,
+  sideRequestHeaders,
+} from "./side-conversation-agent"
 import {
   SpecialistChatAgent,
   specialistRequestHeaders,
@@ -12,16 +32,25 @@ import { ThreadChatAgent, chatRequestHeaders } from "./thread-chat-agent"
 import type { ThreadChatEnv } from "./thread-chat-agent"
 
 // The Worker (wrangler.jsonc `main`). It serves the app through TanStack
-// Start, and puts every realtime Durable Object (REALTIME.md) behind a check
-// with Go: one entry each in `realtimeObjects` below.
+// Start, puts every realtime Durable Object (REALTIME.md) behind a check
+// with Go (one entry each in `realtimeObjects` below), and takes Go's signed
+// purges of the conversations a member leaves behind (src/realtime-purge.ts).
 
-export interface Env extends ThreadChatEnv {
+export interface Env extends ThreadChatEnv, ConversationEnv {
   ThreadChatAgent: DurableObjectNamespace<ThreadChatAgent>
   SpecialistChatAgent: DurableObjectNamespace<SpecialistChatAgent>
   TeamspaceRoomAgent: DurableObjectNamespace<TeamspaceRoomAgent>
 }
 
-export { SpecialistChatAgent, TeamspaceRoomAgent, ThreadChatAgent }
+export {
+  DirectMessageAgent,
+  InboxAgent,
+  RealtimeRegistryAgent,
+  SideConversationAgent,
+  SpecialistChatAgent,
+  TeamspaceRoomAgent,
+  ThreadChatAgent,
+}
 
 /** An error in Go's shape, which the app's `requestError` reads. */
 function failure(
@@ -78,13 +107,23 @@ async function refusedByGo(response: Response): Promise<Response> {
  * or whatever `read` makes of an answer Go accepted. Without `read`, only
  * the status matters and the body is not read.
  */
-type AskGo = (
-  path: string,
-  read?: (accepted: Response) => Promise<Response | undefined>
-) => Promise<Response | undefined>
+type AskGo = {
+  (
+    path: string,
+    read?: (accepted: Response) => Promise<Response | undefined>
+  ): Promise<Response | undefined>
+  /**
+   * Go's JSON answer to `path`, as `{ answer }`, or the refusal to send, as
+   * for any ask; an answer that is not JSON is a bad gateway.
+   */
+  json: (path: string) => Promise<Response | { answer: unknown }>
+}
 
 function askGo(env: Env, cookie: string): AskGo {
-  return async (path, read) => {
+  const ask = async (
+    path: string,
+    read?: (accepted: Response) => Promise<Response | undefined>
+  ) => {
     let access: Response
     try {
       access = await fetch(new URL(path, env.ORYXA_API_ORIGIN), {
@@ -98,11 +137,34 @@ function askGo(env: Env, cookie: string): AskGo {
     await access.body?.cancel().catch(() => undefined)
     return undefined
   }
+  const json = async (path: string) => {
+    let answer: { answer: unknown } | undefined
+    const refused = await ask(path, async (accepted) => {
+      try {
+        answer = { answer: await accepted.json() }
+        return undefined
+      } catch {
+        return badGateway()
+      }
+    })
+    return refused ?? answer ?? badGateway()
+  }
+  return Object.assign(ask, { json })
 }
+
+/**
+ * Headers only the Worker may set on a request it routes: its identity
+ * headers (`X-Oryxa-*`), and those the Agents SDK trusts from a request as
+ * its own routing (`x-cf-agents-subagent-url` hands a socket to a sub-agent
+ * before the object's `onConnect` runs; `x-agents-lifecycle-props` sets its
+ * props), with PartyKit's prefix beside them. A browser's copy of any of
+ * them is dropped.
+ */
+const internalHeader = /^(x-oryxa-|x-cf-agents-|x-agents-|x-partykit-)/i
 
 /** The bindings routeAgentRequest routes: the Durable Object namespaces in `Env`. */
 type ObjectBinding = {
-  [Key in keyof Env]: Env[Key] extends { idFromName: unknown } ? Key : never
+  [Key in keyof Env]-?: Env[Key] extends { idFromName: unknown } ? Key : never
 }[keyof Env]
 
 /**
@@ -112,9 +174,10 @@ type ObjectBinding = {
  * and DELETE when the object has a `deletion`. For any of them the Worker
  * checks the name as it arrives, refuses a cross-site socket or DELETE,
  * requires the session cookie, asks Go (`checkAccess`), and only then hands
- * the request on with the headers it sets itself (`identity`).
+ * the request on with the headers it sets itself (`identity`), from what
+ * the check learned from Go (`TGrant`: who the member is, for a DM).
  */
-type RealtimeObject<TIds> = {
+type RealtimeObject<TIds, TGrant = undefined> = {
   /** Its Durable Object binding in wrangler.jsonc, which is also its class. */
   binding: ObjectBinding
   /** What a page may GET beside the socket, as the path's last segment. */
@@ -127,15 +190,16 @@ type RealtimeObject<TIds> = {
    */
   parseName: (rawName: string) => TIds | undefined
   /**
-   * Asks Go, as the member, whether they may open it: nothing lets the
-   * request through, a response refuses it.
+   * Asks Go, as the member, whether they may open it: a response refuses
+   * the request; anything else lets it through, and is what the check
+   * learned for `identity`.
    */
-  checkAccess: (ids: TIds, ask: AskGo) => Promise<Response | undefined>
+  checkAccess: (ids: TIds, ask: AskGo) => Promise<Response | TGrant>
   /**
    * The headers the object trusts. Every `X-Oryxa-*` header the browser
    * sent is dropped before these are set.
    */
-  identity: (ids: TIds, cookie: string) => Record<string, string>
+  identity: (ids: TIds, cookie: string, grant: TGrant) => Record<string, string>
   /** DELETE, from the app's own origin. Without it, DELETE answers 405. */
   deletion?: {
     /**
@@ -181,7 +245,9 @@ function kebabCase(binding: string): string {
   return kebab.replace(/_/g, "-").replace(/-$/, "")
 }
 
-function realtimeObject<TIds>(object: RealtimeObject<TIds>): RealtimeRoute {
+function realtimeObject<TIds, TGrant = undefined>(
+  object: RealtimeObject<TIds, TGrant>
+): RealtimeRoute {
   const segment = kebabCase(object.binding)
   return {
     segment,
@@ -191,8 +257,8 @@ function realtimeObject<TIds>(object: RealtimeObject<TIds>): RealtimeRoute {
   }
 }
 
-async function routeToObject<TIds>(
-  object: RealtimeObject<TIds>,
+async function routeToObject<TIds, TGrant>(
+  object: RealtimeObject<TIds, TGrant>,
   segment: string,
   request: Request,
   env: Env,
@@ -232,8 +298,8 @@ async function routeToObject<TIds>(
     if (!deletion.goPath) {
       // Nothing in Go to delete: the member may clear the object when they
       // may open it.
-      const refused = await object.checkAccess(ids, ask)
-      if (refused) return refused
+      const access = await object.checkAccess(ids, ask)
+      if (access instanceof Response) return access
       try {
         await deletion.purge(env, rawName)
       } catch (error) {
@@ -266,14 +332,16 @@ async function routeToObject<TIds>(
   }
 
   // The member may reach the object only for what Go lets them open.
-  const refused = await object.checkAccess(ids, ask)
-  if (refused) return refused
+  const access = await object.checkAccess(ids, ask)
+  if (access instanceof Response) return access
 
   const headers = new Headers(request.headers)
   for (const name of [...headers.keys()]) {
-    if (name.toLowerCase().startsWith("x-oryxa-")) headers.delete(name)
+    if (internalHeader.test(name)) headers.delete(name)
   }
-  for (const [name, value] of Object.entries(object.identity(ids, cookie))) {
+  for (const [name, value] of Object.entries(
+    object.identity(ids, cookie, access)
+  )) {
     headers.set(name, value)
   }
   let routed: Response | null
@@ -340,9 +408,184 @@ async function isOnTheTeam(accepted: Response): Promise<Response | undefined> {
   return undefined
 }
 
+/** Who the member is, as Go answered the Worker for their cookie. */
+type Caller = { userId: string }
+
+/**
+ * The member, from Go's answer to `GET /v1/organizations/{org}`: their own
+ * membership, so the organization is theirs, and its `user_id` is the same
+ * subject `GET /v1/auth/me` answers with. Go marks an agent's token
+ * (`agent: true`); DMs are between people, so it is refused.
+ */
+function callerIn(
+  organization: Response | { answer: unknown }
+): Response | Caller {
+  if (organization instanceof Response) return organization
+  const answer = organization.answer as {
+    membership?: { user_id?: unknown } | null
+    agent?: unknown
+  } | null
+  if (answer?.agent === true) {
+    return failure(
+      403,
+      "forbidden",
+      "An agent cannot open a member's conversations."
+    )
+  }
+  const userId = answer?.membership?.user_id
+  if (!isNameId(userId)) return badGateway()
+  return { userId }
+}
+
+/** The user ids in Go's `GET /v1/organizations/{org}/members` answer, or nothing for an answer that is not a list of members. */
+function memberIds(answer: unknown): Set<string> | undefined {
+  const members = (answer as { members?: unknown } | null)?.members
+  if (!Array.isArray(members)) return undefined
+  const ids = new Set<string>()
+  for (const member of members as unknown[]) {
+    const userId = (member as { user_id?: unknown } | null)?.user_id
+    if (typeof userId === "string") ids.add(userId)
+  }
+  return ids
+}
+
+/**
+ * Whether the member may open a DM: one of its two people, with the other
+ * still in the organization. Both of Go's answers are asked for at once;
+ * the member's own refusal (401, or 404 for an organization that is not
+ * theirs) comes first, then 403 `not_participant`, then 404
+ * `peer_not_found`.
+ */
+async function directMessageAccess(
+  ids: { organizationId: string; userA: string; userB: string },
+  ask: AskGo
+): Promise<Response | Caller> {
+  const [organization, members] = await Promise.all([
+    ask.json(organizationPath(ids.organizationId)),
+    ask.json(`${organizationPath(ids.organizationId)}/members`),
+  ])
+  const caller = callerIn(organization)
+  if (caller instanceof Response) return caller
+  const peerId = peerIn(ids, caller.userId)
+  if (!peerId) {
+    return failure(
+      403,
+      "not_participant",
+      "Only the two people in a conversation can open it."
+    )
+  }
+  if (members instanceof Response) return members
+  const listed = memberIds(members.answer)
+  if (!listed) return badGateway()
+  if (!listed.has(peerId)) {
+    return failure(
+      404,
+      "peer_not_found",
+      "This person is not in your organization."
+    )
+  }
+  return caller
+}
+
+/** Whether the member may open an inbox: their own, in an organization of theirs. */
+async function inboxAccess(
+  ids: { organizationId: string; userId: string },
+  ask: AskGo
+): Promise<Response | Caller> {
+  const caller = callerIn(await ask.json(organizationPath(ids.organizationId)))
+  if (caller instanceof Response) return caller
+  if (caller.userId !== ids.userId) {
+    return failure(403, "forbidden", "This is another member's inbox.")
+  }
+  return caller
+}
+
+/** What the side conversation's check learned: who the member is, and who is in the conversation. */
+type SideGrant = Caller & { roster: SideRoster }
+
+/**
+ * Whether the member may open a side conversation: one of its two people,
+ * on the teamspace's team (`is_member`: Go shows a teamspace to a manager
+ * who is not on its team too, but its conversations are the team's), with
+ * the other person on the team as well (in the teamspace's people, the
+ * whisperer seats Go derives from the live team directory). Both of Go's
+ * answers are asked for at once; the member's own refusal comes first
+ * (401, or 404 for an organization that is not theirs), then 403
+ * `not_participant`, Go's refusal of the teamspace (404 for one the member
+ * cannot see), 403 `forbidden` off the team, and 404 `peer_not_found`.
+ */
+async function sideConversationAccess(
+  ids: {
+    organizationId: string
+    teamspaceId: string
+    userA: string
+    userB: string
+  },
+  ask: AskGo
+): Promise<Response | SideGrant> {
+  const [organization, space] = await Promise.all([
+    ask.json(organizationPath(ids.organizationId)),
+    ask.json(teamspacePath(ids)),
+  ])
+  const caller = callerIn(organization)
+  if (caller instanceof Response) return caller
+  const peerId = peerIn(ids, caller.userId)
+  if (!peerId) {
+    return failure(
+      403,
+      "not_participant",
+      "Only the two people in a conversation can open it."
+    )
+  }
+  if (space instanceof Response) return space
+  if ((space.answer as { is_member?: unknown } | null)?.is_member !== true) {
+    return failure(
+      403,
+      "forbidden",
+      "Only the teamspace's team can open its side conversations."
+    )
+  }
+  const roster = rosterOf(space.answer, ids)
+  if (!roster) return badGateway()
+  if (!roster.people.some((person) => person.userId === peerId)) {
+    return failure(
+      404,
+      "peer_not_found",
+      "This person is not on the teamspace's team."
+    )
+  }
+  return { userId: caller.userId, roster }
+}
+
+/** The headers a side conversation trusts: the member as Go said, their cookie, and who is in it. */
+function sideConversationIdentity(
+  ids: { organizationId: string },
+  cookie: string,
+  grant: SideGrant
+): Record<string, string> {
+  return {
+    [sideRequestHeaders.organization]: ids.organizationId,
+    [sideRequestHeaders.user]: grant.userId,
+    [sideRequestHeaders.cookie]: cookie,
+    [sideRequestHeaders.roster]: encodeRoster(grant.roster),
+  }
+}
+
+/** The headers a DM or an inbox trusts: the organization, and the member as Go said. */
+function conversationIdentity(
+  ids: { organizationId: string },
+  _cookie: string,
+  caller: Caller
+): Record<string, string> {
+  return {
+    [conversationRequestHeaders.organization]: ids.organizationId,
+    [conversationRequestHeaders.user]: caller.userId,
+  }
+}
+
 /**
  * Every realtime object, by the path segment its binding is served at. A
- * new one (REALTIME.md: a side conversation, a DM) is one more entry.
+ * new one is one more entry.
  */
 const realtimeObjects = new Map(
   [
@@ -404,6 +647,40 @@ const realtimeObjects = new Map(
       }),
       unavailable: "This teamspace's room is unavailable.",
     }),
+    // A DM between two people, `{organization}~{userA}~{userB}` (ids
+    // sorted), only in its Durable Object. Nobody deletes one; a purge from
+    // Go empties it when one of them leaves (src/realtime-purge.ts).
+    realtimeObject({
+      binding: "DirectMessageAgent",
+      reads: [],
+      parseName: parseDirectMessageName,
+      checkAccess: directMessageAccess,
+      identity: conversationIdentity,
+      unavailable: "This conversation is unavailable.",
+    }),
+    // A teamspace's side conversation, `{organization}~{teamspace}~{userA}~{userB}`
+    // (user ids sorted): two teammates and both their agents. People's
+    // messages live only in its Durable Object; it asks Go as each of them
+    // for their agents and requests. Nobody deletes one; a purge from Go
+    // empties it when one of them leaves (src/realtime-purge.ts).
+    realtimeObject({
+      binding: "SideConversationAgent",
+      reads: [],
+      parseName: parseSideConversationName,
+      checkAccess: sideConversationAccess,
+      identity: sideConversationIdentity,
+      unavailable: "This side conversation is unavailable.",
+    }),
+    // A member's conversation list, `{organization}~{user}`, which their
+    // conversations keep current.
+    realtimeObject({
+      binding: "InboxAgent",
+      reads: [],
+      parseName: parseInboxName,
+      checkAccess: inboxAccess,
+      identity: conversationIdentity,
+      unavailable: "Your conversations are unavailable.",
+    }),
   ].map((route) => [route.segment, route])
 )
 
@@ -413,6 +690,7 @@ const realtimePath = /^\/agents\/([^/]+)\/([^/]+)(?:\/([^/]+))?\/?$/
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
+    if (url.pathname === REALTIME_PURGE_PATH) return handlePurge(request, env)
     const match = realtimePath.exec(url.pathname)
     const object = match ? realtimeObjects.get(match[1]) : undefined
     if (match && object) {

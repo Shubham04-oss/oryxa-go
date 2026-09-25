@@ -37,6 +37,7 @@ import {
 } from "@/lib/threads/chat-messages"
 import type { ThreadChatMessage } from "@/lib/threads/chat-messages"
 import type { ConfirmationAnswer } from "@/lib/threads/client"
+import { socketProtocol } from "@/lib/socket-protocol"
 import { buildTimeline, pendingConfirmationIds } from "@/lib/threads/timeline"
 
 /** What the chat needs of a specialist, as the member's agents list has it. */
@@ -390,6 +391,7 @@ function SpecialistChatSession({
   const name = specialist.name
 
   const socket = useAgent<SpecialistChatState>({
+    protocol: socketProtocol(),
     agent: "specialist-chat-agent",
     name: specialistAgentName(organizationId, specialist.id),
     enabled: refusal === undefined,

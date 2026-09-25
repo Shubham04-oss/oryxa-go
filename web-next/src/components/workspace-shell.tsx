@@ -26,18 +26,30 @@ import { TeamspacesManagement } from "./teamspaces-management"
 import type { WorkspaceRole } from "./teamspaces-management"
 import { TeamspaceFocus } from "./teamspace-focus"
 import { statusLabel } from "./teamspace-format"
-import { previewSharedSpaces, sharedSpacesOf } from "./people-spaces"
+import { DirectMessageView, PersonAvatar } from "./direct-message"
+import {
+  RecentConversations,
+  recentDirectMessages,
+} from "./direct-message-inbox"
+import { useDmPeople } from "./direct-message-people"
+import { usePeerOnline } from "./direct-message-presence"
 import { IdentityAvatar, people, TeamspaceAvatar } from "./workspace-avatar"
 import { WorkspaceTools } from "./workspace-tools"
 import { WorkspaceAgentPanel } from "./workspace-agent-panel"
-import type { AgentPanelChatRequest } from "./workspace-agent-panel"
-import { getSharedPeople, PeopleDirectory } from "./people-directory"
+import type {
+  AgentPanelChatRequest,
+  AgentPanelTabRequest,
+} from "./workspace-agent-panel"
+import { PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
 import { useTeamspaces } from "@/hooks/use-teamspaces"
 import { useAgentsMode } from "@/hooks/use-agents-mode"
 import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
+import { useVisibleHeight } from "@/hooks/use-visible-height"
 import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
+import { useInbox } from "@/lib/dms"
+import { isNameId } from "@/lib/dms/names"
 import type { AvatarIdentity } from "./workspace-avatar"
 import { cn } from "@/lib/utils"
 
@@ -113,6 +125,8 @@ export function WorkspaceShell({
   preview = false,
   initialMode = "home",
   initialSection,
+  initialDirectMessage,
+  onDirectMessageChange,
 }: {
   session?: Session
   role?: WorkspaceRole
@@ -121,16 +135,30 @@ export function WorkspaceShell({
   preview?: boolean
   initialMode?: PrimaryMode
   initialSection?: Section
+  /** The person whose DM opens in the main canvas first (the page's `?dm=`). */
+  initialDirectMessage?: string
+  /** The DM open in the main canvas changed (null: none), for the page's address. */
+  onDirectMessageChange?: (peerId: string | null) => void
 } = {}) {
+  const viewerId = session?.user.id
+  // DMs are the signed-in member's, in the organization they have open.
+  const dmOrganizationId = session ? selectedOrganization?.id : undefined
+  // A DM the page may open: with someone other than the member, by an id a
+  // DM's name can hold.
+  const openable = (peerId: string | null | undefined): string | null =>
+    dmOrganizationId && isNameId(peerId) && peerId !== viewerId ? peerId : null
+  const firstDm = openable(initialDirectMessage)
+  const startMode: PrimaryMode = firstDm ? "team" : initialMode
   const [isMobile, setIsMobile] = useState(false)
   const [leftExpanded, setLeftExpanded] = useState(true)
   const [rightExpanded, setRightExpanded] = useState(false)
-  const [activeMode, setActiveMode] = useState<PrimaryMode>(initialMode)
+  const [activeMode, setActiveMode] = useState<PrimaryMode>(startMode)
   const [sectionsByMode, setSectionsByMode] = useState<
     Record<PrimaryMode, Section>
   >({
     ...defaultSections,
     [initialMode]: initialSection || defaultSections[initialMode],
+    ...(firstDm ? { team: "people" as const } : {}),
   })
   const teamspaces = useTeamspaces(selectedOrganization?.id)
   const [knowledgeBaseSelection, setKnowledgeBaseSelection] =
@@ -139,18 +167,25 @@ export function WorkspaceShell({
   const [signOutError, setSignOutError] = useState("")
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [conversationIds, setConversationIds] = useState<string[]>([])
-  const [activeConversationId, setActiveConversationId] = useState<
-    string | null
-  >(null)
-  const [conversationMessages, setConversationMessages] = useState<
-    Partial<Record<string, string[]>>
-  >({})
-  const conversationListRef = useRef<HTMLDivElement>(null)
   const agentsMode = useAgentsMode()
   const [chatRequest, setChatRequest] = useState<AgentPanelChatRequest | null>(
     null
   )
+  const [tabRequest, setTabRequest] = useState<AgentPanelTabRequest | null>(
+    null
+  )
+  // Direct messages: the member's inbox (Team's recent conversations, the
+  // DMs tab and its badge), whom they can message, and who is known to be
+  // online. The DM open in the main canvas is `dmPeerId`, under People.
+  const inbox = useInbox(dmOrganizationId, viewerId)
+  const dmPeople = useDmPeople(dmOrganizationId, viewerId, teamspaces.spaces)
+  const [dmPeerId, setDmPeerId] = useState<string | null>(firstDm)
+  // The member opened it just now: focus goes into it.
+  const [dmOpenedByMember, setDmOpenedByMember] = useState(false)
+  // Back from a DM, focus returns to that person in People.
+  const [dmReturnTo, setDmReturnTo] = useState<string | null>(null)
+  const [dmDrafts, setDmDrafts] = useState<Partial<Record<string, string>>>({})
+  const [dmComposing, setDmComposing] = useState(false)
 
   const currentIdentity: AvatarIdentity = session
     ? {
@@ -208,44 +243,65 @@ export function WorkspaceShell({
 
   const section = sectionsByMode[activeMode]
   const heading = headings[section]
-  // People lists who shares a teamspace with the member; only the dev
-  // preview, which has no workspace to read, lists examples.
-  const peopleSpaces = preview
-    ? previewSharedSpaces
-    : sharedSpacesOf(teamspaces.spaces)
-  const sharedPeople = getSharedPeople(peopleSpaces, currentIdentity)
   // Agents mode's focused work belongs to that mode and its workspace.
   const agentWork =
     activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
   const isFocused = Boolean(
     agentWork || (teamspaces.openId && selectedOrganization)
   )
-  const selectedPerson =
-    section === "people"
-      ? sharedPeople.find((person) => person.id === activeConversationId)
+  // The teamspace on the page: the agent panel offers its teammates.
+  const pageTeamspaceId =
+    !agentWork && selectedOrganization && teamspaces.openId
+      ? teamspaces.openId
       : undefined
+  // The DM in the main canvas, while People is on screen.
+  const canvasPeerId =
+    section === "people" && dmOrganizationId && viewerId ? dmPeerId : null
+  // Who they are, once the members list can say: until then the header and
+  // the canvas wait, rather than greet "Someone".
+  const canvasPeer = canvasPeerId ? dmPeople.peer(canvasPeerId) : undefined
+  const canvasPeerName = canvasPeer?.name
+  const canvasPeerOnline = usePeerOnline(canvasPeerId ?? undefined)
+  // On a small screen with the keyboard up, the DM gets the height it leaves.
+  const middleHeight = useVisibleHeight(Boolean(canvasPeerId) && dmComposing)
+  const recentPeerIds = recentDirectMessages(inbox.conversations).map(
+    (conversation) => conversation.peerId
+  )
   const selectedKnowledgeBase =
     section === "knowledge" ? (knowledgeBaseSelection ?? undefined) : undefined
   const selectedTeamspace =
     section === "teamspaces" ? teamspaces.selected : undefined
-  const detailTitle =
-    selectedPerson?.name ||
-    selectedKnowledgeBase?.name ||
-    selectedTeamspace?.name
-  const detailKind = selectedPerson
-    ? "Direct message"
+  const detailTitle = canvasPeerId
+    ? (canvasPeerName ?? "Direct message")
+    : selectedKnowledgeBase?.name || selectedTeamspace?.name
+  const detailKind = canvasPeerId
+    ? canvasPeerName === undefined
+      ? undefined
+      : canvasPeerOnline
+        ? "Online"
+        : "Direct message"
     : selectedKnowledgeBase
       ? "Knowledge base"
       : selectedTeamspace
         ? `Teamspace · ${statusLabel(selectedTeamspace)}`
         : undefined
-  const conversations = conversationIds
-    .map((id) => sharedPeople.find((person) => person.id === id))
-    .filter((person): person is AvatarIdentity => Boolean(person))
 
+  // The page's address follows the DM in the main canvas, so a refresh
+  // returns to it.
+  const reportedDm = useRef(canvasPeerId)
   useEffect(() => {
-    if (conversationListRef.current) conversationListRef.current.scrollTop = 0
-  }, [conversationIds])
+    if (reportedDm.current === canvasPeerId) return
+    reportedDm.current = canvasPeerId
+    onDirectMessageChange?.(canvasPeerId)
+  }, [canvasPeerId, onDirectMessageChange])
+
+  /** A nav item is the page: People only while no recent conversation in the nav is. */
+  function navCurrent(key: Section): boolean {
+    if (section !== key) return false
+    return (
+      key !== "people" || !canvasPeerId || !recentPeerIds.includes(canvasPeerId)
+    )
+  }
 
   function selectMode(nextMode: PrimaryMode) {
     setActiveMode(nextMode)
@@ -257,7 +313,7 @@ export function WorkspaceShell({
   }
 
   function selectSection(nextSection: Section) {
-    setActiveConversationId(null)
+    setDmPeerId(null)
     setKnowledgeBaseSelection(null)
     teamspaces.reset()
     setSectionsByMode((current) => ({
@@ -267,30 +323,29 @@ export function WorkspaceShell({
     if (isMobile) setLeftExpanded(false)
   }
 
-  function openConversation(personId: string) {
-    if (!sharedPeople.some((person) => person.id === personId)) return
-    setConversationIds((current) => [
-      personId,
-      ...current.filter((id) => id !== personId),
-    ])
-    setActiveConversationId(personId)
+  /** Opens the DM with `peerId` in the main canvas, under People. */
+  function openDirectMessage(peerId: string) {
+    const peer = openable(peerId)
+    if (!peer) return
+    setDmPeerId(peer)
+    setDmOpenedByMember(true)
     setActiveMode("team")
     setSectionsByMode((current) => ({ ...current, team: "people" }))
     teamspaces.reset()
     if (isMobile) setLeftExpanded(false)
   }
 
-  function sendConversationMessage(personId: string, message: string) {
-    if (!preview || !sharedPeople.some((person) => person.id === personId))
-      return
-    setConversationMessages((current) => ({
-      ...current,
-      [personId]: [...(current[personId] || []), message],
-    }))
-    setConversationIds((current) => [
-      personId,
-      ...current.filter((id) => id !== personId),
-    ])
+  function closeDirectMessage() {
+    setDmReturnTo(dmPeerId)
+    setDmPeerId(null)
+    setDmOpenedByMember(false)
+    setDmComposing(false)
+  }
+
+  /** Team's "All conversations": the agent panel's DMs tab. */
+  function showAllConversations() {
+    expandAgentPanel()
+    setTabRequest({ tab: "dms" })
   }
 
   function openWork(target: AgentsFocusTarget) {
@@ -319,7 +374,7 @@ export function WorkspaceShell({
   }
 
   function closeDetail() {
-    if (selectedPerson) setActiveConversationId(null)
+    if (canvasPeerId) closeDirectMessage()
     if (selectedKnowledgeBase) setKnowledgeBaseSelection(null)
     if (selectedTeamspace) teamspaces.select(null)
   }
@@ -423,20 +478,13 @@ export function WorkspaceShell({
                 <button
                   className={cn(
                     "workspace-nav-item",
-                    section === item.key &&
-                      (item.key !== "people" || !activeConversationId) &&
-                      "is-active"
+                    navCurrent(item.key) && "is-active"
                   )}
                   key={item.key}
                   type="button"
                   title={leftExpanded ? undefined : item.label}
                   aria-label={leftExpanded ? undefined : item.label}
-                  aria-current={
-                    section === item.key &&
-                    (item.key !== "people" || !activeConversationId)
-                      ? "page"
-                      : undefined
-                  }
+                  aria-current={navCurrent(item.key) ? "page" : undefined}
                   onClick={() => selectSection(item.key)}
                 >
                   <Icon size={18} strokeWidth={1.7} />
@@ -459,61 +507,15 @@ export function WorkspaceShell({
           </nav>
 
           {activeMode === "team" && (
-            <div className="workspace-conversations" aria-label="Conversations">
-              {leftExpanded && (
-                <div className="workspace-conversations-heading">
-                  <span>Conversations</span>
-                  {conversations.length > 0 && (
-                    <small>{conversations.length}</small>
-                  )}
-                </div>
-              )}
-              {conversations.length ? (
-                <div
-                  className="workspace-conversations-list"
-                  ref={conversationListRef}
-                >
-                  {conversations.map((person) => (
-                    <button
-                      className={cn(
-                        "workspace-conversation-item",
-                        section === "people" &&
-                          activeConversationId === person.id &&
-                          "is-active"
-                      )}
-                      type="button"
-                      key={person.id}
-                      aria-label={`Open conversation with ${person.name}`}
-                      aria-current={
-                        section === "people" &&
-                        activeConversationId === person.id
-                          ? "page"
-                          : undefined
-                      }
-                      title={leftExpanded ? undefined : person.name}
-                      onClick={() => openConversation(person.id)}
-                    >
-                      <IdentityAvatar identity={person} />
-                      {leftExpanded && (
-                        <span className="workspace-conversation-copy">
-                          <strong>{person.name}</strong>
-                          <small>
-                            {conversationMessages[person.id]?.at(-1) ||
-                              "New conversation"}
-                          </small>
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                leftExpanded && (
-                  <p className="workspace-conversations-empty">
-                    Start a chat from People.
-                  </p>
-                )
-              )}
-            </div>
+            <RecentConversations
+              inbox={inbox}
+              people={dmPeople}
+              viewerId={viewerId}
+              expanded={leftExpanded}
+              activePeerId={canvasPeerId}
+              onOpen={openDirectMessage}
+              onShowAll={showAllConversations}
+            />
           )}
 
           {leftExpanded && activeMode === "home" && (
@@ -592,7 +594,11 @@ export function WorkspaceShell({
         </aside>
       )}
 
-      <div className="workspace-middle">
+      <div
+        className="workspace-middle"
+        data-composing={middleHeight ? "true" : undefined}
+        style={middleHeight ? { height: middleHeight } : undefined}
+      >
         {agentWork && selectedOrganization ? (
           <AgentsFocus
             target={agentWork}
@@ -618,7 +624,7 @@ export function WorkspaceShell({
                     className="workspace-header-back"
                     type="button"
                     aria-label={
-                      selectedPerson
+                      canvasPeerId
                         ? "Back to people"
                         : selectedKnowledgeBase
                           ? "All knowledge bases"
@@ -629,8 +635,12 @@ export function WorkspaceShell({
                     <ArrowLeft size={17} strokeWidth={1.7} />
                   </button>
                   <div className="workspace-header-detail">
-                    {selectedPerson && (
-                      <IdentityAvatar identity={selectedPerson} />
+                    {canvasPeerId && (
+                      <PersonAvatar
+                        id={canvasPeerId}
+                        name={canvasPeerName ?? ""}
+                        online={canvasPeerOnline}
+                      />
                     )}
                     {selectedKnowledgeBase && (
                       <span className="workspace-header-detail-icon">
@@ -642,7 +652,7 @@ export function WorkspaceShell({
                     )}
                     <div>
                       <h1>{detailTitle}</h1>
-                      <small>{detailKind}</small>
+                      {detailKind && <small>{detailKind}</small>}
                     </div>
                   </div>
                 </>
@@ -689,17 +699,36 @@ export function WorkspaceShell({
               {section === "tools" && (
                 <WorkspaceTools organizationId={selectedOrganization?.id} />
               )}
-              {section === "people" && (
-                <PeopleDirectory
-                  spaces={peopleSpaces}
-                  currentIdentity={currentIdentity}
-                  preview={preview}
-                  selectedId={activeConversationId}
-                  messages={conversationMessages}
-                  onOpenConversation={openConversation}
-                  onSendMessage={sendConversationMessage}
-                />
-              )}
+              {section === "people" &&
+                (canvasPeerId && !canvasPeer ? (
+                  <p className="workspace-dm-waiting" role="status">
+                    Loading the conversation…
+                  </p>
+                ) : canvasPeer && dmOrganizationId && viewerId ? (
+                  <DirectMessageView
+                    key={canvasPeer.id}
+                    organizationId={dmOrganizationId}
+                    viewerId={viewerId}
+                    peer={canvasPeer}
+                    layout="canvas"
+                    draft={dmDrafts[canvasPeer.id] ?? ""}
+                    onDraftChange={(draft) =>
+                      setDmDrafts((current) => ({
+                        ...current,
+                        [canvasPeer.id]: draft,
+                      }))
+                    }
+                    onComposingChange={setDmComposing}
+                    autoFocus={dmOpenedByMember}
+                  />
+                ) : (
+                  <PeopleDirectory
+                    people={dmPeople}
+                    onMessage={openDirectMessage}
+                    focusPersonId={dmReturnTo}
+                    onFocused={() => setDmReturnTo(null)}
+                  />
+                ))}
               {section === "teamspaces" && (
                 <TeamspacesManagement
                   organizationId={selectedOrganization?.id}
@@ -731,6 +760,11 @@ export function WorkspaceShell({
         onExpand={expandAgentPanel}
         onCollapse={() => setRightExpanded(false)}
         chatRequest={chatRequest}
+        tabRequest={tabRequest}
+        directMessages={
+          viewerId ? { viewerId, inbox, people: dmPeople } : undefined
+        }
+        teamspaceId={pageTeamspaceId}
       />
       {settingsOpen && (
         <WorkspaceSettings

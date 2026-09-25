@@ -45,6 +45,16 @@ export type AgentRequestResult = {
 export type AgentRequest = {
   id: string
   organization_id: string
+  /** The teamspace it was made in; absent for a request made outside one. */
+  teamspace_id?: string
+  /**
+   * Who decides it, fixed when it was made: `agent` (the addressed agent, or
+   * its member's primary agent), or `owner` (only the target member, in
+   * their own session: a teammate's primary agent, or a specialist
+   * contributed with `request` delegation). Anything but `agent` is held for
+   * the owner.
+   */
+  approval?: "agent" | "owner"
   requester: AgentRequestParty
   target: AgentRequestParty
   purpose: string

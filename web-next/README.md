@@ -68,12 +68,29 @@ specialist's owner). Its `DELETE` starts the chat over and deletes nothing
 in Go, which has no route for that. Both objects share the run relay in
 `src/chat-relay.ts`.
 
+Direct messages live only in Durable Objects: `DirectMessageAgent`
+(`src/direct-message-agent.ts`), one per pair of members,
+`{organization}~{userA}~{userB}` with the ids sorted, and `InboxAgent`
+(`src/inbox-agent.ts`), each member's conversation list,
+`{organization}~{user}`. The Worker serves them at
+`/agents/direct-message-agent/...` and `/agents/inbox-agent/...` once Go has
+said who the member is (`GET /v1/organizations/{org}`) and, for a DM, that
+they are one of its two people and the other is in the organization
+(`GET .../members`). Pages use `useDirectMessages` and `useInbox` from
+`src/lib/dms`. When a member leaves or an organization is deleted, Go calls
+`POST /internal/realtime/purge`, signed with `REALTIME_PURGE_SECRET`, which
+empties their conversations. REALTIME.md holds the contract.
+
 The Worker reaches Go at `ORYXA_API_ORIGIN`, which `wrangler.jsonc` sets to
 `http://localhost:8080`. To point local development elsewhere, copy
 `.dev.vars.example` to `.dev.vars` (gitignored) and restart `pnpm dev`; the
 example targets the stand-in backend on `http://127.0.0.1:18096`. `ORYXA_URL`
 still decides where the browser's `/v1` calls go, through Vite's proxy, so
-keep the two on the same backend.
+keep the two on the same backend. `.dev.vars` also holds
+`REALTIME_PURGE_SECRET` (at least 32 characters; `openssl rand -hex 32`),
+without which the Worker refuses every purge; deployed, it is a Worker
+secret (`wrangler secret put REALTIME_PURGE_SECRET`) holding the value Go
+signs with.
 
 Deploying web-next is deferred: `wrangler.jsonc` holds only the development
 Worker, `oryxa-web-next`, with no production environment. `pnpm build`

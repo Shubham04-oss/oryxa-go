@@ -18,9 +18,11 @@ export function AgentComposer({
   onChange,
   onSubmit,
   disabled = false,
+  sendDisabled = false,
   streaming = false,
   onStop,
   status,
+  leading,
   onFocus,
   onBlur,
 }: {
@@ -30,15 +32,19 @@ export function AgentComposer({
   onChange: (value: string) => void
   onSubmit?: (message: string) => void
   disabled?: boolean
+  /** The field stays editable, but what it holds cannot be sent (say why in `status`). */
+  sendDisabled?: boolean
   streaming?: boolean
   onStop?: () => void
   status?: ReactNode
+  /** A control inside the pill, before the field: a side conversation's "who this goes to". */
+  leading?: ReactNode
   onFocus?: () => void
   onBlur?: () => void
 }) {
   const statusId = useId()
   const message = value.trim()
-  const canSend = !disabled && !streaming && message.length > 0
+  const canSend = !disabled && !sendDisabled && !streaming && message.length > 0
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   // The field is a one-line pill until its text wraps; then it grows up to
   // six lines and softens to a large radius (.workspace-composer
@@ -102,7 +108,9 @@ export function AgentComposer({
       <div
         className="workspace-composer workspace-agent-composer-field"
         data-multiline={multiline ? "true" : "false"}
+        data-leading={leading ? "true" : undefined}
       >
+        {leading}
         <textarea
           ref={textareaRef}
           rows={1}

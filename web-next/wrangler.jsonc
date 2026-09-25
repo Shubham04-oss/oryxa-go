@@ -1,8 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // The development Worker. `vite dev` runs it, with the chats' and the
-  // teamspace rooms' Durable Objects, in workerd; `.dev.vars` (see
-  // `.dev.vars.example`) can point ORYXA_API_ORIGIN at another Go API.
+  // The development Worker. `vite dev` runs it, with the chats', the
+  // teamspace rooms', the side conversations' and the direct messages'
+  // Durable Objects, in workerd;
+  // `.dev.vars` (see `.dev.vars.example`) can point ORYXA_API_ORIGIN at
+  // another Go API, and holds REALTIME_PURGE_SECRET, the secret Go signs a
+  // purge with (a Worker secret once deployed: `wrangler secret put`).
   //
   // There is deliberately no production environment yet: deploying web-next
   // is deferred until it replaces ../web. When it does, add an `env.production`
@@ -22,7 +25,17 @@
     "bindings": [
       { "name": "ThreadChatAgent", "class_name": "ThreadChatAgent" },
       { "name": "SpecialistChatAgent", "class_name": "SpecialistChatAgent" },
-      { "name": "TeamspaceRoomAgent", "class_name": "TeamspaceRoomAgent" }
+      { "name": "TeamspaceRoomAgent", "class_name": "TeamspaceRoomAgent" },
+      { "name": "DirectMessageAgent", "class_name": "DirectMessageAgent" },
+      {
+        "name": "SideConversationAgent",
+        "class_name": "SideConversationAgent"
+      },
+      { "name": "InboxAgent", "class_name": "InboxAgent" },
+      {
+        "name": "RealtimeRegistryAgent",
+        "class_name": "RealtimeRegistryAgent"
+      }
     ]
   },
   // Append-only: a deployed tag is never edited or reordered. Each new
@@ -36,6 +49,19 @@
     {
       "tag": "teamspace-room-v1",
       "new_sqlite_classes": ["TeamspaceRoomAgent"]
+    },
+    {
+      "tag": "direct-message-v1",
+      "new_sqlite_classes": ["DirectMessageAgent"]
+    },
+    { "tag": "inbox-v1", "new_sqlite_classes": ["InboxAgent"] },
+    {
+      "tag": "realtime-registry-v1",
+      "new_sqlite_classes": ["RealtimeRegistryAgent"]
+    },
+    {
+      "tag": "side-conversation-v1",
+      "new_sqlite_classes": ["SideConversationAgent"]
     }
   ],
   "observability": {

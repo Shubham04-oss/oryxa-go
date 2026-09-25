@@ -22,6 +22,12 @@ import {
 import type { FakeAgentsBackend } from "./agents-fake-backend"
 import type { Session } from "@/lib/auth/client"
 
+// The shell holds the member's DM inbox open: its socket is a stand-in.
+vi.mock(
+  "agents/react",
+  async () => (await import("@/test/room-socket")).agentsReact
+)
+
 const session: Session = {
   user: { id: VIEWER, email: "member@example.com", display_name: "Member" },
   organizations: [{ id: ORG, name: "Simulated Org", slug: "sim" }],

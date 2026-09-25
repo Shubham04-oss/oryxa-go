@@ -62,9 +62,13 @@ not permission to copy every incidental value into a new component.
   has more than one agent, the Agents tab's top row is a quick switch between
   them: the one in use is the oval pill with its name, like the pills
   elsewhere, and the rest stay avatar-only. With a single agent the row is not
-  shown, and it never shows empty or example slots. Collapsed, the panel's rail shows one icon per tab, and each opens
-  the panel on that tab. A tab without a live service shows a one-line empty
-  state, never example people, rooms or messages.
+  shown, and it never shows empty or example slots. The panel is
+  location-aware: on a teamspace page the Agents tab also offers that
+  teamspace's teammates and their agents, below the member's own (§3, "Side
+  conversations"); elsewhere it does not. Collapsed, the panel's rail shows
+  one icon per tab, and each opens the panel on that tab. A tab without a
+  live service shows a one-line empty state, never example people, rooms or
+  messages.
 - Sidebar content follows the primary mode:
 
   | Mode | Left navigation |
@@ -111,6 +115,80 @@ not permission to copy every incidental value into a new component.
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header
   principle and keeps the conversation/composer as the main content.
+- **Direct messages.** A DM is one conversation (`direct-message.tsx`) in two
+  layouts, each its own view of the same live object (REALTIME.md): the main
+  canvas, opened from People or Team's recent conversations, under the header
+  that names the person; and the agent panel's DMs tab, under a compact row
+  with a back arrow to the list.
+  - It reads as a quiet log (a centered column in the canvas): the member's
+    messages in raised bubbles on the right, the other person's as plain text
+    on the left beside their avatar. Each person's messages within one minute
+    form a group with one time, and a separator starts each day ("Today",
+    "Yesterday", or the date). The log names nobody: the header does.
+  - A message waiting for the object is faded; a failed one says "Not sent."
+    with Retry. A quiet "Seen" sits under the member's last message the other
+    person has read, until they reply. Their typing is one muted pulsing line
+    at the end.
+  - Online means they have this DM open in a visible tab: a green dot on
+    their avatar in the header, and on any list row whose DM a view on the
+    page has open. Nobody is ever shown offline.
+  - The log follows the end only while the reader is there; otherwise new
+    messages raise a "N new messages" pill and are announced. The page before
+    loads at the top without moving what the reader is looking at, and the
+    start of the conversation says so.
+  - Unread is a count on a DMs row, a dot on a recent conversation in Team's
+    navigation, and a badge on the DMs tab and its rail icon ("9+" past
+    nine); a phone, which has no rail, puts a dot on the panel's edge
+    control. A DM counts as read while it is on screen, at its end, in a
+    visible tab.
+  - States: loading; empty ("Say hello to Priya"); "You can't message this
+    person" once they have left; session ended, with Sign in; and "Can't
+    reach this conversation" with Try again, while the composer keeps taking
+    messages that send once it is back.
+  - People lists everyone in the organization but the member, with role and
+    shared teamspaces as context, search, and a Message action. Team's
+    navigation shows the three latest DMs, and "All" opens the DMs tab, where
+    "New message" picks anyone in the organization. The canvas DM is in the
+    page's address (`?dm=`), so a refresh returns to it.
+  - Opening a DM moves focus to its composer, or to the log on a phone so the
+    keyboard stays down; going back returns focus to the person or row it
+    came from. Editing, deleting, reactions and attachments do not exist yet,
+    so nothing offers them.
+- **Side conversations.** Two teammates and both their agents, about one
+  teamspace's work, away from its room (REALTIME.md). On a teamspace page the
+  Agents tab adds a quiet "In this teamspace" section under the member's own
+  agents: each teammate with a seat there, their unread count, and their
+  agents as small chips with how each takes a request ("asks first" or
+  "automatic"). A teammate opens the conversation in the tab, with a back
+  arrow to the list; a chip opens it asking that agent. The DMs tab lists
+  side conversations with their teamspace as context and opens them the same
+  way, with no teamspace open.
+  - It is a DM's compact layout (`side-conversation.tsx`): the bar names the
+    teammate and the teamspace, with both people's agents as small voxel
+    avatars. People's messages read as a DM's; a question to an agent carries
+    a quiet "Asked Leo". An agent's message is its avatar and "Leo · your
+    agent" or "Nia · Priya's agent", full-width Markdown, a pulsing working
+    line until it has words, and for a request's result one quiet line, "on
+    behalf of Priya · approved by Priya" (or "ran without asking").
+  - A request is a small card: who asked which agent what, and one status
+    line with an icon (sending; not filed, with Retry; waiting for Priya to
+    approve; approved and working; done; declined; failed; expired). Only the
+    agent's owner sees Decline and Approve, with an optional note, named for
+    who and what ("Approve Nia's request from Member"). A request that ends
+    without a result also leaves a quiet centered line in the log.
+  - The composer is the shared pill with a smaller pill inside it, before the
+    field, naming whom the message goes to: the teammate (the default), "Ask
+    my agent", or one of the teammate's agents, picked from a small menu. The
+    line under the field says who approves, or that the member's own agent
+    is still answering (a second question waits for it). Asking an agent is
+    for that one message; the next goes to the teammate again.
+  - The member's own agent's confirmations show to them alone, as in the
+    specialist chat; the teammate sees only that it waits. Answers and
+    approvals that land in place are said aloud.
+  - States: loading; empty ("Talk with Priya about Launch room"); "You can't
+    open this conversation" once either person is off the team; session
+    ended, with Sign in; a paused teamspace, readable with the composer off
+    and why; and "Can't reach this conversation" with Try again.
 - Teamspace management is role-aware. Put account, teammate, organization,
   access, email, and billing administration inside Settings, opened from the
   user menu. Keep the simple Organization tab in that single Settings surface;
