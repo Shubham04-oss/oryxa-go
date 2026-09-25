@@ -2,17 +2,22 @@ package primary
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/credentials"
+	awscredentials "github.com/aws/aws-sdk-go-v2/credentials"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
@@ -54,6 +59,17 @@ func TestMountWithoutTeamsURLAnswersUnavailableNotPanic(t *testing.T) {
 	}))
 	defer auth.Close()
 
+	// google stands in for anything mount time might reach at Google over
+	// the network: it answers every request (a token fetch, a Vertex AI
+	// call) with a harmless canned response, so CI's total lack of network
+	// access to Google never turns into a hang or a DNS failure.
+	google := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"access_token":"fake-access-token","token_type":"Bearer","expires_in":3600}`))
+	}))
+	defer google.Close()
+	fakeGoogleADC(t, google.URL)
+
 	configured := map[string]string{
 		"GOOGLE_CLOUD_PROJECT": "oryxa-test-project",
 		"AUTH_URL":             auth.URL,
@@ -63,7 +79,7 @@ func TestMountWithoutTeamsURLAnswersUnavailableNotPanic(t *testing.T) {
 	// assembly.Build reaches AWS AgentCore's client constructors, which
 	// validate a region and credential provider synchronously but never make
 	// a network call building the session managers this test never uses.
-	plat.AWS = aws.Config{Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("test", "test", "")}
+	plat.AWS = aws.Config{Region: "us-east-1", Credentials: awscredentials.NewStaticCredentialsProvider("test", "test", "")}
 
 	if err := Migrate(ctx, plat); err != nil {
 		t.Fatal(err)
@@ -145,4 +161,51 @@ func TestMountWithoutTeamsURLAnswersUnavailableNotPanic(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fakeGoogleADC points GOOGLE_APPLICATION_CREDENTIALS at a throwaway service
+// account key, freshly generated for this test alone (a real RSA key so
+// Google's credential library can parse it, but never registered with
+// Google or used to sign anything real), so
+// cloud.google.com/go/auth/credentials.DetectDefault finds Application
+// Default Credentials without this machine's own gcloud login: CI has none,
+// which is what made assembly.Build fail with "failed to find default
+// credentials" there even though the test passed locally. Mount still needs
+// GOOGLE_CLOUD_PROJECT set for assembly.Build to run at all, which is what
+// exercises the assembly typed-nil site (Interactions, Teamspaces) this test
+// covers, so the fix is a credential, not dropping the project. The key's
+// token_uri points at serverURL too, so even a token fetch this test does
+// not expect stays local instead of reaching the real Google endpoint.
+func fakeGoogleADC(t *testing.T, serverURL string) {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes})
+	serviceAccount := map[string]string{
+		"type":            "service_account",
+		"project_id":      "oryxa-test-project",
+		"private_key_id":  "fake-key-id",
+		"private_key":     string(keyPEM),
+		"client_email":    "fake-test@oryxa-test-project.iam.gserviceaccount.com",
+		"client_id":       "000000000000000000000",
+		"auth_uri":        serverURL + "/o/oauth2/auth",
+		"token_uri":       serverURL + "/token",
+		"universe_domain": "googleapis.com",
+	}
+	encoded, err := json.Marshal(serviceAccount)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "fake-service-account.json")
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", path)
+	t.Setenv("GOOGLE_VERTEX_BASE_URL", serverURL)
 }
