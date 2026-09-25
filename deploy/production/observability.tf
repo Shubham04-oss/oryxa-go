@@ -177,9 +177,11 @@ resource "aws_cloudwatch_metric_alarm" "database" {
 }
 
 # Every queue: nothing should sit unread, and nothing should reach a
-# dead-letter queue unnoticed.
+# dead-letter queue unnoticed. Realtime's queue fills while realtime_purge is
+# off, with nothing reading it, so events wait for it to be turned on; its
+# backlog alarm exists only once it is.
 resource "aws_cloudwatch_metric_alarm" "queue_age" {
-  for_each            = local.queue_names
+  for_each            = { for service, queue in local.queue_names : service => queue if service != "realtime" || var.realtime_purge }
   alarm_name          = "${each.value}-backlog"
   alarm_description   = "${each.key}'s events have waited over 10 minutes: its consumer is stuck or down."
   namespace           = "AWS/SQS"

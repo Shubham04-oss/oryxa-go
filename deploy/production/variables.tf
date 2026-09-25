@@ -126,6 +126,12 @@ variable "cognito" {
   }
 }
 
+variable "realtime_purge" {
+  description = "Whether realtime has the web app's Worker purge a member's direct messages and side conversations when they leave an organization or it is deleted. Set in realtime.auto.tfvars.json, so every checkout applies the same. Turn it on only once the Worker at app.oryxa.in serves /internal/realtime/purge and REALTIME_PURGE_SECRET is stored on both sides; deploy/README.md gives the order."
+  type        = bool
+  default     = false
+}
+
 variable "memory_agent_engine" {
   description = "The Vertex agent engine id holding Memory Bank (deploy/scripts/memory-bank.sh). Empty leaves memory off."
   type        = string

@@ -42,8 +42,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,10 +59,10 @@ import (
 // claimed source's, or too old. Nothing in the event was used.
 var ErrUnverified = errors.New("the event is not signed by the service it claims to be from")
 
-// maxAge bounds how long a signature stays valid. A replayed event is a
-// duplicate to a consumer that is idempotent — and these consumers are — but
-// a bound keeps an old message from being replayed at a moment of someone's
-// choosing for ever.
+// maxAge bounds how long a signature stays valid, unless a verifier is given
+// MaxAge. A replayed event is a duplicate to a consumer that is idempotent —
+// and these consumers are — but a bound keeps an old message from being
+// replayed at a moment of someone's choosing for ever.
 const maxAge = 24 * time.Hour
 
 // SignatureVersion is the wire version of the sig field this package writes
@@ -337,6 +339,26 @@ type Verifier struct {
 	kms      *KMSKeys
 	resolved map[string]*ecdsa.PublicKey
 	now      func() time.Time
+	// maxAge bounds how long ago a signature may have been made: the
+	// package's maxAge, unless MaxAge set another.
+	maxAge time.Duration
+}
+
+// VerifierOption adjusts a verifier NewVerifier or Registry.Verifier returns.
+type VerifierOption func(*Verifier)
+
+// MaxAge has a verifier accept a signature made up to age ago, in place of the
+// default day. It is for a consumer whose events can wait on its queue longer
+// than a day, or be replayed from the bus's archive, and that is harmless to
+// act on late: an idempotent one, to which a replay is only a repeat. A
+// signature from the future is held to the default day however long age is,
+// since no event waits there. Zero or less keeps the default.
+func MaxAge(age time.Duration) VerifierOption {
+	return func(verifier *Verifier) {
+		if age > 0 {
+			verifier.maxAge = age
+		}
+	}
 }
 
 // Report is told of each event a report-only verifier let through although
@@ -346,11 +368,15 @@ type Report func(source, detailType, eventID string, err error)
 
 // NewVerifier returns a verifier that trusts the local keys given and, when
 // a source's key is not among them, the KMS keys named. Either may be empty.
-func NewVerifier(local map[string]*ecdsa.PublicKey, kmsKeys *KMSKeys, now func() time.Time) *Verifier {
+func NewVerifier(local map[string]*ecdsa.PublicKey, kmsKeys *KMSKeys, now func() time.Time, options ...VerifierOption) *Verifier {
 	if now == nil {
 		now = time.Now
 	}
-	return &Verifier{local: local, kms: kmsKeys, resolved: map[string]*ecdsa.PublicKey{}, now: now}
+	verifier := &Verifier{local: local, kms: kmsKeys, resolved: map[string]*ecdsa.PublicKey{}, now: now, maxAge: maxAge}
+	for _, option := range options {
+		option(verifier)
+	}
+	return verifier
 }
 
 // Verify checks one event's signature against the key its source resolves
@@ -390,7 +416,7 @@ func (verifier *Verifier) check(source, detailType, eventID string, version int,
 		return fmt.Errorf("%w: the signature's time is not a number", ErrUnverified)
 	}
 	signed := time.Unix(seconds, 0)
-	if age := verifier.now().Sub(signed); age > maxAge || age < -maxAge {
+	if age := verifier.now().Sub(signed); age > verifier.maxAge || age < -maxAge {
 		return fmt.Errorf("%w: the signature is too old", ErrUnverified)
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
@@ -541,15 +567,15 @@ func (registry *Registry) Signer(service string) (*Signer, error) {
 // every service mounted later; this one reads the registry at each check. A
 // nil registry answers with a verifier that refuses everything, so a consumer
 // built without identities fails closed.
-func (registry *Registry) Verifier() *Verifier {
+func (registry *Registry) Verifier(options ...VerifierOption) *Verifier {
 	if registry == nil {
-		return NewVerifier(nil, nil, time.Now)
+		return NewVerifier(nil, nil, time.Now, options...)
 	}
 	var keys *KMSKeys
 	if registry.kms != nil {
 		keys = registry.kms.Keys()
 	}
-	verifier := NewVerifier(nil, keys, registry.now)
+	verifier := NewVerifier(nil, keys, registry.now, options...)
 	verifier.registry = registry
 	return verifier
 }
@@ -567,6 +593,18 @@ func (registry *Registry) ReportOnly(report Report) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	registry.report = report
+}
+
+// Minted names, in order, the services this registry has minted a local key
+// for: those that took a signer and have no KMS key. A service that only
+// consumes takes no signer, so it is never among them.
+func (registry *Registry) Minted() []string {
+	if registry == nil {
+		return nil
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return slices.Sorted(maps.Keys(registry.local))
 }
 
 // localKey returns the public half of the key this registry minted for

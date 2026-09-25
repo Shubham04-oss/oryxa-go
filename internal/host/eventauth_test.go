@@ -3,9 +3,11 @@ package host
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,8 +18,13 @@ import (
 )
 
 // mountOrder is cmd/oryxa's: the order services mount in, each taking its
-// signer and then a verifier for its consumer, as every real Mount does.
-var mountOrder = []string{"auth", "teams", "billing", "files", "knowledge", "rag", "apps", "batching", "email", "agents"}
+// signer, unless it publishes nothing, and then a verifier for its consumer,
+// as every real Mount does.
+var mountOrder = []string{"auth", "teams", "billing", "files", "knowledge", "rag", "apps", "batching", "email", "agents", "realtime"}
+
+// publishNothing are the services whose real Mount takes no signer, since
+// they only consume.
+var publishNothing = map[string]bool{"email": true, "realtime": true}
 
 type identities struct {
 	signers   map[string]*eventauth.Signer
@@ -32,11 +39,13 @@ func mountIdentities(t *testing.T, registry *eventauth.Registry) identities {
 	definitions := make([]Definition, 0, len(mountOrder))
 	for _, name := range mountOrder {
 		definitions = append(definitions, Definition{Name: name, Mount: func(_ context.Context, platform Platform) (Service, error) {
-			signer, err := platform.EventAuth.Signer(name)
-			if err != nil {
-				return Service{}, err
+			if !publishNothing[name] {
+				signer, err := platform.EventAuth.Signer(name)
+				if err != nil {
+					return Service{}, err
+				}
+				handed.signers[name] = signer
 			}
-			handed.signers[name] = signer
 			handed.verifiers[name] = platform.EventAuth.Verifier()
 			return Service{}, nil
 		}})
@@ -70,9 +79,12 @@ func namedDefinitions(names ...string) []Definition {
 // In one process every consumer must take every service's events, whichever
 // mounted first: auth, mounted first, hears billing; knowledge hears apps.
 func TestEveryConsumerTrustsEveryServiceInItsProcess(t *testing.T) {
-	registry := eventRegistry(aws.Config{}, true, nil, namedDefinitions(mountOrder...), slog.New(slog.DiscardHandler))
+	registry := eventRegistry(aws.Config{}, true, nil, slog.New(slog.DiscardHandler))
 	handed := mountIdentities(t, registry)
 	for _, publisher := range mountOrder {
+		if publishNothing[publisher] {
+			continue
+		}
 		for _, consumer := range mountOrder {
 			if err := deliver(handed.signers[publisher], publisher, handed.verifiers[consumer]); err != nil {
 				t.Errorf("%s's event refused by %s's consumer: %v", publisher, consumer, err)
@@ -94,9 +106,9 @@ func TestReportingIsTheDefaultAcrossARestart(t *testing.T) {
 	}
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	before := mountIdentities(t, eventRegistry(aws.Config{}, false, nil, namedDefinitions(mountOrder...), logger))
+	before := mountIdentities(t, eventRegistry(aws.Config{}, false, nil, logger))
 
-	after := mountIdentities(t, eventRegistry(aws.Config{}, config.EnforceEventSignatures, nil, namedDefinitions(mountOrder...), logger))
+	after := mountIdentities(t, eventRegistry(aws.Config{}, config.EnforceEventSignatures, nil, logger))
 	if err := deliver(before.signers["billing"], "billing", after.verifiers["auth"]); err != nil {
 		t.Fatalf("reporting, an event from before a restart was refused: %v", err)
 	}
@@ -104,9 +116,44 @@ func TestReportingIsTheDefaultAcrossARestart(t *testing.T) {
 		t.Fatalf("the failure was not logged:\n%s", logs.String())
 	}
 
-	enforcing := mountIdentities(t, eventRegistry(aws.Config{}, true, nil, namedDefinitions(mountOrder...), logger))
+	enforcing := mountIdentities(t, eventRegistry(aws.Config{}, true, nil, logger))
 	if err := deliver(before.signers["billing"], "billing", enforcing.verifiers["auth"]); !errors.Is(err, eventauth.ErrUnverified) {
 		t.Fatalf("enforcing, an event from before a restart was not refused: %v", err)
+	}
+}
+
+// Only a service that publishes takes a signer, so the boot report names
+// those that sign with a key minted at boot, and neither the services that
+// only consume, such as realtime and email, nor one with a KMS key.
+func TestTheBootReportNamesOnlyTheKeysMinted(t *testing.T) {
+	keys := map[string]string{"agents": "alias/agents-events"}
+	var want []string
+	for _, name := range mountOrder {
+		if !publishNothing[name] && keys[name] == "" {
+			want = append(want, name)
+		}
+	}
+	slices.Sort(want)
+	for _, enforce := range []bool{false, true} {
+		var logs bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&logs, nil))
+		registry := eventRegistry(aws.Config{Region: "us-west-2"}, enforce, keys, logger)
+		mountIdentities(t, registry)
+		reportEventSigning(registry, enforce, logger)
+		var report struct {
+			Reporting []string `json:"keys_minted_at_boot"`
+			Enforcing []string `json:"services"`
+		}
+		if err := json.Unmarshal(logs.Bytes(), &report); err != nil {
+			t.Fatalf("enforce=%v: %v in %s", enforce, err, logs.String())
+		}
+		got := report.Reporting
+		if enforce {
+			got = report.Enforcing
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("enforce=%v: the boot report names %v as minting keys, want %v", enforce, got, want)
+		}
 	}
 }
 

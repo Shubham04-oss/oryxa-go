@@ -68,6 +68,7 @@ func Run(ctx context.Context, config Config, definitions []Definition, logger *s
 		return err
 	}
 	defer closeServices(services)
+	reportEventSigning(platform.EventAuth, config.EnforceEventSignatures, logger)
 	return serve(ctx, listener, services, config.ShutdownTimeout, logger)
 }
 
@@ -170,29 +171,34 @@ func openPlatform(ctx context.Context, config Config, selected []Definition, sel
 		AWS:          awsConfig,
 		Google:       google,
 		EventBusName: config.EventBusName,
-		EventAuth:    eventRegistry(awsConfig, config.EnforceEventSignatures, eventSigningKeys(os.Getenv, selected), selected, logger),
+		EventAuth:    eventRegistry(awsConfig, config.EnforceEventSignatures, eventSigningKeys(os.Getenv, selected), logger),
 		Getenv:       Environment(os.Getenv, selected, self),
 	}
 	return platform, func() { database.Close() }, nil
 }
 
-// eventRegistry builds the process's event signing identities, and says at
-// boot how it treats an event whose signature does not check out: refused
-// when enforce is set, and otherwise logged and handled anyway.
-func eventRegistry(awsConfig aws.Config, enforce bool, keys map[string]string, selected []Definition, logger *slog.Logger) *eventauth.Registry {
+// eventRegistry builds the process's event signing identities. An event whose
+// signature does not check out is refused when enforce is set, and otherwise
+// logged and handled anyway.
+func eventRegistry(awsConfig aws.Config, enforce bool, keys map[string]string, logger *slog.Logger) *eventauth.Registry {
 	registry := eventauth.NewRegistry(newKMSResolver(awsConfig, keys), time.Now)
-	var minted []string
-	for _, definition := range selected {
-		if keys[definition.Name] == "" {
-			minted = append(minted, definition.Name)
-		}
-	}
-	switch {
-	case !enforce:
+	if !enforce {
 		registry.ReportOnly(func(source, detailType, eventID string, err error) {
 			logger.Warn("event signature did not check out; handled anyway, since ORYXA_EVENT_SIGNATURES is not enforce",
 				"source", source, "detail_type", detailType, "event_id", eventID, "error", err)
 		})
+	}
+	return registry
+}
+
+// reportEventSigning says at boot how the process treats an event whose
+// signature does not check out, and which services sign with a key minted at
+// boot. It runs once every service has mounted, since only a service that
+// publishes takes a signer: one that only consumes mints no key.
+func reportEventSigning(registry *eventauth.Registry, enforce bool, logger *slog.Logger) {
+	minted := registry.Minted()
+	switch {
+	case !enforce:
 		logger.Info("event signatures are checked and reported, not enforced", "keys_minted_at_boot", minted)
 	case len(minted) > 0:
 		logger.Warn("event signatures are enforced, but these services sign with keys minted at boot: "+
@@ -201,7 +207,6 @@ func eventRegistry(awsConfig aws.Config, enforce bool, keys map[string]string, s
 	default:
 		logger.Info("event signatures are enforced")
 	}
-	return registry
 }
 
 // eventSigningKeyVariable names the setting that gives a service a KMS key to

@@ -129,6 +129,110 @@ func TestASignatureFromTheFutureIsRefused(t *testing.T) {
 	}
 }
 
+// A consumer whose events can wait longer than a day, and that is harmless to
+// act on late, may accept older signatures. Every verifier not given MaxAge
+// keeps the day.
+func TestMaxAgeLengthensHowOldASignatureMayBe(t *testing.T) {
+	now := time.Now()
+	signer, key := newSigner(t, "auth", now)
+	sig := signed(t, signer)
+	clock := now
+	keys := map[string]*ecdsa.PublicKey{"auth": key}
+	longer := NewVerifier(keys, nil, func() time.Time { return clock }, MaxAge(21*24*time.Hour))
+	usual := NewVerifier(keys, nil, func() time.Time { return clock })
+	verify := func(verifier *Verifier) error {
+		return verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), sig)
+	}
+
+	clock = now.Add(maxAge - time.Minute)
+	if err := verify(usual); err != nil {
+		t.Fatalf("by default, a signature within a day did not verify: %v", err)
+	}
+	clock = now.Add(10 * 24 * time.Hour)
+	if err := verify(longer); err != nil {
+		t.Fatalf("a ten-day-old signature under a 21-day bound did not verify: %v", err)
+	}
+	if err := verify(usual); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("by default, a ten-day-old signature verified: %v", err)
+	}
+	clock = now.Add(21*24*time.Hour + time.Minute)
+	if err := verify(longer); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("a signature older than the longer bound verified: %v", err)
+	}
+	// Nothing but a positive age changes the bound.
+	clock = now.Add(maxAge + time.Minute)
+	for _, age := range []time.Duration{0, -time.Hour} {
+		if err := verify(NewVerifier(keys, nil, func() time.Time { return clock }, MaxAge(age))); !errors.Is(err, ErrUnverified) {
+			t.Fatalf("MaxAge(%s) lifted the default bound: %v", age, err)
+		}
+	}
+}
+
+// kmsResolver gives the services it names a KMS signer, which signs nothing
+// here: it only has to be chosen over a local key.
+type kmsResolver map[string]string
+
+func (keys kmsResolver) Signer(service string) (*Signer, bool, error) {
+	keyID, ok := keys[service]
+	if !ok {
+		return nil, false, nil
+	}
+	signer, err := NewKMSSigner(nil, keyID, nil)
+	return signer, err == nil, err
+}
+
+func (keys kmsResolver) Keys() *KMSKeys { return &KMSKeys{KeyIDs: keys} }
+
+func TestARegistryNamesTheKeysItMinted(t *testing.T) {
+	registry := NewRegistry(kmsResolver{"agents": "alias/agents-events"}, time.Now)
+	for _, service := range []string{"teams", "agents", "auth", "teams"} {
+		if _, err := registry.Signer(service); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A consumer takes only a verifier, and mints nothing.
+	registry.Verifier()
+	if got, want := registry.Minted(), []string{"auth", "teams"}; !slices.Equal(got, want) {
+		t.Fatalf("Minted() = %v, want %v", got, want)
+	}
+	var none *Registry
+	if got := none.Minted(); got != nil {
+		t.Fatalf("a nil registry's Minted() = %v", got)
+	}
+}
+
+func TestARegistryVerifierTakesMaxAge(t *testing.T) {
+	now := time.Now()
+	clock := now
+	registry := NewRegistry(nil, func() time.Time { return clock })
+	signer, err := registry.Signer("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := signed(t, signer)
+	clock = now.Add(10 * 24 * time.Hour)
+	if err := registry.Verifier(MaxAge(21*24*time.Hour)).Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), sig); err != nil {
+		t.Fatalf("a registry verifier given MaxAge refused a ten-day-old signature: %v", err)
+	}
+	if err := registry.Verifier().Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), sig); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("a registry verifier without it accepted one: %v", err)
+	}
+}
+
+// A longer bound is for events that waited, not for ones signed ahead of
+// time: the future stays held to the default day.
+func TestMaxAgeStillRefusesASignatureFromTheFuture(t *testing.T) {
+	now := time.Now()
+	future, key, err := NewLocalSigner("auth", func() time.Time { return now.Add(maxAge + time.Hour) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, func() time.Time { return now }, MaxAge(21*24*time.Hour))
+	if err := verifier.Verify(goodSource, goodDetail, goodID, goodVersion, goodOccurred, []byte(goodData), signed(t, future)); !errors.Is(err, ErrUnverified) {
+		t.Fatalf("a signature from beyond the default day ahead verified: %v", err)
+	}
+}
+
 func TestAKeyOfAnotherServiceIsNotATrustedKey(t *testing.T) {
 	// The verifier holds the real auth key; an attacker holds a different
 	// one and signs as auth. The signature must not verify, because the
