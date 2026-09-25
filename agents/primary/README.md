@@ -1336,6 +1336,18 @@ Contracts live in `/contracts/events/agents/v1`:
 | `agents.interaction.completed.v1` | The target completed or failed an approved request |
 | `agents.teamspace.room.message.posted.v1` | A teamspace's room stored a message, a person's or an agent's answer, without its body ([A teamspace is a room](#a-teamspace-is-a-room)) |
 
+A request's three events carry who it is between, its `status` and
+`revision`, and, since the owner-approval fields reached them, where it was
+made and who decides it: `teamspace_id`, left out for a request made outside
+a teamspace; `approval`, `agent` or `owner`, left out only for a request an
+older build stored without one; and `decided_by`, as the API's
+`decision.decided_by` shows it (`{"kind": "member" | "agent" | "system",
+"user_id"?, "agent_id"?}`), once the request is decided, left out before, and
+for a decision an older build recorded without its decider. An approval
+withdrawn when its owner takes deciding back takes `decided_by` with it. They
+stay `v1`, since consumers ignore fields they do not know. Never the purpose,
+task, context, decision's message or result.
+
 `internal/events` holds the outbox, publisher and dispatcher: events are
 recorded in `agents_primary.agents_outbox` with the state they describe and
 the dispatcher publishes them at least once, with exponential retry; consumers

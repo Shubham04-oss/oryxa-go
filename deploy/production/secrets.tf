@@ -10,9 +10,10 @@ locals {
       COMPOSIO_WEBHOOK_SECRET     = "composio-webhook-secret"
       COGNITO_AGENT_CLIENT_SECRET = "cognito-agent-client-secret"
       # Realtime signs every purge it asks the web app's Worker for with
-      # this, and the Worker holds the same value. Its container exists
-      # whatever realtime_purge says, so it can be filled before realtime is
-      # on, and an apply with the switch off never deletes what was stored.
+      # this, and checks the Worker's events with it; the Worker holds the
+      # same value. Its container exists whatever realtime_purge says, so it
+      # can be filled before realtime is on, and an apply with the switch off
+      # never deletes what was stored.
       REALTIME_PURGE_SECRET = "realtime-purge-secret"
     },
     # Only when Jev judges: the tasks cannot start while a secret they name

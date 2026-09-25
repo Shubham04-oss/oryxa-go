@@ -78,7 +78,7 @@ Each service owns a lowercase, hyphen-free directory at the repository root. The
 ├── files/                 # Organization object storage on S3
 ├── knowledge/             # Extracts documents for retrieval
 ├── rag/                   # Corpora, chunking, embeddings and grounded answers
-├── realtime/              # Purges the web app's conversations when members leave
+├── realtime/              # The web app's conversations: their purges, and their events on the bus
 ├── teams/                 # Teams service
 ├── cmd/oryxa/             # The one binary every service runs in
 ├── contracts/             # Versioned event and retrieval HTTP contracts
@@ -148,13 +148,17 @@ and exposes a Jev-backed immediate lane. Agents consumes its
 wakes Krude for each batch as it arrives. Its contract lives in
 `batching/README.md`.
 
-`/realtime` purges what the web app keeps only in its Worker's Durable
-Objects — direct messages and teamspace side conversations — when a member
-leaves an organization or the organization is deleted. It hears both from
-auth and sends the Worker one signed `POST /internal/realtime/purge` for each.
-It has no API, keeps nothing, and is off until `REALTIME_WORKER_URL`,
-`REALTIME_PURGE_SECRET` and its queue are set. Its contract, with golden
-signature vectors for the Worker's side, lives in `realtime/README.md`.
+`/realtime` is the platform's way to what the web app keeps only in its
+Worker's Durable Objects — direct messages and teamspace side conversations.
+When a member leaves an organization or the organization is deleted, it hears
+so from auth and sends the Worker one signed `POST /internal/realtime/purge`
+for each, recording each purge done. The Worker in turn sends it signed
+`POST /v1/realtime/events` calls for the messages posted and conversations
+read there, which it publishes as `oryxa.realtime`: identities and lifecycle
+state, never what was said. It is off, serving no route, until
+`REALTIME_WORKER_URL`, `REALTIME_PURGE_SECRET` and its queue are set. Its
+contracts, with golden signature vectors for the Worker's side, live in
+`realtime/README.md`.
 
 `/agents` holds the agent system. `/agents/primary` is its adk-go engine,
 where Krude works as the member it assists. It runs in the binary as the

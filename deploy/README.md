@@ -206,9 +206,22 @@ Realtime (`realtime/README.md`) has the web app's Worker purge a member's
 direct messages and teamspace side conversations when they leave an
 organization or it is deleted. It calls
 `https://app.oryxa.in/internal/realtime/purge`, signed with
-`REALTIME_PURGE_SECRET`, a secret the Worker holds too. It ships off, and
+`REALTIME_PURGE_SECRET`, a secret the Worker holds too. It also serves
+`POST /v1/realtime/events`, where the Worker, signing with the same secret,
+sends the messages posted and conversations read in those conversations, for
+realtime to publish on the bus as `oryxa.realtime`. It ships off, and
 `realtime_purge` in `production/realtime.auto.tfvars.json`, committed as
-`false`, turns it on.
+`false`, turns it on, the route with it.
+
+**The Worker's events need the Worker configured and realtime on.**
+web-next's Worker needs `ORYXA_API_ORIGIN`, the API's origin
+(`https://app.oryxa.in`, whose `/v1/*` reaches the tasks through the tunnel),
+and the same `REALTIME_PURGE_SECRET`; without either it records nothing.
+Realtime serves the route only while it is on: until then the Worker's calls
+are answered `404`, and it retries each event for seven days, then drops it.
+Nothing else is needed: the task role may already put events from any source
+on the bus, nothing consumes realtime's events yet, so no rule or queue is
+added, and realtime's tables are migrated by every release, on or off.
 
 **It stays off until web-next serves `app.oryxa.in`.** Production's
 `app.oryxa.in` is served by the old `web/` Worker, which has no purge route and
@@ -252,7 +265,10 @@ there, for up to 14 days each, for realtime to be turned on.
    `removed_at` that has a fraction of a second, which almost every real one
    has. A Worker built on the earlier body, without `scope`, must not be the
    one live when realtime is on. `realtime/README.md` has golden vectors to
-   test the Worker's check against, one of them with a fraction.
+   test the Worker's check against, one of them with a fraction, and golden
+   vectors for the Worker's own signing of its events. Give the Worker
+   `ORYXA_API_ORIGIN=https://app.oryxa.in` too, as web-next's `REALTIME.md`
+   says, so it sends them.
 3. Store the secret, then make the queue, its dead-letter queue and the rule
    that feeds it, if they are not there yet. The other provisioners run again
    too, and change nothing. `provision-app.sh` stops before provisioning
@@ -287,7 +303,9 @@ there, for up to 14 days each, for realtime to be turned on.
    Cloudflare's security events for `app.oryxa.in`: a bot or WAF challenge
    answers `403`. A `401` means the two secrets differ. Those purges, like a
    `404`'s, are retried into `oryxa-production-realtime-events-dlq`, whose
-   alarm mails, and can be redriven once that is put right:
+   alarm mails, and can be redriven once that is put right. Send a direct
+   message: realtime logs `realtime events accepted`, and a refusal of the
+   Worker's call as `the Worker's events refused`, with the reason:
 
    ```sh
    aws sqs start-message-move-task --region us-west-2 \
