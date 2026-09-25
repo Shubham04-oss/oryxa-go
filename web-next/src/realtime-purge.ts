@@ -35,7 +35,9 @@ export const maxPurgeBodyBytes = 4 * 1024
  * A purge, as Go sends it (contract v3).
  *
  * - `event_id` names the event behind it (1 to 200 characters, unique per
- *   event): the same event again does nothing.
+ *   event): the same event again does nothing. A `teamspace_member` purge
+ *   is carried out once by what it removes instead, as Go may send the
+ *   same removal under a new event.
  * - `scope` says what goes, and `user_id` and `teamspace_id` must agree
  *   with it. An empty `user_id` never means everybody by itself.
  *   - `member`: the conversations of the member `user_id` (never empty).
