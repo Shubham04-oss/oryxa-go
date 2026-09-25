@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/adk/v2/agent"
 	"google.golang.org/adk/v2/artifact"
 	"google.golang.org/adk/v2/model"
 	"google.golang.org/adk/v2/runner"
@@ -191,5 +192,108 @@ func TestADeliveryRunCannotBrowseTheInbox(t *testing.T) {
 		if slices.Contains(declared, browsing) {
 			t.Fatalf("a delivery run was offered %s: %v", browsing, declared)
 		}
+	}
+}
+
+// recordingInteractions records every decision and answer, as the ledger
+// does: the request takes the status the decision or answer gives it.
+type recordingInteractions struct{ fakeInteractions }
+
+func (*recordingInteractions) Decide(_ context.Context, _ InteractionActor, id string, input InteractionDecisionInput) (Interaction, error) {
+	return Interaction{ID: id, Status: input.Decision}, nil
+}
+
+func (*recordingInteractions) Respond(_ context.Context, _ InteractionActor, id string, input InteractionResponseInput) (Interaction, error) {
+	return Interaction{ID: id, Status: input.Status}, nil
+}
+
+// TestADeliveryRunEndsOnceItsAnswerIsRecorded: recording the answer, or a
+// rejection, is the last thing a delivery run does. No model call follows to
+// tell a member who is not there what the ledger already holds. A member's
+// own run carries on to say what it did, and a delivery that approves work
+// carries on to do it.
+func TestADeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
+	answer := &genai.FunctionCall{ID: "answer", Name: "interactions_respond", Args: map[string]any{
+		"request_id": "irq_1", "status": "completed", "summary": "Reviewed.", "content": "The plan is ready.",
+	}}
+	decision := func(decided string) *genai.FunctionCall {
+		return &genai.FunctionCall{ID: "decide", Name: "interactions_decide", Args: map[string]any{
+			"request_id": "irq_1", "decision": decided, "message": "Understood.",
+		}}
+	}
+	for name, testCase := range map[string]struct {
+		delivering bool
+		call       *genai.FunctionCall
+		calls      int
+	}{
+		"a delivery answering":         {true, answer, 1},
+		"a delivery rejecting":         {true, decision("rejected"), 1},
+		"a delivery approving":         {true, decision("approved"), 2},
+		"the member's own run answers": {false, answer, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			toolbox, err := InteractionToolbox(InteractionConfig{Service: &recordingInteractions{}, Answering: true, Delivering: testCase.delivering})
+			if err != nil {
+				t.Fatal(err)
+			}
+			llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+				if hasFunctionResponse(request) {
+					return genai.NewContentFromText("I answered Crew's request for you.", genai.RoleModel)
+				}
+				return functionCalls(testCase.call)
+			})
+			said := unattendedHarness(t, llm, toolbox).turn("user_b", deliveryState(), "Deliver irq_1.")
+			if calls := len(llm.requestsFor(RootName)); calls != testCase.calls {
+				t.Fatalf("the model was called %d times, want %d", calls, testCase.calls)
+			}
+			if ended := testCase.calls == 1; ended != (said == "") {
+				t.Fatalf("the run said %q, want a closing message only where the run carries on", said)
+			}
+		})
+	}
+}
+
+// TestASpecialistsDeliveryRunEndsOnceItsAnswerIsRecorded: a persistent
+// specialist, whose runs otherwise end on their JSON result, ends a delivery
+// run on the recorded answer too, with no result written after it.
+func TestASpecialistsDeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
+	toolbox, err := InteractionToolbox(InteractionConfig{Service: &recordingInteractions{}, Answering: true, Delivering: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+		if hasFunctionResponse(request) {
+			return genai.NewContentFromText(`{"status":"completed","summary":"Answered Crew.","tools_used":["interactions_respond"],"artifacts":[],"handoffs":[]}`, genai.RoleModel)
+		}
+		return functionCalls(&genai.FunctionCall{ID: "answer", Name: "interactions_respond", Args: map[string]any{
+			"request_id": "irq_1", "status": "completed", "summary": "Reviewed.", "content": "The plan is ready.",
+		}})
+	})
+	router, err := modelrouter.New(llm, llm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	specialist, err := Managed(router, []Toolbox{toolbox}, false, ManagedSpec{
+		ID: "agt_sales", Name: "Sales", Description: "Reviews pipeline", Instructions: "Answer requests about the pipeline.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := session.InMemoryService()
+	turns, err := runner.New(runner.Config{AppName: "managed_agt_sales", Agent: specialist, SessionService: sessions, ArtifactService: artifact.InMemoryService()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := sessions.Create(context.Background(), &session.CreateRequest{AppName: "managed_agt_sales", UserID: "user_b", State: deliveryState()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range turns.Run(context.Background(), "user_b", created.Session.ID(), genai.NewContentFromText("Deliver irq_1.", genai.RoleUser), agent.RunConfig{}) {
+		if err != nil {
+			t.Fatalf("run the specialist: %v", err)
+		}
+	}
+	if calls := len(llm.requestsFor("subagent")); calls != 1 {
+		t.Fatalf("the specialist's model was called %d times, want once", calls)
 	}
 }

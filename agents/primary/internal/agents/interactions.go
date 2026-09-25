@@ -189,7 +189,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	if config.Service == nil {
 		return Toolbox{}, errors.New("agents: InteractionToolbox requires a service")
 	}
-	tools := interactionTools{service: config.Service, tokens: config.Tokens}
+	tools := interactionTools{service: config.Service, tokens: config.Tokens, delivering: config.Delivering}
 	create, err := functiontool.New(functiontool.Config{
 		Name: "interactions_create", Description: "Creates a durable, scoped request for an agent discovered in the organization directory. It emits a routing event; it does not invoke the target directly. Pass teamspace_id to ask a teammate's agent inside that shared teamspace; the teammate then approves it themself first, unless they gave that specialist automatic delegation there.",
 	}, tools.create)
@@ -246,6 +246,23 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 type interactionTools struct {
 	service InteractionService
 	tokens  memberauth.TokenSource
+	// delivering ends the run as soon as the step that settles its delivery
+	// is recorded (see settled).
+	delivering bool
+}
+
+// settled ends a delivery run on the tool call that recorded its answer, or
+// its rejection, with no model call after it. The ledger now holds all there
+// is to say: the member who asked reads it there, and so does the member
+// this agent works for, who is not here to be told; and the call, with what
+// it recorded, stays in the thread. A closing message would be one more
+// model call restating another member's request to nobody, while the run
+// still held its thread and its place in the waker. A member's own run, and
+// a delivery that approved work it has still to do, carry on as ever.
+func (tools interactionTools) settled(ctx agent.Context) {
+	if tools.delivering {
+		ctx.Actions().SkipSummarization = true
+	}
 }
 
 type interactionListArgs struct {
@@ -356,6 +373,10 @@ func (tools interactionTools) decide(ctx agent.Context, args interactionDecision
 	if err != nil {
 		return Interaction{}, interactionError(err)
 	}
+	// A rejection is the request's end; an approval leaves its work to do.
+	if request.Status == "rejected" {
+		tools.settled(ctx)
+	}
 	return request, nil
 }
 
@@ -368,6 +389,7 @@ func (tools interactionTools) respond(ctx agent.Context, args interactionRespons
 	if err != nil {
 		return Interaction{}, interactionError(err)
 	}
+	tools.settled(ctx)
 	return request, nil
 }
 

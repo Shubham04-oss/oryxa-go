@@ -458,7 +458,19 @@ cross-user content as untrusted data, and records decisions and results with
 the strict tools. Its run starts with the interactions toolbox already loaded
 (`threads.RunInput.Toolboxes`), its skill in the instruction, so the first
 model call goes straight to `interactions_get` rather than to `list_tools` and
-`load_tools`; the run's other toolboxes stay loadable as ever. A model answer by itself does not acknowledge target work:
+`load_tools`; the run's other toolboxes stay loadable as ever.
+
+The addressed agent's delivery run ends on the call that settles it:
+`interactions_respond`, or `interactions_decide` rejecting. That call sets
+ADK's `SkipSummarization`, so no model call follows it. The member it works
+for is not there to be told, and nothing is lost: the request holds its
+decision, who made it and its result, which both members read (in a
+teamspace's side conversation the answer shows as the agent's message, "on
+behalf of … approved by …", and a failure as a line), and the call, with
+what it recorded, stays in the delivery thread. A closing message was one
+more model call, 3 to 37 seconds, restating another member's request to
+nobody while the run held its thread and a delivery slot. An approval carries
+on to do the work, and a member's own run is unchanged. A model answer by itself does not acknowledge target work:
 the ledger must actually leave `pending` or `approved`. Every recipient uses
 one stable conversation per interaction, recorded earlier revisions settle
 before later ones while newer authoritative state supersedes stale work, and
