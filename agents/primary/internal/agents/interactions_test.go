@@ -123,26 +123,40 @@ func TestAnAnsweringToolboxCannotStartNewRequests(t *testing.T) {
 }
 
 // TestADeliveringToolboxHoldsOnlyItsOneRequest: a run delivering one
-// interaction reads, decides and answers that request, and has no tool that
-// lists the member's other requests or starts new ones.
+// interaction is offered, from its first model call, exactly the
+// interactions tools its purpose uses: reading and deciding its request in
+// a run deciding it, reading and answering it in one doing the approved
+// work, and reading it alone in a report, or in a run that does not say
+// what it is for. It never has a tool that lists the member's other
+// requests or starts new ones.
 func TestADeliveringToolboxHoldsOnlyItsOneRequest(t *testing.T) {
 	toolbox, err := InteractionToolbox(InteractionConfig{Service: &fakeInteractions{}, Answering: true, Delivering: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools, err := toolbox.Toolset.Tools(nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var offered []string
-	for _, one := range tools {
-		offered = append(offered, one.Name())
-	}
-	if want := []string{"interactions_get", "interactions_decide", "interactions_respond"}; !slices.Equal(offered, want) {
-		t.Fatalf("a delivery was offered %v, want only %v", offered, want)
-	}
 	if toolbox.Name != InteractionsToolboxName {
 		t.Fatalf("the delivering toolbox is named %q, want %q", toolbox.Name, InteractionsToolboxName)
+	}
+	for purpose, want := range map[string][]string{
+		DeliveryDecides: {"interactions_get", "interactions_decide"},
+		DeliveryWorks:   {"interactions_get", "interactions_respond"},
+		DeliveryReports: {"interactions_get"},
+		"":              {"interactions_get"},
+	} {
+		llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
+			return genai.NewContentFromText("Read it.", genai.RoleModel)
+		})
+		deliveringHarness(t, llm, toolbox).turn("user_b", deliveryStateFor(purpose), "Deliver irq_1.")
+		declared := declaredFunctions(llm.requestsFor(RootName)[0])
+		slices.Sort(declared)
+		slices.Sort(want)
+		if !slices.Equal(declared, want) || !slices.Equal(slices.Sorted(slices.Values(DeliveryTools(purpose))), want) {
+			t.Errorf("a run delivering for %q was offered %v, want exactly %v", purpose, declared, want)
+		}
+	}
+	listed, err := toolbox.Toolset.Tools(nil)
+	if err != nil || len(listed) != 1 || listed[0].Name() != "interactions_get" {
+		t.Fatalf("listed with no run = %v, %v; want interactions_get alone", listed, err)
 	}
 }
 

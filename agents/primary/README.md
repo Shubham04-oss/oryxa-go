@@ -496,8 +496,12 @@ what it may reach follows what their own agent has already allowed:
   and `DeliveryReport`, the reach above) with `interactions_get`,
   `interactions_decide` and `interactions_respond` only: `interactions_inbox`
   and `interactions_sent` are not there, so the model cannot browse the
-  member's other requests whatever it makes of the request. The three it has
-  act on the delivered request alone: the waker starts the run naming it
+  member's other requests whatever it makes of the request. Of the three it
+  is offered only those its purpose uses, from its first model call
+  (`agents.DeliveryTools`): reading and deciding its request in a run
+  deciding it, reading and answering it in one doing the approved work, and
+  reading it alone in a report. Each tool still refuses, when called, what
+  its run is not for. They act on the delivered request alone: the waker starts the run naming it
   (`threads.RunInput.Delivery`, kept in the thread's state, which the model
   never writes), and any other `request_id` is refused, so a run holding the
   member's apps cannot read, decide or answer another of their requests. Nothing a

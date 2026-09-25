@@ -2,6 +2,7 @@ package agents
 
 import (
 	"context"
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -88,14 +89,19 @@ func TestADeliveryRunStartsWithAllItMayReach(t *testing.T) {
 		return genai.NewContentFromText("Done.", genai.RoleModel)
 	})
 	// Nothing is loaded in the session: the run's reach is its own.
-	deliveringHarness(t, llm, approvedReach(t)...).turn("user_b", memberState("agt_b", "Carl", "primary"), "Deliver irq_1.")
+	state := memberState("agt_b", "Carl", "primary")
+	maps.Copy(state, DeliveryState(Delivery{RequestID: "irq_1", Purpose: DeliveryWorks}))
+	deliveringHarness(t, llm, approvedReach(t)...).turn("user_b", state, "Deliver irq_1.")
 
 	first := llm.requestsFor(RootName)[0]
 	declared := declaredFunctions(first)
-	for _, want := range []string{"apps_run_read_tool", "knowledge_search", "interactions_get", "interactions_decide", "interactions_respond"} {
+	for _, want := range []string{"apps_run_read_tool", "knowledge_search", "interactions_get", "interactions_respond"} {
 		if !slices.Contains(declared, want) {
 			t.Fatalf("the first call declared %v, want %s among them", declared, want)
 		}
+	}
+	if slices.Contains(declared, "interactions_decide") {
+		t.Fatalf("approved work was offered interactions_decide: %v", declared)
 	}
 	for _, looking := range lookups {
 		if slices.Contains(declared, looking) {
@@ -132,7 +138,9 @@ func TestASpecialistsDeliveryRunStartsWithAllItMayReach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runSpecialist(t, specialist, memberState("agt_sales", "Sales", "specialist"))
+	state := memberState("agt_sales", "Sales", "specialist")
+	maps.Copy(state, DeliveryState(Delivery{RequestID: "irq_1", Purpose: DeliveryWorks}))
+	runSpecialist(t, specialist, state)
 
 	first := llm.requestsFor("subagent")[0]
 	declared := declaredFunctions(first)

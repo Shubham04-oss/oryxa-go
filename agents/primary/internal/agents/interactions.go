@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -346,8 +347,12 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	description := "Durable agent-to-agent requests: send, inspect, approve or reject, and answer through an audited JSON contract without direct invocation."
 	switch {
 	case config.Delivering:
-		offered = []tool.Tool{get, decide, respond}
-		description = "The one agent-to-agent request being delivered to this agent: read it, approve or reject it, and answer it through an audited JSON contract."
+		description = "The one agent-to-agent request being delivered to this agent: read it, and decide it or answer it, as this run is for, through an audited JSON contract."
+		return Toolbox{
+			Name: InteractionsToolboxName, Description: description,
+			Instructions: interactionsInstructions,
+			Toolset:      deliveringTools{tools: []tool.Tool{get, decide, respond}},
+		}, nil
 	case config.Answering:
 		offered = []tool.Tool{inbox, sent, get, decide, respond}
 		description = "Durable agent-to-agent requests addressed to this member: inspect, approve or reject, and answer through an audited JSON contract."
@@ -357,6 +362,45 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		Instructions: interactionsInstructions,
 		Toolset:      fixedTools{name: InteractionsToolboxName, tools: offered},
 	}, nil
+}
+
+// DeliveryTools are the interactions tools a run delivering one interaction
+// for purpose is offered, by name: reading its request, and deciding it in a
+// run that decides, or answering it in one doing the approved work. A
+// report, and a run that does not say what it is for, only read it. Each
+// tool also refuses, when called, whatever its run is not for.
+func DeliveryTools(purpose string) []string {
+	switch purpose {
+	case DeliveryDecides:
+		return []string{"interactions_get", "interactions_decide"}
+	case DeliveryWorks:
+		return []string{"interactions_get", "interactions_respond"}
+	default:
+		return []string{"interactions_get"}
+	}
+}
+
+// deliveringTools offers a run delivering one interaction only the tools
+// its purpose lets it use (DeliveryTools), read from the run's state, which
+// the waker sets as it starts it: a tool the model could not use is not
+// shown to it at all.
+type deliveringTools struct{ tools []tool.Tool }
+
+func (deliveringTools) Name() string { return InteractionsToolboxName }
+
+func (delivering deliveringTools) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
+	purpose := ""
+	if ctx != nil {
+		purpose = stateText(ctx.ReadonlyState(), deliveryPurposeKey, "")
+	}
+	allowed := DeliveryTools(purpose)
+	var offered []tool.Tool
+	for _, one := range delivering.tools {
+		if slices.Contains(allowed, one.Name()) {
+			offered = append(offered, one)
+		}
+	}
+	return offered, nil
 }
 
 type interactionTools struct {
