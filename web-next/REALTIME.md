@@ -246,9 +246,13 @@ current over RPC:
 `RealtimeRegistryAgent` (`src/realtime-registry-agent.ts`), one per
 organization and named after it, records which members have an inbox: an
 inbox registers itself with its first conversation (and tries on every write
-until it has; a failure is tried again on a schedule), so an organization's
-purge can find every inbox and, through them, every conversation. It also
-remembers the purges it carried out (below). No page reaches it.
+until it has; a failure is tried again on a schedule, as the member opens
+the inbox, and after a restart), so an organization's purge can find every
+inbox and, through them, every conversation. An inbox counts as registered
+only once the registry has stored it, and never registers for a purge: a
+purge that reaches an inbox with nothing in it (a member's purge after
+their organization's) leaves it unregistered. The registry also remembers
+the purges it carried out (below). No page reaches it.
 
 ## Side conversations
 

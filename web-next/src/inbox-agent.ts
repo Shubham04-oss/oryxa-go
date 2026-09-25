@@ -169,8 +169,10 @@ async function eachLimited<T>(
  * member's sockets with the new unread total.
  *
  * Its first conversation registers it with its organization's registry
- * (`RealtimeRegistryAgent`), so an organization's purge finds it; `purge`
- * empties every conversation it lists, and then itself.
+ * (`RealtimeRegistryAgent`), so an organization's purge finds it; a
+ * registration that failed is tried again on a schedule, as its member opens
+ * it, and after a restart, and a purge never registers it. `purge` empties
+ * every conversation it lists, and then itself.
  */
 export class InboxAgent extends Agent<ConversationEnv> {
   private schemaReady = false
@@ -203,6 +205,27 @@ export class InboxAgent extends Agent<ConversationEnv> {
     return new Response(null, { status: 204 })
   }
 
+  // After a restart: a registration still to do, with nothing scheduled to
+  // try it (its schedule could not be set, or its tries ran out), is
+  // scheduled again. It is only scheduled, never tried here, as a start may
+  // be for a purge: one that empties the inbox lets the schedule go, so a
+  // purge never registers an inbox.
+  override async onStart(): Promise<void> {
+    this.schema()
+    if (
+      this.meta("registered") === "1" ||
+      this.meta("registration_retry") ||
+      this.everyConversation().length === 0
+    ) {
+      return
+    }
+    try {
+      await this.scheduleRegistration()
+    } catch (error) {
+      console.error("inbox: could not schedule its registration", error)
+    }
+  }
+
   override async onConnect(connection: Connection, context: ConnectionContext) {
     const { headers } = context.request
     const owner = parseInboxName(this.name)
@@ -225,6 +248,12 @@ export class InboxAgent extends Agent<ConversationEnv> {
       conversations: this.listed(INBOX_SNAPSHOT_LIMIT),
       unreadTotal: this.unreadTotal(),
     })
+    // A registration that failed is tried again as the member opens it.
+    if (this.everyConversation().length > 0) {
+      await this.register().catch((error: unknown) => {
+        console.error("inbox: could not register with its organization", error)
+      })
+    }
   }
 
   // A page says nothing on this socket: the conversations change it.
@@ -494,11 +523,11 @@ export class InboxAgent extends Agent<ConversationEnv> {
     return { emptied }
   }
 
-  /** The registration retry's schedule. */
+  /** The registration retry's schedule: for an inbox with any conversation, listed or only known. */
   async retryRegistration(): Promise<void> {
     this.schema()
     this.deleteMeta("registration_retry")
-    if (this.listed(1).length > 0) await this.register()
+    if (this.everyConversation().length > 0) await this.register()
   }
 
   private get owner(): { organizationId: string; userId: string } {
@@ -685,9 +714,10 @@ export class InboxAgent extends Agent<ConversationEnv> {
 
   /**
    * Registers the inbox with its organization's registry, once: every write
-   * tries until it has, and a failure is also tried again on a schedule. It
-   * is remembered only once the registry has stored it, and not when a purge
-   * emptied the inbox meanwhile, so the next write registers again.
+   * tries until it has, a failure is tried again on a schedule, and as the
+   * member opens the inbox. It is remembered only once the registry has
+   * stored it, and not when a purge emptied the inbox meanwhile, so the next
+   * write registers again.
    */
   private async register(): Promise<void> {
     if (this.meta("registered") === "1") return
@@ -702,14 +732,18 @@ export class InboxAgent extends Agent<ConversationEnv> {
       if (this.epoch === epoch) this.setMeta("registered", "1")
     } catch (error) {
       console.error("inbox: could not register with its organization", error)
-      if (!this.meta("registration_retry")) {
-        const schedule = await this.schedule(
-          registrationRetrySeconds,
-          "retryRegistration"
-        )
-        this.setMeta("registration_retry", schedule.id)
-      }
+      await this.scheduleRegistration()
     }
+  }
+
+  /** Schedules the registration retry, unless it is scheduled already. */
+  private async scheduleRegistration(): Promise<void> {
+    if (this.meta("registration_retry")) return
+    const schedule = await this.schedule(
+      registrationRetrySeconds,
+      "retryRegistration"
+    )
+    this.setMeta("registration_retry", schedule.id)
   }
 
   private row(name: string): ConversationRow | undefined {

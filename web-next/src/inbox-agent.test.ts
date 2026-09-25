@@ -435,6 +435,98 @@ describe("InboxAgent: the organization's registry", () => {
     await inbox.noteMessage(dmWith(cy), message(1, cy))
     expect(await registry.members()).toEqual([ada])
   })
+
+  it("registers again on a schedule for a conversation it only knows", async () => {
+    const { inbox, world } = await setup()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    world.failing.add(org)
+    await inbox.knowConversation(dmWith(bo))
+    expect(inbox.jobs.map((job) => job.callback)).toEqual(["retryRegistration"])
+
+    world.failing.delete(org)
+    vi.advanceTimersByTime(30_000)
+    await runDueJobs(inbox)
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([ada])
+  })
+
+  it("tries a registration that failed again when its member opens the inbox", async () => {
+    const { inbox, world } = await setup()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    world.failing.add(org)
+    await inbox.noteMessage(dmWith(bo), message(1, bo))
+    world.failing.delete(org)
+
+    // Before its schedule comes round.
+    const socket = await openSocket(inbox, { organizationId: org, userId: ada })
+    expect(socket.of("inbox-snapshot")).toHaveLength(1)
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([ada])
+    expect(
+      inbox.sql`SELECT value FROM inbox_meta WHERE key = 'registered'`
+    ).toEqual([{ value: "1" }])
+
+    // An inbox with no conversation has nothing to register.
+    const cysInbox = await world.object<Inbox>("InboxAgent", inboxName(org, cy))
+    await openSocket(cysInbox, { organizationId: org, userId: cy })
+    expect(await registry.members()).toEqual([ada])
+  })
+
+  it("schedules a registration that failed with nothing scheduled once it starts again", async () => {
+    const { inbox, world } = await setup()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    world.failing.add(org)
+    vi.spyOn(inbox, "schedule").mockRejectedValueOnce(
+      new Error("storage unavailable")
+    )
+    await expect(inbox.noteMessage(dmWith(bo), message(1, bo))).rejects.toThrow(
+      "storage unavailable"
+    )
+    expect(inbox.jobs).toEqual([])
+    world.failing.delete(org)
+
+    const restarted = await world.restart<Inbox>(
+      "InboxAgent",
+      inboxName(org, ada)
+    )
+    // Scheduled, not tried: a start may be for a purge.
+    expect(restarted.jobs.map((job) => job.callback)).toEqual([
+      "retryRegistration",
+    ])
+    expect(world.callsTo("RealtimeRegistryAgent", "register")).toEqual([])
+    vi.advanceTimersByTime(30_000)
+    await runDueJobs(restarted)
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([ada])
+  })
+
+  it("never registers for a purge, even when its start scheduled a registration: emptied, it lets the schedule go", async () => {
+    const { inbox, world } = await setup()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    world.failing.add(org)
+    vi.spyOn(inbox, "schedule").mockRejectedValueOnce(
+      new Error("storage unavailable")
+    )
+    await expect(inbox.noteMessage(dmWith(bo), message(1, bo))).rejects.toThrow(
+      "storage unavailable"
+    )
+    world.failing.delete(org)
+
+    // The purge starts it again, then empties it.
+    const restarted = await world.restart<Inbox>(
+      "InboxAgent",
+      inboxName(org, ada)
+    )
+    expect(
+      await restarted.purge({ removedAt: "2026-09-24T10:00:00.000Z" })
+    ).toEqual({ emptied: true })
+    expect(restarted.jobs).toEqual([])
+    vi.advanceTimersByTime(30_000)
+    await runDueJobs(restarted)
+    expect(world.callsTo("RealtimeRegistryAgent", "register")).toEqual([])
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([])
+  })
 })
 
 describe("InboxAgent: a conversation restated after a purge", () => {
