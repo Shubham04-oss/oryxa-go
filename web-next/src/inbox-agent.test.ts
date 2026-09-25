@@ -8,13 +8,15 @@ import {
   sideConversationName,
 } from "./lib/dms/names"
 import { MAX_UNREAD, conversationGoneCloseCode } from "./lib/dms/protocol"
-import { RealtimeRegistryAgent } from "./realtime-registry-agent"
+import { RealtimeRegistryAgent, purgeMemoryMs } from "./realtime-registry-agent"
+import { SideConversationAgent } from "./side-conversation-agent"
 import {
   World,
   drain,
   openSocket,
   runDueJobs,
   say,
+  settle,
 } from "./test/durable-objects"
 import type { Harness } from "./test/durable-objects"
 
@@ -35,6 +37,7 @@ type Dm = DirectMessageAgent & Harness
 function makeWorld() {
   return new World({
     DirectMessageAgent,
+    SideConversationAgent,
     InboxAgent,
     RealtimeRegistryAgent,
   } as unknown as ConstructorParameters<typeof World>[0])
@@ -49,6 +52,19 @@ async function setup() {
 
 function dmWith(peerId: string): ConversationEntry {
   return { kind: "dm", name: directMessageName(org, ada, peerId), peerId }
+}
+
+/** Ada's side conversation with `peerId` in a teamspace. */
+function sideWith(
+  peerId: string,
+  teamspaceId = "tsp_launch"
+): ConversationEntry {
+  return {
+    kind: "side",
+    name: sideConversationName(org, teamspaceId, ada, peerId),
+    peerId,
+    teamspaceId,
+  }
 }
 
 function message(
@@ -745,5 +761,290 @@ describe("InboxAgent: purge", () => {
     expect(await inbox.listConversations()).toEqual([])
     const cysInbox = await world.object<Inbox>("InboxAgent", inboxName(org, cy))
     expect(await cysInbox.listConversations()).toEqual([])
+  })
+})
+
+describe("InboxAgent: a teamspace's purge", () => {
+  const removedAt = "2026-09-24T10:00:00.000Z"
+
+  /**
+   * Ada's inbox: two side conversations in the launch teamspace (one
+   * listed, with Bo, whose inbox lists it too, and one only known, with Cy),
+   * one with Bo in another teamspace, and a DM with Bo. Her inbox is open.
+   */
+  async function adaInTwoTeamspaces() {
+    const world = makeWorld()
+    const inbox = await world.object<Inbox>("InboxAgent", inboxName(org, ada))
+    await inbox.noteMessage(sideWith(bo), message(1, bo, "launch, with Bo"))
+    await inbox.knowConversation(sideWith(cy))
+    await inbox.noteMessage(
+      sideWith(bo, "tsp_design"),
+      message(1, bo, "design, with Bo")
+    )
+    await inbox.noteMessage(dmWith(bo), message(1, bo, "a DM"))
+    const bosInbox = await world.object<Inbox>("InboxAgent", inboxName(org, bo))
+    await bosInbox.noteMessage(
+      { ...sideWith(bo), peerId: ada },
+      message(1, bo, "launch, with Bo")
+    )
+    const socket = await openSocket(inbox, { organizationId: org, userId: ada })
+    socket.clear()
+    return { world, inbox, bosInbox, socket }
+  }
+
+  /** The names an inbox lists, sorted. */
+  async function names(inbox: Inbox) {
+    return (await inbox.listConversations()).map((c) => c.name).sort()
+  }
+
+  /**
+   * The next purge of the side conversation `name` never answers: the
+   * inbox's work is cut off there (a deploy, an eviction), and nothing is
+   * raised. Resolves once it is cut off.
+   */
+  function cutOffSidePurge(name: string): Promise<void> {
+    const purgeSide = SideConversationAgent.prototype.purge
+    let cut = false
+    return new Promise((resolve) => {
+      vi.spyOn(SideConversationAgent.prototype, "purge").mockImplementation(
+        function (
+          this: SideConversationAgent,
+          ...args: Parameters<SideConversationAgent["purge"]>
+        ) {
+          if (cut || this.name !== name) return purgeSide.apply(this, args)
+          cut = true
+          resolve()
+          return new Promise<never>(() => {})
+        }
+      )
+    })
+  }
+
+  it("purges only that teamspace's side conversations, by its member's rule, and keeps the inbox, its sockets and its registration", async () => {
+    const { world, inbox, bosInbox, socket } = await adaInTwoTeamspaces()
+    const purges = vi.spyOn(SideConversationAgent.prototype, "purge")
+
+    expect(
+      await inbox.purgeTeamspace("evt_ada_left_launch", "tsp_launch", removedAt)
+    ).toBe("purged")
+
+    expect(
+      world
+        .callsTo("SideConversationAgent", "purge")
+        .map((call) => call.name)
+        .sort()
+    ).toEqual([sideWith(bo).name, sideWith(cy).name].sort())
+    expect(purges.mock.calls).toEqual([
+      [{ userId: ada, removedAt }],
+      [{ userId: ada, removedAt }],
+    ])
+    expect(world.callsTo("DirectMessageAgent")).toEqual([])
+    expect(await names(inbox)).toEqual(
+      [dmWith(bo).name, sideWith(bo, "tsp_design").name].sort()
+    )
+    expect(inbox.sql`SELECT * FROM inbox_known`).toEqual([])
+    expect(await bosInbox.listConversations()).toEqual([])
+    // The inbox stays open, told what went.
+    expect(socket.closed).toBeUndefined()
+    expect(socket.sent).toEqual([
+      { type: "inbox-removed", name: sideWith(bo).name, unreadTotal: 2 },
+    ])
+    expect(
+      inbox.sql`SELECT value FROM inbox_meta WHERE key = 'registered'`
+    ).toEqual([{ value: "1" }])
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([ada, bo])
+    expect(inbox.sql`SELECT event_id FROM inbox_purges`).toEqual([
+      { event_id: "evt_ada_left_launch" },
+    ])
+  })
+
+  it("empties every side conversation of that teamspace without a removal: a teamspace deleted", async () => {
+    const { world, inbox, bosInbox } = await adaInTwoTeamspaces()
+    const purges = vi.spyOn(SideConversationAgent.prototype, "purge")
+
+    expect(await inbox.purgeTeamspace("evt_launch_deleted", "tsp_launch")).toBe(
+      "purged"
+    )
+
+    expect(purges.mock.calls).toEqual([[undefined], [undefined]])
+    expect(world.callsTo("SideConversationAgent", "purge")).toHaveLength(2)
+    expect(await names(inbox)).toEqual(
+      [dmWith(bo).name, sideWith(bo, "tsp_design").name].sort()
+    )
+    expect(inbox.sql`SELECT * FROM inbox_known`).toEqual([])
+    expect(await bosInbox.listConversations()).toEqual([])
+  })
+
+  it("does nothing for an event it carried out, forgets it after a day, and writes nothing for a teamspace it has nothing in", async () => {
+    const { world, inbox } = await adaInTwoTeamspaces()
+    await inbox.purgeTeamspace("evt_1", "tsp_launch", removedAt)
+    const purged = world.callsTo("SideConversationAgent", "purge").length
+    // Bo writes in the launch teamspace again.
+    await inbox.noteMessage(
+      sideWith(bo),
+      message(2, bo, "back", "2026-09-24T10:05:00.000Z")
+    )
+
+    expect(await inbox.purgeTeamspace("evt_1", "tsp_launch", removedAt)).toBe(
+      "repeated"
+    )
+    expect(world.callsTo("SideConversationAgent", "purge")).toHaveLength(purged)
+    expect(await names(inbox)).toContain(sideWith(bo).name)
+
+    // A day later the event is forgotten: sent again, it is carried out.
+    vi.setSystemTime(Date.now() + purgeMemoryMs + 1_000)
+    expect(await inbox.purgeTeamspace("evt_1", "tsp_launch", removedAt)).toBe(
+      "purged"
+    )
+    expect(world.callsTo("SideConversationAgent", "purge")).toHaveLength(
+      purged + 1
+    )
+
+    // Nothing in the teamspace: nothing is written, nothing registers.
+    const done = inbox.sql`SELECT * FROM inbox_purges`
+    expect(await inbox.purgeTeamspace("evt_2", "tsp_other", removedAt)).toBe(
+      "purged"
+    )
+    expect(inbox.sql`SELECT * FROM inbox_purges`).toEqual(done)
+    const cysInbox = await world.object<Inbox>("InboxAgent", inboxName(org, cy))
+    expect(await cysInbox.purgeTeamspace("evt_3", "tsp_launch")).toBe("purged")
+    expect(cysInbox.sql`SELECT * FROM inbox_purges`).toEqual([])
+    expect(cysInbox.sql`SELECT * FROM inbox_meta`).toEqual([])
+    expect(cysInbox.jobs).toEqual([])
+    expect(world.callsTo("RealtimeRegistryAgent", "register")).toHaveLength(2)
+  })
+
+  it("keeps what it could not purge and remembers nothing, so the same event again finishes", async () => {
+    const { world, inbox } = await adaInTwoTeamspaces()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    world.failing.add(sideWith(cy).name)
+
+    await expect(
+      inbox.purgeTeamspace("evt_1", "tsp_launch", removedAt)
+    ).rejects.toThrow("1 conversations could not be purged")
+    expect(inbox.sql`SELECT name FROM inbox_known`).toEqual([
+      { name: sideWith(cy).name },
+    ])
+    expect(inbox.sql`SELECT * FROM inbox_purges`).toEqual([])
+
+    world.failing.clear()
+    expect(await inbox.purgeTeamspace("evt_1", "tsp_launch", removedAt)).toBe(
+      "purged"
+    )
+    expect(inbox.sql`SELECT * FROM inbox_known`).toEqual([])
+    expect(inbox.sql`SELECT event_id FROM inbox_purges`).toEqual([
+      { event_id: "evt_1" },
+    ])
+  })
+
+  it("carries on after a restart cut it off, with only the conversations not yet done", async () => {
+    const { world, inbox } = await adaInTwoTeamspaces()
+    const cutOff = cutOffSidePurge(sideWith(cy).name)
+    void inbox.purgeTeamspace("evt_1", "tsp_launch", removedAt)
+    await cutOff
+    await settle()
+    expect(await names(inbox)).not.toContain(sideWith(bo).name)
+    expect(inbox.sql`SELECT * FROM inbox_purges`).toEqual([])
+
+    const restarted = await world.restart<Inbox>(
+      "InboxAgent",
+      inboxName(org, ada)
+    )
+    const before = world.callsTo("SideConversationAgent", "purge").length
+    expect(
+      await restarted.purgeTeamspace("evt_1", "tsp_launch", removedAt)
+    ).toBe("purged")
+    expect(
+      world
+        .callsTo("SideConversationAgent", "purge")
+        .slice(before)
+        .map((call) => call.name)
+    ).toEqual([sideWith(cy).name])
+    expect(restarted.sql`SELECT * FROM inbox_known`).toEqual([])
+    expect(restarted.sql`SELECT event_id FROM inbox_purges`).toEqual([
+      { event_id: "evt_1" },
+    ])
+  })
+
+  it("remembers nothing while the teamspace's conversations keep arriving, or one it emptied comes back", async () => {
+    const { inbox } = await adaInTwoTeamspaces()
+    const purgeSide = SideConversationAgent.prototype.purge
+    // Each purge of one brings another, past every pass.
+    let arrivals = 0
+    const arriving = vi
+      .spyOn(SideConversationAgent.prototype, "purge")
+      .mockImplementation(async function (
+        this: SideConversationAgent,
+        ...args: Parameters<SideConversationAgent["purge"]>
+      ) {
+        const result = await purgeSide.apply(this, args)
+        arrivals += 1
+        await inbox.knowConversation(sideWith(`user-new-${arrivals}`))
+        return result
+      })
+    await expect(
+      inbox.purgeTeamspace("evt_1", "tsp_launch", removedAt)
+    ).rejects.toThrow(
+      "side conversations kept arriving while the teamspace was purged"
+    )
+    expect(inbox.sql`SELECT * FROM inbox_purges`).toEqual([])
+    arriving.mockRestore()
+
+    // Emptied and taken off, the conversation with Bo in the design
+    // teamspace is noted again while the one with Cy there is purged.
+    const design = sideWith(bo, "tsp_design")
+    await inbox.knowConversation(sideWith(cy, "tsp_design"))
+    const comingBack = vi
+      .spyOn(SideConversationAgent.prototype, "purge")
+      .mockImplementation(async function (
+        this: SideConversationAgent,
+        ...args: Parameters<SideConversationAgent["purge"]>
+      ) {
+        const result = await purgeSide.apply(this, args)
+        if (this.name === sideWith(cy, "tsp_design").name) {
+          await settle()
+          expect(await names(inbox)).not.toContain(design.name)
+          await inbox.noteMessage(design, message(2, bo, "still here"))
+        }
+        return result
+      })
+    await expect(inbox.purgeTeamspace("evt_2", "tsp_design")).rejects.toThrow(
+      "side conversations kept arriving while the teamspace was purged"
+    )
+    expect(inbox.sql`SELECT * FROM inbox_purges`).toEqual([])
+    comingBack.mockRestore()
+    expect(await inbox.purgeTeamspace("evt_2", "tsp_design")).toBe("purged")
+    expect(await names(inbox)).not.toContain(design.name)
+  })
+
+  it("refuses what is not a teamspace's purge", async () => {
+    const { world, inbox } = await adaInTwoTeamspaces()
+    for (const [eventId, teamspaceId, at] of [
+      ["", "tsp_launch", removedAt],
+      ["x".repeat(201), "tsp_launch", removedAt],
+      ["evt_1", "", removedAt],
+      ["evt_1", "tsp~launch", removedAt],
+      ["evt_1", "tsp launch", removedAt],
+      ["evt_1", "x".repeat(129), removedAt],
+      ["evt_1", "tsp_launch", "yesterday"],
+      // Only the purge's own form: UTC, to the millisecond.
+      ["evt_1", "tsp_launch", "2026-09-24T10:00:00Z"],
+    ]) {
+      await expect(
+        inbox.purgeTeamspace(eventId, teamspaceId, at)
+      ).rejects.toThrow(TypeError)
+    }
+    expect(world.callsTo("SideConversationAgent")).toEqual([])
+  })
+
+  it("forgets the teamspace purges it carried out once a purge empties it", async () => {
+    const { inbox } = await adaInTwoTeamspaces()
+    await inbox.purgeTeamspace("evt_1", "tsp_launch", removedAt)
+    expect(inbox.sql`SELECT event_id FROM inbox_purges`).toEqual([
+      { event_id: "evt_1" },
+    ])
+    expect(await inbox.purge()).toEqual({ emptied: true })
+    expect(inbox.sql`SELECT * FROM inbox_purges`).toEqual([])
   })
 })

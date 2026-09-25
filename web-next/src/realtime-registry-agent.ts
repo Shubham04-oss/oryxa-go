@@ -12,6 +12,13 @@ const purgeConcurrency = 8
 /** The longest event id a purge takes. */
 export const maxPurgeEventId = 200
 
+/** Whether `value` is an event id a purge takes: 1 to `maxPurgeEventId` characters. */
+export function isPurgeEventId(value: unknown): value is string {
+  return (
+    typeof value === "string" && value !== "" && value.length <= maxPurgeEventId
+  )
+}
+
 /** What a purge did: the work, or nothing because its event was purged already. */
 export type PurgeOutcome = "purged" | "repeated"
 
@@ -101,9 +108,7 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
     this.schema()
     const { scope } = target as { scope?: unknown }
     if (
-      typeof eventId !== "string" ||
-      eventId === "" ||
-      eventId.length > maxPurgeEventId ||
+      !isPurgeEventId(eventId) ||
       (scope !== "organization" &&
         (scope !== "member" ||
           !isNameId((target as { userId?: unknown }).userId) ||
