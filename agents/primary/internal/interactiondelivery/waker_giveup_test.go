@@ -2,6 +2,7 @@ package interactiondelivery
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -239,5 +240,28 @@ func TestOryxaClosesARequestInUTC(t *testing.T) {
 	}
 	if since, at := requests.swept[0], requests.swept[1]; since.Location() != time.UTC || at.Location() != time.UTC {
 		t.Fatalf("the poll closed between %v and %v, want UTC times", since, at)
+	}
+}
+
+// TestNothingIsClosedWhenTheDropIsNotRecorded: when releasing approved work
+// on its last attempt fails, even with the drop made before a commit that
+// did not happen, the waker does not know the delivery was given up, so it
+// leaves the request approved; the delivery comes round again.
+func TestNothingIsClosedWhenTheDropIsNotRecorded(t *testing.T) {
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(interactions.StatusApproved)}}
+	store := &fakeDeliveries{
+		pending:  []Delivery{approvedDelivery(maxAttempts - 1)},
+		failures: map[string]int{"evt_approved": maxAttempts - 1}, released: map[string]bool{},
+		releaseErr: errors.New("could not commit the release"),
+	}
+	waker := NewWaker(store, &fakeAgentRuns{fail: true}, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, released := store.released["evt_approved"]; !released {
+		t.Fatal("the failed run's delivery was never released")
+	}
+	if got := requests.get("irq_1"); len(requests.closed) != 0 || got.Status != interactions.StatusApproved {
+		t.Fatalf("closed=%v request=%+v, want it left approved", requests.closed, got)
 	}
 }

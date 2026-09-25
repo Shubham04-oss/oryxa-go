@@ -26,6 +26,9 @@ type fakeDeliveries struct {
 	// failures counts each delivery's failed attempts, which drop it once
 	// they reach the waker's most, as the store's Release does.
 	failures map[string]int
+	// releaseErr is what Release answers with, beside what it did, as the
+	// store's does when its transaction fails to commit.
+	releaseErr error
 }
 
 func (store *fakeDeliveries) Claim(context.Context, time.Duration, int) ([]Delivery, error) {
@@ -65,9 +68,9 @@ func (store *fakeDeliveries) Release(_ context.Context, eventID string, failed b
 	}
 	if store.failures[eventID] >= most {
 		store.dropped = append(store.dropped, eventID)
-		return true, nil
+		return true, store.releaseErr
 	}
-	return false, nil
+	return false, store.releaseErr
 }
 
 func (*fakeDeliveries) Purge(context.Context, time.Duration) error { return nil }
