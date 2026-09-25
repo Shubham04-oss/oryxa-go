@@ -348,16 +348,26 @@ func (service *Service) Decide(ctx context.Context, actor agents.InteractionActo
 }
 
 // DecideAsOwner records the decision of the member whose agent a request
-// addresses, made in their own signed-in session. Only the HTTP API calls it
-// — agents' tools see agents.InteractionService, which has no such method —
-// and it is the one way a request held for its owner is decided. The member
-// may decide a request their agent could decide as well, as their primary
-// agent could.
+// addresses, made in their own signed-in session: the actor must be marked
+// agents.SessionMember, which only the HTTP API's member path does, so no
+// run's actor can reach it — and agents' tools see agents.InteractionService,
+// which has no such method. It is the one way a request held for its owner
+// is decided. The member may decide a request their agent could decide as
+// well, as their primary agent could.
 func (service *Service) DecideAsOwner(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
 	return service.decide(ctx, actor, id, input, true)
 }
 
 func (service *Service) decide(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput, asOwner bool) (agents.Interaction, error) {
+	// Who decides is proved by the session, not by which method was called:
+	// only the member's own signed-in session decides as the owner, and it
+	// never decides as an agent.
+	if asOwner && actor.Session != agents.SessionMember {
+		return agents.Interaction{}, fmt.Errorf("%w: only the member, in their own signed-in session, decides as the owner", ErrForbidden)
+	}
+	if !asOwner && actor.Session == agents.SessionMember {
+		return agents.Interaction{}, fmt.Errorf("%w: a member decides in their own session as the owner, not as an agent", ErrForbidden)
+	}
 	request, err := service.Get(ctx, actor, id)
 	if err != nil {
 		return agents.Interaction{}, err

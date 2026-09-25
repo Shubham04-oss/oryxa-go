@@ -448,6 +448,8 @@ type fakeInteractions struct {
 	// with - so an authorization test can assert each route always acted as
 	// the authenticated caller's own persistent agent identity.
 	actors []primaryagents.InteractionActor
+	// agentDecisions and ownerDecisions count Decide and DecideAsOwner.
+	agentDecisions, ownerDecisions int
 }
 
 func (service *fakeInteractions) Create(_ context.Context, actor primaryagents.InteractionActor, token, key string, input primaryagents.InteractionCreateInput) (primaryagents.Interaction, error) {
@@ -470,6 +472,7 @@ func (service *fakeInteractions) Get(_ context.Context, actor primaryagents.Inte
 }
 func (service *fakeInteractions) Decide(_ context.Context, actor primaryagents.InteractionActor, _ string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
 	service.actors = append(service.actors, actor)
+	service.agentDecisions++
 	service.request.Status = input.Decision
 	return service.request, nil
 }

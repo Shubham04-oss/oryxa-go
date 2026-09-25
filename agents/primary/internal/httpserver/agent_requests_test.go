@@ -25,9 +25,17 @@ func (service *fakeInteractions) List(ctx context.Context, actor primaryagents.I
 	return service.Inbox(ctx, actor, query.Limit)
 }
 
-// DecideAsOwner is the one way the server decides: as the member themself.
-func (service *fakeInteractions) DecideAsOwner(ctx context.Context, actor primaryagents.InteractionActor, id string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
-	return service.Decide(ctx, actor, id, input)
+// DecideAsOwner is the one way the server decides: as the member themself,
+// in their own session. It refuses any other actor, as the ledger does, and
+// records the call apart from Decide's so a route that swapped them fails.
+func (service *fakeInteractions) DecideAsOwner(_ context.Context, actor primaryagents.InteractionActor, _ string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
+	service.actors = append(service.actors, actor)
+	if actor.Session != primaryagents.SessionMember {
+		return primaryagents.Interaction{}, interactions.ErrForbidden
+	}
+	service.ownerDecisions++
+	service.request.Status = input.Decision
+	return service.request, nil
 }
 
 // teamspaceInteractions is fakeInteractions keeping the last request body it
@@ -299,6 +307,26 @@ func TestATeamspaceRefusalReachesTheCallerAsTheTeamspaceSaidIt(t *testing.T) {
 			`{"target_agent_id":"agt_grace","teamspace_id":"tsp_1","purpose":"Launch","task":"Review the plan."}`, bearer)
 		if refused.Code != testCase.status || errorCode(t, refused) != testCase.code || !strings.Contains(refused.Body.String(), testCase.message) {
 			t.Errorf("%v: = %d %s, want %d %s saying %q", testCase.refusal, refused.Code, refused.Body.String(), testCase.status, testCase.code, testCase.message)
+		}
+	}
+}
+
+// TestTheDecisionRouteIsTheMembersOwnSession: the route decides through
+// DecideAsOwner, never Decide, and every interaction route acts in the
+// member's own session — the one place an actor is marked so.
+func TestTheDecisionRouteIsTheMembersOwnSession(t *testing.T) {
+	requests := &teamspaceInteractions{}
+	server := agentRequestServer(requests)
+	decided := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_1/decision", `{"decision":"approved","message":"Go ahead."}`, bearer)
+	if decided.Code != http.StatusOK || requests.ownerDecisions != 1 || requests.agentDecisions != 0 {
+		t.Fatalf("decision = %d %s with %d owner and %d agent decisions, want 200 through DecideAsOwner alone",
+			decided.Code, decided.Body.String(), requests.ownerDecisions, requests.agentDecisions)
+	}
+	serve(server, http.MethodGet, "/v1/organizations/org_1/agent-requests?limit=5", "", bearer)
+	serve(server, http.MethodPost, "/v1/organizations/org_1/agent-requests", `{"target_agent_id":"agt_b","purpose":"Launch","task":"Review."}`, bearer)
+	for _, actor := range requests.actors {
+		if actor.Session != primaryagents.SessionMember || actor.UserID != "user_1" {
+			t.Fatalf("a route acted as %+v, want user_1 in their own session", actor)
 		}
 	}
 }

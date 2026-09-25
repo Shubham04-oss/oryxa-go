@@ -109,8 +109,9 @@ func TestAnAgentCannotDecideARequestHeldForItsOwner(t *testing.T) {
 	newHarness(t, llm, box).turn("user_b", map[string]any{
 		OrganizationIDKey: "org_1", AgentIDKey: "agt_b", AgentNameKey: "Carl", AgentKindKey: "primary",
 	}, "Approve Ada's request")
-	if len(service.deciders) != 1 || service.deciders[0].UserID != "user_b" || service.deciders[0].AgentID != "agt_b" {
-		t.Fatalf("deciders=%+v, want one decision asked as agt_b", service.deciders)
+	if len(service.deciders) != 1 || service.deciders[0].UserID != "user_b" || service.deciders[0].AgentID != "agt_b" ||
+		service.deciders[0].Session != SessionAgent {
+		t.Fatalf("deciders=%+v, want one decision asked as agt_b, in an agent's session", service.deciders)
 	}
 	if !strings.Contains(refusal, "error") || !strings.Contains(refusal, "held for your member's own decision") {
 		t.Fatalf("the model was told %q, want the refusal", refusal)

@@ -136,7 +136,9 @@ func TestAnOwnerHeldRequestLivesItsWholeLifeAgainstTheDatabase(t *testing.T) {
 	if _, err := requests.Decide(ctx, b, created.ID, approve); !errors.Is(err, interactions.ErrForbidden) {
 		t.Fatalf("B's agent deciding it: error=%v, want ErrForbidden", err)
 	}
-	if approved, err := requests.DecideAsOwner(ctx, b, created.ID, approve); err != nil || approved.Status != interactions.StatusApproved {
+	bSignedIn := b
+	bSignedIn.Session = agents.SessionMember
+	if approved, err := requests.DecideAsOwner(ctx, bSignedIn, created.ID, approve); err != nil || approved.Status != interactions.StatusApproved {
 		t.Fatalf("B deciding it = %+v, %v", approved, err)
 	}
 

@@ -18,6 +18,18 @@ import (
 //go:embed toolboxes/interactions.md
 var interactionsInstructions string
 
+// The sessions an InteractionActor can act in.
+const (
+	// SessionMember is a person acting in their own signed-in session. Only
+	// the HTTP API's member path sets it, and that path refuses agent tokens;
+	// it is what makes a decision the member's own (DecideAsOwner).
+	SessionMember = "member"
+	// SessionAgent is a persistent agent acting in a run, whoever started it,
+	// the member's own chat turn included. Every actor built from a run's
+	// session state is this, and never SessionMember.
+	SessionAgent = "agent"
+)
+
 // InteractionActor is the persistent agent currently acting for a member.
 // The service derives it from authenticated session state; models never choose
 // the requester identity carried by a cross-user request.
@@ -27,6 +39,10 @@ type InteractionActor struct {
 	AgentID        string
 	AgentName      string
 	AgentKind      string
+	// Session is who is acting: SessionMember for the member themself in
+	// their own signed-in session, SessionAgent for an agent's run. Anything
+	// else, nothing included, is never taken for the member.
+	Session string
 }
 
 type InteractionParty struct {
@@ -226,11 +242,15 @@ func (tools interactionTools) actor(ctx agent.Context, needsToken bool) (Interac
 	if err != nil {
 		return InteractionActor{}, "", interactionError(err)
 	}
+	// A tool call is always the agent acting, even in a turn the member is
+	// watching with their own token: the member's own decisions are made
+	// through the API, never through a model.
 	actor := InteractionActor{
 		OrganizationID: member.OrganizationID, UserID: member.UserID,
 		AgentID:   stateText(ctx.ReadonlyState(), AgentIDKey, ""),
 		AgentName: stateText(ctx.ReadonlyState(), AgentNameKey, ""),
 		AgentKind: stateText(ctx.ReadonlyState(), AgentKindKey, ""),
+		Session:   SessionAgent,
 	}
 	if actor.AgentID == "" {
 		return InteractionActor{}, "", errors.New("this conversation has no persistent agent identity for cross-agent requests")

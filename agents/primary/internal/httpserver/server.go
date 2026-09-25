@@ -363,10 +363,14 @@ func scopeOf(member threads.Member) managedagents.Scope {
 	return managedagents.Scope{OrganizationID: member.OrganizationID, UserID: member.UserID}
 }
 
+// interactionActorOf is the member acting in their own signed-in session,
+// through their primary agent's identity. It is the only place an actor is
+// marked SessionMember: member refuses agent tokens before it is reached.
 func interactionActorOf(member threads.Member) primaryagents.InteractionActor {
 	return primaryagents.InteractionActor{
 		OrganizationID: member.OrganizationID, UserID: member.UserID,
 		AgentID: member.AgentID, AgentName: member.AgentName, AgentKind: member.AgentKind,
+		Session: primaryagents.SessionMember,
 	}
 }
 
