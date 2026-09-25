@@ -27,7 +27,7 @@ conversation) live only in the Durable Object's SQLite.
 | `TeamspaceRoomAgent` | `org~teamspace` | the teamspace's team | `…/teamspaces/{id}/messages` (read and post), `/catchup`, as each member | Go room canonical; DO keeps the recent window, fan-out, live presence |
 | `SideConversationAgent` | `org~teamspace~userA~userB` (ids sorted) | those two members, on the teamspace's team | each person's own agent: `POST …/threads/{id}/runs` on a thread of theirs; the teammate's agent: `…/agent-requests` (create, list, read, decide), as each person | DO SQLite for people's messages and the transcript; Go for agent work: threads, requests, results |
 | `DirectMessageAgent` (a DM) | `org~userA~userB` (ids sorted) | those two members | none | DO SQLite only |
-| `InboxAgent` | `org~user` | that member | none | DO SQLite: the member's conversation list, the teamspace purges it carried out |
+| `InboxAgent` | `org~user` | that member | none | DO SQLite: the member's conversation list, its latest removal from each teamspace's team |
 | `RealtimeRegistryAgent` | `org` | nobody: inboxes and the purge | none | DO SQLite: who has an inbox, purges carried out, a teamspace purge's progress |
 
 Go runs only a member's own agents (`managedagents` scopes by user). A
@@ -538,9 +538,10 @@ body (400 `invalid_request`, which Go does not retry). Then the
 organization's registry carries the purge out (the member's own inbox, for
 `teamspace_member`), and the Worker answers 204 with no body once it is
 done, or was done already for this `event_id`, or found nothing to purge:
-the registry (or that inbox) remembers an event for 24 hours, so a replay,
-or Go sending an event again after missing the answer, does nothing. A
-purge that failed part-way answers 503, and sent again it carries on from
+the registry remembers an event for 24 hours, so a replay, or Go sending an
+event again after missing the answer, does nothing (a `teamspace_member`
+purge is remembered by what it removes instead, below). A purge that failed
+part-way answers 503, and sent again it carries on from
 where it stopped; so does one cut off part-way with no answer at all (a
 deploy, an eviction, the runtime ending it once Go gave up). Each step is
 forgotten only once it is done: a conversation leaves an inbox once its
@@ -626,7 +627,7 @@ that teamspace go as a DM goes when someone leaves the organization; when
 the teamspace is deleted, all of its side conversations go.
 
 **`teamspace_member`** goes straight to the member's inbox
-(`InboxAgent.purgeTeamspace(eventId, teamspaceId, removedAt)`). Of what it
+(`InboxAgent.purgeTeamspace(teamspaceId, removedAt)`). Of what it
 lists or knows, only the side conversations whose name holds that
 teamspace are purged, each by its object with a member's rule
 (`SideConversationAgent.purge`, above): what was stored at or before
@@ -636,10 +637,20 @@ something newer stays in both, restated. The member's other side
 conversations, their DMs and other people's conversations are not touched.
 Unlike a member's purge, the inbox stays as it is otherwise: open, its
 sockets told only what went (`inbox-removed`, `inbox-conversation`), and
-registered, as its member is still in the organization. The inbox
-remembers the event for 24 hours once every such conversation is done, in
-`inbox_purges`, and writes nothing when it has none in that teamspace; an
-inbox a purge empties forgets them too.
+registered, as its member is still in the organization.
+
+A removal is carried out once, whatever the event that brings it: when a
+teams event is delivered again, agents publish the same removal again
+under a new `event_id`. Once every such conversation is done, the inbox
+remembers the latest `removed_at` it finished in that teamspace, for 24
+hours (`inbox_teamspace_removals`), and a removal not after it answers 204
+and touches nothing. Purging those conversations again would end the run
+the pages opened since hold, take the events not yet sent Go, and forget
+the member's agent thread, though it would delete nothing newer. A later
+removal (the member let back in, and removed again) is carried out, and
+remembered in its place. The inbox writes nothing when it has no side
+conversation in that teamspace, and an inbox a purge empties forgets its
+removals too.
 
 **`teamspace`** goes to the organization's registry
 (`RealtimeRegistryAgent.purgeTeamspace(eventId, teamspaceId)`), which asks
@@ -647,7 +658,18 @@ every registered member's inbox, 8 at a time, to empty every side
 conversation it has in the teamspace, newer items too (the same
 `InboxAgent.purgeTeamspace`, without `removedAt`). A conversation emptied
 from one person's inbox leaves the other's at once, so the second visit
-finds nothing left of it.
+finds nothing left of it. The registry remembers the event for 24 hours; a
+deletion sent again under another event finds nothing left, and answers
+204.
+
+**In any order.** Deleting a team brings a `teamspace_member` purge for each
+of its members and one `teamspace` purge, and a member leaving the
+organization brings a `teamspace_member` purge for each of their teams'
+teamspaces beside auth's `member` purge. They may arrive in any order, and
+each answers 204: whichever comes later purges what is left, or finds
+nothing. A member's purge that empties their inbox forgets their removals
+with it, so a `teamspace_member` purge after it writes nothing to the
+emptied inbox and registers nobody.
 
 **Crash safety.** Both are carried out step by step, and each step is
 recorded only once it is done, as for an organization:
@@ -656,7 +678,7 @@ recorded only once it is done, as for an organization:
   that could not be purged stays listed, so the next attempt finds it. The
   inbox goes through its conversations again while any of the teamspace
   arrive (at most five passes); one still unfinished after them fails the
-  attempt, and the event is not remembered.
+  attempt, and the removal is not remembered.
 - The registry must not forget a member to mark progress, as an
   organization's purge does: everybody is still in the organization. It
   records each member done for the event in `registry_purge_progress` once
