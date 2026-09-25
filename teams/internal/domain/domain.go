@@ -65,6 +65,23 @@ type OrgMembership struct {
 	Email            string
 	DisplayName      string
 	Role             OrgRole
+	// Agent says the caller is an agent acting for this member rather than
+	// the member themselves, which auth says of every token it mints for an
+	// agent. An agent may run with its member absent, answering someone
+	// else: a teammate's interaction request, a room it was mentioned in.
+	// What it reads or does can end up in front of any of them, so it gets a
+	// plain member's reach whatever its member's role; see ActsAsAdmin.
+	Agent bool
+}
+
+// ActsAsAdmin reports whether the caller acts with an org admin's reach:
+// every team in the organization, whether or not its member is on it, and
+// the admin-only writes CanCreateTeam and CanManageTeam gate. Only a
+// person's own session does. An agent acting for an admin gets what a plain
+// member would: the teams its member is actually on, and management only
+// where its member is a team admin in its own right.
+func (membership OrgMembership) ActsAsAdmin() bool {
+	return membership.Role.IsOrgAdmin() && !membership.Agent
 }
 
 type Organization struct {
