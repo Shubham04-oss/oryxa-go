@@ -175,7 +175,7 @@ func (waker *Waker) tidy(ctx context.Context) {
 	if err := waker.store.Purge(ctx, handledRetention); err != nil {
 		waker.logger.WarnContext(ctx, "purge handled interaction deliveries", "error", err)
 	}
-	now := time.Now()
+	now := time.Now().UTC()
 	closed, err := waker.requests.CloseExpired(ctx, closedExpired, now.Add(-expiredWithin), now, expiredPerPoll)
 	if err != nil && ctx.Err() == nil {
 		waker.logger.ErrorContext(ctx, "close approved interactions that expired unanswered", "error", err)
@@ -382,7 +382,7 @@ func (waker *Waker) giveUp(ctx context.Context, delivery Delivery, reason string
 	if delivery.Kind != KindTargetApproved {
 		return
 	}
-	_, err := waker.requests.CloseApproved(context.WithoutCancel(ctx), delivery.RequestID, reason, time.Now())
+	_, err := waker.requests.CloseApproved(context.WithoutCancel(ctx), delivery.RequestID, reason, time.Now().UTC())
 	switch {
 	case errors.Is(err, interactions.ErrConflict), errors.Is(err, interactions.ErrNotFound):
 		logger.InfoContext(ctx, "dropped approved work whose request had already moved on")

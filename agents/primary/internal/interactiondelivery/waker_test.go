@@ -103,6 +103,8 @@ type fakeRequests struct {
 	requests map[string]agents.Interaction
 	// closed are the requests CloseApproved failed, in order.
 	closed []string
+	// swept is the window the last CloseExpired closed in, since and at.
+	swept [2]time.Time
 }
 
 func (requests *fakeRequests) Get(_ context.Context, id string) (agents.Interaction, error) {
@@ -138,6 +140,7 @@ func (requests *fakeRequests) CloseApproved(_ context.Context, id, reason string
 // since and by at, the longest expired first, as the ledger does.
 func (requests *fakeRequests) CloseExpired(ctx context.Context, reason string, since, at time.Time, limit int) ([]agents.Interaction, error) {
 	requests.mu.Lock()
+	requests.swept = [2]time.Time{since, at}
 	var expired []agents.Interaction
 	for _, request := range requests.requests {
 		if request.Status == interactions.StatusApproved && !request.ExpiresAt.After(at) && request.ExpiresAt.After(since) {

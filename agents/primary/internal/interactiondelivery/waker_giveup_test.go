@@ -222,3 +222,22 @@ func TestADeliveryCutShortByAStopIsNotAFailedAttempt(t *testing.T) {
 		t.Fatalf("closed=%v, want the request left approved", requests.closed)
 	}
 }
+
+// TestOryxaClosesARequestInUTC: when Oryxa closes a request, the time its
+// failed result was completed, and the times the poll looks between, are
+// UTC, as every other time the ledger writes is, never this process's zone.
+func TestOryxaClosesARequestInUTC(t *testing.T) {
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(interactions.StatusApproved)}}
+	store := &fakeDeliveries{pending: []Delivery{approvedDelivery(0)}}
+	waker := NewWaker(store, &fakeAgentRuns{err: managedagents.ErrNotFound}, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	closed := requests.get("irq_1")
+	if closed.Result == nil || closed.Result.CompletedAt.Location() != time.UTC {
+		t.Fatalf("the closed request's result = %+v, want it completed at a UTC time", closed.Result)
+	}
+	if since, at := requests.swept[0], requests.swept[1]; since.Location() != time.UTC || at.Location() != time.UTC {
+		t.Fatalf("the poll closed between %v and %v, want UTC times", since, at)
+	}
+}
