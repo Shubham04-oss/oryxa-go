@@ -544,6 +544,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			deliveryConfig.Standing = interactionService
 		}
 		interactionWaker := interactiondelivery.NewWaker(deliveryStore, agentRegistry, interactionStore, deliveryConfig, logger)
+		// A delivery the consumer records wakes its agent at once; the
+		// waker's poll is the backstop.
+		consumer.WithInteractionNudge(interactionWaker.Nudge)
 		workers = append(workers,
 			func(ctx context.Context) { consumer.Poll(ctx, queue, settings.EventsQueueURL) },
 			waker.Run,

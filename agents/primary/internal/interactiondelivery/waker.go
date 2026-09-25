@@ -20,7 +20,6 @@ const (
 	maxAttempts      = 3
 	retryAfter       = time.Minute
 	handledRetention = 7 * 24 * time.Hour
-	claimsPerTick    = 8
 )
 
 type deliveries interface {
@@ -56,8 +55,12 @@ type Standing interface {
 }
 
 type Config struct {
-	Interval    time.Duration
-	Lease       time.Duration
+	// Interval is how often the waker looks for due deliveries without being
+	// nudged: a backstop for a delivery released to be retried later, and for
+	// one another replica recorded.
+	Interval time.Duration
+	Lease    time.Duration
+	// Concurrency is how many agents the waker runs at once.
 	Concurrency int
 	// Standing reads a request made in a teamspace again before its agent is
 	// woken. Without it, such a request never wakes its agent: the waker
@@ -74,6 +77,13 @@ type Waker struct {
 	requests Requests
 	config   Config
 	logger   *slog.Logger
+	// slots holds one place for each run under way, Concurrency at most,
+	// whichever pass started it.
+	slots chan struct{}
+	// nudges says a delivery may be due now. It holds one, so nudges that
+	// arrive together make one pass.
+	nudges  chan struct{}
+	running sync.WaitGroup
 }
 
 func NewWaker(store deliveries, agentRuns AgentRuns, requests Requests, config Config, logger *slog.Logger) *Waker {
@@ -81,49 +91,87 @@ func NewWaker(store deliveries, agentRuns AgentRuns, requests Requests, config C
 		logger = slog.New(slog.DiscardHandler)
 	}
 	config.Concurrency = max(config.Concurrency, 1)
-	return &Waker{store: store, agents: agentRuns, requests: requests, config: config, logger: logger}
+	return &Waker{
+		store: store, agents: agentRuns, requests: requests, config: config, logger: logger,
+		slots: make(chan struct{}, config.Concurrency), nudges: make(chan struct{}, 1),
+	}
 }
 
+// Nudge tells the waker a delivery may be due now: one was just recorded,
+// or a run ended and left room for another. It never waits.
+func (waker *Waker) Nudge() {
+	select {
+	case waker.nudges <- struct{}{}:
+	default:
+	}
+}
+
+// Run wakes agents for due deliveries until ctx ends: at once when nudged,
+// and every Interval in any case. A pass starts a run for every due delivery
+// there is room for and does not wait for them, so a delivery recorded while
+// other runs go on starts as soon as a slot is free, not after them. Run
+// returns once every run it started has ended.
 func (waker *Waker) Run(ctx context.Context) {
 	ticker := time.NewTicker(waker.config.Interval)
 	defer ticker.Stop()
+	defer waker.running.Wait()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			waker.tidy(ctx)
+		case <-waker.nudges:
 		}
-		if err := waker.WakeDue(ctx); err != nil && ctx.Err() == nil {
+		if err := waker.claimDue(ctx); err != nil && ctx.Err() == nil {
 			waker.logger.ErrorContext(ctx, "wake agents for interaction deliveries", "error", err)
 		}
 	}
 }
 
-// WakeDue claims and runs several independent agent deliveries concurrently.
+// WakeDue is one of Run's passes that waits: it starts a run for every due
+// delivery there is room for, and returns once they have all ended.
 func (waker *Waker) WakeDue(ctx context.Context) error {
+	waker.tidy(ctx)
+	err := waker.claimDue(ctx)
+	waker.running.Wait()
+	return err
+}
+
+// tidy is what a pass does on the poll: it forgets deliveries handled long
+// ago.
+func (waker *Waker) tidy(ctx context.Context) {
 	if err := waker.store.Purge(ctx, handledRetention); err != nil {
 		waker.logger.WarnContext(ctx, "purge handled interaction deliveries", "error", err)
 	}
-	slots := make(chan struct{}, waker.config.Concurrency)
-	var running sync.WaitGroup
-	defer running.Wait()
-	for range claimsPerTick {
+}
+
+// claimDue claims due deliveries while a slot is free and starts a run for
+// each, without waiting for them. A delivery is claimed only once a slot
+// holds a place for its run, so none sits leased while it waits for one;
+// and a run that ends nudges the waker, so what is due by then starts next.
+func (waker *Waker) claimDue(ctx context.Context) error {
+	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		slots <- struct{}{}
+		select {
+		case waker.slots <- struct{}{}:
+		default:
+			return nil
+		}
 		claimed, err := waker.store.Claim(ctx, waker.config.Lease, 1)
 		if err != nil || len(claimed) == 0 {
-			<-slots
+			<-waker.slots
 			return err
 		}
 		delivery := claimed[0]
-		running.Go(func() {
-			defer func() { <-slots }()
+		waker.running.Go(func() {
+			defer waker.Nudge()
+			defer func() { <-waker.slots }()
 			waker.wake(ctx, delivery)
 		})
 	}
-	return nil
 }
 
 func (waker *Waker) wake(ctx context.Context, delivery Delivery) {

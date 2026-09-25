@@ -103,6 +103,9 @@ type Consumer struct {
 	// queueName is set once, at the top of Poll, before Poll's single
 	// goroutine starts calling handle; it is not touched concurrently.
 	queueName string
+	// interactionRecorded is told each time an interaction delivery is newly
+	// recorded, so its agent is woken at once rather than on the next poll.
+	interactionRecorded func()
 }
 
 // WithOrganizationSynthesisRecorder records shared-entry events for the
@@ -123,6 +126,14 @@ func (consumer *Consumer) WithTeamForgetter(forget TeamForgetter) *Consumer {
 // WithTeamMemberForgetter adds cleanup for teams.member.removed.v1.
 func (consumer *Consumer) WithTeamMemberForgetter(forget TeamMemberForgetter) *Consumer {
 	consumer.forgetTeamMember = forget
+	return consumer
+}
+
+// WithInteractionNudge tells nudge each time an interaction delivery is newly
+// recorded, so the waker delivers it at once instead of on its next poll.
+// interactiondelivery.Waker's Nudge is one; it must not wait.
+func (consumer *Consumer) WithInteractionNudge(nudge func()) *Consumer {
+	consumer.interactionRecorded = nudge
 	return consumer
 }
 
@@ -331,6 +342,9 @@ func (consumer *Consumer) interactionChanged(ctx context.Context, detailType str
 	recorded, err := consumer.interactionRecorder.Record(ctx, delivery)
 	if err != nil {
 		return fmt.Errorf("event %s: %w", envelope.EventID, err)
+	}
+	if recorded && consumer.interactionRecorded != nil {
+		consumer.interactionRecorded()
 	}
 	consumer.logger.InfoContext(ctx, "interaction delivery recorded",
 		"event_id", envelope.EventID, "request_id", changed.RequestID,

@@ -1041,6 +1041,13 @@ times, settle recorded revisions in order per request and recipient, and keep ha
 for a week. If an earlier run already advanced the interaction, a later or
 repeated delivery is settled without running the agent again.
 
+A delivery starts as soon as it is recorded. The consumer nudges the waker as
+it records one, and the waker claims what is due while it has room, four runs
+at once per replica, without waiting for the runs it started: a delivery never
+waits behind an unrelated run, only for a free slot, and a run that ends
+nudges the waker again. The five-second poll is the backstop, for a delivery
+released to be retried later and one another replica recorded.
+
 Not yet: nothing skips the wait for something urgent, such as a direct
 mention, since that means reading each app's payload; and Krude is only ever
 asked to report. What a member would have it do on its own is theirs to

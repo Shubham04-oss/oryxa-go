@@ -262,6 +262,40 @@ func TestInteractionLifecycleRoutesOnlyIdentityAndState(t *testing.T) {
 	}
 }
 
+// TestANewInteractionDeliveryNudgesTheWaker: the consumer tells the waker of
+// each delivery it records, as it records it, so the agent is woken at once;
+// a delivery the bus repeats is not news.
+func TestANewInteractionDeliveryNudgesTheWaker(t *testing.T) {
+	consumer, err := NewConsumer(&fakeRecorder{}, &fakeInteractionRecorder{}, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nudges := 0
+	consumer.WithInteractionNudge(func() { nudges++ })
+	changed := agentsv1.InteractionChanged{
+		RequestID: "irq_1", OrganizationID: "org_1",
+		RequesterUserID: "user_a", RequesterAgentID: "agt_a",
+		TargetUserID: "user_b", TargetAgentID: "agt_b",
+		Status: "pending", Revision: 1, ChangedAt: time.Unix(100, 0).UTC(),
+	}
+	requested := delivery(t, agentsv1.Source, agentsv1.InteractionRequestedDetailType, "evt_requested", changed)
+	for range 2 {
+		if err := consumer.Handle(context.Background(), requested); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if nudges != 1 {
+		t.Fatalf("nudged %d times for one delivery sent twice, want once", nudges)
+	}
+	changed.Status, changed.Revision = "approved", 2
+	if err := consumer.Handle(context.Background(), delivery(t, agentsv1.Source, agentsv1.InteractionDecidedDetailType, "evt_approved", changed)); err != nil {
+		t.Fatal(err)
+	}
+	if nudges != 2 {
+		t.Fatalf("nudged %d times for two deliveries, want twice", nudges)
+	}
+}
+
 func readyBatch(memberID string, triggers ...batchingv1.Trigger) batchingv1.TriggerBatchReady {
 	return batchingv1.TriggerBatchReady{
 		BatchID: "tbatch_1", OrganizationID: "org_1", MemberID: memberID, Lane: batchingv1.LaneDigest,
