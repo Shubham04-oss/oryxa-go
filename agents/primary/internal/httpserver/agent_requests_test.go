@@ -28,8 +28,9 @@ func (service *fakeInteractions) List(ctx context.Context, actor primaryagents.I
 // DecideAsOwner is the one way the server decides: as the member themself,
 // in their own session. It refuses any other actor, as the ledger does, and
 // records the call apart from Decide's so a route that swapped them fails.
-func (service *fakeInteractions) DecideAsOwner(_ context.Context, actor primaryagents.InteractionActor, _ string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
+func (service *fakeInteractions) DecideAsOwner(_ context.Context, actor primaryagents.InteractionActor, token, _ string, input primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error) {
 	service.actors = append(service.actors, actor)
+	service.token = token
 	if actor.Session != primaryagents.SessionMember {
 		return primaryagents.Interaction{}, interactions.ErrForbidden
 	}
@@ -172,19 +173,84 @@ func TestAReusedIdempotencyKeyIsAConflict(t *testing.T) {
 // never reads.
 type unusedDirectory struct{ primaryagents.Directory }
 
-// TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem runs the real
-// ledger service behind the API. Grace asked user_1's primary agent for
-// something in a teamspace, so user_1 decides: the agent's own tool path is
-// refused, while user_1, signed in, approves it through the decision route.
-func TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem(t *testing.T) {
-	ledger := &heldRequests{request: primaryagents.Interaction{
+// tokenDirectory is an organization directory recording the tokens it was
+// loaded with.
+type tokenDirectory struct {
+	primaryagents.Directory
+	tokens []string
+}
+
+func (directory *tokenDirectory) Load(_ context.Context, _, token string) (primaryagents.OrganizationDirectory, error) {
+	directory.tokens = append(directory.tokens, token)
+	return primaryagents.OrganizationDirectory{}, nil
+}
+
+// standingSeats reads a request's teamspace again: its target still seated,
+// or, with lapsed set, the request no longer standing, for that reason.
+type standingSeats struct {
+	refusingSeats
+	lapsed string
+}
+
+func (seats standingSeats) RequestStanding(_ context.Context, _ string, _ primaryagents.OrganizationDirectory, _ string, _, target primaryagents.InteractionParty) (primaryagents.TeamspaceStanding, error) {
+	if seats.lapsed != "" {
+		return primaryagents.TeamspaceStanding{Lapsed: seats.lapsed}, nil
+	}
+	return primaryagents.TeamspaceStanding{Seat: primaryagents.TeamspaceSeat{AgentID: target.AgentID, OwnerUserID: target.UserID, Kind: "primary"}}, nil
+}
+
+// Close ends the held request as the store does, as Oryxa.
+func (ledger *heldRequests) Close(_ context.Context, _, reason string, at time.Time) (primaryagents.Interaction, error) {
+	ledger.request.Status = interactions.StatusRejected
+	ledger.request.Decision = &primaryagents.InteractionDecision{Decision: interactions.DecisionRejected, Message: reason, DecidedAt: at,
+		DecidedBy: &primaryagents.InteractionDecider{Kind: interactions.DecidedBySystem}}
+	ledger.request.Revision++
+	return ledger.request, nil
+}
+
+func heldInTeamspace() primaryagents.Interaction {
+	return primaryagents.Interaction{
 		ID: "irq_held", OrganizationID: "org_1", TeamspaceID: "tsp_1", Approval: interactions.ApprovalOwner,
 		Requester: primaryagents.InteractionParty{UserID: "user_2", AgentID: "agt_grace", AgentName: "Cleo"},
 		Target:    primaryagents.InteractionParty{UserID: "user_1", AgentID: "agt_primary", AgentName: "Carl"},
 		Purpose:   "Launch", Task: "Review the plan.", Status: interactions.StatusPending, Revision: 1,
 		ExpiresAt: time.Now().Add(time.Hour),
-	}}
-	requests, err := interactions.New(interactions.Config{Repository: ledger, Directory: unusedDirectory{}})
+	}
+}
+
+// TestAnOwnerApprovingARequestThatNoLongerStandsIsTold: the member approving
+// a request whose teamspace no longer holds it — read again with their own
+// token — gets a 409 request_closed saying why, and the request is closed
+// by Oryxa rather than approved.
+func TestAnOwnerApprovingARequestThatNoLongerStandsIsTold(t *testing.T) {
+	ledger := &heldRequests{request: heldInTeamspace()}
+	directory := &tokenDirectory{}
+	requests, err := interactions.New(interactions.Config{Repository: ledger, Directory: directory,
+		Teamspaces: standingSeats{lapsed: "the member who asked is no longer on the teamspace's team"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decided := serve(agentRequestServer(requests), http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_held/decision",
+		`{"decision":"approved","message":"Go ahead."}`, bearer)
+	if decided.Code != http.StatusConflict || errorCode(t, decided) != "request_closed" || !strings.Contains(decided.Body.String(), "no longer on the teamspace's team") {
+		t.Fatalf("approving = %d %s, want 409 request_closed saying why", decided.Code, decided.Body.String())
+	}
+	if ledger.request.Status != interactions.StatusRejected || ledger.request.Decision.DecidedBy.Kind != interactions.DecidedBySystem {
+		t.Fatalf("the request = %+v, want it closed by Oryxa", ledger.request)
+	}
+	if len(directory.tokens) != 1 || directory.tokens[0] != "member-token" {
+		t.Fatalf("the teamspace was read with tokens %v, want the member's own", directory.tokens)
+	}
+}
+
+// TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem runs the real
+// ledger service behind the API. Grace asked user_1's primary agent for
+// something in a teamspace, so user_1 decides: the agent's own tool path is
+// refused, while user_1, signed in, approves it through the decision route.
+func TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem(t *testing.T) {
+	ledger := &heldRequests{request: heldInTeamspace()}
+	directory := &tokenDirectory{}
+	requests, err := interactions.New(interactions.Config{Repository: ledger, Directory: directory, Teamspaces: standingSeats{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,6 +274,11 @@ func TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem(t *testing.T) {
 	// Who decided is in the JSON: the member, in their own session.
 	if !strings.Contains(decided.Body.String(), `"decided_by":{"kind":"member","user_id":"user_1"}`) {
 		t.Fatalf("the decision = %s, want decision.decided_by naming user_1 as the member", decided.Body.String())
+	}
+	// Approving it read the teamspace again, as the member, with their own
+	// token.
+	if len(directory.tokens) != 1 || directory.tokens[0] != "member-token" {
+		t.Fatalf("the teamspace was read with tokens %v, want the member's own", directory.tokens)
 	}
 }
 
@@ -274,6 +345,10 @@ type refusingSeats struct{ err error }
 
 func (seats refusingSeats) RequestSeat(context.Context, primaryagents.TeamspaceActor, primaryagents.OrganizationDirectory, string, string) (primaryagents.TeamspaceSeat, error) {
 	return primaryagents.TeamspaceSeat{}, seats.err
+}
+
+func (seats refusingSeats) RequestStanding(context.Context, string, primaryagents.OrganizationDirectory, string, primaryagents.InteractionParty, primaryagents.InteractionParty) (primaryagents.TeamspaceStanding, error) {
+	return primaryagents.TeamspaceStanding{}, seats.err
 }
 
 // graceDirectory is user_1's view of the organization: Grace and her

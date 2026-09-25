@@ -8,16 +8,59 @@ import (
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
 )
 
-// fakeTeamspaces answers RequestSeat from a fixed seating plan, the way
-// teamspaces.Service would after checking the live team directory, and
-// records what it was asked.
+// fakeTeamspaces answers RequestSeat and RequestStanding from a fixed
+// seating plan, the way teamspaces.Service would after checking the live
+// team directory, and records what it was asked.
 type fakeTeamspaces struct {
 	seats map[string]agents.TeamspaceSeat
 	err   error
 	calls []seatCall
+	// lapsed, when set, is why every request no longer stands when read
+	// again; standingErr is failing to read it at all.
+	lapsed      string
+	standingErr error
+	standings   []standingCall
+}
+
+type standingCall struct {
+	organizationID, teamspaceID string
+	directory                   agents.OrganizationDirectory
+	requester, target           agents.InteractionParty
+}
+
+func (spaces *fakeTeamspaces) RequestStanding(_ context.Context, organizationID string, directory agents.OrganizationDirectory, teamspaceID string, requester, target agents.InteractionParty) (agents.TeamspaceStanding, error) {
+	spaces.standings = append(spaces.standings, standingCall{organizationID: organizationID, teamspaceID: teamspaceID, directory: directory, requester: requester, target: target})
+	if spaces.standingErr != nil {
+		return agents.TeamspaceStanding{}, spaces.standingErr
+	}
+	if spaces.lapsed != "" {
+		return agents.TeamspaceStanding{Lapsed: spaces.lapsed}, nil
+	}
+	seat, ok := spaces.seats[target.AgentID]
+	if !ok || seat.OwnerUserID != target.UserID {
+		return agents.TeamspaceStanding{Lapsed: "the agent it asks no longer holds a seat in the teamspace"}, nil
+	}
+	return agents.TeamspaceStanding{Seat: seat}, nil
+}
+
+// fakeTokens mints every member an agent token, or fails as told: err
+// memberauth.ErrGrantRequired is a member who never allowed agents to act
+// for them while away.
+type fakeTokens struct {
+	err   error
+	users []string
+}
+
+func (tokens *fakeTokens) AgentToken(_ context.Context, userID string) (string, time.Time, error) {
+	tokens.users = append(tokens.users, userID)
+	if tokens.err != nil {
+		return "", time.Time{}, tokens.err
+	}
+	return "agent-token-" + userID, testNow.Add(time.Hour), nil
 }
 
 type seatCall struct {
@@ -62,11 +105,18 @@ func teamspaceSeats() *fakeTeamspaces {
 	}}
 }
 
+// teamspaceService is the ledger over spaces, able to mint every member's
+// agent token to read a request's teamspace again.
 func teamspaceService(t *testing.T, spaces Teamspaces) (*Service, *fakeRepository) {
+	t.Helper()
+	return teamspaceServiceWith(t, spaces, &fakeTokens{})
+}
+
+func teamspaceServiceWith(t *testing.T, spaces Teamspaces, tokens memberauth.TokenSource) (*Service, *fakeRepository) {
 	t.Helper()
 	repo := newFakeRepository()
 	service, err := New(Config{
-		Repository: repo, Directory: fakeDirectory{directory: teammateDirectory}, Teamspaces: spaces,
+		Repository: repo, Directory: fakeDirectory{directory: teammateDirectory}, Teamspaces: spaces, Tokens: tokens,
 		Now: func() time.Time { return testNow },
 	})
 	if err != nil {

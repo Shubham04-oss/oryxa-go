@@ -67,7 +67,7 @@ func TestNoAgentDecidesARequestHeldForItsOwner(t *testing.T) {
 func TestTheOwnerDecidesARequestHeldForThem(t *testing.T) {
 	service, _ := teamspaceService(t, teamspaceSeats())
 	held := createInTeamspace(t, service, "agt_b")
-	approved, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), held.ID, approve)
+	approved, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", held.ID, approve)
 	if err != nil || approved.Status != StatusApproved || approved.Decision == nil || approved.Approval != ApprovalOwner {
 		t.Fatalf("approved=%+v err=%v", approved, err)
 	}
@@ -79,7 +79,7 @@ func TestTheOwnerDecidesARequestHeldForThem(t *testing.T) {
 	}
 
 	declined := createInTeamspace(t, service, "agt_ask")
-	rejected, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), declined.ID, agents.InteractionDecisionInput{
+	rejected, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", declined.ID, agents.InteractionDecisionInput{
 		Decision: DecisionRejected, Message: "Not this week.",
 	})
 	if err != nil || rejected.Status != StatusRejected {
@@ -92,10 +92,10 @@ func TestTheOwnerDecidesARequestHeldForThem(t *testing.T) {
 func TestOnlyTheAddressedMemberDecidesAsOwner(t *testing.T) {
 	service, repo := teamspaceService(t, teamspaceSeats())
 	held := createInTeamspace(t, service, "agt_b")
-	if _, err := service.DecideAsOwner(context.Background(), inOwnSession(requester), held.ID, approve); !errors.Is(err, ErrForbidden) {
+	if _, err := service.DecideAsOwner(context.Background(), inOwnSession(requester), "member-token", held.ID, approve); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("the requester deciding as owner: error=%v, want ErrForbidden", err)
 	}
-	if _, err := service.DecideAsOwner(context.Background(), inOwnSession(otherMember), held.ID, approve); !errors.Is(err, ErrNotFound) {
+	if _, err := service.DecideAsOwner(context.Background(), inOwnSession(otherMember), "member-token", held.ID, approve); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("another member deciding as owner: error=%v, want ErrNotFound", err)
 	}
 	if status := repo.requests[held.ID].Status; status != StatusPending {
@@ -120,7 +120,7 @@ func TestAnAgentStillDecidesWhatItsOwnerDelegatedOrNeverHeld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decided, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), outside.ID, approve); err != nil || decided.Status != StatusApproved {
+	if decided, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", outside.ID, approve); err != nil || decided.Status != StatusApproved {
 		t.Fatalf("the member deciding a request their agent could = %+v, %v", decided, err)
 	}
 }
@@ -136,7 +136,7 @@ func TestARequestHeldForItsOwnerStillExpires(t *testing.T) {
 	if read, err := service.Get(context.Background(), targetPrimary, held.ID); err != nil || read.Status != StatusExpired {
 		t.Fatalf("read=%+v err=%v, want it expired", read, err)
 	}
-	if _, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), held.ID, approve); !errors.Is(err, ErrExpired) {
+	if _, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", held.ID, approve); !errors.Is(err, ErrExpired) {
 		t.Fatalf("deciding an expired request: error=%v, want ErrExpired", err)
 	}
 }
@@ -157,7 +157,7 @@ func TestAnApprovalNobodyKnowsIsHeldForTheOwner(t *testing.T) {
 	if _, err := service.Decide(context.Background(), targetPrimary, unknown.ID, approve); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("an agent deciding a request with an unknown approval: error=%v, want ErrForbidden", err)
 	}
-	if decided, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), unknown.ID, approve); err != nil || decided.Status != StatusApproved {
+	if decided, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", unknown.ID, approve); err != nil || decided.Status != StatusApproved {
 		t.Fatalf("its owner deciding it = %+v, %v", decided, err)
 	}
 }
@@ -205,7 +205,7 @@ func TestOnlyTheMembersOwnSessionDecidesAsOwner(t *testing.T) {
 	agentRun := targetPrimary
 	agentRun.Session = agents.SessionAgent
 	for name, actor := range map[string]agents.InteractionActor{"an agent's run": agentRun, "an actor naming no session": targetPrimary} {
-		if _, err := service.DecideAsOwner(context.Background(), actor, held.ID, approve); !errors.Is(err, ErrForbidden) {
+		if _, err := service.DecideAsOwner(context.Background(), actor, "member-token", held.ID, approve); !errors.Is(err, ErrForbidden) {
 			t.Fatalf("%s deciding as owner: error=%v, want ErrForbidden", name, err)
 		}
 	}
@@ -221,7 +221,7 @@ func TestOnlyTheMembersOwnSessionDecidesAsOwner(t *testing.T) {
 	if repo.requests[held.ID].Status != StatusPending || repo.requests[outside.ID].Status != StatusPending {
 		t.Fatal("a refused decision was recorded")
 	}
-	if decided, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), held.ID, approve); err != nil || decided.Status != StatusApproved {
+	if decided, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", held.ID, approve); err != nil || decided.Status != StatusApproved {
 		t.Fatalf("the member's own session = %+v, %v", decided, err)
 	}
 }
@@ -232,7 +232,7 @@ func TestOnlyTheMembersOwnSessionDecidesAsOwner(t *testing.T) {
 func TestADecisionRecordsWhoMadeIt(t *testing.T) {
 	service, _ := teamspaceService(t, teamspaceSeats())
 	held := createInTeamspace(t, service, "agt_b")
-	byOwner, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), held.ID, approve)
+	byOwner, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", held.ID, approve)
 	if err != nil || byOwner.Decision == nil || byOwner.Decision.DecidedBy == nil ||
 		*byOwner.Decision.DecidedBy != (agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}) || !DecidedByItsOwner(byOwner) {
 		t.Fatalf("the member's own decision = %+v, %v; want decided_by the member", byOwner.Decision, err)

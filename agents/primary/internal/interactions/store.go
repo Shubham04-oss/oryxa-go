@@ -281,6 +281,106 @@ func (store *Store) Respond(ctx context.Context, id string, input agents.Interac
 	return result, nil
 }
 
+// Hold keeps a request for its owner's own decision. A pending request is
+// marked held, which nobody is waiting on, so no event is recorded. An
+// approved one has its approval, and who made it, withdrawn and is pending
+// again, held: that is recorded as the request's new requested event, which
+// the waker completes without waking anyone, as it does any held request.
+func (store *Store) Hold(ctx context.Context, id string, at time.Time) (agents.Interaction, error) {
+	var result agents.Interaction
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		current, err := getForUpdate(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !current.ExpiresAt.After(at) {
+			return ErrExpired
+		}
+		switch current.Status {
+		case StatusPending:
+			if current.Approval == ApprovalOwner {
+				result = current
+				return nil
+			}
+			return scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+				SET approval='owner', revision=revision+1, updated_at=$2 WHERE id=$1 RETURNING `+selectColumns,
+				id, at), &result)
+		case StatusApproved:
+			err := scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+				SET status='pending', approval='owner', decision=NULL,
+					decided_by_kind='', decided_by_user_id='', decided_by_agent_id='',
+					revision=revision+1, updated_at=$2
+				WHERE id=$1 RETURNING `+selectColumns, id, at), &result)
+			if err != nil {
+				return err
+			}
+			return recordEvent(ctx, tx, agentsv1.InteractionRequestedDetailType, result)
+		default:
+			return ErrConflict
+		}
+	})
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	return result, nil
+}
+
+// Close ends, as Oryxa and saying why, a request made in a teamspace that no
+// longer stands there. A pending request is rejected, with the reason as its
+// decision's message and Oryxa as its decider; an approved one fails with
+// the reason as its result, before its work begins. Either is recorded as
+// the event that tells the member who asked, exactly as a rejection or a
+// failed result from the target would.
+func (store *Store) Close(ctx context.Context, id, reason string, at time.Time) (agents.Interaction, error) {
+	var result agents.Interaction
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		current, err := getForUpdate(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if !current.ExpiresAt.After(at) {
+			return ErrExpired
+		}
+		switch current.Status {
+		case StatusPending:
+			decisionJSON, err := json.Marshal(agents.InteractionDecision{
+				Decision: DecisionRejected, Message: reason, AllowedTools: []string{}, GrantedPermissions: []string{}, DecidedAt: at,
+			})
+			if err != nil {
+				return err
+			}
+			err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+				SET status='rejected', decision=$2, decided_by_kind='system', decided_by_user_id='', decided_by_agent_id='',
+					revision=revision+1, updated_at=$3
+				WHERE id=$1 RETURNING `+selectColumns, id, decisionJSON, at), &result)
+			if err != nil {
+				return err
+			}
+			return recordEvent(ctx, tx, agentsv1.InteractionDecidedDetailType, result)
+		case StatusApproved:
+			resultJSON, err := json.Marshal(agents.InteractionResult{
+				Status: StatusFailed, Summary: reason, ToolsUsed: []string{}, Artifacts: []string{}, CompletedAt: at,
+			})
+			if err != nil {
+				return err
+			}
+			err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+				SET status='failed', result=$2, revision=revision+1, updated_at=$3
+				WHERE id=$1 RETURNING `+selectColumns, id, resultJSON, at), &result)
+			if err != nil {
+				return err
+			}
+			return recordEvent(ctx, tx, agentsv1.InteractionCompletedDetailType, result)
+		default:
+			return ErrConflict
+		}
+	})
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	return result, nil
+}
+
 // Forget removes request content when a member leaves or an organization is
 // deleted. Published routing events contain IDs and parties only, never task
 // content, so no second content store survives this cleanup.

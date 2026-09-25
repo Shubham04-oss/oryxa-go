@@ -19,6 +19,7 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
+	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
@@ -499,5 +500,142 @@ func TestTheLedgerKeepsWhoDecided(t *testing.T) {
 			older.ID, columns[0], columns[1], columns[2]); err == nil {
 			t.Errorf("the ledger stored %s as its decider", name)
 		}
+	}
+}
+
+var (
+	requestedEvent = agentsv1.InteractionRequestedDetailType + ":pending"
+	approvedEvent  = agentsv1.InteractionDecidedDetailType + ":approved"
+)
+
+// eventsOf is the detail types the outbox holds for one request, oldest
+// first, with the status each carried.
+func eventsOf(t *testing.T, database *postgreskit.Database, requestID string) []string {
+	t.Helper()
+	rows, err := database.Pool.Query(context.Background(), `SELECT detail_type || ':' || (detail->>'status')
+		FROM agents_primary.agents_outbox WHERE detail->>'request_id'=$1 ORDER BY occurred_at, detail_type`, requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var events []string
+	for rows.Next() {
+		var event string
+		if err := rows.Scan(&event); err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+// TestTheLedgerHoldsARequestForItsOwner: a pending request is marked held,
+// which nobody waits on, so no event; an approved one has its approval and
+// its decider withdrawn and is pending again, held, recorded as a new
+// requested event; anything else is not the ledger's to hold.
+func TestTheLedgerHoldsARequestForItsOwner(t *testing.T) {
+	database, store := openInteractionStore(t)
+	ctx := context.Background()
+	organizationID := testOrganization(t, database)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	create := func(name string) agents.Interaction {
+		t.Helper()
+		request := storedRequest(organizationID, organizationID+"_"+name, "user_a", "user_b", now)
+		request.TeamspaceID, request.Approval = "tsp_1", ApprovalAgent
+		if _, err := store.Create(ctx, request, name); err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}
+
+	pending := create("pending")
+	held, err := store.Hold(ctx, pending.ID, now.Add(time.Second))
+	if err != nil || held.Status != StatusPending || held.Approval != ApprovalOwner || held.Revision != 2 {
+		t.Fatalf("holding a pending request = %+v, %v", held, err)
+	}
+	if again, err := store.Hold(ctx, pending.ID, now.Add(2*time.Second)); err != nil || again.Revision != 2 {
+		t.Fatalf("holding it again = %+v, %v; want it unchanged", again, err)
+	}
+	if events := eventsOf(t, database, pending.ID); fmt.Sprint(events) != fmt.Sprint([]string{requestedEvent}) {
+		t.Fatalf("events=%v, want only the request's own", events)
+	}
+
+	approved := create("approved")
+	if _, err := store.Decide(ctx, approved.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "Go."},
+		agents.InteractionDecider{Kind: DecidedByAgent, UserID: "user_b", AgentID: "agt_b"}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	rehold, err := store.Hold(ctx, approved.ID, now.Add(2*time.Second))
+	if err != nil || rehold.Status != StatusPending || rehold.Approval != ApprovalOwner || rehold.Decision != nil || rehold.Revision != 3 {
+		t.Fatalf("holding an approved request = %+v, %v; want it pending, held, its approval withdrawn", rehold, err)
+	}
+	var decider string
+	if err := database.Pool.QueryRow(ctx, `SELECT decided_by_kind || decided_by_user_id || decided_by_agent_id
+		FROM agents_primary.agent_interactions WHERE id=$1`, approved.ID).Scan(&decider); err != nil || decider != "" {
+		t.Fatalf("its decider is %q (%v), want it withdrawn too", decider, err)
+	}
+	if events := eventsOf(t, database, approved.ID); fmt.Sprint(events) != fmt.Sprint([]string{requestedEvent, approvedEvent, requestedEvent}) {
+		t.Fatalf("events=%v, want a new requested event after the withdrawn approval", events)
+	}
+
+	finished := create("finished")
+	if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.agent_interactions SET status='completed' WHERE id=$1`, finished.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Hold(ctx, finished.ID, now.Add(time.Second)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("holding a completed request: error=%v, want ErrConflict", err)
+	}
+	if _, err := store.Hold(ctx, create("expired").ID, now.Add(2*time.Hour)); !errors.Is(err, ErrExpired) {
+		t.Fatalf("holding an expired request: error=%v, want ErrExpired", err)
+	}
+}
+
+// TestTheLedgerClosesARequestThatNoLongerStands: Oryxa rejects a pending
+// request, as its decider, and fails an approved one before its work, each
+// with the reason and the event that tells the member who asked.
+func TestTheLedgerClosesARequestThatNoLongerStands(t *testing.T) {
+	database, store := openInteractionStore(t)
+	ctx := context.Background()
+	organizationID := testOrganization(t, database)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	reason := "Oryxa closed this request because the member who asked is no longer on the teamspace's team."
+	create := func(name string) agents.Interaction {
+		t.Helper()
+		request := storedRequest(organizationID, organizationID+"_"+name, "user_a", "user_b", now)
+		request.TeamspaceID, request.Approval = "tsp_1", ApprovalOwner
+		if _, err := store.Create(ctx, request, name); err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}
+
+	pending := create("pending")
+	rejected, err := store.Close(ctx, pending.ID, reason, now.Add(time.Second))
+	if err != nil || rejected.Status != StatusRejected || rejected.Decision == nil || rejected.Decision.Message != reason ||
+		rejected.Decision.DecidedBy == nil || *rejected.Decision.DecidedBy != (agents.InteractionDecider{Kind: DecidedBySystem}) {
+		t.Fatalf("closing a pending request = %+v, %v; want it rejected by Oryxa", rejected, err)
+	}
+	if events := eventsOf(t, database, pending.ID); fmt.Sprint(events) != fmt.Sprint([]string{requestedEvent, agentsv1.InteractionDecidedDetailType + ":rejected"}) {
+		t.Fatalf("events=%v, want the rejection's", events)
+	}
+
+	approved := create("approved")
+	if _, err := store.Decide(ctx, approved.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "Go."},
+		agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := store.Close(ctx, approved.ID, reason, now.Add(2*time.Second))
+	if err != nil || failed.Status != StatusFailed || failed.Result == nil || failed.Result.Status != StatusFailed || failed.Result.Summary != reason ||
+		failed.Decision == nil || failed.Decision.DecidedBy == nil || failed.Decision.DecidedBy.Kind != DecidedByMember {
+		t.Fatalf("closing an approved request = %+v, %v; want it failed, its member's approval kept", failed, err)
+	}
+	if events := eventsOf(t, database, approved.ID); fmt.Sprint(events) != fmt.Sprint([]string{requestedEvent, approvedEvent, agentsv1.InteractionCompletedDetailType + ":failed"}) {
+		t.Fatalf("events=%v, want the failed result's", events)
+	}
+	if _, err := store.Close(ctx, approved.ID, reason, now.Add(3*time.Second)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("closing it twice: error=%v, want ErrConflict", err)
+	}
+	if _, err := store.Close(ctx, create("expired").ID, reason, now.Add(2*time.Hour)); !errors.Is(err, ErrExpired) {
+		t.Fatalf("closing an expired request: error=%v, want ErrExpired", err)
 	}
 }

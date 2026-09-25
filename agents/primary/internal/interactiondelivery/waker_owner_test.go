@@ -2,6 +2,7 @@ package interactiondelivery
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,30 @@ func requestWithApproval(status, approval string) agents.Interaction {
 	request.Requester = agents.InteractionParty{UserID: "user_a", AgentID: "agt_a", AgentName: "Crew"}
 	request.Target = agents.InteractionParty{UserID: "user_b", AgentID: "agt_b", AgentName: "Carl"}
 	return request
+}
+
+// fakeStanding reads every request again with the same verdict, recording
+// which it was asked about; Stands unless told otherwise.
+type fakeStanding struct {
+	verdict interactions.Verdict
+	err     error
+	asked   []string
+}
+
+func (standing *fakeStanding) Recheck(_ context.Context, request agents.Interaction) (agents.Interaction, interactions.Verdict, error) {
+	standing.asked = append(standing.asked, request.ID)
+	if standing.err != nil {
+		return request, "", standing.err
+	}
+	if standing.verdict == "" {
+		return request, interactions.VerdictStands, nil
+	}
+	return request, standing.verdict, nil
+}
+
+// standsStill is a waker config whose teamspace requests still stand.
+func standsStill() Config {
+	return Config{Interval: time.Second, Lease: time.Minute, Standing: &fakeStanding{}}
 }
 
 // decidedBy is the request approved, as decider recorded it.
@@ -44,7 +69,7 @@ func TestARequestHeldForItsOwnerWakesTheAgentOnlyOnceTheOwnerApproves(t *testing
 	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
 	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner)}}
 	runs := &fakeAgentRuns{}
-	waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, runs, requests, standsStill(), nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +114,7 @@ func TestAHeldRequestTheOwnerRejectsReachesOnlyTheRequester(t *testing.T) {
 	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
 	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner)}}
 	runs := &fakeAgentRuns{}
-	waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, runs, requests, standsStill(), nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +146,7 @@ func TestADelegatedTeamspaceRequestWakesItsAgentAsBefore(t *testing.T) {
 	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
 	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent)}}
 	runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusRejected) }}
-	waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, runs, requests, standsStill(), nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +179,7 @@ func TestAnApprovalNobodyKnowsNeverWakesTheAgentToDecide(t *testing.T) {
 	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
 	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusPending, "team")}}
 	runs := &fakeAgentRuns{}
-	waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, runs, requests, standsStill(), nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +195,7 @@ func TestATeamspaceRequestNamingNoApprovalNeverWakesTheAgentToDecide(t *testing.
 	store := &fakeDeliveries{pending: []Delivery{testDelivery("evt_requested", KindTargetRequested, 1)}}
 	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": requestWithApproval(interactions.StatusPending, "")}}
 	runs := &fakeAgentRuns{}
-	waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	waker := NewWaker(store, runs, requests, standsStill(), nil)
 	if err := waker.WakeDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +227,81 @@ func TestTheOwnerApprovedWordingFollowsWhoDecided(t *testing.T) {
 	} {
 		if told := strings.Contains(messageFor(approved, testCase.request), "approved this request themself"); told != testCase.owner {
 			t.Errorf("%s: told the member approved = %t, want %t", name, told, testCase.owner)
+		}
+	}
+}
+
+// TestTheWakerReadsATeamspaceRequestAgainBeforeWakingItsAgent: a request
+// made in a teamspace is read again before its own delivery or its
+// approval's wakes the agent. One held for its owner, or closed, wakes
+// nobody and its delivery is done; one that could not be read is retried;
+// and without a way to read it at all, it wakes nobody.
+func TestTheWakerReadsATeamspaceRequestAgainBeforeWakingItsAgent(t *testing.T) {
+	approvedDelivery := testDelivery("evt_approved", KindTargetApproved, 2)
+	approvedDelivery.Status = interactions.StatusApproved
+	delegated := requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent)
+	for _, testCase := range []struct {
+		name     string
+		delivery Delivery
+		request  agents.Interaction
+		standing Standing
+		woken    bool
+		done     bool
+	}{
+		{"its own delivery, still standing", testDelivery("evt_requested", KindTargetRequested, 1), delegated, &fakeStanding{}, true, true},
+		{"its own delivery, now held", testDelivery("evt_requested", KindTargetRequested, 1), delegated, &fakeStanding{verdict: interactions.VerdictHeld}, false, true},
+		{"its own delivery, closed", testDelivery("evt_requested", KindTargetRequested, 1), delegated, &fakeStanding{verdict: interactions.VerdictClosed}, false, true},
+		{"its approval, closed", approvedDelivery, decidedBy(delegated, byTheMember), &fakeStanding{verdict: interactions.VerdictClosed}, false, true},
+		{"its approval, held again", approvedDelivery, decidedBy(delegated, byTheMember), &fakeStanding{verdict: interactions.VerdictHeld}, false, true},
+		{"not read again", testDelivery("evt_requested", KindTargetRequested, 1), delegated, &fakeStanding{err: errors.New("auth did not answer")}, false, false},
+		{"no way to read it again", approvedDelivery, decidedBy(delegated, byTheMember), nil, false, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := &fakeDeliveries{pending: []Delivery{testCase.delivery}}
+			requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testCase.request}}
+			runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
+			waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute, Standing: testCase.standing}, nil)
+			if err := waker.WakeDue(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if woken := len(runs.calls) == 1; woken != testCase.woken {
+				t.Fatalf("runs=%+v, want woken=%t", runs.calls, testCase.woken)
+			}
+			if done := len(store.done) == 1; done != testCase.done || !testCase.done && !store.released[testCase.delivery.EventID] {
+				t.Fatalf("done=%v released=%v, want done=%t, else released to retry", store.done, store.released, testCase.done)
+			}
+			if standing, ok := testCase.standing.(*fakeStanding); ok && (len(standing.asked) != 1 || standing.asked[0] != "irq_1") {
+				t.Fatalf("read again %v, want irq_1 once", standing.asked)
+			}
+		})
+	}
+}
+
+// TestOnlyATeamspaceRequestsAgentIsReadAgain: a request outside any
+// teamspace, and a report to the member who asked, wake as they always did.
+func TestOnlyATeamspaceRequestsAgentIsReadAgain(t *testing.T) {
+	outside := requestWithApproval(interactions.StatusPending, interactions.ApprovalAgent)
+	outside.TeamspaceID = ""
+	rejected := requestWithApproval(interactions.StatusRejected, interactions.ApprovalOwner)
+	report := testDelivery("evt_rejected", KindRequesterRejected, 2)
+	report.RecipientUserID, report.RecipientAgentID, report.Status = "user_a", "agt_a", interactions.StatusRejected
+	for name, testCase := range map[string]struct {
+		delivery Delivery
+		request  agents.Interaction
+	}{
+		"a request outside any teamspace": {testDelivery("evt_requested", KindTargetRequested, 1), outside},
+		"a rejection's report":            {report, rejected},
+	} {
+		standing := &fakeStanding{verdict: interactions.VerdictHeld}
+		store := &fakeDeliveries{pending: []Delivery{testCase.delivery}}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testCase.request}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusRejected) }}
+		waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute, Standing: standing}, nil)
+		if err := waker.WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(standing.asked) != 0 || len(runs.calls) != 1 {
+			t.Fatalf("%s: read again %v, runs %+v; want it woken as before, unread", name, standing.asked, runs.calls)
 		}
 	}
 }

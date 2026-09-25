@@ -38,6 +38,14 @@ approved; if it comes up, tell your member it is waiting for them. Once they
 approve it you are asked to do the approved work and answer it with
 `interactions_respond`, without deciding it again.
 
+A request made in a teamspace is checked against that teamspace again when
+you decide it. If your member has since stopped letting the agent it
+addresses decide such requests, it becomes held for them, and
+`interactions_decide` says so. If it no longer stands there (the teamspace is
+gone or disabled, the member who asked left its team, or an agent lost its
+seat), Oryxa closes it and says why. Either way it is no longer yours to
+decide or to work on.
+
 Respond only after approval. List every tool actually used, and never report a
 tool outside the approved set. Share only artifacts intentionally prepared for
 the requester. A completed or rejected request is immutable.

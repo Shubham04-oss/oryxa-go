@@ -117,7 +117,9 @@ type AgentInteractions interface {
 	Create(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionCreateInput) (primaryagents.Interaction, error)
 	List(context.Context, primaryagents.InteractionActor, interactions.Query) ([]primaryagents.Interaction, error)
 	Get(context.Context, primaryagents.InteractionActor, string) (primaryagents.Interaction, error)
-	DecideAsOwner(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error)
+	// DecideAsOwner takes the member's own token, which approving a request
+	// made in a teamspace reads that teamspace with.
+	DecideAsOwner(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error)
 	Respond(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionResponseInput) (primaryagents.Interaction, error)
 }
 
@@ -482,7 +484,7 @@ func (server *Server) decideInteraction(writer http.ResponseWriter, request *htt
 	if !server.decode(writer, request, &input) {
 		return
 	}
-	updated, err := server.interactions.DecideAsOwner(request.Context(), interactionActorOf(member), request.PathValue("requestID"), input)
+	updated, err := server.interactions.DecideAsOwner(request.Context(), interactionActorOf(member), member.AccessToken, request.PathValue("requestID"), input)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -1718,6 +1720,8 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusConflict, "request_expired"
 	case errors.Is(err, interactions.ErrIdempotencyConflict):
 		return http.StatusConflict, "idempotency_key_reused"
+	case errors.Is(err, interactions.ErrClosed):
+		return http.StatusConflict, "request_closed"
 	case errors.Is(err, interactions.ErrConflict):
 		return http.StatusConflict, "invalid_state"
 	case errors.Is(err, interactions.ErrNotFound):

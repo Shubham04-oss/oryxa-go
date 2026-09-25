@@ -2,6 +2,7 @@ package teamspaces
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -57,6 +58,57 @@ func (service *Service) RequestSeat(ctx context.Context, requester primaryagents
 		return primaryagents.TeamspaceSeat{}, fmt.Errorf("%w: that agent has no seat in this teamspace; ask a teammate's primary agent or a specialist a teammate contributed here", ErrInvalid)
 	}
 	return seat.TeamspaceSeat, nil
+}
+
+// The reasons a request made in a teamspace no longer stands there, as
+// RequestStanding reports them.
+const (
+	lapsedSpaceGone      = "the teamspace it was made in no longer exists"
+	lapsedSpaceDisabled  = "the teamspace it was made in, or its organization agent, is disabled"
+	lapsedRequesterLeft  = "the member who asked is no longer on the teamspace's team"
+	lapsedRequesterAgent = "the agent that asked no longer holds a seat in the teamspace"
+	lapsedTargetSeat     = "the agent it asks no longer holds a seat in the teamspace"
+)
+
+// RequestStanding reads again, after a request was made, where it stands in
+// the teamspace it was made in: what RequestSeat checked then, checked now.
+// The teamspace must still exist and be active with its organization agent,
+// the member who asked must still be on its team with the asking agent still
+// seated, and the target must still hold its seat — whose standing, returned
+// as the Seat, may have changed since.
+//
+// directory is the organization as the addressed member sees it, loaded
+// with their token: holding a seat means being on the space's team, which
+// the directory then shows in full, so a team missing from it is a target
+// whose member has left. A request that no longer stands is reported as a
+// Lapsed reason, not an error; the error is for failing to read at all.
+func (service *Service) RequestStanding(ctx context.Context, organizationID string, directory primaryagents.OrganizationDirectory, id string, requester, target primaryagents.InteractionParty) (primaryagents.TeamspaceStanding, error) {
+	space, err := service.repository.Get(ctx, organizationID, strings.TrimSpace(id))
+	if errors.Is(err, ErrNotFound) {
+		return primaryagents.TeamspaceStanding{Lapsed: lapsedSpaceGone}, nil
+	}
+	if err != nil {
+		return primaryagents.TeamspaceStanding{}, err
+	}
+	access, err := accessIn(directory, requester.UserID, space.TeamID)
+	if err != nil {
+		return primaryagents.TeamspaceStanding{Lapsed: lapsedTargetSeat}, nil
+	}
+	space = decorate(space, access)
+	switch {
+	case !collaborationAvailable(space):
+		return primaryagents.TeamspaceStanding{Lapsed: lapsedSpaceDisabled}, nil
+	case !access.isMember:
+		return primaryagents.TeamspaceStanding{Lapsed: lapsedRequesterLeft}, nil
+	}
+	if asking, ok := seatOf(space, requester.AgentID); !ok || asking.OwnerUserID != requester.UserID {
+		return primaryagents.TeamspaceStanding{Lapsed: lapsedRequesterAgent}, nil
+	}
+	seated, ok := targetSeat(space, target.AgentID)
+	if !ok || seated.OwnerUserID != target.UserID {
+		return primaryagents.TeamspaceStanding{Lapsed: lapsedTargetSeat}, nil
+	}
+	return primaryagents.TeamspaceStanding{Seat: seated.TeamspaceSeat}, nil
 }
 
 // seat is where one agent sits in a space, with the name the space shows.

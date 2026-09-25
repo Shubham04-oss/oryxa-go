@@ -276,3 +276,100 @@ func TestATeamspaceRequestLoadsTheDirectoryOnce(t *testing.T) {
 		t.Fatalf("the organization was loaded %d times for one request, want once", directory.loads)
 	}
 }
+
+// standingOf reads where Ada's request of target stands in tsp_1, from the
+// organization as directory shows it.
+func standingOf(t *testing.T, repo Repository, directory primaryagents.OrganizationDirectory, asking, target primaryagents.InteractionParty) primaryagents.TeamspaceStanding {
+	t.Helper()
+	service, err := New(repo, fakeDirectory{directory: directory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	standing, err := service.RequestStanding(context.Background(), "org_1", directory, "tsp_1", asking, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return standing
+}
+
+var (
+	adaAsking = primaryagents.InteractionParty{UserID: "user_1", AgentID: "agt_ada"}
+	grace     = func(agentID string) primaryagents.InteractionParty {
+		return primaryagents.InteractionParty{UserID: "user_2", AgentID: agentID}
+	}
+)
+
+// TestARequestStandsWhileItsSeatsDo: read again, a request still standing
+// reports its target's seat as it is now.
+func TestARequestStandsWhileItsSeatsDo(t *testing.T) {
+	for _, want := range []primaryagents.TeamspaceSeat{
+		{AgentID: "agt_grace", OwnerUserID: "user_2", Kind: "primary"},
+		{AgentID: "agt_auto", OwnerUserID: "user_2", Kind: "specialist", DelegationMode: "automatic"},
+		{AgentID: "agt_ask", OwnerUserID: "user_2", Kind: "specialist", DelegationMode: "request"},
+	} {
+		if standing := standingOf(t, seatSpace(), seatDirectory(true), adaAsking, grace(want.AgentID)); standing.Lapsed != "" || standing.Seat != want {
+			t.Fatalf("the request to %s = %+v, want it standing in %+v", want.AgentID, standing, want)
+		}
+	}
+	// The owner taking deciding back is a change of standing, not a lapse.
+	repo := seatSpace()
+	repo.spaces[0].Contributions[0].DelegationMode = DelegationRequest
+	if standing := standingOf(t, repo, seatDirectory(true), adaAsking, grace("agt_auto")); standing.Lapsed != "" || standing.Seat.DelegationMode != "request" {
+		t.Fatalf("after its owner took deciding back = %+v, want it standing in request mode", standing)
+	}
+}
+
+// TestARequestLapsesWhenItsTeamspaceOrASeatIsGone: every way a request made
+// in a teamspace can stop standing there, each with its reason.
+func TestARequestLapsesWhenItsTeamspaceOrASeatIsGone(t *testing.T) {
+	disabledSpace, disabledAgent, deleted := seatSpace(), seatSpace(), seatSpace()
+	disabledSpace.spaces[0].Status = StatusDisabled
+	disabledAgent.spaces[0].OrganizationAgent.Status = StatusDisabled
+	deleted.spaces = nil
+	// Holding a seat means being on the space's team, which puts the team
+	// in the addressed member's view; one missing from it is a member gone.
+	outOfView := seatDirectory(true)
+	outOfView.Teams = nil
+	for _, testCase := range []struct {
+		name          string
+		repo          Repository
+		directory     primaryagents.OrganizationDirectory
+		asking, asked primaryagents.InteractionParty
+		want          string
+	}{
+		{"the teamspace was deleted", deleted, seatDirectory(true), adaAsking, grace("agt_grace"), lapsedSpaceGone},
+		{"the teamspace was disabled", disabledSpace, seatDirectory(true), adaAsking, grace("agt_grace"), lapsedSpaceDisabled},
+		{"its organization agent was disabled", disabledAgent, seatDirectory(true), adaAsking, grace("agt_grace"), lapsedSpaceDisabled},
+		{"the member who asked left its team", seatSpace(), seatDirectory(false), adaAsking, grace("agt_grace"), lapsedRequesterLeft},
+		{"the asking agent holds no seat", seatSpace(), seatDirectory(true), primaryagents.InteractionParty{UserID: "user_1", AgentID: "agt_ada_private"}, grace("agt_grace"), lapsedRequesterAgent},
+		{"the asking agent is another member's", seatSpace(), seatDirectory(true), primaryagents.InteractionParty{UserID: "user_1", AgentID: "agt_grace"}, grace("agt_auto"), lapsedRequesterAgent},
+		{"the specialist was never contributed", seatSpace(), seatDirectory(true), adaAsking, grace("agt_private"), lapsedTargetSeat},
+		{"the specialist's contribution is disabled", seatSpace(), seatDirectory(true), adaAsking, grace("agt_off"), lapsedTargetSeat},
+		{"the specialist's owner left the team", seatSpace(), seatDirectory(true), adaAsking, primaryagents.InteractionParty{UserID: "user_3", AgentID: "agt_left"}, lapsedTargetSeat},
+		{"the seat is someone else's now", seatSpace(), seatDirectory(true), adaAsking, primaryagents.InteractionParty{UserID: "user_3", AgentID: "agt_grace"}, lapsedTargetSeat},
+		{"the team is out of the addressed member's view", seatSpace(), outOfView, adaAsking, grace("agt_grace"), lapsedTargetSeat},
+	} {
+		if standing := standingOf(t, testCase.repo, testCase.directory, testCase.asking, testCase.asked); standing.Lapsed != testCase.want {
+			t.Errorf("%s: standing = %+v, want lapsed %q", testCase.name, standing, testCase.want)
+		}
+	}
+}
+
+// failingSpaces is a teamspace store that cannot be read.
+type failingSpaces struct{ *fakeRepository }
+
+func (failingSpaces) Get(context.Context, string, string) (Space, error) {
+	return Space{}, errors.New("database is down")
+}
+
+// TestAStandingThatCannotBeReadIsAnError: failing to read the space is not
+// a lapse; nothing is concluded from it.
+func TestAStandingThatCannotBeReadIsAnError(t *testing.T) {
+	service, err := New(failingSpaces{seatSpace()}, fakeDirectory{directory: seatDirectory(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if standing, err := service.RequestStanding(context.Background(), "org_1", seatDirectory(true), "tsp_1", adaAsking, grace("agt_grace")); err == nil {
+		t.Fatalf("standing = %+v, want the error", standing)
+	}
+}

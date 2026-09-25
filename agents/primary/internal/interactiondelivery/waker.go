@@ -48,10 +48,21 @@ type Requests interface {
 	Get(context.Context, string) (agents.Interaction, error)
 }
 
+// Standing reads a request made in a teamspace again, live, before an agent
+// is woken for it: holding it for its owner, or closing it, when it no
+// longer stands as it was decided. interactions.Service implements it.
+type Standing interface {
+	Recheck(context.Context, agents.Interaction) (agents.Interaction, interactions.Verdict, error)
+}
+
 type Config struct {
 	Interval    time.Duration
 	Lease       time.Duration
 	Concurrency int
+	// Standing reads a request made in a teamspace again before its agent is
+	// woken. Without it, such a request never wakes its agent: the waker
+	// cannot tell whether it still stands.
+	Standing Standing
 }
 
 // Waker runs the correct persistent agent for each interaction lifecycle
@@ -141,6 +152,12 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 			logger.ErrorContext(ctx, "finish superseded interaction delivery", "error", err)
 		}
 		return
+	}
+	if request.TeamspaceID != "" && (delivery.Kind == KindTargetRequested || delivery.Kind == KindTargetApproved) {
+		var stands bool
+		if request, stands = waker.recheck(ctx, delivery, request, logger); !stands {
+			return
+		}
 	}
 	if heldForOwner(delivery, request) {
 		if err := waker.store.Done(context.WithoutCancel(ctx), delivery.EventID); err != nil {
@@ -246,6 +263,35 @@ func (waker *Waker) drop(ctx context.Context, delivery Delivery, reason string, 
 	if err := waker.store.Drop(context.WithoutCancel(ctx), delivery.EventID, reason); err != nil {
 		logger.ErrorContext(ctx, "drop interaction delivery", "error", err)
 	}
+}
+
+// recheck reads a request made in a teamspace again before its agent is
+// woken for it, and reports whether it still stands as it was decided. One
+// that does not wakes nobody: its delivery is completed, since holding the
+// request for its owner, or closing it, is the change that request's
+// parties now hear about. A request that could not be read again is retried.
+func (waker *Waker) recheck(ctx context.Context, delivery Delivery, request agents.Interaction, logger *slog.Logger) (agents.Interaction, bool) {
+	verdict := interactions.VerdictHeld
+	if waker.config.Standing == nil {
+		logger.WarnContext(ctx, "a request made in a teamspace cannot be read again here, so its agent is not woken")
+	} else {
+		var err error
+		request, verdict, err = waker.config.Standing.Recheck(ctx, request)
+		if err != nil {
+			logger.ErrorContext(ctx, "read a teamspace request again before waking its agent", "error", err)
+			waker.release(ctx, delivery, true, err.Error(), logger)
+			return request, false
+		}
+	}
+	if verdict == interactions.VerdictStands {
+		return request, true
+	}
+	if err := waker.store.Done(context.WithoutCancel(ctx), delivery.EventID); err != nil {
+		logger.ErrorContext(ctx, "finish interaction delivery that no longer wakes its agent", "error", err)
+		return request, false
+	}
+	logger.InfoContext(ctx, "interaction no longer wakes its agent", "verdict", verdict, "status", request.Status)
+	return request, false
 }
 
 // heldForOwner is a new request only the addressed agent's member may

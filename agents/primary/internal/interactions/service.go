@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 )
 
@@ -102,18 +103,31 @@ type Repository interface {
 	// Decide records a pending request's decision and who made it.
 	Decide(context.Context, string, agents.InteractionDecisionInput, agents.InteractionDecider, time.Time) (agents.Interaction, error)
 	Respond(context.Context, string, agents.InteractionResponseInput, time.Time) (agents.Interaction, error)
+	// Hold keeps a request for its owner's own decision: a pending one is
+	// marked held, and an approved one has its approval withdrawn and is
+	// pending, held, again.
+	Hold(ctx context.Context, id string, at time.Time) (agents.Interaction, error)
+	// Close ends, as Oryxa and with the reason, a request that no longer
+	// stands in its teamspace: a pending one is rejected, an approved one
+	// fails before its work begins.
+	Close(ctx context.Context, id, reason string, at time.Time) (agents.Interaction, error)
 }
 
 // Teamspaces places the addressed agent in the teamspace a request is made
 // in, against the live team directory: the requester must be on the team now,
 // the asking agent and the target must each hold a seat there now.
-// teamspaces.Service implements it; its errors (teamspaces.ErrNotFound,
-// ErrForbidden, ErrInvalid, ErrDisabled) reach the caller as they are.
+// teamspaces.Service implements it; RequestSeat's errors
+// (teamspaces.ErrNotFound, ErrForbidden, ErrInvalid, ErrDisabled) reach the
+// caller as they are.
 type Teamspaces interface {
 	// RequestSeat reads the organization from directory, which Create has
 	// already loaded with the requester's own token, rather than loading it
 	// a second time.
 	RequestSeat(ctx context.Context, requester agents.TeamspaceActor, directory agents.OrganizationDirectory, teamspaceID, targetAgentID string) (agents.TeamspaceSeat, error)
+	// RequestStanding reads again where a request stands in the teamspace it
+	// was made in, from directory as its addressed member sees the
+	// organization; a request that no longer stands is reported as Lapsed.
+	RequestStanding(ctx context.Context, organizationID string, directory agents.OrganizationDirectory, teamspaceID string, requester, target agents.InteractionParty) (agents.TeamspaceStanding, error)
 }
 
 type Config struct {
@@ -122,13 +136,20 @@ type Config struct {
 	// Teamspaces enables requests made inside a teamspace. Without it a
 	// request naming one is refused.
 	Teamspaces Teamspaces
-	Now        func() time.Time
+	// Tokens mints the addressed member's agent token, under their standing
+	// grant, to read a request's teamspace again when nobody's session
+	// carries a token of theirs: in the waker, or in a run they are not
+	// watching. Without it, or without their grant, such a request cannot
+	// be read again and is held for them rather than decided by an agent.
+	Tokens memberauth.TokenSource
+	Now    func() time.Time
 }
 
 type Service struct {
 	repository Repository
 	directory  agents.Directory
 	teamspaces Teamspaces
+	tokens     memberauth.TokenSource
 	now        func() time.Time
 }
 
@@ -143,7 +164,7 @@ func New(config Config) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, now: now}, nil
+	return &Service{repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens, now: now}, nil
 }
 
 func (service *Service) Create(ctx context.Context, actor agents.InteractionActor, token, idempotencyKey string, input agents.InteractionCreateInput) (agents.Interaction, error) {
@@ -294,10 +315,10 @@ func (service *Service) approval(ctx context.Context, actor agents.InteractionAc
 	if seat.AgentID != target.ID || seat.OwnerUserID != target.OwnerUserID {
 		return "", fmt.Errorf("%w: target_agent_id does not hold a seat of its owner's in that teamspace", ErrInvalid)
 	}
-	if seat.Kind == "specialist" && seat.DelegationMode == "automatic" {
-		return ApprovalAgent, nil
+	if ownersToDecide(seat) {
+		return ApprovalOwner, nil
 	}
-	return ApprovalOwner, nil
+	return ApprovalAgent, nil
 }
 
 func (service *Service) Inbox(ctx context.Context, actor agents.InteractionActor, limit int) ([]agents.Interaction, error) {
@@ -348,9 +369,11 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 // Decide records a decision an agent makes, through its interactions tool:
 // the addressed agent's own, or its member's primary agent mediating. A
 // request held for its owner (HeldForOwner) is never an agent's to decide,
-// whichever agent asks.
+// whichever agent asks, and one made in a teamspace is read again first
+// (agentMayDecide): held for its owner if they have since taken deciding
+// back, closed if it no longer stands.
 func (service *Service) Decide(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
-	return service.decide(ctx, actor, id, input, false)
+	return service.decide(ctx, actor, "", id, input, false)
 }
 
 // DecideAsOwner records the decision of the member whose agent a request
@@ -359,12 +382,14 @@ func (service *Service) Decide(ctx context.Context, actor agents.InteractionActo
 // run's actor can reach it — and agents' tools see agents.InteractionService,
 // which has no such method. It is the one way a request held for its owner
 // is decided. The member may decide a request their agent could decide as
-// well, as their primary agent could.
-func (service *Service) DecideAsOwner(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
-	return service.decide(ctx, actor, id, input, true)
+// well, as their primary agent could. token is their own, from that
+// session: approving a request made in a teamspace reads it again with it
+// first (ownerMayApprove), and closes it instead when it no longer stands.
+func (service *Service) DecideAsOwner(ctx context.Context, actor agents.InteractionActor, token, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
+	return service.decide(ctx, actor, token, id, input, true)
 }
 
-func (service *Service) decide(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput, asOwner bool) (agents.Interaction, error) {
+func (service *Service) decide(ctx context.Context, actor agents.InteractionActor, token, id string, input agents.InteractionDecisionInput, asOwner bool) (agents.Interaction, error) {
 	// Who decides is proved by the session, not by which method was called:
 	// only the member's own signed-in session decides as the owner, and it
 	// never decides as an agent.
@@ -395,6 +420,21 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 	input = cleanDecision(input)
 	if err := validateDecision(request, input); err != nil {
 		return agents.Interaction{}, err
+	}
+	if request.TeamspaceID != "" {
+		switch {
+		case !asOwner:
+			if err := service.agentMayDecide(ctx, request); err != nil {
+				return agents.Interaction{}, err
+			}
+		case input.Decision == DecisionApproved:
+			if strings.TrimSpace(token) == "" {
+				return agents.Interaction{}, fmt.Errorf("%w: member token is required to approve a request made in a teamspace", ErrInvalid)
+			}
+			if err := service.ownerMayApprove(ctx, request, token); err != nil {
+				return agents.Interaction{}, err
+			}
+		}
 	}
 	decider := agents.InteractionDecider{Kind: DecidedByAgent, UserID: actor.UserID, AgentID: actor.AgentID}
 	if asOwner {

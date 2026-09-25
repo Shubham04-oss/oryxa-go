@@ -31,6 +31,7 @@ type fakeRepository struct {
 	requests map[string]agents.Interaction
 	keys     map[string]string
 	creates  int
+	holds    int
 }
 
 func newFakeRepository() *fakeRepository {
@@ -91,6 +92,52 @@ func (repo *fakeRepository) Decide(_ context.Context, id string, input agents.In
 	}
 	request.Decision = &agents.InteractionDecision{Decision: input.Decision, Message: input.Message, AllowedTools: input.AllowedTools, GrantedPermissions: input.GrantedPermissions, DecidedAt: at, DecidedBy: &decider}
 	request.Revision++
+	repo.requests[id] = request
+	return request, nil
+}
+
+// Hold and Close change the fake ledger as Store does.
+func (repo *fakeRepository) Hold(_ context.Context, id string, at time.Time) (agents.Interaction, error) {
+	request, ok := repo.requests[id]
+	switch {
+	case !ok:
+		return agents.Interaction{}, ErrNotFound
+	case !request.ExpiresAt.After(at):
+		return agents.Interaction{}, ErrExpired
+	case request.Status == StatusPending && request.Approval == ApprovalOwner:
+		return request, nil
+	case request.Status == StatusPending:
+	case request.Status == StatusApproved:
+		request.Status, request.Decision = StatusPending, nil
+	default:
+		return agents.Interaction{}, ErrConflict
+	}
+	request.Approval = ApprovalOwner
+	request.Revision++
+	request.UpdatedAt = at
+	repo.requests[id] = request
+	repo.holds++
+	return request, nil
+}
+func (repo *fakeRepository) Close(_ context.Context, id, reason string, at time.Time) (agents.Interaction, error) {
+	request, ok := repo.requests[id]
+	switch {
+	case !ok:
+		return agents.Interaction{}, ErrNotFound
+	case !request.ExpiresAt.After(at):
+		return agents.Interaction{}, ErrExpired
+	case request.Status == StatusPending:
+		request.Status = StatusRejected
+		request.Decision = &agents.InteractionDecision{Decision: DecisionRejected, Message: reason, AllowedTools: []string{}, GrantedPermissions: []string{}, DecidedAt: at,
+			DecidedBy: &agents.InteractionDecider{Kind: DecidedBySystem}}
+	case request.Status == StatusApproved:
+		request.Status = StatusFailed
+		request.Result = &agents.InteractionResult{Status: StatusFailed, Summary: reason, ToolsUsed: []string{}, Artifacts: []string{}, CompletedAt: at}
+	default:
+		return agents.Interaction{}, ErrConflict
+	}
+	request.Revision++
+	request.UpdatedAt = at
 	repo.requests[id] = request
 	return request, nil
 }

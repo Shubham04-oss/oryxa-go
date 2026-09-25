@@ -68,6 +68,18 @@ type TeamspaceSeat struct {
 	DelegationMode string
 }
 
+// TeamspaceStanding is where a request made in a teamspace stands there now,
+// read again after it was made: teamspaces.Service reports it from the live
+// team directory as the addressed member sees it.
+type TeamspaceStanding struct {
+	// Seat is the target's seat now, while the request still stands.
+	Seat TeamspaceSeat
+	// Lapsed, when set, is why the request no longer stands there, in words
+	// for both members: the teamspace is gone or disabled, the member who
+	// asked is off its team, or an agent lost its seat there.
+	Lapsed string
+}
+
 type Teamspace struct {
 	ID                string                     `json:"id"`
 	TeamID            string                     `json:"team_id"`

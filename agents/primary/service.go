@@ -188,6 +188,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	} else {
 		logger.Warn("TEAMS_URL is not set: agents cannot discover people or teams")
 	}
+	// One agent-token exchange serves Krude's tools and the request ledger,
+	// which reads a request's teamspace again as its addressed member.
+	memberTokens := assembly.MemberTokens(settings, platform.AWS)
 	var interactionService *agentinteractions.Service
 	var teamspaceService *teamspaces.Service
 	teamspaceStore := teamspaces.NewStore(platform.Database)
@@ -202,7 +205,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		// A request made inside a teamspace is approved as the target's
 		// owner chose there, so the ledger asks the teamspace for its seat.
 		interactionService, err = agentinteractions.New(agentinteractions.Config{
-			Repository: interactionStore, Directory: organizationDirectory, Teamspaces: teamspaceService,
+			Repository: interactionStore, Directory: organizationDirectory, Teamspaces: teamspaceService, Tokens: memberTokens,
 		})
 		if err != nil {
 			sessionStore.Close()
@@ -213,7 +216,7 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 	krude, err := assembly.Build(ctx, assembly.Options{
 		Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger,
 		Directory: organizationDirectory, Interactions: interactionService,
-		AgentSystem: agentSystemBinding, Teamspaces: teamspaceService,
+		AgentSystem: agentSystemBinding, Teamspaces: teamspaceService, Tokens: memberTokens,
 	})
 	if err != nil {
 		sessionStore.Close()
@@ -509,11 +512,17 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			Lease:       settings.RunTimeout + time.Minute,
 			Concurrency: wakeupConcurrency,
 		}, logger)
-		interactionWaker := interactiondelivery.NewWaker(deliveryStore, agentRegistry, interactionStore, interactiondelivery.Config{
+		deliveryConfig := interactiondelivery.Config{
 			Interval:    interactionDeliveryInterval,
 			Lease:       settings.RunTimeout + time.Minute,
 			Concurrency: interactionDeliveryConcurrency,
-		}, logger)
+		}
+		// The ledger reads a request made in a teamspace again before its
+		// agent is woken; without one, such requests wake nobody.
+		if interactionService != nil {
+			deliveryConfig.Standing = interactionService
+		}
+		interactionWaker := interactiondelivery.NewWaker(deliveryStore, agentRegistry, interactionStore, deliveryConfig, logger)
 		workers = append(workers,
 			func(ctx context.Context) { consumer.Poll(ctx, queue, settings.EventsQueueURL) },
 			waker.Run,

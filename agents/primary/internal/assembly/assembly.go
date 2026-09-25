@@ -72,6 +72,21 @@ type Options struct {
 	Teamspaces agents.TeamspaceService
 }
 
+// MemberTokens is auth's agent-token exchange, which mints a member's agent
+// token under their standing grant for a run that carries no token of
+// theirs, or nil when Settings does not name both AuthURL and ServiceKeyID.
+// The service builds it once and hands the same one to Build and to the
+// request ledger, so both share its cache.
+func MemberTokens(settings serviceconfig.Config, awsConfig aws.Config) memberauth.TokenSource {
+	if settings.AuthURL == "" || settings.ServiceKeyID == "" {
+		return nil
+	}
+	return memberauth.NewAuthClient(memberauth.AuthClientConfig{
+		BaseURL: settings.AuthURL,
+		Signer:  serviceauth.Signer{Client: kms.NewFromConfig(awsConfig), KeyID: settings.ServiceKeyID, Service: "agents"},
+	})
+}
+
 // Krude is the assembled agent with what it runs with.
 type Krude struct {
 	// Root is Krude, the agent every conversation starts with.
@@ -239,12 +254,7 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	// token minted under the member's standing grant.
 	tokens := options.Tokens
 	if tokens == nil && (settings.AppsURL != "" || settings.RagURL != "" || options.Directory != nil || options.Interactions != nil || options.Teamspaces != nil) {
-		if settings.AuthURL != "" && settings.ServiceKeyID != "" {
-			tokens = memberauth.NewAuthClient(memberauth.AuthClientConfig{
-				BaseURL: settings.AuthURL,
-				Signer:  serviceauth.Signer{Client: kms.NewFromConfig(options.AWS), KeyID: settings.ServiceKeyID, Service: "agents"},
-			})
-		} else {
+		if tokens = MemberTokens(settings, options.AWS); tokens == nil {
 			logger.WarnContext(ctx, "member token: AUTH_URL and AGENTS_PRIMARY_SERVICE_KEY_ID are not both set, so a run without the member's own token cannot act for them")
 		}
 	}
