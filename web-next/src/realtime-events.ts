@@ -204,8 +204,26 @@ function refusedByGo(answer: { status: number; text: string }): boolean {
 /** A value the SDK's `sql` binds. */
 export type SqlValue = string | number | boolean | null
 
-/** An event waiting in the outbox. */
-type OutboxRow = StoredEvent & { created_at: number; attempts: number }
+/** An event waiting in the outbox, at its place in it. */
+type OutboxRow = StoredEvent & { position: number; created_at: number }
+
+/**
+ * Go not taking the outbox's requests: how many in a row it did not take,
+ * and when the next may go.
+ */
+type Backoff = { failures: number; until: number }
+
+/** How many rows a prune reads at a time, from the head. */
+const pruneChunk = 100
+
+/** The rows at the head of `head` that `expired` holds for, up to the first it does not. */
+function expiredHead<TRow>(
+  head: readonly TRow[],
+  expired: (row: TRow) => boolean
+): TRow[] {
+  const kept = head.findIndex((row) => !expired(row))
+  return kept === -1 ? [...head] : head.slice(0, kept)
+}
 
 /** What an object lends its outbox: its conversation, its storage, its schedule and the Worker's settings. */
 export type EventOutboxHost = {
@@ -232,11 +250,17 @@ export type EventOutboxHost = {
  * A conversation's outbox of events, in its object's SQLite:
  *
  * - `event_outbox`: each event waiting for Go (`id`, `type`, `detail`,
- *   `created_at`, `attempts`, `next_at`), in the order they were recorded,
- *   with `reader_id` on a read so each reader has one at most;
+ *   `created_at`), in the order they were recorded (`position`), with
+ *   `reader_id` on a read so each reader has one at most;
  * - `event_dead_letters`: what Go refused (`refusedByGo`), with its
  *   answer, for seven days;
- * - `event_meta`: the drain that is set, and when the last one ran.
+ * - `event_meta`: Go's wait (`backoff`: the requests in a row Go did not
+ *   take, and when the next may go), the one value a retry writes; the
+ *   drain that is set, and when the last one ran.
+ *
+ * Whatever waits, recording an event and a request Go did not take each
+ * write a fixed few rows, and nothing reads more of the outbox than its
+ * head: its first rows by `position`, and the first dead letter by rowid.
  *
  * An object records an event in the transaction that stores what it is
  * about, then `plan`s; the drain (`drain`, the object's `drainEvents`
@@ -380,6 +404,7 @@ export class EventOutbox {
       this.host.sql`DELETE FROM event_dead_letters`
       this.deleteMeta("drain")
       this.deleteMeta("drain_at")
+      this.endBackoff()
     })
     const draining = this.draining
     return (async () => {
@@ -390,33 +415,77 @@ export class EventOutbox {
 
   private schema(): void {
     if (this.schemaReady) return
-    // `position` is the order events go in; `next_at`, in milliseconds,
-    // when one may go next.
-    this.host.sql`CREATE TABLE IF NOT EXISTS event_outbox (
-      position INTEGER PRIMARY KEY,
-      id TEXT NOT NULL UNIQUE,
-      type TEXT NOT NULL,
-      detail TEXT NOT NULL,
-      reader_id TEXT UNIQUE,
-      created_at INTEGER NOT NULL,
-      attempts INTEGER NOT NULL DEFAULT 0,
-      next_at INTEGER NOT NULL
-    )`
-    this.host.sql`CREATE TABLE IF NOT EXISTS event_dead_letters (
-      id TEXT PRIMARY KEY,
-      type TEXT NOT NULL,
-      detail TEXT NOT NULL,
-      created_at INTEGER NOT NULL,
-      attempts INTEGER NOT NULL,
-      status INTEGER NOT NULL,
-      answer TEXT NOT NULL,
-      dead_at INTEGER NOT NULL
-    )`
-    this.host.sql`CREATE TABLE IF NOT EXISTS event_meta (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )`
+    this.host.transaction(() => {
+      const earlier = this.setAsideEarlierTables()
+      // `position` is the order events go in. Only a read has a
+      // `reader_id`, so only reads are in its index. The ids are not
+      // indexed: each is random, and a row goes by its position.
+      this.host.sql`CREATE TABLE IF NOT EXISTS event_outbox (
+        position INTEGER PRIMARY KEY,
+        id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        reader_id TEXT,
+        created_at INTEGER NOT NULL
+      )`
+      this.host.sql`CREATE UNIQUE INDEX IF NOT EXISTS event_outbox_by_reader
+        ON event_outbox (reader_id) WHERE reader_id IS NOT NULL`
+      // In the order they were refused, by rowid.
+      this.host.sql`CREATE TABLE IF NOT EXISTS event_dead_letters (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        status INTEGER NOT NULL,
+        answer TEXT NOT NULL,
+        dead_at INTEGER NOT NULL
+      )`
+      this.host.sql`CREATE TABLE IF NOT EXISTS event_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )`
+      if (earlier.outbox) {
+        this.host.sql`INSERT INTO event_outbox
+            (position, id, type, detail, reader_id, created_at)
+          SELECT position, id, type, detail, reader_id, created_at
+          FROM event_outbox_earlier`
+        this.host.sql`DROP TABLE event_outbox_earlier`
+      }
+      if (earlier.deadLetters) {
+        this.host.sql`INSERT INTO event_dead_letters
+            (id, type, detail, created_at, status, answer, dead_at)
+          SELECT id, type, detail, created_at, status, answer, dead_at
+          FROM event_dead_letters_earlier ORDER BY rowid`
+        this.host.sql`DROP TABLE event_dead_letters_earlier`
+      }
+    })
     this.schemaReady = true
+  }
+
+  /**
+   * An earlier build kept a wait and a count of tries on every event (and
+   * indexed the ids): its tables are set aside, to be made again as they
+   * are now with what they held.
+   */
+  private setAsideEarlierTables(): { outbox: boolean; deadLetters: boolean } {
+    const outbox = this.host.sql<{
+      name: string
+    }>`PRAGMA table_info(event_outbox)`.some(
+      (column) => column.name === "next_at"
+    )
+    if (outbox) {
+      this.host.sql`ALTER TABLE event_outbox RENAME TO event_outbox_earlier`
+    }
+    const deadLetters = this.host.sql<{
+      name: string
+    }>`PRAGMA table_info(event_dead_letters)`.some(
+      (column) => column.name === "attempts"
+    )
+    if (deadLetters) {
+      this.host
+        .sql`ALTER TABLE event_dead_letters RENAME TO event_dead_letters_earlier`
+    }
+    return { outbox, deadLetters }
   }
 
   private insert(
@@ -425,21 +494,16 @@ export class EventOutbox {
     readerId?: string
   ): void {
     this.schema()
-    const now = Date.now()
     // A newer read takes the place of the reader's one not yet sent, under a
     // new id: an answer to a request carrying the old one never settles it.
     if (readerId !== undefined) {
       this.host.sql`DELETE FROM event_outbox WHERE reader_id = ${readerId}`
     }
-    // Never before the events recorded ahead of it: while Go is being waited
-    // for, it waits with them.
-    const ahead =
-      this.host.sql<{ next_at: number | null }>`SELECT MAX(next_at) AS next_at
-        FROM event_outbox`.at(0)?.next_at ?? 0
+    // At the tail: while Go is waited for, it waits with the rest.
     this.host.sql`INSERT INTO event_outbox
-        (id, type, detail, reader_id, created_at, attempts, next_at)
+        (id, type, detail, reader_id, created_at)
       VALUES (${`evt_${randomId()}`}, ${type}, ${JSON.stringify(detail)},
-        ${readerId ?? null}, ${now}, 0, ${Math.max(now, ahead)})`
+        ${readerId ?? null}, ${Date.now()})`
   }
 
   private async planOnce(): Promise<void> {
@@ -461,18 +525,16 @@ export class EventOutbox {
 
   /** When the next drain is due, in a whole second, or nothing when nothing waits. */
   private nextDrainAt(): number | undefined {
-    const next = this.host.sql<{ at: number | null }>`SELECT MIN(next_at) AS at
-      FROM event_outbox`.at(0)?.at
+    const due: number[] = []
+    // The outbox goes whole, oldest first, once Go may be asked again.
+    if (this.host.sql`SELECT 1 FROM event_outbox LIMIT 1`.length > 0) {
+      due.push(Math.max(Date.now(), this.backoff()?.until ?? 0))
+    }
+    // The oldest dead letter is let go seven days after it was refused.
     const refused = this.host.sql<{
-      at: number | null
-    }>`SELECT MIN(dead_at) AS at
-      FROM event_dead_letters`.at(0)?.at
-    const due = [
-      next,
-      typeof refused === "number"
-        ? refused + eventsTiming.retentionMs
-        : undefined,
-    ].filter((at): at is number => typeof at === "number")
+      dead_at: number
+    }>`SELECT dead_at FROM event_dead_letters ORDER BY rowid LIMIT 1`.at(0)
+    if (refused) due.push(refused.dead_at + eventsTiming.retentionMs)
     if (due.length === 0) return undefined
     const last = Number(this.meta("last_drain_at") ?? "0")
     const at = Math.max(Math.min(...due), last + eventsTiming.minGapMs)
@@ -487,14 +549,15 @@ export class EventOutbox {
     if (now < last + eventsTiming.minGapMs) return
     this.setMeta("last_drain_at", String(now))
     this.prune(now)
-    const due = this.host.sql<OutboxRow>`SELECT id, type, detail, created_at,
-        attempts
-      FROM event_outbox WHERE next_at <= ${now}
-      ORDER BY position LIMIT ${eventsRequestLimits.events}`
+    // Go is waited for: nothing goes before then.
+    if (now < (this.backoff()?.until ?? 0)) return
+    const due = this.host.sql<OutboxRow>`SELECT position, id, type, detail,
+        created_at
+      FROM event_outbox ORDER BY position LIMIT ${eventsRequestLimits.events}`
     if (due.length === 0) return
     const config = this.host.config()
     if (!config) {
-      this.retryLater(due, now, "the events are not configured")
+      this.retryLater(due.length, now, "the events are not configured")
       return
     }
     const batch = fitted(due)
@@ -533,7 +596,9 @@ export class EventOutbox {
         text: response.status === 204 ? "" : await response.text(),
       }
     } catch (error) {
-      if (this.epoch === epoch) this.retryLater(batch, Date.now(), error)
+      if (this.epoch === epoch) {
+        this.retryLater(batch.length, Date.now(), error)
+      }
       return
     } finally {
       clearTimeout(timeout)
@@ -541,9 +606,8 @@ export class EventOutbox {
     if (this.epoch !== epoch) return
     if (answer.status === 204) {
       this.host.transaction(() => {
-        for (const row of batch) {
-          this.host.sql`DELETE FROM event_outbox WHERE id = ${row.id}`
-        }
+        for (const row of batch) this.remove(row)
+        this.endBackoff()
       })
       return
     }
@@ -552,7 +616,7 @@ export class EventOutbox {
       return
     }
     this.retryLater(
-      batch,
+      batch.length,
       Date.now(),
       answer.status === 400 || answer.status === 413
         ? `answered ${answer.status}, but not as Go refuses a request`
@@ -560,19 +624,53 @@ export class EventOutbox {
     )
   }
 
-  /** Drops what waited longer than `eventsTiming.retentionMs`, and dead letters as old. */
+  /**
+   * Drops what waited longer than `eventsTiming.retentionMs`, and dead
+   * letters as old. Each table is in the order it was written, so what is
+   * past its time is at its head: nothing reads past the first row that is
+   * not.
+   */
   private prune(now: number): void {
     const cutoff = now - eventsTiming.retentionMs
-    const expired = this.host.sql<{ id: string }>`SELECT id FROM event_outbox
-      WHERE created_at <= ${cutoff}`
+    const expired: string[] = []
+    for (;;) {
+      const head = this.host.sql<{
+        position: number
+        id: string
+        created_at: number
+      }>`SELECT position, id, created_at FROM event_outbox
+        ORDER BY position LIMIT ${pruneChunk}`
+      const old = expiredHead(head, (row) => row.created_at <= cutoff)
+      if (old.length === 0) break
+      this.host.sql`DELETE FROM event_outbox
+        WHERE position <= ${old[old.length - 1].position}`
+      expired.push(...old.map((row) => row.id))
+      if (old.length < head.length) break
+    }
     if (expired.length > 0) {
-      this.host.sql`DELETE FROM event_outbox WHERE created_at <= ${cutoff}`
       console.error(
         `${this.host.label}: dropped ${expired.length} events Go did not take in 7 days`,
-        { conversation: this.host.name(), ids: expired.map((row) => row.id) }
+        { conversation: this.host.name(), ids: expired }
       )
     }
-    this.host.sql`DELETE FROM event_dead_letters WHERE dead_at <= ${cutoff}`
+    for (;;) {
+      const head = this.host.sql<{
+        row: number
+        dead_at: number
+      }>`SELECT rowid AS row, dead_at FROM event_dead_letters
+        ORDER BY rowid LIMIT ${pruneChunk}`
+      const old = expiredHead(head, (row) => row.dead_at <= cutoff)
+      if (old.length === 0) break
+      this.host.sql`DELETE FROM event_dead_letters
+        WHERE rowid <= ${old[old.length - 1].row}`
+      if (old.length < head.length) break
+    }
+  }
+
+  /** A row the outbox sent: gone, unless a newer read took its place (and position) meanwhile. */
+  private remove(row: OutboxRow): void {
+    this.host.sql`DELETE FROM event_outbox
+      WHERE position = ${row.position} AND id = ${row.id}`
   }
 
   /** Go refused the request: its events move to the dead letters, with the answer. */
@@ -585,11 +683,13 @@ export class EventOutbox {
     this.host.transaction(() => {
       for (const row of batch) {
         this.host.sql`INSERT OR REPLACE INTO event_dead_letters
-            (id, type, detail, created_at, attempts, status, answer, dead_at)
+            (id, type, detail, created_at, status, answer, dead_at)
           VALUES (${row.id}, ${row.type}, ${row.detail}, ${row.created_at},
-            ${row.attempts + 1}, ${answer.status}, ${text}, ${at})`
-        this.host.sql`DELETE FROM event_outbox WHERE id = ${row.id}`
+            ${answer.status}, ${text}, ${at})`
+        this.remove(row)
       }
+      // Go answered: it is waited for no more.
+      this.endBackoff()
     })
     console.error(
       `${this.host.label}: Go refused ${batch.length} events (${answer.status}); they are kept 7 days as dead letters`,
@@ -602,32 +702,44 @@ export class EventOutbox {
   }
 
   /**
-   * Go did not take the request: its events count the attempt, and the
-   * whole outbox waits (what was recorded since goes after, together),
-   * doubling with each attempt in a row of the oldest event.
+   * Go did not take the request: the whole outbox waits (what was recorded
+   * since goes after, together), doubling with each such request in a row.
+   * One value says so, however much waits.
    */
-  private retryLater(
-    batch: readonly OutboxRow[],
-    at: number,
-    reason: unknown
-  ): void {
-    const streak = Math.max(...batch.map((row) => row.attempts)) + 1
+  private retryLater(count: number, at: number, reason: unknown): void {
+    const failures = (this.backoff()?.failures ?? 0) + 1
     const wait = Math.min(
-      eventsTiming.firstRetryMs * 2 ** Math.min(streak - 1, 30),
+      eventsTiming.firstRetryMs * 2 ** Math.min(failures - 1, 30),
       eventsTiming.maxRetryMs
     )
-    const retryAt = at + wait
-    this.host.transaction(() => {
-      for (const row of batch) {
-        this.host
-          .sql`UPDATE event_outbox SET attempts = attempts + 1 WHERE id = ${row.id}`
-      }
-      this.host.sql`UPDATE event_outbox SET next_at = MAX(next_at, ${retryAt})`
-    })
+    this.setMeta(
+      "backoff",
+      JSON.stringify({ failures, until: at + wait } satisfies Backoff)
+    )
     console.error(
-      `${this.host.label}: Go did not take ${batch.length} events (${reasonOf(reason)}); trying again in ${wait / 1000} s`,
+      `${this.host.label}: Go did not take ${count} events (${reasonOf(reason)}); trying again in ${wait / 1000} s`,
       { conversation: this.host.name() }
     )
+  }
+
+  /** Go's wait, while there is one. */
+  private backoff(): Backoff | undefined {
+    const held = this.meta("backoff")
+    if (held === undefined) return undefined
+    try {
+      const backoff = JSON.parse(held) as Partial<Backoff>
+      return {
+        failures: Number(backoff.failures) || 0,
+        until: Number(backoff.until) || 0,
+      }
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Go answered: the next request goes without waiting. */
+  private endBackoff(): void {
+    this.deleteMeta("backoff")
   }
 
   private meta(key: string): string | undefined {

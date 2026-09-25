@@ -136,9 +136,9 @@ function enqueue(dm: Dm, count: number, createdAt = Date.now()): string[] {
       author: { kind: "member", user_id: ada },
       posted_at: new Date(createdAt).toISOString(),
     })
-    dm.sql`INSERT INTO event_outbox (id, type, detail, created_at, attempts, next_at)
+    dm.sql`INSERT INTO event_outbox (id, type, detail, created_at)
       VALUES (${id}, ${realtimeEventTypes.messagePosted}, ${detail},
-        ${createdAt}, 0, ${createdAt})`
+        ${createdAt})`
     ids.push(id)
   }
   return ids
@@ -147,8 +147,54 @@ function enqueue(dm: Dm, count: number, createdAt = Date.now()): string[] {
 function outbox(object: Harness) {
   return object.sql<{
     id: string
-    attempts: number
-  }>`SELECT id, attempts FROM event_outbox ORDER BY position`
+  }>`SELECT id FROM event_outbox ORDER BY position`
+}
+
+/** Go's wait as the outbox keeps it: one value. */
+function backoffOf(object: Harness) {
+  const rows = object.sql<{
+    value: string
+  }>`SELECT value FROM event_meta WHERE key = 'backoff'`
+  return rows.map((row) => JSON.parse(row.value) as unknown)
+}
+
+type Db = {
+  prepare: (sql: string) => { all: (...values: unknown[]) => unknown[] }
+}
+
+/**
+ * Runs `work` and counts what the object's SQL did meanwhile: the rows its
+ * writes changed, and the statements it ran.
+ */
+async function sqlOf(object: Harness, work: () => Promise<unknown>) {
+  const holder = object as unknown as { db: Db }
+  const db = holder.db
+  const statements: string[] = []
+  let rows = 0
+  holder.db = {
+    prepare(sql) {
+      const statement = db.prepare(sql)
+      return {
+        all(...values) {
+          const result = statement.all(...values)
+          statements.push(sql.replace(/\s+/g, " ").trim())
+          if (/^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql)) {
+            const [{ changed }] = db
+              .prepare("SELECT changes() AS changed")
+              .all() as Array<{ changed: number }>
+            rows += changed
+          }
+          return result
+        },
+      }
+    },
+  }
+  try {
+    await work()
+  } finally {
+    holder.db = db
+  }
+  return { rows, statements }
 }
 
 function deadLetters(object: Harness) {
@@ -291,9 +337,8 @@ describe("EventOutbox: the call", () => {
       [side, golden.read],
     ] as const) {
       const { id, type, detail } = goldenEvent(vector.body)
-      const now = Date.now()
-      object.sql`INSERT INTO event_outbox (id, type, detail, created_at, attempts, next_at)
-        VALUES (${id}, ${type}, ${detail}, ${now}, 0, ${now})`
+      object.sql`INSERT INTO event_outbox (id, type, detail, created_at)
+        VALUES (${id}, ${type}, ${detail}, ${Date.now()})`
       await object.drainEvents()
     }
 
@@ -606,7 +651,10 @@ describe("EventOutbox: draining", () => {
     await dm.drainEvents()
     const waits: number[] = []
     for (let attempt = 1; attempt <= 11; attempt += 1) {
-      expect(outbox(dm)).toEqual([{ id, attempts: attempt }])
+      expect(outbox(dm)).toEqual([{ id }])
+      expect(backoffOf(dm)).toEqual([
+        { failures: attempt, until: Date.now() + drainsSet(dm)[0] * 1000 },
+      ])
       waits.push(...drainsSet(dm))
       await runNextDrain(dm)
     }
@@ -631,10 +679,48 @@ describe("EventOutbox: draining", () => {
     ).toEqual(Array.from({ length: 12 }, () => [id]))
     expect(outbox(dm)).toEqual([])
     expect(drainsSet(dm)).toEqual([])
+    // Taken: Go is waited for no more.
+    expect(backoffOf(dm)).toEqual([])
     expect(errors).toHaveBeenCalledWith(
       expect.stringContaining("Go did not take 1 events (Go answered 401)"),
       expect.anything()
     )
+  })
+
+  it("keeps Go's wait as one value: what Go does not take, and a message meanwhile, cost as much with a thousand events waiting as with one", async () => {
+    const costs: Array<Record<string, number>> = []
+    const statements: string[] = []
+    for (const waiting of [1, 1_000]) {
+      const { dm } = await setup()
+      const adaTab = await join(dm, ada)
+      enqueue(dm, waiting)
+      go.answers.push(503, 503)
+      const refused = await sqlOf(dm, () => dm.drainEvents())
+      const refusedAgain = await sqlOf(dm, () => runNextDrain(dm))
+      const recorded = await sqlOf(dm, () => send(dm, adaTab, "meanwhile"))
+      costs.push({
+        refused: refused.rows,
+        refusedAgain: refusedAgain.rows,
+        recorded: recorded.rows,
+      })
+      statements.push(
+        ...refused.statements,
+        ...refusedAgain.statements,
+        ...recorded.statements
+      )
+      expect(go.requests.map((request) => request.status)).toEqual([503, 503])
+      go = new FakeGoEvents()
+      vi.stubGlobal("fetch", routeFetch(go))
+    }
+    expect(costs[1]).toEqual(costs[0])
+    // Nothing reads the outbox or the dead letters whole.
+    expect(
+      statements.filter(
+        (statement) =>
+          /event_(outbox|dead_letters)/.test(statement) &&
+          /\b(MAX|MIN|COUNT)\s*\(/i.test(statement)
+      )
+    ).toEqual([])
   })
 
   it("keeps what is recorded while it waits waiting with it, in the same request", async () => {
@@ -670,6 +756,134 @@ describe("EventOutbox: draining", () => {
     ])
     expect(together.status).toBe(204)
     expect(outbox(dm)).toEqual([])
+  })
+
+  it("makes an earlier build's tables again as they are now, with what they held, and sends it in order", async () => {
+    const { world, dm } = await setup()
+    // As the build before kept them: a wait and a count of tries on every
+    // event, and the ids indexed.
+    dm.sql`DROP TABLE event_outbox`
+    dm.sql`DROP TABLE event_dead_letters`
+    dm.sql`CREATE TABLE event_outbox (
+      position INTEGER PRIMARY KEY,
+      id TEXT NOT NULL UNIQUE,
+      type TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      reader_id TEXT UNIQUE,
+      created_at INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      next_at INTEGER NOT NULL
+    )`
+    dm.sql`CREATE TABLE event_dead_letters (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      attempts INTEGER NOT NULL,
+      status INTEGER NOT NULL,
+      answer TEXT NOT NULL,
+      dead_at INTEGER NOT NULL
+    )`
+    const now = Date.now()
+    const detail = (seq: number) =>
+      JSON.stringify({
+        organization_id: org,
+        conversation: { kind: "direct", id: dmName },
+        participant_user_ids: [ada, bo],
+        message: { id: `dmm_${seq}`, seq },
+        author: { kind: "member", user_id: ada },
+        posted_at: new Date(now).toISOString(),
+      })
+    const read = JSON.stringify({
+      organization_id: org,
+      conversation: { kind: "direct", id: dmName },
+      reader_user_id: bo,
+      read_through_seq: 1,
+      read_at: new Date(now).toISOString(),
+    })
+    dm.sql`INSERT INTO event_outbox
+        (position, id, type, detail, reader_id, created_at, attempts, next_at)
+      VALUES
+        (4, 'evt_early_1', ${realtimeEventTypes.messagePosted}, ${detail(1)}, NULL, ${now}, 2, ${now}),
+        (7, 'evt_early_2', ${realtimeEventTypes.conversationRead}, ${read}, ${bo}, ${now}, 2, ${now}),
+        (9, 'evt_early_3', ${realtimeEventTypes.messagePosted}, ${detail(2)}, NULL, ${now}, 0, ${now})`
+    dm.sql`INSERT INTO event_dead_letters
+        (id, type, detail, created_at, attempts, status, answer, dead_at)
+      VALUES
+        ('evt_dead_2', ${realtimeEventTypes.messagePosted}, ${detail(0)}, ${now - 2}, 1, 400, '{}', ${now - 2}),
+        ('evt_dead_1', ${realtimeEventTypes.messagePosted}, ${detail(0)}, ${now - 1}, 1, 400, '{}', ${now - 1})`
+
+    const restarted = await world.restart<Dm>("DirectMessageAgent", dmName)
+    const columns = (table: string) =>
+      restarted
+        .sql<{
+          name: string
+        }>([`PRAGMA table_info(${table})`] as unknown as TemplateStringsArray)
+        .map((column) => column.name)
+    expect(columns("event_outbox")).toEqual([
+      "position",
+      "id",
+      "type",
+      "detail",
+      "reader_id",
+      "created_at",
+    ])
+    expect(columns("event_dead_letters")).toEqual([
+      "id",
+      "type",
+      "detail",
+      "created_at",
+      "status",
+      "answer",
+      "dead_at",
+    ])
+    // Only reads are indexed, by their reader.
+    expect(
+      restarted.sql`SELECT name, sql FROM sqlite_master
+        WHERE type = 'index' AND tbl_name = 'event_outbox'`
+    ).toEqual([
+      {
+        name: "event_outbox_by_reader",
+        sql: expect.stringContaining(
+          "(reader_id) WHERE reader_id IS NOT NULL"
+        ) as unknown,
+      },
+    ])
+    expect(
+      restarted.sql`SELECT name FROM sqlite_master WHERE name LIKE '%earlier%'`
+    ).toEqual([])
+    // What they held, in the same order.
+    expect(
+      restarted.sql`SELECT position, id, reader_id FROM event_outbox
+        ORDER BY position`
+    ).toEqual([
+      { position: 4, id: "evt_early_1", reader_id: null },
+      { position: 7, id: "evt_early_2", reader_id: bo },
+      { position: 9, id: "evt_early_3", reader_id: null },
+    ])
+    expect(
+      restarted.sql`SELECT id FROM event_dead_letters ORDER BY rowid`
+    ).toEqual([{ id: "evt_dead_2" }, { id: "evt_dead_1" }])
+
+    // It goes on as ever: Bo's newer read takes his old one's place, and
+    // it all goes, oldest first.
+    restarted.sql`INSERT INTO dm_messages
+        (seq, id, author_id, client_id, body, created_at)
+      VALUES (1, 'dmm_1', ${ada}, 'client-early', 'Before',
+        ${new Date(now).toISOString()})`
+    const boTab = await join(restarted, bo)
+    await say(restarted, boTab, { type: "dm-read", seq: 1 })
+    await runDueJobs(restarted)
+    expect(go.taken.map((event) => event.id)).toEqual([
+      "evt_early_1",
+      "evt_early_3",
+      expect.stringMatching(/^evt_[0-9a-f]{32}$/),
+    ])
+    expect(go.taken.at(-1)?.detail).toMatchObject({
+      reader_user_id: bo,
+      read_through_seq: 1,
+    })
+    expect(outbox(restarted)).toEqual([])
   })
 
   it("drops what Go has not taken in seven days, with an error log", async () => {

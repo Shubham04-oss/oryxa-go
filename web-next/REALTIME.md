@@ -631,13 +631,24 @@ fails, neither is kept.
 
 - `event_outbox`: `position` (the order events go in), `id` (`evt_` and 32
   hex digits, made once and kept across retries), `type`, `detail` (the
-  JSON, sent byte for byte), `reader_id` on a read, `created_at`,
-  `attempts` and `next_at` (milliseconds). Reads coalesce: each reader has
-  one waiting at most, and a newer one takes its place under a new id, so
-  Go's answer to a request that carried the older one never settles it.
+  JSON, sent byte for byte), `reader_id` on a read, and `created_at`
+  (milliseconds). Only reads are indexed, by their reader; a row goes by
+  its position. Reads coalesce: each reader has one waiting at most, and a
+  newer one takes its place under a new id, so Go's answer to a request
+  that carried the older one never settles it.
 - `event_dead_letters`: what Go refused, with its `status`, its `answer`
   (the first 2,000 characters) and `dead_at`, kept seven days.
-- `event_meta`: the drain that is set, and when the last one ran.
+- `event_meta`: Go's wait (`backoff`: how many requests in a row Go did not
+  take, and when the next may go), one value for the whole outbox; the
+  drain that is set, and when the last one ran.
+
+Whatever waits, recording an event and a request Go does not take each
+write a fixed few rows, and nothing reads more of the outbox than its
+head: its first rows by `position`, and the oldest dead letter by rowid.
+Both tables are in the order they were written, so what is past its seven
+days is at the head too. A table an earlier build made (with `attempts`
+and `next_at` on every event) is made again as it is now, with what it
+held, the first time the object starts.
 
 **Draining.** One drain at a time, on the SDK's schedule (`drainEvents`),
 set for when the oldest event may go, never under a second after the last
@@ -670,9 +681,9 @@ Then, by Go's answer:
   below.
 - Anything else (401, 503 while Go's realtime is not configured, another
   5xx, a redirect, or no answer within 10 s): they stay, and the whole
-  outbox waits, a second after the first such answer in a row for its
-  oldest event, doubling each time, to five minutes. What is recorded
-  meanwhile waits with it, behind what is ahead.
+  outbox waits, a second after the first such answer in a row, doubling
+  each time, to five minutes. What is recorded meanwhile waits with it,
+  behind what is ahead. Go's next 204 or refusal ends the wait.
 
 Without `ORYXA_API_ORIGIN` or `REALTIME_PURGE_SECRET`, or with a secret
 shorter than 32 characters once trimmed (the least a purge and Go take), the
