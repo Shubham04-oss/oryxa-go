@@ -124,7 +124,9 @@ type AgentInteractions interface {
 	Respond(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionResponseInput) (primaryagents.Interaction, error)
 	// ReviewAsOwner is the member's review, in their own session, of an
 	// answer the answer guard held for them: the only way one is reviewed.
-	ReviewAsOwner(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionReviewInput) (primaryagents.Interaction, error)
+	// It takes the member's own token, which sending the answer to a
+	// request made in a teamspace reads that teamspace with.
+	ReviewAsOwner(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionReviewInput) (primaryagents.Interaction, error)
 }
 
 // Teamspaces is the shared multi-user agent-space catalogue. Authorization is
@@ -534,7 +536,7 @@ func (server *Server) reviewInteraction(writer http.ResponseWriter, request *htt
 	if !server.decode(writer, request, &input) {
 		return
 	}
-	updated, err := server.interactions.ReviewAsOwner(request.Context(), interactionActorOf(member), request.PathValue("requestID"), input)
+	updated, err := server.interactions.ReviewAsOwner(request.Context(), interactionActorOf(member), member.AccessToken, request.PathValue("requestID"), input)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return

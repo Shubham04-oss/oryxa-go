@@ -162,7 +162,7 @@ func (repo *fakeRepository) Respond(_ context.Context, id string, answer Answer,
 	repo.requests[id] = request
 	return request, nil
 }
-func (repo *fakeRepository) Review(_ context.Context, id, action string, reviewer agents.InteractionDecider, at time.Time) (agents.Interaction, error) {
+func (repo *fakeRepository) Review(_ context.Context, id string, review agents.InteractionReview, at time.Time) (agents.Interaction, error) {
 	request, ok := repo.requests[id]
 	switch {
 	case !ok:
@@ -173,7 +173,7 @@ func (repo *fakeRepository) Review(_ context.Context, id, action string, reviewe
 		return agents.Interaction{}, ErrExpired
 	}
 	var delivered *agents.InteractionResult
-	switch action {
+	switch review.Action {
 	case ReviewSend:
 		delivered = &request.Held.Result
 	case ReviewSendMasked:
@@ -184,7 +184,8 @@ func (repo *fakeRepository) Review(_ context.Context, id, action string, reviewe
 		request.Status, request.Result = delivered.Status, delivered
 	}
 	request.Held = nil
-	request.Review = &agents.InteractionReview{Action: action, DecidedBy: reviewer, DecidedAt: at}
+	review.DecidedAt = at
+	request.Review = &review
 	request.Revision++
 	request.UpdatedAt = at
 	repo.requests[id] = request

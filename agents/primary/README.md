@@ -868,8 +868,14 @@ are `403 forbidden`, the member who asked is `403 forbidden`, and anyone else
 otherwise, and `409 request_expired` past its expiry). `send` delivers
 `held.result` and `send_masked` `held.masked_result` (`409 invalid_state` for
 an answer that could not be checked); either completes the request, or fails
-it for a held failure. `withhold` ends it `withheld`, and the member who asked
-reads no result. Either way the held versions are dropped, and the review is
+it for a held failure. Sending the answer to a request made in a teamspace
+reads the teamspace again first, with the member's own token, as approving it
+did: one that no longer stands there (the member who asked left its team,
+say) has its answer withheld by Oryxa,
+`{"action":"withhold","decided_by":{"kind":"system"},"reason":"Oryxa withheld this answer because ..."}`,
+and the route answers `409 request_closed` saying why. `withhold` ends it
+`withheld`, needing nothing to remain, and the member who asked reads no
+result. Either way the held versions are dropped, and the review is
 kept as `review`:
 `{"action":"send","decided_by":{"kind":"member","user_id":"..."},"decided_at":"..."}`.
 A request that expires in review is withheld by the waker's poll

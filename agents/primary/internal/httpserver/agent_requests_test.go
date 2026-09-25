@@ -42,8 +42,9 @@ func (service *fakeInteractions) DecideAsOwner(_ context.Context, actor primarya
 // ReviewAsOwner is the one way the server reviews an answer held for its
 // member: as the member themself, in their own session. It refuses any
 // other actor, as the ledger does.
-func (service *fakeInteractions) ReviewAsOwner(_ context.Context, actor primaryagents.InteractionActor, _ string, input primaryagents.InteractionReviewInput) (primaryagents.Interaction, error) {
+func (service *fakeInteractions) ReviewAsOwner(_ context.Context, actor primaryagents.InteractionActor, token, _ string, input primaryagents.InteractionReviewInput) (primaryagents.Interaction, error) {
 	service.actors = append(service.actors, actor)
+	service.token = token
 	if actor.Session != primaryagents.SessionMember {
 		return primaryagents.Interaction{}, interactions.ErrForbidden
 	}
@@ -440,10 +441,10 @@ func (ledger *reviewLedger) Get(_ context.Context, id string) (primaryagents.Int
 }
 
 // Review settles the review as the store does.
-func (ledger *reviewLedger) Review(_ context.Context, _ string, action string, reviewer primaryagents.InteractionDecider, at time.Time) (primaryagents.Interaction, error) {
+func (ledger *reviewLedger) Review(_ context.Context, _ string, review primaryagents.InteractionReview, at time.Time) (primaryagents.Interaction, error) {
 	ledger.reviews++
 	var delivered *primaryagents.InteractionResult
-	switch action {
+	switch review.Action {
 	case interactions.ReviewSend:
 		delivered = &ledger.request.Held.Result
 	case interactions.ReviewSendMasked:
@@ -454,7 +455,8 @@ func (ledger *reviewLedger) Review(_ context.Context, _ string, action string, r
 		ledger.request.Status = delivered.Status
 	}
 	ledger.request.Held = nil
-	ledger.request.Review = &primaryagents.InteractionReview{Action: action, DecidedBy: reviewer, DecidedAt: at}
+	review.DecidedAt = at
+	ledger.request.Review = &review
 	ledger.request.Revision++
 	return ledger.request, nil
 }
@@ -475,11 +477,42 @@ func answerInReview() primaryagents.Interaction {
 
 func reviewServer(t *testing.T, ledger *reviewLedger) *Server {
 	t.Helper()
-	requests, err := interactions.New(interactions.Config{Repository: ledger, Directory: unusedDirectory{}})
+	return reviewServerReading(t, ledger, &tokenDirectory{}, standingSeats{})
+}
+
+// reviewServerReading is reviewServer reading the request's teamspace
+// through directory and seats.
+func reviewServerReading(t *testing.T, ledger *reviewLedger, directory *tokenDirectory, seats standingSeats) *Server {
+	t.Helper()
+	requests, err := interactions.New(interactions.Config{Repository: ledger, Directory: directory, Teamspaces: seats})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return agentRequestServer(requests)
+}
+
+// TestSendingAHeldAnswerReadsItsTeamspaceWithTheMembersOwnToken: the review
+// route passes the member's own token, which sending the answer to a
+// request made in a teamspace reads that teamspace with; one that no longer
+// stands there answers 409 request_closed, saying why, with the answer
+// withheld by Oryxa.
+func TestSendingAHeldAnswerReadsItsTeamspaceWithTheMembersOwnToken(t *testing.T) {
+	ledger := &reviewLedger{request: answerInReview()}
+	directory := &tokenDirectory{}
+	sent := serve(reviewServerReading(t, ledger, directory, standingSeats{}), http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_held/review", `{"action":"send"}`, bearer)
+	if sent.Code != http.StatusOK || len(directory.tokens) != 1 || directory.tokens[0] != "member-token" {
+		t.Fatalf("send = %d %s, the teamspace read with %v; want 200, read with the member's own token", sent.Code, sent.Body.String(), directory.tokens)
+	}
+
+	ledger = &reviewLedger{request: answerInReview()}
+	lapsed := "the member who asked is no longer on the teamspace's team"
+	closed := serve(reviewServerReading(t, ledger, &tokenDirectory{}, standingSeats{lapsed: lapsed}), http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_held/review", `{"action":"send_masked"}`, bearer)
+	if closed.Code != http.StatusConflict || errorCode(t, closed) != "request_closed" || !strings.Contains(closed.Body.String(), lapsed) {
+		t.Fatalf("sending once it lapsed = %d %s, want 409 request_closed saying why", closed.Code, closed.Body.String())
+	}
+	if review := ledger.request.Review; ledger.request.Status != interactions.StatusWithheld || review == nil || review.DecidedBy.Kind != interactions.DecidedBySystem || !strings.Contains(review.Reason, lapsed) {
+		t.Fatalf("the request = %+v, review %+v; want it withheld by Oryxa saying why", ledger.request, review)
+	}
 }
 
 // TestTheMemberReviewsAHeldAnswerInTheirOwnSession runs the real ledger

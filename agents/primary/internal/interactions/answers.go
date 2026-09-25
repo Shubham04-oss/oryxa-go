@@ -148,7 +148,14 @@ func withTexts(result agents.InteractionResult, texts []string) agents.Interacti
 // agents.SessionMember, which only the HTTP API's member path does, and
 // agents' tools see agents.InteractionService, which has no such method. It
 // reviews only a request in review that has not expired.
-func (service *Service) ReviewAsOwner(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionReviewInput) (agents.Interaction, error) {
+//
+// Sending the answer to a request made in a teamspace reads the teamspace
+// again first, with token, the member's own, as approving it did
+// (ownerMayApprove): an answer whose request no longer stands there, the
+// member who asked having left its team say, is withheld by Oryxa with the
+// reason instead, and the member told so (ErrClosed). Withholding needs
+// nothing to remain.
+func (service *Service) ReviewAsOwner(ctx context.Context, actor agents.InteractionActor, token, id string, input agents.InteractionReviewInput) (agents.Interaction, error) {
 	if actor.Session != agents.SessionMember {
 		return agents.Interaction{}, fmt.Errorf("%w: only the member, in their own signed-in session, reviews an answer held for them", ErrForbidden)
 	}
@@ -172,7 +179,45 @@ func (service *Service) ReviewAsOwner(ctx context.Context, actor agents.Interact
 	case action == ReviewSendMasked && (request.Held == nil || request.Held.MaskedResult == nil):
 		return agents.Interaction{}, fmt.Errorf("%w: this answer could not be checked, so it has no masked version to send; send it as it is, or withhold it", ErrConflict)
 	}
-	return service.viewed(actor)(service.repository.Review(ctx, request.ID, action, agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}, now))
+	if request.TeamspaceID != "" && action != ReviewWithhold {
+		if err := service.mayStillSend(ctx, request, token); err != nil {
+			return agents.Interaction{}, err
+		}
+	}
+	return service.viewed(actor)(service.repository.Review(ctx, request.ID, agents.InteractionReview{
+		Action: action, DecidedBy: agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID},
+	}, now))
+}
+
+// mayStillSend reads again, with the member's own token, whether a request
+// made in a teamspace still stands there before its held answer is sent;
+// one that no longer does has its answer withheld by Oryxa, saying why.
+func (service *Service) mayStillSend(ctx context.Context, request agents.Interaction, token string) error {
+	if service.teamspaces == nil {
+		return fmt.Errorf("%w: requests inside a teamspace are not available on this server", ErrInvalid)
+	}
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("%w: member token is required to send the answer to a request made in a teamspace", ErrInvalid)
+	}
+	found, err := service.standingOf(ctx, request, token)
+	if err != nil {
+		return err
+	}
+	if found.lapsed == "" {
+		return nil
+	}
+	if _, err := service.repository.Review(ctx, request.ID, agents.InteractionReview{
+		Action: ReviewWithhold, DecidedBy: agents.InteractionDecider{Kind: DecidedBySystem}, Reason: withheldBecause(found.lapsed),
+	}, service.now().UTC()); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %s, so Oryxa withheld the answer", ErrClosed, found.lapsed)
+}
+
+// withheldBecause is what an answer Oryxa withheld says, as its review's
+// reason, when its request no longer stands in its teamspace.
+func withheldBecause(lapsed string) string {
+	return "Oryxa withheld this answer because " + lapsed + "."
 }
 
 // viewFor is request as actor may read it. The member who asked, and their

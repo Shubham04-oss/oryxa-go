@@ -95,7 +95,7 @@ func TestTheLedgerHoldsAnAnswerForReviewAndReleasesItAsReviewed(t *testing.T) {
 		}
 
 		reviewedAt := now.Add(3 * time.Minute)
-		reviewed, err := store.Review(ctx, approved.ID, action, member, reviewedAt)
+		reviewed, err := store.Review(ctx, approved.ID, agents.InteractionReview{Action: action, DecidedBy: member}, reviewedAt)
 		if err != nil || reviewed.Status != want.status || reviewed.Held != nil || reviewed.Review == nil ||
 			reviewed.Review.Action != action || reviewed.Review.DecidedBy != member || !reviewed.Review.DecidedAt.Equal(reviewedAt) {
 			t.Fatalf("%s: reviewed=%+v err=%v, want %s, the review recorded", action, reviewed, err, want.status)
@@ -114,7 +114,7 @@ func TestTheLedgerHoldsAnAnswerForReviewAndReleasesItAsReviewed(t *testing.T) {
 			t.Fatalf("%s: events=%v", action, events)
 		}
 		eventsCarryNothingOfTheAnswer(t, database, approved.ID, "priya", "415 555", "{EMAIL}", "EMAIL", "PHONE", "Reach Priya", "kinds")
-		if _, err := store.Review(ctx, approved.ID, ReviewSend, member, reviewedAt); !errors.Is(err, ErrConflict) {
+		if _, err := store.Review(ctx, approved.ID, agents.InteractionReview{Action: ReviewSend, DecidedBy: member}, reviewedAt); !errors.Is(err, ErrConflict) {
 			t.Fatalf("%s, reviewed again: error=%v, want ErrConflict", action, err)
 		}
 	}
@@ -204,7 +204,7 @@ func TestTheLedgerWithholdsAnAnswerWhoseRequestExpiredInReview(t *testing.T) {
 	if again, err := store.WithholdExpired(ctx, ExpiredBeforeReview, at, 100); err != nil || len(again) != 0 {
 		t.Fatalf("withholding again = %+v, %v; want nothing left", again, err)
 	}
-	if _, err := store.Review(ctx, inTime.ID, ReviewSend, agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}, made.Add(4*time.Hour)); !errors.Is(err, ErrExpired) {
+	if _, err := store.Review(ctx, inTime.ID, agents.InteractionReview{Action: ReviewSend, DecidedBy: agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}}, made.Add(4*time.Hour)); !errors.Is(err, ErrExpired) {
 		t.Fatalf("reviewing past the request's expiry: error=%v, want ErrExpired", err)
 	}
 }

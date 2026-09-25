@@ -120,9 +120,10 @@ type Repository interface {
 	// Respond records an approved request's answer as the guard left it:
 	// delivered, or held in review.
 	Respond(ctx context.Context, id string, answer Answer, at time.Time) (agents.Interaction, error)
-	// Review records the addressed member's review of an answer held for
-	// them: sent as held, sent masked, or withheld.
-	Review(ctx context.Context, id, action string, reviewer agents.InteractionDecider, at time.Time) (agents.Interaction, error)
+	// Review records a review of an answer held for its addressed member:
+	// sent as held, sent masked, or withheld, by them, or withheld by Oryxa
+	// with the reason.
+	Review(ctx context.Context, id string, review agents.InteractionReview, at time.Time) (agents.Interaction, error)
 	// Hold keeps a request for its owner's own decision: a pending one is
 	// marked held, and an approved one has its approval withdrawn and is
 	// pending, held, again.

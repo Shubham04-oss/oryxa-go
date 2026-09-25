@@ -182,7 +182,7 @@ func TestAnAnswerThatCouldNotBeCheckedIsHeldWithNothingToSendMasked(t *testing.T
 		answered.Guard == nil || !slices.Equal(answered.Guard.Kinds, []string{answerguard.Unchecked}) {
 		t.Fatalf("answered=%+v guard=%+v, want held as UNCHECKED with no masked version", answered, answered.Guard)
 	}
-	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, agents.InteractionReviewInput{Action: ReviewSendMasked}); !errors.Is(err, ErrConflict) {
+	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", approved.ID, agents.InteractionReviewInput{Action: ReviewSendMasked}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("sending masked an unchecked answer: error=%v, want ErrConflict", err)
 	}
 	if repo.requests[approved.ID].Status != StatusReview || repo.reviews != 0 {
@@ -243,7 +243,7 @@ func TestTheOwnerSendsSendsMaskedOrWithholds(t *testing.T) {
 		if _, err := service.Respond(context.Background(), target, approved.ID, answerGiven); err != nil {
 			t.Fatal(err)
 		}
-		reviewed, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, agents.InteractionReviewInput{Action: " " + strings.ToUpper(action) + " "})
+		reviewed, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", approved.ID, agents.InteractionReviewInput{Action: " " + strings.ToUpper(action) + " "})
 		if err != nil {
 			t.Fatalf("%s: %v", action, err)
 		}
@@ -257,7 +257,7 @@ func TestTheOwnerSendsSendsMaskedOrWithholds(t *testing.T) {
 		if review == nil || review.Action != action || review.DecidedBy.Kind != DecidedByMember || review.DecidedBy.UserID != "user_b" || !review.DecidedAt.Equal(testNow) {
 			t.Fatalf("%s: review=%+v, want the member's own, now", action, review)
 		}
-		if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, agents.InteractionReviewInput{Action: ReviewSend}); !errors.Is(err, ErrConflict) {
+		if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", approved.ID, agents.InteractionReviewInput{Action: ReviewSend}); !errors.Is(err, ErrConflict) {
 			t.Fatalf("%s, reviewed again: error=%v, want ErrConflict", action, err)
 		}
 		if repo.reviews != 1 {
@@ -279,7 +279,7 @@ func TestAHeldFailureIsSentAsAFailure(t *testing.T) {
 	if held := asTheOwner(t, service, approved.ID); held.Status != StatusReview || held.Held == nil || held.Held.Result.Status != StatusFailed {
 		t.Fatalf("held=%+v, want a failure held in review", held)
 	}
-	sent, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, agents.InteractionReviewInput{Action: ReviewSendMasked})
+	sent, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", approved.ID, agents.InteractionReviewInput{Action: ReviewSendMasked})
 	if err != nil || sent.Status != StatusFailed || sent.Result == nil || sent.Result.Status != StatusFailed {
 		t.Fatalf("sent=%+v err=%v, want the request failed with the masked failure", sent, err)
 	}
@@ -308,7 +308,7 @@ func TestOnlyTheOwnersOwnSessionReviewsAnAnswerInReview(t *testing.T) {
 		"the addressed specialist itself": {target, send, ErrForbidden},
 		"an action nobody knows":          {inOwnSession(targetPrimary), agents.InteractionReviewInput{Action: "forward"}, ErrInvalid},
 	} {
-		if _, err := service.ReviewAsOwner(context.Background(), attempt.actor, approved.ID, attempt.input); !errors.Is(err, attempt.want) {
+		if _, err := service.ReviewAsOwner(context.Background(), attempt.actor, "member-token", approved.ID, attempt.input); !errors.Is(err, attempt.want) {
 			t.Errorf("%s: error=%v, want %v", name, err, attempt.want)
 		}
 	}
@@ -321,13 +321,13 @@ func TestOnlyTheOwnersOwnSessionReviewsAnAnswerInReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), pending.ID, send); !errors.Is(err, ErrConflict) {
+	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", pending.ID, send); !errors.Is(err, ErrConflict) {
 		t.Fatalf("reviewing a pending request: error=%v, want ErrConflict", err)
 	}
 	expired := repo.requests[approved.ID]
 	expired.ExpiresAt = testNow.Add(-time.Second)
 	repo.requests[approved.ID] = expired
-	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, send); !errors.Is(err, ErrExpired) {
+	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", approved.ID, send); !errors.Is(err, ErrExpired) {
 		t.Fatalf("reviewing past the request's expiry: error=%v, want ErrExpired", err)
 	}
 }
@@ -382,7 +382,7 @@ func TestWhatEachMemberSeesOfAHeldAnswer(t *testing.T) {
 		}
 	}
 
-	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, agents.InteractionReviewInput{Action: ReviewSendMasked}); err != nil {
+	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", approved.ID, agents.InteractionReviewInput{Action: ReviewSendMasked}); err != nil {
 		t.Fatal(err)
 	}
 	sent := asker()
@@ -396,7 +396,7 @@ func TestWhatEachMemberSeesOfAHeldAnswer(t *testing.T) {
 	if _, err := withholding.Respond(context.Background(), target, second.ID, answerGiven); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := withholding.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), second.ID, agents.InteractionReviewInput{Action: ReviewWithhold}); err != nil {
+	if _, err := withholding.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", second.ID, agents.InteractionReviewInput{Action: ReviewWithhold}); err != nil {
 		t.Fatal(err)
 	}
 	withheld, err := withholding.Get(context.Background(), requester, second.ID)
@@ -447,7 +447,7 @@ func TestNothingTheGuardFindsIsLogged(t *testing.T) {
 		held.Held.MaskedResult.Content != "Her number is {PHONE}; the PIN is {PIN}." {
 		t.Fatalf("held=%+v", held)
 	}
-	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, agents.InteractionReviewInput{Action: ReviewSend}); err != nil {
+	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), "member-token", approved.ID, agents.InteractionReviewInput{Action: ReviewSend}); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(logs.String(), `"kinds":["EMAIL","PHONE"]`) {

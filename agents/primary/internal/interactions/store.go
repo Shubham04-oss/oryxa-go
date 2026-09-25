@@ -311,15 +311,15 @@ func (store *Store) Respond(ctx context.Context, id string, answer Answer, at ti
 	return result, nil
 }
 
-// Review records the addressed member's review of an answer held for them,
+// Review records a review of an answer held for its addressed member,
 // before the request expires: ReviewSend delivers the answer as it was held,
 // ReviewSendMasked its fully masked version, each completing the request or
 // failing it as the answer did; ReviewWithhold ends it withheld, with no
 // result. The held answer is dropped either way, and the review recorded
-// with who made it. It is the completed event, carrying the new status and
+// with who made it, the member or Oryxa, and any reason. It is the completed event, carrying the new status and
 // nothing else, that tells the member who asked. A request not in review is
 // ErrConflict, and so is sending masked an answer that has no masked version.
-func (store *Store) Review(ctx context.Context, id, action string, reviewer agents.InteractionDecider, at time.Time) (agents.Interaction, error) {
+func (store *Store) Review(ctx context.Context, id string, review agents.InteractionReview, at time.Time) (agents.Interaction, error) {
 	var result agents.Interaction
 	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		current, err := getForUpdate(ctx, tx, id)
@@ -333,7 +333,7 @@ func (store *Store) Review(ctx context.Context, id, action string, reviewer agen
 			return ErrExpired
 		}
 		var delivered *agents.InteractionResult
-		switch action {
+		switch review.Action {
 		case ReviewSend:
 			delivered = &current.Held.Result
 		case ReviewSendMasked:
@@ -345,7 +345,8 @@ func (store *Store) Review(ctx context.Context, id, action string, reviewer agen
 		default:
 			return fmt.Errorf("%w: action must be send, send_masked or withhold", ErrInvalid)
 		}
-		result, err = settleReview(ctx, tx, id, delivered, agents.InteractionReview{Action: action, DecidedBy: reviewer, DecidedAt: at}, at)
+		review.DecidedAt = at
+		result, err = settleReview(ctx, tx, id, delivered, review, at)
 		return err
 	})
 	if err != nil {

@@ -87,7 +87,7 @@ func TestAHeldAnswerLivesItsWholeLifeAgainstTheDatabase(t *testing.T) {
 		t.Fatalf("%d review events (%v), want one", reviewEvents, err)
 	}
 
-	sent, err := requests.ReviewAsOwner(ctx, bSignedIn, created.ID, agents.InteractionReviewInput{Action: interactions.ReviewSendMasked})
+	sent, err := requests.ReviewAsOwner(ctx, bSignedIn, "member-token", created.ID, agents.InteractionReviewInput{Action: interactions.ReviewSendMasked})
 	if err != nil || sent.Status != interactions.StatusCompleted {
 		t.Fatalf("B sending it masked = %+v, %v", sent, err)
 	}
