@@ -1495,6 +1495,88 @@ describe("SideConversationAgent: events for Go", () => {
     ])
   })
 
+  it("settles an agent's answer and records it as one: when its event cannot be written, the answer does not settle either", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    let finish!: () => void
+    go.runAnswers.push(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            const write = (item: Item) =>
+              controller.enqueue(
+                encoder.encode(
+                  `event: ${item.type}\ndata: ${JSON.stringify(item)}\n\n`
+                )
+              )
+            write({ type: "run_started", run_id: "run_1" })
+            write({ type: "message", author: "Leo", text: "Done." })
+            finish = () => {
+              write({ type: "run_completed", run_id: "run_1" })
+              controller.close()
+            }
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } }
+      )
+    )
+    const asking = askMine(side, adaTab, "Leo, is it done?")
+    await vi.waitFor(() =>
+      expect(lastItem(adaTab, "agent-message")?.body).toBe("Done.")
+    )
+    // The outbox refuses its rows, as a full disk would, as the run ends.
+    side.sql`CREATE TRIGGER outbox_full BEFORE INSERT ON event_outbox
+      BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`
+    finish()
+    await expect(asking).rejects.toThrow("database or disk is full")
+    expect(
+      side.sql`SELECT state, settled FROM side_items
+        WHERE kind = 'agent-message'`
+    ).toEqual([{ state: "streaming", settled: 0 }])
+    expect(lastItem(adaTab, "agent-message")?.status).toBe("streaming")
+    expect(postedOf(side)).toEqual([[1, member(ada)]])
+  })
+
+  it("leaves a completed request's result and records it as one: when its event cannot be written, neither lands until a later read", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Pull the pricing sheet")
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    go.complete("irq_1", "The sheet is attached.")
+    side.sql`CREATE TRIGGER outbox_full BEFORE INSERT ON event_outbox
+      BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`
+    const poll = () =>
+      (side as unknown as { pollRequests: () => Promise<void> }).pollRequests()
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await expect(poll()).rejects.toThrow("database or disk is full")
+    // The card shows how it stands; the result and its event are not there.
+    expect(lastItem(adaTab, "request-card")?.status).toBe("completed")
+    expect(
+      side.sql`SELECT seq FROM side_items WHERE kind = 'agent-message'`
+    ).toEqual([])
+    expect(postedOf(side)).toEqual([])
+
+    // Once the outbox takes rows again, the next read leaves both.
+    side.sql`DROP TRIGGER outbox_full`
+    await poll()
+    const result = lastItem(adaTab, "agent-message")
+    expect(result).toMatchObject({
+      status: "done",
+      via: { requestId: "irq_1" },
+    })
+    expect(postedOf(side)).toEqual([
+      [
+        result?.seq,
+        { kind: "agent", user_id: bo.userId, agent_id: bo.agentId },
+      ],
+    ])
+  })
+
   it("records a completed request's result as the asked agent's message, and never a card or a quiet line", async () => {
     const { side } = await setup(eventsOn)
     const adaTab = await join(side, ada)

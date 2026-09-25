@@ -598,6 +598,47 @@ describe("EventOutbox: draining", () => {
     expect(outbox(dm)).toEqual([])
   })
 
+  it("waits while Go's realtime is off: a 404 is sent again, never refused", async () => {
+    const { dm } = await setup()
+    go.answers.push(404, 404)
+    const ids = enqueue(dm, 1)
+    await dm.drainEvents()
+    expect(deadLetters(dm)).toEqual([])
+    expect(backoffOf(dm)).toEqual([{ failures: 1, until: Date.now() + 1000 }])
+    await runNextDrain(dm)
+    expect(backoffOf(dm)).toEqual([{ failures: 2, until: Date.now() + 2000 }])
+    await runNextDrain(dm)
+    expect(go.requests.map((request) => request.status)).toEqual([
+      404, 404, 204,
+    ])
+    expect(go.taken.map((event) => event.id)).toEqual(ids)
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining("Go did not take 1 events (Go answered 404)"),
+      expect.anything()
+    )
+  })
+
+  it("runs one drain at a time: one that comes while another is under way sends nothing, and the first sets the next", async () => {
+    const { dm } = await setup()
+    go.answers.push(503)
+    const ids = enqueue(dm, 1)
+    const release = go.hold()
+    const first = dm.drainEvents()
+    await vi.waitFor(() => expect(go.requests).toHaveLength(1))
+    // As a second schedule, or the platform's retry of an alarm, firing
+    // while the first is still waiting for Go.
+    await dm.drainEvents()
+    expect(go.requests).toHaveLength(1)
+    release()
+    await first
+    // Go did not take it: the first set one drain, and the second none.
+    expect(drainIds(dm)).toHaveLength(1)
+    await runNextDrain(dm)
+    expect(go.requests).toHaveLength(2)
+    expect(go.taken.map((event) => event.id)).toEqual(ids)
+    expect(drainIds(dm)).toEqual([])
+  })
+
   it("never follows a redirect: it is not Go's answer, and the events go again", async () => {
     const { dm } = await setup()
     const elsewhere = `${eventsOrigin}/v1/realtime/elsewhere`

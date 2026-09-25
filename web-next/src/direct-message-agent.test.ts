@@ -1063,38 +1063,78 @@ describe("DirectMessageAgent: events for Go", () => {
   })
 
   it("sends a newer read after the one on its way, whatever Go answers that one", async () => {
-    const { dm } = await setup(eventsOn)
-    const adaTab = await join(dm, ada)
-    const boTab = await join(dm, bo)
-    await send(dm, adaTab, "one")
-    await say(dm, boTab, { type: "dm-read", seq: 1 })
-    const release = go.hold()
-    const draining = runDueJobs(dm)
-    await vi.waitFor(() => expect(go.requests).toHaveLength(1))
+    // What each answer leaves of the request: taken, waiting again, or
+    // refused. Bo's read through one was on it either way.
+    const outcomes = [
+      { answer: 204, waiting: [], refused: [] },
+      { answer: 503, waiting: [[posted, 1]], refused: [] },
+      {
+        answer: 400,
+        waiting: [],
+        refused: [
+          [posted, 1],
+          [read, 1],
+        ],
+      },
+    ]
+    const described = (row: {
+      type: string
+      detail: Record<string, unknown>
+    }) => [
+      row.type,
+      row.type === read
+        ? row.detail.read_through_seq
+        : (row.detail.message as { seq: number }).seq,
+    ]
+    for (const [index, { answer, waiting, refused }] of outcomes.entries()) {
+      // Each on a whole second, when its drain is due at once.
+      vi.setSystemTime(new Date(`2026-09-24T09:0${index}:00.000Z`))
+      go = new FakeGoEvents()
+      vi.stubGlobal("fetch", routeFetch(go))
+      const { dm } = await setup(eventsOn)
+      const adaTab = await join(dm, ada)
+      const boTab = await join(dm, bo)
+      await send(dm, adaTab, "one")
+      await say(dm, boTab, { type: "dm-read", seq: 1 })
+      const release = go.hold()
+      const draining = runDueJobs(dm)
+      await vi.waitFor(() => expect(go.requests).toHaveLength(1))
 
-    // While Bo's read through one is on its way, he reads further.
-    await send(dm, adaTab, "two")
-    await say(dm, boTab, { type: "dm-read", seq: 2 })
-    release()
-    await draining
-    expect(
-      outbox(dm).map((row) => [
-        row.type,
-        row.type === read
-          ? row.detail.read_through_seq
-          : (row.detail.message as { seq: number }).seq,
+      // While Bo's read through one is on its way, he reads further.
+      await send(dm, adaTab, "two")
+      await say(dm, boTab, { type: "dm-read", seq: 2 })
+      go.answers.push(answer)
+      release()
+      await draining
+      expect(outbox(dm).map(described)).toEqual([
+        ...waiting,
+        [posted, 2],
+        [read, 2],
       ])
-    ).toEqual([
-      [posted, 2],
-      [read, 2],
-    ])
-    vi.advanceTimersByTime(1_000)
-    await runDueJobs(dm)
-    expect(
-      go.taken
-        .filter((event) => event.type === read)
-        .map((event) => event.detail.read_through_seq)
-    ).toEqual([1, 2])
+      expect(
+        dm.sql<{
+          type: string
+          detail: string
+        }>`SELECT type, detail FROM event_dead_letters ORDER BY rowid`.map(
+          (row) =>
+            described({
+              type: row.type,
+              detail: JSON.parse(row.detail) as Record<string, unknown>,
+            })
+        )
+      ).toEqual(refused)
+      // The next drain, whenever Go's answer set it.
+      const [next] = dm.jobs.filter((job) => job.callback === "drainEvents")
+      vi.setSystemTime(next.time * 1000)
+      await runDueJobs(dm)
+      // The newer read goes, and only once.
+      expect(
+        go.taken
+          .filter((event) => event.type === read)
+          .map((event) => event.detail.read_through_seq)
+      ).toEqual(answer === 204 ? [1, 2] : [2])
+      expect(outbox(dm)).toEqual([])
+    }
   })
 
   it("never gives a seq twice when a purge takes the newest messages away, and a read Go was told of covers none that come after", async () => {
