@@ -670,7 +670,8 @@ Then, by Go's answer:
   oldest event, doubling each time, to five minutes. What is recorded
   meanwhile waits with it, behind what is ahead.
 
-Without `ORYXA_API_ORIGIN` or `REALTIME_PURGE_SECRET` (once trimmed), the
+Without `ORYXA_API_ORIGIN` or `REALTIME_PURGE_SECRET`, or with a secret
+shorter than 32 characters once trimmed (the least a purge and Go take), the
 objects record nothing, so nothing is sent.
 
 **Purges.** A purge of a conversation, whole or of one member, takes every

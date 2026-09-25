@@ -24,8 +24,9 @@ export interface ConversationEnv extends Cloudflare.Env {
    * /internal/realtime/purge` (Go to the Worker) and the conversation events
    * (the Worker to Go). A Worker secret (`wrangler secret put
    * REALTIME_PURGE_SECRET`, or `.dev.vars` locally), trimmed of surrounding
-   * whitespace, as Go trims it. A purge needs at least 32 characters, or it
-   * is refused; without it, no conversation records events.
+   * whitespace, as Go trims it. It needs at least 32 characters, as Go
+   * does: a shorter one refuses every purge, and without it, or with a
+   * shorter one, no conversation records events.
    */
   REALTIME_PURGE_SECRET?: string
 }

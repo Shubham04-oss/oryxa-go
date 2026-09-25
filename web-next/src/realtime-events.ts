@@ -6,7 +6,7 @@
 // signed with the secret Go signs its purges with. Go publishes what it
 // takes as `oryxa.realtime` events. An event carries identities and
 // positions, never what anybody wrote.
-import { realtimeSignature } from "./realtime-purge"
+import { minPurgeSecretLength, realtimeSignature } from "./realtime-purge"
 
 /** Where the objects send their events, on Go's origin. */
 export const REALTIME_EVENTS_PATH = "/v1/realtime/events"
@@ -107,8 +107,10 @@ export type EventsConfig = { url: URL; secret: string }
 
 /**
  * Where the events go, from the Worker's environment: Go's origin and the
- * purge's secret, trimmed as Go trims it. Nothing when either is unset (or
- * the origin is not a URL): then nothing is recorded.
+ * purge's secret, trimmed as Go trims it. Nothing when either is unset, when
+ * the secret is shorter than a purge's (`minPurgeSecretLength`: Go takes
+ * no shorter one), or when the origin is not a URL: then nothing is
+ * recorded.
  */
 export function realtimeEventsConfig(env: {
   ORYXA_API_ORIGIN?: unknown
@@ -120,7 +122,7 @@ export function realtimeEventsConfig(env: {
       : ""
   const origin =
     typeof env.ORYXA_API_ORIGIN === "string" ? env.ORYXA_API_ORIGIN.trim() : ""
-  if (!secret || !origin) return undefined
+  if (secret.length < minPurgeSecretLength || !origin) return undefined
   try {
     return { url: new URL(REALTIME_EVENTS_PATH, origin), secret }
   } catch {

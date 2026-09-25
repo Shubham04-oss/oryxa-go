@@ -1067,12 +1067,17 @@ describe("DirectMessageAgent: events for Go", () => {
     ).toEqual([1, 2])
   })
 
-  it("records nothing, and sends nothing, while Go's origin or the secret is unset", async () => {
+  it("records nothing, and sends nothing, while Go's origin or the secret is unset, or the secret is too short", async () => {
     for (const vars of [
       {},
       { ORYXA_API_ORIGIN: eventsOrigin },
       { REALTIME_PURGE_SECRET: eventsSecret },
       { ORYXA_API_ORIGIN: eventsOrigin, REALTIME_PURGE_SECRET: " \n" },
+      // A character short of the 32 Go takes: nothing Go would refuse waits.
+      {
+        ORYXA_API_ORIGIN: eventsOrigin,
+        REALTIME_PURGE_SECRET: eventsSecret.slice(1),
+      },
     ]) {
       const { dm } = await setup(vars)
       const adaTab = await join(dm, ada)

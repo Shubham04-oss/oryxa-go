@@ -12,7 +12,7 @@ import {
   realtimeEventsConfig,
   signEvents,
 } from "./realtime-events"
-import { signPurge } from "./realtime-purge"
+import { minPurgeSecretLength, signPurge } from "./realtime-purge"
 import { RealtimeRegistryAgent } from "./realtime-registry-agent"
 import { SideConversationAgent } from "./side-conversation-agent"
 import {
@@ -210,6 +210,29 @@ describe("realtimeEventsConfig", () => {
     ).toEqual({
       url: new URL(`${eventsOrigin}${REALTIME_EVENTS_PATH}`),
       secret: eventsSecret,
+    })
+  })
+
+  it("is off with a secret shorter than a purge's, as Go would take none it signs", () => {
+    const short = "x".repeat(minPurgeSecretLength - 1)
+    // The whitespace around it never counts.
+    for (const secret of [short, ` ${short}\n`]) {
+      expect(
+        realtimeEventsConfig({
+          ORYXA_API_ORIGIN: eventsOrigin,
+          REALTIME_PURGE_SECRET: secret,
+        })
+      ).toBeUndefined()
+    }
+    const least = "x".repeat(minPurgeSecretLength)
+    expect(
+      realtimeEventsConfig({
+        ORYXA_API_ORIGIN: eventsOrigin,
+        REALTIME_PURGE_SECRET: ` ${least} `,
+      })
+    ).toEqual({
+      url: new URL(`${eventsOrigin}${REALTIME_EVENTS_PATH}`),
+      secret: least,
     })
   })
 })

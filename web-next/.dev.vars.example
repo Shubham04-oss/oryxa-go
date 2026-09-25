@@ -8,7 +8,7 @@ ORYXA_API_ORIGIN=http://127.0.0.1:18096
 # REALTIME.md): Go's POST /internal/realtime/purge, and the conversation
 # events the DMs and side conversations send Go's POST /v1/realtime/events.
 # At least 32 characters, the same value Go is given. Without it (as here,
-# empty) the Worker refuses every purge and records no events. Deployed, it
-# is a Worker secret: `wrangler secret put REALTIME_PURGE_SECRET`. Make one
-# with `openssl rand -hex 32`.
+# empty), or with a shorter one, the Worker refuses every purge and records
+# no events. Deployed, it is a Worker secret: `wrangler secret put
+# REALTIME_PURGE_SECRET`. Make one with `openssl rand -hex 32`.
 REALTIME_PURGE_SECRET=
