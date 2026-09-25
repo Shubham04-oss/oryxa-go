@@ -70,6 +70,11 @@ const (
 	// TeamspaceContributionChangedDetailType announces a member adding,
 	// changing, or removing an agent contribution.
 	TeamspaceContributionChangedDetailType = "agents.teamspace.contribution.changed.v1"
+	// TeamspaceMemberRemovedDetailType announces that a person left a
+	// teamspace: Teams removed them from the human team it is bound to,
+	// whether or not they had contributed agents to it. Realtime has the web
+	// app purge their side conversations in it.
+	TeamspaceMemberRemovedDetailType = "agents.teamspace.member.removed.v1"
 	// OrganizationAgentCreatedDetailType announces the singleton coordinating
 	// agent for an organization without copying its instructions to EventBridge.
 	OrganizationAgentCreatedDetailType = "agents.organization-agent.created.v1"
@@ -215,6 +220,20 @@ type TeamspaceChanged struct {
 	Revision            int64     `json:"revision"`
 	ContributorUserIDs  []string  `json:"contributor_user_ids"`
 	ChangedAt           time.Time `json:"changed_at"`
+}
+
+// TeamspaceMemberRemoved says a person left a teamspace. A teamspace is bound
+// to one human team, so leaving the team is leaving the teamspace. It carries
+// identities only. A Teams event delivered again can publish it again, with
+// the same RemovedAt, so its consumers take a repeat as one.
+type TeamspaceMemberRemoved struct {
+	OrganizationID string `json:"organization_id"`
+	TeamspaceID    string `json:"teamspace_id"`
+	TeamID         string `json:"team_id"`
+	UserID         string `json:"user_id"`
+	// RemovedAt is when the team membership ended: the Teams event's
+	// removed_at, or when that event happened when it has none.
+	RemovedAt time.Time `json:"removed_at"`
 }
 
 // OrganizationAgentChanged is the safe lifecycle projection of the one
