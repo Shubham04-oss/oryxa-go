@@ -25,12 +25,21 @@ provision() {
   env "$@" go run "./$package/cmd/provision" | jq -c .
 }
 
+# Every queue this names, looked up before anything is provisioned. A service
+# OpenTofu names no queue for is one whose configuration has not been applied
+# yet, and stopping on it part way through would leave the services after it
+# unprovisioned, without a word.
+missing=()
+for service in agents apps auth batching billing files knowledge rag realtime teams; do
+  queue_name "$service" >/dev/null || missing+=("$service")
+done
+if ((${#missing[@]} > 0)); then
+  echo "OpenTofu names no queue for ${missing[*]} yet: run tofu apply in deploy/production first, then this again" >&2
+  exit 1
+fi
+
 for service in apps auth batching billing knowledge realtime teams; do
-  # Assigned first, so a service OpenTofu names no queue for yet (the
-  # configuration adding it not applied) stops the script, rather than
-  # provisioning a queue called "null".
-  queue=$(queue_name "$service")
-  provision "$service/infra/events" "$(tr '[:lower:]' '[:upper:]' <<<"$service")_EVENTS_QUEUE_NAME=$queue"
+  provision "$service/infra/events" "$(tr '[:lower:]' '[:upper:]' <<<"$service")_EVENTS_QUEUE_NAME=$(queue_name "$service")"
 done
 provision agents/primary/infra/events "AGENTS_EVENTS_QUEUE_NAME=$(queue_name agents)"
 provision files/infra/storage "FILES_EVENTS_QUEUE_NAME=$(queue_name files)"
