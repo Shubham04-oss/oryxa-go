@@ -431,6 +431,50 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 	}
 }
 
+// A purge dropped for good is logged whole, as the Worker was sent it, so it
+// can be sent again by hand once whatever refused it is put right.
+func TestPollLogsADroppedPurgeWhole(t *testing.T) {
+	purger := &fakePurger{fail: map[string]error{"evt_refused": fmt.Errorf("%w: it answered 400 Bad Request", purge.ErrPermanent)}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{
+		{message("refused", memberRemoved("evt_refused", "org_1", "user-2", autheventsv1.MemberRemovedReasonRemoved))},
+	}}
+	var logs strings.Builder
+	_, verifier := authHarness()
+	consumer, err := NewConsumer(purger, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer.Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
+
+	if !slices.Equal(queue.deleted, []string{"refused"}) {
+		t.Fatalf("deleted = %v, want the refused purge dropped", queue.deleted)
+	}
+	dropped := logged(t, logs.String(), "realtime purge dropped")
+	for key, want := range map[string]string{
+		"sqs_message_id": "refused", "event_id": "evt_refused", "scope": "member",
+		"organization_id": "org_1", "user_id": "user-2", "removed_at": removedAt,
+	} {
+		if got := dropped[key]; got != want {
+			t.Errorf("the dropped purge's %s = %v, want %q", key, got, want)
+		}
+	}
+}
+
+// logged is the JSON log record whose message starts with prefix.
+func logged(t *testing.T, logs, prefix string) map[string]any {
+	t.Helper()
+	for line := range strings.Lines(logs) {
+		var record map[string]any
+		if json.Unmarshal([]byte(line), &record) == nil && strings.HasPrefix(fmt.Sprint(record["msg"]), prefix) {
+			return record
+		}
+	}
+	t.Fatalf("nothing logged starts with %q:\n%s", prefix, logs)
+	return nil
+}
+
 func TestNewConsumerRefusesToRunBlind(t *testing.T) {
 	_, verifier := authHarness()
 	if _, err := NewConsumer(nil, verifier, nil); err == nil {

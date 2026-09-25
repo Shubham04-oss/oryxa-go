@@ -38,7 +38,7 @@ X-Oryxa-Signature: v1=ee12ee93bb00fb5e9901c4a0ac8ed193a85539bfb2c76241f9182f2fcc
 | The Worker answers | Realtime |
 | --- | --- |
 | `204` | Done. The message is deleted. |
-| `400` or `413` carrying the Worker's own refusal, `{"error":{"code":…}}` | The Worker refusing the body for good: it cannot be read as a purge, or it is over 4 KB. It is logged as `realtime purge dropped`, with the status and the start of the Worker's answer, and the message is deleted. |
+| `400` or `413` carrying the Worker's own refusal, `{"error":{"code":…}}` | The Worker refusing the body for good: it cannot be read as a purge, or it is over 4 KB. It is logged as `realtime purge dropped`, with the status, the start of the Worker's answer and the purge's five fields, and the message is deleted. |
 | `401` | A bad signature, which comes from the secret or the clock, not from this purge. It is logged, and the message is kept for the queue to deliver again, so it reaches the dead-letter queue and can be redriven once the secret is fixed. |
 | `408`, `429` | The Worker asking for later. Kept and retried. |
 | Any other `4xx`, including a `400` or `413` without the Worker's refusal | Not the Worker refusing this purge. A `403` is usually Cloudflare challenging the call, and a `404` or `405` a URL that does not reach the Worker's route, or a Worker without it. Kept and retried, so it reaches the dead-letter queue, whose alarm mails, and can be redriven once that is put right. |
@@ -115,4 +115,4 @@ Realtime deploys in the single `oryxa` image. Its identity needs `sqs:ReceiveMes
 ## Limits
 
 - `removed_at` comes from auth's clock, and the Worker's messages are stamped by Cloudflare's. The two clocks agree only to within a few milliseconds, so a message written in the same instant as the removal may fall on either side of it.
-- A dropped purge is gone. Its log line names the event. In production the bus archives every event for a week, so one can be replayed to realtime's rule once whatever the Worker refused is fixed.
+- A dropped purge is gone from the queue. Its log line carries it whole, as `event_id`, `scope`, `organization_id`, `user_id` and `removed_at`, so it can be sent again by hand. In production the bus also archives every event for a week, so one can be replayed to realtime's rule once whatever the Worker refused is fixed.

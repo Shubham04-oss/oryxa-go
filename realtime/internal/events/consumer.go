@@ -102,29 +102,32 @@ type receivedEnvelope struct {
 // refused the purge for good, and Poll drops the message; any other error
 // leaves it for the queue to deliver again.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
-	return consumer.handle(ctx, body, time.Now())
+	_, err := consumer.handle(ctx, body, time.Now())
+	return err
 }
 
-func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt time.Time) error {
+// handle is Handle, answering also with the purge the event asked for, as far
+// as it got to saying, so that one given up for good can be logged whole.
+func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt time.Time) (purge.Request, error) {
 	var event eventBridgeEvent
 	if err := json.Unmarshal([]byte(body), &event); err != nil {
-		return fmt.Errorf("decode EventBridge event: %w", err)
+		return purge.Request{}, fmt.Errorf("decode EventBridge event: %w", err)
 	}
 	if event.Source != autheventsv1.Source || !slices.Contains(AuthSubscriptions(), event.DetailType) {
-		return fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
+		return purge.Request{}, fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
 	}
 	var detail receivedEnvelope
 	if err := json.Unmarshal(event.Detail, &detail); err != nil {
-		return fmt.Errorf("event %s: decode detail: %w", event.ID, err)
+		return purge.Request{}, fmt.Errorf("event %s: decode detail: %w", event.ID, err)
 	}
 	if detail.Version != 1 || detail.EventID == "" {
-		return fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, detail.Version, detail.EventID)
+		return purge.Request{}, fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, detail.Version, detail.EventID)
 	}
 	// The signature is checked before anything in the event is used, so a
 	// message that reached the queue without auth having sent it purges
 	// nothing, whatever it names.
 	if err := consumer.verifier.Verify(event.Source, event.DetailType, detail.EventID, detail.Version, detail.OccurredAt, detail.Data, detail.Signature); err != nil {
-		return fmt.Errorf("event %s: %w", detail.EventID, err)
+		return purge.Request{}, fmt.Errorf("event %s: %w", detail.EventID, err)
 	}
 	occurredAt, _ := time.Parse(time.RFC3339Nano, detail.OccurredAt)
 
@@ -146,11 +149,11 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 	observability.EndSpan(span, err)
 	consumer.metrics.Record(ctx, component, event.DetailType, occurredAt, receivedAt, started, err)
 	if err != nil {
-		return fmt.Errorf("event %s: %s%s: %w", detail.EventID, event.DetailType, scope(request), err)
+		return request, fmt.Errorf("event %s: %s%s: %w", detail.EventID, event.DetailType, scope(request), err)
 	}
 	consumer.logger.InfoContext(ctx, outcome, "event_id", detail.EventID, "detail_type", event.DetailType,
 		"organization_id", request.OrganizationID, "scope", string(request.Scope))
-	return nil
+	return request, nil
 }
 
 // scope names the organization a failed purge was for, when the event got as
@@ -257,12 +260,16 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 				// Stopping: what is left goes back to the queue.
 				break
 			}
-			err := consumer.handle(ctx, aws.ToString(message.Body), receivedAt)
+			request, err := consumer.handle(ctx, aws.ToString(message.Body), receivedAt)
 			switch {
 			case err == nil:
 			case errors.Is(err, purge.ErrPermanent):
+				// The purge whole, as the Worker was sent it, so it can be sent
+				// again by hand once whatever refused it is put right.
 				consumer.logger.ErrorContext(ctx, "realtime purge dropped: the Worker refused it, and sending it again cannot change that",
-					"sqs_message_id", aws.ToString(message.MessageId), "error", err)
+					"sqs_message_id", aws.ToString(message.MessageId), "event_id", request.EventID, "scope", string(request.Scope),
+					"organization_id", request.OrganizationID, "user_id", request.UserID,
+					"removed_at", request.RemovedAt.UTC().Format(time.RFC3339Nano), "error", err)
 			default:
 				if ctx.Err() == nil {
 					consumer.logger.ErrorContext(ctx, "realtime purge failed; the queue will deliver it again",
