@@ -13,6 +13,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/purge"
@@ -60,7 +61,7 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	if err != nil {
 		return host.Service{}, err
 	}
-	consumer, err := events.NewConsumer(client, platform.EventAuth.Verifier(), logger)
+	consumer, err := events.NewConsumer(client, verifier(platform.EventAuth), logger)
 	if err != nil {
 		return host.Service{}, err
 	}
@@ -70,6 +71,12 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	return host.Service{
 		Workers: []host.Worker{func(ctx context.Context) { consumer.Poll(ctx, queue, config.EventsQueueURL) }},
 	}, nil
+}
+
+// verifier checks auth's signatures for as long as a purge can wait to be
+// handled (events.SignatureMaxAge), rather than a consumer's usual day.
+func verifier(registry *eventauth.Registry) *eventauth.Verifier {
+	return registry.Verifier(eventauth.MaxAge(events.SignatureMaxAge))
 }
 
 // namedIn reports whether services, ORYXA_SERVICES's value, names realtime

@@ -70,6 +70,16 @@ func TestTheVisibilityTimeoutOutlastsABatchTheWorkerNeverAnswers(t *testing.T) {
 	}
 }
 
+// Enforcing signatures, a purge must still verify for as long as it can wait
+// on the queue or its dead-letter queue, and then for the week the bus's
+// archive keeps it to be replayed (deploy/production/events.tf).
+func TestSignaturesOutlastEveryWayAPurgeCanWait(t *testing.T) {
+	const archiveRetention = 7 * 24 * time.Hour
+	if wait := time.Duration(retentionSeconds)*time.Second + archiveRetention; events.SignatureMaxAge < wait {
+		t.Fatalf("realtime accepts signatures up to %s old, but a purge can wait %s", events.SignatureMaxAge, wait)
+	}
+}
+
 func assertJSONEqual(t *testing.T, got, want string) {
 	t.Helper()
 	var gotValue, wantValue any

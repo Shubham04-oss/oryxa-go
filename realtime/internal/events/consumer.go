@@ -37,6 +37,16 @@ func AuthSubscriptions() []string {
 	}
 }
 
+// SignatureMaxAge is how old a signature on an auth event realtime still
+// accepts, rather than the day other consumers do. A purge can wait on
+// realtime's queue, and its dead-letter queue, for the 14 days they keep it
+// (the provisioner's retention), and an event lost on the way can be replayed
+// from the bus's archive for 7 days after it was published
+// (deploy/production/events.tf). Enforcing signatures, a purge that waited or
+// came back must still verify; acting on it late is harmless, since the
+// Worker's purge is idempotent and knows each event by its id.
+const SignatureMaxAge = (14 + 7) * 24 * time.Hour
+
 // maxClockSkew is how far after an event was received the removal it names
 // may lie. Auth's clock and this one agree far more closely than that, so a
 // removal later still did not happen then, and a purge up to it would take

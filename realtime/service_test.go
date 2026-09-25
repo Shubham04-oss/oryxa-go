@@ -3,16 +3,20 @@ package realtime
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
+	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/realtime/internal/events"
 )
 
 func platform(values map[string]string, logs *bytes.Buffer) host.Platform {
@@ -165,6 +169,40 @@ func TestMountRefusesMalformedSettingsEvenWhenOptional(t *testing.T) {
 		if _, err := Mount(context.Background(), platform(values, &bytes.Buffer{})); err == nil {
 			t.Errorf("%s: Mount() = nil error", name)
 		}
+	}
+}
+
+// Enforcing signatures, a purge that waited on realtime's queue, or came back
+// from the bus's archive, still verifies for as long as either keeps it: well
+// past the day other consumers allow.
+func TestRealtimeVerifiesAPurgeForAsLongAsItCanWait(t *testing.T) {
+	signedAt := time.Now()
+	clock := signedAt
+	registry := eventauth.NewRegistry(nil, func() time.Time { return clock })
+	signer, err := registry.Signer("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const source, detailType, occurredAt = "oryxa.auth", "auth.organization.deleted.v1", "2026-09-24T12:00:00Z"
+	data := []byte(`{"organization_id":"org_1","deleted_at":"2026-09-24T12:00:00Z"}`)
+	sig, err := signer.Sign(source, detailType, "evt_1", 1, occurredAt, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := func(verifier *eventauth.Verifier) error {
+		return verifier.Verify(source, detailType, "evt_1", 1, occurredAt, data, sig)
+	}
+
+	clock = signedAt.Add(20 * 24 * time.Hour)
+	if err := verify(verifier(registry)); err != nil {
+		t.Fatalf("a purge 20 days old was refused: %v", err)
+	}
+	if err := verify(registry.Verifier()); !errors.Is(err, eventauth.ErrUnverified) {
+		t.Fatalf("another consumer's verifier accepted an event 20 days old: %v", err)
+	}
+	clock = signedAt.Add(events.SignatureMaxAge + time.Minute)
+	if err := verify(verifier(registry)); !errors.Is(err, eventauth.ErrUnverified) {
+		t.Fatalf("a purge older than its queue and the archive keep one verified: %v", err)
 	}
 }
 
