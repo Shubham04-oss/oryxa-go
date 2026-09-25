@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -16,13 +17,17 @@ import (
 
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
+	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/events"
 )
 
+// platform is what a host hands realtime. Its database never connects:
+// mounting builds realtime's store and outbox, and queries neither.
 func platform(values map[string]string, logs *bytes.Buffer) host.Platform {
 	return host.Platform{
 		EventAuth:    host.TestRegistry(),
 		Logger:       slog.New(slog.NewTextHandler(logs, nil)),
+		Database:     postgreskit.Detached(nil),
 		AWS:          aws.Config{Region: "ap-south-1", Credentials: aws.AnonymousCredentials{}},
 		EventBusName: "default",
 		Getenv:       func(name string) string { return values[name] },
@@ -48,7 +53,7 @@ func without(values map[string]string, names ...string) map[string]string {
 
 func TestDefinitionRegistersAConsumerWithItsOwnQueue(t *testing.T) {
 	if Definition.Name != "realtime" || Definition.EventsQueueVariable != "REALTIME_EVENTS_QUEUE_URL" ||
-		Definition.URLVariable != "" || Definition.Migrate != nil || Definition.Mount == nil || Definition.Enabled == nil {
+		Definition.URLVariable != "" || Definition.Migrate == nil || Definition.Mount == nil || Definition.Enabled == nil {
 		t.Fatalf("Definition = %+v", Definition)
 	}
 	selected, err := host.Select([]host.Definition{Definition}, []string{"realtime"})
@@ -90,17 +95,45 @@ func TestRealtimeIsOnOnceEitherOfItsOwnSettingsIsSet(t *testing.T) {
 	}
 }
 
-func TestMountRunsTheConsumerOnceConfigured(t *testing.T) {
+// Once configured, realtime runs its consumer and the dispatcher that
+// publishes its outbox, and signs what it publishes as itself.
+func TestMountRunsRealtimeOnceConfigured(t *testing.T) {
 	var logs bytes.Buffer
-	service, err := Mount(context.Background(), platform(configured(), &logs))
+	on := platform(configured(), &logs)
+	service, err := Mount(context.Background(), on)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(service.Workers) != 1 || service.Handler != nil || len(service.Routes) != 0 {
-		t.Fatalf("service = %d workers, handler %v, routes %v; want the consumer alone", len(service.Workers), service.Handler, service.Routes)
+	if len(service.Workers) != 2 || service.Handler != nil || len(service.Routes) != 0 {
+		t.Fatalf("service = %d workers, handler %v, routes %v; want the consumer and the dispatcher",
+			len(service.Workers), service.Handler, service.Routes)
 	}
 	if !strings.Contains(logs.String(), "realtime mounted") || !strings.Contains(logs.String(), "worker_url=http://127.0.0.1:3001") {
 		t.Fatalf("logs = %s", logs.String())
+	}
+	if minted := on.EventAuth.Minted(); !slices.Equal(minted, []string{"realtime"}) {
+		t.Fatalf("minted = %v, want realtime's own signing key", minted)
+	}
+	if strings.Contains(logs.String(), configured()["REALTIME_PURGE_SECRET"]) {
+		t.Fatal("the secret was logged")
+	}
+}
+
+// Realtime keeps its outbox in PostgreSQL, so once on it cannot run without
+// it; off, it needs nothing.
+func TestMountNeedsTheDatabaseOnceOn(t *testing.T) {
+	without := platform(configured(), &bytes.Buffer{})
+	without.Database = nil
+	if _, err := Mount(context.Background(), without); !errors.Is(err, host.ErrDatabaseRequired) {
+		t.Fatalf("Mount() without a database = %v, want ErrDatabaseRequired", err)
+	}
+	off := platform(map[string]string{}, &bytes.Buffer{})
+	off.Database = nil
+	if service, err := Mount(context.Background(), off); err != nil || service.Handler != nil {
+		t.Fatalf("Mount() off, without a database = %+v, %v", service, err)
+	}
+	if err := Migrate(context.Background(), off); !errors.Is(err, host.ErrDatabaseRequired) {
+		t.Fatalf("Migrate() without a database = %v", err)
 	}
 }
 
@@ -123,8 +156,8 @@ func TestMountIsOffUntilEverythingItNeedsIsSet(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Mount() = %v, want realtime off rather than the process refusing to start", err)
 			}
-			if len(service.Workers) != 0 || service.Handler != nil {
-				t.Fatalf("service = %+v, want nothing running", service)
+			if len(service.Workers) != 0 || service.Handler != nil || len(service.Routes) != 0 {
+				t.Fatalf("service = %+v, want nothing running and no route", service)
 			}
 			says := "these are not set: " + test.unset
 			if got := strings.Count(logs.String(), "level=WARN"); got != 1 || !strings.Contains(logs.String(), "realtime is off") ||
@@ -150,7 +183,7 @@ func TestMountRefusesToStartWhenAskedForByNameWithoutWhatItNeeds(t *testing.T) {
 	}
 	values := configured()
 	values["ORYXA_SERVICES"] = "realtime"
-	if service, err := Mount(context.Background(), platform(values, &bytes.Buffer{})); err != nil || len(service.Workers) != 1 {
+	if service, err := Mount(context.Background(), platform(values, &bytes.Buffer{})); err != nil || len(service.Workers) != 2 {
 		t.Fatalf("ORYXA_SERVICES=realtime, configured: Mount() = %d workers, %v", len(service.Workers), err)
 	}
 	for services, want := range map[string]bool{"": false, "all": false, "auth,teams": false, "realtimes": false, "realtime": true, "teams, realtime": true} {
