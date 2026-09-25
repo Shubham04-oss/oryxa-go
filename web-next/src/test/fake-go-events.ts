@@ -2,8 +2,11 @@
 // as the realtime service answers it: it checks each request's timestamp,
 // signature (with its own HMAC of `events.{timestamp}.{body}`) and limits,
 // then answers as the test says (204 once the test says nothing), and keeps
-// every request it was sent. Use its `fetch` as the global one, or route
-// the events path to it (`routeFetch`).
+// every request it was sent. It honours what a real `fetch` would: a
+// request's `signal` ends it as soon as it aborts, and a redirect is
+// followed unless the request says `redirect: "manual"` (or refused for
+// `"error"`). Use its `fetch` as the global one, or route the events path to
+// it (`routeFetch`).
 import { vi } from "vitest"
 
 export const eventsOrigin = "http://go.test"
@@ -28,12 +31,14 @@ export type EventsRequest = {
   at: number
   /** What Go answered. */
   status?: number
+  /** Why the Worker gave up on it before Go answered: its signal's reason. */
+  aborted?: unknown
 }
 
 /**
  * How a request is answered: a status, as Go's realtime answers it
- * (`goAnswer`); a whole response, such as a proxy's page; or an error
- * thrown as the network failing.
+ * (`goAnswer`); a whole response, such as a proxy's page or a redirect; or
+ * an error thrown as the network failing.
  */
 export type EventsAnswer = number | Response | Error
 
@@ -85,6 +90,36 @@ function goAnswer(status: number): Response {
   }
 }
 
+/** Why an aborted signal ended a request, as `fetch` rejects with it. */
+function abortReason(signal: AbortSignal): unknown {
+  return (
+    signal.reason ?? new DOMException("The request was aborted.", "AbortError")
+  )
+}
+
+/** `work`, or its signal's reason as soon as the signal aborts. */
+function unlessAborted<T>(
+  work: Promise<T>,
+  signal: AbortSignal | null | undefined
+): Promise<T> {
+  if (!signal) return work
+  if (signal.aborted) return Promise.reject(abortReason(signal))
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(abortReason(signal))
+    signal.addEventListener("abort", abort, { once: true })
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", abort)
+        resolve(value)
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", abort)
+        reject(error)
+      }
+    )
+  })
+}
+
 export class FakeGoEvents {
   readonly requests: EventsRequest[] = []
   /**
@@ -134,14 +169,37 @@ export class FakeGoEvents {
         at: Date.now(),
       }
       this.requests.push(request)
-      const response = await this.answer(request)
+      let response: Response
+      try {
+        response = await unlessAborted(
+          this.answer(request, init.signal),
+          init.signal
+        )
+      } catch (error) {
+        if (init.signal?.aborted) request.aborted = init.signal.reason
+        throw error
+      }
       request.status = response.status
+      const location = response.headers.get("Location")
+      if (response.status >= 300 && response.status < 400 && location) {
+        if (init.redirect === "manual") return response
+        if (init.redirect === "error") {
+          throw new TypeError(`fetch refused a redirect to ${location}`)
+        }
+        // As `fetch` follows one, to wherever it points.
+        return this.fetch(new URL(location, String(input)), init)
+      }
       return response
     }
   )
 
-  private async answer(request: EventsRequest): Promise<Response> {
+  private async answer(
+    request: EventsRequest,
+    signal: AbortSignal | null | undefined
+  ): Promise<Response> {
     if (this.held) await this.held
+    // Given up on while held: it takes no turn of the answers.
+    if (signal?.aborted) throw abortReason(signal)
     const next = this.answers.shift()
     if (next instanceof Error) throw next
     const timestamp = request.headers["x-oryxa-timestamp"] ?? ""

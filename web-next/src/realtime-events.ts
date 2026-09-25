@@ -504,6 +504,16 @@ export class EventOutbox {
     const signature = await signEvents(config.secret, timestamp, body)
     // Purged meanwhile: nothing about it goes.
     if (this.epoch !== epoch) return
+    // Given up on after `requestTimeoutMs`, its answer's body included.
+    const controller = new AbortController()
+    const timeout = setTimeout(() => {
+      controller.abort(
+        new DOMException(
+          `Go did not answer within ${eventsTiming.requestTimeoutMs / 1000} s`,
+          "TimeoutError"
+        )
+      )
+    }, eventsTiming.requestTimeoutMs)
     let answer: { status: number; text: string }
     try {
       const response = await fetch(config.url, {
@@ -514,8 +524,9 @@ export class EventOutbox {
           [eventsRequestHeaders.signature]: signature,
         },
         body,
+        // A redirect is not Go's answer, wherever it points.
         redirect: "manual",
-        signal: AbortSignal.timeout(eventsTiming.requestTimeoutMs),
+        signal: controller.signal,
       })
       answer = {
         status: response.status,
@@ -524,6 +535,8 @@ export class EventOutbox {
     } catch (error) {
       if (this.epoch === epoch) this.retryLater(batch, Date.now(), error)
       return
+    } finally {
+      clearTimeout(timeout)
     }
     if (this.epoch !== epoch) return
     if (answer.status === 204) {

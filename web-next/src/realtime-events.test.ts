@@ -533,6 +533,60 @@ describe("EventOutbox: draining", () => {
     expect(outbox(dm)).toEqual([])
   })
 
+  it("never follows a redirect: it is not Go's answer, and the events go again", async () => {
+    const { dm } = await setup()
+    const elsewhere = `${eventsOrigin}/v1/realtime/elsewhere`
+    go.answers.push(
+      new Response(null, { status: 307, headers: { Location: elsewhere } })
+    )
+    const ids = enqueue(dm, 1)
+    await dm.drainEvents()
+    // Followed, the request would have gone on to `elsewhere` and been
+    // taken there.
+    expect(go.requests.map((request) => [request.url, request.status])).toEqual(
+      [[`${eventsOrigin}${REALTIME_EVENTS_PATH}`, 307]]
+    )
+    expect(outbox(dm).map((row) => row.id)).toEqual(ids)
+    expect(drainsSet(dm)).toEqual([1])
+    await runNextDrain(dm)
+    expect(go.taken.map((event) => event.id)).toEqual(ids)
+    expect(outbox(dm)).toEqual([])
+  })
+
+  it("gives up on a request Go has not answered in ten seconds, and sends its events again", async () => {
+    const { dm } = await setup()
+    const release = go.hold()
+    const ids = enqueue(dm, 1)
+    const draining = dm.drainEvents()
+    await vi.waitFor(() => expect(go.requests).toHaveLength(1))
+    // Counted from when it was sent (waiting moved the clock on a little).
+    vi.advanceTimersByTime(
+      go.requests[0].at + eventsTiming.requestTimeoutMs - 1 - Date.now()
+    )
+    await drain()
+    expect(go.requests[0].aborted).toBeUndefined()
+
+    vi.advanceTimersByTime(1)
+    await draining
+    expect(go.requests[0].aborted).toEqual(
+      expect.objectContaining({ name: "TimeoutError" })
+    )
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Go did not take 1 events (Go did not answer within 10 s)"
+      ),
+      expect.anything()
+    )
+    expect(outbox(dm).map((row) => row.id)).toEqual(ids)
+    // A second on, in the whole second the SDK keeps.
+    const [wait] = drainsSet(dm)
+    expect(wait).toBeGreaterThanOrEqual(1)
+    expect(wait).toBeLessThan(2)
+    release()
+    await runNextDrain(dm)
+    expect(go.taken.map((event) => event.id)).toEqual(ids)
+  })
+
   it("waits after any other answer or none, from one second doubling to five minutes, and never under a second", async () => {
     const { dm } = await setup()
     go.answers.push(
