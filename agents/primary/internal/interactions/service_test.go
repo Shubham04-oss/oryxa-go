@@ -24,15 +24,39 @@ func (fakeDirectory) FindAgents(context.Context, string, string, string, int) ([
 	return nil, nil
 }
 
-type fakeRepository struct{ requests map[string]agents.Interaction }
-
-func newFakeRepository() *fakeRepository {
-	return &fakeRepository{requests: map[string]agents.Interaction{}}
+// fakeRepository is the ledger in memory. Like Store, it keeps one request
+// per organization, requesting agent and idempotency key: Create under a key
+// already used stores nothing and returns the request stored under it.
+type fakeRepository struct {
+	requests map[string]agents.Interaction
+	keys     map[string]string
+	creates  int
 }
 
-func (repo *fakeRepository) Create(_ context.Context, request agents.Interaction, _ string) (agents.Interaction, error) {
+func newFakeRepository() *fakeRepository {
+	return &fakeRepository{requests: map[string]agents.Interaction{}, keys: map[string]string{}}
+}
+
+func keyScope(organizationID, requesterAgentID, key string) string {
+	return organizationID + "|" + requesterAgentID + "|" + key
+}
+
+func (repo *fakeRepository) Create(_ context.Context, request agents.Interaction, key string) (agents.Interaction, error) {
+	repo.creates++
+	scope := keyScope(request.OrganizationID, request.Requester.AgentID, key)
+	if id, ok := repo.keys[scope]; ok {
+		return repo.requests[id], nil
+	}
+	repo.keys[scope] = request.ID
 	repo.requests[request.ID] = request
 	return request, nil
+}
+func (repo *fakeRepository) FindByKey(_ context.Context, organizationID, requesterAgentID, key string) (agents.Interaction, error) {
+	id, ok := repo.keys[keyScope(organizationID, requesterAgentID, key)]
+	if !ok {
+		return agents.Interaction{}, ErrNotFound
+	}
+	return repo.requests[id], nil
 }
 func (repo *fakeRepository) Get(_ context.Context, id string) (agents.Interaction, error) {
 	request, ok := repo.requests[id]

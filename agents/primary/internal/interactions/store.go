@@ -63,8 +63,9 @@ func (store *Store) Create(ctx context.Context, request agents.Interaction, idem
 			request.Purpose, request.Task, contextJSON, toolsJSON, permissionsJSON, request.Status, idempotencyKey,
 			request.Revision, request.ExpiresAt, request.CreatedAt, request.TeamspaceID, request.Approval)
 		if err := scanInteraction(row, &request); errors.Is(err, pgx.ErrNoRows) {
-			return scanInteraction(tx.QueryRow(ctx, `SELECT `+selectColumns+` FROM agents_primary.agent_interactions
-				WHERE organization_id=$1 AND requester_agent_id=$2 AND idempotency_key=$3`,
+			// The key is taken: return what it names, which the service
+			// compares with what it was asked to create.
+			return scanInteraction(tx.QueryRow(ctx, byKeyStatement,
 				request.OrganizationID, request.Requester.AgentID, idempotencyKey), &request)
 		} else if err != nil {
 			return err
@@ -73,6 +74,23 @@ func (store *Store) Create(ctx context.Context, request agents.Interaction, idem
 	})
 	if err != nil {
 		return agents.Interaction{}, fmt.Errorf("create agent request: %w", err)
+	}
+	return request, nil
+}
+
+const byKeyStatement = `SELECT ` + selectColumns + ` FROM agents_primary.agent_interactions
+	WHERE organization_id=$1 AND requester_agent_id=$2 AND idempotency_key=$3`
+
+// FindByKey is the request one organization's requesting agent stored under
+// an idempotency key, found through the key's own unique index.
+func (store *Store) FindByKey(ctx context.Context, organizationID, requesterAgentID, key string) (agents.Interaction, error) {
+	var request agents.Interaction
+	err := scanInteraction(store.database.Pool.QueryRow(ctx, byKeyStatement, organizationID, requesterAgentID, key), &request)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return agents.Interaction{}, ErrNotFound
+	}
+	if err != nil {
+		return agents.Interaction{}, fmt.Errorf("find agent request by idempotency key: %w", err)
 	}
 	return request, nil
 }

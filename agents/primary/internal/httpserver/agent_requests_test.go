@@ -101,6 +101,65 @@ func (ledger *heldRequests) Decide(_ context.Context, _ string, input primaryage
 	return ledger.request, nil
 }
 
+// keyedLedger keeps new requests under their idempotency keys, as the store
+// does: a key already used stores nothing and returns what it names.
+type keyedLedger struct {
+	interactions.Repository
+	requests map[string]primaryagents.Interaction
+}
+
+func (ledger *keyedLedger) FindByKey(_ context.Context, organizationID, agentID, key string) (primaryagents.Interaction, error) {
+	request, ok := ledger.requests[organizationID+"|"+agentID+"|"+key]
+	if !ok {
+		return primaryagents.Interaction{}, interactions.ErrNotFound
+	}
+	return request, nil
+}
+
+func (ledger *keyedLedger) Create(ctx context.Context, request primaryagents.Interaction, key string) (primaryagents.Interaction, error) {
+	if stored, err := ledger.FindByKey(ctx, request.OrganizationID, request.Requester.AgentID, key); err == nil {
+		return stored, nil
+	}
+	ledger.requests[request.OrganizationID+"|"+request.Requester.AgentID+"|"+key] = request
+	return request, nil
+}
+
+// TestAReusedIdempotencyKeyIsAConflict: sent again unchanged, a request
+// comes back as it was made; sent under the same key as something else, it
+// is a 409 that says so, and never another request answered as 201.
+func TestAReusedIdempotencyKeyIsAConflict(t *testing.T) {
+	requests, err := interactions.New(interactions.Config{Repository: &keyedLedger{requests: map[string]primaryagents.Interaction{}}, Directory: graceDirectory{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := agentRequestServer(requests)
+	withKey := map[string]string{"Authorization": "Bearer member-token", "Idempotency-Key": "side-sdc-1"}
+	create := func(body string) (int, primaryagents.Interaction, string) {
+		t.Helper()
+		response := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-requests", body, withKey)
+		var created primaryagents.Interaction
+		if response.Code == http.StatusCreated {
+			if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil {
+				t.Fatal(err)
+			}
+			return response.Code, created, ""
+		}
+		return response.Code, created, errorCode(t, response)
+	}
+	body := `{"target_agent_id":"agt_grace","purpose":"Launch","task":"Review the plan."}`
+	status, first, _ := create(body)
+	if status != http.StatusCreated || first.ID == "" {
+		t.Fatalf("the first create = %d %+v", status, first)
+	}
+	if status, again, _ := create(body); status != http.StatusCreated || again.ID != first.ID {
+		t.Fatalf("the same create again = %d %+v, want 201 and %s", status, again, first.ID)
+	}
+	status, other, code := create(`{"target_agent_id":"agt_grace","purpose":"Launch","task":"Something else."}`)
+	if status != http.StatusConflict || code != "idempotency_key_reused" || other.ID != "" {
+		t.Fatalf("another request under the key = %d %s %+v, want 409 idempotency_key_reused", status, code, other)
+	}
+}
+
 // unusedDirectory stands in for the organization directory, which deciding
 // never reads.
 type unusedDirectory struct{ primaryagents.Directory }

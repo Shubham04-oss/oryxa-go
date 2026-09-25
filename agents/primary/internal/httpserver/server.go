@@ -1712,6 +1712,8 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, interactions.ErrExpired):
 		return http.StatusConflict, "request_expired"
+	case errors.Is(err, interactions.ErrIdempotencyConflict):
+		return http.StatusConflict, "idempotency_key_reused"
 	case errors.Is(err, interactions.ErrConflict):
 		return http.StatusConflict, "invalid_state"
 	case errors.Is(err, interactions.ErrNotFound):

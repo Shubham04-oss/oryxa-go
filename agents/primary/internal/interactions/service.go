@@ -24,6 +24,9 @@ var (
 	ErrForbidden = errors.New("agent request is not available to this agent")
 	ErrConflict  = errors.New("agent request cannot make that transition")
 	ErrExpired   = errors.New("agent request has expired")
+	// ErrIdempotencyConflict reports an idempotency key sent again with a
+	// different request than the one it already names.
+	ErrIdempotencyConflict = errors.New("that idempotency key already names a different agent request; send a new key for a new request")
 )
 
 const (
@@ -81,7 +84,12 @@ type Query struct {
 
 // Repository is the transactional interaction ledger. Store implements it.
 type Repository interface {
+	// Create records a new request under an idempotency key. Under a key
+	// already used it stores nothing and returns the request stored there.
 	Create(context.Context, agents.Interaction, string) (agents.Interaction, error)
+	// FindByKey is the request one organization's requesting agent stored
+	// under an idempotency key, or ErrNotFound.
+	FindByKey(ctx context.Context, organizationID, requesterAgentID, key string) (agents.Interaction, error)
 	Get(context.Context, string) (agents.Interaction, error)
 	// List selects, newest first, the requests of one organization that one
 	// member is a party to, as the query narrows them.
@@ -147,6 +155,18 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	if strings.TrimSpace(token) == "" {
 		return agents.Interaction{}, fmt.Errorf("%w: member token is required to resolve the target", ErrInvalid)
 	}
+	// A retry is answered from the ledger before anything is looked up, so
+	// it gets back the request it made even when the directory or the seat
+	// that request was made from has since changed.
+	if idempotencyKey != "" {
+		stored, err := service.repository.FindByKey(ctx, actor.OrganizationID, actor.AgentID, idempotencyKey)
+		switch {
+		case err == nil:
+			return service.replay(actor, stored, input)
+		case !errors.Is(err, ErrNotFound):
+			return agents.Interaction{}, fmt.Errorf("find agent request by idempotency key: %w", err)
+		}
+	}
 	directory, err := service.directory.Load(ctx, actor.OrganizationID, token)
 	if err != nil {
 		return agents.Interaction{}, fmt.Errorf("load organization directory: %w", err)
@@ -197,7 +217,39 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	if idempotencyKey == "" {
 		idempotencyKey = id
 	}
-	return service.repository.Create(ctx, request, idempotencyKey)
+	created, err := service.repository.Create(ctx, request, idempotencyKey)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	if created.ID != request.ID {
+		// Another create under this key landed first.
+		return service.replay(actor, created, input)
+	}
+	return created, nil
+}
+
+// replay answers a create whose idempotency key already names a stored
+// request: that request, when this is the same one sent again, and
+// ErrIdempotencyConflict when it is another — never a different request as
+// if it were the new one.
+func (service *Service) replay(actor agents.InteractionActor, stored agents.Interaction, input agents.InteractionCreateInput) (agents.Interaction, error) {
+	if !sameRequest(actor, stored, input) {
+		return agents.Interaction{}, ErrIdempotencyConflict
+	}
+	return service.view(stored), nil
+}
+
+// sameRequest is whether a stored request is the one input asks for again:
+// the same requester, target, teamspace, purpose, task, context and asks.
+// Both sides are compared as cleaned, which is how the request was stored.
+func sameRequest(actor agents.InteractionActor, stored agents.Interaction, input agents.InteractionCreateInput) bool {
+	return stored.OrganizationID == actor.OrganizationID &&
+		stored.Requester.UserID == actor.UserID && stored.Requester.AgentID == actor.AgentID &&
+		stored.Target.AgentID == input.TargetAgentID && stored.TeamspaceID == input.TeamspaceID &&
+		stored.Purpose == input.Purpose && stored.Task == input.Task &&
+		slices.Equal(stored.Context, input.Context) &&
+		slices.Equal(stored.RequestedTools, input.RequestedTools) &&
+		slices.Equal(stored.RequestedPermissions, input.RequestedPermissions)
 }
 
 // HeldForOwner is whether only the addressed agent's member may decide a

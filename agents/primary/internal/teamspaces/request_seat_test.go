@@ -123,8 +123,9 @@ func TestRequestSeatRefusesADisabledSpace(t *testing.T) {
 	}
 }
 
-// requestLedger keeps what interactions.Service creates. Create is all a new
-// request reaches; the embedded nil Repository fails loudly on anything else.
+// requestLedger keeps what interactions.Service creates. Looking its key up
+// and Create are all a new request reaches; the embedded nil Repository
+// fails loudly on anything else.
 type requestLedger struct {
 	interactions.Repository
 	created []primaryagents.Interaction
@@ -133,6 +134,11 @@ type requestLedger struct {
 func (ledger *requestLedger) Create(_ context.Context, request primaryagents.Interaction, _ string) (primaryagents.Interaction, error) {
 	ledger.created = append(ledger.created, request)
 	return request, nil
+}
+
+// FindByKey finds nothing: every request here is made under a new key.
+func (ledger *requestLedger) FindByKey(context.Context, string, string, string) (primaryagents.Interaction, error) {
+	return primaryagents.Interaction{}, interactions.ErrNotFound
 }
 
 // organizationDirectory is fakeDirectory as the request ledger reads it: a

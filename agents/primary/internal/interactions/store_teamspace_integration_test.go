@@ -278,3 +278,30 @@ func TestASideConversationsListingUsesTheTeamspaceIndexOnceItsPlanIsGeneric(t *t
 		t.Fatalf("the generic plan does not use the teamspace index:\n%s", explained)
 	}
 }
+
+// TestTheLedgerFindsARequestByItsKey: the key names one request of one
+// requesting agent in one organization, and nothing else.
+func TestTheLedgerFindsARequestByItsKey(t *testing.T) {
+	database, store := openInteractionStore(t)
+	ctx := context.Background()
+	organizationID := testOrganization(t, database)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	request := storedRequest(organizationID, organizationID+"_keyed", "user_a", "user_b", now)
+	request.TeamspaceID, request.Approval = "tsp_1", ApprovalOwner
+	if _, err := store.Create(ctx, request, "side-sdc-1"); err != nil {
+		t.Fatal(err)
+	}
+	found, err := store.FindByKey(ctx, organizationID, "agt_user_a", "side-sdc-1")
+	if err != nil || found.ID != request.ID || found.TeamspaceID != "tsp_1" || found.Approval != ApprovalOwner {
+		t.Fatalf("FindByKey = %+v, %v; want %s", found, err, request.ID)
+	}
+	for name, lookup := range map[string][3]string{
+		"another key":          {organizationID, "agt_user_a", "side-sdc-2"},
+		"another agent":        {organizationID, "agt_user_b", "side-sdc-1"},
+		"another organization": {organizationID + "_other", "agt_user_a", "side-sdc-1"},
+	} {
+		if found, err := store.FindByKey(ctx, lookup[0], lookup[1], lookup[2]); !errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: FindByKey = %+v, %v; want ErrNotFound", name, found, err)
+		}
+	}
+}
