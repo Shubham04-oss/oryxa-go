@@ -639,3 +639,128 @@ func TestTheLedgerClosesARequestThatNoLongerStands(t *testing.T) {
 		t.Fatalf("closing an expired request: error=%v, want ErrExpired", err)
 	}
 }
+
+// changesOf is what the outbox tells the bus about one request, oldest first:
+// each event's detail type and its data.
+func changesOf(t *testing.T, database *postgreskit.Database, requestID string) ([]string, []agentsv1.InteractionChanged) {
+	t.Helper()
+	rows, err := database.Pool.Query(context.Background(), `SELECT detail_type, detail
+		FROM agents_primary.agents_outbox WHERE detail->>'request_id'=$1 ORDER BY occurred_at, detail_type`, requestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var detailTypes []string
+	var changes []agentsv1.InteractionChanged
+	for rows.Next() {
+		var detailType string
+		var detail []byte
+		if err := rows.Scan(&detailType, &detail); err != nil {
+			t.Fatal(err)
+		}
+		var change agentsv1.InteractionChanged
+		if err := json.Unmarshal(detail, &change); err != nil {
+			t.Fatal(err)
+		}
+		detailTypes = append(detailTypes, detailType)
+		changes = append(changes, change)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return detailTypes, changes
+}
+
+// TestARequestsEventsCarryItsTeamspaceApprovalAndDecider: every event the
+// ledger records says where the request was made and who decides it, and,
+// once it is decided, who did, exactly as the ledger stores them; a request
+// outside a teamspace names none, and an approval withdrawn takes its decider
+// with it.
+func TestARequestsEventsCarryItsTeamspaceApprovalAndDecider(t *testing.T) {
+	database, store := openInteractionStore(t)
+	ctx := context.Background()
+	organizationID := testOrganization(t, database)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	member := agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}
+	agent := agents.InteractionDecider{Kind: DecidedByAgent, UserID: "user_b", AgentID: "agt_b"}
+	decider := func(decider agents.InteractionDecider) *agentsv1.InteractionDecider {
+		return &agentsv1.InteractionDecider{Kind: decider.Kind, UserID: decider.UserID, AgentID: decider.AgentID}
+	}
+	type change struct {
+		detailType, status, teamspaceID, approval string
+		decidedBy                                 *agentsv1.InteractionDecider
+	}
+	check := func(name, requestID string, want []change) {
+		t.Helper()
+		detailTypes, changes := changesOf(t, database, requestID)
+		if len(changes) != len(want) {
+			t.Fatalf("%s: events = %v, want %d", name, detailTypes, len(want))
+		}
+		for index, got := range changes {
+			expected := want[index]
+			if detailTypes[index] != expected.detailType || got.Status != expected.status || got.RequestID != requestID ||
+				got.TeamspaceID != expected.teamspaceID || got.Approval != expected.approval ||
+				(got.DecidedBy == nil) != (expected.decidedBy == nil) || (got.DecidedBy != nil && *got.DecidedBy != *expected.decidedBy) {
+				t.Errorf("%s: event %d = %s %+v (decided by %+v), want %+v (decided by %+v)",
+					name, index, detailTypes[index], got, got.DecidedBy, expected, expected.decidedBy)
+			}
+		}
+	}
+
+	// Held for its owner in a teamspace, approved by them, and answered.
+	held := storedRequest(organizationID, organizationID+"_held", "user_a", "user_b", now)
+	held.TeamspaceID, held.Approval = "tsp_1", ApprovalOwner
+	if _, err := store.Create(ctx, held, "held"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Decide(ctx, held.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "Go."},
+		member, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Respond(ctx, held.ID, agents.InteractionResponseInput{Status: StatusCompleted, Summary: "Done", Content: "Reviewed."},
+		now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	check("held for its owner", held.ID, []change{
+		{agentsv1.InteractionRequestedDetailType, StatusPending, "tsp_1", ApprovalOwner, nil},
+		{agentsv1.InteractionDecidedDetailType, StatusApproved, "tsp_1", ApprovalOwner, decider(member)},
+		{agentsv1.InteractionCompletedDetailType, StatusCompleted, "tsp_1", ApprovalOwner, decider(member)},
+	})
+
+	// Outside a teamspace, its agent decides, and rejects it.
+	outside := storedRequest(organizationID, organizationID+"_outside", "user_a", "user_b", now)
+	if _, err := store.Create(ctx, outside, "outside"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Decide(ctx, outside.ID, agents.InteractionDecisionInput{Decision: DecisionRejected, Message: "No."},
+		agent, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	check("outside a teamspace", outside.ID, []change{
+		{agentsv1.InteractionRequestedDetailType, StatusPending, "", ApprovalAgent, nil},
+		{agentsv1.InteractionDecidedDetailType, StatusRejected, "", ApprovalAgent, decider(agent)},
+	})
+
+	// An agent's approval withdrawn, and the request then closed by Oryxa.
+	withdrawn := storedRequest(organizationID, organizationID+"_withdrawn", "user_a", "user_b", now)
+	withdrawn.TeamspaceID, withdrawn.Approval = "tsp_1", ApprovalAgent
+	if _, err := store.Create(ctx, withdrawn, "withdrawn"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Decide(ctx, withdrawn.ID, agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "Go."},
+		agent, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Hold(ctx, withdrawn.ID, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Close(ctx, withdrawn.ID, "The teamspace is gone.", now.Add(3*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	check("withdrawn, then closed", withdrawn.ID, []change{
+		{agentsv1.InteractionRequestedDetailType, StatusPending, "tsp_1", ApprovalAgent, nil},
+		{agentsv1.InteractionDecidedDetailType, StatusApproved, "tsp_1", ApprovalAgent, decider(agent)},
+		{agentsv1.InteractionRequestedDetailType, StatusPending, "tsp_1", ApprovalOwner, nil},
+		{agentsv1.InteractionDecidedDetailType, StatusRejected, "tsp_1", ApprovalOwner, &agentsv1.InteractionDecider{Kind: DecidedBySystem}},
+	})
+}

@@ -461,12 +461,7 @@ func getForUpdate(ctx context.Context, tx pgx.Tx, id string) (agents.Interaction
 
 func recordEvent(ctx context.Context, tx pgx.Tx, detailType string, request agents.Interaction) error {
 	at := request.UpdatedAt
-	event, err := events.NewEvent(detailType, agentsv1.InteractionChanged{
-		RequestID: request.ID, OrganizationID: request.OrganizationID,
-		RequesterUserID: request.Requester.UserID, RequesterAgentID: request.Requester.AgentID,
-		TargetUserID: request.Target.UserID, TargetAgentID: request.Target.AgentID,
-		Status: request.Status, Revision: request.Revision, ChangedAt: at,
-	}, at)
+	event, err := events.NewEvent(detailType, changed(request), at)
 	if err != nil {
 		return err
 	}
@@ -475,6 +470,25 @@ func recordEvent(ctx context.Context, tx pgx.Tx, detailType string, request agen
 		(id, detail_type, detail, occurred_at, trace_context) VALUES ($1,$2,$3,$4,NULLIF($5,''))`,
 		event.ID, event.DetailType, event.Data, event.OccurredAt, trace)
 	return err
+}
+
+// changed is what the bus is told about request: who it is between, where
+// it was made, who decides it and who did, and its state, but none of what
+// it asks or answers. Who decided is the stored decider, as the API shows it,
+// whatever event the change is.
+func changed(request agents.Interaction) agentsv1.InteractionChanged {
+	event := agentsv1.InteractionChanged{
+		RequestID: request.ID, OrganizationID: request.OrganizationID,
+		RequesterUserID: request.Requester.UserID, RequesterAgentID: request.Requester.AgentID,
+		TargetUserID: request.Target.UserID, TargetAgentID: request.Target.AgentID,
+		Status: request.Status, Revision: request.Revision, ChangedAt: request.UpdatedAt,
+		TeamspaceID: request.TeamspaceID, Approval: request.Approval,
+	}
+	if request.Decision != nil && request.Decision.DecidedBy != nil {
+		decider := request.Decision.DecidedBy
+		event.DecidedBy = &agentsv1.InteractionDecider{Kind: decider.Kind, UserID: decider.UserID, AgentID: decider.AgentID}
+	}
+	return event
 }
 
 var _ Repository = (*Store)(nil)
