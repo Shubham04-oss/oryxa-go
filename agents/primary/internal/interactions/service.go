@@ -539,8 +539,19 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 }
 
 func (service *Service) view(request agents.Interaction) agents.Interaction {
-	if (request.Status == StatusPending || request.Status == StatusApproved) && !request.ExpiresAt.After(service.now()) {
+	expired := !request.ExpiresAt.After(service.now())
+	switch {
+	case (request.Status == StatusPending || request.Status == StatusApproved) && expired:
 		request.Status = StatusExpired
+	case request.Status == StatusReview && expired:
+		// An answer can no longer be reviewed once its request has expired,
+		// so it reads as the withholding the next sweep records
+		// (Store.WithholdExpired), whether or not a sweep runs here.
+		request.Status, request.Result, request.Held = StatusWithheld, nil, nil
+		request.Review = &agents.InteractionReview{
+			Action: ReviewWithhold, DecidedBy: agents.InteractionDecider{Kind: DecidedBySystem},
+			DecidedAt: request.ExpiresAt, Reason: ExpiredBeforeReview,
+		}
 	}
 	return request
 }

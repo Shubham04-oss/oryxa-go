@@ -879,8 +879,13 @@ result. Either way the held versions are dropped, and the review is
 kept as `review`:
 `{"action":"send","decided_by":{"kind":"member","user_id":"..."},"decided_at":"..."}`.
 A request that expires in review is withheld by the waker's poll
-(`Store.WithholdExpired`), with
+(`Store.WithholdExpired`), or, where no events queue runs the waker, by a
+sweep of its own every five seconds (`interactions.SweepExpiredReviews`),
+with
 `{"action":"withhold","decided_by":{"kind":"system"},"decided_at":"...","reason":"expired before review"}`.
+Until a sweep records it, a request in review past its expiry already reads
+that way to both members, with its expiry as `decided_at`, and cannot be
+reviewed (`409 request_expired`).
 
 The addressed member reads all of it in their own signed-in session. Their
 agents read that an answer is held, and what for (`guard`), but never `held`:

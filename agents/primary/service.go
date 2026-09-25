@@ -597,6 +597,13 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			"organization_synthesis_interval", organizationSynthesisInterval.String())
 	} else {
 		logger.Warn("AGENTS_EVENTS_QUEUE_URL is not set: app events, interaction requests, and shared publications will not wake agents, and a member's threads outlive their place in an organization")
+		// The interaction waker withholds answers left in review past their
+		// request's expiry; without it, this does.
+		if interactionService != nil {
+			workers = append(workers, func(ctx context.Context) {
+				agentinteractions.SweepExpiredReviews(ctx, interactionStore, interactionDeliveryInterval, logger)
+			})
+		}
 	}
 
 	logger.Info("agents mounted", "model", settings.Model, "model_lite", settings.ModelLite, "run_timeout", settings.RunTimeout.String())

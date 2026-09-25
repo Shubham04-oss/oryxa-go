@@ -3,7 +3,9 @@ package interactions
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
@@ -172,10 +174,12 @@ func (service *Service) ReviewAsOwner(ctx context.Context, actor agents.Interact
 	}
 	now := service.now().UTC()
 	switch {
+	case !request.ExpiresAt.After(now):
+		// An answer still in review past its request's expiry reads as
+		// withheld already (view), and is no longer the member's to send.
+		return agents.Interaction{}, ErrExpired
 	case request.Status != StatusReview:
 		return agents.Interaction{}, fmt.Errorf("%w: only an answer held for review is reviewed", ErrConflict)
-	case !request.ExpiresAt.After(now):
-		return agents.Interaction{}, ErrExpired
 	case action == ReviewSendMasked && (request.Held == nil || request.Held.MaskedResult == nil):
 		return agents.Interaction{}, fmt.Errorf("%w: this answer could not be checked, so it has no masked version to send; send it as it is, or withhold it", ErrConflict)
 	}
@@ -250,5 +254,42 @@ func (service *Service) viewed(actor agents.InteractionActor) func(agents.Intera
 			return agents.Interaction{}, err
 		}
 		return service.viewFor(actor, request), nil
+	}
+}
+
+// expiredReviews withholds answers whose request expired in review.
+// Store implements it.
+type expiredReviews interface {
+	WithholdExpired(ctx context.Context, reason string, at time.Time, limit int) ([]agents.Interaction, error)
+}
+
+// expiredReviewsPerSweep bounds how many answers one sweep withholds; the
+// rest wait for the next.
+const expiredReviewsPerSweep = 20
+
+// SweepExpiredReviews withholds, every interval until ctx ends, the answers
+// whose request expired while they waited in review, as Oryxa and saying
+// so. The interaction waker's poll does the same where the events queue
+// runs it; without the queue there is no waker, and this is what ends such a
+// request instead, and what tells the member who asked (its event).
+func SweepExpiredReviews(ctx context.Context, reviews expiredReviews, interval time.Duration, logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		withheld, err := reviews.WithholdExpired(ctx, ExpiredBeforeReview, time.Now().UTC(), expiredReviewsPerSweep)
+		if err != nil && ctx.Err() == nil {
+			logger.ErrorContext(ctx, "withhold answers whose request expired in review", "error", err)
+		}
+		for _, request := range withheld {
+			logger.WarnContext(ctx, "withheld an answer whose request expired before its member reviewed it", "request_id", request.ID)
+		}
 	}
 }
