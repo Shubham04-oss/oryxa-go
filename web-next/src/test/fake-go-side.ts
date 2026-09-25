@@ -139,6 +139,7 @@ export type GoInteraction = {
     allowed_tools: string[]
     granted_permissions: string[]
     decided_at: string
+    decided_by?: { kind: string; user_id?: string; agent_id?: string }
   }
   result?: GoResult
   guard?: { state: string; kinds: string[] }
@@ -238,6 +239,8 @@ export class FakeGo {
   requestedTools: string[] = []
   /** The answers held for review, by request: Go shows them to the target's owner alone. */
   readonly held = new Map<string, GoHeld>()
+  /** Requests that no longer stand in their teamspace, by id, and why (Go's lapsed words). */
+  readonly lapsed = new Map<string, string>()
   private threads = 0
   private ids = 0
   now = () => new Date().toISOString()
@@ -370,7 +373,11 @@ export class FakeGo {
     })
   }
 
-  /** Oryxa withholds an answer whose request expired while it waited in review. */
+  private pastExpiry(request: GoInteraction): boolean {
+    return Date.parse(request.expires_at) <= Date.parse(this.now())
+  }
+
+  /** Oryxa withholds an answer whose request expired while it waited in review (its sweep, at the time it runs). */
   withholdExpired(id: string): GoInteraction {
     this.held.delete(id)
     return this.change(id, {
@@ -388,9 +395,24 @@ export class FakeGo {
    * A request as `caller` reads it (Go's `viewFor`): its owner's side reads
    * it all, an answer held for them included while it is in review; the
    * requester never reads what is held, and reads what the guard found only
-   * beside a result, which they do not read in review or once withheld.
+   * beside a result, which they do not read in review or once withheld. An
+   * answer still in review past its request's expiry reads as Oryxa's
+   * withholding, at the expiry, as the next sweep records it (Go's `view`).
    */
-  view(request: GoInteraction, caller: Person): Record<string, unknown> {
+  view(stored: GoInteraction, caller: Person): Record<string, unknown> {
+    const request: GoInteraction =
+      stored.status === "review" && this.pastExpiry(stored)
+        ? {
+            ...stored,
+            status: "withheld",
+            review: {
+              action: "withhold",
+              decided_by: { kind: "system" },
+              decided_at: stored.expires_at,
+              reason: "expired before review",
+            },
+          }
+        : stored
     if (request.target.user_id === caller.userId) {
       const held = this.held.get(request.id)
       return request.status === "review" && held
@@ -521,6 +543,7 @@ export class FakeGo {
                 allowed_tools: allowed,
                 granted_permissions: [],
                 decided_at: this.now(),
+                decided_by: { kind: "member", user_id: caller.userId },
               },
             }),
             caller
@@ -554,15 +577,16 @@ export class FakeGo {
         "invalid request: action must be send, send_masked or withhold"
       )
     }
+    // Past its expiry first: it reads as withheld already.
+    if (this.pastExpiry(request)) {
+      return goError(409, "request_expired", "agent request expired")
+    }
     if (request.status !== "review") {
       return goError(
         409,
         "invalid_state",
         "only an answer held for review is reviewed"
       )
-    }
-    if (Date.parse(request.expires_at) <= Date.parse(this.now())) {
-      return goError(409, "request_expired", "agent request expired")
     }
     const held = this.held.get(request.id)
     const delivered =
@@ -576,6 +600,26 @@ export class FakeGo {
         409,
         "invalid_state",
         "this answer could not be checked, so it has no masked version to send"
+      )
+    }
+    // Sent, the request must still stand in its teamspace: one that no
+    // longer does has its answer withheld by Oryxa, saying why.
+    const lapsed = this.lapsed.get(request.id)
+    if (action !== "withhold" && lapsed) {
+      this.held.delete(request.id)
+      this.change(request.id, {
+        status: "withheld",
+        review: {
+          action: "withhold",
+          decided_by: { kind: "system" },
+          decided_at: this.now(),
+          reason: `Oryxa withheld this answer because ${lapsed}.`,
+        },
+      })
+      return goError(
+        409,
+        "request_closed",
+        `${lapsed}, so Oryxa withheld the answer`
       )
     }
     this.held.delete(request.id)

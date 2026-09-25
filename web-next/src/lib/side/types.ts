@@ -5,10 +5,12 @@ import type {
   SideAgentMessageStatus,
   SideApproval,
   SideConfirmation,
+  SideDecision,
   SideGuard,
   SideHeldAnswer,
   SideOutcome,
   SideRequestStatus,
+  SideReview,
   SideReviewAction,
   SideVia,
 } from "./protocol"
@@ -17,10 +19,12 @@ export type {
   SideAgentMessageStatus,
   SideApproval,
   SideConfirmation,
+  SideDecision,
   SideGuard,
   SideHeldAnswer,
   SideOutcome,
   SideRequestStatus,
+  SideReview,
   SideReviewAction,
   SideVia,
 }
@@ -134,16 +138,12 @@ export type SideRequestCard = {
   createdAt: string
   updatedAt: string
   expiresAt: string
-  decision?: {
-    decision: "approved" | "rejected"
-    message: string
-    decidedAt: string
-  }
+  decision?: SideDecision
   clientId?: string
   requestedTools?: string[]
   guard?: SideGuard
   heldAnswer?: SideHeldAnswer
-  review?: { action: SideReviewAction; decidedAt: string }
+  review?: SideReview
   error?: string
   deciding?: boolean
   decisionError?: string

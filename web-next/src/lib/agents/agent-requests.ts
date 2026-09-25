@@ -62,8 +62,10 @@ export type AgentRequestDecider = {
 
 /**
  * The target member's review of a held answer: made by them (`decided_by`
- * a `member`), or by Oryxa (`system`, `withhold`) for a request that expired
- * in review, with `reason` "expired before review".
+ * a `member`), or a withholding by Oryxa (`system`), with its `reason`:
+ * "expired before review" (its `decided_at` the request's expiry), or
+ * "Oryxa withheld this answer because …" when the request no longer stood
+ * in its teamspace as it was to be sent.
  */
 export type AgentRequestReview = {
   action: AgentRequestReviewAction
@@ -84,10 +86,17 @@ export type AgentRequestContextItem = { label: string; value: string }
 
 export type AgentRequestDecision = {
   decision: "approved" | "rejected"
+  /**
+   * A member's own words; an agent's decision reads in fixed words
+   * ("Approved by their agent." or "Declined by their agent."), and a
+   * request Oryxa closed says why ("Oryxa closed this request because …").
+   */
   message: string
   allowed_tools: string[]
   granted_permissions: string[]
   decided_at: string
+  /** Who decided: absent from a decision an older build recorded. */
+  decided_by?: AgentRequestDecider
 }
 
 export type AgentRequestResult = {

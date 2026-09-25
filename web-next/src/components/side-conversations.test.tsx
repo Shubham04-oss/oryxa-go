@@ -1234,7 +1234,7 @@ describe("What a side conversation holds", () => {
       type: "side-item",
       item: cardForMe(1, {
         status: "completed",
-        review: { action: "send", decidedAt: at(9) },
+        review: { action: "send", decidedAt: at(9), by: "owner" },
       }),
     })
     expect(within(first).queryByText("Send masked shares:")).toBeNull()
@@ -1267,7 +1267,16 @@ describe("What a side conversation holds", () => {
       snapshot([
         card(1, { status: "review" }),
         card(2, { status: "approved" }),
-        card(3, { status: "withheld" }),
+        // Go withheld it when nobody reviewed it in time.
+        card(3, {
+          status: "withheld",
+          review: {
+            action: "withhold",
+            decidedAt: "2099-01-01T00:00:00.000Z",
+            by: "system",
+            reason: "expired before review",
+          },
+        }),
       ])
     )
     const [first, second, third] = within(view).getAllByRole("article", {
@@ -1278,7 +1287,6 @@ describe("What a side conversation holds", () => {
     ).toBeTruthy()
     expect(within(first).queryByRole("button")).toBeNull()
     expect(within(first).queryByText(/Send masked/)).toBeNull()
-    // Go withheld it when nobody reviewed it in time.
     expect(within(third).getByText("Expired.")).toBeTruthy()
 
     socket.says({ type: "side-item", item: card(2, { status: "review" }) })
@@ -1289,7 +1297,7 @@ describe("What a side conversation holds", () => {
       type: "side-item",
       item: card(1, {
         status: "completed",
-        review: { action: "send", decidedAt: at(5) },
+        review: { action: "send", decidedAt: at(5), by: "owner" },
       }),
     })
     socket.says({
@@ -1323,7 +1331,7 @@ describe("What a side conversation holds", () => {
       type: "side-item",
       item: card(2, {
         status: "withheld",
-        review: { action: "withhold", decidedAt: at(6) },
+        review: { action: "withhold", decidedAt: at(6), by: "owner" },
       }),
     })
     socket.says({
@@ -1342,6 +1350,66 @@ describe("What a side conversation holds", () => {
         .className
     ).toBe("workspace-side-status")
     expect(announced(view)).toBe("Priya chose not to share Nia's answer.")
+  })
+
+  it("says why Oryxa withheld an answer, and reads an agent's decline in its fixed words", async () => {
+    const view = await openWithPriya()
+    opened(
+      snapshot([
+        // Oryxa withheld it: Priya could no longer send it here.
+        card(1, {
+          status: "withheld",
+          review: {
+            action: "withhold",
+            decidedAt: at(1),
+            by: "system",
+            reason:
+              "Oryxa withheld this answer because the agent that asked no longer holds a seat in the teamspace.",
+          },
+        }),
+        statusLine(
+          2,
+          "Oryxa withheld Nia's answer because the agent that asked no longer holds a seat in the teamspace.",
+          { requestId: "irq_1", outcome: "withheld" }
+        ),
+        // Priya's automatic specialist declined, in Go's fixed words.
+        card(3, {
+          targetAgentId: "agt_pricing",
+          targetAgentName: "Pricing",
+          approval: "agent",
+          status: "rejected",
+          decision: {
+            decision: "rejected",
+            message: "Declined by their agent.",
+            decidedAt: at(3),
+            by: "agent",
+          },
+        }),
+        statusLine(4, "Pricing declined the request.", {
+          requestId: "irq_3",
+        }),
+      ])
+    )
+    const withheld = within(view).getByRole("article", {
+      name: "You asked Nia, Priya's agent",
+    })
+    expect(within(withheld).getByText("Withheld by Oryxa.")).toBeTruthy()
+    const log = within(view).getByRole("log", {
+      name: "Side conversation with Priya Shah",
+    })
+    expect(
+      within(log).getByText(
+        /^Oryxa withheld Nia's answer because the agent that asked no longer holds a seat in the teamspace\./
+      )
+    ).toBeTruthy()
+    const pricing = within(view).getByRole("article", {
+      name: "You asked Pricing, Priya's specialist",
+    })
+    expect(within(pricing).getByText("Declined by Pricing.")).toBeTruthy()
+    expect(
+      within(log).getByText(/^Pricing declined the request\./)
+    ).toBeTruthy()
+    expect(view.textContent).not.toContain("Declined by their agent.")
   })
 
   it("shows the member's own agent's confirmations to them alone", async () => {

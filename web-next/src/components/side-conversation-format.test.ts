@@ -312,6 +312,19 @@ describe("cardState", () => {
       tone: "ended",
       text: "Declined by Priya.",
     })
+    // Oryxa closed it: it no longer stood in its teamspace.
+    expect(
+      words({
+        status: "rejected",
+        decision: {
+          decision: "rejected",
+          message:
+            "Oryxa closed this request because the teamspace it was made in no longer exists.",
+          decidedAt: local(9, 5),
+          by: "system",
+        },
+      })
+    ).toEqual({ tone: "ended", text: "Closed by Oryxa." })
     expect(words({ status: "failed" })).toEqual({
       tone: "failed",
       text: "Failed.",
@@ -375,16 +388,39 @@ describe("an answer held for review", () => {
       cardState(
         card({
           status: "withheld",
-          review: { action: "withhold", decidedAt: local(9, 9) },
+          review: { action: "withhold", decidedAt: local(9, 9), by: "owner" },
         }),
         reader
       )
     ).toEqual({ tone: "ended", text: "Not shared by Priya." })
-    // Withheld as nobody reviewed it in time: its quiet line says so.
-    expect(cardState(card({ status: "withheld" }), reader)).toEqual({
+    // Withheld by Oryxa: as nobody reviewed it in time, or for why it
+    // gives, which its quiet line says.
+    const byOryxa = (reason: string) =>
+      card({
+        status: "withheld",
+        review: {
+          action: "withhold",
+          decidedAt: local(9, 9),
+          by: "system",
+          reason,
+        },
+      })
+    expect(cardState(byOryxa("expired before review"), reader)).toEqual({
       tone: "ended",
       text: "Expired.",
     })
+    expect(
+      cardState(
+        byOryxa(
+          "Oryxa withheld this answer because the member who asked is no longer on the teamspace's team."
+        ),
+        reader
+      )
+    ).toEqual({ tone: "ended", text: "Withheld by Oryxa." })
+    // Go said nothing of who: it assumes nobody.
+    expect(cardState(card({ status: "withheld" }), reader).text).toBe(
+      "Not shared."
+    )
   })
 
   it("tells its owner why it waits for them, in plain words", () => {
@@ -405,14 +441,26 @@ describe("an answer held for review", () => {
         {
           ...forMe,
           status: "withheld",
-          review: { action: "withhold", decidedAt: local(9, 9) },
+          review: { action: "withhold", decidedAt: local(9, 9), by: "owner" },
         },
         reader
       ).text
     ).toBe("Not shared by you.")
-    expect(cardState({ ...forMe, status: "withheld" }, reader).text).toBe(
-      "Expired."
-    )
+    expect(
+      cardState(
+        {
+          ...forMe,
+          status: "withheld",
+          review: {
+            action: "withhold",
+            decidedAt: local(9, 9),
+            by: "system",
+            reason: "expired before review",
+          },
+        },
+        reader
+      ).text
+    ).toBe("Expired.")
   })
 
   it("says each kind the guard found in plain words, never its code", () => {

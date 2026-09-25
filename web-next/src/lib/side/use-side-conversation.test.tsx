@@ -605,7 +605,7 @@ describe("useSideConversation: asking agents", () => {
       type: "side-item",
       item: card(1, {
         status: "completed",
-        review: { action: "send_masked", decidedAt: at(5) },
+        review: { action: "send_masked", decidedAt: at(5), by: "owner" },
       }),
     })
     await waitFor(() => expect(reviewed).toBe(true))

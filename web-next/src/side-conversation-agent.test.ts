@@ -1391,16 +1391,20 @@ describe("SideConversationAgent: the answer guard", () => {
           .filter((item) => item.kind === "request-card")
           .map((item) => [item.requestId, item.status, item.review])
       ).toEqual([
-        [one, "completed", { action: "send", decidedAt: expect.any(String) }],
+        [
+          one,
+          "completed",
+          { action: "send", decidedAt: expect.any(String), by: "owner" },
+        ],
         [
           two,
           "completed",
-          { action: "send_masked", decidedAt: expect.any(String) },
+          { action: "send_masked", decidedAt: expect.any(String), by: "owner" },
         ],
         [
           three,
           "withheld",
-          { action: "withhold", decidedAt: expect.any(String) },
+          { action: "withhold", decidedAt: expect.any(String), by: "owner" },
         ],
       ])
       expect(
@@ -1465,8 +1469,15 @@ describe("SideConversationAgent: the answer guard", () => {
       text: "Nia's answer expired before Bo reviewed it.",
     })
     expect(
-      itemsOf(adaTab).find((item) => item.requestId === expired)
-    ).not.toHaveProperty("review")
+      itemsOf(adaTab).find(
+        (item) => item.kind === "request-card" && item.requestId === expired
+      )?.review
+    ).toEqual({
+      action: "withhold",
+      decidedAt: expect.any(String),
+      by: "system",
+      reason: "expired before review",
+    })
     expect(polls(side)).toEqual([])
 
     // Bo reviews one Go withheld before the object read it: Go refuses, and
@@ -1745,6 +1756,13 @@ describe("SideConversationAgent: the answer guard", () => {
         "already_decided",
         "This request expired before its answer was reviewed.",
       ],
+      [
+        409,
+        "request_closed",
+        "send",
+        "already_decided",
+        "Oryxa withheld this answer, as its request no longer stands in this teamspace.",
+      ],
     ]
     for (const [status, code, action, refused, words] of refusals) {
       go.overrides.set(
@@ -1765,6 +1783,153 @@ describe("SideConversationAgent: the answer guard", () => {
     // Every one reached Go, and the answer still waits on Bo.
     expect(sentTo("review")).toHaveLength(refusals.length)
     expect(lastItem(boTab, "request-card")?.status).toBe("review")
+  })
+
+  it("withholds an answer whose request no longer stands as its owner sends it, saying why on the card and in the log", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const requestId = await heldForBo(side, adaTab, boTab)
+    go.lapsed.set(
+      requestId,
+      "the member who asked is no longer on the teamspace's team"
+    )
+    await say(side, boTab, { type: "side-review", requestId, action: "send" })
+    expect(boTab.last("side-refused")).toEqual({
+      type: "side-refused",
+      target: requestId,
+      code: "already_decided",
+      message:
+        "Oryxa withheld this answer, as its request no longer stands in this teamspace.",
+    })
+    const reason =
+      "Oryxa withheld this answer because the member who asked is no longer on the teamspace's team."
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "request-card")).toMatchObject({
+        status: "withheld",
+        review: { action: "withhold", by: "system", reason },
+      })
+      expect(lastItem(socket, "status")).toMatchObject({
+        outcome: "withheld",
+        text: "Oryxa withheld Nia's answer because the member who asked is no longer on the teamspace's team.",
+      })
+      expect(
+        itemsOf(socket).some((item) => item.kind === "agent-message")
+      ).toBe(false)
+    }
+  })
+
+  it("reads an answer still in review past its request's expiry as Go shows it: withheld at the expiry, not reviewable", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const requestId = await heldForBo(side, adaTab, boTab)
+    const expiresAt = String(go.requests.get(requestId)?.expires_at)
+    // Nothing has swept it yet: Go reads it as withheld, at its expiry.
+    vi.setSystemTime(new Date(Date.parse(expiresAt) + 60_000))
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(go.requests.get(requestId)?.status).toBe("review")
+    expect(lastItem(boTab, "request-card")).toMatchObject({
+      status: "withheld",
+      review: {
+        action: "withhold",
+        decidedAt: expiresAt,
+        by: "system",
+        reason: "expired before review",
+      },
+    })
+    expect(lastItem(boTab, "request-card")).not.toHaveProperty("heldAnswer")
+    expect(lastItem(adaTab, "status")).toMatchObject({
+      text: "Nia's answer expired before Bo reviewed it.",
+    })
+    await say(side, boTab, { type: "side-review", requestId, action: "send" })
+    expect(boTab.last("side-refused")).toMatchObject({
+      code: "already_decided",
+      message: "This answer was reviewed already, or expired.",
+    })
+    expect(sentTo("review")).toEqual([])
+  })
+
+  it("says a request Oryxa closed as its owner decides it", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Pull the pricing sheet")
+    go.overrides.set(
+      `POST ${base}/agent-requests/irq_1/decision`,
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "request_closed",
+            message:
+              "the member who asked is no longer on the teamspace's team",
+          },
+        }),
+        { status: 409, headers: { "Content-Type": "application/json" } }
+      )
+    )
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    expect(boTab.last("side-refused")).toEqual({
+      type: "side-refused",
+      target: "irq_1",
+      code: "already_decided",
+      message:
+        "Oryxa closed this request, as it no longer stands in this teamspace.",
+    })
+  })
+
+  it("reads an agent's decision in its fixed words, and says why Oryxa closed a request", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    await askTeammate(side, adaTab, pricing.agentId, "Price the add-on")
+    await askTeammate(side, adaTab, bo.agentId, "Pull the pricing sheet")
+    go.change("irq_1", {
+      status: "rejected",
+      decision: {
+        decision: "rejected",
+        message: "Declined by their agent.",
+        allowed_tools: [],
+        granted_permissions: [],
+        decided_at: new Date().toISOString(),
+        decided_by: {
+          kind: "agent",
+          user_id: bo.userId,
+          agent_id: pricing.agentId,
+        },
+      },
+    })
+    go.change("irq_2", {
+      status: "rejected",
+      decision: {
+        decision: "rejected",
+        message:
+          "Oryxa closed this request because the agent it asks no longer holds a seat in the teamspace.",
+        allowed_tools: [],
+        granted_permissions: [],
+        decided_at: new Date().toISOString(),
+        decided_by: { kind: "system" },
+      },
+    })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(
+      itemsOf(adaTab)
+        .filter((item) => item.kind === "status")
+        .map((item) => item.text)
+    ).toEqual([
+      "Pricing declined the request.",
+      "Oryxa closed the request to Nia because the agent it asks no longer holds a seat in the teamspace.",
+    ])
+    expect(
+      itemsOf(adaTab)
+        .filter((item) => item.kind === "request-card")
+        .map((item) => (item.decision as { by?: string }).by)
+    ).toEqual(["agent", "system"])
   })
 
   it("forgets the answers it holds for an owner when it is purged", async () => {

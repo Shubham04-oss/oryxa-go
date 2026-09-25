@@ -265,6 +265,13 @@ type Refusal = { code: SideFailure; message: string }
 
 /** Go's refusal of an owner's decision, in words. */
 function decisionRefusal(error: ApiError): Refusal {
+  if (error.status === 409 && error.code === "request_closed") {
+    return {
+      code: "already_decided",
+      message:
+        "Oryxa closed this request, as it no longer stands in this teamspace.",
+    }
+  }
   return error.status === 409
     ? {
         code: "already_decided",
@@ -291,6 +298,14 @@ function reviewRefusal(
     return {
       code: "already_decided",
       message: "This request expired before its answer was reviewed.",
+    }
+  }
+  if (error.status === 409 && error.code === "request_closed") {
+    // Go withheld it meanwhile, saying why: the card's quiet line has it.
+    return {
+      code: "already_decided",
+      message:
+        "Oryxa withheld this answer, as its request no longer stands in this teamspace.",
     }
   }
   if (error.status === 409) {
@@ -2131,7 +2146,9 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
                 : {}),
               // Held by the answer guard, it was shared once its owner
               // reviewed it.
-              ...(data.review ? { reviewedBy: data.targetId } : {}),
+              ...(data.review?.by === "owner"
+                ? { reviewedBy: data.targetId }
+                : {}),
             },
           } satisfies AgentData,
           settled: true,

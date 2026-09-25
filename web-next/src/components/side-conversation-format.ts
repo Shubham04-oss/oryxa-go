@@ -17,6 +17,7 @@ import type {
   SideStatusLine,
 } from "@/lib/side"
 import { AGENT_REQUEST_TOOLBOXES } from "@/lib/agents/agent-requests"
+import { EXPIRED_BEFORE_REVIEW } from "@/lib/side/asking"
 import type { AgentRequestToolbox } from "@/lib/agents/agent-requests"
 import type { Teamspace } from "@/lib/teamspaces/client"
 
@@ -161,10 +162,14 @@ export function cardState(
             text: `Waiting for ${owner} to review the answer.`,
           }
     case "withheld":
-      // Its quiet line says who chose, or that time ran out first.
-      return card.review
+      // Its quiet line says who kept it back, and why when Oryxa did.
+      return card.review?.by === "owner"
         ? { tone: "ended", text: `Not shared by ${owner}.` }
-        : { tone: "ended", text: "Expired." }
+        : card.review?.reason === EXPIRED_BEFORE_REVIEW
+          ? { tone: "ended", text: "Expired." }
+          : card.review
+            ? { tone: "ended", text: "Withheld by Oryxa." }
+            : { tone: "ended", text: "Not shared." }
     case "sending":
       return { tone: "waiting", text: "Sending…" }
     case "not_filed":
@@ -187,7 +192,9 @@ export function cardState(
     case "completed":
       return { tone: "done", text: "Done." }
     case "rejected":
-      return { tone: "ended", text: `Declined by ${decidedBy}.` }
+      return card.decision?.by === "system"
+        ? { tone: "ended", text: "Closed by Oryxa." }
+        : { tone: "ended", text: `Declined by ${decidedBy}.` }
     case "failed":
       return { tone: "failed", text: "Failed." }
     case "expired":

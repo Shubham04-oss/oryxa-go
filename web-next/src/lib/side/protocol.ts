@@ -213,11 +213,7 @@ export type SideWireRequestCard = {
   /** When its status last changed here. */
   updatedAt: string
   expiresAt: string
-  decision?: {
-    decision: "approved" | "rejected"
-    message: string
-    decidedAt: string
-  }
+  decision?: SideDecision
   /** The requester's page id, on their own card, when it was asked for here. */
   clientId?: string
   /** What the request asks to use (Go's `requested_tools`): toolbox names, `apps` and `knowledge`. Absent when none. */
@@ -226,8 +222,33 @@ export type SideWireRequestCard = {
   guard?: SideGuard
   /** While `review`, the answer held for its target's owner, on their copy only, once the object has read it as them. */
   heldAnswer?: SideHeldAnswer
-  /** How its target's owner reviewed a held answer, once they did. Absent for one that expired before they did. */
-  review?: { action: SideReviewAction; decidedAt: string }
+  /** How a held answer was reviewed: by its target's owner, or withheld by Oryxa (`system`), saying why. */
+  review?: SideReview
+}
+
+/**
+ * A request's decision: `by` its target's owner, their agent (whose
+ * message is fixed words, never its own), or Oryxa (`system`, closing a
+ * request that no longer stands, its message saying why); absent from a
+ * decision Go recorded no decider for.
+ */
+export type SideDecision = {
+  decision: "approved" | "rejected"
+  message: string
+  decidedAt: string
+  by?: "owner" | "agent" | "system"
+}
+
+/**
+ * A held answer's review: its target's owner's (`owner`), or Oryxa's
+ * withholding (`system`, `withhold`), with Go's `reason`: "expired before
+ * review", or why the request no longer stood in its teamspace.
+ */
+export type SideReview = {
+  action: SideReviewAction
+  decidedAt: string
+  by: "owner" | "system"
+  reason?: string
 }
 
 /** A quiet line: a request declined, failed or expired, or an answer not shared. */
@@ -1021,13 +1042,20 @@ function heldAnswerOf(value: unknown): SideHeldAnswer | undefined {
   }
 }
 
-function reviewOf(value: unknown): SideWireRequestCard["review"] {
+function reviewOf(value: unknown): SideReview | undefined {
   if (!isObject(value)) return undefined
-  const { action, decidedAt } = value
+  const { action, decidedAt, by, reason } = value
   return typeof action === "string" &&
     reviewActions.has(action) &&
-    typeof decidedAt === "string"
-    ? { action: action as SideReviewAction, decidedAt }
+    typeof decidedAt === "string" &&
+    (by === "owner" || by === "system") &&
+    optionalString(reason)
+    ? {
+        action: action as SideReviewAction,
+        decidedAt,
+        by,
+        ...(typeof reason === "string" ? { reason } : {}),
+      }
     : undefined
 }
 
@@ -1055,17 +1083,18 @@ function confirmationsOf(value: unknown): SideConfirmation[] | undefined {
   return confirmations
 }
 
-function decisionOf(value: unknown): SideWireRequestCard["decision"] {
+function decisionOf(value: unknown): SideDecision | undefined {
   if (!isObject(value)) return undefined
-  const { decision, message, decidedAt } = value
+  const { decision, message, decidedAt, by } = value
   if (
     (decision !== "approved" && decision !== "rejected") ||
     typeof message !== "string" ||
-    typeof decidedAt !== "string"
+    typeof decidedAt !== "string" ||
+    (by !== undefined && by !== "owner" && by !== "agent" && by !== "system")
   ) {
     return undefined
   }
-  return { decision, message, decidedAt }
+  return { decision, message, decidedAt, ...(by ? { by } : {}) }
 }
 
 function isGoId(value: unknown): value is string {

@@ -475,6 +475,7 @@ describe("asking agents", () => {
     expect(statusLineText("rejected", owner, "Bo")).toBe(
       "Bo declined the request to Nia."
     )
+    // An agent's decision is fixed words: the line leaves them out.
     expect(
       statusLineText(
         "rejected",
@@ -483,13 +484,13 @@ describe("asking agents", () => {
           targetAgentName: "Pricing",
           decision: {
             decision: "rejected",
-            message: " Out of scope ",
+            message: "Declined by their agent.",
             decidedAt: "t",
           },
         },
         "Bo"
       )
-    ).toBe("Pricing declined the request to Pricing: Out of scope")
+    ).toBe("Pricing declined the request.")
     expect(statusLineText("failed", owner, "Bo", "No access.")).toBe(
       "Nia could not finish the request: No access."
     )
@@ -648,9 +649,26 @@ describe("the answer guard", () => {
     const withheld = {
       ...card,
       status: "withheld",
-      review: { action: "withhold", decidedAt: "t" },
+      review: { action: "withhold", decidedAt: "t", by: "owner" },
     }
     expect(itemOf(withheld)).toEqual(withheld)
+    const byOryxa = {
+      ...card,
+      status: "withheld",
+      review: {
+        action: "withhold",
+        decidedAt: "t",
+        by: "system",
+        reason: "expired before review",
+      },
+      decision: {
+        decision: "approved",
+        message: "Approved by their agent.",
+        decidedAt: "t",
+        by: "agent",
+      },
+    }
+    expect(itemOf(byOryxa)).toEqual(byOryxa)
     // An empty list of tools is none.
     expect(itemOf({ ...card, requestedTools: [] })).toEqual(card)
     for (const broken of [
@@ -660,7 +678,18 @@ describe("the answer guard", () => {
       { ...card, guard: { state: "held", kinds: "EMAIL" } },
       { ...card, heldAnswer: { masked: "only the masked one" } },
       { ...card, heldAnswer: { stored: "x", failed: false } },
-      { ...card, review: { action: "publish", decidedAt: "t" } },
+      { ...card, review: { action: "publish", decidedAt: "t", by: "owner" } },
+      { ...card, review: { action: "withhold", decidedAt: "t" } },
+      { ...card, review: { action: "withhold", decidedAt: "t", by: "agent" } },
+      {
+        ...card,
+        decision: {
+          decision: "approved",
+          message: "",
+          decidedAt: "t",
+          by: "someone",
+        },
+      },
     ]) {
       expect(itemOf(broken)).toBeUndefined()
     }
@@ -728,44 +757,97 @@ describe("the answer guard", () => {
 
     const decidedAt = "2026-09-24T10:00:00Z"
     const owner = { kind: "member", user_id: "user-b" }
-    for (const [review, kept] of [
-      // The owner's own, as a decider or as their id.
-      [{ action: "withhold", decided_by: owner, decided_at: decidedAt }, true],
+    const lapsed =
+      "Oryxa withheld this answer because the member who asked is no longer on the teamspace's team."
+    const reviews: Array<[Record<string, unknown>, unknown]> = [
+      // The owner's own, as Go records it, or as their id.
+      [
+        { action: "send", decided_by: owner, decided_at: decidedAt },
+        { action: "send", decidedAt, by: "owner" },
+      ],
+      [
+        { action: "withhold", decided_by: owner, decided_at: decidedAt },
+        { action: "withhold", decidedAt, by: "owner" },
+      ],
       [
         { action: "withhold", decided_by: "user-b", decided_at: decidedAt },
-        true,
+        { action: "withhold", decidedAt, by: "owner" },
       ],
-      // Only the owner sends; a send is theirs whoever Go names.
-      [{ action: "send_masked", decided_at: decidedAt }, true],
-      // Withheld by Oryxa: the answer expired before its owner reviewed it.
+      // Only the owner sends: a send is theirs whoever Go names.
+      [
+        { action: "send_masked", decided_at: decidedAt },
+        { action: "send_masked", decidedAt, by: "owner" },
+      ],
+      // Withheld by Oryxa, in Go's exact shapes: expired before review, and
+      // a request that no longer stood in its teamspace.
+      [
+        {
+          action: "withhold",
+          decided_by: { kind: "system" },
+          decided_at: "2026-09-25T09:00:00Z",
+          reason: "expired before review",
+        },
+        {
+          action: "withhold",
+          decidedAt: "2026-09-25T09:00:00Z",
+          by: "system",
+          reason: "expired before review",
+        },
+      ],
       [
         {
           action: "withhold",
           decided_by: { kind: "system" },
           decided_at: decidedAt,
-          reason: "expired before review",
+          reason: lapsed,
         },
-        false,
+        { action: "withhold", decidedAt, by: "system", reason: lapsed },
       ],
-      [{ action: "withhold", decided_at: decidedAt }, false],
+      // Nobody Go names, anybody else, an agent, or no choice Go makes.
+      [{ action: "withhold", decided_at: decidedAt }, undefined],
       [
         {
           action: "withhold",
           decided_by: { kind: "member", user_id: "user-a" },
           decided_at: decidedAt,
         },
-        false,
+        undefined,
       ],
-      [{ action: "publish", decided_at: decidedAt }, false],
-    ] as const) {
+      [
+        {
+          action: "withhold",
+          decided_by: { kind: "agent", user_id: "user-b" },
+          decided_at: decidedAt,
+        },
+        undefined,
+      ],
+      [{ action: "publish", decided_at: decidedAt }, undefined],
+    ]
+    for (const [review, read] of reviews) {
       const fields = cardFields({ ...request, status: "withheld", review })
       expect(fields?.status).toBe("withheld")
-      if (kept) {
-        expect(fields?.review).toEqual({ action: review.action, decidedAt })
-      } else {
-        expect(fields).not.toHaveProperty("review")
-      }
+      expect(fields?.review).toEqual(read)
     }
+
+    // Who decided: the owner, their agent (in fixed words), or Oryxa.
+    const decided = (decidedBy?: unknown) =>
+      cardFields({
+        ...request,
+        status: "rejected",
+        decision: {
+          decision: "rejected",
+          message: "Declined by their agent.",
+          decided_at: decidedAt,
+          ...(decidedBy ? { decided_by: decidedBy } : {}),
+        },
+      })?.decision?.by
+    expect(decided(owner)).toBe("owner")
+    expect(
+      decided({ kind: "agent", user_id: "user-b", agent_id: "agt_b" })
+    ).toBe("agent")
+    expect(decided({ kind: "system" })).toBe("system")
+    expect(decided()).toBeUndefined()
+    expect(decided({ kind: "member", user_id: "user-a" })).toBeUndefined()
     expect(isOpen("review")).toBe(true)
     expect(isOpen("withheld")).toBe(false)
   })
@@ -818,17 +900,86 @@ describe("the answer guard", () => {
     expect(cardFields(held)).not.toHaveProperty("heldAnswer")
   })
 
-  it("says who chose not to share an answer, or that it expired before its review", () => {
+  it("says who kept an answer back: its owner, the time that ran out, or Oryxa and why", () => {
     const owner = { approval: "owner" as const, targetAgentName: "Nia" }
+    const withheld = (review: Parameters<typeof statusLineText>[1]["review"]) =>
+      statusLineText("withheld", { ...owner, review }, "Bo")
+    expect(withheld({ action: "withhold", decidedAt: "t", by: "owner" })).toBe(
+      "Bo chose not to share Nia's answer."
+    )
     expect(
+      withheld({
+        action: "withhold",
+        decidedAt: "t",
+        by: "system",
+        reason: "expired before review",
+      })
+    ).toBe("Nia's answer expired before Bo reviewed it.")
+    // Not every withholding of Oryxa's is an expiry: it says why.
+    expect(
+      withheld({
+        action: "withhold",
+        decidedAt: "t",
+        by: "system",
+        reason:
+          "Oryxa withheld this answer because the member who asked is no longer on the teamspace's team.",
+      })
+    ).toBe(
+      "Oryxa withheld Nia's answer because the member who asked is no longer on the teamspace's team."
+    )
+    expect(
+      withheld({
+        action: "withhold",
+        decidedAt: "t",
+        by: "system",
+        reason: "a policy changed",
+      })
+    ).toBe("Oryxa withheld Nia's answer: a policy changed.")
+    expect(withheld({ action: "withhold", decidedAt: "t", by: "system" })).toBe(
+      "Oryxa withheld Nia's answer."
+    )
+    expect(withheld(undefined)).toBe("Nia's answer wasn't shared.")
+  })
+
+  it("leaves out an agent's decision words, which are fixed, and says why Oryxa closed a request", () => {
+    const declined = (
+      approval: "owner" | "agent",
+      message: string,
+      by?: "owner" | "agent" | "system"
+    ) =>
       statusLineText(
-        "withheld",
-        { ...owner, review: { action: "withhold", decidedAt: "t" } },
+        "rejected",
+        {
+          approval,
+          targetAgentName: approval === "agent" ? "Pricing" : "Nia",
+          decision: {
+            decision: "rejected",
+            message,
+            decidedAt: "t",
+            ...(by ? { by } : {}),
+          },
+        },
         "Bo"
       )
-    ).toBe("Bo chose not to share Nia's answer.")
-    expect(statusLineText("withheld", owner, "Bo")).toBe(
-      "Nia's answer expired before Bo reviewed it."
+    expect(declined("agent", "Declined by their agent.", "agent")).toBe(
+      "Pricing declined the request."
+    )
+    // Recorded without who decided, by an older build: an agent's, as its
+    // approval says.
+    expect(declined("agent", "Out of scope")).toBe(
+      "Pricing declined the request."
+    )
+    expect(declined("owner", " Not this week. ", "owner")).toBe(
+      "Bo declined the request to Nia: Not this week."
+    )
+    expect(
+      declined(
+        "owner",
+        "Oryxa closed this request because the agent it asks no longer holds a seat in the teamspace.",
+        "system"
+      )
+    ).toBe(
+      "Oryxa closed the request to Nia because the agent it asks no longer holds a seat in the teamspace."
     )
   })
 })
