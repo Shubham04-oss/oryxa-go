@@ -224,8 +224,9 @@ type TeamspaceChanged struct {
 
 // TeamspaceMemberRemoved says a person left a teamspace. A teamspace is bound
 // to one human team, so leaving the team is leaving the teamspace. It carries
-// identities only. A Teams event delivered again can publish it again, with
-// the same RemovedAt, so its consumers take a repeat as one.
+// identities only. A Teams event delivered again can publish it again, under a
+// new event_id but with the same RemovedAt, and its consumers take that as a
+// repeat.
 type TeamspaceMemberRemoved struct {
 	OrganizationID string `json:"organization_id"`
 	TeamspaceID    string `json:"teamspace_id"`
