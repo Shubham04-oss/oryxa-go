@@ -40,7 +40,6 @@ const (
 var (
 	closedAfterAttempts = fmt.Sprintf("Oryxa closed this request because the approved work could not be done after %d attempts.", maxAttempts)
 	closedAgentGone     = "Oryxa closed this request because the agent it was approved for no longer exists."
-	closedAgentDisabled = "Oryxa closed this request because the agent it was approved for has been disabled."
 	closedExpired       = "Oryxa closed this request because it expired before the approved work was done."
 )
 
@@ -263,13 +262,19 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 		logger.InfoContext(ctx, "interaction delivery waits for the agent conversation", "reason", err)
 		waker.release(ctx, delivery, false, err.Error(), logger)
 		return
+	case errors.Is(err, managedagents.ErrDisabled) && forTheTarget(delivery.Kind):
+		// A member may turn their agent on again, so what it was asked to
+		// decide or do is not given up: the delivery waits for it,
+		// uncounted, until the request's expiry ends the wait, when the poll
+		// closes approved work that ran out.
+		logger.InfoContext(ctx, "interaction delivery waits for its agent to be enabled", "reason", err)
+		waker.release(ctx, delivery, false, err.Error(), logger)
+		return
 	case errors.Is(err, managedagents.ErrNotFound), errors.Is(err, managedagents.ErrDisabled):
 		waker.drop(ctx, delivery, err.Error(), logger)
-		reason := closedAgentGone
-		if errors.Is(err, managedagents.ErrDisabled) {
-			reason = closedAgentDisabled
+		if errors.Is(err, managedagents.ErrNotFound) {
+			waker.giveUp(ctx, delivery, closedAgentGone, logger)
 		}
-		waker.giveUp(ctx, delivery, reason, logger)
 		return
 	case err != nil:
 		logger.ErrorContext(ctx, "interaction delivery run could not start", "error", err)
@@ -291,7 +296,7 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 
 	// Target deliveries require an authoritative ledger transition. A model
 	// answer alone is not success: it must use the strict interaction tools.
-	if delivery.Kind == KindTargetRequested || delivery.Kind == KindTargetApproved {
+	if forTheTarget(delivery.Kind) {
 		request, err = waker.requests.Get(ctx, delivery.RequestID)
 		if errors.Is(err, interactions.ErrNotFound) {
 			waker.drop(ctx, delivery, "interaction disappeared after the run", logger)
@@ -428,6 +433,13 @@ func (waker *Waker) recheck(ctx context.Context, delivery Delivery, request agen
 // completed without a run: the member decides in their own session, and an
 // approval arrives as a delivery of its own, which wakes the agent to do the
 // work.
+// forTheTarget is whether a delivery asks the addressed agent to decide or
+// to work, rather than tell the member who asked how it went. Its request's
+// expiry settles it, one way or the other.
+func forTheTarget(kind string) bool {
+	return kind == KindTargetRequested || kind == KindTargetApproved
+}
+
 func heldForOwner(delivery Delivery, request agents.Interaction) bool {
 	return delivery.Kind == KindTargetRequested && interactions.HeldForOwner(request)
 }

@@ -55,27 +55,68 @@ func TestApprovedWorkThatKeepsFailingIsClosedWhenItIsDropped(t *testing.T) {
 	}
 }
 
-// TestApprovedWorkWhoseAgentIsGoneOrDisabledIsClosed: an approval whose
-// agent no longer exists, or has been disabled, can never be worked; its
-// delivery is dropped at once and its request closed, saying which.
-func TestApprovedWorkWhoseAgentIsGoneOrDisabledIsClosed(t *testing.T) {
-	for _, testCase := range []struct {
-		err    error
-		reason string
+// TestApprovedWorkWhoseAgentIsGoneIsClosed: an approval whose agent was
+// deleted can never be worked; its delivery is dropped at once and its
+// request closed, saying so.
+func TestApprovedWorkWhoseAgentIsGoneIsClosed(t *testing.T) {
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(interactions.StatusApproved)}}
+	store := &fakeDeliveries{pending: []Delivery{approvedDelivery(0)}}
+	waker := NewWaker(store, &fakeAgentRuns{err: managedagents.ErrNotFound}, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	closed := requests.get("irq_1")
+	if len(store.dropped) != 1 || closed.Status != interactions.StatusFailed || closed.Result == nil || closed.Result.Summary != closedAgentGone {
+		t.Fatalf("dropped=%v request=%+v, want it dropped and the request failed saying its agent is gone", store.dropped, closed)
+	}
+}
+
+// TestADeliveryWaitsForItsDisabledAgent: an agent its member disabled may be
+// turned on again, so a delivery that asks it to decide or to work is not
+// given up: it is released to be tried again, uncounted, and its request is
+// left as it is. Only the request's expiry ends the wait, and approved work
+// that runs out is closed by the poll. A report to a disabled requester's
+// agent is dropped, as it always was, since nothing else would end its wait.
+func TestADeliveryWaitsForItsDisabledAgent(t *testing.T) {
+	report := testDelivery("evt_completed", KindRequesterCompleted, 3)
+	report.RecipientUserID, report.RecipientAgentID, report.Status = "user_a", "agt_a", interactions.StatusCompleted
+	for name, testCase := range map[string]struct {
+		delivery Delivery
+		status   string
+		waits    bool
 	}{
-		{managedagents.ErrNotFound, closedAgentGone},
-		{managedagents.ErrDisabled, closedAgentDisabled},
+		"approved work":       {approvedDelivery(maxAttempts - 1), interactions.StatusApproved, true},
+		"a new request":       {testDelivery("evt_requested", KindTargetRequested, 1), interactions.StatusPending, true},
+		"an outcome's report": {report, interactions.StatusCompleted, false},
 	} {
-		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(interactions.StatusApproved)}}
-		store := &fakeDeliveries{pending: []Delivery{approvedDelivery(0)}}
-		waker := NewWaker(store, &fakeAgentRuns{err: testCase.err}, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
-		if err := waker.WakeDue(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		closed := requests.get("irq_1")
-		if len(store.dropped) != 1 || closed.Status != interactions.StatusFailed || closed.Result == nil || closed.Result.Summary != testCase.reason {
-			t.Fatalf("%v: dropped=%v request=%+v, want it dropped and the request failed saying %q", testCase.err, store.dropped, closed, testCase.reason)
-		}
+		t.Run(name, func(t *testing.T) {
+			requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(testCase.status)}}
+			store := &fakeDeliveries{pending: []Delivery{testCase.delivery}}
+			waker := NewWaker(store, &fakeAgentRuns{err: managedagents.ErrDisabled}, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+			if err := waker.WakeDue(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			failed, released := store.released[testCase.delivery.EventID]
+			if waits := released && !failed && len(store.dropped) == 0; waits != testCase.waits {
+				t.Fatalf("released=%v dropped=%v, want waiting %t", store.released, store.dropped, testCase.waits)
+			}
+			if got := requests.get("irq_1"); len(requests.closed) != 0 || got.Status != testCase.status {
+				t.Fatalf("closed=%v request=%+v, want it left %s", requests.closed, got, testCase.status)
+			}
+		})
+	}
+
+	// The approval runs out while its agent is still disabled: the poll
+	// closes it, saying it expired.
+	expired := testRequest(interactions.StatusApproved)
+	expired.ExpiresAt = time.Now().Add(-time.Minute)
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": expired}}
+	waker := NewWaker(&fakeDeliveries{pending: []Delivery{approvedDelivery(0)}}, &fakeAgentRuns{err: managedagents.ErrDisabled}, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if closed := requests.get("irq_1"); closed.Status != interactions.StatusFailed || closed.Result == nil || closed.Result.Summary != closedExpired {
+		t.Fatalf("the approval that ran out = %+v, want it failed saying it expired", closed)
 	}
 }
 

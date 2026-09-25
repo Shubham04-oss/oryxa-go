@@ -1070,17 +1070,21 @@ repeated delivery is settled without running the agent again.
 
 Approved work is never left approved with nobody working on it. When the waker
 gives up on an `approved` delivery (its runs failed three times, not counting
-a run the waker's own stop cut short, or its agent no longer exists or has
-been disabled) it closes the request, failed, with why as the result's
-summary; and every poll closes, the same way, the approved requests whose
-expiry passed unanswered in the last hour, since none can be answered any
-more, whatever became of their delivery (`interactions.Store.CloseApproved`
-and `CloseExpired`, which fail an approved request as `Close` does). Each is
-the ordinary completed event, so the member who asked hears of it as of any
-failed result, and a side conversation shows it as the agent's failure with
-the reason. Nothing else is closed: a new request whose deciding run was given
-up stays pending, for its member to decide or to expire, and a failed report
-to the member who asked changes nothing about the request.
+a run the waker's own stop cut short, or its agent no longer exists) it closes
+the request, failed, with why as the result's summary; and every poll closes,
+the same way, the approved requests whose expiry passed unanswered in the last
+hour, since none can be answered any more, whatever became of their delivery
+(`interactions.Store.CloseApproved` and `CloseExpired`, which fail an approved
+request as `Close` does). Each is the ordinary completed event, so the member
+who asked hears of it as of any failed result, and a side conversation shows
+it as the agent's failure with the reason. Nothing else is closed: a new
+request whose deciding run was given up stays pending, for its member to
+decide or to expire, and a failed report to the member who asked changes
+nothing about the request. An agent its member disabled may be turned on
+again, so a delivery asking it to decide or to work is not given up: it waits
+for the agent, tried again every minute without counting, until the request's
+expiry ends the wait. A report to a disabled requester's agent is dropped, as
+it always was.
 
 The poll closes an approval seconds after it runs out, so the hour is only for
 the time nothing polls: a deploy, a restart or an outage. An approval that ran
