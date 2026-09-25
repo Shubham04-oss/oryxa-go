@@ -245,9 +245,12 @@ type TeamspaceRoomMessagePosted struct {
 	TeamspaceID    string               `json:"teamspace_id"`
 	Message        TeamspaceRoomMessage `json:"message"`
 	Author         TeamspaceRoomAuthor  `json:"author"`
-	// AddressedHandles are the seat handles the message named, its author's
-	// own left out: whom it was for, as a mention. Absent when it named
-	// nobody.
+	// AddressedHandles are the handles of the room's seats the message named
+	// with "@handle", written as the room makes them, without the "@"
+	// ("ada"): whom it was for, as a mention. Only seats that were in the
+	// room when it was posted, and never its author's own: an "@" before
+	// anything else in what was said, such as an email address's domain, is
+	// not a mention and is not here. Absent when it named no seat.
 	AddressedHandles []string  `json:"addressed_handles,omitempty"`
 	PostedAt         time.Time `json:"posted_at"`
 }

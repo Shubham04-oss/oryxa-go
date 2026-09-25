@@ -72,10 +72,10 @@ func TestTeamspaceRoomMessagePostedIsWrittenAsTheContractSays(t *testing.T) {
 			TeamspaceRoomMessagePosted{
 				OrganizationID: "org_1", TeamspaceID: "tsp_1", Message: TeamspaceRoomMessage{ID: "rmm_1", Seq: 1},
 				Author:           TeamspaceRoomAuthor{Kind: TeamspaceRoomAuthorMember, UserID: "user_ada"},
-				AddressedHandles: []string{"@crew"}, PostedAt: at,
+				AddressedHandles: []string{"crew"}, PostedAt: at,
 			},
 			`{"organization_id":"org_1","teamspace_id":"tsp_1","message":{"id":"rmm_1","seq":1},` +
-				`"author":{"kind":"member","user_id":"user_ada"},"addressed_handles":["@crew"],"posted_at":"2026-09-25T09:30:00.123Z"}`,
+				`"author":{"kind":"member","user_id":"user_ada"},"addressed_handles":["crew"],"posted_at":"2026-09-25T09:30:00.123Z"}`,
 		},
 		"an agent's answer": {
 			TeamspaceRoomMessagePosted{
