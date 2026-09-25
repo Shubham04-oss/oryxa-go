@@ -247,6 +247,7 @@ func TestAProfileSaysWhatItReachesAndWhetherItDelivers(t *testing.T) {
 		UnattendedQuiet: {},
 		DeliveryReads:   {apps: true, delivers: true},
 		DeliveryQuiet:   {delivers: true},
+		DeliveryReport:  {delivers: true},
 		"everything":    {},
 	} {
 		if profile.ReadsApps() != want.apps || profile.Delivers() != want.delivers {

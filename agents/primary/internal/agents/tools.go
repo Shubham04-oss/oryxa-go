@@ -35,6 +35,10 @@ type Toolbox struct {
 
 type toolCatalog struct {
 	toolboxes []Toolbox
+	// preloaded loads every toolbox from the first model call, whatever the
+	// session has loaded, for an agent that has no list_tools or load_tools:
+	// one whose work, and so everything it may use, is known before it runs.
+	preloaded bool
 }
 
 func newToolCatalog(toolboxes []Toolbox) (*toolCatalog, error) {
@@ -49,6 +53,20 @@ func newToolCatalog(toolboxes []Toolbox) (*toolCatalog, error) {
 		seen[box.Name] = true
 	}
 	return &toolCatalog{toolboxes: toolboxes}, nil
+}
+
+// loadedNames are the toolboxes loaded in a session whose state is state:
+// every one in a preloaded catalog, and otherwise those load_tools, or the
+// run, loaded.
+func (c *toolCatalog) loadedNames(state session.ReadonlyState) []string {
+	if !c.preloaded {
+		return loadedToolboxes(state)
+	}
+	names := make([]string, 0, len(c.toolboxes))
+	for _, box := range c.toolboxes {
+		names = append(names, box.Name)
+	}
+	return names
 }
 
 func (c *toolCatalog) find(name string) (Toolbox, bool) {
@@ -92,13 +110,20 @@ func (l loadedToolset) Name() string { return "loaded_tools" }
 
 func (l loadedToolset) Tools(ctx agent.ReadonlyContext) ([]tool.Tool, error) {
 	var tools []tool.Tool
-	for _, name := range loadedToolboxes(ctx.ReadonlyState()) {
+	for _, name := range l.catalog.loadedNames(ctx.ReadonlyState()) {
 		box, ok := l.catalog.find(name)
 		if !ok || box.Toolset == nil {
 			continue
 		}
 		boxTools, err := box.Toolset.Tools(ctx)
 		if err != nil {
+			continue
+		}
+		// load_tools refuses a toolbox whose tools are not all named after
+		// it; a preloaded one never passes through load_tools, so it is left
+		// out here instead, rather than risk a tool colliding with the
+		// agent's own.
+		if l.catalog.preloaded && misnamed(box, boxTools) != "" {
 			continue
 		}
 		tools = append(tools, boxTools...)
@@ -261,6 +286,12 @@ func misnamedTool(ctx agent.ReadonlyContext, box Toolbox) string {
 	if err != nil {
 		return "its tools could not be listed right now"
 	}
+	return misnamed(box, tools)
+}
+
+// misnamed reports a tool of box's that is not named after it, or cannot be
+// packed into a model request as a toolbox tool must be.
+func misnamed(box Toolbox, tools []tool.Tool) string {
 	for _, t := range tools {
 		if !strings.HasPrefix(t.Name(), box.Name+"_") {
 			return fmt.Sprintf("its tool %q is not named after the toolbox", t.Name())

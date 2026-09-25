@@ -179,6 +179,19 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 // It answers to the same name as Root, since it takes turns with Root in the
 // same thread.
 func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
+	return unattendedRoot(router, toolboxes, false)
+}
+
+// DeliveringRoot returns UnattendedRoot for a run that delivers one
+// interaction. What such a run may reach is decided before it starts, by
+// what the member's agent has allowed, so every toolbox given is loaded, with
+// its skill, from the run's first model call, and there is nothing to list or
+// load: no list_tools or load_tools, and no model call spent on either.
+func DeliveringRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
+	return unattendedRoot(router, toolboxes, true)
+}
+
+func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering bool) (agent.Agent, error) {
 	if router == nil {
 		return nil, errors.New("a model router is required")
 	}
@@ -186,7 +199,12 @@ func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agen
 	if err != nil {
 		return nil, err
 	}
-	tools, err := buildTools(catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool)
+	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool}
+	if delivering {
+		catalog.preloaded = true
+		builders = []func() (tool.Tool, error){userDetailsTool, loadArtifactsTool}
+	}
+	tools, err := buildTools(builders...)
 	if err != nil {
 		return nil, err
 	}
@@ -232,12 +250,18 @@ func instructionFrom(instruction *template.Template, catalog *toolCatalog) func(
 	return func(ctx agent.ReadonlyContext) (string, error) {
 		state := ctx.ReadonlyState()
 		var rendered strings.Builder
-		err := instruction.Execute(&rendered, struct{ UserName, UserAbout, OrgName, Member, AgentName string }{
+		err := instruction.Execute(&rendered, struct {
+			UserName, UserAbout, OrgName, Member, AgentName string
+			// Preloaded is whether every toolbox is loaded already, with
+			// nothing to list or load.
+			Preloaded bool
+		}{
 			UserName:  stateText(state, UserNameKey, "the member you are talking with"),
 			UserAbout: stateText(state, UserAboutKey, ""),
 			OrgName:   stateText(state, OrgNameKey, "their organization"),
 			Member:    memberDetails(state),
 			AgentName: stateText(state, AgentNameKey, "Krude"),
+			Preloaded: catalog.preloaded,
 		})
 		if err != nil {
 			return "", err
@@ -271,7 +295,7 @@ func memberDetails(state session.ReadonlyState) string {
 // instruction.
 func appendToolboxSkills(rendered *strings.Builder, catalog *toolCatalog, state session.ReadonlyState) {
 	var skills []string
-	for _, name := range loadedToolboxes(state) {
+	for _, name := range catalog.loadedNames(state) {
 		box, ok := catalog.find(name)
 		if !ok || strings.TrimSpace(box.Instructions) == "" {
 			continue

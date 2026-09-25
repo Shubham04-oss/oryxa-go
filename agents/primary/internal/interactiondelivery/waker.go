@@ -456,16 +456,21 @@ func deliverySatisfied(delivery Delivery, request agents.Interaction, now time.T
 }
 
 // reach says how far the woken run may go, which is what the recipient's
-// agent has actually allowed rather than what the request asked for. Only
-// work the agent already approved reads the member's apps; deciding on a new
-// request, and reporting an outcome back to one's own member, do not. Every
-// delivery is about its one request, so none is offered the member's other
-// requests to browse.
+// agent has actually allowed rather than what the request asked for, and is
+// everything the run starts with. Only work the agent already approved reads
+// the member's apps; deciding on a new request does not, and reporting an
+// outcome back to one's own member reads the request alone. Every delivery
+// is about its one request, so none is offered the member's other requests
+// to browse.
 func reach(kind string) managedagents.UnattendedProfile {
-	if kind == KindTargetApproved {
+	switch kind {
+	case KindTargetApproved:
 		return managedagents.DeliveryReads
+	case KindTargetRequested:
+		return managedagents.DeliveryQuiet
+	default:
+		return managedagents.DeliveryReport
 	}
-	return managedagents.DeliveryQuiet
 }
 
 // Message contains no request content. It tells the recipient which durable

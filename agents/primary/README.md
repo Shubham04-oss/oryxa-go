@@ -424,25 +424,30 @@ is told (see [Wake-ups](#wake-ups)).
 there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
 what it may reach follows what their own agent has already allowed:
 
-- **Deciding** on a new request, and **reporting** a finished one back to its
-  own member, run without the apps toolbox at all. Nothing another member
-  wrote can read this member's connected apps before their agent has approved
-  it. A request held for its owner is never delivered for deciding at all.
+- **Deciding** on a new request runs without the apps toolbox at all, with
+  the organization's knowledge, read-only, beside the request, so an approval
+  whose work needs no more can be finished in the same run. Nothing another
+  member wrote can read this member's connected apps before their agent has
+  approved it. A request held for its owner is never delivered for deciding
+  at all.
+- **Reporting** a rejection or a result back to the member who asked reads
+  the request alone: neither their apps nor their knowledge.
 - **Doing approved work** runs with the read-only apps toolbox (the same one
-  a wake-up gets) and never the writing one. The run is not narrowed to the
-  decision's `allowed_tools`: it has the whole read-only toolbox and is only
-  told to keep to what was allowed. The ledger checks only the response's own
-  account of it, that `tools_used` is within `allowed_tools`.
+  a wake-up gets) and never the writing one, beside the read-only knowledge.
+  The run is not narrowed to the decision's `allowed_tools`: it has the whole
+  read-only toolbox and is only told to keep to what was allowed. The ledger
+  checks only the response's own account of it, that `tools_used` is within
+  `allowed_tools`.
 - No unwatched run may start an interaction of its own: `interactions_create`
   is left out, so a request cannot fan out into requests on other members.
 - A delivery is about its one request. Its run gets an interactions toolbox
-  of its own (`managedagents.DeliveryReads` and `DeliveryQuiet`, the reach
-  above) with `interactions_get`, `interactions_decide` and
-  `interactions_respond` only: `interactions_inbox` and `interactions_sent`
-  are not there, so the model cannot browse the member's other requests
-  whatever it makes of the request. Nothing a delivery does needs them, since
-  its message names the request. App wake-ups and a room's stand-in keep the
-  toolbox they had.
+  of its own (`managedagents.DeliveryReads`, `DeliveryQuiet` and
+  `DeliveryReport`, the reach above) with `interactions_get`,
+  `interactions_decide` and `interactions_respond` only: `interactions_inbox`
+  and `interactions_sent` are not there, so the model cannot browse the
+  member's other requests whatever it makes of the request. Nothing a
+  delivery does needs them, since its message names the request. App
+  wake-ups and a room's stand-in keep the toolbox they had.
 
 Each create, decision, and response is committed with an EventBridge outbox
 event. The event contains routing identities and lifecycle state, not the task,
@@ -465,10 +470,28 @@ repeat events deduplicate by `event_id`. Runs carry no member access token, do
 not read or write long-term memory, and remain subject to the normal tool
 authorization and confirmation boundaries.
 
-A delivery run starts with the interactions toolbox already loaded
-(`threads.RunInput.Toolboxes`), its skill in the instruction, so the first
-model call goes straight to `interactions_get` rather than to `list_tools` and
-`load_tools`; the run's other toolboxes stay loadable as ever.
+A delivery run starts with all it may reach already loaded: every toolbox of
+its reach has its tools declared, and its skill in the instruction, from the
+first model call, and the run has no `list_tools` or `load_tools`, so no
+model call goes to finding what it could use (`assembly.Krude.Delivering` for
+Krude, `ManagedDelivering` for a specialist). Approved work starts with the
+read-only apps, the read-only knowledge and the request's interactions
+toolbox; deciding a new request with the knowledge and the interactions
+toolbox; a report with the interactions toolbox alone.
+
+That puts the whole reach on every call. For approved work it is 4.7 KB of
+tool declarations and 4.8 KB of skills that the interactions toolbox alone
+did not carry, less the 1.4 KB `list_tools` and `load_tools` took: about
+2,000 tokens more per call, 1,200 more to decide, and 350 fewer for a report.
+Against that, every measured delivery spent a model call on `list_tools`, 2.8
+to 37 seconds, and approved work that reads the member's apps spent another
+on `load_tools`, each call sending the whole conversation again. A run's
+prefix no longer changes midway either, so when it is large enough for an
+explicit prompt cache, one cache serves every call rather than a second after
+a toolbox loaded. The waker still marks the interactions toolbox loaded in
+the delivery's thread (`threads.RunInput.Toolboxes`), so a member who carries
+that thread on in their own chat has it there. App wake-ups, a room's
+stand-in and a member's own runs find and load toolboxes as before.
 
 The addressed agent's delivery run ends on the call that settles it:
 `interactions_respond`, or `interactions_decide` rejecting. That call sets

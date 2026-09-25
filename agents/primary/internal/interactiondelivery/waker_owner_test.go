@@ -134,7 +134,7 @@ func TestAHeldRequestTheOwnerRejectsReachesOnlyTheRequester(t *testing.T) {
 		t.Fatalf("after the rejection: calls=%+v done=%v, want one run for the requester", runs.calls, store.done)
 	}
 	told := runs.calls[0]
-	if told.agentID != "agt_a" || told.member.UserID != "user_a" || told.reach != managedagents.DeliveryQuiet || told.input.Message != Message(rejected) {
+	if told.agentID != "agt_a" || told.member.UserID != "user_a" || told.reach != managedagents.DeliveryReport || told.input.Message != Message(rejected) {
 		t.Fatalf("told=%+v, want the requester's agent told of the rejection as before", told)
 	}
 }

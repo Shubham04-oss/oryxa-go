@@ -275,25 +275,23 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		// the reduced toolboxes and no memory, and without the member's apps
 		// at all until their agent has approved the request that woke it. A
 		// run delivering one interaction is offered nothing that lists the
-		// member's other requests.
+		// member's other requests, and starts with all it may reach loaded.
 		Unattended: func(definition managedagents.Definition, profile managedagents.UnattendedProfile) (agent.Agent, error) {
-			withApps := profile.ReadsApps()
-			if definition.Kind == managedagents.KindPrimary {
-				switch {
-				case profile.Delivers() && withApps:
-					return krude.Delivering, nil
-				case profile.Delivers():
-					return krude.DeliveringQuiet, nil
-				case withApps:
-					return krude.Unattended, nil
-				}
-				return krude.UnattendedQuiet, nil
-			}
 			spec := agents.ManagedSpec{
 				ID: definition.ID, Name: definition.Name, Description: definition.Description, Instructions: definition.Instructions,
 			}
 			if profile.Delivers() {
-				return krude.ManagedDelivering(spec, withApps)
+				if definition.Kind == managedagents.KindPrimary {
+					return krude.Delivering(deliveryReach(profile)), nil
+				}
+				return krude.ManagedDelivering(spec, deliveryReach(profile))
+			}
+			withApps := profile.ReadsApps()
+			if definition.Kind == managedagents.KindPrimary {
+				if withApps {
+					return krude.Unattended, nil
+				}
+				return krude.UnattendedQuiet, nil
 			}
 			return krude.ManagedUnattended(spec, withApps)
 		},
@@ -578,6 +576,19 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		Workers:  workers,
 		Close:    closeAll,
 	}, nil
+}
+
+// deliveryReach is how far a run delivering one interaction on profile
+// reaches. A profile this does not know reaches least: the request alone.
+func deliveryReach(profile managedagents.UnattendedProfile) assembly.DeliveryReach {
+	switch profile {
+	case managedagents.DeliveryReads:
+		return assembly.DeliveryReads
+	case managedagents.DeliveryQuiet:
+		return assembly.DeliveryQuiet
+	default:
+		return assembly.DeliveryReport
+	}
 }
 
 // roomDecider is what a room asks about every message. Jev answers in a few

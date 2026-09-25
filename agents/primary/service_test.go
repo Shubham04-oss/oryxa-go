@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/assembly"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/internal/host"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
@@ -64,6 +66,22 @@ func TestMountRefusesInvalidConfiguration(t *testing.T) {
 		"AGENTS_PRIMARY_AUTO_MIGRATE": "sometimes",
 	}, nil)); err == nil {
 		t.Fatal("Mount() accepted an invalid AGENTS_PRIMARY_AUTO_MIGRATE")
+	}
+}
+
+// TestADeliveryReachesAsFarAsItsProfile: approved work reads the member's
+// apps, a new request only their knowledge, and a report, or a delivering
+// profile this does not know, the request alone.
+func TestADeliveryReachesAsFarAsItsProfile(t *testing.T) {
+	for profile, want := range map[managedagents.UnattendedProfile]assembly.DeliveryReach{
+		managedagents.DeliveryReads:  assembly.DeliveryReads,
+		managedagents.DeliveryQuiet:  assembly.DeliveryQuiet,
+		managedagents.DeliveryReport: assembly.DeliveryReport,
+		"delivery_everything":        assembly.DeliveryReport,
+	} {
+		if got := deliveryReach(profile); got != want {
+			t.Errorf("deliveryReach(%q) = %d, want %d", profile, got, want)
+		}
 	}
 }
 
