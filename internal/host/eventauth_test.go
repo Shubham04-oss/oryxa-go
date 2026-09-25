@@ -16,8 +16,13 @@ import (
 )
 
 // mountOrder is cmd/oryxa's: the order services mount in, each taking its
-// signer and then a verifier for its consumer, as every real Mount does.
+// signer, unless it publishes nothing, and then a verifier for its consumer,
+// as every real Mount does.
 var mountOrder = []string{"auth", "teams", "billing", "files", "knowledge", "rag", "apps", "batching", "email", "agents", "realtime"}
+
+// publishNothing are the services whose real Mount takes no signer, since
+// they only consume.
+var publishNothing = map[string]bool{"email": true, "realtime": true}
 
 type identities struct {
 	signers   map[string]*eventauth.Signer
@@ -32,11 +37,13 @@ func mountIdentities(t *testing.T, registry *eventauth.Registry) identities {
 	definitions := make([]Definition, 0, len(mountOrder))
 	for _, name := range mountOrder {
 		definitions = append(definitions, Definition{Name: name, Mount: func(_ context.Context, platform Platform) (Service, error) {
-			signer, err := platform.EventAuth.Signer(name)
-			if err != nil {
-				return Service{}, err
+			if !publishNothing[name] {
+				signer, err := platform.EventAuth.Signer(name)
+				if err != nil {
+					return Service{}, err
+				}
+				handed.signers[name] = signer
 			}
-			handed.signers[name] = signer
 			handed.verifiers[name] = platform.EventAuth.Verifier()
 			return Service{}, nil
 		}})
@@ -73,6 +80,9 @@ func TestEveryConsumerTrustsEveryServiceInItsProcess(t *testing.T) {
 	registry := eventRegistry(aws.Config{}, true, nil, namedDefinitions(mountOrder...), slog.New(slog.DiscardHandler))
 	handed := mountIdentities(t, registry)
 	for _, publisher := range mountOrder {
+		if publishNothing[publisher] {
+			continue
+		}
 		for _, consumer := range mountOrder {
 			if err := deliver(handed.signers[publisher], publisher, handed.verifiers[consumer]); err != nil {
 				t.Errorf("%s's event refused by %s's consumer: %v", publisher, consumer, err)
