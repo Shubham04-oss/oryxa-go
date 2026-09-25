@@ -42,7 +42,8 @@ const (
 
 // Seat is one participant, as the room shows them to everybody else.
 type Seat struct {
-	// Handle is how the seat is addressed in a message: "@ada".
+	// Handle is the seat's name without the "@", "ada", which a message
+	// addresses as "@ada".
 	Handle string   `json:"handle"`
 	Kind   SeatKind `json:"kind"`
 	// UserID is the person, or for an agent the person it speaks for.
@@ -78,7 +79,11 @@ type Message struct {
 	// AuthorAgentID is set when an agent said it.
 	AuthorAgentID string `json:"author_agent_id,omitempty"`
 	Body          string `json:"body"`
-	// AddressedTo holds the handles the body named, the author excluded.
+	// AddressedTo holds the handles of the room's seats the body named with
+	// "@handle", the author excluded, in the order it first named them, as the
+	// relay resolved them when it stored the message: never an "@" before
+	// anything that was not a seat, such as an email address's domain. The
+	// message's event publishes the same list as addressed_handles.
 	AddressedTo []string `json:"addressed_to,omitempty"`
 	// InReplyToSeq is the message this one answers, when an agent was woken
 	// by one in particular.

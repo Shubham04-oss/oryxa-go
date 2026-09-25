@@ -518,6 +518,63 @@ func TestNewRelay(t *testing.T) {
 	}
 }
 
+// TestRelayPost_StoresOnlyTheSeatsAMessageNamed: a message, a person's or an
+// agent's, is stored addressing the room's seats it named, and nothing else
+// that followed an "@": not an email address's domain, not a handle nobody
+// here has, and not a list the caller brought along.
+func TestRelayPost_StoresOnlyTheSeatsAMessageNamed(t *testing.T) {
+	bob := relayPersonSeat("bob", "user-bob", true)
+	ada := relayAgentSeat("ada", "user-ada", "agent-ada")
+	cy := relayAgentSeat("cy", "user-cy", "agent-cy")
+	store := &relayFakeStore{}
+	speaker := &relayFakeSpeaker{reply: func(seat Seat, _ Situation, _ []Message) (string, error) {
+		switch seat.Handle {
+		case "ada":
+			return "Sent to ops@acme-merger-2027.com. @bob, @dana has it too; @cy, your turn.", nil
+		case "cy":
+			return "Filed it under billing@acme-merger-2027.com.", nil
+		}
+		return Pass, nil
+	}}
+	relay := &Relay{Store: store, Speaker: speaker}
+	room := Situation{Seats: []Seat{bob, ada, cy}}
+	msg := relayMessage("room-1", bob, "@ada mail the deck to ops@acme-merger-2027.com, cc @nobody-here and @ada again")
+	msg.AddressedTo = []string{"acme-merger-2027"}
+
+	results, err := relay.Post(context.Background(), room, msg, Verdict{})
+	if err != nil {
+		t.Fatalf("Post: %v", err)
+	}
+	if len(results) != 3 || results[1].AuthorHandle != "ada" || results[2].AuthorHandle != "cy" {
+		t.Fatalf("got %+v, want bob's message, ada's answer and cy's", results)
+	}
+	for index, want := range [][]string{{"ada"}, {"bob", "cy"}, nil} {
+		if got := results[index].AddressedTo; !slices.Equal(got, want) {
+			t.Errorf("message %d addresses %v, want %v", index, got, want)
+		}
+		if stored := store.messages[index].AddressedTo; !slices.Equal(stored, want) {
+			t.Errorf("message %d is stored addressing %v, want %v", index, stored, want)
+		}
+	}
+}
+
+func TestSeatHandles(t *testing.T) {
+	seats := []Seat{relayPersonSeat("bob", "user-bob", true), relayAgentSeat("ada", "user-ada", "agent-ada")}
+	for _, test := range []struct {
+		body, author string
+		want         []string
+	}{
+		{"@ada and @bob, and @ada again", "carol", []string{"ada", "bob"}},
+		{"write to ops@acme-merger-2027.com", "bob", nil},
+		{"@bob talking about himself to @ada", "bob", []string{"ada"}},
+		{"no mentions here", "bob", nil},
+	} {
+		if got := seatHandles(seats, test.body, test.author); !slices.Equal(got, test.want) {
+			t.Errorf("seatHandles(%q, author %s) = %v, want %v", test.body, test.author, got, test.want)
+		}
+	}
+}
+
 func TestAddressedHandles(t *testing.T) {
 	got := addressedHandles("@ada, @bob and @ada again, but not @carol's own mention", "carol")
 	want := []string{"ada", "bob"}

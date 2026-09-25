@@ -150,7 +150,8 @@ func recordPosted(ctx context.Context, tx pgx.Tx, organizationID string, message
 }
 
 // posted is the bus's view of a stored message. The room is the teamspace,
-// so its id is the teamspace's.
+// so its id is the teamspace's. Whom it named is its AddressedTo, which the
+// relay narrowed to the room's own seats before storing it.
 func posted(organizationID string, message Message) agentsv1.TeamspaceRoomMessagePosted {
 	author := agentsv1.TeamspaceRoomAuthor{Kind: agentsv1.TeamspaceRoomAuthorMember, UserID: message.AuthorUserID}
 	if message.AuthorKind == SeatAgent {
