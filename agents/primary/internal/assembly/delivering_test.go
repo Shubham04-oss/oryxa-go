@@ -163,7 +163,8 @@ func assembledKrude(t *testing.T, llm model.LLM) *Krude {
 // member's apps and knowledge, read-only, and its request; deciding a new
 // request with the knowledge and the request; a report with the request
 // alone. Krude and a specialist alike, and none of them can list or load a
-// toolbox, so none spends a model call finding one.
+// toolbox, so none spends a model call finding one, or look up the member
+// its instruction already names.
 func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 	llm := &recordingModel{}
 	krude := assembledKrude(t, llm)
@@ -188,7 +189,7 @@ func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 					t.Errorf("%s, for %s: the first call declared %v, want %s", name, runner, offered, want)
 				}
 			}
-			for _, unwanted := range append([]string{"list_tools", "load_tools", "interactions_inbox", "interactions_create"}, reach.absent...) {
+			for _, unwanted := range append([]string{"list_tools", "load_tools", "get_user_details", "interactions_inbox", "interactions_create"}, reach.absent...) {
 				if slices.Contains(offered, unwanted) {
 					t.Errorf("%s, for %s: the first call declared %s: %v", name, runner, unwanted, offered)
 				}
@@ -198,7 +199,8 @@ func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 }
 
 // TestOnlyDeliveriesStartLoaded: the member's own chat, an app wake-up and a
-// room's stand-in still find and load their toolboxes as they did.
+// room's stand-in still find and load their toolboxes, and look up their
+// member, as they did.
 func TestOnlyDeliveriesStartLoaded(t *testing.T) {
 	llm := &recordingModel{}
 	krude := assembledKrude(t, llm)
@@ -210,8 +212,8 @@ func TestOnlyDeliveriesStartLoaded(t *testing.T) {
 		"a member's chat": krude.Root, "a wake-up": krude.Unattended, "a room's stand-in": krude.UnattendedQuiet, "a specialist standing in": stood,
 	} {
 		offered := declared(llm.firstCall(t, built))
-		if !slices.Contains(offered, "list_tools") || !slices.Contains(offered, "load_tools") {
-			t.Errorf("%s lost list_tools or load_tools: %v", name, offered)
+		if !slices.Contains(offered, "list_tools") || !slices.Contains(offered, "load_tools") || !slices.Contains(offered, "get_user_details") {
+			t.Errorf("%s lost list_tools, load_tools or get_user_details: %v", name, offered)
 		}
 		if slices.Contains(offered, "knowledge_search") || slices.Contains(offered, "interactions_get") {
 			t.Errorf("%s started with a toolbox loaded: %v", name, offered)

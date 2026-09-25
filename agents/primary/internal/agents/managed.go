@@ -53,8 +53,9 @@ func Managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 
 // ManagedDelivering returns the specialist for a run that delivers one
 // interaction, as DeliveringRoot does Krude: every toolbox given is loaded
-// from the first model call, with its skill, and it has no list_tools or
-// load_tools. Such a run is unwatched, so it has no memory either.
+// from the first model call, with its skill, and it has no list_tools,
+// load_tools or get_user_details, whose every detail its instruction already
+// carries. Such a run is unwatched, so it has no memory either.
 func ManagedDelivering(router *modelrouter.Router, toolboxes []Toolbox, spec ManagedSpec) (agent.Agent, error) {
 	return managed(router, toolboxes, false, spec, true)
 }
@@ -73,7 +74,7 @@ func managed(router *modelrouter.Router, toolboxes []Toolbox, remembers bool, sp
 	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool, saveArtifactTool}
 	if delivering {
 		catalog.preloaded = true
-		builders = []func() (tool.Tool, error){userDetailsTool, loadArtifactsTool, saveArtifactTool}
+		builders = []func() (tool.Tool, error){loadArtifactsTool, saveArtifactTool}
 	}
 	if remembers {
 		builders = append(builders, loadMemoryTool)

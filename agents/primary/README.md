@@ -481,17 +481,38 @@ toolbox; a report with the interactions toolbox alone.
 
 That puts the whole reach on every call. For approved work it is 4.7 KB of
 tool declarations and 4.8 KB of skills that the interactions toolbox alone
-did not carry, less the 1.4 KB `list_tools` and `load_tools` took: about
-2,000 tokens more per call, 1,200 more to decide, and 350 fewer for a report.
-Against that, every measured delivery spent a model call on `list_tools`, 2.8
-to 37 seconds, and approved work that reads the member's apps spent another
-on `load_tools`, each call sending the whole conversation again. A run's
-prefix no longer changes midway either, so when it is large enough for an
-explicit prompt cache, one cache serves every call rather than a second after
-a toolbox loaded. The waker still marks the interactions toolbox loaded in
-the delivery's thread (`threads.RunInput.Toolboxes`), so a member who carries
-that thread on in their own chat has it there. App wake-ups, a room's
-stand-in and a member's own runs find and load toolboxes as before.
+did not carry, less the 2 KB that `list_tools`, `load_tools` and
+`get_user_details` (below) took: about 1,900 tokens more per call, 1,100 more
+to decide, and 500 fewer for a report. Against that, every measured delivery
+spent a model call on `list_tools`, 2.8 to 37 seconds, and approved work that
+reads the member's apps spent another on `load_tools`, each call sending the
+whole conversation again. A run's prefix no longer changes midway either, so
+when it is large enough for an explicit prompt cache, one cache serves every
+call rather than a second after a toolbox loaded. The waker still marks the
+interactions toolbox loaded in the delivery's thread
+(`threads.RunInput.Toolboxes`), so a member who carries that thread on in
+their own chat has it there. App wake-ups, a room's stand-in and a member's
+own runs find and load toolboxes as before.
+
+The message that wakes the agent says where the request comes from, so the
+agent need not look it up. The agent asked to decide it, or to do its work,
+is told the agent that asked and the member it asked for, by the name they
+chose and their sign-in address, as auth keeps them: auth has no other
+handle for a person, and a room's `@handle` exists only inside that room.
+Both sides are told the teamspace it was made in (`interactiondelivery.Config`
+`Members` and `Teamspaces`). A report to the member who asked names no one:
+the one who asked is that member, whom the run's instruction already names.
+Each name is one quoted line of at most 60 characters, and the message
+treats the names as it does the request, as untrusted data. None of it is
+the request's content, which stays behind `interactions_get`. A name that
+cannot be read is left out, and the agent is woken all the same.
+
+So a delivery run is not offered `get_user_details` either. Everything it
+returns, the name, role, sign-in address and organization of the member the
+agent works for, is in the run's instruction from its first call; a delivery
+thread is too short for any of it to scroll out of sight; and it never
+described the member who asked. Two of three measured runs called it, at 7 to
+16 seconds each, and learned nothing their instruction did not say.
 
 The addressed agent's delivery run ends on the call that settles it:
 `interactions_respond`, or `interactions_decide` rejecting. That call sets

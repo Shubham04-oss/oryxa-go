@@ -160,7 +160,7 @@ func Root(router *modelrouter.Router, toolboxes []Toolbox, remembers bool) (agen
 		Name:                RootName,
 		Description:         "Krude, a member's assistant.",
 		Model:               router.For(modelrouter.RoleChat),
-		InstructionProvider: instructionFrom(krudeInstruction, catalog),
+		InstructionProvider: instructionFrom(krudeInstruction, catalog, false),
 		SubAgents:           subAgents,
 		Tools:               tools,
 		Toolsets:            []tool.Toolset{catalog.loaded(), subagents},
@@ -186,7 +186,11 @@ func UnattendedRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agen
 // interaction. What such a run may reach is decided before it starts, by
 // what the member's agent has allowed, so every toolbox given is loaded, with
 // its skill, from the run's first model call, and there is nothing to list or
-// load: no list_tools or load_tools, and no model call spent on either.
+// load: no list_tools or load_tools, and no model call spent on either. Nor
+// is it offered get_user_details: its instruction carries every detail of the
+// member it works for, the run is too short for them to scroll out of sight,
+// and the message that wakes it names the member on the other side of the
+// request, whom get_user_details never described.
 func DeliveringRoot(router *modelrouter.Router, toolboxes []Toolbox) (agent.Agent, error) {
 	return unattendedRoot(router, toolboxes, true)
 }
@@ -202,7 +206,7 @@ func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering 
 	builders := []func() (tool.Tool, error){catalog.listTool, catalog.loadTool, userDetailsTool, loadArtifactsTool}
 	if delivering {
 		catalog.preloaded = true
-		builders = []func() (tool.Tool, error){userDetailsTool, loadArtifactsTool}
+		builders = []func() (tool.Tool, error){loadArtifactsTool}
 	}
 	tools, err := buildTools(builders...)
 	if err != nil {
@@ -212,7 +216,7 @@ func unattendedRoot(router *modelrouter.Router, toolboxes []Toolbox, delivering 
 		Name:                RootName,
 		Description:         "Krude, reporting to a member who is away.",
 		Model:               router.For(modelrouter.RoleChat),
-		InstructionProvider: instructionFrom(unattendedInstruction, catalog),
+		InstructionProvider: instructionFrom(unattendedInstruction, catalog, delivering),
 		Tools:               tools,
 		Toolsets:            []tool.Toolset{catalog.loaded()},
 	})
@@ -245,23 +249,25 @@ func buildTools(builders ...func() (tool.Tool, error)) ([]tool.Tool, error) {
 
 // instructionFrom renders an instruction of Krude's for the member in this
 // session, then appends the skill of every loaded toolbox, so a toolbox that
-// is loaded brings its usage instructions with it.
-func instructionFrom(instruction *template.Template, catalog *toolCatalog) func(agent.ReadonlyContext) (string, error) {
+// is loaded brings its usage instructions with it. delivering is whether the
+// run delivers one interaction (DeliveringRoot).
+func instructionFrom(instruction *template.Template, catalog *toolCatalog, delivering bool) func(agent.ReadonlyContext) (string, error) {
 	return func(ctx agent.ReadonlyContext) (string, error) {
 		state := ctx.ReadonlyState()
 		var rendered strings.Builder
 		err := instruction.Execute(&rendered, struct {
 			UserName, UserAbout, OrgName, Member, AgentName string
-			// Preloaded is whether every toolbox is loaded already, with
-			// nothing to list or load.
-			Preloaded bool
+			// Delivering is a run that delivers one interaction: every
+			// toolbox it may use is loaded already, and it has no
+			// get_user_details.
+			Delivering bool
 		}{
-			UserName:  stateText(state, UserNameKey, "the member you are talking with"),
-			UserAbout: stateText(state, UserAboutKey, ""),
-			OrgName:   stateText(state, OrgNameKey, "their organization"),
-			Member:    memberDetails(state),
-			AgentName: stateText(state, AgentNameKey, "Krude"),
-			Preloaded: catalog.preloaded,
+			UserName:   stateText(state, UserNameKey, "the member you are talking with"),
+			UserAbout:  stateText(state, UserAboutKey, ""),
+			OrgName:    stateText(state, OrgNameKey, "their organization"),
+			Member:     memberDetails(state),
+			AgentName:  stateText(state, AgentNameKey, "Krude"),
+			Delivering: delivering,
 		})
 		if err != nil {
 			return "", err

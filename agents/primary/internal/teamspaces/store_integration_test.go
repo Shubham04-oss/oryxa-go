@@ -343,3 +343,37 @@ func TestForgetTeamMemberRefusesWhatItCannotBound(t *testing.T) {
 		}
 	}
 }
+
+// TestStoreNamesATeamspaceInItsOrganizationOnly: a teamspace's name is read
+// by its organization and id together, so another organization's teamspace,
+// or one that does not exist, has none.
+func TestStoreNamesATeamspaceInItsOrganizationOnly(t *testing.T) {
+	database, store, _ := testStores(t)
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	organizationID := fmt.Sprintf("org_teamspace_name_test_%d", suffix)
+	defer func() {
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.teamspaces WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.organization_agents WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organizationID)
+	}()
+	organizationAgent, err := store.EnsureOrganizationAgent(ctx, organizationID, "Naming Org", "user_owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err := store.Create(ctx, Space{
+		ID: fmt.Sprintf("tsp_name_%d", suffix), OrganizationID: organizationID, TeamID: fmt.Sprintf("team_name_%d", suffix),
+		Name: "Launch", CreatedByUserID: "user_owner", OrganizationAgentID: organizationAgent.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if name, err := store.Name(ctx, organizationID, space.ID); err != nil || name != "Launch" {
+		t.Fatalf("Name() = %q, %v, want Launch", name, err)
+	}
+	for _, other := range [][2]string{{organizationID + "_other", space.ID}, {organizationID, space.ID + "_missing"}} {
+		if name, err := store.Name(ctx, other[0], other[1]); !errors.Is(err, ErrNotFound) {
+			t.Errorf("Name(%q, %q) = %q, %v, want ErrNotFound", other[0], other[1], name, err)
+		}
+	}
+}

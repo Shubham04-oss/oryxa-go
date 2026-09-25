@@ -546,6 +546,9 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 			Interval:    interactionDeliveryInterval,
 			Lease:       settings.RunTimeout + time.Minute,
 			Concurrency: interactionDeliveryConcurrency,
+			// The message that wakes an agent names the member who asked, as
+			// auth keeps them, and the teamspace the request was made in.
+			Members: sessionStore, Teamspaces: teamspaceStore,
 		}
 		// The ledger reads a request made in a teamspace again before its
 		// agent is woken; without one, such requests wake nobody.

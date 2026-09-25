@@ -50,21 +50,38 @@ func approvedReach(t *testing.T) []Toolbox {
 	}
 }
 
-// discovery is every tool that finds or loads toolboxes.
-var discovery = []string{"list_tools", "load_tools"}
+// discovery is every tool that finds or loads toolboxes, and lookups every
+// tool a delivery run is not offered for looking up what it is already told.
+var (
+	discovery = []string{"list_tools", "load_tools"}
+	lookups   = append([]string{"get_user_details"}, discovery...)
+)
+
+// memberState is the session of the member whose agent is woken, as it is
+// seeded from their auth record.
+func memberState(agentID, agentName, kind string) map[string]any {
+	return map[string]any{
+		UserNameKey: "Org Admin", UserAboutKey: "an admin of their organization", UserEmailKey: "admin@sim.oryxa",
+		UserRoleKey: "admin", OrgNameKey: "Sim Org", OrganizationIDKey: "org_1",
+		AgentIDKey: agentID, AgentNameKey: agentName, AgentKindKey: kind,
+	}
+}
+
+// memberLines are what get_user_details would answer, as the instruction
+// carries them.
+var memberLines = []string{"- Name: Org Admin", "- About: an admin of their organization", "- Email: admin@sim.oryxa", "- Role: admin", "- Organization: Sim Org", "- Organization ID: org_1"}
 
 // TestADeliveryRunStartsWithAllItMayReach: the model delivering an approved
 // request is offered every tool of its reach, with every skill, on its very
 // first call, whatever its session loaded, and has nothing to list or load,
-// so no model call goes to finding its tools.
+// so no model call goes to finding its tools. Nor is it offered
+// get_user_details: everything that would answer is in its instruction.
 func TestADeliveryRunStartsWithAllItMayReach(t *testing.T) {
 	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
 		return genai.NewContentFromText("Done.", genai.RoleModel)
 	})
 	// Nothing is loaded in the session: the run's reach is its own.
-	deliveringHarness(t, llm, approvedReach(t)...).turn("user_b", map[string]any{
-		OrganizationIDKey: "org_1", AgentIDKey: "agt_b", AgentNameKey: "Carl", AgentKindKey: "primary",
-	}, "Deliver irq_1.")
+	deliveringHarness(t, llm, approvedReach(t)...).turn("user_b", memberState("agt_b", "Carl", "primary"), "Deliver irq_1.")
 
 	first := llm.requestsFor(RootName)[0]
 	declared := declaredFunctions(first)
@@ -73,19 +90,21 @@ func TestADeliveryRunStartsWithAllItMayReach(t *testing.T) {
 			t.Fatalf("the first call declared %v, want %s among them", declared, want)
 		}
 	}
-	for _, finding := range discovery {
-		if slices.Contains(declared, finding) {
-			t.Fatalf("a delivery run was offered %s: %v", finding, declared)
+	for _, looking := range lookups {
+		if slices.Contains(declared, looking) {
+			t.Fatalf("a delivery run was offered %s: %v", looking, declared)
 		}
 	}
 	instruction := text(first.Config.SystemInstruction)
-	for _, want := range []string{"APPS SKILL", "KNOWLEDGE SKILL", "# Agent interactions", "already loaded"} {
+	for _, want := range append([]string{"APPS SKILL", "KNOWLEDGE SKILL", "# Agent interactions", "already loaded"}, memberLines...) {
 		if !strings.Contains(instruction, want) {
 			t.Fatalf("the first call's instruction lacks %q:\n%s", want, instruction)
 		}
 	}
-	if strings.Contains(instruction, "list_tools") {
-		t.Fatalf("the instruction still sends the model to list_tools:\n%s", instruction)
+	for _, looking := range lookups {
+		if strings.Contains(instruction, looking) {
+			t.Fatalf("the instruction still sends the model to %s:\n%s", looking, instruction)
+		}
 	}
 }
 
@@ -106,7 +125,7 @@ func TestASpecialistsDeliveryRunStartsWithAllItMayReach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runSpecialist(t, specialist, map[string]any{OrganizationIDKey: "org_1", AgentIDKey: "agt_sales", AgentNameKey: "Sales", AgentKindKey: "specialist"})
+	runSpecialist(t, specialist, memberState("agt_sales", "Sales", "specialist"))
 
 	first := llm.requestsFor("subagent")[0]
 	declared := declaredFunctions(first)
@@ -115,14 +134,19 @@ func TestASpecialistsDeliveryRunStartsWithAllItMayReach(t *testing.T) {
 			t.Fatalf("the first call declared %v, want %s among them", declared, want)
 		}
 	}
-	for _, finding := range discovery {
-		if slices.Contains(declared, finding) {
-			t.Fatalf("a specialist's delivery run was offered %s: %v", finding, declared)
+	for _, looking := range lookups {
+		if slices.Contains(declared, looking) {
+			t.Fatalf("a specialist's delivery run was offered %s: %v", looking, declared)
 		}
 	}
 	instruction := text(first.Config.SystemInstruction)
 	if !strings.Contains(instruction, "APPS SKILL") || !strings.Contains(instruction, "already loaded") || strings.Contains(instruction, "Load only toolboxes") {
 		t.Fatalf("the specialist's instruction does not start it loaded:\n%s", instruction)
+	}
+	for _, want := range memberLines {
+		if !strings.Contains(instruction, want) {
+			t.Fatalf("the specialist's instruction lacks %q, which get_user_details would have answered:\n%s", want, instruction)
+		}
 	}
 }
 
@@ -149,9 +173,9 @@ func TestADeliveryRunLeavesOutAToolboxItCannotOfferSafely(t *testing.T) {
 	}
 }
 
-// TestAWakeUpStillFindsItsToolboxes: an app wake-up keeps list_tools and
-// load_tools, and loads what it needs as it always has; only a delivery
-// starts loaded.
+// TestAWakeUpStillFindsItsToolboxes: an app wake-up keeps list_tools,
+// load_tools and get_user_details, and loads what it needs as it always has;
+// only a delivery starts loaded.
 func TestAWakeUpStillFindsItsToolboxes(t *testing.T) {
 	llm := newTreeModel(func(string, *model.LLMRequest) *genai.Content {
 		return genai.NewContentFromText("Two emails came in.", genai.RoleModel)
@@ -159,9 +183,9 @@ func TestAWakeUpStillFindsItsToolboxes(t *testing.T) {
 	unattendedHarness(t, llm, approvedReach(t)...).turn("member_1", nil, "Events arrived.")
 	first := llm.requestsFor(RootName)[0]
 	declared := declaredFunctions(first)
-	for _, finding := range discovery {
-		if !slices.Contains(declared, finding) {
-			t.Fatalf("a wake-up lost %s: %v", finding, declared)
+	for _, looking := range lookups {
+		if !slices.Contains(declared, looking) {
+			t.Fatalf("a wake-up lost %s: %v", looking, declared)
 		}
 	}
 	if slices.Contains(declared, "apps_run_read_tool") || strings.Contains(text(first.Config.SystemInstruction), "APPS SKILL") {
