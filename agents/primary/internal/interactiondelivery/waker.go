@@ -122,6 +122,9 @@ type Config struct {
 	// Without them the message leaves out what they would have named.
 	Members    Members
 	Teamspaces TeamspaceNames
+	// Toolboxes names the toolboxes a run on a profile is given, for the
+	// line that logs each run's start. Without it the line names none.
+	Toolboxes func(managedagents.UnattendedProfile) []string
 }
 
 // Waker runs the correct persistent agent for each interaction lifecycle
@@ -296,7 +299,8 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 		return
 	}
 
-	started, err := waker.start(ctx, delivery, messageFor(delivery, request, waker.between(ctx, delivery, request, logger)), reach(delivery.Kind, request))
+	profile := reach(delivery.Kind, request)
+	started, err := waker.start(ctx, delivery, messageFor(delivery, request, waker.between(ctx, delivery, request, logger)), profile)
 	switch {
 	case errors.Is(err, threads.ErrRunInProgress), errors.Is(err, threads.ErrConfirmationPending):
 		logger.InfoContext(ctx, "interaction delivery waits for the agent conversation", "reason", err)
@@ -321,6 +325,16 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 		waker.release(ctx, delivery, true, err.Error(), logger)
 		return
 	}
+
+	// What the run was given, by name: what it may reach of the member's,
+	// and what it may do with its request. Never what either holds.
+	var toolboxes []string
+	if waker.config.Toolboxes != nil {
+		toolboxes = waker.config.Toolboxes(profile)
+	}
+	logger.InfoContext(ctx, "interaction delivery run started", "run_id", started.Run.ID(),
+		"purpose", purpose(delivery.Kind), "profile", string(profile), "toolboxes", toolboxes,
+		"interaction_tools", agents.DeliveryTools(purpose(delivery.Kind)))
 
 	var ended string
 	started.Run.Execute(ctx, func(item threads.Item) error {

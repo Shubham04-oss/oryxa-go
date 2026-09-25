@@ -532,6 +532,16 @@ func (krude *Krude) ManagedDelivering(spec agents.ManagedSpec, reach DeliveryRea
 	return agents.ManagedDelivering(krude.router, krude.toolboxesFor(reach), spec, krude.deliveryThinking)
 }
 
+// DeliveryToolboxNames are the names of the toolboxes a run delivering one
+// interaction with reach starts with, for the line that logs each such run.
+func (krude *Krude) DeliveryToolboxNames(reach DeliveryReach) []string {
+	names := []string{}
+	for _, box := range krude.toolboxesFor(reach) {
+		names = append(names, box.Name)
+	}
+	return names
+}
+
 // toolboxesFor is what a run delivering one interaction with reach starts
 // with; a reach this does not know gets the least.
 func (krude *Krude) toolboxesFor(reach DeliveryReach) []agents.Toolbox {

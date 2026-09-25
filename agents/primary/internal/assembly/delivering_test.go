@@ -340,3 +340,19 @@ func TestOnlyDeliveriesThinkAtTheLevelSet(t *testing.T) {
 		}
 	}
 }
+
+// TestADeliveryRunsToolboxesAreNamedForItsLog: the names the waker logs for
+// a run are those of the toolboxes its reach gives it.
+func TestADeliveryRunsToolboxesAreNamedForItsLog(t *testing.T) {
+	krude := assembledKrude(t, &recordingModel{}, "")
+	for reach, want := range map[DeliveryReach][]string{
+		DeliveryReads:  {"apps", "knowledge", "interactions"},
+		DeliveryApps:   {"apps", "interactions"},
+		DeliveryQuiet:  {"knowledge", "interactions"},
+		DeliveryReport: {"interactions"},
+	} {
+		if got := krude.DeliveryToolboxNames(reach); !slices.Equal(got, want) {
+			t.Errorf("reach %d is named %v, want %v", reach, got, want)
+		}
+	}
+}

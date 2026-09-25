@@ -507,6 +507,10 @@ what it may reach follows what their own agent has already allowed:
   member's apps cannot read, decide or answer another of their requests. Nothing a
   delivery does needs them, since its message names the request. App
   wake-ups and a room's stand-in keep the toolbox they had.
+- Every delivery run's start is logged at INFO, `interaction delivery run
+  started`, with its request, the delivery's kind and purpose, its profile,
+  and the toolboxes and interactions tools it was given, by name
+  (`interactiondelivery.Config.Toolboxes`); never what any of them holds.
 - A delivery run has no `load_artifacts`, which would list the member's own
   files, the `user:` ones every thread of theirs shares, into a run another
   member's words steer.

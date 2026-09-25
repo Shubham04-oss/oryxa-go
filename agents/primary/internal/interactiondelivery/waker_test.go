@@ -1,8 +1,11 @@
 package interactiondelivery
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -407,6 +410,68 @@ func TestEveryDeliveryRunIsPinnedToItsRequest(t *testing.T) {
 		}[kind]
 		if got := runs.calls[0].input.Delivery.Purpose; got != want {
 			t.Fatalf("%s: the run is for %q, want %q", kind, got, want)
+		}
+	}
+}
+
+// TestEveryDeliveryRunStartIsLoggedWithWhatItWasGiven: each run a delivery
+// starts logs one line saying which request, what kind of delivery, and the
+// toolboxes and interactions tools it was given, by name, and nothing the
+// request says.
+func TestEveryDeliveryRunStartIsLoggedWithWhatItWasGiven(t *testing.T) {
+	for kind, want := range map[string]struct {
+		toolboxes, tools []string
+	}{
+		KindTargetRequested:    {[]string{"interactions"}, []string{"interactions_get", "interactions_decide"}},
+		KindTargetApproved:     {[]string{"apps", "interactions"}, []string{"interactions_get", "interactions_respond"}},
+		KindRequesterCompleted: {[]string{"interactions"}, []string{"interactions_get"}},
+	} {
+		status := interactions.StatusPending
+		request := testRequest(status)
+		if kind == KindTargetApproved {
+			request = allowing(request, agents.AppsToolboxName)
+		}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": request}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
+		var logs bytes.Buffer
+		toolboxes := func(profile managedagents.UnattendedProfile) []string {
+			if profile.ReadsApps() {
+				return []string{"apps", "interactions"}
+			}
+			return []string{"interactions"}
+		}
+		waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", kind, 1)}}, runs, requests,
+			Config{Interval: time.Second, Lease: time.Minute, Toolboxes: toolboxes}, slog.New(slog.NewJSONHandler(&logs, nil)))
+		if err := waker.WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var started []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+			var entry map[string]any
+			if err := json.Unmarshal([]byte(line), &entry); err != nil {
+				t.Fatalf("%s: log line %q: %v", kind, line, err)
+			}
+			if entry["msg"] == "interaction delivery run started" {
+				started = append(started, entry)
+			}
+		}
+		if len(started) != 1 {
+			t.Fatalf("%s: %d lines logged a run starting, want one:\n%s", kind, len(started), logs.String())
+		}
+		line := started[0]
+		names := func(key string) []string {
+			var out []string
+			for _, value := range line[key].([]any) {
+				out = append(out, value.(string))
+			}
+			return out
+		}
+		if line["request_id"] != "irq_1" || line["kind"] != kind || line["level"] != "INFO" ||
+			!slices.Equal(names("toolboxes"), want.toolboxes) || !slices.Equal(names("interaction_tools"), want.tools) {
+			t.Fatalf("%s: logged %v, want irq_1, its kind, %v and %v", kind, line, want.toolboxes, want.tools)
+		}
+		if strings.Contains(logs.String(), "TOP SECRET") {
+			t.Fatalf("%s: the log carries the request:\n%s", kind, logs.String())
 		}
 	}
 }
