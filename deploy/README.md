@@ -206,7 +206,10 @@ every purge is retried into the dead-letter queue. In this order:
 
 3. Switch it on in `deploy/production/realtime.auto.tfvars.json`, and apply.
    The task gets `REALTIME_WORKER_URL=https://app.oryxa.in` and the secret, and
-   restarts with realtime on:
+   restarts with realtime on. The apply also adds the queue's backlog alarm,
+   which is not there while realtime is off, since nothing reads the queue
+   then. It may mail once while realtime works through the events that
+   waited:
 
    ```sh
    echo '{"realtime_purge": true}' | jq . > deploy/production/realtime.auto.tfvars.json
@@ -234,9 +237,10 @@ every purge is retried into the dead-letter queue. In this order:
 
 To turn it off, set `realtime_purge` to `false`, apply and commit. The stored
 secret stays, so turning it on again is step 3. The rule keeps filling the
-queue, which holds each event for 14 days, and the backlog alarm mails after
-ten minutes. Turned on again within those 14 days, realtime purges everything
-that waited.
+queue, which holds each event for 14 days, and the queue's backlog alarm,
+which exists only while realtime is on, goes with the switch. Turned on again
+within those 14 days, realtime purges everything that waited, and the backlog
+alarm, made again by the apply, may mail once while it does.
 
 ## Looking at it
 
