@@ -1511,6 +1511,25 @@ describe("a teamspace's purge, through the Worker", () => {
     expect(world.callsTo("InboxAgent", "purgeTeamspace")).toHaveLength(
       inboxPurges
     )
+    // Under another event, it finds nothing left to purge.
+    const sidePurges = world.callsTo("SideConversationAgent", "purge").length
+    expect(
+      (
+        await purge(
+          world,
+          await purgeRequest({
+            ...teamspaceDeleted,
+            event_id: "evt_teamspace_deleted_2",
+          })
+        )
+      ).status
+    ).toBe(204)
+    expect(world.callsTo("SideConversationAgent", "purge")).toHaveLength(
+      sidePurges
+    )
+    expect(sideBodies(world, design, admin, member)).toEqual([
+      "design: admin to member",
+    ])
   })
 
   it("answers 204 when nothing is in the teamspace, making no conversation and registering nobody", async () => {
