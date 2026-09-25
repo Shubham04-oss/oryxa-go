@@ -71,3 +71,27 @@ func TestARequestsEventsSayWhereItWasMadeAndWhoDecides(t *testing.T) {
 		}
 	}
 }
+
+// A request read back from PostgreSQL carries this process's local zone, such
+// as +05:30. Its event says when it changed in UTC, as the envelope's
+// occurred_at does.
+func TestARequestsEventSaysWhenItChangedInUTC(t *testing.T) {
+	ist := time.FixedZone("IST", 5*60*60+30*60)
+	changedAt := time.Date(2026, time.September, 25, 15, 0, 0, 123456000, ist)
+	event := changed(agents.Interaction{
+		ID: "irq_1", OrganizationID: "org_1", Status: StatusPending, Revision: 1, Approval: ApprovalAgent,
+		Requester: agents.InteractionParty{UserID: "user_a", AgentID: "agt_a"},
+		Target:    agents.InteractionParty{UserID: "user_b", AgentID: "agt_b"},
+		CreatedAt: changedAt, UpdatedAt: changedAt,
+	})
+	if !event.ChangedAt.Equal(changedAt) || event.ChangedAt.Location() != time.UTC {
+		t.Fatalf("changed_at = %s, want %s in UTC", event.ChangedAt, changedAt.UTC())
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"changed_at":"2026-09-25T09:30:00.123456Z"`) {
+		t.Errorf("the event is written %s, want changed_at 2026-09-25T09:30:00.123456Z", encoded)
+	}
+}

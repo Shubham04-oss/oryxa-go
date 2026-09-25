@@ -475,13 +475,15 @@ func recordEvent(ctx context.Context, tx pgx.Tx, detailType string, request agen
 // changed is what the bus is told about request: who it is between, where
 // it was made, who decides it and who did, and its state, but none of what
 // it asks or answers. Who decided is the stored decider, as the API shows it,
-// whatever event the change is.
+// whatever event the change is. When it changed is written in UTC, as the
+// envelope's occurred_at is: a time read back from PostgreSQL comes in this
+// process's local zone, which is no business of the bus's.
 func changed(request agents.Interaction) agentsv1.InteractionChanged {
 	event := agentsv1.InteractionChanged{
 		RequestID: request.ID, OrganizationID: request.OrganizationID,
 		RequesterUserID: request.Requester.UserID, RequesterAgentID: request.Requester.AgentID,
 		TargetUserID: request.Target.UserID, TargetAgentID: request.Target.AgentID,
-		Status: request.Status, Revision: request.Revision, ChangedAt: request.UpdatedAt,
+		Status: request.Status, Revision: request.Revision, ChangedAt: request.UpdatedAt.UTC(),
 		TeamspaceID: request.TeamspaceID, Approval: request.Approval,
 	}
 	if request.Decision != nil && request.Decision.DecidedBy != nil {
