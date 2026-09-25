@@ -264,14 +264,19 @@ there, for up to 14 days each, for realtime to be turned on.
    Worker must take the body with `scope` and `removed_at`, and accept a
    `removed_at` that has a fraction of a second, which almost every real one
    has. A Worker built on the earlier body, without `scope`, must not be the
-   one live when realtime is on. `realtime/README.md` has golden vectors to
+   one live when realtime is on. Nor may one without the teamspace scopes,
+   `teamspace_member` and `teamspace`, with `teamspace_id`: it refuses each
+   with a `400`, which realtime takes as for good, so the purge is dropped,
+   logged whole as `realtime purge dropped`, and the side conversations stay. `realtime/README.md` has golden vectors to
    test the Worker's check against, one of them with a fraction, and golden
    vectors for the Worker's own signing of its events. Give the Worker
    `ORYXA_API_ORIGIN=https://app.oryxa.in` too, as web-next's `REALTIME.md`
    says, so it sends them.
 3. Store the secret, then make the queue, its dead-letter queue and the rule
-   that feeds it, if they are not there yet. The other provisioners run again
-   too, and change nothing. `provision-app.sh` stops before provisioning
+   that feeds it, if they are not there yet, or bring the rule up to date: it
+   matches agents' teamspace endings as well as auth's events since the
+   teamspace purges were added. The other provisioners run again too, and
+   change nothing. `provision-app.sh` stops before provisioning
    anything if OpenTofu's state names no queue for a service yet, saying to
    apply first. The tasks cannot start while a secret they name holds no
    value, so store it before the next step:
