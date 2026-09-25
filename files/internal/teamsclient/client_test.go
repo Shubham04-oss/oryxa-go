@@ -70,3 +70,26 @@ func TestTeamTreatsNullMembershipAsNotAMember(t *testing.T) {
 		t.Fatalf("access = %+v", access)
 	}
 }
+
+// TestTeamReadsTheCallersOwnRoleOnTheTeam: teams says can_manage for every
+// org admin, on the team or not, so whether the caller manages the team in
+// their own right comes from the role their membership carries. An agent,
+// which gets no org admin's reach, may manage a team on nothing else.
+func TestTeamReadsTheCallersOwnRoleOnTheTeam(t *testing.T) {
+	tests := map[string]domain.TeamAccess{
+		`{"team":{"id":"team_eng"},"membership":{"user_id":"user-1","role":"admin"},"can_manage":true}`:  {TeamID: "team_eng", CanManage: true, Member: true, TeamAdmin: true},
+		`{"team":{"id":"team_eng"},"membership":{"user_id":"user-1","role":"member"},"can_manage":true}`: {TeamID: "team_eng", CanManage: true, Member: true},
+		`{"team":{"id":"team_eng"},"membership":null,"can_manage":true}`:                                 {TeamID: "team_eng", CanManage: true},
+		`{"team":{"id":"team_eng"},"membership":{"user_id":"","role":"admin"},"can_manage":false}`:       {TeamID: "team_eng"},
+	}
+	for body, want := range tests {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(body))
+		}))
+		access, err := New(server.URL).Team(context.Background(), "org_1", "team_eng", authclient.Credentials{Authorization: "Bearer token"})
+		server.Close()
+		if err != nil || access != want {
+			t.Fatalf("Team() for %s = %+v, %v; want %+v", body, access, err, want)
+		}
+	}
+}
