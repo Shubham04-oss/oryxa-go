@@ -387,8 +387,9 @@ member approves it, and before the waker wakes an agent for its `requested` or
 - If its owner has since taken deciding back (switched the specialist from
   `automatic` to `request`, say), the request is held for them. A pending
   request is marked `approval: "owner"`. An agent's approval whose work has
-  not started is withdrawn, so the request is pending and held again, with a
-  new `requested` event. The agent is refused and not woken. Switching a mode
+  not started is withdrawn, so the request is pending and held again. Either
+  is recorded as a new `requested` event carrying `approval: "owner"`, whose
+  delivery wakes nobody. The agent is refused and not woken. Switching a mode
   the other way does not release requests already held.
 - If it no longer stands (the teamspace is gone or disabled, the member who
   asked left its team, or either agent lost its seat), Oryxa closes it with
@@ -725,6 +726,29 @@ context by concluding something, not by anybody remembering to publish.
 **Bounds.** One posted message causes at most four agent turns, two
 consecutive passes end the relay, and the whole thing is bounded in
 wall-clock time. An agent with nothing to add says so and is not recorded.
+
+**Every message a room stores is announced**, a person's or an agent's
+answer, as `agents.teamspace.room.message.posted.v1`, recorded in the agents
+outbox in the transaction that stores the message: the event commits with the
+message, and never without it. It carries the organization, the
+`teamspace_id` (a room's id is its teamspace's), the message's `id` and `seq`,
+and `in_reply_to_seq` for an agent woken by one message in particular; its
+`author`, `member` or `agent`, with the member's `user_id` and, for an agent,
+its `agent_id` (the member it belongs to is the `user_id`); the
+`addressed_handles` it named, for telling someone they were mentioned, left
+out when it named none; and `posted_at`. Never the body, nor any summary of
+it.
+
+`addressed_handles` are the handles of the room's seats the message named
+with `@handle`, written as the room makes them, without the `@` (`["ada"]`),
+and never its author's own. Only seats that were in the room count, as when
+the room works out who answers: an `@` before anything else, such as an email
+address's domain, names nobody, so nothing of what was said reaches the bus
+as a handle. The message is stored addressing the same seats, as
+`addressed_to`, whoever wrote it.
+
+The events can reach the bus in any order (see [Events](#events)), so a
+consumer puts a room's messages in order by `seq`.
 
 ### Multi-user, multi-agent teamspaces
 
@@ -1322,11 +1346,29 @@ Contracts live in `/contracts/events/agents/v1`:
 | `agents.interaction.requested.v1` | A durable request is ready to route to its target agent |
 | `agents.interaction.decided.v1` | The target approved or rejected a request |
 | `agents.interaction.completed.v1` | The target completed or failed an approved request |
+| `agents.teamspace.room.message.posted.v1` | A teamspace's room stored a message, a person's or an agent's answer, without its body ([A teamspace is a room](#a-teamspace-is-a-room)) |
+
+A request's three events carry who it is between, its `status` and
+`revision`, and, since the owner-approval fields reached them, where it was
+made and who decides it: `teamspace_id`, left out for a request made outside
+a teamspace; `approval`, `agent` or `owner`, always there, since every request
+has one (the column is `NOT NULL DEFAULT 'agent'`, so a request stored before
+approvals were recorded has `agent`); and `decided_by`, as the API's
+`decision.decided_by` shows it (`{"kind": "member" | "agent" | "system",
+"user_id"?, "agent_id"?}`), once the request is decided, left out before, and
+for a decision an older build recorded without its decider. An approval
+withdrawn when its owner takes deciding back takes `decided_by` with it. They
+stay `v1`, since consumers ignore fields they do not know. Never the purpose,
+task, context, decision's message or result.
 
 `internal/events` holds the outbox, publisher and dispatcher: events are
 recorded in `agents_primary.agents_outbox` with the state they describe and
 the dispatcher publishes them at least once, with exponential retry; consumers
-deduplicate by `event_id`. The session runtime records `session.created` and
+deduplicate by `event_id`. They are published in no particular order: the
+shared dispatcher publishes each batch in parallel, and a failed event later,
+and EventBridge keeps no order either. So a consumer orders what it hears by
+the order the events carry, a request's `revision` or a room message's `seq`,
+never by arrival. The session runtime records `session.created` and
 `session.deleted` as sessions come and go, best-effort after the session
 service has already succeeded. `cmd/devui` creates the outbox table at
 startup, and starts the dispatcher when `EVENTBRIDGE_ENDPOINT` is set — with

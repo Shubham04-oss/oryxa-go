@@ -282,10 +282,11 @@ func (store *Store) Respond(ctx context.Context, id string, input agents.Interac
 }
 
 // Hold keeps a request for its owner's own decision. A pending request is
-// marked held, which nobody is waiting on, so no event is recorded. An
-// approved one has its approval, and who made it, withdrawn and is pending
-// again, held: that is recorded as the request's new requested event, which
-// the waker completes without waking anyone, as it does any held request.
+// marked held. An approved one has its approval, and who made it, withdrawn
+// and is pending again, held. Either change is recorded as the request's new
+// requested event, carrying its approval, now "owner", and its new revision,
+// which the waker completes without waking anyone, as it does any held
+// request. A request already held is left as it is, with no event.
 func (store *Store) Hold(ctx context.Context, id string, at time.Time) (agents.Interaction, error) {
 	var result agents.Interaction
 	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
@@ -302,9 +303,13 @@ func (store *Store) Hold(ctx context.Context, id string, at time.Time) (agents.I
 				result = current
 				return nil
 			}
-			return scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+			err := scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
 				SET approval='owner', revision=revision+1, updated_at=$2 WHERE id=$1 RETURNING `+selectColumns,
 				id, at), &result)
+			if err != nil {
+				return err
+			}
+			return recordEvent(ctx, tx, agentsv1.InteractionRequestedDetailType, result)
 		case StatusApproved:
 			err := scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
 				SET status='pending', approval='owner', decision=NULL,
@@ -461,12 +466,7 @@ func getForUpdate(ctx context.Context, tx pgx.Tx, id string) (agents.Interaction
 
 func recordEvent(ctx context.Context, tx pgx.Tx, detailType string, request agents.Interaction) error {
 	at := request.UpdatedAt
-	event, err := events.NewEvent(detailType, agentsv1.InteractionChanged{
-		RequestID: request.ID, OrganizationID: request.OrganizationID,
-		RequesterUserID: request.Requester.UserID, RequesterAgentID: request.Requester.AgentID,
-		TargetUserID: request.Target.UserID, TargetAgentID: request.Target.AgentID,
-		Status: request.Status, Revision: request.Revision, ChangedAt: at,
-	}, at)
+	event, err := events.NewEvent(detailType, changed(request), at)
 	if err != nil {
 		return err
 	}
@@ -475,6 +475,27 @@ func recordEvent(ctx context.Context, tx pgx.Tx, detailType string, request agen
 		(id, detail_type, detail, occurred_at, trace_context) VALUES ($1,$2,$3,$4,NULLIF($5,''))`,
 		event.ID, event.DetailType, event.Data, event.OccurredAt, trace)
 	return err
+}
+
+// changed is what the bus is told about request: who it is between, where
+// it was made, who decides it and who did, and its state, but none of what
+// it asks or answers. Who decided is the stored decider, as the API shows it,
+// whatever event the change is. When it changed is written in UTC, as the
+// envelope's occurred_at is: a time read back from PostgreSQL comes in this
+// process's local zone, which is no business of the bus's.
+func changed(request agents.Interaction) agentsv1.InteractionChanged {
+	event := agentsv1.InteractionChanged{
+		RequestID: request.ID, OrganizationID: request.OrganizationID,
+		RequesterUserID: request.Requester.UserID, RequesterAgentID: request.Requester.AgentID,
+		TargetUserID: request.Target.UserID, TargetAgentID: request.Target.AgentID,
+		Status: request.Status, Revision: request.Revision, ChangedAt: request.UpdatedAt.UTC(),
+		TeamspaceID: request.TeamspaceID, Approval: request.Approval,
+	}
+	if request.Decision != nil && request.Decision.DecidedBy != nil {
+		decider := request.Decision.DecidedBy
+		event.DecidedBy = &agentsv1.InteractionDecider{Kind: decider.Kind, UserID: decider.UserID, AgentID: decider.AgentID}
+	}
+	return event
 }
 
 var _ Repository = (*Store)(nil)

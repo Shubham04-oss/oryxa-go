@@ -80,7 +80,7 @@ func (opt *Options) Defaults() {
 	set(&opt.SES, "http://localhost:4567")
 	set(&opt.SMTP, "127.0.0.1:1025")
 	set(&opt.Mailpit, "http://127.0.0.1:8025")
-	set(&opt.Services, "teams,billing,files,knowledge,rag,apps,batching,email,agents")
+	set(&opt.Services, "teams,billing,files,knowledge,rag,apps,batching,email,agents,realtime")
 	set(&opt.PostgresContainer, DefaultPostgresContainer)
 	if opt.MinFreeBytes == 0 {
 		opt.MinFreeBytes = 3 << 30
@@ -109,6 +109,7 @@ type State struct {
 	Bus            string            `json:"bus"`
 	ComposioSecret string            `json:"composio_webhook_secret"`
 	DodoWebhookKey string            `json:"dodo_webhook_key"`
+	RealtimeSecret string            `json:"realtime_purge_secret"`
 	StartedAt      time.Time         `json:"started_at"`
 }
 
@@ -198,6 +199,7 @@ func (rig *Rig) up(ctx context.Context) error {
 		Bus: prefix, Bucket: prefix + "-files",
 		ComposioSecret: "chaos-composio-secret-" + opt.RunID,
 		DodoWebhookKey: "whsec_" + base64.StdEncoding.EncodeToString([]byte("chaos-dodo-secret-"+opt.RunID+"-0123456789")),
+		RealtimeSecret: "chaos-realtime-secret-" + opt.RunID + "-0123456789abcdef",
 		StartedAt:      time.Now().UTC(),
 	}
 
@@ -288,6 +290,7 @@ func (rig *Rig) provisioners() []provisionSpec {
 		{"apps-events", "./apps/infra/events/cmd/provision", events("apps", "APPS_EVENTS_QUEUE_NAME"), "APPS_EVENTS_QUEUE_URL", "apps"},
 		{"batching-events", "./batching/infra/events/cmd/provision", events("batching", "BATCHING_EVENTS_QUEUE_NAME"), "BATCHING_EVENTS_QUEUE_URL", "batching"},
 		{"agents-events", "./agents/primary/infra/events/cmd/provision", events("agents", "AGENTS_EVENTS_QUEUE_NAME"), "AGENTS_EVENTS_QUEUE_URL", "agents"},
+		{"realtime-events", "./realtime/infra/events/cmd/provision", events("realtime", "REALTIME_EVENTS_QUEUE_NAME"), "REALTIME_EVENTS_QUEUE_URL", "realtime"},
 		{"rag-events", "./rag/infra/vectors/cmd/provision", events("rag", "RAG_EVENTS_QUEUE_NAME"), "RAG_EVENTS_QUEUE_URL", "rag"},
 		{"files-storage", "./files/infra/storage/cmd/provision", func(prefix string) map[string]string {
 			return map[string]string{"FILES_BUCKET_NAME": prefix + "-files", "FILES_EVENTS_QUEUE_NAME": prefix + "-files-events"}
@@ -405,7 +408,13 @@ func (rig *Rig) oryxaEnv() []string {
 		"KNOWLEDGE_EVENTS_QUEUE_URL": queues("knowledge"), "APPS_EVENTS_QUEUE_URL": queues("apps"),
 		"BATCHING_EVENTS_QUEUE_URL": queues("batching"), "AGENTS_EVENTS_QUEUE_URL": queues("agents"),
 		"RAG_EVENTS_QUEUE_URL": queues("rag"), "FILES_EVENTS_QUEUE_URL": queues("files"),
-		"EMAIL_QUEUE_URL": queues("email"),
+		"EMAIL_QUEUE_URL": queues("email"), "REALTIME_EVENTS_QUEUE_URL": queues("realtime"),
+
+		// Realtime is on for its route, POST /v1/realtime/events, which takes
+		// calls signed with this secret. It has no Worker to purge through:
+		// nothing publishes auth's membership events here, and a purge would
+		// only fail and wait on the queue.
+		"REALTIME_WORKER_URL": "http://127.0.0.1:9", "REALTIME_PURGE_SECRET": state.RealtimeSecret,
 
 		"BILLING_URL": "http://localhost:3000/settings/billing", "BILLING_PLANS_FILE": filepath.Join(opt.Root, "billing/plans.example.json"),
 		"DODO_PAYMENTS_ENVIRONMENT": "test_mode", "DODO_PAYMENTS_API_KEY": "chaos-fake-dodo-key",

@@ -48,8 +48,8 @@ if [[ -n "$(value_of TYPESAFE_API_KEY)" ]]; then
 fi
 
 # Realtime signs every purge it asks the web app's Worker for with this, and
-# the Worker holds the same 64 characters. Its secret's container exists
-# whatever realtime_purge says.
+# checks the Worker's events with it; the Worker holds the same 64
+# characters. Its secret's container exists whatever realtime_purge says.
 if [[ -n "$(value_of REALTIME_PURGE_SECRET)" ]]; then
   value_of REALTIME_PURGE_SECRET | put_secret "$(secret_id realtime-purge-secret)"
   step "stored REALTIME_PURGE_SECRET"

@@ -1,7 +1,7 @@
 # chaos
 
 Throws fake and hostile payloads at a locally running copy of the whole Oryxa
-stack (all nine services in one process) and watches what happens. It is for
+stack (all ten services in one process) and watches what happens. It is for
 finding what breaks, not for regression testing: nothing here is a product
 service and none of it may be deployed.
 

@@ -8,11 +8,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
+	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
+	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
@@ -34,11 +38,16 @@ var ErrRoomNotFound = errors.New("room not found")
 // PostgresStore is the PostgreSQL-backed [Store]. It is not named Store,
 // unlike its sibling packages' own stores, because rooms.go already spends
 // that name on the interface this type implements.
-type PostgresStore struct{ database *postgreskit.Database }
+type PostgresStore struct {
+	database *postgreskit.Database
+	// recordPosted records a stored message's event in the transaction that
+	// stored it. It is recordPosted, but for a test that makes it fail.
+	recordPosted func(ctx context.Context, tx pgx.Tx, organizationID string, message Message) error
+}
 
 // NewStore returns the store over database.
 func NewStore(database *postgreskit.Database) *PostgresStore {
-	return &PostgresStore{database: database}
+	return &PostgresStore{database: database, recordPosted: recordPosted}
 }
 
 // Migrate installs this package's tables. Running it twice is harmless.
@@ -69,6 +78,10 @@ const messageColumns = `id, room_id, seq, author_handle, author_kind, author_use
 // SELECT ... FROM teamspaces supplies the one candidate row the upsert
 // needs, so a room whose teamspace is gone yields no candidate, no upsert,
 // and ErrRoomNotFound — on the first message exactly as on the thousandth.
+//
+// Every message stored is announced, in the same transaction, as
+// agents.teamspace.room.message.posted.v1 in the agents outbox: the event
+// commits with the message, and never without it.
 func (store *PostgresStore) Append(ctx context.Context, message Message) (Message, error) {
 	// The store gives a message both of the things that make it one: its
 	// place in the room, and its name. A caller that invented ids would have
@@ -100,13 +113,16 @@ func (store *PostgresStore) Append(ctx context.Context, message Message) (Messag
 		if err != nil {
 			return fmt.Errorf("allocate room message sequence: %w", err)
 		}
-		return scanMessage(tx.QueryRow(ctx, `
+		if err := scanMessage(tx.QueryRow(ctx, `
 			INSERT INTO agents_primary.room_messages (`+messageColumns+`, organization_id)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 			RETURNING `+messageColumns,
 			message.ID, message.RoomID, message.Seq, message.AuthorHandle, message.AuthorKind,
 			message.AuthorUserID, message.AuthorAgentID, message.Body, message.AddressedTo,
-			message.InReplyToSeq, message.CreatedAt, organizationID), &message)
+			message.InReplyToSeq, message.CreatedAt, organizationID), &message); err != nil {
+			return err
+		}
+		return store.recordPosted(ctx, tx, organizationID, message)
 	})
 	if errors.Is(err, ErrRoomNotFound) {
 		return Message{}, ErrRoomNotFound
@@ -115,6 +131,43 @@ func (store *PostgresStore) Append(ctx context.Context, message Message) (Messag
 		return Message{}, fmt.Errorf("append room message: %w", err)
 	}
 	return message, nil
+}
+
+// recordPosted records in tx that message, as stored, was posted in its
+// room: who wrote it, its place, and whom it named, never what it said.
+func recordPosted(ctx context.Context, tx pgx.Tx, organizationID string, message Message) error {
+	event, err := events.NewEvent(agentsv1.TeamspaceRoomMessagePostedDetailType, posted(organizationID, message), message.CreatedAt)
+	if err != nil {
+		return err
+	}
+	trace := observability.CaptureTraceCarrier(ctx).Encode()
+	if _, err := tx.Exec(ctx, `INSERT INTO agents_primary.agents_outbox
+		(id, detail_type, detail, occurred_at, trace_context) VALUES ($1,$2,$3,$4,NULLIF($5,''))`,
+		event.ID, event.DetailType, event.Data, event.OccurredAt, trace); err != nil {
+		return fmt.Errorf("record the room message's event: %w", err)
+	}
+	return nil
+}
+
+// posted is the bus's view of a stored message. The room is the teamspace,
+// so its id is the teamspace's. Whom it named is its AddressedTo, which the
+// relay narrowed to the room's own seats before storing it.
+func posted(organizationID string, message Message) agentsv1.TeamspaceRoomMessagePosted {
+	author := agentsv1.TeamspaceRoomAuthor{Kind: agentsv1.TeamspaceRoomAuthorMember, UserID: message.AuthorUserID}
+	if message.AuthorKind == SeatAgent {
+		author = agentsv1.TeamspaceRoomAuthor{Kind: agentsv1.TeamspaceRoomAuthorAgent, UserID: message.AuthorUserID, AgentID: message.AuthorAgentID}
+	}
+	var addressed []string
+	if len(message.AddressedTo) > 0 {
+		addressed = slices.Clone(message.AddressedTo)
+	}
+	return agentsv1.TeamspaceRoomMessagePosted{
+		OrganizationID: organizationID, TeamspaceID: message.RoomID,
+		Message:          agentsv1.TeamspaceRoomMessage{ID: message.ID, Seq: message.Seq, InReplyToSeq: message.InReplyToSeq},
+		Author:           author,
+		AddressedHandles: addressed,
+		PostedAt:         message.CreatedAt.UTC(),
+	}
 }
 
 // Messages implements [Store].

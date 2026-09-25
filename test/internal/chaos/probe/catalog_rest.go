@@ -74,6 +74,9 @@ var shallowRoutes = map[string][]string{
 		"GET /v1/billing/plans", "GET /v1/billing/organizations/{organizationID}",
 		"POST /v1/billing/organizations/{organizationID}/checkout", "POST /v1/billing/organizations/{organizationID}/portal",
 	},
+	// The Worker's route: signed with REALTIME_PURGE_SECRET, not a member's
+	// token, so a shallow call is refused 401 before its body is read.
+	"realtime": {"POST /v1/realtime/events"},
 }
 
 // publicRoutes need no credentials.
@@ -81,6 +84,7 @@ var publicRoutes = map[string]bool{
 	"GET /v1/capabilities": true, "GET /v1/sources/providers": true, "GET /v1/sources/kinds": true,
 	"GET /v1/apps/catalog": true, "GET /v1/apps/catalog/{toolkit}": true, "GET /v1/apps/catalog/{toolkit}/tools": true,
 	"GET /v1/apps/catalog/{toolkit}/triggers": true, "GET /v1/billing/plans": true,
+	"POST /v1/realtime/events": true,
 }
 
 // shallowOp turns a route pattern into a shallow operation.
@@ -151,7 +155,9 @@ func RAGOps() []Op {
 	})
 }
 
-// KnowledgeOps, AppsOps and BillingOps are shallow until their objects are worth making.
+// KnowledgeOps, AppsOps, BillingOps and RealtimeOps are shallow until their
+// objects are worth making.
 func KnowledgeOps() []Op { return withCreates("knowledge", nil) }
 func AppsOps() []Op      { return withCreates("apps", nil) }
 func BillingOps() []Op   { return withCreates("billing", nil) }
+func RealtimeOps() []Op  { return withCreates("realtime", nil) }

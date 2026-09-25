@@ -278,3 +278,44 @@ func TestARequestThatLapsesBeforeItsAgentWakesIsClosedNotWorked(t *testing.T) {
 		t.Fatalf("A's report = %+v, want the failed result", report)
 	}
 }
+
+// TestAPendingRequestHeldForItsOwnerWakesNobody: a pending request its agent
+// could decide is held for its owner, which the ledger records as a new
+// requested event. That event is delivered to the addressed agent as any
+// requested event is, and completed without a run: nothing about the request
+// is the agent's to act on any more.
+func TestAPendingRequestHeldForItsOwnerWakesNobody(t *testing.T) {
+	world := newOwnerApprovalWorld(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	request := agents.Interaction{
+		ID: world.organizationID + "_held", OrganizationID: world.organizationID,
+		TeamspaceID: "tsp_launch", Approval: interactions.ApprovalAgent,
+		Requester: agents.InteractionParty{UserID: "user_a", AgentID: "agt_a", AgentName: "Crew"},
+		Target:    agents.InteractionParty{UserID: "user_b", AgentID: "agt_b", AgentName: "Carl"},
+		Purpose:   "Launch", Task: "Review the launch plan.",
+		Context: []agents.InteractionContextItem{}, RequestedTools: []string{}, RequestedPermissions: []string{},
+		Status: interactions.StatusPending, Revision: 1, ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
+	}
+	if _, err := world.ledger.Create(ctx, request, "held"); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := world.ledger.Hold(ctx, request.ID, now.Add(time.Second)); err != nil || held.Approval != interactions.ApprovalOwner {
+		t.Fatalf("held = %+v, %v", held, err)
+	}
+	requests, err := interactions.New(interactions.Config{Repository: world.ledger, Directory: teammateB{}, Teamspaces: primarySeat{}, Tokens: memberTokens{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := &fakeAgentRuns{}
+	waker := NewWaker(world.deliveries, runs, world.ledger, Config{Interval: time.Second, Lease: time.Minute, Standing: requests}, nil)
+
+	hold := world.deliver(t, agentsv1.InteractionRequestedDetailType, KindTargetRequested, world.b, request.ID)
+	if hold.Revision != 2 {
+		t.Fatalf("delivered %+v, want the hold's requested event, at revision 2", hold)
+	}
+	waker.wake(ctx, hold)
+	if len(runs.calls) != 0 || !world.handled(t, hold.EventID) {
+		t.Fatalf("the hold's delivery: runs=%+v handled=%v, want it completed without waking anyone", runs.calls, world.handled(t, hold.EventID))
+	}
+}

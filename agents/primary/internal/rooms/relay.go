@@ -110,7 +110,14 @@ type relayItem struct {
 // answers in turn — this is how agents answer agents — but never past
 // maxAgentTurns, maxConsecutivePasses or relayBudget, and never a seat
 // answering a message it wrote itself.
+//
+// Every message the relay stores, the posted one and each reply, is stored
+// addressing exactly the room's seats it named (seatHandles), whatever
+// message.AddressedTo held when it came in. That list is what the store keeps
+// and what the message's event publishes, so it is worked out here, where
+// every message a room stores passes through.
 func (relay *Relay) Post(ctx context.Context, room Situation, message Message, verdict Verdict) ([]Message, error) {
+	message.AddressedTo = seatHandles(room.Seats, message.Body, message.AuthorHandle)
 	stored, err := relay.Store.Append(ctx, message)
 	if err != nil {
 		return nil, fmt.Errorf("rooms: relay: append the posted message: %w", err)
@@ -172,7 +179,7 @@ func (relay *Relay) Post(ctx context.Context, room Situation, message Message, v
 				AuthorUserID:  seat.UserID,
 				AuthorAgentID: seat.AgentID,
 				Body:          reply,
-				AddressedTo:   addressedHandles(reply, seat.Handle),
+				AddressedTo:   seatHandles(room.Seats, reply, seat.Handle),
 				InReplyToSeq:  trigger.Seq,
 				CreatedAt:     time.Now().UTC(),
 			})
@@ -278,6 +285,23 @@ func addressedHandles(body, authorHandle string) []string {
 		out = append(out, handle)
 	}
 	return out
+}
+
+// seatHandles is addressedHandles narrowed to the handles findSeat resolves
+// among seats: whom a message named, as the room resolves a name when it
+// works out who answers. An "@" before anything that is no seat here — the
+// domain of an email address, a handle from another room, a word — names
+// nobody, so it is left out. This is the list a message is stored as
+// addressing and its event publishes, so what reaches the bus is the room's
+// own seat handles, never a word of what was said. nil when it named no seat.
+func seatHandles(seats []Seat, body, authorHandle string) []string {
+	var named []string
+	for _, handle := range addressedHandles(body, authorHandle) {
+		if _, ok := findSeat(seats, handle); ok {
+			named = append(named, handle)
+		}
+	}
+	return named
 }
 
 func findSeat(seats []Seat, handle string) (Seat, bool) {

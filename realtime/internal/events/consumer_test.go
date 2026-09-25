@@ -21,6 +21,7 @@ import (
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	realtimev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/realtime/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/purge"
@@ -116,10 +117,49 @@ func samePurges(got, want []purge.Request) bool {
 	})
 }
 
+// fakeRecorder keeps every completed purge it is given, answering fail
+// instead while it is set.
+type fakeRecorder struct {
+	mu        sync.Mutex
+	completed []realtimev1.PurgeCompleted
+	fail      error
+}
+
+func (fake *fakeRecorder) RecordPurgeCompleted(ctx context.Context, completed realtimev1.PurgeCompleted) (bool, error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.fail != nil {
+		return false, fake.fail
+	}
+	// As a database would, it refuses a context already done.
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	fake.completed = append(fake.completed, completed)
+	return true, nil
+}
+
+func (fake *fakeRecorder) recorded() []realtimev1.PurgeCompleted {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return slices.Clone(fake.completed)
+}
+
+func (fake *fakeRecorder) failWith(err error) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.fail = err
+}
+
 func newConsumer(t *testing.T, purger Purger) *Consumer {
 	t.Helper()
+	return newRecordingConsumer(t, purger, &fakeRecorder{})
+}
+
+func newRecordingConsumer(t *testing.T, purger Purger, recorder Recorder) *Consumer {
+	t.Helper()
 	_, verifier := authHarness()
-	consumer, err := NewConsumer(purger, verifier, slog.New(slog.DiscardHandler))
+	consumer, err := NewConsumer(purger, recorder, verifier, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +265,7 @@ func TestConsumerFollowsTheRegistrysSignaturePolicy(t *testing.T) {
 			t.Fatal(err)
 		}
 		purger := &fakePurger{}
-		consumer, err := NewConsumer(purger, registry.Verifier(), slog.New(slog.DiscardHandler))
+		consumer, err := NewConsumer(purger, &fakeRecorder{}, registry.Verifier(), slog.New(slog.DiscardHandler))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -413,7 +453,7 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 	}}
 	var logs strings.Builder
 	_, verifier := authHarness()
-	consumer, err := NewConsumer(client, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+	consumer, err := NewConsumer(client, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,9 +488,10 @@ func (purgeWith purgerFunc) Purge(ctx context.Context, request purge.Request) er
 	return purgeWith(ctx, request)
 }
 
-// A purge the Worker has done is deleted even when the process is told to
-// stop while it was being sent; left, it would come back to the next process
-// and be sent again. What was not yet handled goes back to the queue.
+// A purge the Worker has done is recorded and deleted even when the process
+// is told to stop while it was being sent; left, it would come back to the
+// next process and be sent again. What was not yet handled goes back to the
+// queue.
 func TestPollDeletesWhatItPurgedAsItStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -462,9 +503,13 @@ func TestPollDeletesWhatItPurgedAsItStops(t *testing.T) {
 		message("purged", memberRemoved("evt_1", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft)),
 		message("not-yet", memberRemoved("evt_2", "org_1", "user-3", autheventsv1.MemberRemovedReasonLeft)),
 	}}}
-	newConsumer(t, stopping).Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
+	recorder := &fakeRecorder{}
+	newRecordingConsumer(t, stopping, recorder).Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
 	if !slices.Equal(queue.deleted, []string{"purged"}) {
 		t.Fatalf("deleted = %v, want the purged message alone", queue.deleted)
+	}
+	if completed := recorder.recorded(); len(completed) != 1 || completed[0].SourceEventID != "evt_1" {
+		t.Fatalf("recorded %+v, want the purge done as the process stopped", completed)
 	}
 }
 
@@ -482,7 +527,7 @@ func TestPollSaysWhenADeletionFails(t *testing.T) {
 			queue.batches = [][]sqstypes.Message{{message("purged", memberRemoved("evt_1", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft))}}
 			var logs strings.Builder
 			_, verifier := authHarness()
-			consumer, err := NewConsumer(&fakePurger{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+			consumer, err := NewConsumer(&fakePurger{}, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -505,7 +550,7 @@ func TestPollLogsADroppedPurgeWhole(t *testing.T) {
 	}}
 	var logs strings.Builder
 	_, verifier := authHarness()
-	consumer, err := NewConsumer(purger, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+	consumer, err := NewConsumer(purger, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -560,7 +605,7 @@ func TestPollDropsARemovalStillToComeLoudly(t *testing.T) {
 	queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{{message("future", future)}}}
 	var logs strings.Builder
 	_, verifier := authHarness()
-	consumer, err := NewConsumer(purger, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+	consumer, err := NewConsumer(purger, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,10 +642,107 @@ func logged(t *testing.T, logs, prefix string) map[string]any {
 
 func TestNewConsumerRefusesToRunBlind(t *testing.T) {
 	_, verifier := authHarness()
-	if _, err := NewConsumer(nil, verifier, nil); err == nil {
+	if _, err := NewConsumer(nil, &fakeRecorder{}, verifier, nil); err == nil {
 		t.Fatal("NewConsumer() without a purger = nil error")
 	}
-	if _, err := NewConsumer(&fakePurger{}, nil, nil); err == nil {
+	if _, err := NewConsumer(&fakePurger{}, nil, verifier, nil); err == nil {
+		t.Fatal("NewConsumer() without a recorder = nil error")
+	}
+	if _, err := NewConsumer(&fakePurger{}, &fakeRecorder{}, nil, nil); err == nil {
 		t.Fatal("NewConsumer() without a verifier = nil error")
+	}
+}
+
+// Every purge the Worker has done is recorded, once, as its completion: what
+// it took, up to when, and auth's event that asked for it.
+func TestConsumerRecordsEachPurgeTheWorkerHasDone(t *testing.T) {
+	purger := &fakePurger{fail: map[string]error{"evt_down": errors.New("the Worker answered 503 Service Unavailable, not 204")}}
+	recorder := &fakeRecorder{}
+	consumer := newRecordingConsumer(t, purger, recorder)
+	ctx := context.Background()
+	before := time.Now()
+	for _, body := range []string{
+		memberRemoved("evt_left", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft),
+		organizationDeleted("evt_deleted", "org_1"),
+		// Delivered again: purged and recorded already.
+		memberRemoved("evt_left", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft),
+	} {
+		if err := consumer.Handle(ctx, body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A purge the Worker did not do is not recorded.
+	if err := consumer.Handle(ctx, organizationDeleted("evt_down", "org_2")); err == nil {
+		t.Fatal("Handle() = nil for a purge the Worker did not do")
+	}
+
+	completed := recorder.recorded()
+	if len(completed) != 2 {
+		t.Fatalf("recorded %+v, want the two purges done, once each", completed)
+	}
+	want := []realtimev1.PurgeCompleted{
+		{OrganizationID: "org_1", Scope: realtimev1.PurgeScopeMember, UserID: "user-2", RemovedAt: at(removedAt), SourceEventID: "evt_left"},
+		{OrganizationID: "org_1", Scope: realtimev1.PurgeScopeOrganization, RemovedAt: at(deletedAt), SourceEventID: "evt_deleted"},
+	}
+	for index, got := range completed {
+		expected := want[index]
+		if got.OrganizationID != expected.OrganizationID || got.Scope != expected.Scope || got.UserID != expected.UserID ||
+			!got.RemovedAt.Equal(expected.RemovedAt) || got.SourceEventID != expected.SourceEventID ||
+			got.CompletedAt.Before(before) || got.CompletedAt.After(time.Now()) || got.CompletedAt.Location() != time.UTC {
+			t.Errorf("recorded %+v, want %+v, completed while it was handled, in UTC", got, expected)
+		}
+	}
+}
+
+// A purge done whose completion could not be recorded is still done. Its
+// message comes back, the Worker purges again, idempotently, and it is
+// recorded then.
+func TestConsumerPurgesAgainWhenItCouldNotRecordThePurge(t *testing.T) {
+	purger := &fakePurger{}
+	recorder := &fakeRecorder{}
+	recorder.failWith(errors.New("the database is unreachable"))
+	consumer := newRecordingConsumer(t, purger, recorder)
+	ctx := context.Background()
+	body := memberRemoved("evt_left", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft)
+
+	err := consumer.Handle(ctx, body)
+	if !errors.Is(err, errUnrecorded) || errors.Is(err, purge.ErrPermanent) || !strings.Contains(err.Error(), "the database is unreachable") {
+		t.Fatalf("Handle() = %v, want the purge done but unrecorded, worth delivering again", err)
+	}
+	recorder.failWith(nil)
+	if err := consumer.Handle(ctx, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := consumer.Handle(ctx, body); err != nil {
+		t.Fatal(err)
+	}
+	if purges, completed := len(purger.asked()), len(recorder.recorded()); purges != 2 || completed != 1 {
+		t.Fatalf("purges = %d, recorded = %d; want the Worker asked again until the purge was recorded, then not", purges, completed)
+	}
+}
+
+// Poll keeps such a message for the queue to deliver again, and says the
+// purge itself was done.
+func TestPollKeepsAPurgeItCouldNotRecord(t *testing.T) {
+	recorder := &fakeRecorder{}
+	recorder.failWith(errors.New("the database is unreachable"))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{
+		{message("unrecorded", memberRemoved("evt_left", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft))},
+	}}
+	var logs strings.Builder
+	_, verifier := authHarness()
+	consumer, err := NewConsumer(&fakePurger{}, recorder, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer.Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
+	if len(queue.deleted) != 0 {
+		t.Fatalf("deleted = %v, want the message kept", queue.deleted)
+	}
+	record := logged(t, logs.String(), "realtime purge done but not recorded")
+	if record["event_id"] != "evt_left" || record["organization_id"] != "org_1" || !strings.Contains(fmt.Sprint(record["error"]), "unreachable") {
+		t.Fatalf("logged %v", record)
 	}
 }

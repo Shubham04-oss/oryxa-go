@@ -200,6 +200,26 @@ func TestTalkingInARoomCountsAsBeingInIt(t *testing.T) {
 	}
 }
 
+// A member's message is stored addressing the seats it named, as an agent's
+// answer is, so its event can say who was mentioned; an email address in it
+// names nobody.
+func TestAMembersMentionIsStoredWithTheirMessage(t *testing.T) {
+	store := newServiceFakeStore()
+	service := aService(t, store, &serviceFakeDecider{}, nil)
+
+	said, err := service.Post(context.Background(), Actor{OrganizationID: "org_1", UserID: "user-ada"}, "tsp_room",
+		"@bo and @ledger, the price list went to ops@northwind-2027.com")
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	if len(said) != 1 || !slices.Equal(said[0].AddressedTo, []string{"bo", "ledger"}) {
+		t.Fatalf("said = %+v, want Ada's message addressing bo and ledger", said)
+	}
+	if stored := store.messages[0]; stored.AuthorHandle != "ada" || !slices.Equal(stored.AddressedTo, []string{"bo", "ledger"}) {
+		t.Errorf("stored %+v, want it addressing bo and ledger", stored)
+	}
+}
+
 // A room that has just concluded something has outgrown any brief that does
 // not mention it, whatever the decider thought of the brief a moment earlier.
 func TestConcludingSomethingRewritesTheBrief(t *testing.T) {

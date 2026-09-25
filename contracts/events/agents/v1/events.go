@@ -82,6 +82,10 @@ const (
 	// OrganizationAgentSynthesisUpdatedDetailType announces a durable shared
 	// context revision without copying synthesized content to EventBridge.
 	OrganizationAgentSynthesisUpdatedDetailType = "agents.organization-agent.synthesis.updated.v1"
+	// TeamspaceRoomMessagePostedDetailType announces a message stored in a
+	// teamspace's room: a person's, or an agent's answer. What it said stays
+	// in the agents database.
+	TeamspaceRoomMessagePostedDetailType = "agents.teamspace.room.message.posted.v1"
 )
 
 // AgentChanged is the shared lifecycle detail for a persistent member-owned
@@ -152,6 +156,50 @@ type InteractionChanged struct {
 	Status           string    `json:"status"`
 	Revision         int64     `json:"revision"`
 	ChangedAt        time.Time `json:"changed_at"`
+	// TeamspaceID is the teamspace the request was made in, absent for one
+	// made outside a teamspace.
+	TeamspaceID string `json:"teamspace_id,omitempty"`
+	// Approval is who decides the request: InteractionApprovalAgent or
+	// InteractionApprovalOwner. Every request the ledger holds has one, since
+	// the column is NOT NULL with "agent" as its default, which is what a
+	// request stored before approvals were recorded has: so an event this
+	// build publishes always carries it. Only an event an older build
+	// published, before the field existed, lacks it.
+	Approval string `json:"approval,omitempty"`
+	// DecidedBy is who decided the request, as the API's
+	// decision.decided_by: absent until it is decided, and for a decision an
+	// older build recorded without its decider.
+	DecidedBy *InteractionDecider `json:"decided_by,omitempty"`
+}
+
+// Who decides a request, as InteractionChanged.Approval.
+const (
+	// InteractionApprovalAgent lets the addressed agent, or its member's
+	// primary agent, decide.
+	InteractionApprovalAgent = "agent"
+	// InteractionApprovalOwner holds the request for the addressed agent's
+	// member to decide in their own session.
+	InteractionApprovalOwner = "owner"
+)
+
+// Who decided a request, as InteractionDecider.Kind.
+const (
+	// DecidedByMember is the addressed agent's member, in their own session.
+	DecidedByMember = "member"
+	// DecidedByAgent is an agent deciding in a run.
+	DecidedByAgent = "agent"
+	// DecidedBySystem is Oryxa closing a request made in a teamspace that no
+	// longer stands there.
+	DecidedBySystem = "system"
+)
+
+// InteractionDecider is who decided a request.
+type InteractionDecider struct {
+	Kind string `json:"kind"`
+	// UserID is the member who decided, or whose agent did. Oryxa has none.
+	UserID string `json:"user_id,omitempty"`
+	// AgentID is the agent that decided, when an agent did.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 // TeamspaceChanged is the safe lifecycle projection of a multi-user shared
@@ -190,6 +238,53 @@ type TeamspaceEntryPublished struct {
 	AuthorAgentID  string    `json:"author_agent_id"`
 	Kind           string    `json:"kind"`
 	PublishedAt    time.Time `json:"published_at"`
+}
+
+// TeamspaceRoomMessagePosted announces a message stored in a teamspace's
+// room, a person's or an agent's answer, without its body or any summary of
+// it. A room's id is its teamspace's id.
+type TeamspaceRoomMessagePosted struct {
+	OrganizationID string               `json:"organization_id"`
+	TeamspaceID    string               `json:"teamspace_id"`
+	Message        TeamspaceRoomMessage `json:"message"`
+	Author         TeamspaceRoomAuthor  `json:"author"`
+	// AddressedHandles are the handles of the room's seats the message named
+	// with "@handle", written as the room makes them, without the "@"
+	// ("ada"): whom it was for, as a mention. Only seats that were in the
+	// room when it was posted, and never its author's own: an "@" before
+	// anything else in what was said, such as an email address's domain, is
+	// not a mention and is not here. Absent when it named no seat.
+	AddressedHandles []string  `json:"addressed_handles,omitempty"`
+	PostedAt         time.Time `json:"posted_at"`
+}
+
+// TeamspaceRoomMessage names one message in its room.
+type TeamspaceRoomMessage struct {
+	ID string `json:"id"`
+	// Seq is the message's place in its room, counting from 1: the order to
+	// put a room's messages in. The agents outbox publishes a batch in
+	// parallel, and EventBridge keeps no order, so their events can arrive in
+	// any order.
+	Seq int64 `json:"seq"`
+	// InReplyToSeq is the message an agent was woken to answer, when there
+	// was one.
+	InReplyToSeq int64 `json:"in_reply_to_seq,omitempty"`
+}
+
+// Who wrote a room message, as TeamspaceRoomAuthor.Kind.
+const (
+	TeamspaceRoomAuthorMember = "member"
+	TeamspaceRoomAuthorAgent  = "agent"
+)
+
+// TeamspaceRoomAuthor is who wrote a room message.
+type TeamspaceRoomAuthor struct {
+	Kind string `json:"kind"`
+	// UserID is the member who wrote it, or the member the agent that wrote
+	// it belongs to.
+	UserID string `json:"user_id"`
+	// AgentID is set exactly when an agent wrote it.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 type OrganizationAgentSynthesisUpdated struct {

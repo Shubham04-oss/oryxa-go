@@ -1,5 +1,6 @@
 // Package events hears auth's word that a membership ended, on realtime's own
-// queue, and turns each into one purge by the Worker.
+// queue, and turns each into one purge by the Worker, recorded once done as
+// realtime.purge.completed.v1. It also puts realtime's own events on the bus.
 package events
 
 import (
@@ -18,6 +19,7 @@ import (
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
+	realtimev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/realtime/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/internal/eventauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
@@ -58,15 +60,30 @@ const maxClockSkew = 5 * time.Minute
 // time had passed, it would take whatever the member wrote in between.
 var errFutureRemoval = errors.New("its removed_at is still to come")
 
+// errUnrecorded marks a purge the Worker did whose completion could not be
+// recorded. The message is kept, so its redelivery asks the Worker again,
+// which answers 204 again, the purge being idempotent, and records it then.
+var errUnrecorded = errors.New("the Worker purged the conversations, but their purge's completion was not recorded")
+
 // Purger is what a purge is sent through; *purge.Client is one.
 type Purger interface {
 	Purge(context.Context, purge.Request) error
+}
+
+// Recorder keeps the audit trail of purges: realtime.purge.completed.v1 in
+// realtime's outbox. *postgres.Store is one. Recording one again, for the
+// same auth event, records nothing new.
+type Recorder interface {
+	RecordPurgeCompleted(context.Context, realtimev1.PurgeCompleted) (bool, error)
 }
 
 // Consumer purges the realtime conversations of members who left an
 // organization, and of organizations that were deleted.
 type Consumer struct {
 	purger Purger
+	// recorder records each purge once the Worker has done it. NewConsumer
+	// refuses a nil one, so no purge goes unrecorded by omission.
+	recorder Recorder
 	// verifier checks who published each event before anything in it is
 	// used. NewConsumer refuses a nil one, so the check is never left out by
 	// omission. Whether an event that fails it is refused or only reported is
@@ -81,10 +98,14 @@ type Consumer struct {
 	queueName string
 }
 
-// NewConsumer returns a consumer that purges through purger.
-func NewConsumer(purger Purger, verifier *eventauth.Verifier, logger *slog.Logger) (*Consumer, error) {
+// NewConsumer returns a consumer that purges through purger, and records
+// each purge done through recorder.
+func NewConsumer(purger Purger, recorder Recorder, verifier *eventauth.Verifier, logger *slog.Logger) (*Consumer, error) {
 	if purger == nil {
 		return nil, errors.New("realtime needs the Worker to purge through")
+	}
+	if recorder == nil {
+		return nil, errors.New("realtime needs somewhere to record the purges it has done")
 	}
 	if verifier == nil {
 		return nil, errors.New("realtime needs a verifier to check its events' signatures with")
@@ -96,7 +117,7 @@ func NewConsumer(purger Purger, verifier *eventauth.Verifier, logger *slog.Logge
 	if err != nil {
 		logger.Warn("consumer metrics unavailable; handling continues without them", "error", err)
 	}
-	return &Consumer{purger: purger, verifier: verifier, logger: logger, metrics: metrics, purged: newRecent(recentSize)}, nil
+	return &Consumer{purger: purger, recorder: recorder, verifier: verifier, logger: logger, metrics: metrics, purged: newRecent(recentSize)}, nil
 }
 
 type eventBridgeEvent struct {
@@ -120,11 +141,12 @@ type receivedEnvelope struct {
 }
 
 // Handle processes one SQS message body: an EventBridge event from auth. It
-// returns nil once the message is done with: purged, or purged already. An
-// error wrapping purge.ErrPermanent means the Worker refused the purge for
-// good, and one for an event whose removed_at lies more than maxClockSkew
-// ahead means no purge should be sent; Poll drops the message for either. Any
-// other error leaves it for the queue to deliver again.
+// returns nil once the message is done with: purged and the purge recorded,
+// or purged already. An error wrapping purge.ErrPermanent means the Worker
+// refused the purge for good, and one for an event whose removed_at lies more
+// than maxClockSkew ahead means no purge should be sent; Poll drops the
+// message for either. Any other error leaves it for the queue to deliver
+// again, including a purge done but not recorded.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	_, err := consumer.handle(ctx, body, time.Now())
 	return err
@@ -169,7 +191,12 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 		outcome = "realtime purge already done"
 	default:
 		if err = consumer.purger.Purge(ctx, request); err == nil {
-			consumer.purged.add(detail.EventID)
+			// Only a purge that is done and recorded is remembered, so one
+			// whose record failed is purged again when it comes back, and
+			// recorded then.
+			if err = consumer.record(ctx, request, time.Now()); err == nil {
+				consumer.purged.add(detail.EventID)
+			}
 		}
 	}
 	observability.EndSpan(span, err)
@@ -180,6 +207,27 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 	consumer.logger.InfoContext(ctx, outcome, "event_id", detail.EventID, "detail_type", event.DetailType,
 		"organization_id", request.OrganizationID, "scope", string(request.Scope))
 	return request, nil
+}
+
+// recordTimeout bounds recording a purge the Worker has done. The record goes
+// ahead once the context it was asked in is cancelled, as a deletion does,
+// well within the host's shutdown: a purge done while the process stops would
+// otherwise be unrecorded, and come back to the next process to be sent again.
+const recordTimeout = 10 * time.Second
+
+// record keeps the audit trail of a purge the Worker has done: when it was
+// done, what it took, and auth's event that asked for it.
+func (consumer *Consumer) record(ctx context.Context, request purge.Request, completedAt time.Time) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+	_, err := consumer.recorder.RecordPurgeCompleted(ctx, realtimev1.PurgeCompleted{
+		OrganizationID: request.OrganizationID, Scope: string(request.Scope), UserID: request.UserID,
+		RemovedAt: request.RemovedAt.UTC(), SourceEventID: request.EventID, CompletedAt: completedAt.UTC(),
+	})
+	if err != nil {
+		return fmt.Errorf("%w: %w", errUnrecorded, err)
+	}
+	return nil
 }
 
 // scope names the organization a failed purge was for, when the event got as
@@ -302,6 +350,13 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 					"sqs_message_id", aws.ToString(message.MessageId), "event_id", request.EventID, "scope", string(request.Scope),
 					"organization_id", request.OrganizationID, "user_id", request.UserID,
 					"removed_at", request.RemovedAt.UTC().Format(time.RFC3339Nano), "error", err)
+			case errors.Is(err, errUnrecorded):
+				// The purge is done. The redelivery purges again, which the
+				// Worker answers 204 as before, and records it then.
+				consumer.logger.ErrorContext(ctx, "realtime purge done but not recorded; the queue will deliver it again",
+					"sqs_message_id", aws.ToString(message.MessageId), "event_id", request.EventID, "scope", string(request.Scope),
+					"organization_id", request.OrganizationID, "error", err)
+				continue
 			default:
 				if ctx.Err() == nil {
 					consumer.logger.ErrorContext(ctx, "realtime purge failed; the queue will deliver it again",
