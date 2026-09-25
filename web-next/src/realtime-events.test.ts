@@ -498,6 +498,41 @@ describe("EventOutbox: draining", () => {
     expect(go.requests.map((request) => request.status)).toEqual([400, 413])
   })
 
+  it("sends again what a 400 or 413 refused without Go's own refusal: a proxy's page, or another error", async () => {
+    const { dm } = await setup()
+    go.answers.push(
+      new Response("<html><body>400 Bad Request</body></html>", {
+        status: 400,
+        headers: { "Content-Type": "text/html" },
+      }),
+      new Response(null, { status: 413 }),
+      Response.json({ error: { code: "bad_request" } }, { status: 400 }),
+      Response.json({ error: "invalid_request" }, { status: 413 }),
+      Response.json({ code: "invalid_request" }, { status: 400 })
+    )
+    const ids = enqueue(dm, 2)
+    await dm.drainEvents()
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      expect(deadLetters(dm)).toEqual([])
+      expect(outbox(dm).map((row) => row.id)).toEqual(ids)
+      await runNextDrain(dm)
+    }
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Go did not take 2 events (answered 400, but not as Go refuses a request)"
+      ),
+      expect.anything()
+    )
+    // Then Go takes them, with the same ids.
+    await runNextDrain(dm)
+    expect(go.requests.map((request) => request.status)).toEqual([
+      400, 413, 400, 413, 400, 204,
+    ])
+    expect(go.taken.map((event) => event.id)).toEqual(ids)
+    expect(deadLetters(dm)).toEqual([])
+    expect(outbox(dm)).toEqual([])
+  })
+
   it("waits after any other answer or none, from one second doubling to five minutes, and never under a second", async () => {
     const { dm } = await setup()
     go.answers.push(

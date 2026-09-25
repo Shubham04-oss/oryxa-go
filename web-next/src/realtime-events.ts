@@ -182,6 +182,25 @@ function reasonOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/**
+ * Whether an answer is Go's own refusal of a request, which it never takes
+ * later: 400 or 413 with Go's error body,
+ * `{"error":{"code":"invalid_request",…}}`. The same status from anything
+ * between the Worker and Go (a proxy's or a gateway's page) says nothing
+ * about the events, which go again.
+ */
+function refusedByGo(answer: { status: number; text: string }): boolean {
+  if (answer.status !== 400 && answer.status !== 413) return false
+  try {
+    const body = JSON.parse(answer.text) as {
+      error?: { code?: unknown }
+    } | null
+    return body?.error?.code === "invalid_request"
+  } catch {
+    return false
+  }
+}
+
 /** A value the SDK's `sql` binds. */
 export type SqlValue = string | number | boolean | null
 
@@ -215,8 +234,8 @@ export type EventOutboxHost = {
  * - `event_outbox`: each event waiting for Go (`id`, `type`, `detail`,
  *   `created_at`, `attempts`, `next_at`), in the order they were recorded,
  *   with `reader_id` on a read so each reader has one at most;
- * - `event_dead_letters`: what Go refused (400 or 413), with its answer,
- *   for seven days;
+ * - `event_dead_letters`: what Go refused (`refusedByGo`), with its
+ *   answer, for seven days;
  * - `event_meta`: the drain that is set, and when the last one ran.
  *
  * An object records an event in the transaction that stores what it is
@@ -310,9 +329,11 @@ export class EventOutbox {
    * acts on Go's answer:
    *
    * - 204: every event was taken, and leaves the outbox;
-   * - 400 or 413: Go refused the request and takes none of it, then or
-   *   later: its events move to the dead letters, with the answer;
-   * - anything else, or no answer: the outbox waits, from
+   * - Go's refusal (`refusedByGo`: 400 or 413 with Go's own error): Go
+   *   takes none of it, then or later: its events move to the dead
+   *   letters, with the answer;
+   * - anything else (a 400 or 413 without Go's error too), or no answer:
+   *   the outbox waits, from
    *   `eventsTiming.firstRetryMs`, doubling with each such answer in a row,
    *   to `eventsTiming.maxRetryMs`.
    *
@@ -513,11 +534,17 @@ export class EventOutbox {
       })
       return
     }
-    if (answer.status === 400 || answer.status === 413) {
+    if (refusedByGo(answer)) {
       this.deadLetter(batch, answer, Date.now())
       return
     }
-    this.retryLater(batch, Date.now(), `Go answered ${answer.status}`)
+    this.retryLater(
+      batch,
+      Date.now(),
+      answer.status === 400 || answer.status === 413
+        ? `answered ${answer.status}, but not as Go refuses a request`
+        : `Go answered ${answer.status}`
+    )
   }
 
   /** Drops what waited longer than `eventsTiming.retentionMs`, and dead letters as old. */

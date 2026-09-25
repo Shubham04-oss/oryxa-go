@@ -661,9 +661,13 @@ Then, by Go's answer:
 
 - 204: Go took every event (again, without a second event, for an id it
   took in the last seven days), and they leave the outbox.
-- 400 (`invalid_request`: Go took none of it) or 413 (over 100 events or
-  256 KiB): they move to the dead letters, with an error log, and are never
-  sent again.
+- Go's refusal, a 400 or 413 with Go's own error
+  (`{"error":{"code":"invalid_request",…}}`: an event Go cannot take, or
+  over 100 events or 256 KiB; Go took none of it): they move to the dead
+  letters, with an error log, and are never sent again. A 400 or 413
+  without it came from something between the Worker and Go, such as a
+  proxy's page, and says nothing about the events: they go again, as
+  below.
 - Anything else (401, 503 while Go's realtime is not configured, another
   5xx, a redirect, or no answer within 10 s): they stay, and the whole
   outbox waits, a second after the first such answer in a row for its

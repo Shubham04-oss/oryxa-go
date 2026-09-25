@@ -30,7 +30,11 @@ export type EventsRequest = {
   status?: number
 }
 
-/** How Go answers a request: a status, a whole response, or an error thrown as the network failing. */
+/**
+ * How a request is answered: a status, as Go's realtime answers it
+ * (`goAnswer`); a whole response, such as a proxy's page; or an error
+ * thrown as the network failing.
+ */
 export type EventsAnswer = number | Response | Error
 
 const encoder = new TextEncoder()
@@ -57,6 +61,28 @@ async function expectedSignature(
 
 function refusal(status: number, code: string, message: string): Response {
   return Response.json({ error: { code, message } }, { status })
+}
+
+/**
+ * A status as Go's realtime answers it: 400 and 413 with its
+ * `invalid_request` refusal, 401 `unauthorized`, 404 as a mux with no such
+ * route (realtime off), and anything else with an error of its own.
+ */
+function goAnswer(status: number): Response {
+  switch (status) {
+    case 400:
+    case 413:
+      return refusal(status, "invalid_request", `Go refused it (${status}).`)
+    case 401:
+      return refusal(status, "unauthorized", "The signature does not match.")
+    case 404:
+      return new Response("404 page not found\n", {
+        status,
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+      })
+    default:
+      return refusal(status, "unavailable", `Go answered ${status}.`)
+  }
 }
 
 export class FakeGoEvents {
@@ -128,19 +154,19 @@ export class FakeGoEvents {
       signature !==
         (await expectedSignature(this.secret, timestamp, request.body))
     ) {
-      return refusal(401, "unauthorized", "The signature does not match.")
+      return goAnswer(401)
     }
     if (
       encoder.encode(request.body).length > 256 * 1024 ||
       request.events.length > 100
     ) {
-      return refusal(413, "too_large", "At most 100 events and 256 KiB.")
+      return goAnswer(413)
     }
     if (next instanceof Response) return next
     if (next === undefined || next === 204) {
       return new Response(null, { status: 204 })
     }
-    return refusal(next, "refused", `Go answered ${next}.`)
+    return goAnswer(next)
   }
 }
 
