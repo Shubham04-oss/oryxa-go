@@ -99,7 +99,7 @@ Copy the root `.env.example` to the ignored `.env`. Its emulator block points SQ
 (set -a && . ./.env && go run ./realtime/infra/events/cmd/provision)
 ```
 
-The command is repeatable. It creates or updates the `realtime-events` queue and `realtime-events-dlq`, with a fifteen-minute visibility timeout, a redrive after five receives, 14 days' retention and SQS-managed encryption. It also creates a `realtime-auth-memberships` rule on `EVENT_BUS_NAME`, matching the two detail types above from `oryxa.auth`, whose target is the queue and which the queue policy admits alone. Put the printed `queue_url` in `REALTIME_EVENTS_QUEUE_URL`. LocalStack forgets it all when it restarts, so re-run the command after a restart.
+The command is repeatable. It creates or updates the `realtime-events` queue and `realtime-events-dlq`, with a fifteen-minute visibility timeout, a redrive after five receives, 14 days' retention and SQS-managed encryption. It also creates a `realtime-auth-memberships` rule on `EVENT_BUS_NAME`, matching the two detail types above from `oryxa.auth`. The rule's target is the queue, with the dead-letter queue for an event EventBridge cannot deliver to it, and each queue's policy admits that rule alone. Put the printed `queue_url` in `REALTIME_EVENTS_QUEUE_URL`. LocalStack forgets it all when it restarts, so re-run the command after a restart.
 
 ## Run locally
 

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/purge"
 )
@@ -22,21 +24,37 @@ func TestEventPatternMatchesTheEndsOfMemberships(t *testing.T) {
 }
 
 func TestQueuePolicyAllowsOnlyTheRule(t *testing.T) {
-	policy, err := QueuePolicy("arn:aws:sqs:us-west-2:123456789012:realtime-events", "arn:aws:events:us-west-2:123456789012:rule/oryxa/realtime-auth-memberships")
-	if err != nil {
-		t.Fatalf("QueuePolicy() error = %v", err)
+	const ruleARN = "arn:aws:events:us-west-2:123456789012:rule/oryxa/realtime-auth-memberships"
+	for queueARN, sid := range map[string]string{
+		"arn:aws:sqs:us-west-2:123456789012:realtime-events":     "AllowRealtimeRule",
+		"arn:aws:sqs:us-west-2:123456789012:realtime-events-dlq": "AllowRealtimeRuleFailures",
+	} {
+		policy, err := QueuePolicy(queueARN, ruleARN, sid)
+		if err != nil {
+			t.Fatalf("QueuePolicy() error = %v", err)
+		}
+		assertJSONEqual(t, policy, `{
+			"Version": "2012-10-17",
+			"Statement": [{
+				"Sid": "`+sid+`",
+				"Effect": "Allow",
+				"Principal": {"Service": "events.amazonaws.com"},
+				"Action": "sqs:SendMessage",
+				"Resource": "`+queueARN+`",
+				"Condition": {"ArnEquals": {"aws:SourceArn": "`+ruleARN+`"}}
+			}]
+		}`)
 	}
-	assertJSONEqual(t, policy, `{
-		"Version": "2012-10-17",
-		"Statement": [{
-			"Sid": "AllowRealtimeRule",
-			"Effect": "Allow",
-			"Principal": {"Service": "events.amazonaws.com"},
-			"Action": "sqs:SendMessage",
-			"Resource": "arn:aws:sqs:us-west-2:123456789012:realtime-events",
-			"Condition": {"ArnEquals": {"aws:SourceArn": "arn:aws:events:us-west-2:123456789012:rule/oryxa/realtime-auth-memberships"}}
-		}]
-	}`)
+}
+
+// What EventBridge cannot deliver to the queue, after its own retries, goes
+// to the dead-letter queue rather than being lost, and its purge with it.
+func TestTheRuleSendsWhatItCannotDeliverToTheDeadLetterQueue(t *testing.T) {
+	target := Target("arn:aws:sqs:us-west-2:123456789012:realtime-events", "arn:aws:sqs:us-west-2:123456789012:realtime-events-dlq")
+	if aws.ToString(target.Id) != "realtime-queue" || aws.ToString(target.Arn) != "arn:aws:sqs:us-west-2:123456789012:realtime-events" ||
+		target.DeadLetterConfig == nil || aws.ToString(target.DeadLetterConfig.Arn) != "arn:aws:sqs:us-west-2:123456789012:realtime-events-dlq" {
+		t.Fatalf("Target() = %+v, dead letters to %+v", target, target.DeadLetterConfig)
+	}
 }
 
 func TestFromEnvDefaults(t *testing.T) {

@@ -1,6 +1,7 @@
 // Package provision creates what delivers auth's membership endings to
 // realtime: a queue with a dead-letter queue, and an EventBridge rule allowed
-// to send to it.
+// to send to both: to the queue, and to the dead-letter queue what it cannot
+// deliver to the queue.
 package provision
 
 import (
@@ -115,7 +116,7 @@ func Run(ctx context.Context, eventBridgeClient *eventbridge.Client, sqsClient *
 		return Output{}, fmt.Errorf("put EventBridge rule: %w", err)
 	}
 	ruleARN := aws.ToString(rule.RuleArn)
-	policy, err := QueuePolicy(queueARN, ruleARN)
+	policy, err := QueuePolicy(queueARN, ruleARN, "AllowRealtimeRule")
 	if err != nil {
 		return Output{}, err
 	}
@@ -125,10 +126,20 @@ func Run(ctx context.Context, eventBridgeClient *eventbridge.Client, sqsClient *
 	}); err != nil {
 		return Output{}, fmt.Errorf("set queue policy: %w", err)
 	}
+	deadLetterPolicy, err := QueuePolicy(deadLetterARN, ruleARN, "AllowRealtimeRuleFailures")
+	if err != nil {
+		return Output{}, err
+	}
+	if _, err := sqsClient.SetQueueAttributes(ctx, &sqs.SetQueueAttributesInput{
+		QueueUrl:   aws.String(deadLetterURL),
+		Attributes: map[string]string{"Policy": deadLetterPolicy},
+	}); err != nil {
+		return Output{}, fmt.Errorf("set dead-letter queue policy: %w", err)
+	}
 	targets, err := eventBridgeClient.PutTargets(ctx, &eventbridge.PutTargetsInput{
 		Rule:         aws.String(ruleName),
 		EventBusName: aws.String(config.EventBusName),
-		Targets:      []eventbridgetypes.Target{{Id: aws.String(targetID), Arn: aws.String(queueARN)}},
+		Targets:      []eventbridgetypes.Target{Target(queueARN, deadLetterARN)},
 	})
 	if err != nil {
 		return Output{}, fmt.Errorf("put EventBridge target: %w", err)
@@ -160,12 +171,23 @@ func EventPattern() (string, error) {
 	return string(pattern), nil
 }
 
-// QueuePolicy lets the rule, and nothing else, send to the queue.
-func QueuePolicy(queueARN, ruleARN string) (string, error) {
+// Target is the rule's one target: the queue, with the dead-letter queue for
+// an event EventBridge cannot deliver to it, which would otherwise be lost
+// after EventBridge's own retries, and its purge with it.
+func Target(queueARN, deadLetterARN string) eventbridgetypes.Target {
+	return eventbridgetypes.Target{
+		Id: aws.String(targetID), Arn: aws.String(queueARN),
+		DeadLetterConfig: &eventbridgetypes.DeadLetterConfig{Arn: aws.String(deadLetterARN)},
+	}
+}
+
+// QueuePolicy lets the rule, and nothing else, send to a queue: the queue
+// itself, or the dead-letter queue the rule sends what it cannot deliver to.
+func QueuePolicy(queueARN, ruleARN, sid string) (string, error) {
 	policy, err := json.Marshal(map[string]any{
 		"Version": "2012-10-17",
 		"Statement": []map[string]any{{
-			"Sid":       "AllowRealtimeRule",
+			"Sid":       sid,
 			"Effect":    "Allow",
 			"Principal": map[string]string{"Service": "events.amazonaws.com"},
 			"Action":    "sqs:SendMessage",
