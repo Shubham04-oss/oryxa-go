@@ -405,12 +405,13 @@ describe("SideConversationAgent: asking one's own agent", () => {
     go.runAnswers.push(answer("Leo", "We promised the beta on Friday."))
     const clientId = await askMine(side, adaTab, "Leo, what did we promise?")
 
-    // A thread of Ada's, started as her, with her page's origin.
+    // A thread of Ada's, started as her, with her page's origin, and marked
+    // as this conversation's so it stays out of her own chat list.
     const [thread] = go.callsTo(`${base}/threads`, "POST")
     expect(thread).toMatchObject({
       cookie: ada.cookie,
       origin: pageOrigin,
-      body: {},
+      body: { origin: "side_conversation" },
     })
     const [run] = go.callsTo(`${base}/threads/thread-ada-1/runs`, "POST")
     expect(run.cookie).toBe(ada.cookie)

@@ -1278,12 +1278,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     const held = this.sql<{ thread_id: string }>`SELECT thread_id
       FROM side_threads WHERE user_id = ${state.userId}`.at(0)
     if (held) return held.thread_id
-    // Go reads no field of a new thread and refuses unknown ones, but
-    // decodes any body it is sent: an empty object, as the page's does.
+    // Marked as a side conversation's, so Go keeps it out of the person's
+    // own chat list: its turns carry this conversation's framing, not theirs.
     const thread = await this.goAs<{ id?: unknown }>(
       state,
       organizationPath(this.ids.organizationId, "threads"),
-      { method: "POST", body: {} }
+      { method: "POST", body: { origin: "side_conversation" } }
     )
     if (typeof thread.id !== "string" || !thread.id) {
       throw new Error("Go answered a new thread without its id")
