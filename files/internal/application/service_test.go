@@ -246,6 +246,198 @@ func TestAdminOnlyOrganizationFileACL(t *testing.T) {
 	}
 }
 
+// TestAdminsAgentGetsAPlainMembersReachToAdminOnlyFiles: RAG and Knowledge
+// already give an agent's token a plain member's reach; Files must too. An
+// agent acting for an org admin can be answering someone else entirely — a
+// teammate's interaction request, a room it was mentioned in — so it may not
+// list, read or download a file only admins may see, even though its member
+// could. The admin's own session, and a plain member, are unaffected.
+func TestAdminsAgentGetsAPlainMembersReachToAdminOnlyFiles(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	restricted, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "secret.txt", ContentType: "text/plain", Scope: domain.ScopeOrganization, Access: domain.AccessAdmins, Content: []byte("secret"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	general, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "handbook.txt", ContentType: "text/plain", Scope: domain.ScopeOrganization, Content: []byte("handbook"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, reader := range []struct {
+		name           string
+		credentials    authclient.Credentials
+		seesRestricted bool
+	}{
+		{"the admin's agent", agentCreds("user-admin"), false},
+		{"the admin's own session", creds("user-admin"), true},
+		{"a plain member", creds("user-member"), false},
+	} {
+		t.Run(reader.name, func(t *testing.T) {
+			wantListed := 1
+			if reader.seesRestricted {
+				wantListed = 2
+			}
+			listed, err := service.List(context.Background(), reader.credentials, "org_1", ListFilter{Scope: domain.ScopeOrganization})
+			if err != nil || len(listed) != wantListed {
+				t.Fatalf("List = %+v, %v; want %d files", listed, err, wantListed)
+			}
+			_, getErr := service.Get(context.Background(), reader.credentials, "org_1", restricted.ID)
+			_, _, contentErr := service.Content(context.Background(), reader.credentials, "org_1", restricted.ID)
+			_, downloadErr := service.DownloadURL(context.Background(), reader.credentials, "org_1", restricted.ID)
+			if reader.seesRestricted {
+				if getErr != nil || contentErr != nil || downloadErr != nil {
+					t.Fatalf("reading the restricted file = %v, %v, %v; want it read", getErr, contentErr, downloadErr)
+				}
+			} else {
+				if !errors.Is(getErr, domain.ErrNotFound) || !errors.Is(contentErr, domain.ErrNotFound) || !errors.Is(downloadErr, domain.ErrNotFound) {
+					t.Fatalf("reading the restricted file = %v, %v, %v; want ErrNotFound throughout", getErr, contentErr, downloadErr)
+				}
+			}
+			// The general file stays visible to everyone regardless.
+			if _, err := service.Get(context.Background(), reader.credentials, "org_1", general.ID); err != nil {
+				t.Fatalf("Get(general) = %v", err)
+			}
+		})
+	}
+}
+
+// TestAdminsAgentCannotPerformAdminOnlyWrites: creating any organization
+// file, creating an admin-only file, and deleting an organization file are
+// an org admin's acts. An agent gets a plain member's reach and is refused
+// each one even acting for an admin; the admin's own session and a plain
+// member behave as before.
+func TestAdminsAgentCannotPerformAdminOnlyWrites(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	agent := agentCreds("user-admin")
+
+	if _, err := service.Create(context.Background(), agent, "org_1", given(CreateInput{
+		Filename: "handbook.txt", ContentType: "text/plain", Scope: domain.ScopeOrganization, Content: []byte("handbook"),
+	})); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("admin's agent creating an organization file = %v, want forbidden", err)
+	}
+	if _, err := service.Create(context.Background(), agent, "org_1", given(CreateInput{
+		Filename: "secret.txt", ContentType: "text/plain", Scope: domain.ScopeOrganization, Access: domain.AccessAdmins, Content: []byte("secret"),
+	})); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("admin's agent creating an admin-only file = %v, want forbidden", err)
+	}
+
+	orgFile, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "invoice.pdf", ContentType: "application/pdf", Scope: domain.ScopeOrganization, Content: []byte("inv"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Delete(context.Background(), agent, "org_1", orgFile.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("admin's agent deleting an organization file = %v, want not found", err)
+	}
+	if err := service.Delete(context.Background(), creds("user-member"), "org_1", orgFile.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("member deleting an organization file = %v, want not found", err)
+	}
+	if err := service.Delete(context.Background(), creds("user-admin"), "org_1", orgFile.ID); err != nil {
+		t.Fatalf("admin's own session deleting an organization file = %v", err)
+	}
+}
+
+// TestAdminsAgentDoesNotReachEveryMembersFiles: an org admin's own session
+// sees every member's files; an agent acting for that admin sees only its
+// own member's, exactly as a plain member would.
+func TestAdminsAgentDoesNotReachEveryMembersFiles(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	colleagueFile, err := service.Create(context.Background(), creds("user-member"), "org_1", given(CreateInput{
+		Filename: "a.txt", ContentType: "text/plain", Content: []byte("a"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent := agentCreds("user-admin")
+	if _, err := service.Get(context.Background(), agent, "org_1", colleagueFile.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("admin's agent reading a colleague's private file = %v, want not found", err)
+	}
+	if listed, err := service.List(context.Background(), agent, "org_1", ListFilter{}); err != nil || len(listed) != 0 {
+		t.Fatalf("admin's agent listing member files = %+v, %v; want none", listed, err)
+	}
+	// The admin's own session is unaffected.
+	if _, err := service.Get(context.Background(), creds("user-admin"), "org_1", colleagueFile.ID); err != nil {
+		t.Fatalf("admin's own session reading a colleague's private file = %v", err)
+	}
+}
+
+// TestAdminsAgentReachesATeamOnlyAsItsMemberActuallyCan: teams shows an org
+// admin every team and says they can manage each one, whether or not they
+// are really on it (see fakeTeams in fakes_test.go). An agent must not
+// inherit that: on team_eng, where user-admin is not a member at all, the
+// agent gets nothing; on team_design, where user-admin is a plain member
+// only (teams' can_manage there is still just the org bypass), the agent
+// reads the team's files but may not manage or delete them.
+func TestAdminsAgentReachesATeamOnlyAsItsMemberActuallyCan(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	engFile, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "eng.md", ContentType: "text/markdown", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("eng"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	designFile, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "design.md", ContentType: "text/markdown", Scope: domain.ScopeTeam, TeamID: "team_design", Content: []byte("design"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	agent := agentCreds("user-admin")
+	if _, err := service.Get(context.Background(), agent, "org_1", engFile.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("admin's agent reading a team it is not really on = %v, want not found", err)
+	}
+	if _, err := service.List(context.Background(), agent, "org_1", ListFilter{TeamID: "team_eng"}); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("admin's agent listing a team it is not really on = %v, want not found", err)
+	}
+
+	if _, err := service.Get(context.Background(), agent, "org_1", designFile.ID); err != nil {
+		t.Fatalf("admin's agent reading its member's own team = %v", err)
+	}
+	listed, err := service.List(context.Background(), agent, "org_1", ListFilter{TeamID: "team_design"})
+	if err != nil || len(listed) != 1 || listed[0].ID != designFile.ID {
+		t.Fatalf("admin's agent listing its member's own team = %+v, %v", listed, err)
+	}
+	if err := service.Delete(context.Background(), agent, "org_1", designFile.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("admin's agent deleting a team file on the org bypass alone = %v, want not found", err)
+	}
+
+	// The admin's own session is unaffected either way.
+	if _, err := service.Get(context.Background(), creds("user-admin"), "org_1", engFile.ID); err != nil {
+		t.Fatalf("admin's own session reading team_eng = %v", err)
+	}
+	if err := service.Delete(context.Background(), creds("user-admin"), "org_1", designFile.ID); err != nil {
+		t.Fatalf("admin's own session deleting a team_design file = %v", err)
+	}
+}
+
+// TestAdminsAgentNeedsTeamsUnlikeTheAdminItself is the mirror image of
+// TestOrganizationAdminReadsTeamFilesWithoutTeamMembershipLookup: the admin's
+// own session never needs the teams client, since ActsAsAdmin short-circuits
+// before it is asked. An agent acting for that admin gets no such shortcut
+// and cannot be let through on role alone when there is no teams client to ask.
+func TestAdminsAgentNeedsTeamsUnlikeTheAdminItself(t *testing.T) {
+	service := testService(newFakeStore(), blob.NewMemory())
+	teamFile, err := service.Create(context.Background(), creds("user-owner"), "org_1", given(CreateInput{
+		Filename: "team.md", ContentType: "text/markdown", Scope: domain.ScopeTeam, TeamID: "team_eng", Content: []byte("team notes"),
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.teams = nil
+	if _, err := service.Get(context.Background(), creds("user-admin"), "org_1", teamFile.ID); err != nil {
+		t.Fatalf("admin's own session reading a team file with no teams client = %v", err)
+	}
+	if _, err := service.Get(context.Background(), agentCreds("user-admin"), "org_1", teamFile.ID); !errors.Is(err, domain.ErrInvalid) {
+		t.Fatalf("admin's agent reading a team file with no teams client = %v, want invalid", err)
+	}
+}
+
 func TestDeleteIsCreatorOrAdmin(t *testing.T) {
 	service := testService(newFakeStore(), blob.NewMemory())
 	created, err := service.Create(context.Background(), creds("user-member"), "org_1", given(CreateInput{Filename: "a.txt", ContentType: "text/plain", Content: []byte("a")}))

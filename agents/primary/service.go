@@ -213,11 +213,21 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 	}
 	agentSystemBinding := agents.NewAgentSystemBinding()
-	krude, err := assembly.Build(ctx, assembly.Options{
+	assemblyOptions := assembly.Options{
 		Settings: settings, AWS: platform.AWS, Google: platform.Google, Logger: logger,
-		Directory: organizationDirectory, Interactions: interactionService,
-		AgentSystem: agentSystemBinding, Teamspaces: teamspaceService, Tokens: memberTokens,
-	})
+		Directory: organizationDirectory, AgentSystem: agentSystemBinding, Tokens: memberTokens,
+	}
+	// interactionService and teamspaceService are concrete *Service pointers,
+	// nil when TEAMS_URL is unset. Boxed directly into these interface fields
+	// they would leave Build seeing a configured-but-nil collaborator rather
+	// than none at all, so each is set only when it holds something real.
+	if interactionService != nil {
+		assemblyOptions.Interactions = interactionService
+	}
+	if teamspaceService != nil {
+		assemblyOptions.Teamspaces = teamspaceService
+	}
+	krude, err := assembly.Build(ctx, assemblyOptions)
 	if err != nil {
 		sessionStore.Close()
 		return host.Service{}, fmt.Errorf("assemble Krude: %w", err)
@@ -414,19 +424,30 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 
-	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpserver.Config{
+	httpConfig := httpserver.Config{
 		AllowedOrigins:      settings.AllowedOrigins,
 		RunTimeout:          settings.RunTimeout,
 		Agents:              agentRegistry,
 		Teams:               teamService,
 		TeamRooms:           teamRoomService,
 		Workflows:           workflowService,
-		Interactions:        interactionService,
-		Teamspaces:          teamspaceService,
-		Rooms:               roomService,
 		OrganizationContext: organizationStore,
 		Preferences:         wakeups.NewStore(platform.Database),
-	}, logger)
+	}
+	// Same reasoning as assemblyOptions above: a nil *Service must leave the
+	// interface field unset, or server.interactions/.teamspaces/.rooms would
+	// compare non-nil and the routes would call a method on a nil receiver
+	// instead of answering 503.
+	if interactionService != nil {
+		httpConfig.Interactions = interactionService
+	}
+	if teamspaceService != nil {
+		httpConfig.Teamspaces = teamspaceService
+	}
+	if roomService != nil {
+		httpConfig.Rooms = roomService
+	}
+	server := httpserver.New(authclient.New(settings.AuthURL), httpserver.ForThreads(service), httpConfig, logger)
 
 	table, err := outbox.NewTable(platform.Database.Pool, schema+".agents_outbox")
 	if err != nil {
