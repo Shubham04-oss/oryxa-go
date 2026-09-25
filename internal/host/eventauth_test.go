@@ -23,8 +23,9 @@ import (
 var mountOrder = []string{"auth", "teams", "billing", "files", "knowledge", "rag", "apps", "batching", "email", "agents", "realtime"}
 
 // publishNothing are the services whose real Mount takes no signer, since
-// they only consume.
-var publishNothing = map[string]bool{"email": true, "realtime": true}
+// they only consume. Realtime publishes, once it is on, and takes its signer
+// then; mounted here, it is on.
+var publishNothing = map[string]bool{"email": true}
 
 type identities struct {
 	signers   map[string]*eventauth.Signer
@@ -123,8 +124,8 @@ func TestReportingIsTheDefaultAcrossARestart(t *testing.T) {
 }
 
 // Only a service that publishes takes a signer, so the boot report names
-// those that sign with a key minted at boot, and neither the services that
-// only consume, such as realtime and email, nor one with a KMS key.
+// those that sign with a key minted at boot, and neither a service that only
+// consumes, such as email, nor one with a KMS key.
 func TestTheBootReportNamesOnlyTheKeysMinted(t *testing.T) {
 	keys := map[string]string{"agents": "alias/agents-events"}
 	var want []string
