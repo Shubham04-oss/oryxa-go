@@ -18,6 +18,7 @@ import {
 } from "./lib/dms/protocol"
 import type { InboxServerMessage } from "./lib/dms/protocol"
 import type { Conversation, ConversationKind } from "./lib/dms/types"
+import { removalTime } from "./realtime-purge"
 import { isPurgeInstant, purgeMemoryMs } from "./realtime-registry-agent"
 import type { PurgeOutcome } from "./realtime-registry-agent"
 
@@ -73,6 +74,17 @@ const purgeConcurrency = 4
 const purgePasses = 5
 
 const maxTeamspaceName = 200
+
+/**
+ * A removal time as the instant it names, in milliseconds, read with the
+ * purge's own parser (`removalTime`: any RFC 3339 time, floored to the
+ * millisecond), or nothing for one that is not a time. Removals are
+ * compared as instants, never as strings.
+ */
+function removalInstant(value: string): number | undefined {
+  const instant = removalTime(value)
+  return instant === undefined ? undefined : Date.parse(instant)
+}
 
 /** A conversation as a purge goes through them: listed or only known. */
 type PurgedConversation = {
@@ -532,11 +544,10 @@ export class InboxAgent extends Agent<ConversationEnv> {
     }
     this.sql`DELETE FROM inbox_teamspace_removals
       WHERE done_at < ${Date.now() - purgeMemoryMs}`
-    const done = this.sql<{
-      removed_at: string
-    }>`SELECT removed_at FROM inbox_teamspace_removals
-      WHERE teamspace_id = ${teamspaceId}`.at(0)
-    if (removedAt !== undefined && done && done.removed_at >= removedAt) {
+    const removed =
+      removedAt === undefined ? undefined : removalInstant(removedAt)
+    const done = this.latestRemoval(teamspaceId)
+    if (removed !== undefined && done !== undefined && done >= removed) {
       return "repeated"
     }
     const inTeamspace = (conversation: PurgedConversation) =>
@@ -556,15 +567,32 @@ export class InboxAgent extends Agent<ConversationEnv> {
         "side conversations kept arriving while the teamspace was purged"
       )
     }
-    if (removedAt !== undefined) {
+    if (removed !== undefined) {
+      // The later of the two: an earlier removal may finish after a later one.
+      const latest = Math.max(
+        this.latestRemoval(teamspaceId) ?? removed,
+        removed
+      )
       this
         .sql`INSERT INTO inbox_teamspace_removals (teamspace_id, removed_at, done_at)
-        VALUES (${teamspaceId}, ${removedAt}, ${Date.now()})
+        VALUES (${teamspaceId}, ${new Date(latest).toISOString()}, ${Date.now()})
         ON CONFLICT (teamspace_id) DO UPDATE SET
-          removed_at = MAX(removed_at, excluded.removed_at),
+          removed_at = excluded.removed_at,
           done_at = excluded.done_at`
     }
     return "purged"
+  }
+
+  /**
+   * The latest removal from `teamspaceId`'s team this inbox carried out, as
+   * the instant it names (`removalInstant`), if it remembers one.
+   */
+  private latestRemoval(teamspaceId: string): number | undefined {
+    const row = this.sql<{
+      removed_at: string
+    }>`SELECT removed_at FROM inbox_teamspace_removals
+      WHERE teamspace_id = ${teamspaceId}`.at(0)
+    return row === undefined ? undefined : removalInstant(row.removed_at)
   }
 
   /** The registration retry's schedule: for an inbox with any conversation, listed or only known. */

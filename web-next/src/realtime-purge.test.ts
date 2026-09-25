@@ -1422,6 +1422,47 @@ describe("a teamspace's purge, through the Worker", () => {
     }
   })
 
+  it("carries out a removal later in the same second, whatever the digits Go sends: done at .9, one at .95 runs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ requests: [] }))
+    )
+    const world = makeWorld({
+      REALTIME_PURGE_SECRET: secret,
+      ORYXA_API_ORIGIN: "http://go.test",
+    })
+    await sideTalk(world, admin, member, "before both")
+    vi.setSystemTime(new Date("2026-09-24T12:00:00.920Z"))
+    await sideTalk(world, member, admin, "between them")
+
+    expect(
+      (
+        await purge(
+          world,
+          await purgeRequest({
+            ...teamspaceMemberLeft,
+            removed_at: "2026-09-24T12:00:00.9Z",
+          })
+        )
+      ).status
+    ).toBe(204)
+    expect(sideBodies(world, launch, admin, member)).toEqual(["between them"])
+
+    expect(
+      (
+        await purge(
+          world,
+          await purgeRequest({
+            ...teamspaceMemberLeft,
+            event_id: "evt_teamspace_member_removed_later",
+            removed_at: "2026-09-24T12:00:00.95Z",
+          })
+        )
+      ).status
+    ).toBe(204)
+    expect(sideBodies(world, launch, admin, member)).toEqual([])
+  })
+
   it("takes Go's own shapes on the teamspace scopes: a teamspace id of tsp_ and 22 base64url characters, and removed_at with nine fractional digits", async () => {
     const teamspace = "tsp_Ji-q_oilaC2tgma5jq-H_g"
     const { world } = await teamspaceWorld()

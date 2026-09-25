@@ -921,6 +921,27 @@ describe("InboxAgent: a teamspace's purge", () => {
     )
   })
 
+  it("compares the removal it remembers with a new one as instants, however the one it remembers is written", async () => {
+    const { world, inbox } = await adaInTwoTeamspaces()
+    // Remembered in a looser RFC 3339 form than it now writes: .9 s.
+    inbox.sql`INSERT INTO inbox_teamspace_removals (teamspace_id, removed_at, done_at)
+      VALUES ('tsp_launch', '2026-09-24T10:00:00.9Z', ${Date.now()})`
+
+    // .95 s is later: it runs, and is remembered in the purge's own form.
+    expect(
+      await inbox.purgeTeamspace("tsp_launch", "2026-09-24T10:00:00.950Z")
+    ).toBe("purged")
+    expect(world.callsTo("SideConversationAgent", "purge")).toHaveLength(2)
+    expect(removals(inbox)).toEqual([
+      { teamspace_id: "tsp_launch", removed_at: "2026-09-24T10:00:00.950Z" },
+    ])
+    // .9 s, however written, is not.
+    inbox.sql`UPDATE inbox_teamspace_removals SET removed_at = '2026-09-24T15:30:00.95+05:30'`
+    expect(
+      await inbox.purgeTeamspace("tsp_launch", "2026-09-24T10:00:00.900Z")
+    ).toBe("repeated")
+  })
+
   it("keeps the latest removal it carried out when an earlier one finishes after it", async () => {
     const { inbox } = await adaInTwoTeamspaces()
     const purgeSide = SideConversationAgent.prototype.purge
