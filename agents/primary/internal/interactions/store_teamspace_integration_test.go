@@ -338,9 +338,16 @@ func genericPlan(t *testing.T, database *postgreskit.Database, statement string)
 	ctx := context.Background()
 	var explained []byte
 	err := pgx.BeginFunc(ctx, database.Pool, func(tx pgx.Tx) error {
-		// With sequential scans off the plan shows what the indexes allow,
-		// not what a nearly empty test table makes cheapest.
+		// With sequential scans and sorts off the plan shows what the
+		// indexes allow, not what a nearly empty test table makes cheapest:
+		// there, reading a few rows through any index on the organization
+		// and sorting them can cost less than an ordered read, and which
+		// wins turns on how many pages the other tests' writes have left
+		// each index. A plan that cannot read in order still sorts.
 		if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `SET LOCAL enable_sort = off`); err != nil {
 			return err
 		}
 		// GENERIC_PLAN plans the $n placeholders without values; pgconn sends
