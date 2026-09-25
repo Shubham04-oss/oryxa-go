@@ -244,10 +244,11 @@ export function parsePurgeRequest(body: Uint8Array): PurgeRequest | undefined {
 
 /**
  * `POST /internal/realtime/purge`, from Go. Checked in this order: the
- * method (405), the Worker's secret (503 when it is not set), both headers
- * (401), the timestamp within `purgeWindowSeconds` of now (401), the
- * signature's form (401), the body at most `maxPurgeBodyBytes` (413), the
- * signature itself, compared in constant time (401), and the body (400).
+ * method (405), the Worker's secret, trimmed (503 when it is not set or
+ * shorter than `minPurgeSecretLength`), both headers (401), the timestamp
+ * within `purgeWindowSeconds` of now (401), the signature's form (401), the
+ * body at most `maxPurgeBodyBytes` (413), the signature itself, compared in
+ * constant time (401), and the body (400).
  * Then the organization's registry carries the purge out
  * (`RealtimeRegistryAgent.purge`): 204 once it is done, or was done already
  * for this event; 503 when part of it failed, and Go sends it again.
@@ -262,7 +263,9 @@ export async function handlePurge(
       Allow: "POST",
     })
   }
-  const secret = env.REALTIME_PURGE_SECRET
+  // Trimmed, as Go trims its own: a secret stored with a trailing newline on
+  // either side still signs and verifies the same.
+  const secret = env.REALTIME_PURGE_SECRET?.trim()
   if (!secret || secret.length < minPurgeSecretLength) {
     console.error(
       "realtime purge: REALTIME_PURGE_SECRET is missing or shorter than 32 characters"

@@ -17,8 +17,8 @@ export interface ConversationEnv extends Cloudflare.Env {
   /**
    * The HMAC-SHA256 key of `POST /internal/realtime/purge`, shared with Go:
    * a Worker secret (`wrangler secret put REALTIME_PURGE_SECRET`, or
-   * `.dev.vars` locally), at least 32 characters. Without it every purge is
-   * refused.
+   * `.dev.vars` locally), at least 32 characters once surrounding whitespace
+   * is trimmed, as Go trims it. Without it every purge is refused.
    */
   REALTIME_PURGE_SECRET?: string
 }

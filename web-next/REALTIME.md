@@ -480,8 +480,9 @@ member):
 
 - `X-Oryxa-Timestamp`: Unix seconds, when Go signed it.
 - `X-Oryxa-Signature`: `v1=` and the lowercase hex HMAC-SHA256, keyed with
-  `REALTIME_PURGE_SECRET` (its characters as written, never hex-decoded), of
-  the timestamp as sent, a `.`, and the raw body's bytes.
+  `REALTIME_PURGE_SECRET` (its characters as written, less any surrounding
+  whitespace, which Go and the Worker both trim; never hex-decoded), of the
+  timestamp as sent, a `.`, and the raw body's bytes.
 - The body, at most 4 KB of compact JSON, keys in this order:
   `{"event_id":"…","organization_id":"…","scope":"member"|"organization","user_id":"…","removed_at":"…"}`.
   - `event_id`: 1 to 200 characters, unique per event.
@@ -494,8 +495,8 @@ member):
     offset; 0 to 9 fractional digits), a real time: a 30th of February,
     24:00, a leap second or a year before 1970 is refused.
 
-The Worker checks, in order: POST (405); its secret is set and at least 32
-characters (503 `unavailable` otherwise); both headers (401
+The Worker checks, in order: POST (405); its secret, trimmed, is set and at
+least 32 characters (503 `unavailable` otherwise); both headers (401
 `unauthorized`); the timestamp within 300 s of its clock, either way (401
 `stale_request`); the signature's form, `v1=` and 64 hex digits (401
 `invalid_signature`); the body at most 4 KB (413 `too_large`); the

@@ -320,12 +320,25 @@ describe("the purge's signature", () => {
     }
   })
 
+  it("trims the Worker's secret as Go does, so one stored with a newline still verifies", async () => {
+    for (const stored of [`${secret}\n`, `  ${secret}\r\n`, `\t${secret} `]) {
+      const world = makeWorld({ REALTIME_PURGE_SECRET: stored })
+      await talk(world, admin, member)
+      const response = await purge(world, await purgeRequest(memberLeft))
+      expect(response.status).toBe(204)
+      expect(bodiesIn(world, admin, member)).toEqual([])
+    }
+  })
+
   it("refuses every purge while the Worker has no secret of at least 32 characters", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {})
     for (const vars of [
       {},
       { REALTIME_PURGE_SECRET: "" },
       { REALTIME_PURGE_SECRET: "short-secret" },
+      // Its length is the trimmed one's.
+      { REALTIME_PURGE_SECRET: " ".repeat(40) },
+      { REALTIME_PURGE_SECRET: `short-secret${" ".repeat(30)}\n` },
     ]) {
       const world = makeWorld(vars)
       const response = await purge(world, await purgeRequest(memberLeft))
