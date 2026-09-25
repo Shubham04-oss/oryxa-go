@@ -131,7 +131,7 @@ func (s *Service) Create(ctx context.Context, credentials authclient.Credentials
 	if purpose == domain.PurposeBillingAttachment {
 		access = domain.AccessAdmins
 	}
-	if access == domain.AccessAdmins && (scope != domain.ScopeOrganization || !org.Role.IsOrgAdmin()) {
+	if access == domain.AccessAdmins && (scope != domain.ScopeOrganization || !org.ActsAsAdmin()) {
 		return domain.Object{}, domain.ErrForbidden
 	}
 	teamID, memberID, err := domain.Place(scope, input.TeamID, org.UserID)
@@ -215,7 +215,7 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 		return nil, err
 	}
 	if filter.Scope == domain.ScopeTeam {
-		if !org.Role.IsOrgAdmin() {
+		if !org.ActsAsAdmin() {
 			if _, err := s.teamAccess(ctx, credentials, organizationID, filter.TeamID); err != nil {
 				return nil, err
 			}
@@ -225,7 +225,7 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 		Scope:       filter.Scope,
 		TeamID:      filter.TeamID,
 		MemberID:    org.UserID,
-		Admin:       org.Role.IsOrgAdmin(),
+		Admin:       org.ActsAsAdmin(),
 		Purpose:     filter.Purpose,
 		CreatedFrom: from,
 		CreatedTo:   to,
@@ -367,7 +367,7 @@ func (s *Service) mayCreate(ctx context.Context, credentials authclient.Credenti
 	case domain.ScopeMember:
 		return nil
 	case domain.ScopeOrganization:
-		if !org.Role.IsOrgAdmin() {
+		if !org.ActsAsAdmin() {
 			return domain.ErrForbidden
 		}
 		return nil
@@ -382,17 +382,17 @@ func (s *Service) mayCreate(ctx context.Context, credentials authclient.Credenti
 func (s *Service) canSee(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, object domain.Object) error {
 	switch object.Scope {
 	case domain.ScopeMember:
-		if object.MemberID == org.UserID || org.Role.IsOrgAdmin() {
+		if object.MemberID == org.UserID || org.ActsAsAdmin() {
 			return nil
 		}
 		return domain.ErrNotFound
 	case domain.ScopeOrganization:
-		if object.EffectiveAccess() != domain.AccessMembers && !org.Role.IsOrgAdmin() {
+		if object.EffectiveAccess() != domain.AccessMembers && !org.ActsAsAdmin() {
 			return domain.ErrNotFound
 		}
 		return nil
 	case domain.ScopeTeam:
-		if org.Role.IsOrgAdmin() {
+		if org.ActsAsAdmin() {
 			return nil
 		}
 		_, err := s.teamAccess(ctx, credentials, object.OrganizationID, object.TeamID)
@@ -403,7 +403,7 @@ func (s *Service) canSee(ctx context.Context, credentials authclient.Credentials
 }
 
 func (s *Service) canDelete(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, object domain.Object) error {
-	if org.Role.IsOrgAdmin() {
+	if org.ActsAsAdmin() {
 		return nil
 	}
 	switch object.Scope {
