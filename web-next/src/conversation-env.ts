@@ -6,8 +6,8 @@ import type { SideConversationAgent } from "./side-conversation-agent"
 /**
  * What the conversation objects (a DM, a side conversation, a member's
  * inbox, the organization's registry) read from the Worker's environment:
- * each other's bindings, and the secret Go signs a purge with
- * (src/realtime-purge.ts).
+ * each other's bindings, Go's origin, and the secret Go and the Worker sign
+ * with, both ways (src/realtime-purge.ts, src/realtime-events.ts).
  */
 export interface ConversationEnv extends Cloudflare.Env {
   DirectMessageAgent: DurableObjectNamespace<DirectMessageAgent>
@@ -15,10 +15,18 @@ export interface ConversationEnv extends Cloudflare.Env {
   InboxAgent: DurableObjectNamespace<InboxAgent>
   RealtimeRegistryAgent: DurableObjectNamespace<RealtimeRegistryAgent>
   /**
-   * The HMAC-SHA256 key of `POST /internal/realtime/purge`, shared with Go:
-   * a Worker secret (`wrangler secret put REALTIME_PURGE_SECRET`, or
-   * `.dev.vars` locally), at least 32 characters once surrounding whitespace
-   * is trimmed, as Go trims it. Without it every purge is refused.
+   * Where the Go API answers, such as `https://api.oryxa.in`: a DM and a
+   * side conversation send their events there (`POST /v1/realtime/events`).
+   */
+  ORYXA_API_ORIGIN: string
+  /**
+   * The HMAC-SHA256 key shared with Go: it signs `POST
+   * /internal/realtime/purge` (Go to the Worker) and the conversation events
+   * (the Worker to Go). A Worker secret (`wrangler secret put
+   * REALTIME_PURGE_SECRET`, or `.dev.vars` locally), trimmed of surrounding
+   * whitespace, as Go trims it. It needs at least 32 characters, as Go
+   * does: a shorter one refuses every purge, and without it, or with a
+   * shorter one, no conversation records events.
    */
   REALTIME_PURGE_SECRET?: string
 }

@@ -165,9 +165,13 @@ stay current. What travels on the socket is in `src/lib/dms/protocol.ts`;
 the socket carries that alone (no SDK identity, state or MCP frames, no
 callable methods, and a page may not set state).
 
-- **Storage** (its SQLite): the messages (id, seq gapless from 1, author,
-  body, `created_at`, and the page's `clientId`), how far each person has
-  read, and what each person's inbox has been told. It keeps at most
+- **Storage** (its SQLite): the messages (id, seq, author, body,
+  `created_at`, and the page's `clientId`), how far each person has read,
+  and what each person's inbox has been told. Seqs are gapless from 1, and
+  each is newer than any before: a purge that takes the newest messages
+  away keeps the highest seq used (`seq_floor` in `dm_meta`), so no seq is
+  used twice, and a read, which only ever goes further, never covers a
+  message that came after it. It keeps at most
   `DM_HISTORY_LIMIT`, 10,000 messages: past that the oldest go as new ones
   arrive (about 160 MB at the longest bodies; a typical conversation is a
   small fraction of that).
@@ -210,6 +214,10 @@ callable methods, and a page may not set state).
   sets an alarm before it calls them, so an inbox it could not reach, or an
   instance lost mid-call, is told again (after 2 s, doubling with each retry
   that fails, up to 5 minutes).
+- **Events.** Each message stored and each read that goes further is
+  recorded for Go in the same transaction, and sent from an outbox
+  ([Conversation events](#conversation-events)): who and where, never what
+  was said.
 
 A member's conversation list is `InboxAgent` (`src/inbox-agent.ts`), one per
 member per organization, `{org}~{user}`, read live by `useInbox(org, viewer)`
@@ -273,8 +281,8 @@ socket is in `src/lib/side/protocol.ts`; like a DM's, it carries that alone,
 and a page may not set state.
 
 **The transcript** (its SQLite, at most 10,000 items, the oldest dropped
-first) holds four kinds of item, one order (`seq`, gapless from 1) over all
-of them:
+first) holds four kinds of item, one order (`seq`, gapless from 1 and never
+used twice, as a DM's) over all of them:
 
 | Kind | What | Whose side (`authorId`, `ownerId`, `requesterId`) |
 |---|---|---|
@@ -383,6 +391,11 @@ through for their author; an agent's message and a quiet line are noted as
 the agent's (`authorId` the agent's id; an agent's message previews as
 "Nia: …"), so they count as unread for both until read. Reads go on as a DM's (`markRead`), and a
 failed update is tried again on a schedule, as a DM's.
+
+**Events.** A person's message (a question to their own agent too), an
+agent's final answer and each read that goes further are recorded for Go
+as a DM's are ([Conversation events](#conversation-events)); an answer's
+deltas, a request card and a quiet line never are.
 
 **The page's side** is `useSideConversation(organizationId?, viewerId?,
 teamspaceId?, peerId?)`:
@@ -535,8 +548,8 @@ meanwhile (at most five passes). In each DM (`DirectMessageAgent.purge`):
   before they left, writing in the moment between their removal and this
   purge.
 - Nothing left, and no socket opened since `removed_at`: the DM is emptied
-  (messages, read states, what it told the inboxes), its sockets are told
-  `dm-gone` and closed, and it leaves both inboxes.
+  (messages, what it told the inboxes), its sockets are told `dm-gone` and
+  closed, and it leaves both inboxes.
 - Otherwise it stays, as a new run of the conversation (a new
   `conversation` id, so no page joins what it held to what stayed). Both
   inboxes are restated from what stayed
@@ -544,6 +557,11 @@ meanwhile (at most five passes). In each DM (`DirectMessageAgent.purge`):
   what is unread; with no message left, known but not listed). Its sockets
   opened since `removed_at` are sent the new run; those opened before are
   told `dm-gone` and closed.
+- Either way, and after an organization's purge too, two numbers stay: how
+  far each person had read, and the highest seq used. The next message,
+  in whatever run, takes a seq newer than any before it, which no read
+  covers yet: a purge that took the newest messages away never lets a seq
+  Go was told of be used again, nor moves a read back.
 
 A side conversation (`SideConversationAgent.purge`) follows the same
 rules, over every kind of item: what was stored at or before `removed_at`
@@ -573,11 +591,140 @@ The hooks act on the message, not only the close: in `vite dev` the
 object's close does not reach a socket whose page never sent a frame on it
 (an inbox's; a DM's page always says its visibility first).
 
+A purge of a DM or a side conversation, whole or of one member, also takes
+the events it had not yet sent Go, and those Go refused, with it
+([Conversation events](#conversation-events)).
+
 `REALTIME_PURGE_SECRET` is a Worker secret (`wrangler secret put
 REALTIME_PURGE_SECRET`, the same value Go has; `.dev.vars` locally, see
-`.dev.vars.example`). `src/realtime-purge.test.ts` pins Go's own signing
-vectors: a member's purge, an organization's, and a member's with a
+`.dev.vars.example`). It signs the other direction too: the conversation
+events the Worker sends Go. `src/realtime-purge.test.ts` pins Go's own
+signing vectors: a member's purge, an organization's, and a member's with a
 nanosecond `removed_at`.
+
+## Conversation events
+
+DMs and side conversations live only here, so nothing else in the platform
+would know they happen. Each object tells Go instead, and Go's realtime
+service publishes what it takes on the event bus (source `oryxa.realtime`),
+for notifications, audit and search to react to. An event carries
+identities and positions, never what anybody wrote: no body, no preview, no
+title. The shapes, the signing and the outbox both objects keep are in
+`src/realtime-events.ts`.
+
+**What is recorded.**
+
+- `realtime.message.posted.v1`: a stored, finished message. A person's (in
+  a DM or a side conversation, a question to their own agent included), or
+  an agent's final answer in a side conversation: their own agent's answer
+  once its run has ended with something said, and a completed request's
+  result as the asked agent's. Never an answer's deltas, an answer waiting
+  on its owner's confirmation, one that failed or said nothing, a request
+  card, a quiet line or typing.
+  `{ organization_id, conversation: { kind: "direct" | "side", id, teamspace_id }, participant_user_ids, message: { id, seq }, author: { kind: "member", user_id } | { kind: "agent", user_id, agent_id }, posted_at }`:
+  `id` is the object's name, `teamspace_id` is there exactly for a side
+  conversation, `participant_user_ids` are its two people, sorted, and an
+  agent's `user_id` is its owner. An agent's answer is posted when its run
+  ended.
+- `realtime.conversation.read.v1`: a read position that goes further,
+  moved by the page's `dm-read` or `side-read`, or by a request card a
+  person filed in a side conversation, which reads it through the card.
+  A person's own message (a question to their own agent too) reads the
+  conversation through it as well, with no read event of its own: its
+  `realtime.message.posted.v1`, by them, says they have read through its
+  seq.
+  `{ organization_id, conversation, reader_user_id, read_through_seq, read_at }`.
+
+Times are `toISOString`'s, UTC to the millisecond. In a conversation, a
+`seq` is never used twice, not even after a purge took the newest messages
+away, and a reader's `read_through_seq` only ever goes up.
+
+**The outbox**, in each object's SQLite. An event is written in the same
+transaction (`ctx.storage.transactionSync`) as what it is about: a message
+is never stored without its event, nor a read moved, and when either write
+fails, neither is kept.
+
+- `event_outbox`: `position` (the order events go in), `id` (`evt_` and 32
+  hex digits, made once and kept across retries), `type`, `detail` (the
+  JSON, sent byte for byte), `reader_id` on a read, and `created_at`
+  (milliseconds). Only reads are indexed, by their reader; a row goes by
+  its position. Reads coalesce: each reader has one waiting at most, and a
+  newer one takes its place under a new id, so Go's answer to a request
+  that carried the older one never settles it.
+- `event_dead_letters`: what Go refused, with its `status`, its `answer`
+  (the first 2,000 characters) and `dead_at`, kept seven days.
+- `event_meta`: Go's wait (`backoff`: how many requests in a row Go did not
+  take, and when the next may go), one value for the whole outbox, written
+  only when Go does not take a request.
+
+Whatever waits, recording an event and a request Go does not take each
+write a fixed few rows, and nothing reads more of the outbox than its
+head: its first rows by `position`, and the oldest dead letter by rowid.
+Both tables are in the order they were written, so what is past its seven
+days is at the head too. A table an earlier build made (with `attempts`
+and `next_at` on every event) is made again as it is now, with what it
+held, the first time the object starts.
+
+**Draining.** One drain at a time, on the SDK's schedule (`drainEvents`),
+set for when the oldest event may go, never under a second after the last
+drain, and always in a whole second: the SDK rounds a schedule's time down
+to the second, so a drain set sooner could run again in the second it ran
+in, and spin. The drains set are the SDK's own schedules, as it lists them
+(`listSchedules`), and when the last one ran is kept in memory, so a drain
+writes nothing of its own. A drain that is set is never moved, and none is
+set while one as early is: an event recorded meanwhile goes with it. One
+set for later, to let a dead letter go, stays as it is beside a sooner one.
+Each drain drops what Go has not taken in seven days (with an error log)
+and the dead letters as old, then sends the oldest events, at most 100 and
+256 KiB a request, to `POST {ORYXA_API_ORIGIN}/v1/realtime/events`:
+
+- `Content-Type: application/json`; `X-Oryxa-Timestamp`, Unix seconds; and
+  `X-Oryxa-Signature`, `v1=` and the lowercase hex HMAC-SHA256, keyed with
+  `REALTIME_PURGE_SECRET` (trimmed, as for a purge), of
+  `events.{timestamp}.{body}`. The prefix keeps the two directions apart: a
+  purge's signature (`{timestamp}.{body}`) never verifies as an events
+  request's, nor one of these as a purge's. `signEvents` reuses the purge's
+  helper (`realtimeSignature`).
+- The body: `{"events":[{"id":…,"type":…,"detail":…},…]}`.
+
+Then, by Go's answer:
+
+- 204: Go took every event (again, without a second event, for an id it
+  took in the last seven days), and they leave the outbox.
+- Go's refusal, a 400 or 413 with Go's own error
+  (`{"error":{"code":"invalid_request",…}}`: an event Go cannot take, or
+  over 100 events or 256 KiB; Go took none of it): they move to the dead
+  letters, with an error log, and are never sent again. A 400 or 413
+  without it came from something between the Worker and Go, such as a
+  proxy's page, and says nothing about the events: they go again, as
+  below.
+- Anything else (401; 404 while Go's realtime is off or not fully
+  configured, since Go then mounts no such route; a 5xx; a redirect,
+  never followed; or no answer within 10 s): they stay, and the whole
+  outbox waits, a second after the first such answer in a row, doubling
+  each time, to five minutes. What is recorded meanwhile waits with it,
+  behind what is ahead. Go's next 204 or refusal ends the wait.
+
+Without `ORYXA_API_ORIGIN` or `REALTIME_PURGE_SECRET`, or with a secret
+shorter than 32 characters once trimmed (the least a purge and Go take), the
+objects record nothing, so nothing is sent.
+
+**Purges.** A purge of a conversation, whole or of one member, takes every
+event waiting and every dead letter with it before it does anything else,
+and lets its drains go: nothing recorded before a purge is ever sent. A
+request already on its way was sent before the purge came: the purge waits
+for Go's answer to it two seconds at most, then gives it up, so a member in
+many conversations stays well within the 30 s Go gives their purge (an
+inbox purges four conversations at a time). Go may still take a request
+given up on, after the Worker answered the purge: an event about what a
+purge took can reach the bus after Go's own `realtime.purge.completed.v1`,
+which a consumer must not take for the last word on it. An event about a
+message that stayed through a member's purge, not yet sent, goes with the
+rest; what is said after the purge is recorded as ever.
+
+`src/realtime-events.test.ts` pins the contract's golden vectors (a DM's
+message and a side conversation's read, their bodies byte for byte and
+their signatures) and that neither is ever signed as a purge.
 
 ## UI
 

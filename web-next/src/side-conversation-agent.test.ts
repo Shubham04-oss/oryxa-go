@@ -5,6 +5,8 @@ import { inboxName, sideConversationName } from "./lib/dms/names"
 import { SIDE_MAX_BODY_LENGTH, encodeRoster } from "./lib/side/protocol"
 import type { SideRoster } from "./lib/side/protocol"
 import { sessionExpiredCode } from "./lib/threads/chat-messages"
+import type { Item } from "./lib/threads/client"
+import { realtimeEventTypes } from "./realtime-events"
 import { RealtimeRegistryAgent } from "./realtime-registry-agent"
 import {
   SideConversationAgent,
@@ -19,6 +21,7 @@ import {
   say,
 } from "./test/durable-objects"
 import type { FakeSocket, Harness } from "./test/durable-objects"
+import { FakeGoEvents, eventsSecret, routeFetch } from "./test/fake-go-events"
 import {
   FakeGo,
   ada,
@@ -48,7 +51,7 @@ const base = `/v1/organizations/${org}`
 
 let go: FakeGo
 
-function makeWorld() {
+function makeWorld(vars: Record<string, unknown> = {}) {
   return new World(
     {
       SideConversationAgent,
@@ -56,12 +59,12 @@ function makeWorld() {
       InboxAgent,
       RealtimeRegistryAgent,
     } as unknown as ConstructorParameters<typeof World>[0],
-    { ORYXA_API_ORIGIN: goOrigin }
+    { ORYXA_API_ORIGIN: goOrigin, ...vars }
   )
 }
 
-async function setup() {
-  const world = makeWorld()
+async function setup(vars?: Record<string, unknown>) {
+  const world = makeWorld(vars)
   const side = await world.object<Side>("SideConversationAgent", name)
   return { world, side }
 }
@@ -1145,9 +1148,14 @@ describe("SideConversationAgent: purge", () => {
     await askTeammate(side, adaTab, bo.agentId, "Help")
     expect(await side.purge()).toEqual({ emptied: true })
     expect(side.sql`SELECT * FROM side_items`).toEqual([])
-    expect(side.sql`SELECT * FROM side_reads`).toEqual([])
     expect(side.sql`SELECT * FROM side_threads`).toEqual([])
-    expect(side.sql`SELECT * FROM side_meta`).toEqual([])
+    // Two numbers stay: how far each person read, and the highest seq used.
+    expect(side.sql`SELECT user_id, seq FROM side_reads`).toEqual([
+      { user_id: ada.userId, seq: 4 },
+    ])
+    expect(side.sql`SELECT key, value FROM side_meta`).toEqual([
+      { key: "seq_floor", value: "4" },
+    ])
     expect(side.jobs).toEqual([])
     expect(adaTab.last("side-gone")).toEqual({ type: "side-gone" })
     expect(adaTab.closed).toEqual({ code: 4404, reason: "Gone" })
@@ -1231,5 +1239,427 @@ describe("SideConversationAgent: purge", () => {
     await expect(
       side.purge({ userId: ada.userId, removedAt: "yesterday" })
     ).rejects.toThrow(TypeError)
+  })
+})
+
+describe("SideConversationAgent: events for Go", () => {
+  const eventsOn = { REALTIME_PURGE_SECRET: eventsSecret }
+  const posted = realtimeEventTypes.messagePosted
+  const read = realtimeEventTypes.conversationRead
+  const encoder = new TextEncoder()
+  let events: FakeGoEvents
+
+  beforeEach(() => {
+    events = new FakeGoEvents()
+    vi.stubGlobal("fetch", routeFetch(events, go.fetch))
+  })
+
+  function outbox(side: Side) {
+    return side.sql<{
+      type: string
+      detail: string
+      reader_id: string | null
+    }>`SELECT type, detail, reader_id FROM event_outbox ORDER BY position`.map(
+      (row) => ({
+        ...row,
+        detail: JSON.parse(row.detail) as Record<string, unknown>,
+      })
+    )
+  }
+
+  /** The messages recorded, as `[seq, author]`. */
+  function postedOf(side: Side) {
+    return outbox(side)
+      .filter((row) => row.type === posted)
+      .map((row) => [
+        (row.detail.message as { seq: number }).seq,
+        row.detail.author,
+      ])
+  }
+
+  const member = (person: Person) => ({
+    kind: "member",
+    user_id: person.userId,
+  })
+
+  it("records a person's message and each read that goes further, as a DM's, in its teamspace", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await send(side, adaTab, "Morning, Bo")
+    await say(side, boTab, { type: "side-read", seq: 1 })
+
+    const conversation = { kind: "side", id: name, teamspace_id: teamspaceId }
+    const [message] = side.sql<{ id: string }>`SELECT id FROM side_items`
+    expect(outbox(side)).toEqual([
+      {
+        type: posted,
+        reader_id: null,
+        detail: {
+          organization_id: org,
+          conversation,
+          participant_user_ids: [ada.userId, bo.userId],
+          message: { id: message.id, seq: 1 },
+          author: member(ada),
+          posted_at: "2026-09-24T09:00:00.000Z",
+        },
+      },
+      // Ada reads through her own message with no event of its own.
+      {
+        type: read,
+        reader_id: bo.userId,
+        detail: {
+          organization_id: org,
+          conversation,
+          reader_user_id: bo.userId,
+          read_through_seq: 1,
+          read_at: "2026-09-24T09:00:00.000Z",
+        },
+      },
+    ])
+    await runDueJobs(side)
+    expect(events.taken.map((event) => event.type)).toEqual([posted, read])
+  })
+
+  it("records no read of its own for a person's message or question, and one for the read a request they filed makes", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    await join(side, bo)
+    await send(side, adaTab, "Morning")
+    go.runAnswers.push(answer("Leo", "Morning to you."))
+    await askMine(side, adaTab, "Leo, say hi")
+    // Her read went through the question, and on through Leo's answer only
+    // once she reads it.
+    expect(side.sql`SELECT user_id, seq FROM side_reads`).toEqual([
+      { user_id: ada.userId, seq: 2 },
+    ])
+    expect(outbox(side).filter((row) => row.type === read)).toEqual([])
+    // A request card is no event: the read it makes is one.
+    await askTeammate(side, adaTab, bo.agentId, "Pull the numbers")
+    expect(
+      outbox(side).map((row) => [
+        row.type,
+        row.type === read
+          ? row.detail.read_through_seq
+          : (row.detail.message as { seq: number }).seq,
+      ])
+    ).toEqual([
+      [posted, 1],
+      [posted, 2],
+      [posted, 3],
+      [read, 4],
+    ])
+    expect(outbox(side).at(-1)?.detail.reader_user_id).toBe(ada.userId)
+  })
+
+  it("stores a message and its event as one: when the event cannot be written, neither is kept", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    side.sql`CREATE TRIGGER outbox_full BEFORE INSERT ON event_outbox
+      BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`
+    const clientId = await send(side, adaTab, "Lost?")
+    expect(adaTab.last("side-failed")).toMatchObject({
+      clientId,
+      code: "unavailable",
+    })
+    const question = await askMine(side, adaTab, "Leo, are you there?")
+    expect(adaTab.last("side-failed")).toMatchObject({
+      clientId: question,
+      code: "unavailable",
+    })
+    expect(side.sql`SELECT * FROM side_items`).toEqual([])
+    expect(side.sql`SELECT * FROM side_reads`).toEqual([])
+    expect(go.callsTo(`${base}/threads`, "POST")).toEqual([])
+    expect(outbox(side)).toEqual([])
+  })
+
+  it("records an agent's final answer as the agent's once its run ends, never while it streams", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    let finish!: () => void
+    go.runAnswers.push(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            const write = (item: Item) =>
+              controller.enqueue(
+                encoder.encode(
+                  `event: ${item.type}\ndata: ${JSON.stringify(item)}\n\n`
+                )
+              )
+            write({ type: "run_started", run_id: "run_1" })
+            write({ type: "delta", author: "Leo", text: "We promised " })
+            write({ type: "delta", author: "Leo", text: "the beta." })
+            write({
+              type: "message",
+              author: "Leo",
+              text: "We promised the beta.",
+            })
+            finish = () => {
+              write({ type: "run_completed", run_id: "run_1" })
+              controller.close()
+            }
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } }
+      )
+    )
+    const asking = askMine(side, adaTab, "Leo, what did we promise?")
+    await vi.waitFor(() =>
+      expect(lastItem(adaTab, "agent-message")?.body).toBe(
+        "We promised the beta."
+      )
+    )
+    // Streamed and even stored, but the run goes on: only the question.
+    expect(adaTab.of("side-delta")).toHaveLength(2)
+    expect(postedOf(side)).toEqual([[1, member(ada)]])
+
+    vi.setSystemTime(new Date("2026-09-24T09:00:07.000Z"))
+    finish()
+    await asking
+    const reply = lastItem(adaTab, "agent-message")
+    expect(reply).toMatchObject({ seq: 2, status: "done" })
+    expect(postedOf(side)).toEqual([
+      [1, member(ada)],
+      [2, { kind: "agent", user_id: ada.userId, agent_id: ada.agentId }],
+    ])
+    const [, { detail }] = outbox(side).filter((row) => row.type === posted)
+    expect(detail).toMatchObject({
+      message: { id: reply?.id, seq: 2 },
+      posted_at: "2026-09-24T09:00:07.000Z",
+    })
+    expect(JSON.stringify(outbox(side))).not.toContain("promise")
+  })
+
+  it("records no answer that waits on its owner until it is done, and none that failed or said nothing", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    go.runAnswers.push([
+      { type: "run_started", run_id: "run_1" },
+      { type: "message", author: "Leo", text: "I can email the plan." },
+      {
+        type: "confirmation",
+        call_id: "call_1",
+        tool: "gmail_send",
+        status: "pending",
+      },
+      { type: "run_completed", run_id: "run_1" },
+    ])
+    await askMine(side, adaTab, "Email Bo the plan")
+    expect(lastItem(adaTab, "agent-message")?.status).toBe("waiting")
+    expect(postedOf(side)).toEqual([[1, member(ada)]])
+    go.runAnswers.push([
+      { type: "run_started", run_id: "run_2" },
+      { type: "message", author: "Leo", text: "Sent." },
+      { type: "run_completed", run_id: "run_2" },
+    ])
+    await say(side, adaTab, {
+      type: "side-confirm",
+      seq: 2,
+      answers: [{ id: "call_1", confirmed: true }],
+    })
+    expect(lastItem(adaTab, "agent-message")?.status).toBe("done")
+    const agent = { kind: "agent", user_id: ada.userId, agent_id: ada.agentId }
+    expect(postedOf(side)).toEqual([
+      [1, member(ada)],
+      [2, agent],
+    ])
+
+    // An answer that says nothing, and one that fails.
+    go.runAnswers.push([
+      { type: "run_started", run_id: "run_3" },
+      { type: "run_completed", run_id: "run_3" },
+    ])
+    await askMine(side, adaTab, "Anything else?")
+    expect(lastItem(adaTab, "agent-message")).toMatchObject({
+      seq: 4,
+      status: "done",
+      error: "The agent had nothing to say.",
+    })
+    go.runAnswers.push(
+      new Response(
+        JSON.stringify({ error: { code: "internal", message: "boom" } }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      )
+    )
+    await askMine(side, adaTab, "And now?")
+    expect(lastItem(adaTab, "agent-message")).toMatchObject({
+      seq: 6,
+      status: "failed",
+    })
+    expect(postedOf(side)).toEqual([
+      [1, member(ada)],
+      [2, agent],
+      [3, member(ada)],
+      [5, member(ada)],
+    ])
+  })
+
+  it("settles an agent's answer and records it as one: when its event cannot be written, the answer does not settle either", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    let finish!: () => void
+    go.runAnswers.push(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            const write = (item: Item) =>
+              controller.enqueue(
+                encoder.encode(
+                  `event: ${item.type}\ndata: ${JSON.stringify(item)}\n\n`
+                )
+              )
+            write({ type: "run_started", run_id: "run_1" })
+            write({ type: "message", author: "Leo", text: "Done." })
+            finish = () => {
+              write({ type: "run_completed", run_id: "run_1" })
+              controller.close()
+            }
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } }
+      )
+    )
+    const asking = askMine(side, adaTab, "Leo, is it done?")
+    await vi.waitFor(() =>
+      expect(lastItem(adaTab, "agent-message")?.body).toBe("Done.")
+    )
+    // The outbox refuses its rows, as a full disk would, as the run ends.
+    side.sql`CREATE TRIGGER outbox_full BEFORE INSERT ON event_outbox
+      BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`
+    finish()
+    await expect(asking).rejects.toThrow("database or disk is full")
+    expect(
+      side.sql`SELECT state, settled FROM side_items
+        WHERE kind = 'agent-message'`
+    ).toEqual([{ state: "streaming", settled: 0 }])
+    expect(lastItem(adaTab, "agent-message")?.status).toBe("streaming")
+    expect(postedOf(side)).toEqual([[1, member(ada)]])
+  })
+
+  it("leaves a completed request's result and records it as one: when its event cannot be written, neither lands until a later read", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Pull the pricing sheet")
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    go.complete("irq_1", "The sheet is attached.")
+    side.sql`CREATE TRIGGER outbox_full BEFORE INSERT ON event_outbox
+      BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`
+    const poll = () =>
+      (side as unknown as { pollRequests: () => Promise<void> }).pollRequests()
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await expect(poll()).rejects.toThrow("database or disk is full")
+    // The card shows how it stands; the result and its event are not there.
+    expect(lastItem(adaTab, "request-card")?.status).toBe("completed")
+    expect(
+      side.sql`SELECT seq FROM side_items WHERE kind = 'agent-message'`
+    ).toEqual([])
+    expect(postedOf(side)).toEqual([])
+
+    // Once the outbox takes rows again, the next read leaves both.
+    side.sql`DROP TRIGGER outbox_full`
+    await poll()
+    const result = lastItem(adaTab, "agent-message")
+    expect(result).toMatchObject({
+      status: "done",
+      via: { requestId: "irq_1" },
+    })
+    expect(postedOf(side)).toEqual([
+      [
+        result?.seq,
+        { kind: "agent", user_id: bo.userId, agent_id: bo.agentId },
+      ],
+    ])
+  })
+
+  it("records a completed request's result as the asked agent's message, and never a card or a quiet line", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Pull the pricing sheet")
+    await askTeammate(side, adaTab, bo.agentId, "And the old one")
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_2",
+      decision: "rejected",
+      message: "Not this week.",
+    })
+    go.complete("irq_1", "The sheet is attached.")
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    const result = itemsOf(adaTab).find((item) => item.kind === "agent-message")
+    expect(result).toMatchObject({
+      status: "done",
+      via: { requestId: "irq_1" },
+    })
+    expect(itemsOf(adaTab).map((item) => item.kind)).toEqual([
+      "request-card",
+      "request-card",
+      "status",
+      "agent-message",
+    ])
+    expect(postedOf(side)).toEqual([
+      [4, { kind: "agent", user_id: bo.userId, agent_id: bo.agentId }],
+    ])
+    // Once: however often Go is read again.
+    vi.advanceTimersByTime(60_000)
+    await (
+      side as unknown as { pollRequests: () => Promise<void> }
+    ).pollRequests()
+    expect(postedOf(side)).toHaveLength(1)
+  })
+
+  it("never gives a seq twice when a purge takes the newest items away", async () => {
+    const { side } = await setup(eventsOn)
+    const adaOld = await join(side, ada)
+    await send(side, adaOld, "Before")
+    // Ada left at 10:00. Bo writes after, and so does her page from before.
+    vi.setSystemTime(new Date("2026-09-24T10:05:00.000Z"))
+    const boNew = await join(side, bo)
+    await send(side, boNew, "Bo, after")
+    await send(side, adaOld, "Ada's page from before, after")
+    await runDueJobs(side)
+    expect(
+      events.taken.map((event) => (event.detail.message as { seq: number }).seq)
+    ).toEqual([1, 2, 3])
+
+    expect(
+      await side.purge({
+        userId: ada.userId,
+        removedAt: "2026-09-24T10:00:00.000Z",
+      })
+    ).toEqual({ emptied: false })
+    expect(side.sql`SELECT seq FROM side_items`).toEqual([{ seq: 2 }])
+    await send(side, boNew, "And now")
+    expect(lastItem(boNew, "message")).toMatchObject({
+      seq: 4,
+      body: "And now",
+    })
+    expect(postedOf(side)).toEqual([[4, member(bo)]])
+  })
+
+  it("takes its events with it when it is purged", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    await send(side, adaTab, "Morning")
+    expect(outbox(side)).toHaveLength(1)
+    await side.purge()
+    expect(outbox(side)).toEqual([])
+    expect(side.sql`SELECT * FROM event_dead_letters`).toEqual([])
+    expect(side.jobs.filter((job) => job.callback === "drainEvents")).toEqual(
+      []
+    )
+    await runDueJobs(side)
+    expect(events.requests).toEqual([])
   })
 })

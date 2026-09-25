@@ -18,8 +18,11 @@ export type {
 /**
  * A person's message, oldest first in a view with every other item.
  *
- * - `seq` is the conversation's own order, gapless from 1 over every kind of
- *   item. It is 0 while the object has not confirmed the message (`status`).
+ * - `seq` is the conversation's own order over every kind of item: gapless
+ *   from 1, each one newer than any before, and never used twice, not even
+ *   after a purge takes items away (the next run goes on from the
+ *   highest). It is 0 while the object has not confirmed the message
+ *   (`status`).
  * - `clientId` is the page's own id for a message it sent, kept once it is
  *   confirmed so a view can keep its key. Only the author's own carry it.
  * - `asksAgentId` marks a message that asked its author's own agent

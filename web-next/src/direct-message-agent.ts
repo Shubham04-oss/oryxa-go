@@ -1,5 +1,5 @@
 import { Agent, getAgentByName } from "agents"
-import type { Connection, ConnectionContext, WSMessage } from "agents"
+import type { Connection, ConnectionContext, Schedule, WSMessage } from "agents"
 import { conversationRequestHeaders } from "./conversation-env"
 import type { ConversationEnv } from "./conversation-env"
 import type { NotedMessage, RestatedConversation } from "./inbox-agent"
@@ -16,6 +16,12 @@ import {
   parseDmClientMessage,
   preview,
 } from "./lib/dms/protocol"
+import {
+  EventOutbox,
+  memberAuthor,
+  realtimeEventsConfig,
+} from "./realtime-events"
+import type { SqlValue } from "./realtime-events"
 import { isPurgeInstant } from "./realtime-registry-agent"
 import type {
   DmRead,
@@ -144,7 +150,9 @@ function randomId(): string {
  *
  * - **Storage** (its SQLite): the messages (at most `DM_HISTORY_LIMIT`, the
  *   oldest dropped first), how far each person has read, and what each
- *   person's inbox has been told.
+ *   person's inbox has been told. A message's seq is one past the highest
+ *   any message ever had here, so a purge never lets one be used twice,
+ *   and a read only ever goes further.
  * - **Sending.** A message's author is always the socket's own person, as
  *   the Worker determined it. Its body is trimmed and holds 1 to
  *   `DM_MAX_BODY_LENGTH` code points; each person may send `dmSendLimit`.
@@ -158,6 +166,11 @@ function randomId(): string {
  *   never stored.
  * - **Presence.** A person is online while one of their sockets says its tab
  *   is visible.
+ * - **Events.** Each message stored, and each read that goes further, is
+ *   recorded for Go in the same transaction (src/realtime-events.ts), and
+ *   sent on the `drainEvents` schedule; never what anybody wrote. A
+ *   message's author reads through it with no event of its own: the
+ *   message's says so.
  *
  * Only its two people reach it: the Worker routes a socket only once Go has
  * said who the member is and that the other person is in the organization.
@@ -174,6 +187,29 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
   private schemaReady = false
   private syncing: Promise<void> | undefined
   private syncAgain = false
+  /** What Go is told of the conversation: messages and reads, no content. */
+  private readonly events = new EventOutbox({
+    label: "direct message",
+    name: () => this.name,
+    scope: () => {
+      const { organizationId, userA, userB } = this.ids
+      return {
+        organizationId,
+        conversation: { kind: "direct", id: this.name },
+        participants: [userA, userB],
+      }
+    },
+    config: () => realtimeEventsConfig(this.env),
+    sql: <T>(strings: TemplateStringsArray, ...values: SqlValue[]) =>
+      this.sql<T>(strings, ...values),
+    transaction: (work) => this.transaction(work),
+    schedule: (at) => this.schedule(at, "drainEvents"),
+    drains: async () =>
+      (await this.listSchedules()).filter(
+        (schedule) => schedule.callback === "drainEvents"
+      ),
+    cancelSchedule: (id) => this.cancelSchedule(id),
+  })
 
   // The socket carries this object's protocol only: no SDK identity, state
   // or MCP frames, and nothing at all before `onConnect` has checked it.
@@ -200,10 +236,12 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return new Response(null, { status: 204 })
   }
 
-  // After a restart: an inbox that was never told is told again.
+  // After a restart: an inbox that was never told is told again, and the
+  // events still waiting go.
   override async onStart(): Promise<void> {
     this.schema()
     if (this.syncPending()) await this.armRetry()
+    await this.events.plan()
   }
 
   override async onConnect(connection: Connection, context: ConnectionContext) {
@@ -283,8 +321,11 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
    * The purge (src/realtime-purge.ts), over RPC from an inbox's.
    *
    * Without a `scope` (an organization deleted), it empties the
-   * conversation: every message, read state and what its inboxes were told,
-   * and tells every socket `dm-gone` and closes it.
+   * conversation: every message and what its inboxes were told, and tells
+   * every socket `dm-gone` and closes it. Two numbers stay, as after any
+   * purge: how far each person had read, and the highest seq used
+   * (`keepSeqFloor`), so a later run never uses a seq again nor moves a
+   * read back.
    *
    * For one of its people who left at `scope.removedAt`, the messages written
    * at or before then go, and so do any that person wrote after it on a
@@ -298,19 +339,30 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
    *
    * Resolves whether it was emptied, and the caller then takes it off both
    * inboxes; otherwise it stays in them, restated. Safe to call again.
+   *
+   * Either way, the events waiting for Go and those Go refused go with it
+   * (`EventOutbox.purge`): nothing recorded before the purge is sent, and a
+   * request already on its way is waited for, two seconds at most.
    */
   async purge(scope?: DmPurgeScope): Promise<{ emptied: boolean }> {
+    // A scope that is not this conversation's is refused before anything
+    // goes.
+    const leaving = scope ? this.checkedScope(scope) : undefined
     this.epoch += 1
     this.schema()
+    const eventsGone = this.events.purge()
     for (const held of this.typing.values()) clearTimeout(held.timer)
     this.typing.clear()
     this.sendBuckets.clear()
-    if (!scope) {
+    if (!leaving) {
       await this.reset()
       this.endSockets(() => true)
+      await eventsGone
       return { emptied: true }
     }
-    const { userId, removedAt } = this.checkedScope(scope)
+    const { userId, removedAt } = leaving
+    // The newest may go too (written after, on a page from before).
+    this.keepSeqFloor()
     this.sql`DELETE FROM dm_messages WHERE created_at <= ${removedAt}
       OR (author_id = ${userId} AND session_at IS NOT NULL AND session_at <= ${removedAt})`
     const openedBefore = (state: DmConnectionState) =>
@@ -322,11 +374,12 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     if (this.latestSeq() === 0 && staying.length === 0) {
       await this.reset()
       this.endSockets(() => true)
+      await eventsGone
       return { emptied: true }
     }
-    // What stays is a new run of the conversation.
+    // What stays is a new run of the conversation. The reads stay as they
+    // were: every seq the run takes is newer than they are.
     if (this.latestSeq() === 0) {
-      this.sql`DELETE FROM dm_reads`
       this.deleteMeta("conversation")
       this.setMeta("opened", "1")
     } else {
@@ -339,6 +392,7 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       send(connection, this.snapshot(state.userId))
     }
     await this.syncInboxes()
+    await eventsGone
     return { emptied: false }
   }
 
@@ -349,6 +403,14 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     const attempt = Number(this.meta("retry_attempt") ?? "0") + 1
     this.setMeta("retry_attempt", String(attempt))
     await this.syncInboxes()
+  }
+
+  /** The events' schedule: sends Go what waits (`EventOutbox.drain`). */
+  async drainEvents(
+    _payload?: unknown,
+    schedule?: Schedule<unknown>
+  ): Promise<void> {
+    await this.events.drain(schedule)
   }
 
   private get ids(): DirectMessageIds {
@@ -372,13 +434,17 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return { userId, removedAt }
   }
 
-  /** Empties all the conversation keeps, and lets its retry go. */
+  /**
+   * Empties the conversation, and lets its retry go: all it keeps but how
+   * far each person read and the highest seq used, so a later run never
+   * uses a seq again nor moves a read back.
+   */
   private async reset(): Promise<void> {
     const retry = this.meta("retry")
+    this.keepSeqFloor()
     this.sql`DELETE FROM dm_messages`
-    this.sql`DELETE FROM dm_reads`
     this.sql`DELETE FROM dm_inbox_sync`
-    this.sql`DELETE FROM dm_meta`
+    this.sql`DELETE FROM dm_meta WHERE key != 'seq_floor'`
     if (retry) await this.cancelSchedule(retry).catch(() => false)
   }
 
@@ -530,6 +596,7 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     // Sending a message reads the conversation through it.
     this.tell({ type: "dm-read", userId: author, seq: row.seq })
     this.stopTyping(author)
+    await this.events.plan()
     await this.syncInboxes()
   }
 
@@ -547,10 +614,11 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
   }
 
   /**
-   * Stores a message and what it changes, synchronously, so that it is
-   * written as one: the message (with when its socket opened), the oldest
-   * dropped past the limit, the author's read through it, and the
-   * conversation's run.
+   * Stores a message and what it changes as one transaction: the message
+   * (with when its socket opened) and its event for Go, the oldest dropped
+   * past the limit, the author's read through it (no event of its own: the
+   * message's says so), and the conversation's run. When any of it fails,
+   * none of it is kept.
    */
   private store(
     author: string,
@@ -558,26 +626,29 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     body: string,
     sessionAt: string | null
   ): MessageRow {
-    const row: MessageRow = {
-      seq: this.latestSeq() + 1,
-      id: `dmm_${randomId()}`,
-      author_id: author,
-      client_id: clientId,
-      body,
-      created_at: new Date().toISOString(),
-    }
-    this
-      .sql`INSERT INTO dm_messages (seq, id, author_id, client_id, body, created_at, session_at)
-      VALUES (${row.seq}, ${row.id}, ${author}, ${clientId}, ${body}, ${row.created_at}, ${sessionAt})`
-    if (row.seq > DM_HISTORY_LIMIT) {
+    return this.transaction(() => {
+      const row: MessageRow = {
+        seq: this.nextSeq(),
+        id: `dmm_${randomId()}`,
+        author_id: author,
+        client_id: clientId,
+        body,
+        created_at: new Date().toISOString(),
+      }
       this
-        .sql`DELETE FROM dm_messages WHERE seq <= ${row.seq - DM_HISTORY_LIMIT}`
-    }
-    this.setRead(author, row.seq)
-    if (!this.meta("conversation")) {
-      this.setMeta("conversation", `dmc_${randomId()}`)
-    }
-    return row
+        .sql`INSERT INTO dm_messages (seq, id, author_id, client_id, body, created_at, session_at)
+        VALUES (${row.seq}, ${row.id}, ${author}, ${clientId}, ${body}, ${row.created_at}, ${sessionAt})`
+      this.events.recordPosted(row, memberAuthor(author), row.created_at)
+      if (row.seq > DM_HISTORY_LIMIT) {
+        this
+          .sql`DELETE FROM dm_messages WHERE seq <= ${row.seq - DM_HISTORY_LIMIT}`
+      }
+      this.setRead(author, row.seq, false)
+      if (!this.meta("conversation")) {
+        this.setMeta("conversation", `dmc_${randomId()}`)
+      }
+      return row
+    })
   }
 
   /** `reader` read through `seq` (at most the latest): both sockets and their inbox are told. */
@@ -586,6 +657,7 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     if (through <= this.readSeq(reader)) return
     this.setRead(reader, through)
     this.tell({ type: "dm-read", userId: reader, seq: through })
+    await this.events.plan()
     await this.syncInboxes()
   }
 
@@ -843,11 +915,38 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return { noted: row?.noted_seq ?? 0, read: row?.read_seq ?? 0 }
   }
 
+  /** The newest message's seq, or 0 without one. */
   private latestSeq(): number {
     const row = this.sql<{
       seq: number | null
     }>`SELECT MAX(seq) AS seq FROM dm_messages`.at(0)
     return row?.seq ?? 0
+  }
+
+  /**
+   * The next message's seq: one past the highest ever used, which is the
+   * newest message's, or the one a purge kept when it took the newest away
+   * (`keepSeqFloor`). A conversation from before any purge goes on from
+   * its newest message.
+   */
+  private nextSeq(): number {
+    return Math.max(this.latestSeq(), this.seqFloor()) + 1
+  }
+
+  /** The highest seq a purge took away, which no message takes again. */
+  private seqFloor(): number {
+    return Number(this.meta("seq_floor") ?? "0")
+  }
+
+  /**
+   * Before a purge takes messages away, the newest perhaps: the highest seq
+   * used so far is kept, and only ever goes up. Nothing else takes the
+   * newest message away (the history limit drops the oldest), so a message
+   * never reuses a seq Go was told of, nor one a read already covers.
+   */
+  private keepSeqFloor(): void {
+    const latest = this.latestSeq()
+    if (latest > this.seqFloor()) this.setMeta("seq_floor", String(latest))
   }
 
   private readSeq(user: string): number {
@@ -857,9 +956,25 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return row?.seq ?? 0
   }
 
-  private setRead(user: string, seq: number): void {
-    this.sql`INSERT INTO dm_reads (user_id, seq) VALUES (${user}, ${seq})
-      ON CONFLICT (user_id) DO UPDATE SET seq = MAX(seq, excluded.seq)`
+  /**
+   * Reads `user` through `seq`, only ever further, and records it for Go in
+   * the same transaction when it goes further, unless `record` says the
+   * read is an event's already (an author's through their own message).
+   */
+  private setRead(user: string, seq: number, record = true): void {
+    this.transaction(() => {
+      const before = this.readSeq(user)
+      this.sql`INSERT INTO dm_reads (user_id, seq) VALUES (${user}, ${seq})
+        ON CONFLICT (user_id) DO UPDATE SET seq = MAX(seq, excluded.seq)`
+      if (record && seq > before) {
+        this.events.recordRead(user, seq, new Date().toISOString())
+      }
+    })
+  }
+
+  /** Runs `work` as one SQLite transaction: all it writes, or none of it when it throws. */
+  private transaction<T>(work: () => T): T {
+    return this.ctx.storage.transactionSync(work)
   }
 
   private reads(): DmRead[] {

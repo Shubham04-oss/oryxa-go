@@ -99,7 +99,7 @@ export type SideConfirmation = {
 export type SideWireMessage = {
   kind: "message"
   id: string
-  /** The conversation's own order, gapless from 1, over every kind of item. */
+  /** The conversation's own order over every kind of item: never used twice, even after a purge. */
   seq: number
   authorId: string
   body: string

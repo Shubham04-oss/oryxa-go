@@ -10,6 +10,7 @@ import {
   conversationGoneCloseCode,
 } from "./protocol"
 import type { DmServerMessage, DmWireMessage } from "./protocol"
+import { seenMessageId } from "@/components/direct-message-format"
 import { roomSockets } from "@/test/room-socket"
 import type { FakeRoomSocket } from "@/test/room-socket"
 import { apiError, json, mockApi } from "@/test/teamspaces"
@@ -666,6 +667,56 @@ describe("useDirectMessages: refusals", () => {
     ])
     // What was out goes again under its own id.
     expect(socket.said("dm-send").at(-1)).toEqual(inFlight)
+  })
+
+  it("after a purge that left nothing, goes on in order from seqs newer than any before, with the reads that stayed", async () => {
+    mockApi(({ path: asked }) =>
+      asked === path ? json(undefined, 204) : undefined
+    )
+    const reads = [
+      { userId: peer, seq: 3 },
+      { userId: viewer, seq: 3 },
+    ]
+    const { result } = setup()
+    const socket = open([wire(1, viewer), wire(2), wire(3, viewer)], {
+      conversation: "dmc_1",
+      reads,
+    })
+    socket.says({ type: "dm-gone" })
+    await waitFor(() => expect(socket.reconnects).toBe(1))
+    await waitFor(() => expect(socket.readyState).toBe(1))
+    // Nothing stayed; the reads did, and every seq to come is newer.
+    socket.says(snapshot([], { conversation: "", reads }))
+    expect(result.current.messages).toEqual([])
+    act(() => result.current.send("Hello again"))
+    const [sent] = socket.said("dm-send").slice(-1) as Array<{
+      clientId: string
+    }>
+    socket.says({
+      type: "dm-message",
+      message: wire(4, viewer, { clientId: sent.clientId }),
+    })
+    // The other person's read from before does not cover it: not "Seen"
+    // until they read it.
+    expect(result.current.peer.lastReadSeq).toBe(3)
+    const seen = () =>
+      seenMessageId(
+        result.current.messages,
+        viewer,
+        result.current.peer.lastReadSeq
+      )
+    expect(seen()).toBeUndefined()
+    socket.says({ type: "dm-read", userId: peer, seq: 4 })
+    expect(seen()).toBe("dmm_4")
+    socket.says({ type: "dm-message", message: wire(5) })
+    expect(
+      result.current.messages.map((message) => [message.seq, message.status])
+    ).toEqual([
+      [4, undefined],
+      [5, undefined],
+    ])
+    act(() => result.current.markRead())
+    expect(socket.said("dm-read").at(-1)).toEqual({ type: "dm-read", seq: 5 })
   })
 
   it("treats the object's close of a run as a purge, when its word did not arrive", async () => {

@@ -2,10 +2,11 @@
 // objects (src/direct-message-agent.ts, src/inbox-agent.ts,
 // src/realtime-registry-agent.ts), which only run in workerd. Each object
 // gets a real SQLite database (Node's built-in, as Durable Object SQLite is
-// SQLite), sockets the test opens, speaks through and reads, and schedules
-// the test runs; `getAgentByName` reaches the other objects over a stand-in
-// RPC that copies what crosses it, as Durable Object RPC does, and fails
-// for an object the test says was reset. Use it with
+// SQLite) with workerd's `ctx.storage.transactionSync`, sockets the test
+// opens, speaks through and reads, and schedules the test runs;
+// `getAgentByName` reaches the other objects over a stand-in RPC that
+// copies what crosses it, as Durable Object RPC does, and fails for an
+// object the test says was reset. Use it with
 // `vi.mock("agents", async () => (await import("@/test/durable-objects")).agentsModule)`.
 
 type Row = Record<string, unknown>
@@ -73,19 +74,48 @@ export class FakeSocket {
 
 let scheduleIds = 0
 
+/** The Durable Object's state, as far as the objects use it. */
+type FakeState = {
+  id: { name: string }
+  storage: { transactionSync: <T>(work: () => T) => T }
+}
+
 /** The SDK's `Agent`, as far as the objects use it. */
 class Agent {
-  readonly ctx: { id: { name: string } }
+  readonly ctx: FakeState
   readonly env: unknown
   /** Its storage: a restart (`World.restart`) hands it to the new instance. */
   db: Database
   sockets: Array<FakeSocket> = []
   jobs: Array<Job> = []
+  private savepoints = 0
 
   constructor(ctx: { id: { name: string } }, env: unknown) {
-    this.ctx = ctx
+    this.ctx = {
+      ...ctx,
+      storage: { transactionSync: (work) => this.transactionSync(work) },
+    }
     this.env = env
     this.db = new DatabaseSync(":memory:")
+  }
+
+  // As workerd's: a savepoint, released once `work` returns, rolled back
+  // when it throws, and nested inside one under way.
+  private transactionSync<T>(work: () => T): T {
+    const savepoint = `transaction_${this.savepoints}`
+    this.savepoints += 1
+    this.db.prepare(`SAVEPOINT ${savepoint}`).all()
+    try {
+      const result = work()
+      this.db.prepare(`RELEASE ${savepoint}`).all()
+      return result
+    } catch (error) {
+      this.db.prepare(`ROLLBACK TO ${savepoint}`).all()
+      this.db.prepare(`RELEASE ${savepoint}`).all()
+      throw error
+    } finally {
+      this.savepoints -= 1
+    }
   }
 
   get name(): string {
@@ -127,6 +157,11 @@ class Agent {
     const before = this.jobs.length
     this.jobs = this.jobs.filter((job) => job.id !== id)
     return this.jobs.length < before
+  }
+
+  // As the SDK lists them: a schedule running is still listed.
+  async listSchedules() {
+    return this.jobs.map((job) => ({ ...job, type: "scheduled" as const }))
   }
 
   async keepAliveWhile<T>(work: () => Promise<T>): Promise<T> {
@@ -376,20 +411,28 @@ export function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
-/** Runs every schedule due by now, as the SDK's alarm does, oldest first. */
+/**
+ * Runs every schedule due by now, as the SDK's alarm does, oldest first:
+ * each stays listed while its callback runs, and goes once it returns.
+ */
 export async function runDueJobs(object: unknown): Promise<void> {
   const harness = object as Harness & Record<string, unknown>
+  const ran = new Set<Job>()
   for (;;) {
     const due = harness.jobs
-      .filter((job) => job.time * 1000 <= Date.now())
+      .filter((job) => job.time * 1000 <= Date.now() && !ran.has(job))
       .sort((left, right) => left.time - right.time)
       .at(0)
     if (!due) return
-    harness.jobs = harness.jobs.filter((job) => job !== due)
+    ran.add(due)
     const callback = harness[due.callback] as (
       payload: unknown,
       schedule: Job
     ) => Promise<void>
-    await callback.call(harness, due.payload, due)
+    try {
+      await callback.call(harness, due.payload, due)
+    } finally {
+      harness.jobs = harness.jobs.filter((job) => job !== due)
+    }
   }
 }

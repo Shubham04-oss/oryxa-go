@@ -5,8 +5,10 @@
 /**
  * One message in a DM, oldest first in a view.
  *
- * - `seq` is the conversation's own order, gapless from 1. It is 0 while the
- *   object has not confirmed the message (`status` set).
+ * - `seq` is the conversation's own order: gapless from 1, each one newer
+ *   than any before, and never used twice, not even after a purge takes
+ *   messages away (the next run goes on from the highest). It is 0 while
+ *   the object has not confirmed the message (`status` set).
  * - `createdAt` is when the object stored it (ISO 8601, UTC, milliseconds),
  *   or when the page sent it while it is not confirmed: the day separators
  *   read it.
