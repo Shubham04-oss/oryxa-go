@@ -427,6 +427,14 @@ func (server *Server) listInteractions(writer http.ResponseWriter, request *http
 		return
 	}
 	query := request.URL.Query()
+	// A filter left out lists everything, so one sent blank is a mistake to
+	// answer, never a quiet way of asking for everything.
+	for _, name := range []string{"teamspace_id", "with_user"} {
+		if query.Has(name) && strings.TrimSpace(query.Get(name)) == "" {
+			writeError(writer, http.StatusBadRequest, "invalid_request", name+" must not be blank; leave it out to list every request")
+			return
+		}
+	}
 	listed, err := server.interactions.List(request.Context(), interactionActorOf(member), interactions.Query{
 		Box: box, TeamspaceID: query.Get("teamspace_id"), WithUserID: query.Get("with_user"), Limit: limit,
 	})

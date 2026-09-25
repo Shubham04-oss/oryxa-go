@@ -179,6 +179,25 @@ func TestAListingTheLedgerRefusesIsABadRequest(t *testing.T) {
 	}
 }
 
+// TestABlankFilterIsABadRequest: a filter sent blank would read as no filter
+// and list every request the caller has, so on every listing it is refused
+// before the ledger is asked anything.
+func TestABlankFilterIsABadRequest(t *testing.T) {
+	for _, path := range []string{
+		"/v1/organizations/org_1/agent-requests",
+		"/v1/organizations/org_1/agent-requests/inbox",
+		"/v1/organizations/org_1/agent-requests/sent",
+	} {
+		for _, query := range []string{"?teamspace_id=", "?teamspace_id=%20", "?with_user=", "?with_user=%20%09", "?teamspace_id=tsp_1&with_user=", "?teamspace_id"} {
+			requests := &teamspaceInteractions{}
+			listed := serve(agentRequestServer(requests), http.MethodGet, path+query, "", bearer)
+			if listed.Code != http.StatusBadRequest || errorCode(t, listed) != "invalid_request" || len(requests.actors) != 0 {
+				t.Fatalf("GET %s%s = %d %s after %d ledger calls, want 400 invalid_request and none", path, query, listed.Code, listed.Body.String(), len(requests.actors))
+			}
+		}
+	}
+}
+
 // refusingSeats refuses every seat lookup the way the teamspace does.
 type refusingSeats struct{ err error }
 
