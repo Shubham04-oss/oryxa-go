@@ -1,7 +1,7 @@
 // Package provision creates what delivers auth's membership endings to
 // realtime: a queue with a dead-letter queue, and an EventBridge rule allowed
-// to send to both: to the queue, and to the dead-letter queue what it cannot
-// deliver to the queue.
+// to send to the queue, and to the dead-letter queue what it cannot deliver
+// there.
 package provision
 
 import (

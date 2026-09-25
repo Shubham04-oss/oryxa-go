@@ -136,11 +136,11 @@ type Config struct {
 	EventBusName     string
 	// RequireEventQueues refuses to start while a selected service that is
 	// on (Definition.Enabled) has its events queue unset. A service without
-	// its queue does not fail: it warns
-	// once and then never hears the events that remove what people deleted,
-	// which in a deployment is a quiet data-retention gap. It is on where the
-	// deployment environment (DEPLOYMENT_ENVIRONMENT, else ENVIRONMENT) is
-	// production, and ORYXA_REQUIRE_EVENT_QUEUES sets it either way.
+	// its queue does not fail: it warns once and then never hears the events
+	// that remove what people deleted, which in a deployment is a quiet
+	// data-retention gap. It is on where the deployment environment
+	// (DEPLOYMENT_ENVIRONMENT, else ENVIRONMENT) is production, and
+	// ORYXA_REQUIRE_EVENT_QUEUES sets it either way.
 	RequireEventQueues bool
 	// EnforceEventSignatures refuses an event whose signature does not check
 	// out. Off, every event is still signed and checked, and a failure is
