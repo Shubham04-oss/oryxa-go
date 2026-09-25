@@ -23,6 +23,9 @@ type fakeDeliveries struct {
 	dropped  []string
 	released map[string]bool
 	threads  map[string]string
+	// failures counts each delivery's failed attempts, which drop it once
+	// they reach the waker's most, as the store's Release does.
+	failures map[string]int
 }
 
 func (store *fakeDeliveries) Claim(context.Context, time.Duration, int) ([]Delivery, error) {
@@ -50,13 +53,20 @@ func (store *fakeDeliveries) Drop(_ context.Context, eventID, _ string) error {
 	return nil
 }
 
-func (store *fakeDeliveries) Release(_ context.Context, eventID string, failed bool, _ int, _ time.Duration, _ string) (bool, error) {
+func (store *fakeDeliveries) Release(_ context.Context, eventID string, failed bool, most int, _ time.Duration, _ string) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.released == nil {
-		store.released = map[string]bool{}
+		store.released, store.failures = map[string]bool{}, map[string]int{}
 	}
 	store.released[eventID] = failed
+	if failed {
+		store.failures[eventID]++
+	}
+	if store.failures[eventID] >= most {
+		store.dropped = append(store.dropped, eventID)
+		return true, nil
+	}
 	return false, nil
 }
 
@@ -91,6 +101,8 @@ func (store *fakeDeliveries) ClearThread(_ context.Context, requestID, agentID, 
 type fakeRequests struct {
 	mu       sync.Mutex
 	requests map[string]agents.Interaction
+	// closed are the requests CloseApproved failed, in order.
+	closed []string
 }
 
 func (requests *fakeRequests) Get(_ context.Context, id string) (agents.Interaction, error) {
@@ -101,6 +113,54 @@ func (requests *fakeRequests) Get(_ context.Context, id string) (agents.Interact
 		return agents.Interaction{}, errors.New("agent request not found")
 	}
 	return request, nil
+}
+
+// CloseApproved fails an approved request with the reason, as the ledger
+// does, and leaves any other as it is.
+func (requests *fakeRequests) CloseApproved(_ context.Context, id, reason string, at time.Time) (agents.Interaction, error) {
+	requests.mu.Lock()
+	defer requests.mu.Unlock()
+	request, ok := requests.requests[id]
+	switch {
+	case !ok:
+		return agents.Interaction{}, interactions.ErrNotFound
+	case request.Status != interactions.StatusApproved:
+		return agents.Interaction{}, interactions.ErrConflict
+	}
+	request.Status, request.Revision = interactions.StatusFailed, request.Revision+1
+	request.Result = &agents.InteractionResult{Status: interactions.StatusFailed, Summary: reason, CompletedAt: at}
+	requests.requests[id] = request
+	requests.closed = append(requests.closed, id)
+	return request, nil
+}
+
+// CloseExpired closes every approved request past its expiry, the longest
+// expired first, as the ledger does.
+func (requests *fakeRequests) CloseExpired(ctx context.Context, reason string, at time.Time, limit int) ([]agents.Interaction, error) {
+	requests.mu.Lock()
+	var expired []agents.Interaction
+	for _, request := range requests.requests {
+		if request.Status == interactions.StatusApproved && !request.ExpiresAt.After(at) {
+			expired = append(expired, request)
+		}
+	}
+	requests.mu.Unlock()
+	slices.SortFunc(expired, func(a, b agents.Interaction) int { return a.ExpiresAt.Compare(b.ExpiresAt) })
+	var closed []agents.Interaction
+	for _, request := range expired[:min(len(expired), limit)] {
+		failed, err := requests.CloseApproved(ctx, request.ID, reason, at)
+		if err != nil {
+			return closed, err
+		}
+		closed = append(closed, failed)
+	}
+	return closed, nil
+}
+
+func (requests *fakeRequests) get(id string) agents.Interaction {
+	requests.mu.Lock()
+	defer requests.mu.Unlock()
+	return requests.requests[id]
 }
 
 func (requests *fakeRequests) setStatus(id, status string) {

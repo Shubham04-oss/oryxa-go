@@ -20,6 +20,18 @@ const (
 	maxAttempts      = 3
 	retryAfter       = time.Minute
 	handledRetention = 7 * 24 * time.Hour
+	// expiredPerPoll bounds how many expired approvals one poll closes; the
+	// rest wait for the next.
+	expiredPerPoll = 20
+)
+
+// What a request Oryxa closed says, to both members, as its failed result,
+// when the approved work will not be done.
+var (
+	closedAfterAttempts = fmt.Sprintf("Oryxa closed this request because the approved work could not be done after %d attempts.", maxAttempts)
+	closedAgentGone     = "Oryxa closed this request because the agent it was approved for no longer exists."
+	closedAgentDisabled = "Oryxa closed this request because the agent it was approved for has been disabled."
+	closedExpired       = "Oryxa closed this request because it expired before the approved work was done."
 )
 
 type deliveries interface {
@@ -41,10 +53,17 @@ type AgentRuns interface {
 	StartUnattendedRun(context.Context, threads.Member, string, string, threads.RunInput, managedagents.UnattendedProfile) (managedagents.StartedRun, error)
 }
 
-// Requests reads authoritative interaction state. interactions.Store
-// implements it; content never travels through the delivery record.
+// Requests reads authoritative interaction state, and closes an approved
+// request whose work will not be done. interactions.Store implements it;
+// content never travels through the delivery record.
 type Requests interface {
 	Get(context.Context, string) (agents.Interaction, error)
+	// CloseApproved fails an approved request as Oryxa, with the reason,
+	// recording the completed event that tells the member who asked; any
+	// request not approved is left as it is (interactions.ErrConflict).
+	CloseApproved(ctx context.Context, id, reason string, at time.Time) (agents.Interaction, error)
+	// CloseExpired does the same for approved requests whose expiry passed.
+	CloseExpired(ctx context.Context, reason string, at time.Time, limit int) ([]agents.Interaction, error)
 }
 
 // Standing reads a request made in a teamspace again, live, before an agent
@@ -139,10 +158,20 @@ func (waker *Waker) WakeDue(ctx context.Context) error {
 }
 
 // tidy is what a pass does on the poll: it forgets deliveries handled long
-// ago.
+// ago, and closes approved requests that expired with their work unanswered,
+// which nothing else would: no answer can be recorded for them any more,
+// whether their delivery ran out of time or never arrived.
 func (waker *Waker) tidy(ctx context.Context) {
 	if err := waker.store.Purge(ctx, handledRetention); err != nil {
 		waker.logger.WarnContext(ctx, "purge handled interaction deliveries", "error", err)
+	}
+	closed, err := waker.requests.CloseExpired(ctx, closedExpired, time.Now(), expiredPerPoll)
+	if err != nil && ctx.Err() == nil {
+		waker.logger.ErrorContext(ctx, "close approved interactions that expired unanswered", "error", err)
+	}
+	for _, request := range closed {
+		waker.logger.WarnContext(ctx, "closed an approved interaction that expired unanswered",
+			"request_id", request.ID, "recipient_agent_id", request.Target.AgentID)
 	}
 }
 
@@ -224,6 +253,11 @@ func (waker *Waker) wake(ctx context.Context, delivery Delivery) {
 		return
 	case errors.Is(err, managedagents.ErrNotFound), errors.Is(err, managedagents.ErrDisabled):
 		waker.drop(ctx, delivery, err.Error(), logger)
+		reason := closedAgentGone
+		if errors.Is(err, managedagents.ErrDisabled) {
+			reason = closedAgentDisabled
+		}
+		waker.giveUp(ctx, delivery, reason, logger)
 		return
 	case err != nil:
 		logger.ErrorContext(ctx, "interaction delivery run could not start", "error", err)
@@ -309,6 +343,30 @@ func (waker *Waker) release(ctx context.Context, delivery Delivery, failed bool,
 	}
 	if dropped {
 		logger.WarnContext(ctx, "dropped interaction delivery after repeated failures", "attempts", maxAttempts)
+		waker.giveUp(ctx, delivery, closedAfterAttempts, logger)
+	}
+}
+
+// giveUp closes the request of approved work the waker has dropped for good,
+// so it does not stay approved with nobody working on it: it fails, saying
+// why, and the completed event tells the member who asked, as any failed
+// result does. Only approved work is closed. A new request whose deciding
+// run was dropped stays pending, for its member to decide or to expire, and
+// an outcome's report changes nothing about the request. A request answered
+// or changed meanwhile is left as it is. Should closing fail, the request
+// is closed once it expires (tidy).
+func (waker *Waker) giveUp(ctx context.Context, delivery Delivery, reason string, logger *slog.Logger) {
+	if delivery.Kind != KindTargetApproved {
+		return
+	}
+	_, err := waker.requests.CloseApproved(context.WithoutCancel(ctx), delivery.RequestID, reason, time.Now())
+	switch {
+	case errors.Is(err, interactions.ErrConflict), errors.Is(err, interactions.ErrNotFound):
+		logger.InfoContext(ctx, "dropped approved work whose request had already moved on")
+	case err != nil:
+		logger.ErrorContext(ctx, "close an approved interaction whose work was dropped; it is closed once it expires", "error", err)
+	default:
+		logger.WarnContext(ctx, "closed an approved interaction whose work was dropped", "reason", reason)
 	}
 }
 
