@@ -933,18 +933,6 @@ describe("DirectMessageAgent: events for Go", () => {
           posted_at: "2026-09-24T09:00:00.000Z",
         },
       },
-      // Sending reads the conversation through the message, for its author.
-      {
-        id: eventId,
-        type: read,
-        reader_id: ada,
-        detail: {
-          ...where,
-          reader_user_id: ada,
-          read_through_seq: 1,
-          read_at: "2026-09-24T09:00:00.000Z",
-        },
-      },
       {
         id: eventId,
         type: read,
@@ -960,8 +948,41 @@ describe("DirectMessageAgent: events for Go", () => {
     expect(JSON.stringify(outbox(dm))).not.toContain("Morning")
 
     await runDueJobs(dm)
-    expect(go.taken.map((event) => event.type)).toEqual([posted, read, read])
+    expect(go.taken.map((event) => event.type)).toEqual([posted, read])
     expect(outbox(dm)).toEqual([])
+  })
+
+  it("records no read of its own for a message's author, whose event says they read through it, and records their read of the other's", async () => {
+    const { dm } = await setup(eventsOn)
+    const adaTab = await join(dm, ada)
+    const boTab = await join(dm, bo)
+    await send(dm, adaTab, "one")
+    // Sending reads it through for Ada, and both pages are told, as ever.
+    expect(dm.sql`SELECT user_id, seq FROM dm_reads`).toEqual([
+      { user_id: ada, seq: 1 },
+    ])
+    expect(boTab.last("dm-read")).toEqual({
+      type: "dm-read",
+      userId: ada,
+      seq: 1,
+    })
+    await send(dm, boTab, "two")
+    await say(dm, adaTab, { type: "dm-read", seq: 2 })
+    expect(
+      outbox(dm).map((row) => [
+        row.type,
+        row.type === read
+          ? row.detail.reader_user_id
+          : (row.detail.author as { user_id: string }).user_id,
+        row.type === read
+          ? row.detail.read_through_seq
+          : (row.detail.message as { seq: number }).seq,
+      ])
+    ).toEqual([
+      [posted, ada, 1],
+      [posted, bo, 2],
+      [read, ada, 2],
+    ])
   })
 
   it("stores a message and its event as one: when the event cannot be written, neither is kept", async () => {
@@ -988,7 +1009,10 @@ describe("DirectMessageAgent: events for Go", () => {
     dm.sql`DROP TRIGGER outbox_full`
     await send(dm, adaTab, "Lost?", clientId)
     expect(dm.sql`SELECT seq FROM dm_messages`).toEqual([{ seq: 1 }])
-    expect(outbox(dm).map((row) => row.type)).toEqual([posted, read])
+    expect(dm.sql`SELECT user_id, seq FROM dm_reads`).toEqual([
+      { user_id: ada, seq: 1 },
+    ])
+    expect(outbox(dm).map((row) => row.type)).toEqual([posted])
   })
 
   it("advances a read and records it as one: when the event cannot be written, the read stays where it was", async () => {
@@ -1020,10 +1044,7 @@ describe("DirectMessageAgent: events for Go", () => {
     const reads = outbox(dm).filter((row) => row.type === read)
     expect(
       reads.map((row) => [row.reader_id, row.detail.read_through_seq])
-    ).toEqual([
-      [ada, 3],
-      [bo, 3],
-    ])
+    ).toEqual([[bo, 3]])
     expect(reads.find((row) => row.reader_id === bo)?.id).not.toBe(first?.id)
 
     await runDueJobs(dm)
@@ -1033,18 +1054,22 @@ describe("DirectMessageAgent: events for Go", () => {
           ? [event.detail.reader_user_id, event.detail.read_through_seq]
           : (event.detail.message as { seq: number }).seq
       )
-    ).toEqual([1, 2, 3, [ada, 3], [bo, 3]])
+    ).toEqual([1, 2, 3, [bo, 3]])
   })
 
   it("sends a newer read after the one on its way, whatever Go answers that one", async () => {
     const { dm } = await setup(eventsOn)
     const adaTab = await join(dm, ada)
+    const boTab = await join(dm, bo)
     await send(dm, adaTab, "one")
+    await say(dm, boTab, { type: "dm-read", seq: 1 })
     const release = go.hold()
     const draining = runDueJobs(dm)
     await vi.waitFor(() => expect(go.requests).toHaveLength(1))
 
+    // While Bo's read through one is on its way, he reads further.
     await send(dm, adaTab, "two")
+    await say(dm, boTab, { type: "dm-read", seq: 2 })
     release()
     await draining
     expect(

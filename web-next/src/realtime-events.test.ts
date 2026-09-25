@@ -470,12 +470,12 @@ describe("EventOutbox: draining", () => {
     const { dm } = await setup()
     const adaTab = await join(dm, ada)
     await send(dm, adaTab, "one")
-    // Set for now, the drain goes at once.
+    // Set for now, the drain goes at once. Ada's read through her own
+    // message is its event's to say.
     expect(drainsSet(dm)).toEqual([0])
     await runDueJobs(dm)
     expect(go.taken.map((event) => event.type)).toEqual([
       realtimeEventTypes.messagePosted,
-      realtimeEventTypes.conversationRead,
     ])
     expect(outbox(dm)).toEqual([])
     expect(drainsSet(dm)).toEqual([])
@@ -727,6 +727,7 @@ describe("EventOutbox: draining", () => {
     const { dm } = await setup()
     go.answers.push(503, 503, 503)
     const adaTab = await join(dm, ada)
+    const boTab = await join(dm, bo)
     await send(dm, adaTab, "one")
     await runDueJobs(dm)
     await runNextDrain(dm)
@@ -736,6 +737,7 @@ describe("EventOutbox: draining", () => {
     // No drain of its own, and no sooner: it waits with the rest, behind
     // them, even across a restart.
     await send(dm, adaTab, "two")
+    await say(dm, boTab, { type: "dm-read", seq: 2 })
     expect(drainsSet(dm)).toEqual([4])
     dm.jobs = []
     dm.sql`DELETE FROM event_meta WHERE key IN ('drain', 'drain_at')`
@@ -754,6 +756,7 @@ describe("EventOutbox: draining", () => {
       [realtimeEventTypes.messagePosted, 2],
       [realtimeEventTypes.conversationRead, 2],
     ])
+    expect(together.events.at(-1)?.detail.reader_user_id).toBe(bo)
     expect(together.status).toBe(204)
     expect(outbox(dm)).toEqual([])
   })
@@ -922,7 +925,6 @@ describe("EventOutbox: draining", () => {
     await runDueJobs(restarted)
     expect(go.taken.map((event) => event.type)).toEqual([
       realtimeEventTypes.messagePosted,
-      realtimeEventTypes.conversationRead,
     ])
     expect(outbox(restarted)).toEqual([])
   })
@@ -933,10 +935,13 @@ describe("EventOutbox: purges", () => {
     const { dm } = await setup()
     go.answers.push(400, 503)
     const adaTab = await join(dm, ada)
+    const boTab = await join(dm, bo)
     await send(dm, adaTab, "refused")
+    await say(dm, boTab, { type: "dm-read", seq: 1 })
     await runDueJobs(dm)
     vi.advanceTimersByTime(1000)
     await send(dm, adaTab, "waiting")
+    await say(dm, boTab, { type: "dm-read", seq: 2 })
     await runDueJobs(dm)
     expect(deadLetters(dm)).toHaveLength(2)
     expect(outbox(dm)).toHaveLength(2)
@@ -959,8 +964,9 @@ describe("EventOutbox: purges", () => {
     await runDueJobs(dm)
     vi.setSystemTime(new Date("2026-09-24T09:01:00.000Z"))
     const boTab = await join(dm, bo)
+    await say(dm, boTab, { type: "dm-read", seq: 1 })
     await send(dm, boTab, "after")
-    expect(outbox(dm)).toHaveLength(4)
+    expect(outbox(dm)).toHaveLength(3)
 
     expect(
       await dm.purge({ userId: ada, removedAt: "2026-09-24T09:00:30.000Z" })
@@ -975,7 +981,6 @@ describe("EventOutbox: purges", () => {
         message: expect.objectContaining({ seq: 3 }) as unknown,
         author: { kind: "member", user_id: bo },
       }),
-      expect.objectContaining({ reader_user_id: bo, read_through_seq: 3 }),
     ])
   })
 

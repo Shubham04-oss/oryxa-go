@@ -335,6 +335,9 @@ function isExpiry(error: unknown): boolean {
  *   read that goes further is recorded for Go in the same transaction
  *   (src/realtime-events.ts), and sent on the `drainEvents` schedule; never
  *   an answer's deltas, a request card, a quiet line or what anybody wrote.
+ *   A person's message (a question too) reads through itself with no
+ *   event of its own; a request card, which is none, reads through itself
+ *   with one.
  *
  * Only its two people reach it: the Worker routes a socket only once Go has
  * said who the member is, that they are on the teamspace's team, and that
@@ -903,7 +906,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       return
     }
     this.announce(row)
-    this.readOwn(author, row.seq)
+    this.readOwn(author, row.seq, false)
     await this.events.plan()
     await this.syncInboxes()
   }
@@ -954,9 +957,13 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     send(connection, { type: "side-refused", target, code, message })
   }
 
-  /** The author's own item reads the conversation through it, and stops their typing. */
-  private readOwn(author: string, seq: number): void {
-    this.setRead(author, seq)
+  /**
+   * The author's own item reads the conversation through it, and stops
+   * their typing. The read is an event for Go only when `record` says so:
+   * a message's (a question's too) is its own event's to say.
+   */
+  private readOwn(author: string, seq: number, record: boolean): void {
+    this.setRead(author, seq, record)
     this.tell({ type: "side-read", userId: author, seq })
     this.stopTyping(author)
   }
@@ -1054,7 +1061,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     }
     this.announce(question)
     this.announce(answer)
-    this.readOwn(owner, question.seq)
+    this.readOwn(owner, question.seq, false)
     await this.events.plan()
     await this.syncInboxes()
     await this.runOwnAgent(actor, answer.seq, { message: text })
@@ -1513,7 +1520,8 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         settled: true,
       })
       this.announce(row)
-      this.readOwn(asker, row.seq)
+      // A card is no event: the read it makes is one.
+      this.readOwn(asker, row.seq, true)
     }
     await this.events.plan()
     await this.syncInboxes()
@@ -2576,13 +2584,17 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     )
   }
 
-  /** Reads `user` through `seq`, only ever further, and records it for Go in the same transaction when it goes further. */
-  private setRead(user: string, seq: number): void {
+  /**
+   * Reads `user` through `seq`, only ever further, and records it for Go in
+   * the same transaction when it goes further, unless `record` says the
+   * read is an event's already (an author's through their own message).
+   */
+  private setRead(user: string, seq: number, record = true): void {
     this.transaction(() => {
       const before = this.readSeq(user)
       this.sql`INSERT INTO side_reads (user_id, seq) VALUES (${user}, ${seq})
         ON CONFLICT (user_id) DO UPDATE SET seq = MAX(seq, excluded.seq)`
-      if (seq > before) {
+      if (record && seq > before) {
         this.events.recordRead(user, seq, new Date().toISOString())
       }
     })

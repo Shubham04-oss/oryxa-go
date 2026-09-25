@@ -166,7 +166,9 @@ function randomId(): string {
  *   is visible.
  * - **Events.** Each message stored, and each read that goes further, is
  *   recorded for Go in the same transaction (src/realtime-events.ts), and
- *   sent on the `drainEvents` schedule; never what anybody wrote.
+ *   sent on the `drainEvents` schedule; never what anybody wrote. A
+ *   message's author reads through it with no event of its own: the
+ *   message's says so.
  *
  * Only its two people reach it: the Worker routes a socket only once Go has
  * said who the member is and that the other person is in the organization.
@@ -599,8 +601,9 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
   /**
    * Stores a message and what it changes as one transaction: the message
    * (with when its socket opened) and its event for Go, the oldest dropped
-   * past the limit, the author's read through it, and the conversation's
-   * run. When any of it fails, none of it is kept.
+   * past the limit, the author's read through it (no event of its own: the
+   * message's says so), and the conversation's run. When any of it fails,
+   * none of it is kept.
    */
   private store(
     author: string,
@@ -625,7 +628,7 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
         this
           .sql`DELETE FROM dm_messages WHERE seq <= ${row.seq - DM_HISTORY_LIMIT}`
       }
-      this.setRead(author, row.seq)
+      this.setRead(author, row.seq, false)
       if (!this.meta("conversation")) {
         this.setMeta("conversation", `dmc_${randomId()}`)
       }
@@ -911,13 +914,17 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return row?.seq ?? 0
   }
 
-  /** Reads `user` through `seq`, only ever further, and records it for Go in the same transaction when it goes further. */
-  private setRead(user: string, seq: number): void {
+  /**
+   * Reads `user` through `seq`, only ever further, and records it for Go in
+   * the same transaction when it goes further, unless `record` says the
+   * read is an event's already (an author's through their own message).
+   */
+  private setRead(user: string, seq: number, record = true): void {
     this.transaction(() => {
       const before = this.readSeq(user)
       this.sql`INSERT INTO dm_reads (user_id, seq) VALUES (${user}, ${seq})
         ON CONFLICT (user_id) DO UPDATE SET seq = MAX(seq, excluded.seq)`
-      if (seq > before) {
+      if (record && seq > before) {
         this.events.recordRead(user, seq, new Date().toISOString())
       }
     })

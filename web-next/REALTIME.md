@@ -618,8 +618,12 @@ title. The shapes, the signing and the outbox both objects keep are in
   agent's `user_id` is its owner. An agent's answer is posted when its run
   ended.
 - `realtime.conversation.read.v1`: a read position that goes further,
-  whatever moved it (the page's `dm-read` or `side-read`, or a person's own
-  message, question or request, which reads the conversation through it).
+  moved by the page's `dm-read` or `side-read`, or by a request card a
+  person filed in a side conversation, which reads it through the card.
+  A person's own message (a question to their own agent too) reads the
+  conversation through it as well, with no read event of its own: its
+  `realtime.message.posted.v1`, by them, says they have read through its
+  seq.
   `{ organization_id, conversation, reader_user_id, read_through_seq, read_at }`.
 
 Times are `toISOString`'s, UTC to the millisecond.

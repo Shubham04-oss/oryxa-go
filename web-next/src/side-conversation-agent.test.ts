@@ -1299,24 +1299,52 @@ describe("SideConversationAgent: events for Go", () => {
           posted_at: "2026-09-24T09:00:00.000Z",
         },
       },
-      ...[ada, bo].map((person) => ({
+      // Ada reads through her own message with no event of its own.
+      {
         type: read,
-        reader_id: person.userId,
+        reader_id: bo.userId,
         detail: {
           organization_id: org,
           conversation,
-          reader_user_id: person.userId,
+          reader_user_id: bo.userId,
           read_through_seq: 1,
           read_at: "2026-09-24T09:00:00.000Z",
         },
-      })),
+      },
     ])
     await runDueJobs(side)
-    expect(events.taken.map((event) => event.type)).toEqual([
-      posted,
-      read,
-      read,
+    expect(events.taken.map((event) => event.type)).toEqual([posted, read])
+  })
+
+  it("records no read of its own for a person's message or question, and one for the read a request they filed makes", async () => {
+    const { side } = await setup(eventsOn)
+    const adaTab = await join(side, ada)
+    await join(side, bo)
+    await send(side, adaTab, "Morning")
+    go.runAnswers.push(answer("Leo", "Morning to you."))
+    await askMine(side, adaTab, "Leo, say hi")
+    // Her read went through the question, and on through Leo's answer only
+    // once she reads it.
+    expect(side.sql`SELECT user_id, seq FROM side_reads`).toEqual([
+      { user_id: ada.userId, seq: 2 },
     ])
+    expect(outbox(side).filter((row) => row.type === read)).toEqual([])
+    // A request card is no event: the read it makes is one.
+    await askTeammate(side, adaTab, bo.agentId, "Pull the numbers")
+    expect(
+      outbox(side).map((row) => [
+        row.type,
+        row.type === read
+          ? row.detail.read_through_seq
+          : (row.detail.message as { seq: number }).seq,
+      ])
+    ).toEqual([
+      [posted, 1],
+      [posted, 2],
+      [posted, 3],
+      [read, 4],
+    ])
+    expect(outbox(side).at(-1)?.detail.reader_user_id).toBe(ada.userId)
   })
 
   it("stores a message and its event as one: when the event cannot be written, neither is kept", async () => {
@@ -1508,7 +1536,7 @@ describe("SideConversationAgent: events for Go", () => {
     const { side } = await setup(eventsOn)
     const adaTab = await join(side, ada)
     await send(side, adaTab, "Morning")
-    expect(outbox(side)).toHaveLength(2)
+    expect(outbox(side)).toHaveLength(1)
     await side.purge()
     expect(outbox(side)).toEqual([])
     expect(side.sql`SELECT * FROM event_dead_letters`).toEqual([])
