@@ -85,6 +85,17 @@ func guardedService(t *testing.T, guard Guard, logs io.Writer) (*Service, *fakeR
 	return service, repo, approved
 }
 
+// asTheOwner is request as its addressed member reads it in their own
+// session, the one view that holds the texts the guard held.
+func asTheOwner(t *testing.T, service *Service, id string) agents.Interaction {
+	t.Helper()
+	read, err := service.Get(context.Background(), inOwnSession(targetPrimary), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return read
+}
+
 // TestAnAnswerNothingIsFoundInIsDeliveredAsGiven: the guard reads every text
 // the member who asked would, the summary, the content and the artifact
 // references, and an answer it finds nothing in completes the request as
@@ -136,8 +147,12 @@ func TestAHeldAnswerWaitsInReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if answered.Status != StatusReview || answered.Result != nil || answered.Held == nil || answered.Held.MaskedResult == nil {
-		t.Fatalf("answered=%+v, want in review, held, with no result", answered)
+	if answered.Status != StatusReview || answered.Result != nil || answered.Held != nil || answered.Guard == nil {
+		t.Fatalf("answered=%+v, want in review with no result, and nothing held shown to the agent that answered", answered)
+	}
+	answered = asTheOwner(t, service, approved.ID)
+	if answered.Held == nil || answered.Held.MaskedResult == nil {
+		t.Fatalf("the owner reads %+v, want both versions held", answered)
 	}
 	if held := answered.Held.Result; held.Status != StatusCompleted || held.Content != textsAsHeld[1] || !slices.Equal(held.Artifacts, []string{"notes-for-priya@example.com.md", "plan.md"}) {
 		t.Fatalf("held=%+v, want the guardrail's output", held)
@@ -159,10 +174,10 @@ func TestAHeldAnswerWaitsInReview(t *testing.T) {
 func TestAnAnswerThatCouldNotBeCheckedIsHeldWithNothingToSendMasked(t *testing.T) {
 	verdict := uncheckedOne
 	service, repo, approved := guardedService(t, &fakeGuard{verdict: &verdict}, nil)
-	answered, err := service.Respond(context.Background(), target, approved.ID, answerGiven)
-	if err != nil {
+	if _, err := service.Respond(context.Background(), target, approved.ID, answerGiven); err != nil {
 		t.Fatal(err)
 	}
+	answered := asTheOwner(t, service, approved.ID)
 	if answered.Status != StatusReview || answered.Held == nil || answered.Held.MaskedResult != nil ||
 		answered.Guard == nil || !slices.Equal(answered.Guard.Kinds, []string{answerguard.Unchecked}) {
 		t.Fatalf("answered=%+v guard=%+v, want held as UNCHECKED with no masked version", answered, answered.Guard)
@@ -187,10 +202,10 @@ func TestAGuardVerdictThatDoesNotAddUpIsHeldUnchecked(t *testing.T) {
 		{State: answerguard.StateHeld, Kinds: []string{"EMAIL"}, Texts: textsGiven, Masked: []string{"short"}},
 	} {
 		service, _, approved := guardedService(t, &fakeGuard{verdict: &verdict}, nil)
-		answered, err := service.Respond(context.Background(), target, approved.ID, answerGiven)
-		if err != nil {
+		if _, err := service.Respond(context.Background(), target, approved.ID, answerGiven); err != nil {
 			t.Fatal(err)
 		}
+		answered := asTheOwner(t, service, approved.ID)
 		if answered.Status != StatusReview || answered.Guard == nil || !slices.Equal(answered.Guard.Kinds, []string{answerguard.Unchecked}) ||
 			answered.Held == nil || answered.Held.Result.Summary != answerGiven.Summary {
 			t.Errorf("verdict %+v: answered=%+v, want held as UNCHECKED, as given", verdict, answered)
@@ -258,9 +273,11 @@ func TestAHeldFailureIsSentAsAFailure(t *testing.T) {
 	service, _, approved := guardedService(t, &fakeGuard{verdict: &verdict}, nil)
 	failed := answerGiven
 	failed.Status = StatusFailed
-	held, err := service.Respond(context.Background(), target, approved.ID, failed)
-	if err != nil || held.Status != StatusReview || held.Held.Result.Status != StatusFailed {
-		t.Fatalf("held=%+v err=%v, want a failure held in review", held, err)
+	if _, err := service.Respond(context.Background(), target, approved.ID, failed); err != nil {
+		t.Fatal(err)
+	}
+	if held := asTheOwner(t, service, approved.ID); held.Status != StatusReview || held.Held == nil || held.Held.Result.Status != StatusFailed {
+		t.Fatalf("held=%+v, want a failure held in review", held)
 	}
 	sent, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, agents.InteractionReviewInput{Action: ReviewSendMasked})
 	if err != nil || sent.Status != StatusFailed || sent.Result == nil || sent.Result.Status != StatusFailed {
@@ -358,8 +375,11 @@ func TestWhatEachMemberSeesOfAHeldAnswer(t *testing.T) {
 	if err != nil || owner.Held == nil || owner.Held.MaskedResult == nil || owner.Guard == nil || !slices.Equal(owner.Guard.Kinds, []string{"EMAIL", "PHONE"}) {
 		t.Fatalf("the addressed member sees %+v (%v), want both versions and the kinds", owner, err)
 	}
-	if byAgent, err := service.Get(context.Background(), target, approved.ID); err != nil || byAgent.Held == nil {
-		t.Fatalf("the addressed agent sees %+v (%v), want the held answer", byAgent, err)
+	for _, agent := range []agents.InteractionActor{target, targetPrimary} {
+		byAgent, err := service.Get(context.Background(), agent, approved.ID)
+		if err != nil || byAgent.Held != nil || byAgent.Guard == nil || byAgent.Status != StatusReview {
+			t.Fatalf("the addressed member's agent %s sees %+v (%v), want that it is held, and what for, and no held text", agent.AgentID, byAgent, err)
+		}
 	}
 
 	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, agents.InteractionReviewInput{Action: ReviewSendMasked}); err != nil {
@@ -419,10 +439,13 @@ func TestNothingTheGuardFindsIsLogged(t *testing.T) {
 		t.Fatal(err)
 	}
 	service, _, approved := guardedService(t, guard, &logs)
-	held, err := service.Respond(context.Background(), target, approved.ID, answerGiven)
-	if err != nil || held.Status != StatusReview || !slices.Equal(held.Guard.Kinds, []string{"EMAIL", "PHONE"}) ||
+	if _, err := service.Respond(context.Background(), target, approved.ID, answerGiven); err != nil {
+		t.Fatal(err)
+	}
+	held := asTheOwner(t, service, approved.ID)
+	if held.Status != StatusReview || !slices.Equal(held.Guard.Kinds, []string{"EMAIL", "PHONE"}) ||
 		held.Held.MaskedResult.Content != "Her number is {PHONE}; the PIN is {PIN}." {
-		t.Fatalf("held=%+v err=%v", held, err)
+		t.Fatalf("held=%+v", held)
 	}
 	if _, err := service.ReviewAsOwner(context.Background(), inOwnSession(targetPrimary), approved.ID, agents.InteractionReviewInput{Action: ReviewSend}); err != nil {
 		t.Fatal(err)

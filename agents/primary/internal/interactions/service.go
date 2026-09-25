@@ -506,7 +506,7 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 			input.Message = AgentDeclined
 		}
 	}
-	return service.repository.Decide(ctx, request.ID, input, decider, service.now().UTC())
+	return service.viewed(actor)(service.repository.Decide(ctx, request.ID, input, decider, service.now().UTC()))
 }
 
 // DecidedByItsOwner is whether a request's decision is its addressed
@@ -534,7 +534,7 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 	}
 	// Another member reads what is recorded here, so the guard reads it
 	// first, outside the ledger's transaction.
-	return service.repository.Respond(ctx, request.ID, service.answer(ctx, request, input), service.now().UTC())
+	return service.viewed(actor)(service.repository.Respond(ctx, request.ID, service.answer(ctx, request, input), service.now().UTC()))
 }
 
 func (service *Service) view(request agents.Interaction) agents.Interaction {

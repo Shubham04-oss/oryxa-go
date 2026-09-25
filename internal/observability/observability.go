@@ -78,7 +78,8 @@ func Setup(ctx context.Context, config Config) (Shutdown, error) {
 			return nil, fmt.Errorf("configure OTLP trace exporter: %w", err)
 		}
 		tracerProvider = sdktrace.NewTracerProvider(
-			sdktrace.WithBatcher(exporter),
+			// No agent request's content leaves in a trace (redact.go).
+			sdktrace.WithBatcher(RedactToolCalls(exporter)),
 			sdktrace.WithResource(serviceResource),
 			sdktrace.WithSampler(Sampler()),
 		)

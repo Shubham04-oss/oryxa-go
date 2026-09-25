@@ -876,10 +876,13 @@ A request that expires in review is withheld by the waker's poll
 (`Store.WithholdExpired`), with
 `{"action":"withhold","decided_by":{"kind":"system"},"decided_at":"...","reason":"expired before review"}`.
 
-The addressed member's side reads all of it. The member who asked, and their
-agents, read a request in `review` as its status alone (no `result`, `guard`
-or `held`), a `withheld` one as its status and `review`, and a delivered one
-with its `result`, `guard` and `review`; never `held`.
+The addressed member reads all of it in their own signed-in session. Their
+agents read that an answer is held, and what for (`guard`), but never `held`:
+no run carries the held texts into a model call, its thread or a trace. The
+member who asked, and their agents, read a request in `review` as its status
+alone (no `result`, `guard` or `held`), a `withheld` one as its status and
+`review`, and a delivered one with its `result`, `guard` and `review`; never
+`held`.
 
 Each step is the ordinary `agents.interaction.completed.v1` event, carrying
 `review`, `withheld`, or `completed` or `failed` as its status, and nothing of
@@ -892,7 +895,13 @@ touch only `approved` requests.
 
 Nothing the guard found is logged or traced as a value: Bedrock's `match`
 holds the raw value by design, and neither it nor any text is ever logged,
-published or traced. The guard logs reasons and kinds, and a failed call by
+published or traced. ADK traces every tool call's arguments and response on
+its `execute_tool` span, whatever `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT`
+says, which would put an answer the guard has yet to read, from
+`interactions_respond`'s arguments, into X-Ray. So the process's trace
+exporter redacts both attributes on every `interactions_` tool's span, and on
+a span of merged calls one of them is among
+(`observability.RedactToolCalls`). The guard logs reasons and kinds, and a failed call by
 its error code alone, since the error's message could quote what it was
 sent.
 

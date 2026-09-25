@@ -172,16 +172,22 @@ func (service *Service) ReviewAsOwner(ctx context.Context, actor agents.Interact
 	case action == ReviewSendMasked && (request.Held == nil || request.Held.MaskedResult == nil):
 		return agents.Interaction{}, fmt.Errorf("%w: this answer could not be checked, so it has no masked version to send; send it as it is, or withhold it", ErrConflict)
 	}
-	return service.repository.Review(ctx, request.ID, action, agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}, now)
+	return service.viewed(actor)(service.repository.Review(ctx, request.ID, action, agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}, now))
 }
 
-// viewFor is request as actor may read it. The addressed member's side reads
-// it all. The member who asked, and their agents, never read what the guard
-// holds, and read what it found only beside an answer they read: a request
-// in review or withheld shows them its status, and its review, alone.
+// viewFor is request as actor may read it. The member who asked, and their
+// agents, never read what the guard holds, and read what it found only
+// beside an answer they read: a request in review or withheld shows them its
+// status, and its review, alone. The addressed member reads it all in their
+// own signed-in session. Their agents read that an answer is held, and what
+// for (guard), but not the held texts, which only the member reviews: so no
+// run carries them into a model call, its thread or a trace.
 func (service *Service) viewFor(actor agents.InteractionActor, request agents.Interaction) agents.Interaction {
 	request = service.view(request)
 	if actsFor(actor, request.Target) {
+		if actor.Session != agents.SessionMember {
+			request.Held = nil
+		}
 		return request
 	}
 	request.Held = nil
@@ -189,4 +195,15 @@ func (service *Service) viewFor(actor agents.InteractionActor, request agents.In
 		request.Result, request.Guard = nil, nil
 	}
 	return request
+}
+
+// viewed is a ledger change's result as actor may read it (viewFor), for
+// returning what a change recorded to whoever made it.
+func (service *Service) viewed(actor agents.InteractionActor) func(agents.Interaction, error) (agents.Interaction, error) {
+	return func(request agents.Interaction, err error) (agents.Interaction, error) {
+		if err != nil {
+			return agents.Interaction{}, err
+		}
+		return service.viewFor(actor, request), nil
+	}
 }
