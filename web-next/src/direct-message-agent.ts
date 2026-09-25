@@ -150,7 +150,9 @@ function randomId(): string {
  *
  * - **Storage** (its SQLite): the messages (at most `DM_HISTORY_LIMIT`, the
  *   oldest dropped first), how far each person has read, and what each
- *   person's inbox has been told.
+ *   person's inbox has been told. A message's seq is one past the highest
+ *   any message ever had here, so a purge never lets one be used twice,
+ *   and a read only ever goes further.
  * - **Sending.** A message's author is always the socket's own person, as
  *   the Worker determined it. Its body is trimmed and holds 1 to
  *   `DM_MAX_BODY_LENGTH` code points; each person may send `dmSendLimit`.
@@ -319,8 +321,11 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
    * The purge (src/realtime-purge.ts), over RPC from an inbox's.
    *
    * Without a `scope` (an organization deleted), it empties the
-   * conversation: every message, read state and what its inboxes were told,
-   * and tells every socket `dm-gone` and closes it.
+   * conversation: every message and what its inboxes were told, and tells
+   * every socket `dm-gone` and closes it. Two numbers stay, as after any
+   * purge: how far each person had read, and the highest seq used
+   * (`keepSeqFloor`), so a later run never uses a seq again nor moves a
+   * read back.
    *
    * For one of its people who left at `scope.removedAt`, the messages written
    * at or before then go, and so do any that person wrote after it on a
@@ -356,6 +361,8 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       return { emptied: true }
     }
     const { userId, removedAt } = leaving
+    // The newest may go too (written after, on a page from before).
+    this.keepSeqFloor()
     this.sql`DELETE FROM dm_messages WHERE created_at <= ${removedAt}
       OR (author_id = ${userId} AND session_at IS NOT NULL AND session_at <= ${removedAt})`
     const openedBefore = (state: DmConnectionState) =>
@@ -370,9 +377,9 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       await eventsGone
       return { emptied: true }
     }
-    // What stays is a new run of the conversation.
+    // What stays is a new run of the conversation. The reads stay as they
+    // were: every seq the run takes is newer than they are.
     if (this.latestSeq() === 0) {
-      this.sql`DELETE FROM dm_reads`
       this.deleteMeta("conversation")
       this.setMeta("opened", "1")
     } else {
@@ -427,13 +434,17 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return { userId, removedAt }
   }
 
-  /** Empties all the conversation keeps, and lets its retry go. */
+  /**
+   * Empties the conversation, and lets its retry go: all it keeps but how
+   * far each person read and the highest seq used, so a later run never
+   * uses a seq again nor moves a read back.
+   */
   private async reset(): Promise<void> {
     const retry = this.meta("retry")
+    this.keepSeqFloor()
     this.sql`DELETE FROM dm_messages`
-    this.sql`DELETE FROM dm_reads`
     this.sql`DELETE FROM dm_inbox_sync`
-    this.sql`DELETE FROM dm_meta`
+    this.sql`DELETE FROM dm_meta WHERE key != 'seq_floor'`
     if (retry) await this.cancelSchedule(retry).catch(() => false)
   }
 
@@ -617,7 +628,7 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
   ): MessageRow {
     return this.transaction(() => {
       const row: MessageRow = {
-        seq: this.latestSeq() + 1,
+        seq: this.nextSeq(),
         id: `dmm_${randomId()}`,
         author_id: author,
         client_id: clientId,
@@ -904,11 +915,38 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
     return { noted: row?.noted_seq ?? 0, read: row?.read_seq ?? 0 }
   }
 
+  /** The newest message's seq, or 0 without one. */
   private latestSeq(): number {
     const row = this.sql<{
       seq: number | null
     }>`SELECT MAX(seq) AS seq FROM dm_messages`.at(0)
     return row?.seq ?? 0
+  }
+
+  /**
+   * The next message's seq: one past the highest ever used, which is the
+   * newest message's, or the one a purge kept when it took the newest away
+   * (`keepSeqFloor`). A conversation from before any purge goes on from
+   * its newest message.
+   */
+  private nextSeq(): number {
+    return Math.max(this.latestSeq(), this.seqFloor()) + 1
+  }
+
+  /** The highest seq a purge took away, which no message takes again. */
+  private seqFloor(): number {
+    return Number(this.meta("seq_floor") ?? "0")
+  }
+
+  /**
+   * Before a purge takes messages away, the newest perhaps: the highest seq
+   * used so far is kept, and only ever goes up. Nothing else takes the
+   * newest message away (the history limit drops the oldest), so a message
+   * never reuses a seq Go was told of, nor one a read already covers.
+   */
+  private keepSeqFloor(): void {
+    const latest = this.latestSeq()
+    if (latest > this.seqFloor()) this.setMeta("seq_floor", String(latest))
   }
 
   private readSeq(user: string): number {

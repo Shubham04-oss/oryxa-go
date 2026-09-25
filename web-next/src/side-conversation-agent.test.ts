@@ -1148,9 +1148,14 @@ describe("SideConversationAgent: purge", () => {
     await askTeammate(side, adaTab, bo.agentId, "Help")
     expect(await side.purge()).toEqual({ emptied: true })
     expect(side.sql`SELECT * FROM side_items`).toEqual([])
-    expect(side.sql`SELECT * FROM side_reads`).toEqual([])
     expect(side.sql`SELECT * FROM side_threads`).toEqual([])
-    expect(side.sql`SELECT * FROM side_meta`).toEqual([])
+    // Two numbers stay: how far each person read, and the highest seq used.
+    expect(side.sql`SELECT user_id, seq FROM side_reads`).toEqual([
+      { user_id: ada.userId, seq: 4 },
+    ])
+    expect(side.sql`SELECT key, value FROM side_meta`).toEqual([
+      { key: "seq_floor", value: "4" },
+    ])
     expect(side.jobs).toEqual([])
     expect(adaTab.last("side-gone")).toEqual({ type: "side-gone" })
     expect(adaTab.closed).toEqual({ code: 4404, reason: "Gone" })
@@ -1530,6 +1535,35 @@ describe("SideConversationAgent: events for Go", () => {
       side as unknown as { pollRequests: () => Promise<void> }
     ).pollRequests()
     expect(postedOf(side)).toHaveLength(1)
+  })
+
+  it("never gives a seq twice when a purge takes the newest items away", async () => {
+    const { side } = await setup(eventsOn)
+    const adaOld = await join(side, ada)
+    await send(side, adaOld, "Before")
+    // Ada left at 10:00. Bo writes after, and so does her page from before.
+    vi.setSystemTime(new Date("2026-09-24T10:05:00.000Z"))
+    const boNew = await join(side, bo)
+    await send(side, boNew, "Bo, after")
+    await send(side, adaOld, "Ada's page from before, after")
+    await runDueJobs(side)
+    expect(
+      events.taken.map((event) => (event.detail.message as { seq: number }).seq)
+    ).toEqual([1, 2, 3])
+
+    expect(
+      await side.purge({
+        userId: ada.userId,
+        removedAt: "2026-09-24T10:00:00.000Z",
+      })
+    ).toEqual({ emptied: false })
+    expect(side.sql`SELECT seq FROM side_items`).toEqual([{ seq: 2 }])
+    await send(side, boNew, "And now")
+    expect(lastItem(boNew, "message")).toMatchObject({
+      seq: 4,
+      body: "And now",
+    })
+    expect(postedOf(side)).toEqual([[4, member(bo)]])
   })
 
   it("takes its events with it when it is purged", async () => {

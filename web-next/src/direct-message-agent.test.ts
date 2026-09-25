@@ -706,16 +706,18 @@ describe("DirectMessageAgent: purge", () => {
         reason: "Gone",
       })
     }
-    for (const table of [
-      "dm_messages",
-      "dm_reads",
-      "dm_inbox_sync",
-      "dm_meta",
-    ]) {
+    for (const table of ["dm_messages", "dm_inbox_sync"]) {
       expect(
         dm.sql([`SELECT * FROM ${table}`] as unknown as TemplateStringsArray)
       ).toEqual([])
     }
+    // Two numbers stay: how far each person read, and the highest seq used.
+    expect(dm.sql`SELECT user_id, seq FROM dm_reads`).toEqual([
+      { user_id: ada, seq: 1 },
+    ])
+    expect(dm.sql`SELECT key, value FROM dm_meta`).toEqual([
+      { key: "seq_floor", value: "1" },
+    ])
     await dm.purge()
 
     const again = await join(dm, ada)
@@ -723,7 +725,8 @@ describe("DirectMessageAgent: purge", () => {
       expect.objectContaining({ conversation: "", messages: [], typing: [] })
     )
     await send(dm, again, "a new start")
-    expect(messagesOf(again)).toEqual([expect.objectContaining({ seq: 1 })])
+    // Newer than anything before: no seq is used twice.
+    expect(messagesOf(again)).toEqual([expect.objectContaining({ seq: 2 })])
     const reopened = await join(dm, bo)
     expect(reopened.last("dm-snapshot")?.conversation).toMatch(/^dmc_/)
     expect(reopened.last("dm-snapshot")?.conversation).not.toBe(before)
@@ -797,16 +800,17 @@ describe("DirectMessageAgent: purging one person who left", () => {
     expect(await dm.purge({ userId: ada, removedAt })).toEqual({
       emptied: true,
     })
-    for (const table of [
-      "dm_messages",
-      "dm_reads",
-      "dm_inbox_sync",
-      "dm_meta",
-    ]) {
+    for (const table of ["dm_messages", "dm_inbox_sync"]) {
       expect(
         dm.sql([`SELECT * FROM ${table}`] as unknown as TemplateStringsArray)
       ).toEqual([])
     }
+    expect(dm.sql`SELECT user_id, seq FROM dm_reads`).toEqual([
+      { user_id: ada, seq: 1 },
+    ])
+    expect(dm.sql`SELECT key, value FROM dm_meta`).toEqual([
+      { key: "seq_floor", value: "1" },
+    ])
     expect(adaTab.closed?.code).toBe(conversationGoneCloseCode)
     // The inbox's caller takes it off both inboxes.
     expect(world.callsTo("InboxAgent", "restateConversation")).toEqual([])
@@ -823,12 +827,13 @@ describe("DirectMessageAgent: purging one person who left", () => {
       emptied: false,
     })
     expect(dm.sql`SELECT * FROM dm_messages`).toEqual([])
+    // The reads stay where they were: every seq to come is newer.
     expect(boNew.last("dm-snapshot")).toEqual(
       expect.objectContaining({
         conversation: "",
         messages: [],
         reads: [
-          { userId: ada, seq: 0 },
+          { userId: ada, seq: 1 },
           { userId: bo, seq: 0 },
         ],
       })
@@ -1090,6 +1095,74 @@ describe("DirectMessageAgent: events for Go", () => {
         .filter((event) => event.type === read)
         .map((event) => event.detail.read_through_seq)
     ).toEqual([1, 2])
+  })
+
+  it("never gives a seq twice when a purge takes the newest messages away, and a read Go was told of covers none that come after", async () => {
+    const { dm, world } = await setup(eventsOn)
+    const adaOld = await join(dm, ada)
+    await send(dm, adaOld, "one")
+    // Ada left at 09:00:30. Bo writes after, and so does her page from
+    // before; Bo reads through all of it, and Go is told.
+    vi.setSystemTime(new Date("2026-09-24T09:01:00.000Z"))
+    const boNew = await join(dm, bo)
+    await send(dm, boNew, "two")
+    await send(dm, adaOld, "stale")
+    await say(dm, boNew, { type: "dm-read", seq: 3 })
+    await runDueJobs(dm)
+
+    await dm.purge({ userId: ada, removedAt: "2026-09-24T09:00:30.000Z" })
+    // One and three went: two, the newest now, stays.
+    expect(dm.sql`SELECT seq FROM dm_messages`).toEqual([{ seq: 2 }])
+
+    // Ada is back, on a page opened since: her message takes a seq newer
+    // than any Go was told of, and is unread for Bo.
+    vi.setSystemTime(new Date("2026-09-24T09:02:00.000Z"))
+    const adaNew = await join(dm, ada)
+    await send(dm, adaNew, "back")
+    expect(messagesOf(adaNew).at(-1)).toMatchObject({ seq: 4, body: "back" })
+    expect((await inboxOf(world, bo))[0].unread).toBe(1)
+    await runDueJobs(dm)
+    expect(
+      go.taken
+        .filter((event) => event.type === posted)
+        .map((event) => (event.detail.message as { seq: number }).seq)
+    ).toEqual([1, 2, 3, 4])
+  })
+
+  it("keeps both reads where they were when a purge leaves nothing, so Go never sees a read go back", async () => {
+    const { dm } = await setup(eventsOn)
+    const adaOld = await join(dm, ada)
+    const boOld = await join(dm, bo)
+    for (const body of ["one", "two", "three"]) await send(dm, adaOld, body)
+    await say(dm, boOld, { type: "dm-read", seq: 3 })
+    vi.setSystemTime(new Date("2026-09-24T09:01:00.000Z"))
+    const boNew = await join(dm, bo)
+    await runDueJobs(dm)
+
+    expect(
+      await dm.purge({ userId: ada, removedAt: "2026-09-24T09:00:30.000Z" })
+    ).toEqual({ emptied: false })
+    expect(dm.sql`SELECT * FROM dm_messages`).toEqual([])
+    expect(dm.sql`SELECT user_id, seq FROM dm_reads ORDER BY user_id`).toEqual([
+      { user_id: ada, seq: 3 },
+      { user_id: bo, seq: 3 },
+    ])
+    // A page that still says an old seq moves nothing.
+    await say(dm, boNew, { type: "dm-read", seq: 2 })
+
+    // Ada is back: her message is newer than both reads, and Bo reads it.
+    vi.setSystemTime(new Date("2026-09-24T09:02:00.000Z"))
+    const adaNew = await join(dm, ada)
+    await send(dm, adaNew, "back")
+    await say(dm, boNew, { type: "dm-read", seq: 4 })
+    await runDueJobs(dm)
+    expect(
+      go.taken
+        .filter(
+          (event) => event.type === read && event.detail.reader_user_id === bo
+        )
+        .map((event) => event.detail.read_through_seq)
+    ).toEqual([3, 4])
   })
 
   it("records nothing, and sends nothing, while Go's origin or the secret is unset, or the secret is too short", async () => {

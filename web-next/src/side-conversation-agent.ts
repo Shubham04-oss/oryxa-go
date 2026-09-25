@@ -557,9 +557,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
    * DM's semantics (`DirectMessageAgent.purge`).
    *
    * Without a `scope` (an organization deleted), it empties the
-   * conversation: every item, read state, what its inboxes were told and
-   * which Go threads its people's agents answered on, stops every agent run
-   * and read, and tells every socket `side-gone` and closes it.
+   * conversation: every item, what its inboxes were told and which Go
+   * threads its people's agents answered on, stops every agent run and
+   * read, and tells every socket `side-gone` and closes it. As after any
+   * purge, how far each person read and the highest seq used stay
+   * (`keepSeqFloor`), so a later run never uses a seq again nor moves a
+   * read back.
    *
    * For one of its people who left at `scope.removedAt`, the items stored at
    * or before then go, and so do any that came through that person's
@@ -597,6 +600,8 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       return { emptied: true }
     }
     const { userId, removedAt } = leaving
+    // The newest may go too (what their page from before said after).
+    this.keepSeqFloor()
     this.sql`DELETE FROM side_items WHERE created_at <= ${removedAt}
       OR (author_id = ${userId} AND session_at IS NOT NULL AND session_at <= ${removedAt})`
     this.sql`DELETE FROM side_threads WHERE user_id = ${userId}`
@@ -627,9 +632,9 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       await eventsGone
       return { emptied: true }
     }
-    // What stays is a new run of the conversation.
+    // What stays is a new run of the conversation. The reads stay as they
+    // were: every seq the run takes is newer than they are.
     if (this.latestSeq() === 0) {
-      this.sql`DELETE FROM side_reads`
       this.deleteMeta("conversation")
       this.setMeta("opened", "1")
     } else {
@@ -2096,7 +2101,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
   }): ItemRow {
     const now = new Date().toISOString()
     const row: ItemRow = {
-      seq: this.latestSeq() + 1,
+      seq: this.nextSeq(),
       id: `sdi_${randomId()}`,
       kind: item.kind,
       author_id: item.authorId,
@@ -2536,18 +2541,22 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     return { userId, removedAt }
   }
 
-  /** Empties all the conversation keeps, stops its runs and lets its schedules go. */
+  /**
+   * Empties the conversation, stops its runs and lets its schedules go: all
+   * it keeps but how far each person read and the highest seq used, so a
+   * later run never uses a seq again nor moves a read back.
+   */
   private async reset(): Promise<void> {
     for (const run of this.runs.values()) run.controller.abort()
     this.runs.clear()
     this.drafts.clear()
     const retry = this.meta("retry")
     const poll = this.meta("poll")
+    this.keepSeqFloor()
     this.sql`DELETE FROM side_items`
-    this.sql`DELETE FROM side_reads`
     this.sql`DELETE FROM side_inbox_sync`
     this.sql`DELETE FROM side_threads`
-    this.sql`DELETE FROM side_meta`
+    this.sql`DELETE FROM side_meta WHERE key != 'seq_floor'`
     if (retry) await this.cancelSchedule(retry).catch(() => false)
     if (poll) await this.cancelSchedule(poll).catch(() => false)
   }
@@ -2572,12 +2581,39 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
 
   // ---- Small things ----
 
+  /** The newest item's seq, or 0 without one. */
   private latestSeq(): number {
     return (
       this.sql<{
         seq: number | null
       }>`SELECT MAX(seq) AS seq FROM side_items`.at(0)?.seq ?? 0
     )
+  }
+
+  /**
+   * The next item's seq: one past the highest ever used, which is the
+   * newest item's, or the one a purge kept when it took the newest away
+   * (`keepSeqFloor`). A conversation from before any purge goes on from
+   * its newest item.
+   */
+  private nextSeq(): number {
+    return Math.max(this.latestSeq(), this.seqFloor()) + 1
+  }
+
+  /** The highest seq a purge took away, which no item takes again. */
+  private seqFloor(): number {
+    return Number(this.meta("seq_floor") ?? "0")
+  }
+
+  /**
+   * Before a purge takes items away, the newest perhaps: the highest seq
+   * used so far is kept, and only ever goes up. Nothing else takes the
+   * newest item away (the history limit drops the oldest), so an item
+   * never reuses a seq Go was told of, nor one a read already covers.
+   */
+  private keepSeqFloor(): void {
+    const latest = this.latestSeq()
+    if (latest > this.seqFloor()) this.setMeta("seq_floor", String(latest))
   }
 
   private readSeq(user: string): number {

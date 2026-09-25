@@ -165,9 +165,13 @@ stay current. What travels on the socket is in `src/lib/dms/protocol.ts`;
 the socket carries that alone (no SDK identity, state or MCP frames, no
 callable methods, and a page may not set state).
 
-- **Storage** (its SQLite): the messages (id, seq gapless from 1, author,
-  body, `created_at`, and the page's `clientId`), how far each person has
-  read, and what each person's inbox has been told. It keeps at most
+- **Storage** (its SQLite): the messages (id, seq, author, body,
+  `created_at`, and the page's `clientId`), how far each person has read,
+  and what each person's inbox has been told. Seqs are gapless from 1, and
+  each is newer than any before: a purge that takes the newest messages
+  away keeps the highest seq used (`seq_floor` in `dm_meta`), so no seq is
+  used twice, and a read, which only ever goes further, never covers a
+  message that came after it. It keeps at most
   `DM_HISTORY_LIMIT`, 10,000 messages: past that the oldest go as new ones
   arrive (about 160 MB at the longest bodies; a typical conversation is a
   small fraction of that).
@@ -277,8 +281,8 @@ socket is in `src/lib/side/protocol.ts`; like a DM's, it carries that alone,
 and a page may not set state.
 
 **The transcript** (its SQLite, at most 10,000 items, the oldest dropped
-first) holds four kinds of item, one order (`seq`, gapless from 1) over all
-of them:
+first) holds four kinds of item, one order (`seq`, gapless from 1 and never
+used twice, as a DM's) over all of them:
 
 | Kind | What | Whose side (`authorId`, `ownerId`, `requesterId`) |
 |---|---|---|
@@ -544,8 +548,8 @@ meanwhile (at most five passes). In each DM (`DirectMessageAgent.purge`):
   before they left, writing in the moment between their removal and this
   purge.
 - Nothing left, and no socket opened since `removed_at`: the DM is emptied
-  (messages, read states, what it told the inboxes), its sockets are told
-  `dm-gone` and closed, and it leaves both inboxes.
+  (messages, what it told the inboxes), its sockets are told `dm-gone` and
+  closed, and it leaves both inboxes.
 - Otherwise it stays, as a new run of the conversation (a new
   `conversation` id, so no page joins what it held to what stayed). Both
   inboxes are restated from what stayed
@@ -553,6 +557,11 @@ meanwhile (at most five passes). In each DM (`DirectMessageAgent.purge`):
   what is unread; with no message left, known but not listed). Its sockets
   opened since `removed_at` are sent the new run; those opened before are
   told `dm-gone` and closed.
+- Either way, and after an organization's purge too, two numbers stay: how
+  far each person had read, and the highest seq used. The next message,
+  in whatever run, takes a seq newer than any before it, which no read
+  covers yet: a purge that took the newest messages away never lets a seq
+  Go was told of be used again, nor moves a read back.
 
 A side conversation (`SideConversationAgent.purge`) follows the same
 rules, over every kind of item: what was stored at or before `removed_at`
