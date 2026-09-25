@@ -643,8 +643,8 @@ fails, neither is kept.
 - `event_dead_letters`: what Go refused, with its `status`, its `answer`
   (the first 2,000 characters) and `dead_at`, kept seven days.
 - `event_meta`: Go's wait (`backoff`: how many requests in a row Go did not
-  take, and when the next may go), one value for the whole outbox; the
-  drain that is set, and when the last one ran.
+  take, and when the next may go), one value for the whole outbox, written
+  only when Go does not take a request.
 
 Whatever waits, recording an event and a request Go does not take each
 write a fixed few rows, and nothing reads more of the outbox than its
@@ -658,7 +658,11 @@ held, the first time the object starts.
 set for when the oldest event may go, never under a second after the last
 drain, and always in a whole second: the SDK rounds a schedule's time down
 to the second, so a drain set sooner could run again in the second it ran
-in, and spin. An event recorded while a drain is set goes with it. Each
+in, and spin. The drains set are the SDK's own schedules, as it lists
+them, and when the last one ran is kept in memory, so a drain writes
+nothing of its own. A drain that is set is never moved, and none is set
+while one as early is: an event recorded meanwhile goes with it. One set
+for later, to let a dead letter go, stays as it is beside a sooner one. Each
 drain drops what Go has not taken in seven days (with an error log) and the
 dead letters as old, then sends the oldest events that may go, at most 100
 and 256 KiB a request, to `POST {ORYXA_API_ORIGIN}/v1/realtime/events`:

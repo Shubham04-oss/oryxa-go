@@ -159,6 +159,11 @@ class Agent {
     return this.jobs.length < before
   }
 
+  // As the SDK lists them: a schedule running is still listed.
+  async listSchedules() {
+    return this.jobs.map((job) => ({ ...job, type: "scheduled" as const }))
+  }
+
   async keepAliveWhile<T>(work: () => Promise<T>): Promise<T> {
     return work()
   }
@@ -406,20 +411,28 @@ export function settle(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
-/** Runs every schedule due by now, as the SDK's alarm does, oldest first. */
+/**
+ * Runs every schedule due by now, as the SDK's alarm does, oldest first:
+ * each stays listed while its callback runs, and goes once it returns.
+ */
 export async function runDueJobs(object: unknown): Promise<void> {
   const harness = object as Harness & Record<string, unknown>
+  const ran = new Set<Job>()
   for (;;) {
     const due = harness.jobs
-      .filter((job) => job.time * 1000 <= Date.now())
+      .filter((job) => job.time * 1000 <= Date.now() && !ran.has(job))
       .sort((left, right) => left.time - right.time)
       .at(0)
     if (!due) return
-    harness.jobs = harness.jobs.filter((job) => job !== due)
+    ran.add(due)
     const callback = harness[due.callback] as (
       payload: unknown,
       schedule: Job
     ) => Promise<void>
-    await callback.call(harness, due.payload, due)
+    try {
+      await callback.call(harness, due.payload, due)
+    } finally {
+      harness.jobs = harness.jobs.filter((job) => job !== due)
+    }
   }
 }

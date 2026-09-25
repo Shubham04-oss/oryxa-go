@@ -163,26 +163,28 @@ type Db = {
 }
 
 /**
- * Runs `work` and counts what the object's SQL did meanwhile: the rows its
- * writes changed, and the statements it ran.
+ * Runs `work` and counts what the object's SQL did meanwhile: the
+ * statements it ran, each write with the rows it changed, and those rows in
+ * all.
  */
 async function sqlOf(object: Harness, work: () => Promise<unknown>) {
   const holder = object as unknown as { db: Db }
   const db = holder.db
   const statements: string[] = []
-  let rows = 0
+  const writes: Array<{ sql: string; changed: number }> = []
   holder.db = {
     prepare(sql) {
       const statement = db.prepare(sql)
       return {
         all(...values) {
           const result = statement.all(...values)
-          statements.push(sql.replace(/\s+/g, " ").trim())
+          const text = sql.replace(/\s+/g, " ").trim()
+          statements.push(text)
           if (/^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql)) {
             const [{ changed }] = db
               .prepare("SELECT changes() AS changed")
               .all() as Array<{ changed: number }>
-            rows += changed
+            writes.push({ sql: text, changed })
           }
           return result
         },
@@ -194,7 +196,18 @@ async function sqlOf(object: Harness, work: () => Promise<unknown>) {
   } finally {
     holder.db = db
   }
-  return { rows, statements }
+  const rows = writes.reduce((total, write) => total + write.changed, 0)
+  return { rows, statements, writes }
+}
+
+/** The rows `writes` changed in `table`. */
+function rowsIn(
+  writes: ReadonlyArray<{ sql: string; changed: number }>,
+  table: string
+): number {
+  return writes
+    .filter((write) => new RegExp(`\\b${table}\\b`).test(write.sql))
+    .reduce((total, write) => total + write.changed, 0)
 }
 
 function deadLetters(object: Harness) {
@@ -211,6 +224,13 @@ function drainsSet(dm: Dm): number[] {
   return dm.jobs
     .filter((job) => job.callback === "drainEvents")
     .map((job) => (job.time * 1000 - Date.now()) / 1000)
+}
+
+/** The ids of the drains set (a running one included, as the SDK lists it). */
+function drainIds(object: Harness): string[] {
+  return object.jobs
+    .filter((job) => job.callback === "drainEvents")
+    .map((job) => job.id)
 }
 
 /** Moves the clock to the drain that is set and runs it. */
@@ -740,7 +760,6 @@ describe("EventOutbox: draining", () => {
     await say(dm, boTab, { type: "dm-read", seq: 2 })
     expect(drainsSet(dm)).toEqual([4])
     dm.jobs = []
-    dm.sql`DELETE FROM event_meta WHERE key IN ('drain', 'drain_at')`
     await dm.onStart()
     expect(drainsSet(dm)).toEqual([4])
     await runNextDrain(dm)
@@ -759,6 +778,103 @@ describe("EventOutbox: draining", () => {
     expect(together.events.at(-1)?.detail.reader_user_id).toBe(bo)
     expect(together.status).toBe(204)
     expect(outbox(dm)).toEqual([])
+  })
+
+  it("costs a DM's message two outbox rows and one schedule: no read of its author's, and nothing in event_meta", async () => {
+    const { dm } = await setup()
+    const adaTab = await join(dm, ada)
+    const schedule = vi.spyOn(
+      dm as unknown as {
+        schedule: (when: Date, callback: string) => Promise<{ id: string }>
+      },
+      "schedule"
+    )
+    const { writes } = await sqlOf(dm, async () => {
+      await send(dm, adaTab, "one")
+      await runDueJobs(dm)
+    })
+    expect(go.taken).toHaveLength(1)
+    // Its event in, then out once Go took it.
+    expect(rowsIn(writes, "event_outbox")).toBe(2)
+    expect(rowsIn(writes, "event_meta")).toBe(0)
+    expect(rowsIn(writes, "event_dead_letters")).toBe(0)
+    expect(dm.sql`SELECT * FROM event_meta`).toEqual([])
+    // One drain was set, and it has run.
+    expect(
+      schedule.mock.calls.filter(([, callback]) => callback === "drainEvents")
+    ).toHaveLength(1)
+    expect(drainsSet(dm)).toEqual([])
+  })
+
+  it("never moves a drain that is set, and sets none while one as early is: what is recorded meanwhile goes with it", async () => {
+    const { dm } = await setup()
+    const cancel = vi.spyOn(
+      dm as unknown as { cancelSchedule: (id: string) => Promise<boolean> },
+      "cancelSchedule"
+    )
+    go.answers.push(400)
+    const adaTab = await join(dm, ada)
+    const boTab = await join(dm, bo)
+    await send(dm, adaTab, "refused")
+    await runDueJobs(dm)
+    // A dead letter: a drain is set to let it go in seven days.
+    const drains = () => drainIds(dm)
+    const [later] = drains()
+    expect(drainsSet(dm)).toEqual([eventsTiming.retentionMs / 1000])
+
+    // A message: a drain for it, sooner, beside the later one.
+    vi.advanceTimersByTime(5_000)
+    await send(dm, adaTab, "two")
+    expect(drains()).toEqual([later, expect.any(String)])
+    const [, sooner] = drains()
+    // More, before it runs: they go with it.
+    await say(dm, boTab, { type: "dm-read", seq: 2 })
+    await send(dm, boTab, "three")
+    expect(drains()).toEqual([later, sooner])
+    await runDueJobs(dm)
+    expect(go.requests.at(-1)?.events.map((event) => event.type)).toEqual([
+      realtimeEventTypes.messagePosted,
+      realtimeEventTypes.conversationRead,
+      realtimeEventTypes.messagePosted,
+    ])
+    // The later one is still the one set, as it was: never cancelled.
+    expect(drains()).toEqual([later])
+    expect(cancel.mock.calls.map(([id]) => id)).not.toContain(later)
+    expect(cancel.mock.calls.map(([id]) => id)).not.toContain(sooner)
+  })
+
+  it("sets no second drain after a restart, nor while one runs that Go keeps waiting", async () => {
+    const { world, dm } = await setup()
+    go.answers.push(503)
+    const adaTab = await join(dm, ada)
+    await send(dm, adaTab, "one")
+    await runDueJobs(dm)
+    expect(drainsSet(dm)).toEqual([1])
+    const restarted = await world.restart<Dm>("DirectMessageAgent", dmName)
+    expect(drainsSet(restarted)).toEqual([1])
+
+    // Go holds the next request: what is recorded meanwhile sets nothing,
+    // and the drain sets the one after as it ends.
+    const [running] = drainIds(restarted)
+    const release = go.hold()
+    vi.advanceTimersByTime(1_000)
+    const draining = runDueJobs(restarted)
+    await vi.waitFor(() => expect(go.requests).toHaveLength(2))
+    await send(restarted, await join(restarted, bo), "meanwhile")
+    expect(drainIds(restarted)).toEqual([running])
+    release()
+    await draining
+    // The drain that ran is gone; the one it set for what came meanwhile
+    // is the only one.
+    const [next, ...more] = drainIds(restarted)
+    expect(more).toEqual([])
+    expect(next).not.toBe(running)
+    await runNextDrain(restarted)
+    expect(go.taken.map((event) => event.type)).toEqual([
+      realtimeEventTypes.messagePosted,
+      realtimeEventTypes.messagePosted,
+    ])
+    expect(drainsSet(restarted)).toEqual([])
   })
 
   it("makes an earlier build's tables again as they are now, with what they held, and sends it in order", async () => {
@@ -919,7 +1035,6 @@ describe("EventOutbox: draining", () => {
     await send(dm, adaTab, "before the restart")
     // As a restart that lost the drain it had set.
     dm.jobs = []
-    dm.sql`DELETE FROM event_meta WHERE key IN ('drain', 'drain_at')`
     const restarted = await world.restart<Dm>("DirectMessageAgent", dmName)
     expect(drainsSet(restarted)).toEqual([0])
     await runDueJobs(restarted)
@@ -945,7 +1060,8 @@ describe("EventOutbox: purges", () => {
     await runDueJobs(dm)
     expect(deadLetters(dm)).toHaveLength(2)
     expect(outbox(dm)).toHaveLength(2)
-    expect(drainsSet(dm)).toHaveLength(1)
+    // The dead letters' drain, in seven days, and the waiting events'.
+    expect(drainsSet(dm)).toEqual([eventsTiming.retentionMs / 1000 - 1, 1])
 
     await dm.purge()
     expect(outbox(dm)).toEqual([])

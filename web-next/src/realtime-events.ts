@@ -243,6 +243,11 @@ export type EventOutboxHost = {
   transaction: <T>(work: () => T) => T
   /** Sets the object's drain (its `drainEvents`) for `at`. */
   schedule: (at: Date) => Promise<{ id: string }>
+  /**
+   * The object's drains set, as the SDK lists its `drainEvents` schedules
+   * (`time` in seconds): one that is running is listed until it returns.
+   */
+  drains: () => Promise<ReadonlyArray<{ id: string; time: number }>>
   cancelSchedule: (id: string) => Promise<boolean>
 }
 
@@ -255,8 +260,11 @@ export type EventOutboxHost = {
  * - `event_dead_letters`: what Go refused (`refusedByGo`), with its
  *   answer, for seven days;
  * - `event_meta`: Go's wait (`backoff`: the requests in a row Go did not
- *   take, and when the next may go), the one value a retry writes; the
- *   drain that is set, and when the last one ran.
+ *   take, and when the next may go), the one value a retry writes.
+ *
+ * The drains set are the SDK's own schedules, which it lists (`drains`),
+ * and when the last drain ran is kept in memory: a drain costs its
+ * schedule's row alone, and one that is set is never moved.
  *
  * Whatever waits, recording an event and a request Go did not take each
  * write a fixed few rows, and nothing reads more of the outbox than its
@@ -276,6 +284,10 @@ export class EventOutbox {
   private draining: Promise<void> | undefined
   /** Plans one at a time, so two never set two drains. */
   private planning: Promise<void> = Promise.resolve()
+  /** When the last drain ran here: a restart forgets it, and the next may go at once. */
+  private lastDrainAt = 0
+  /** The drains that began here: the SDK lists one until it returns, but it is set no more. */
+  private readonly started = new Set<string>()
 
   constructor(private readonly host: EventOutboxHost) {}
 
@@ -330,10 +342,12 @@ export class EventOutbox {
   /**
    * Makes sure a drain is set for what waits: when the oldest event may go
    * (or the oldest dead letter is due to be let go), never under
-   * `eventsTiming.minGapMs` after the last drain, in a whole second. One
-   * drain is set at a time: an event recorded while one is set goes with
-   * it. Never throws; a drain that could not be set is set by the next
-   * event or restart.
+   * `eventsTiming.minGapMs` after the last drain, in a whole second. A
+   * drain set as early goes for it: an event recorded while one is set
+   * goes with it, and a drain that is set is never moved (one set later,
+   * for the dead letters, stays as it is beside a sooner one). Never
+   * throws; a drain that could not be set is set by the next event or
+   * restart.
    */
   plan(): Promise<void> {
     const next = this.planning.then(() => this.planOnce())
@@ -367,12 +381,8 @@ export class EventOutbox {
   async drain(schedule?: { id: string }): Promise<void> {
     try {
       this.schema()
-      // The drain set is this one: it is no longer set. Any other stays set,
-      // and the next plan keeps it or moves it.
-      if (schedule && this.meta("drain") === schedule.id) {
-        this.deleteMeta("drain")
-        this.deleteMeta("drain_at")
-      }
+      // This one is set no more, though the SDK lists it until it returns.
+      if (schedule) this.started.add(schedule.id)
       // One at a time: the drain under way sets the next as it ends.
       if (this.draining) return
       const run = this.drainOnce()
@@ -398,18 +408,21 @@ export class EventOutbox {
   purge(): Promise<void> {
     this.schema()
     this.epoch += 1
-    const planned = this.meta("drain")
     this.host.transaction(() => {
       this.host.sql`DELETE FROM event_outbox`
       this.host.sql`DELETE FROM event_dead_letters`
-      this.deleteMeta("drain")
-      this.deleteMeta("drain_at")
-      this.endBackoff()
+      this.host.sql`DELETE FROM event_meta`
     })
     const draining = this.draining
     return (async () => {
-      if (planned) await this.host.cancelSchedule(planned).catch(() => false)
+      const set = await this.host.drains().catch(() => [])
+      for (const drain of set) {
+        await this.host.cancelSchedule(drain.id).catch(() => false)
+      }
       await draining?.catch(() => undefined)
+      // What was recorded since (a member's purge keeps the conversation)
+      // has a drain of its own.
+      await this.plan()
     })()
   }
 
@@ -444,6 +457,9 @@ export class EventOutbox {
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       )`
+      // An earlier build's note of its drains: the SDK lists them now.
+      this.host.sql`DELETE FROM event_meta
+        WHERE key IN ('drain', 'drain_at', 'last_drain_at')`
       if (earlier.outbox) {
         this.host.sql`INSERT INTO event_outbox
             (position, id, type, detail, reader_id, created_at)
@@ -506,21 +522,35 @@ export class EventOutbox {
         ${readerId ?? null}, ${Date.now()})`
   }
 
+  /** Whether a drain is under way (read again after each wait). */
+  private busy(): boolean {
+    return this.draining !== undefined
+  }
+
   private async planOnce(): Promise<void> {
     this.schema()
     // The drain under way sets the next as it ends.
-    if (this.draining) return
+    if (this.busy()) return
     const at = this.nextDrainAt()
     if (at === undefined) return
-    const planned = this.meta("drain")
-    const plannedAt = Number(this.meta("drain_at") ?? "0")
-    // One as early is set already (and not long overdue, which would mean
-    // it is lost).
-    if (planned && plannedAt <= at && plannedAt > Date.now() - 60_000) return
-    if (planned) await this.host.cancelSchedule(planned).catch(() => false)
-    const schedule = await this.host.schedule(new Date(at))
-    this.setMeta("drain", schedule.id)
-    this.setMeta("drain_at", String(at))
+    const epoch = this.epoch
+    const set = await this.host.drains()
+    for (const id of this.started) {
+      if (!set.some((drain) => drain.id === id)) this.started.delete(id)
+    }
+    // One set as early goes for this too (a due one the SDK has yet to run
+    // included).
+    if (
+      set.some(
+        (drain) => !this.started.has(drain.id) && drain.time * 1000 <= at
+      )
+    ) {
+      return
+    }
+    // A drain began meanwhile, and sets the next as it ends; or a purge
+    // came, which plans again once it is done.
+    if (this.busy() || this.epoch !== epoch) return
+    await this.host.schedule(new Date(at))
   }
 
   /** When the next drain is due, in a whole second, or nothing when nothing waits. */
@@ -536,8 +566,10 @@ export class EventOutbox {
     }>`SELECT dead_at FROM event_dead_letters ORDER BY rowid LIMIT 1`.at(0)
     if (refused) due.push(refused.dead_at + eventsTiming.retentionMs)
     if (due.length === 0) return undefined
-    const last = Number(this.meta("last_drain_at") ?? "0")
-    const at = Math.max(Math.min(...due), last + eventsTiming.minGapMs)
+    const at = Math.max(
+      Math.min(...due),
+      this.lastDrainAt + eventsTiming.minGapMs
+    )
     // The SDK rounds a schedule's time down to the second: rounded up here,
     // the drain is never early.
     return Math.ceil(at / 1000) * 1000
@@ -545,9 +577,8 @@ export class EventOutbox {
 
   private async drainOnce(): Promise<void> {
     const now = Date.now()
-    const last = Number(this.meta("last_drain_at") ?? "0")
-    if (now < last + eventsTiming.minGapMs) return
-    this.setMeta("last_drain_at", String(now))
+    if (now < this.lastDrainAt + eventsTiming.minGapMs) return
+    this.lastDrainAt = now
     this.prune(now)
     // Go is waited for: nothing goes before then.
     if (now < (this.backoff()?.until ?? 0)) return

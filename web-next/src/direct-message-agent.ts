@@ -202,6 +202,10 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
       this.sql<T>(strings, ...values),
     transaction: (work) => this.transaction(work),
     schedule: (at) => this.schedule(at, "drainEvents"),
+    drains: async () =>
+      (await this.listSchedules()).filter(
+        (schedule) => schedule.callback === "drainEvents"
+      ),
     cancelSchedule: (id) => this.cancelSchedule(id),
   })
 
