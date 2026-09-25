@@ -210,6 +210,10 @@ callable methods, and a page may not set state).
   sets an alarm before it calls them, so an inbox it could not reach, or an
   instance lost mid-call, is told again (after 2 s, doubling with each retry
   that fails, up to 5 minutes).
+- **Events.** Each message stored and each read that goes further is
+  recorded for Go in the same transaction, and sent from an outbox
+  ([Conversation events](#conversation-events)): who and where, never what
+  was said.
 
 A member's conversation list is `InboxAgent` (`src/inbox-agent.ts`), one per
 member per organization, `{org}~{user}`, read live by `useInbox(org, viewer)`
@@ -383,6 +387,11 @@ through for their author; an agent's message and a quiet line are noted as
 the agent's (`authorId` the agent's id; an agent's message previews as
 "Nia: …"), so they count as unread for both until read. Reads go on as a DM's (`markRead`), and a
 failed update is tried again on a schedule, as a DM's.
+
+**Events.** A person's message (a question to their own agent too), an
+agent's final answer and each read that goes further are recorded for Go
+as a DM's are ([Conversation events](#conversation-events)); an answer's
+deltas, a request card and a quiet line never are.
 
 **The page's side** is `useSideConversation(organizationId?, viewerId?,
 teamspaceId?, peerId?)`:
@@ -573,11 +582,110 @@ The hooks act on the message, not only the close: in `vite dev` the
 object's close does not reach a socket whose page never sent a frame on it
 (an inbox's; a DM's page always says its visibility first).
 
+A purge of a DM or a side conversation, whole or of one member, also takes
+the events it had not yet sent Go, and those Go refused, with it
+([Conversation events](#conversation-events)).
+
 `REALTIME_PURGE_SECRET` is a Worker secret (`wrangler secret put
 REALTIME_PURGE_SECRET`, the same value Go has; `.dev.vars` locally, see
-`.dev.vars.example`). `src/realtime-purge.test.ts` pins Go's own signing
-vectors: a member's purge, an organization's, and a member's with a
+`.dev.vars.example`). It signs the other direction too: the conversation
+events the Worker sends Go. `src/realtime-purge.test.ts` pins Go's own
+signing vectors: a member's purge, an organization's, and a member's with a
 nanosecond `removed_at`.
+
+## Conversation events
+
+DMs and side conversations live only here, so nothing else in the platform
+would know they happen. Each object tells Go instead, and Go's realtime
+service publishes what it takes on the event bus (source `oryxa.realtime`),
+for notifications, audit and search to react to. An event carries
+identities and positions, never what anybody wrote: no body, no preview, no
+title. The shapes, the signing and the outbox both objects keep are in
+`src/realtime-events.ts`.
+
+**What is recorded.**
+
+- `realtime.message.posted.v1`: a stored, finished message. A person's (in
+  a DM or a side conversation, a question to their own agent included), or
+  an agent's final answer in a side conversation: their own agent's answer
+  once its run has ended with something said, and a completed request's
+  result as the asked agent's. Never an answer's deltas, an answer waiting
+  on its owner's confirmation, one that failed or said nothing, a request
+  card, a quiet line or typing.
+  `{ organization_id, conversation: { kind: "direct" | "side", id, teamspace_id }, participant_user_ids, message: { id, seq }, author: { kind: "member", user_id } | { kind: "agent", user_id, agent_id }, posted_at }`:
+  `id` is the object's name, `teamspace_id` is there exactly for a side
+  conversation, `participant_user_ids` are its two people, sorted, and an
+  agent's `user_id` is its owner. An agent's answer is posted when its run
+  ended.
+- `realtime.conversation.read.v1`: a read position that goes further,
+  whatever moved it (the page's `dm-read` or `side-read`, or a person's own
+  message, question or request, which reads the conversation through it).
+  `{ organization_id, conversation, reader_user_id, read_through_seq, read_at }`.
+
+Times are `toISOString`'s, UTC to the millisecond.
+
+**The outbox**, in each object's SQLite. An event is written in the same
+transaction (`ctx.storage.transactionSync`) as what it is about: a message
+is never stored without its event, nor a read moved, and when either write
+fails, neither is kept.
+
+- `event_outbox`: `position` (the order events go in), `id` (`evt_` and 32
+  hex digits, made once and kept across retries), `type`, `detail` (the
+  JSON, sent byte for byte), `reader_id` on a read, `created_at`,
+  `attempts` and `next_at` (milliseconds). Reads coalesce: each reader has
+  one waiting at most, and a newer one takes its place under a new id, so
+  Go's answer to a request that carried the older one never settles it.
+- `event_dead_letters`: what Go refused, with its `status`, its `answer`
+  (the first 2,000 characters) and `dead_at`, kept seven days.
+- `event_meta`: the drain that is set, and when the last one ran.
+
+**Draining.** One drain at a time, on the SDK's schedule (`drainEvents`),
+set for when the oldest event may go, never under a second after the last
+drain, and always in a whole second: the SDK rounds a schedule's time down
+to the second, so a drain set sooner could run again in the second it ran
+in, and spin. An event recorded while a drain is set goes with it. Each
+drain drops what Go has not taken in seven days (with an error log) and the
+dead letters as old, then sends the oldest events that may go, at most 100
+and 256 KiB a request, to `POST {ORYXA_API_ORIGIN}/v1/realtime/events`:
+
+- `Content-Type: application/json`; `X-Oryxa-Timestamp`, Unix seconds; and
+  `X-Oryxa-Signature`, `v1=` and the lowercase hex HMAC-SHA256, keyed with
+  `REALTIME_PURGE_SECRET` (trimmed, as for a purge), of
+  `events.{timestamp}.{body}`. The prefix keeps the two directions apart: a
+  purge's signature (`{timestamp}.{body}`) never verifies as an events
+  request's, nor one of these as a purge's. `signEvents` reuses the purge's
+  helper (`realtimeSignature`).
+- The body: `{"events":[{"id":…,"type":…,"detail":…},…]}`.
+
+Then, by Go's answer:
+
+- 204: Go took every event (again, without a second event, for an id it
+  took in the last seven days), and they leave the outbox.
+- 400 (`invalid_request`: Go took none of it) or 413 (over 100 events or
+  256 KiB): they move to the dead letters, with an error log, and are never
+  sent again.
+- Anything else (401, 503 while Go's realtime is not configured, another
+  5xx, a redirect, or no answer within 10 s): they stay, and the whole
+  outbox waits, a second after the first such answer in a row for its
+  oldest event, doubling each time, to five minutes. What is recorded
+  meanwhile waits with it, behind what is ahead.
+
+Without `ORYXA_API_ORIGIN` or `REALTIME_PURGE_SECRET` (once trimmed), the
+objects record nothing, so nothing is sent.
+
+**Purges.** A purge of a conversation, whole or of one member, takes every
+event waiting and every dead letter with it before it does anything else,
+and lets its drain go: nothing recorded before a purge is ever sent. A
+request already on its way was sent before the purge came, and the purge
+resolves only once Go has answered it: whatever Go took about what went, it
+took before the Worker answered the purge, so before Go's own
+`realtime.purge.completed.v1`. An event about a message that stayed through
+a member's purge, not yet sent, goes with the rest; what is said after the
+purge is recorded as ever.
+
+`src/realtime-events.test.ts` pins the contract's golden vectors (a DM's
+message and a side conversation's read, their bodies byte for byte and
+their signatures) and that neither is ever signed as a purge.
 
 ## UI
 

@@ -5,7 +5,8 @@
   // Durable Objects, in workerd;
   // `.dev.vars` (see `.dev.vars.example`) can point ORYXA_API_ORIGIN at
   // another Go API, and holds REALTIME_PURGE_SECRET, the secret Go signs a
-  // purge with (a Worker secret once deployed: `wrangler secret put`).
+  // purge with and the conversations sign their events for Go with (a
+  // Worker secret once deployed: `wrangler secret put`).
   //
   // There is deliberately no production environment yet: deploying web-next
   // is deferred until it replaces ../web. When it does, add an `env.production`
