@@ -1067,8 +1067,9 @@ for a week. If an earlier run already advanced the interaction, a later or
 repeated delivery is settled without running the agent again.
 
 Approved work is never left approved with nobody working on it. When the
-waker gives up on an `approved` delivery (its runs failed three times, or its
-agent no longer exists or has been disabled) it closes the request, failed,
+waker gives up on an `approved` delivery (its runs failed three times, not
+counting a run the waker's own stop cut short, or its agent no longer exists
+or has been disabled) it closes the request, failed,
 with why as the result's summary; and every poll closes, the same way, the
 approved requests whose expiry passed unanswered, since none can be answered
 any more, whatever became of their delivery

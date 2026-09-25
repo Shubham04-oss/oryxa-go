@@ -152,3 +152,25 @@ func TestAnApprovalThatExpiredUnansweredIsClosedOnThePoll(t *testing.T) {
 			requests.get("irq_2").Status, requests.get("irq_3").Status, len(runs.calls))
 	}
 }
+
+// TestADeliveryCutShortByAStopIsNotAFailedAttempt: a run the waker's stop
+// cancels, a deploy say, did not fail. On what would be its last attempt its
+// delivery is released to be tried again, uncounted, and its request is not
+// closed.
+func TestADeliveryCutShortByAStopIsNotAFailedAttempt(t *testing.T) {
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(interactions.StatusApproved)}}
+	store := &fakeDeliveries{
+		pending:  []Delivery{approvedDelivery(maxAttempts - 1)},
+		failures: map[string]int{"evt_approved": maxAttempts - 1}, released: map[string]bool{},
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	runs := &fakeAgentRuns{fail: true, onExecute: stop}
+	waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	_ = waker.WakeDue(ctx)
+	if failed, released := store.released["evt_approved"]; !released || failed || len(store.dropped) != 0 {
+		t.Fatalf("released=%v dropped=%v, want it released uncounted, not dropped", store.released, store.dropped)
+	}
+	if len(requests.closed) != 0 || requests.get("irq_1").Status != interactions.StatusApproved {
+		t.Fatalf("closed=%v, want the request left approved", requests.closed)
+	}
+}

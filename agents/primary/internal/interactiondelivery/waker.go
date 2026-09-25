@@ -336,6 +336,12 @@ func (waker *Waker) start(ctx context.Context, delivery Delivery, message string
 }
 
 func (waker *Waker) release(ctx context.Context, delivery Delivery, failed bool, reason string, logger *slog.Logger) {
+	// A delivery cut short because the waker is stopping, a deploy say, did
+	// not fail: it is tried again, and the attempt does not count toward
+	// giving it up.
+	if ctx.Err() != nil {
+		failed = false
+	}
 	dropped, err := waker.store.Release(context.WithoutCancel(ctx), delivery.EventID, failed, maxAttempts, retryAfter, reason)
 	if err != nil {
 		logger.ErrorContext(ctx, "release interaction delivery", "error", err)
