@@ -25,9 +25,22 @@ The last team admin cannot be demoted or leave. Organization admins who are not 
 
 A caller who is not in the organization gets `404`, as auth conceals which organizations exist.
 
+"Organization owner or admin" above means a person's own session, such as a
+chat they are watching. A token auth minted for an agent, which it answers
+with `agent: true`, gets a plain member's reach whatever its member's role,
+because the agent can be answering someone else entirely: a teammate's
+interaction request, a room it was mentioned in. It sees and lists only the
+teams its member is actually on, `can_manage` is true only where its member
+is that team's own admin, and it creates no top-level team and makes no
+admin-only write on a team its member merely oversees as an organization
+admin. It still manages a team its member is genuinely that team's admin of,
+the same as a plain member holding that role would. Files and rag ask teams
+for the same team over an agent's credentials and additionally re-check the
+answer themselves, in case a caller ever reaches them some other way.
+
 ## Tools
 
-The point of a team here is that an AI can call it. There are three tools. Organization admins can open every team; everyone else only the teams they belong to. A team the caller cannot see is `404`, same concealment as the rest of teams.
+The point of a team here is that an AI can call it. There are three tools. Organization admins can open every team; everyone else only the teams they belong to — and that "everyone else" includes an agent calling with a token minted for an organization-admin member, per [Control](#control) above. A team the caller cannot see is `404`, same concealment as the rest of teams.
 
 | Tool | Arguments | Result |
 | --- | --- | --- |
