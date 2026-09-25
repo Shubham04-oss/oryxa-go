@@ -177,7 +177,7 @@ func (s *Service) visibleTeams(ctx context.Context, credentials authclient.Crede
 		return nil, domain.OrgMembership{}, err
 	}
 	var teams []domain.Team
-	if org.Role.IsOrgAdmin() {
+	if org.ActsAsAdmin() {
 		teams, err = s.store.Teams(ctx, organizationID)
 	} else {
 		teams, err = s.store.TeamsForUser(ctx, organizationID, org.UserID)
