@@ -13,6 +13,7 @@ import {
   DM_TYPING_TTL_MS,
   conversationGoneCloseCode,
 } from "./lib/dms/protocol"
+import { realtimeEventTypes } from "./realtime-events"
 import { RealtimeRegistryAgent } from "./realtime-registry-agent"
 import {
   World,
@@ -23,6 +24,12 @@ import {
   say,
 } from "./test/durable-objects"
 import type { FakeSocket, Harness } from "./test/durable-objects"
+import {
+  FakeGoEvents,
+  eventsOrigin,
+  eventsSecret,
+  routeFetch,
+} from "./test/fake-go-events"
 
 vi.mock(
   "agents",
@@ -37,16 +44,19 @@ const dmName = directMessageName(org, bo, ada)
 type Dm = DirectMessageAgent & Harness
 type Inbox = InboxAgent & Harness
 
-function makeWorld() {
-  return new World({
-    DirectMessageAgent,
-    InboxAgent,
-    RealtimeRegistryAgent,
-  } as unknown as ConstructorParameters<typeof World>[0])
+function makeWorld(vars: Record<string, unknown> = {}) {
+  return new World(
+    {
+      DirectMessageAgent,
+      InboxAgent,
+      RealtimeRegistryAgent,
+    } as unknown as ConstructorParameters<typeof World>[0],
+    vars
+  )
 }
 
-async function setup() {
-  const world = makeWorld()
+async function setup(vars?: Record<string, unknown>) {
+  const world = makeWorld(vars)
   const dm = await world.object<Dm>("DirectMessageAgent", dmName)
   return { world, dm }
 }
@@ -859,5 +869,222 @@ describe("DirectMessageAgent: purging one person who left", () => {
     ]) {
       await expect(dm.purge(scope)).rejects.toThrow(TypeError)
     }
+  })
+})
+
+describe("DirectMessageAgent: events for Go", () => {
+  const eventsOn = {
+    ORYXA_API_ORIGIN: eventsOrigin,
+    REALTIME_PURGE_SECRET: eventsSecret,
+  }
+  const posted = realtimeEventTypes.messagePosted
+  const read = realtimeEventTypes.conversationRead
+  let go: FakeGoEvents
+
+  beforeEach(() => {
+    go = new FakeGoEvents()
+    vi.stubGlobal("fetch", routeFetch(go))
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function outbox(dm: Dm) {
+    return dm.sql<{
+      id: string
+      type: string
+      detail: string
+      reader_id: string | null
+    }>`SELECT id, type, detail, reader_id FROM event_outbox ORDER BY position`.map(
+      (row) => ({
+        ...row,
+        detail: JSON.parse(row.detail) as Record<string, unknown>,
+      })
+    )
+  }
+
+  it("records each message and each read that goes further, by who and where, never what was said", async () => {
+    const { dm } = await setup(eventsOn)
+    const adaTab = await join(dm, ada)
+    const boTab = await join(dm, bo)
+    await send(dm, adaTab, "Morning, Bo")
+    vi.setSystemTime(new Date("2026-09-24T09:00:05.250Z"))
+    await say(dm, boTab, { type: "dm-read", seq: 1 })
+    // Not further: nothing new.
+    await say(dm, boTab, { type: "dm-read", seq: 1 })
+
+    const [message] = dm.sql<{ id: string }>`SELECT id FROM dm_messages`
+    const where = {
+      organization_id: org,
+      conversation: { kind: "direct", id: dmName },
+    }
+    const eventId = expect.stringMatching(/^evt_[0-9a-f]{32}$/) as unknown
+    expect(outbox(dm)).toEqual([
+      {
+        id: eventId,
+        type: posted,
+        reader_id: null,
+        detail: {
+          ...where,
+          participant_user_ids: [ada, bo],
+          message: { id: message.id, seq: 1 },
+          author: { kind: "member", user_id: ada },
+          posted_at: "2026-09-24T09:00:00.000Z",
+        },
+      },
+      // Sending reads the conversation through the message, for its author.
+      {
+        id: eventId,
+        type: read,
+        reader_id: ada,
+        detail: {
+          ...where,
+          reader_user_id: ada,
+          read_through_seq: 1,
+          read_at: "2026-09-24T09:00:00.000Z",
+        },
+      },
+      {
+        id: eventId,
+        type: read,
+        reader_id: bo,
+        detail: {
+          ...where,
+          reader_user_id: bo,
+          read_through_seq: 1,
+          read_at: "2026-09-24T09:00:05.250Z",
+        },
+      },
+    ])
+    expect(JSON.stringify(outbox(dm))).not.toContain("Morning")
+
+    await runDueJobs(dm)
+    expect(go.taken.map((event) => event.type)).toEqual([posted, read, read])
+    expect(outbox(dm)).toEqual([])
+  })
+
+  it("stores a message and its event as one: when the event cannot be written, neither is kept", async () => {
+    const { dm } = await setup(eventsOn)
+    const adaTab = await join(dm, ada)
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    // The outbox refuses its rows, as a full disk would, once the message is
+    // written.
+    dm.sql`CREATE TRIGGER outbox_full BEFORE INSERT ON event_outbox
+      BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`
+
+    const clientId = await send(dm, adaTab, "Lost?")
+    expect(adaTab.last("dm-send-failed")).toMatchObject({
+      clientId,
+      code: "unavailable",
+    })
+    expect(messagesOf(adaTab)).toEqual([])
+    expect(dm.sql`SELECT * FROM dm_messages`).toEqual([])
+    expect(dm.sql`SELECT * FROM dm_reads`).toEqual([])
+    expect(dm.sql`SELECT * FROM dm_meta WHERE key = 'conversation'`).toEqual([])
+    expect(outbox(dm)).toEqual([])
+
+    // Once it can be written, the page's retry keeps both.
+    dm.sql`DROP TRIGGER outbox_full`
+    await send(dm, adaTab, "Lost?", clientId)
+    expect(dm.sql`SELECT seq FROM dm_messages`).toEqual([{ seq: 1 }])
+    expect(outbox(dm).map((row) => row.type)).toEqual([posted, read])
+  })
+
+  it("advances a read and records it as one: when the event cannot be written, the read stays where it was", async () => {
+    const { dm } = await setup(eventsOn)
+    const adaTab = await join(dm, ada)
+    const boTab = await join(dm, bo)
+    await send(dm, adaTab, "one")
+    dm.sql`CREATE TRIGGER outbox_full BEFORE INSERT ON event_outbox
+      BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`
+    await expect(say(dm, boTab, { type: "dm-read", seq: 1 })).rejects.toThrow(
+      "database or disk is full"
+    )
+    expect(dm.sql`SELECT user_id, seq FROM dm_reads ORDER BY user_id`).toEqual([
+      { user_id: ada, seq: 1 },
+    ])
+    expect(outbox(dm).filter((row) => row.reader_id === bo)).toEqual([])
+  })
+
+  it("keeps one read of each reader waiting: a newer one takes its place, under a new id", async () => {
+    const { dm } = await setup(eventsOn)
+    const adaTab = await join(dm, ada)
+    const boTab = await join(dm, bo)
+    for (const body of ["one", "two", "three"]) await send(dm, adaTab, body)
+    await say(dm, boTab, { type: "dm-read", seq: 1 })
+    const first = outbox(dm).find((row) => row.reader_id === bo)
+    await say(dm, boTab, { type: "dm-read", seq: 2 })
+    await say(dm, boTab, { type: "dm-read", seq: 3 })
+
+    const reads = outbox(dm).filter((row) => row.type === read)
+    expect(
+      reads.map((row) => [row.reader_id, row.detail.read_through_seq])
+    ).toEqual([
+      [ada, 3],
+      [bo, 3],
+    ])
+    expect(reads.find((row) => row.reader_id === bo)?.id).not.toBe(first?.id)
+
+    await runDueJobs(dm)
+    expect(
+      go.taken.map((event) =>
+        event.type === read
+          ? [event.detail.reader_user_id, event.detail.read_through_seq]
+          : (event.detail.message as { seq: number }).seq
+      )
+    ).toEqual([1, 2, 3, [ada, 3], [bo, 3]])
+  })
+
+  it("sends a newer read after the one on its way, whatever Go answers that one", async () => {
+    const { dm } = await setup(eventsOn)
+    const adaTab = await join(dm, ada)
+    await send(dm, adaTab, "one")
+    const release = go.hold()
+    const draining = runDueJobs(dm)
+    await vi.waitFor(() => expect(go.requests).toHaveLength(1))
+
+    await send(dm, adaTab, "two")
+    release()
+    await draining
+    expect(
+      outbox(dm).map((row) => [
+        row.type,
+        row.type === read
+          ? row.detail.read_through_seq
+          : (row.detail.message as { seq: number }).seq,
+      ])
+    ).toEqual([
+      [posted, 2],
+      [read, 2],
+    ])
+    vi.advanceTimersByTime(1_000)
+    await runDueJobs(dm)
+    expect(
+      go.taken
+        .filter((event) => event.type === read)
+        .map((event) => event.detail.read_through_seq)
+    ).toEqual([1, 2])
+  })
+
+  it("records nothing, and sends nothing, while Go's origin or the secret is unset", async () => {
+    for (const vars of [
+      {},
+      { ORYXA_API_ORIGIN: eventsOrigin },
+      { REALTIME_PURGE_SECRET: eventsSecret },
+      { ORYXA_API_ORIGIN: eventsOrigin, REALTIME_PURGE_SECRET: " \n" },
+    ]) {
+      const { dm } = await setup(vars)
+      const adaTab = await join(dm, ada)
+      const boTab = await join(dm, bo)
+      await send(dm, adaTab, "hello")
+      await say(dm, boTab, { type: "dm-read", seq: 1 })
+      expect(dm.sql`SELECT seq FROM dm_messages`).toEqual([{ seq: 1 }])
+      expect(outbox(dm)).toEqual([])
+      expect(dm.jobs.filter((job) => job.callback === "drainEvents")).toEqual(
+        []
+      )
+    }
+    expect(go.requests).toEqual([])
   })
 })
