@@ -180,7 +180,9 @@ not permission to copy every incidental value into a new component.
     line ("Nia may read your connected apps and team knowledge.") and adds
     Approve without tools between them; Approve allows what was asked for.
     A request that ends without a result also leaves a quiet centered line
-    in the log.
+    in the log, which says why when Oryxa closed it or withheld its answer
+    ("Withheld by Oryxa." on the card), and never repeats an agent's
+    decision, whose words are fixed ("Pricing declined the request.").
   - An answer the answer guard holds for its owner's review shows them, on
     the card, why in plain words ("Nia's answer includes an email address
     and a phone number. Review it before it's shared.", or "couldn't be
