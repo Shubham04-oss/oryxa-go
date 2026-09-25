@@ -19,7 +19,7 @@ import type { PurgeRequest } from "./realtime-purge"
 import { RealtimeRegistryAgent, purgeMemoryMs } from "./realtime-registry-agent"
 import { SideConversationAgent } from "./side-conversation-agent"
 import { encodeRoster } from "./lib/side/protocol"
-import { World, drain, openSocket, say } from "./test/durable-objects"
+import { World, drain, openSocket, say, settle } from "./test/durable-objects"
 import type { Harness } from "./test/durable-objects"
 import type { ConversationEnv } from "./conversation-env"
 
@@ -191,6 +191,31 @@ const organizationDeleted: PurgeRequest = {
 /** Moves the clock on by `ms`. */
 function later(ms: number) {
   vi.setSystemTime(Date.now() + ms)
+}
+
+/**
+ * The next purge of `userId`'s inbox never answers: the registry's work is
+ * cut off there (a deploy, an eviction, or the runtime ending it once Go
+ * gave up), and nothing is raised. Later purges of it run.
+ */
+function cutOffInboxPurge(userId: string) {
+  const purgeInbox = InboxAgent.prototype.purge
+  let cut = false
+  vi.spyOn(InboxAgent.prototype, "purge").mockImplementation(function (
+    this: InboxAgent,
+    ...args: Parameters<InboxAgent["purge"]>
+  ) {
+    if (cut || this.name !== inboxName(org, userId)) {
+      return purgeInbox.apply(this, args)
+    }
+    cut = true
+    return new Promise<never>(() => {})
+  })
+}
+
+/** How many objects of `binding` were ever made. */
+function made(world: World, binding: string) {
+  return (world.env[binding] as { objects: Map<string, unknown> }).objects.size
 }
 
 beforeEach(() => {
@@ -714,6 +739,152 @@ describe("purging", () => {
     expect(bodiesIn(world, owner, admin)).toEqual([])
     expect(await listed(world, admin)).toEqual([])
     expect(await listed(world, owner)).toEqual([])
+  })
+
+  it("keeps a member registered until their inbox is purged, whether the purge fails part-way or is cut off, and the same event again purges them", async () => {
+    const world = makeWorld()
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    // The member's inbox was being reset as the admin wrote: only the
+    // admin's inbox, and the registry through it, knows the DM.
+    world.failing.add(inboxName(org, member))
+    await talk(world, admin, member, "known through the admin only")
+    world.failing.clear()
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([admin])
+    const adminsInbox = await world.object<Inbox>(
+      "InboxAgent",
+      inboxName(org, admin)
+    )
+    const adminList = await openSocket(adminsInbox, {
+      organizationId: org,
+      userId: admin,
+    })
+
+    // The DM cannot be purged: the admin's purge fails part-way.
+    world.failing.add(directMessageName(org, admin, member))
+    expect(
+      await codeOf(await purge(world, await purgeRequest(organizationDeleted)))
+    ).toEqual([503, "unavailable"])
+    expect(await registry.members()).toEqual([admin])
+    world.failing.clear()
+
+    // Sent again, it is cut off at the admin's inbox: no error, no answer.
+    cutOffInboxPurge(admin)
+    void purge(world, await purgeRequest(organizationDeleted))
+    await settle()
+    expect(await registry.members()).toEqual([admin])
+    expect(bodiesIn(world, admin, member)).toEqual([
+      "known through the admin only",
+    ])
+
+    // Go heard nothing back and sends it again, to the registry restarted.
+    const restarted = await world.restart<Registry>(
+      "RealtimeRegistryAgent",
+      org
+    )
+    expect(
+      (await purge(world, await purgeRequest(organizationDeleted))).status
+    ).toBe(204)
+    expect(bodiesIn(world, admin, member)).toEqual([])
+    expect(await listed(world, admin)).toEqual([])
+    expect(adminList.closed?.code).toBe(4404)
+    expect(await restarted.members()).toEqual([])
+  })
+
+  it("remembers an event only once every member is purged, and the same event again carries on with the members not yet done", async () => {
+    const world = makeWorld()
+    await talk(world, admin, member)
+    await talk(world, member, owner)
+    await talk(world, owner, admin)
+    cutOffInboxPurge(owner)
+
+    void purge(world, await purgeRequest(organizationDeleted))
+    await settle()
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(registry.sql`SELECT event_id FROM registry_purges`).toEqual([])
+    // The admin and the member are done and let go; the owner is not.
+    expect(await registry.members()).toEqual([owner])
+
+    const restarted = await world.restart<Registry>(
+      "RealtimeRegistryAgent",
+      org
+    )
+    const before = world.callsTo("InboxAgent", "purge").length
+    expect(
+      (await purge(world, await purgeRequest(organizationDeleted))).status
+    ).toBe(204)
+    expect(
+      world
+        .callsTo("InboxAgent", "purge")
+        .slice(before)
+        .map((call) => call.name)
+    ).toEqual([inboxName(org, owner)])
+    expect(restarted.sql`SELECT event_id FROM registry_purges`).toEqual([
+      { event_id: organizationDeleted.event_id },
+    ])
+    expect(await restarted.members()).toEqual([])
+
+    // Done: the same event again does nothing.
+    const done = world.callsTo("InboxAgent", "purge").length
+    expect(
+      (await purge(world, await purgeRequest(organizationDeleted))).status
+    ).toBe(204)
+    expect(world.callsTo("InboxAgent", "purge")).toHaveLength(done)
+  })
+
+  it("answers 204 to a member's purge after their organization's, registering nobody and making no conversation", async () => {
+    const world = makeWorld()
+    await talk(world, admin, member)
+    expect(
+      (await purge(world, await purgeRequest(organizationDeleted))).status
+    ).toBe(204)
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([])
+    const registrations = world.callsTo("RealtimeRegistryAgent", "register")
+    const conversations = [
+      made(world, "DirectMessageAgent"),
+      made(world, "SideConversationAgent"),
+    ]
+    const conversationCalls = [
+      ...world.callsTo("DirectMessageAgent"),
+      ...world.callsTo("SideConversationAgent"),
+    ]
+
+    // Go purges each member too: two whose inboxes the organization's purge
+    // emptied, and one who never had an inbox.
+    const never = "user-never"
+    for (const userId of [admin, member, never]) {
+      const response = await purge(
+        world,
+        await purgeRequest({
+          ...memberLeft,
+          event_id: `evt_member_removed_${userId}`,
+          user_id: userId,
+        })
+      )
+      expect(response.status).toBe(204)
+    }
+
+    expect(await registry.members()).toEqual([])
+    expect(world.callsTo("RealtimeRegistryAgent", "register")).toEqual(
+      registrations
+    )
+    expect([
+      made(world, "DirectMessageAgent"),
+      made(world, "SideConversationAgent"),
+    ]).toEqual(conversations)
+    expect([
+      ...world.callsTo("DirectMessageAgent"),
+      ...world.callsTo("SideConversationAgent"),
+    ]).toEqual(conversationCalls)
+    for (const userId of [admin, member, never]) {
+      const inbox = await world.object<Inbox>(
+        "InboxAgent",
+        inboxName(org, userId)
+      )
+      expect(inbox.sql`SELECT * FROM inbox_meta`).toEqual([])
+      expect(inbox.jobs).toEqual([])
+    }
   })
 
   it("answers 503 when the organization's registry cannot be reached", async () => {

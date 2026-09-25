@@ -51,6 +51,13 @@ export function isPurgeInstant(value: unknown): value is string {
  */
 export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
   private schemaReady = false
+  /**
+   * How many times each member's inbox has registered with this instance: a
+   * purge that emptied an inbox compares it with what it was before, to tell
+   * an inbox that registered again meanwhile. Memory is enough, as an
+   * instance that is gone runs no more of its purges.
+   */
+  private readonly registrations = new Map<string, number>()
 
   override shouldSendProtocolMessages(): boolean {
     return false
@@ -71,6 +78,7 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
     this.sql`INSERT INTO registry_members (user_id, registered_at)
       VALUES (${userId}, ${new Date().toISOString()})
       ON CONFLICT (user_id) DO NOTHING`
+    this.registrations.set(userId, (this.registrations.get(userId) ?? 0) + 1)
   }
 
   /** The members with an inbox, in id order. */
@@ -83,11 +91,11 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
    * Carries out a purge for Go (src/realtime-purge.ts): every registered
    * member's conversations and inbox, entirely, for an organization; for a
    * member who left, what in theirs is not newer than when they left
-   * (`InboxAgent.purge`). Each member leaves the registry while it is done,
-   * and is put back when something newer of theirs stays, or the purge
-   * failed. The event is remembered only once all of it is done: a purge
-   * that failed part-way throws, and the same event again carries on from
-   * where it stopped.
+   * (`InboxAgent.purge`). A member leaves the registry only once their inbox
+   * is emptied, and the event is remembered only once every member is done.
+   * A purge that failed part-way throws, and one cut off part-way (a deploy,
+   * an eviction) says nothing; either way, the same event again carries on
+   * with the members not yet done.
    */
   async purge(eventId: string, target: PurgeTarget): Promise<PurgeOutcome> {
     this.schema()
@@ -142,35 +150,28 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
 
   /**
    * Purges a member's inbox and conversations: entirely, or, with
-   * `removedAt`, what is not newer than it. The member leaves the registry
-   * first, so an inbox that registers again while it is purged (a
-   * conversation noted meanwhile) stays found; the member is put back when
-   * something newer of theirs stays, and when the purge fails, for the next.
+   * `removedAt`, what is not newer than it. The member stays registered
+   * until their inbox says it is empty, so a purge that fails or is cut off
+   * before then leaves them for the next, and stays registered after it if
+   * their inbox registered again meanwhile (a conversation noted once it was
+   * emptied). When something of theirs stays, they are kept registered, or
+   * registered if they were not.
    */
   private async purgeMember(userId: string, removedAt?: string): Promise<void> {
-    const registered = this.sql<{
-      registered_at: string
-    }>`SELECT registered_at FROM registry_members WHERE user_id = ${userId}`.at(
-      0
+    const registrations = this.registrations.get(userId) ?? 0
+    const inbox = await getAgentByName(
+      this.env.InboxAgent,
+      inboxName(this.name, userId)
     )
-    const putBack = () => {
+    const { emptied } = await inbox.purge(
+      removedAt === undefined ? undefined : { removedAt }
+    )
+    if (!emptied) {
       this.sql`INSERT INTO registry_members (user_id, registered_at)
-        VALUES (${userId}, ${registered?.registered_at ?? new Date().toISOString()})
+        VALUES (${userId}, ${new Date().toISOString()})
         ON CONFLICT (user_id) DO NOTHING`
-    }
-    this.sql`DELETE FROM registry_members WHERE user_id = ${userId}`
-    try {
-      const inbox = await getAgentByName(
-        this.env.InboxAgent,
-        inboxName(this.name, userId)
-      )
-      const { emptied } = await inbox.purge(
-        removedAt === undefined ? undefined : { removedAt }
-      )
-      if (!emptied) putBack()
-    } catch (error) {
-      if (registered) putBack()
-      throw error
+    } else if ((this.registrations.get(userId) ?? 0) === registrations) {
+      this.sql`DELETE FROM registry_members WHERE user_id = ${userId}`
     }
   }
 

@@ -77,7 +77,8 @@ let scheduleIds = 0
 class Agent {
   readonly ctx: { id: { name: string } }
   readonly env: unknown
-  readonly db: Database
+  /** Its storage: a restart (`World.restart`) hands it to the new instance. */
+  db: Database
   sockets: Array<FakeSocket> = []
   jobs: Array<Job> = []
 
@@ -155,10 +156,33 @@ export class FakeNamespace {
     if (!started) {
       const object = new this.make({ id: { name } }, this.world.env)
       this.objects.set(name, object)
-      const onStart = (object as { onStart?: () => Promise<void> }).onStart
-      started = Promise.resolve(onStart?.call(object)).then(() => object)
-      this.starting.set(name, started)
+      started = this.start(name, object)
     }
+    return started
+  }
+
+  /**
+   * The object named `name` as a restart leaves it (a deploy, an eviction):
+   * a new instance on the same storage (its database, its schedules and its
+   * hibernated sockets), started again, which every later call reaches. What
+   * the old instance kept in memory is gone, and the test sees to it that
+   * what it had not finished never resumes.
+   */
+  restart(name: string): Promise<unknown> {
+    const old = this.objects.get(name) as Agent | undefined
+    if (!old) throw new Error(`no ${this.binding} named ${name} to restart`)
+    const object = new this.make({ id: { name } }, this.world.env) as Agent
+    object.db = old.db
+    object.jobs = [...old.jobs]
+    object.sockets = old.sockets
+    this.objects.set(name, object)
+    return this.start(name, object)
+  }
+
+  private start(name: string, object: unknown): Promise<unknown> {
+    const onStart = (object as { onStart?: () => Promise<void> }).onStart
+    const started = Promise.resolve(onStart?.call(object)).then(() => object)
+    this.starting.set(name, started)
     return started
   }
 
@@ -221,6 +245,13 @@ export class World {
     const namespace = this.namespaces.get(binding)
     if (!namespace) throw new Error(`no binding ${binding}`)
     return (await namespace.get(name)) as T
+  }
+
+  /** The object `name` of `binding` restarted on its storage (`FakeNamespace.restart`). */
+  async restart<T>(binding: string, name: string): Promise<T> {
+    const namespace = this.namespaces.get(binding)
+    if (!namespace) throw new Error(`no binding ${binding}`)
+    return (await namespace.restart(name)) as T
   }
 
   /** Makes calls to the object `name` wait until the returned release is called. */
@@ -334,6 +365,15 @@ export async function closeSocket(
 /** Lets every promise chain that can move, move: a call held by `World.hold` is then waiting. */
 export async function drain(): Promise<void> {
   for (let turn = 0; turn < 50; turn += 1) await Promise.resolve()
+}
+
+/**
+ * Lets all the work under way run as far as it goes, to its end or to a call
+ * that never answers: the objects' work is promises only, and every one of
+ * them runs before the next timer does.
+ */
+export function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
 /** Runs every schedule due by now, as the SDK's alarm does, oldest first. */

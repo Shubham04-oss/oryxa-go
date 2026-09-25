@@ -501,9 +501,13 @@ organization's registry carries the purge out, and the Worker answers 204
 with no body once it is done, or was done already for this `event_id`: the
 registry remembers an event for 24 hours, so a replay, or Go sending an
 event again after missing the answer, does nothing. A purge that failed
-part-way answers 503, and sent again it carries on from where it stopped.
-Only 204 is done: Go retries 401, 408, 429, 5xx and any other 2xx, and
-follows no redirect.
+part-way answers 503, and sent again it carries on from where it stopped;
+so does one cut off part-way with no answer at all (a deploy, an eviction,
+the runtime ending it once Go gave up). Each step is forgotten only once it
+is done: a conversation leaves an inbox once its object is purged, a member
+leaves the registry once their inbox is emptied, and the event is
+remembered once every member is. Only 204 is done: Go retries 401, 408,
+429, 5xx and any other 2xx, and follows no redirect.
 
 **`removed_at`, to the millisecond.** Messages record when they were
 written to the millisecond, so `removed_at` is compared at that precision:
@@ -517,10 +521,9 @@ in its registry, 8 members at a time, newer messages too, and every socket
 is told `…-gone` and closed.
 
 **A member's purge** keeps what is newer than `removed_at` (a member let
-back in who talked since). The member leaves the registry while it runs.
-Their inbox goes through every conversation it lists or knows (a DM opened
-without a message too), again while any arrive meanwhile (at most five
-passes). In each DM (`DirectMessageAgent.purge`):
+back in who talked since). Their inbox goes through every conversation it
+lists or knows (a DM opened without a message too), again while any arrive
+meanwhile (at most five passes). In each DM (`DirectMessageAgent.purge`):
 
 - The messages written at or before `removed_at` go, and so do any the
   member wrote after it on a socket opened before it: a page left open from
@@ -547,11 +550,12 @@ not deleted (it is theirs in Go), and a later read of Go's requests does not
 bring back one made at or before `removed_at`. An organization's purge
 empties it, stops its runs and lets its schedules go.
 
-Then the inbox empties itself only if nothing of the member's stays, and the
-member is put back in the registry if something does (or if the purge
-failed, for the next one). Its sockets opened before `removed_at` are told
-`inbox-gone` and closed; those opened since are sent the inbox as it now
-stands. The objects are left empty, not deleted. A message sent in the
+Then the inbox empties itself only if nothing of the member's stays, and
+only then does the member leave the registry, unless their inbox registered
+again meanwhile (a conversation noted once it was emptied); when something
+stays, they stay registered. Its sockets opened before `removed_at` are
+told `inbox-gone` and closed; those opened since are sent the inbox as it
+now stands. The objects are left empty, not deleted. A message sent in the
 moment a DM is purged can leave its preview in the other person's inbox;
 opening it then answers 404, as the member is gone.
 
