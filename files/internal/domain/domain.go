@@ -68,9 +68,16 @@ func (membership OrgMembership) ActsAsAdmin() bool {
 }
 
 type TeamAccess struct {
-	TeamID    string
+	TeamID string
+	// CanManage is teams' own answer, which is true for every org admin as
+	// well as for the team's own admins.
 	CanManage bool
-	Member    bool
+	// Member says the caller is on the team. Teams also shows every team to
+	// an org admin who is not.
+	Member bool
+	// TeamAdmin says the caller holds the team's admin role themselves,
+	// rather than managing it as an org admin.
+	TeamAdmin bool
 }
 
 func (access TeamAccess) CanSee() bool {
