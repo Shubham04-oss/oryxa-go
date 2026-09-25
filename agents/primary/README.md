@@ -400,7 +400,16 @@ Every decision records who made it, as `decision.decided_by`:
 `{"kind": "member", "user_id": ...}` for the member in their own session,
 `{"kind": "agent", "user_id": ..., "agent_id": ...}` for an agent in a run,
 and `{"kind": "system"}` when Oryxa closes a request (below). A decision an
-older build recorded has no `decided_by`. The waker tells an agent its owner
+older build recorded has no `decided_by`.
+
+An agent's decision reaches the member who asked in fixed words,
+`Approved by their agent.` or `Declined by their agent.`, never the message
+the agent wrote (`interactions.AgentApproved`, `AgentDeclined`). A run
+deciding holds whatever it may reach, and no guard reads a decision (only an
+answer is held for review), so what an agent writes there could otherwise
+carry what it read of its member's. Its message stays in its own thread,
+with the call that carried it. A member deciding in their own session writes
+to the member who asked in their own words. The waker tells an agent its owner
 approved in person only when `decided_by` names that member, never inferred
 from `approval`.
 
@@ -480,7 +489,11 @@ what it may reach follows what their own agent has already allowed:
   `DeliveryReport`, the reach above) with `interactions_get`,
   `interactions_decide` and `interactions_respond` only: `interactions_inbox`
   and `interactions_sent` are not there, so the model cannot browse the
-  member's other requests whatever it makes of the request. Nothing a
+  member's other requests whatever it makes of the request. The three it has
+  act on the delivered request alone: the waker starts the run naming it
+  (`threads.RunInput.Delivery`, kept in the thread's state, which the model
+  never writes), and any other `request_id` is refused, so a run holding the
+  member's apps cannot read, decide or answer another of their requests. Nothing a
   delivery does needs them, since its message names the request. App
   wake-ups and a room's stand-in keep the toolbox they had.
 

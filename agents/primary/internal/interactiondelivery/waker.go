@@ -371,6 +371,8 @@ func (waker *Waker) start(ctx context.Context, delivery Delivery, message string
 	input := threads.RunInput{
 		Message: message, StartedBy: agentsv1.StartedByTrigger, Wakeup: delivery.EventID,
 		Toolboxes: []string{agents.InteractionsToolboxName},
+		// Its interactions tools act on this request alone.
+		Delivery: agents.Delivery{RequestID: delivery.RequestID},
 	}
 	member := threads.Member{UserID: delivery.RecipientUserID, OrganizationID: delivery.OrganizationID}
 	started, err := waker.agents.StartUnattendedRun(ctx, member, delivery.RecipientAgentID, threadID, input, profile)

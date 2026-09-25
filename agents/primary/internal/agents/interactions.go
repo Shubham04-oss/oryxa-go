@@ -35,6 +35,25 @@ const (
 	KnowledgeToolboxName = "knowledge"
 )
 
+// deliveredRequestKey is the state a run delivering one interaction starts
+// with, which the waker sets as it starts it (threads.RunInput.Delivery) and
+// the model never writes: the one request the run's interactions tools act
+// on.
+const deliveredRequestKey = "delivered_interaction"
+
+// Delivery is the one interaction a run delivers.
+type Delivery struct {
+	// RequestID is the request the run's interactions tools read, decide and
+	// answer, and no other.
+	RequestID string
+}
+
+// DeliveryState is what a run delivering one interaction adds to its
+// thread's state as it starts.
+func DeliveryState(delivery Delivery) map[string]any {
+	return map[string]any{deliveredRequestKey: delivery.RequestID}
+}
+
 // RequestTool is value as the tool vocabulary spells it: AppsToolboxName or
 // KnowledgeToolboxName for either, in any case, and anything else as it is.
 func RequestTool(value string) string {
@@ -219,7 +238,7 @@ type InteractionCreateInput struct {
 
 type InteractionDecisionInput struct {
 	Decision           string   `json:"decision" jsonschema:"approved or rejected"`
-	Message            string   `json:"message" jsonschema:"Reason or boundary communicated to the requester."`
+	Message            string   `json:"message" jsonschema:"Why, for your member's record: the member who asked reads an agent's decision in fixed words, approved or declined, never this message."`
 	AllowedTools       []string `json:"allowed_tools,omitempty" jsonschema:"Approved subset of requested_tools: the toolboxes, apps and knowledge, the approved work runs with. Left out, it allows none."`
 	GrantedPermissions []string `json:"granted_permissions,omitempty" jsonschema:"Approved subset of requested_permissions."`
 }
@@ -291,7 +310,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		return Toolbox{}, err
 	}
 	decide, err := functiontool.New(functiontool.Config{
-		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. A request whose approval is \"owner\" is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there.",
+		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. The member who asked reads an agent's decision in fixed words, approved or declined, never its message. A request whose approval is \"owner\" is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there.",
 	}, tools.decide)
 	if err != nil {
 		return Toolbox{}, err
@@ -428,7 +447,30 @@ func (tools interactionTools) sent(ctx agent.Context, args interactionListArgs) 
 	return interactionListResult{Requests: requests}, nil
 }
 
+// delivered refuses, in a run delivering one interaction, every request but
+// that one: the run was woken for it, and what another member's words steer
+// must not read, decide or answer any other request of this member's, where
+// what the run has loaded (their apps, say) could be written into a decision
+// or an answer the request never allowed. A run with no delivered request on
+// record acts on none.
+func (tools interactionTools) delivered(ctx agent.Context, requestID string) error {
+	if !tools.delivering {
+		return nil
+	}
+	delivered := stateText(ctx.ReadonlyState(), deliveredRequestKey, "")
+	if delivered == "" {
+		return errors.New("this run delivers no agent request, so it acts on none")
+	}
+	if strings.TrimSpace(requestID) != delivered {
+		return fmt.Errorf("this run delivers request_id %q and acts on no other request", delivered)
+	}
+	return nil
+}
+
 func (tools interactionTools) get(ctx agent.Context, args interactionIDArgs) (Interaction, error) {
+	if err := tools.delivered(ctx, args.RequestID); err != nil {
+		return Interaction{}, err
+	}
 	actor, _, err := tools.actor(ctx, false)
 	if err != nil {
 		return Interaction{}, err
@@ -441,6 +483,9 @@ func (tools interactionTools) get(ctx agent.Context, args interactionIDArgs) (In
 }
 
 func (tools interactionTools) decide(ctx agent.Context, args interactionDecisionArgs) (Interaction, error) {
+	if err := tools.delivered(ctx, args.RequestID); err != nil {
+		return Interaction{}, err
+	}
 	actor, _, err := tools.actor(ctx, false)
 	if err != nil {
 		return Interaction{}, err
@@ -457,6 +502,9 @@ func (tools interactionTools) decide(ctx agent.Context, args interactionDecision
 }
 
 func (tools interactionTools) respond(ctx agent.Context, args interactionResponseArgs) (Interaction, error) {
+	if err := tools.delivered(ctx, args.RequestID); err != nil {
+		return Interaction{}, err
+	}
 	actor, _, err := tools.actor(ctx, false)
 	if err != nil {
 		return Interaction{}, err

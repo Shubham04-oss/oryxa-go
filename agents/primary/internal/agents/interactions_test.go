@@ -165,11 +165,82 @@ func unattendedHarness(t *testing.T, llm model.LLM, toolboxes ...Toolbox) *harne
 }
 
 // deliveryState is a delivery run's session: its agent's identity, with its
-// interactions toolbox loaded before the run, as the waker starts it.
+// interactions toolbox loaded before the run and irq_1 the request it
+// delivers, as the waker starts it.
 func deliveryState() map[string]any {
 	state := map[string]any{OrganizationIDKey: "org_1", AgentIDKey: "agt_b", AgentNameKey: "Carl", AgentKindKey: "primary"}
 	maps.Copy(state, LoadToolboxes(mapState{}, InteractionsToolboxName))
+	maps.Copy(state, DeliveryState(Delivery{RequestID: "irq_1"}))
 	return state
+}
+
+// pinnedInteractions records every request id each of its methods is asked
+// about.
+type pinnedInteractions struct {
+	fakeInteractions
+	asked []string
+}
+
+func (service *pinnedInteractions) Get(_ context.Context, _ InteractionActor, id string) (Interaction, error) {
+	service.asked = append(service.asked, "get "+id)
+	return Interaction{ID: id, Status: "pending"}, nil
+}
+
+func (service *pinnedInteractions) Decide(_ context.Context, _ InteractionActor, id string, input InteractionDecisionInput) (Interaction, error) {
+	service.asked = append(service.asked, "decide "+id)
+	return Interaction{ID: id, Status: input.Decision}, nil
+}
+
+func (service *pinnedInteractions) Respond(_ context.Context, _ InteractionActor, id string, input InteractionResponseInput) (Interaction, error) {
+	service.asked = append(service.asked, "respond "+id)
+	return Interaction{ID: id, Status: input.Status}, nil
+}
+
+// TestADeliveryRunActsOnItsOwnRequestAlone: a run woken to deliver irq_1
+// can neither read, decide nor answer any other request of its member's,
+// whatever the model is steered to try, and a run with no delivered request
+// on record acts on none; its own request it reads as before. A member's own
+// run is not limited this way.
+func TestADeliveryRunActsOnItsOwnRequestAlone(t *testing.T) {
+	calls := []*genai.FunctionCall{
+		{ID: "read", Name: "interactions_get", Args: map[string]any{"request_id": "irq_other"}},
+		{ID: "decide", Name: "interactions_decide", Args: map[string]any{"request_id": "irq_other", "decision": "rejected", "message": "Ann's phone is 555-0100."}},
+		{ID: "answer", Name: "interactions_respond", Args: map[string]any{"request_id": "irq_other", "status": "completed", "summary": "Ann is at ann@example.com.", "content": "Her number is 555-0100."}},
+		{ID: "own", Name: "interactions_get", Args: map[string]any{"request_id": "irq_1"}},
+	}
+	for name, testCase := range map[string]struct {
+		delivering bool
+		state      map[string]any
+		want       []string
+	}{
+		"a delivery of irq_1":          {true, deliveryState(), []string{"get irq_1"}},
+		"a delivery naming no request": {true, map[string]any{OrganizationIDKey: "org_1", AgentIDKey: "agt_b", AgentNameKey: "Carl", AgentKindKey: "primary"}, nil},
+		"the member's own run":         {false, deliveryState(), []string{"get irq_other", "decide irq_other", "respond irq_other", "get irq_1"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			service := &pinnedInteractions{}
+			toolbox, err := InteractionToolbox(InteractionConfig{Service: service, Answering: true, Delivering: testCase.delivering})
+			if err != nil {
+				t.Fatal(err)
+			}
+			llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+				if hasFunctionResponse(request) {
+					return genai.NewContentFromText("Done.", genai.RoleModel)
+				}
+				return functionCalls(calls...)
+			})
+			running := unattendedHarness
+			if testCase.delivering {
+				running = deliveringHarness
+			}
+			running(t, llm, toolbox).turn("user_b", testCase.state, "Deliver irq_1.")
+			slices.Sort(service.asked)
+			want := slices.Sorted(slices.Values(testCase.want))
+			if !slices.Equal(service.asked, want) {
+				t.Fatalf("the ledger was asked %v, want %v", service.asked, want)
+			}
+		})
+	}
 }
 
 // TestADeliveryRunCannotBrowseTheInbox: the model delivering one request is

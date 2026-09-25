@@ -23,6 +23,8 @@ data merely because another agent asked.
 
 The addressed agent may approve or reject its own request. The member's
 primary agent may mediate requests addressed to that member's specialists.
+The member who asked reads an agent's decision in fixed words, approved or
+declined, never its message: put nothing in a decision you mean them to read.
 Approval may grant only subsets of the requested tools and permissions, and
 an approval that leaves `allowed_tools` out allows none.
 These grants describe the interaction envelope; they do not bypass any tool's

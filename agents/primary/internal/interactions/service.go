@@ -43,6 +43,17 @@ const (
 	DecisionApproved = "approved"
 	DecisionRejected = "rejected"
 
+	// AgentApproved and AgentDeclined are a decision an agent made as the
+	// member who asked reads it: fixed words, never the agent's own message.
+	// What an agent writes could carry what it read of its member's (a run
+	// deciding holds whatever it may reach), and no guard reads a decision:
+	// only an answer is held for its member's review. The agent's message
+	// stays in its own thread, with the call that carried it. A member
+	// deciding in their own session writes to the member who asked in their
+	// own words.
+	AgentApproved = "Approved by their agent."
+	AgentDeclined = "Declined by their agent."
+
 	// Who recorded a decision (agents.InteractionDecider.Kind).
 	DecidedByMember = "member"
 	DecidedByAgent  = "agent"
@@ -487,9 +498,13 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 			}
 		}
 	}
-	decider := agents.InteractionDecider{Kind: DecidedByAgent, UserID: actor.UserID, AgentID: actor.AgentID}
-	if asOwner {
-		decider = agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}
+	decider := agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}
+	if !asOwner {
+		decider = agents.InteractionDecider{Kind: DecidedByAgent, UserID: actor.UserID, AgentID: actor.AgentID}
+		input.Message = AgentApproved
+		if input.Decision == DecisionRejected {
+			input.Message = AgentDeclined
+		}
 	}
 	return service.repository.Decide(ctx, request.ID, input, decider, service.now().UTC())
 }

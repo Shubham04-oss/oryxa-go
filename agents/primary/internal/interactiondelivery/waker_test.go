@@ -383,6 +383,27 @@ func TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded(t *testing.T) {
 	}
 }
 
+// TestEveryDeliveryRunIsPinnedToItsRequest: whatever the delivery, its run
+// is started naming the one request it delivers, which its interactions
+// tools act on alone.
+func TestEveryDeliveryRunIsPinnedToItsRequest(t *testing.T) {
+	for _, kind := range []string{KindTargetRequested, KindTargetApproved, KindRequesterRejected, KindRequesterCompleted} {
+		status := interactions.StatusPending
+		if kind == KindTargetApproved {
+			status = interactions.StatusApproved
+		}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(status)}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
+		waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", kind, 1)}}, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+		if err := waker.WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(runs.calls) != 1 || runs.calls[0].input.Delivery.RequestID != "irq_1" {
+			t.Fatalf("%s: calls=%+v, want one run pinned to irq_1", kind, runs.calls)
+		}
+	}
+}
+
 // TestOnlyApprovedWorkReadsTheMembersApps: the member is not here, so what
 // their agent may reach is what it has already approved. Deciding on a new
 // request runs without the apps toolbox at all, and reporting an outcome to
