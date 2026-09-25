@@ -174,6 +174,12 @@ async function eachLimited<T>(
  */
 export class InboxAgent extends Agent<ConversationEnv> {
   private schemaReady = false
+  /**
+   * Counts the purges that emptied the inbox in this instance: a
+   * registration under way as one did is not remembered, since the registry
+   * may have let the inbox go after it.
+   */
+  private epoch = 0
 
   // The socket carries this object's protocol only.
   override shouldSendProtocolMessages(): boolean {
@@ -457,6 +463,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
     const emptied = staying.length === 0
     if (emptied) {
       const retry = this.meta("registration_retry")
+      this.epoch += 1
       this.sql`DELETE FROM inbox_conversations`
       this.sql`DELETE FROM inbox_known`
       this.sql`DELETE FROM inbox_unread`
@@ -678,18 +685,21 @@ export class InboxAgent extends Agent<ConversationEnv> {
 
   /**
    * Registers the inbox with its organization's registry, once: every write
-   * tries until it has, and a failure is also tried again on a schedule.
+   * tries until it has, and a failure is also tried again on a schedule. It
+   * is remembered only once the registry has stored it, and not when a purge
+   * emptied the inbox meanwhile, so the next write registers again.
    */
   private async register(): Promise<void> {
     if (this.meta("registered") === "1") return
     const { organizationId, userId } = this.owner
+    const epoch = this.epoch
     try {
       const registry = await getAgentByName(
         this.env.RealtimeRegistryAgent,
         registryName(organizationId)
       )
       await registry.register(userId)
-      this.setMeta("registered", "1")
+      if (this.epoch === epoch) this.setMeta("registered", "1")
     } catch (error) {
       console.error("inbox: could not register with its organization", error)
       if (!this.meta("registration_retry")) {

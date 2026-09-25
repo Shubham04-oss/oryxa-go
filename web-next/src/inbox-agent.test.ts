@@ -390,6 +390,51 @@ describe("InboxAgent: the organization's registry", () => {
     expect(await registry.members()).toEqual([ada])
     expect(inbox.jobs).toEqual([])
   })
+
+  it("does not remember a registration a purge overtook, and registers again with its next conversation", async () => {
+    const { inbox, world } = await setup()
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    // The registry stores Ada's registration, but its answer is slow to
+    // come back.
+    let answer!: () => void
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve
+    })
+    const register = RealtimeRegistryAgent.prototype.register
+    vi.spyOn(
+      RealtimeRegistryAgent.prototype,
+      "register"
+    ).mockImplementationOnce(async function (
+      this: RealtimeRegistryAgent,
+      userId: string
+    ) {
+      await register.call(this, userId)
+      await answered
+    })
+    const noting = inbox.noteMessage(dmWith(bo), message(1, bo))
+    await drain()
+    expect(await registry.members()).toEqual([ada])
+
+    // Meanwhile Ada leaves: her purge empties the inbox, and the registry
+    // lets her go.
+    expect(
+      await registry.purge("evt_ada_left", {
+        scope: "member",
+        userId: ada,
+        removedAt: "2026-09-24T10:00:00.000Z",
+      })
+    ).toBe("purged")
+    expect(await registry.members()).toEqual([])
+    answer()
+    await noting
+    expect(
+      inbox.sql`SELECT value FROM inbox_meta WHERE key = 'registered'`
+    ).toEqual([])
+
+    // She is let back in and talks again: an organization's purge finds her.
+    await inbox.noteMessage(dmWith(cy), message(1, cy))
+    expect(await registry.members()).toEqual([ada])
+  })
 })
 
 describe("InboxAgent: a conversation restated after a purge", () => {
