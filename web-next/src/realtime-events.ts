@@ -41,7 +41,7 @@ export const eventsTiming = {
    * it ran in, run again at once, and spin.
    */
   minGapMs: 1_000,
-  /** After a request Go did not answer 204, 400 or 413, the wait before the next: doubling with each such answer in a row, from this… */
+  /** After a request Go neither took (204) nor refused (`refusedByGo`), the wait before the next: doubling with each such answer in a row, from this… */
   firstRetryMs: 1_000,
   /** …to this. */
   maxRetryMs: 5 * 60_000,

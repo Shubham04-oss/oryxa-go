@@ -635,7 +635,9 @@ title. The shapes, the signing and the outbox both objects keep are in
   seq.
   `{ organization_id, conversation, reader_user_id, read_through_seq, read_at }`.
 
-Times are `toISOString`'s, UTC to the millisecond.
+Times are `toISOString`'s, UTC to the millisecond. In a conversation, a
+`seq` is never used twice, not even after a purge took the newest messages
+away, and a reader's `read_through_seq` only ever goes up.
 
 **The outbox**, in each object's SQLite. An event is written in the same
 transaction (`ctx.storage.transactionSync`) as what it is about: a message
@@ -667,14 +669,14 @@ held, the first time the object starts.
 set for when the oldest event may go, never under a second after the last
 drain, and always in a whole second: the SDK rounds a schedule's time down
 to the second, so a drain set sooner could run again in the second it ran
-in, and spin. The drains set are the SDK's own schedules, as it lists
-them, and when the last one ran is kept in memory, so a drain writes
-nothing of its own. A drain that is set is never moved, and none is set
-while one as early is: an event recorded meanwhile goes with it. One set
-for later, to let a dead letter go, stays as it is beside a sooner one. Each
-drain drops what Go has not taken in seven days (with an error log) and the
-dead letters as old, then sends the oldest events that may go, at most 100
-and 256 KiB a request, to `POST {ORYXA_API_ORIGIN}/v1/realtime/events`:
+in, and spin. The drains set are the SDK's own schedules, as it lists them
+(`listSchedules`), and when the last one ran is kept in memory, so a drain
+writes nothing of its own. A drain that is set is never moved, and none is
+set while one as early is: an event recorded meanwhile goes with it. One
+set for later, to let a dead letter go, stays as it is beside a sooner one.
+Each drain drops what Go has not taken in seven days (with an error log)
+and the dead letters as old, then sends the oldest events, at most 100 and
+256 KiB a request, to `POST {ORYXA_API_ORIGIN}/v1/realtime/events`:
 
 - `Content-Type: application/json`; `X-Oryxa-Timestamp`, Unix seconds; and
   `X-Oryxa-Signature`, `v1=` and the lowercase hex HMAC-SHA256, keyed with
@@ -709,16 +711,16 @@ objects record nothing, so nothing is sent.
 
 **Purges.** A purge of a conversation, whole or of one member, takes every
 event waiting and every dead letter with it before it does anything else,
-and lets its drain go: nothing recorded before a purge is ever sent. A
+and lets its drains go: nothing recorded before a purge is ever sent. A
 request already on its way was sent before the purge came: the purge waits
 for Go's answer to it two seconds at most, then gives it up, so a member in
 many conversations stays well within the 30 s Go gives their purge (an
 inbox purges four conversations at a time). Go may still take a request
 given up on, after the Worker answered the purge: an event about what a
 purge took can reach the bus after Go's own `realtime.purge.completed.v1`,
-so a consumer orders by neither. An event about a message that stayed
-through a member's purge, not yet sent, goes with the rest; what is said
-after the purge is recorded as ever.
+which a consumer must not take for the last word on it. An event about a
+message that stayed through a member's purge, not yet sent, goes with the
+rest; what is said after the purge is recorded as ever.
 
 `src/realtime-events.test.ts` pins the contract's golden vectors (a DM's
 message and a side conversation's read, their bodies byte for byte and
