@@ -52,8 +52,13 @@ type organizationResponse struct {
 		DisplayName    string `json:"display_name"`
 		Role           string `json:"role"`
 	} `json:"membership"`
+	// Agent is set on a token auth minted for an agent, and absent on a
+	// member's own session.
+	Agent bool `json:"agent"`
 }
 
+// Membership answers what the caller is in an organization, and whether they
+// are an agent acting for a member rather than the member themselves.
 func (client *Client) Membership(ctx context.Context, organizationID string, credentials Credentials) (domain.OrgMembership, error) {
 	var decoded organizationResponse
 	if err := client.get(ctx, "/v1/organizations/"+url.PathEscape(organizationID), credentials, &decoded); err != nil {
@@ -69,6 +74,7 @@ func (client *Client) Membership(ctx context.Context, organizationID string, cre
 		Email:            decoded.Membership.Email,
 		DisplayName:      decoded.Membership.DisplayName,
 		Role:             domain.OrgRole(decoded.Membership.Role),
+		Agent:            decoded.Agent,
 	}, nil
 }
 

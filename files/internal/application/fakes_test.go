@@ -2,12 +2,24 @@ package application
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/files/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/files/internal/domain"
 )
+
+// agentTokenPrefix marks a credential as auth would answer for a token it
+// minted for an agent acting for the named member, rather than the member's
+// own session.
+const agentTokenPrefix = "agent:"
+
+// agentCreds is a token auth minted for an agent acting for userID. The fake
+// directory answers it as that member, marked as an agent.
+func agentCreds(userID string) authclient.Credentials {
+	return authclient.Credentials{Authorization: "Bearer " + agentTokenPrefix + userID}
+}
 
 type fakeDirectory struct{}
 
@@ -19,6 +31,7 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 	if credentials.AccessCookie != "" && token == "" {
 		token = credentials.AccessCookie
 	}
+	token, agent := strings.CutPrefix(token, agentTokenPrefix)
 	people := map[string]domain.OrgMembership{
 		"user-owner":    {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner},
 		"user-admin":    {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
@@ -29,6 +42,7 @@ func (fakeDirectory) Membership(_ context.Context, organizationID string, creden
 	if !ok || organizationID != "org_1" {
 		return domain.OrgMembership{}, domain.ErrNotFound
 	}
+	membership.Agent = agent
 	return membership, nil
 }
 
@@ -55,6 +69,10 @@ func (fake *fakeTeams) Team(_ context.Context, organizationID, teamID string, cr
 	if len(token) > 7 {
 		token = token[7:]
 	}
+	// Team membership is about which member is calling, agent or not: the
+	// real teams service resolves an agent's token to its member's own
+	// identity just as auth does, and decides nothing from the agent flag.
+	token = strings.TrimPrefix(token, agentTokenPrefix)
 	access, ok := fake.access[token+"/"+teamID]
 	if !ok || access.TeamID == "" {
 		return domain.TeamAccess{}, domain.ErrNotFound
