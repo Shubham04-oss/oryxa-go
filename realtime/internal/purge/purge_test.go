@@ -196,35 +196,57 @@ func TestPurgeKeepsAPathTheWorkerURLCarries(t *testing.T) {
 	}
 }
 
-// Only 204 is done. A 4xx is the Worker refusing this purge for good, except
-// a 401, which is the secret or the clock, and 408 and 429, which are the
-// Worker asking for later. Everything else may succeed if sent again.
+// How the Worker's purge route words a refusal of the body: 400 for one it
+// cannot read as a purge, 413 for one over 4 KB.
+const (
+	malformedRefusal = `{"error":{"code":"invalid_request","message":"A purge needs event_id, organization_id, a scope that agrees with user_id, and removed_at."}}`
+	tooLargeRefusal  = `{"error":{"code":"too_large","message":"A purge's body is at most 4 KB."}}`
+)
+
+// Only 204 is done, and only the Worker refusing the body itself, a 400 or
+// 413 carrying its own error, is for good. Everything else may succeed if sent
+// again, or once an operator puts right whatever answered in the Worker's
+// place: a 401 is the secret or the clock, 408 and 429 are the Worker asking
+// for later, a 403, 404 or 405 is a URL that does not reach the Worker's
+// route, the old Worker without it, or Cloudflare, and a 5xx is the Worker
+// failing.
 func TestPurgeTellsARefusalForGoodFromOneWorthRetrying(t *testing.T) {
+	const words = "  the Worker's\n  own words  "
 	cases := []struct {
+		name      string
 		status    int
+		answer    string
 		permanent bool
 	}{
-		{http.StatusBadRequest, true},
-		{http.StatusForbidden, true},
-		{http.StatusNotFound, true},
-		{http.StatusMethodNotAllowed, true},
-		{http.StatusConflict, true},
-		{http.StatusUnprocessableEntity, true},
-		{http.StatusUnauthorized, false},
-		{http.StatusRequestTimeout, false},
-		{http.StatusTooManyRequests, false},
-		{http.StatusInternalServerError, false},
-		{http.StatusBadGateway, false},
-		{http.StatusServiceUnavailable, false},
-		{http.StatusGatewayTimeout, false},
+		{"the Worker refusing a malformed body", http.StatusBadRequest, malformedRefusal, true},
+		{"the Worker refusing a body too large", http.StatusRequestEntityTooLarge, tooLargeRefusal, true},
+		{"a 400 without the Worker's refusal", http.StatusBadRequest, words, false},
+		{"a 400 page", http.StatusBadRequest, "<html><body>400 Bad Request</body></html>", false},
+		{"a 400 with other JSON", http.StatusBadRequest, `{"error":"unknown organization"}`, false},
+		{"a 400 with an error but no code", http.StatusBadRequest, `{"error":{"message":"no"}}`, false},
+		{"a 413 without the Worker's refusal", http.StatusRequestEntityTooLarge, words, false},
+		{"a 403 from Cloudflare", http.StatusForbidden, words, false},
+		{"a 403 worded like the Worker", http.StatusForbidden, `{"error":{"code":"forbidden","message":"No."}}`, false},
+		{"a 404 from a Worker without the route", http.StatusNotFound, words, false},
+		{"a 404 worded like the Worker", http.StatusNotFound, `{"error":{"code":"not_found","message":"Not found."}}`, false},
+		{"a 405 from the Worker", http.StatusMethodNotAllowed, `{"error":{"code":"method_not_allowed","message":"Method not allowed."}}`, false},
+		{"a 409", http.StatusConflict, words, false},
+		{"a 422", http.StatusUnprocessableEntity, words, false},
+		{"a 401", http.StatusUnauthorized, words, false},
+		{"a 408", http.StatusRequestTimeout, words, false},
+		{"a 429", http.StatusTooManyRequests, words, false},
+		{"a 500", http.StatusInternalServerError, words, false},
+		{"a 502", http.StatusBadGateway, words, false},
+		{"a 503 from the Worker", http.StatusServiceUnavailable, `{"error":{"code":"unavailable","message":"The purge did not finish. Try again."}}`, false},
+		{"a 504", http.StatusGatewayTimeout, words, false},
 		// Answers the contract does not name are no sign the purge happened.
-		{http.StatusOK, false},
-		{http.StatusAccepted, false},
-		{http.StatusTemporaryRedirect, false},
+		{"a 200", http.StatusOK, words, false},
+		{"a 202", http.StatusAccepted, words, false},
+		{"a 307", http.StatusTemporaryRedirect, words, false},
 	}
 	for _, test := range cases {
-		t.Run(http.StatusText(test.status), func(t *testing.T) {
-			fake := newWorker(t, test.status, "  the Worker's\n  own words  ")
+		t.Run(test.name, func(t *testing.T) {
+			fake := newWorker(t, test.status, test.answer)
 			err := goldenClient(t, fake.URL).Purge(context.Background(), goldenVectors[0].request)
 			if err == nil {
 				t.Fatalf("Purge() = nil for %d", test.status)
@@ -232,7 +254,8 @@ func TestPurgeTellsARefusalForGoodFromOneWorthRetrying(t *testing.T) {
 			if errors.Is(err, ErrPermanent) != test.permanent {
 				t.Fatalf("Purge() = %v; permanent = %v, want %v", err, errors.Is(err, ErrPermanent), test.permanent)
 			}
-			if !strings.Contains(err.Error(), http.StatusText(test.status)) || !strings.Contains(err.Error(), ": the Worker's own words") {
+			said := ": " + strings.Join(strings.Fields(test.answer), " ")
+			if !strings.Contains(err.Error(), http.StatusText(test.status)) || !strings.Contains(err.Error(), said) {
 				t.Fatalf("Purge() = %q, want the status and what the Worker said on one line", err)
 			}
 		})

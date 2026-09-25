@@ -364,9 +364,15 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 		var purged purge.Request
 		_ = json.Unmarshal(body, &purged)
 		switch purged.OrganizationID {
-		case "org_gone":
+		case "org_refused":
+			// The Worker refusing the body itself, as it does one it cannot
+			// read as a purge.
 			writer.WriteHeader(http.StatusBadRequest)
-			_, _ = io.WriteString(writer, `{"error":"unknown organization"}`)
+			_, _ = io.WriteString(writer, `{"error":{"code":"invalid_request","message":"A purge needs event_id, organization_id, a scope that agrees with user_id, and removed_at."}}`)
+		case "org_misrouted":
+			// What a Worker without the route answers.
+			writer.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(writer, "Not found")
 		case "org_down":
 			writer.WriteHeader(http.StatusServiceUnavailable)
 		default:
@@ -386,10 +392,11 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 			message("member-left", memberRemoved("evt_left", "org_1", "user-2", "left")),
 			message("org-deleted", organizationDeleted("evt_deleted", "org_1")),
 			message("member-of-deleted-org", memberRemoved("evt_member_of_deleted", "org_1", "user-3", "organization_deleted")),
-			message("refused", organizationDeleted("evt_refused", "org_gone")),
+			message("refused", organizationDeleted("evt_refused", "org_refused")),
 			message("worker-down", organizationDeleted("evt_down", "org_down")),
 		},
 		{
+			message("misrouted", organizationDeleted("evt_misrouted", "org_misrouted")),
 			message("undecodable", "{"),
 			// Delivered again after its deletion failed: done already.
 			message("member-left-again", memberRemoved("evt_left", "org_1", "user-2", "left")),
@@ -409,13 +416,14 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 	wantBodies := []string{
 		`{"event_id":"evt_left","organization_id":"org_1","scope":"member","user_id":"user-2","removed_at":"2026-09-24T11:59:58.123456789Z"}`,
 		`{"event_id":"evt_deleted","organization_id":"org_1","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
-		`{"event_id":"evt_refused","organization_id":"org_gone","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
+		`{"event_id":"evt_refused","organization_id":"org_refused","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
 		`{"event_id":"evt_down","organization_id":"org_down","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
+		`{"event_id":"evt_misrouted","organization_id":"org_misrouted","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
 	}
 	if !slices.Equal(bodies, wantBodies) {
 		t.Fatalf("the Worker was sent %v, want %v", bodies, wantBodies)
 	}
-	if !strings.Contains(logs.String(), "realtime purge dropped") || !strings.Contains(logs.String(), "unknown organization") {
+	if !strings.Contains(logs.String(), "realtime purge dropped") || !strings.Contains(logs.String(), "invalid_request") {
 		t.Fatalf("the refusal was not logged with the Worker's answer:\n%s", logs.String())
 	}
 	if !strings.Contains(logs.String(), "the queue will deliver it again") {

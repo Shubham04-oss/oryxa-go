@@ -100,8 +100,12 @@ func Sign(secret string, timestamp int64, body []byte) string {
 }
 
 // ErrPermanent marks a purge the Worker refused in a way that sending it again
-// cannot change: any 4xx but 401, 408 and 429. Its event is dropped, with the
-// Worker's answer logged, rather than retried into the dead-letter queue.
+// cannot change: a 400, the body malformed, or a 413, the body too large, each
+// carrying the Worker's own refusal, {"error":{"code":…}}. Its event is
+// dropped, with the Worker's answer logged, rather than retried into the
+// dead-letter queue. No other answer is taken for one: a 403, 404 or 405 comes
+// from a URL that reaches something other than the Worker's route, a Worker
+// without it, or Cloudflare in front of it, which an operator can put right.
 var ErrPermanent = errors.New("the Worker refused the purge for good")
 
 // Config is how to reach the Worker.
@@ -157,8 +161,9 @@ func New(config Config) (*Client, error) {
 // Purge asks the Worker for the purge request names, and returns once the
 // Worker says it is done. An error wrapping ErrPermanent fails the same way
 // however often it is sent. Any other error may not: the Worker was
-// unreachable, slow or failing, or it refused the signature, which is the
-// secret or the clock being wrong, not the purge.
+// unreachable, slow or failing, something other than its route answered, or
+// it refused the signature, which is the secret or the clock being wrong, not
+// the purge.
 func (client *Client) Purge(ctx context.Context, request Request) error {
 	// Nothing here builds a purge the Worker could read more widely than it
 	// was meant, and nothing ever should: each is refused before it is sent.
@@ -201,8 +206,11 @@ func (client *Client) Purge(ctx context.Context, request Request) error {
 	if response.StatusCode == http.StatusNoContent {
 		return nil
 	}
-	said := excerpt(response.Body)
+	answer, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
+	said := excerpt(answer)
 	switch status := response.StatusCode; {
+	case (status == http.StatusBadRequest || status == http.StatusRequestEntityTooLarge) && refusedByTheWorker(answer):
+		return fmt.Errorf("%w: it answered %s%s", ErrPermanent, response.Status, said)
 	case status == http.StatusUnauthorized:
 		// Not about this purge but about the secret or the clock, which an
 		// operator can put right. Retried, it reaches the dead-letter queue,
@@ -212,20 +220,32 @@ func (client *Client) Purge(ctx context.Context, request Request) error {
 			"or this host's clock is further from the Worker's than it allows%s", response.Status, said)
 	case status == http.StatusRequestTimeout, status == http.StatusTooManyRequests:
 		return fmt.Errorf("the Worker answered %s; it may take the purge later%s", response.Status, said)
-	case status >= 400 && status < 500:
-		return fmt.Errorf("%w: it answered %s%s", ErrPermanent, response.Status, said)
 	default:
-		// A 5xx, or anything else the contract does not name, which is no
-		// sign the purge happened.
+		// A 5xx, any other 4xx, or anything else the contract does not name,
+		// which is no sign the purge happened. A 403, 404 or 405 is a
+		// misrouted URL, a Worker without the route, or Cloudflare refusing
+		// the call: retried, it reaches the dead-letter queue, whose alarm
+		// says so, and can be redriven once that is put right.
 		return fmt.Errorf("the Worker answered %s, not 204%s", response.Status, said)
 	}
 }
 
+// refusedByTheWorker reports whether answer is the Worker's own refusal,
+// {"error":{"code":"…","message":"…"}}, rather than a page something else
+// answered with.
+func refusedByTheWorker(answer []byte) bool {
+	var refusal struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	return json.Unmarshal(answer, &refusal) == nil && refusal.Error.Code != ""
+}
+
 // excerpt is the start of what the Worker said, on one line, for an error: ""
 // when it said nothing, else ": " and the text.
-func excerpt(body io.Reader) string {
+func excerpt(raw []byte) string {
 	const most = 200
-	raw, _ := io.ReadAll(io.LimitReader(body, 1024))
 	text := strings.Join(strings.Fields(strings.ToValidUTF8(string(raw), "�")), " ")
 	if text == "" {
 		return ""

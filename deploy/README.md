@@ -171,7 +171,7 @@ queue.
 
 **Turning it on.** The Worker's endpoint must be live, holding the secret,
 before realtime is on. Until then the Worker answers `404` to the purge, and
-realtime drops every purge that gets one. In this order:
+every purge is retried into the dead-letter queue. In this order:
 
 1. Make the secret, and put it in the repository's `.env` as
    `REALTIME_PURGE_SECRET=…`:
@@ -226,10 +226,10 @@ realtime drops every purge that gets one. In this order:
    Worker logs a `204`. `realtime purge dropped` means the Worker refused the
    purge; the log line carries the Worker's answer. If the Worker never sees
    the call, look at Cloudflare's security events for `app.oryxa.in`: a bot or
-   WAF challenge answers `403`, and realtime drops that too. A `401` means the
-   two secrets differ. Those purges are retried into
+   WAF challenge answers `403`. A `401` means the two secrets differ. Those
+   purges, like a `404`'s, are retried into
    `oryxa-production-realtime-events-dlq`, whose alarm mails, and can be
-   redriven once the secrets match:
+   redriven once that is put right:
 
    ```sh
    aws sqs start-message-move-task --region us-west-2 \
