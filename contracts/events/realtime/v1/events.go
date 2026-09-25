@@ -34,7 +34,8 @@ const (
 	ConversationReadDetailType = "realtime.conversation.read.v1"
 	// PurgeCompletedDetailType is published once the Worker has purged what
 	// a member kept in an organization, or everything the organization kept,
-	// as the audit trail of that deletion. Realtime publishes it itself; the
+	// or, in one teamspace, a member's side conversations or all of them, as
+	// the audit trail of that deletion. Realtime publishes it itself; the
 	// Worker cannot send it.
 	PurgeCompletedDetailType = "realtime.purge.completed.v1"
 )
@@ -60,6 +61,12 @@ const (
 	PurgeScopeMember = "member"
 	// PurgeScopeOrganization is everything the organization kept.
 	PurgeScopeOrganization = "organization"
+	// PurgeScopeTeamspaceMember is one member's side conversations in one
+	// teamspace, which they left.
+	PurgeScopeTeamspaceMember = "teamspace_member"
+	// PurgeScopeTeamspace is every side conversation in one teamspace, which
+	// was deleted.
+	PurgeScopeTeamspace = "teamspace"
 )
 
 // Conversation names one conversation.
@@ -120,17 +127,22 @@ type ConversationRead struct {
 
 // PurgeCompleted records that the Worker purged the conversations a member
 // kept in an organization, or all the organization's, written up to
-// RemovedAt.
+// RemovedAt, or, in one teamspace, a member's side conversations, or all of
+// them.
 type PurgeCompleted struct {
 	OrganizationID string `json:"organization_id"`
 	Scope          string `json:"scope"`
 	// UserID is the member whose conversations went, set exactly when Scope
-	// is PurgeScopeMember.
+	// is PurgeScopeMember or PurgeScopeTeamspaceMember.
 	UserID string `json:"user_id,omitempty"`
-	// RemovedAt is when the membership, or the organization, ended: the purge
-	// took what was written then or before.
+	// TeamspaceID is the teamspace whose side conversations went, set
+	// exactly when Scope is PurgeScopeTeamspaceMember or PurgeScopeTeamspace.
+	TeamspaceID string `json:"teamspace_id,omitempty"`
+	// RemovedAt is when the membership, the organization or the teamspace
+	// ended: a member's purge took what was written then or before.
 	RemovedAt time.Time `json:"removed_at"`
-	// SourceEventID is the id of auth's event that asked for the purge.
+	// SourceEventID is the id of the event that asked for the purge: auth's
+	// for a member's or an organization's, agents' for a teamspace's.
 	SourceEventID string    `json:"source_event_id"`
 	CompletedAt   time.Time `json:"completed_at"`
 }
