@@ -106,7 +106,12 @@ type Repository interface {
 	List(context.Context, string, string, Query) ([]agents.Interaction, error)
 	// Decide records a pending request's decision and who made it.
 	Decide(context.Context, string, agents.InteractionDecisionInput, agents.InteractionDecider, time.Time) (agents.Interaction, error)
-	Respond(context.Context, string, agents.InteractionResponseInput, time.Time) (agents.Interaction, error)
+	// Respond records an approved request's answer as the guard left it:
+	// delivered, or held in review.
+	Respond(ctx context.Context, id string, answer Answer, at time.Time) (agents.Interaction, error)
+	// Review records the addressed member's review of an answer held for
+	// them: sent as held, sent masked, or withheld.
+	Review(ctx context.Context, id, action string, reviewer agents.InteractionDecider, at time.Time) (agents.Interaction, error)
 	// Hold keeps a request for its owner's own decision: a pending one is
 	// marked held, and an approved one has its approval withdrawn and is
 	// pending, held, again.
@@ -152,7 +157,12 @@ type Config struct {
 	Jev func(context.Context, jev.Request) (jev.Result, error)
 	// JevTimeout bounds asking Jev; DefaultJevTimeout when zero.
 	JevTimeout time.Duration
-	// Logger records what Jev judged; discarded when nil.
+	// Guard reads every answer another member will read before they read
+	// it: *answerguard.Guard, when AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID names
+	// one. Without it answers are delivered as given.
+	Guard Guard
+	// Logger records what Jev judged and what the guard found, by kind;
+	// discarded when nil.
 	Logger *slog.Logger
 	Now    func() time.Time
 }
@@ -164,6 +174,7 @@ type Service struct {
 	tokens     memberauth.TokenSource
 	jev        func(context.Context, jev.Request) (jev.Result, error)
 	jevTimeout time.Duration
+	guard      Guard
 	logger     *slog.Logger
 	now        func() time.Time
 }
@@ -189,7 +200,7 @@ func New(config Config) (*Service, error) {
 	}
 	return &Service{
 		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens,
-		jev: config.Jev, jevTimeout: jevTimeout, logger: logger, now: now,
+		jev: config.Jev, jevTimeout: jevTimeout, guard: config.Guard, logger: logger, now: now,
 	}, nil
 }
 
@@ -292,7 +303,7 @@ func (service *Service) replay(actor agents.InteractionActor, stored agents.Inte
 	if !sameRequest(actor, stored, input) {
 		return agents.Interaction{}, ErrIdempotencyConflict
 	}
-	return service.view(stored), nil
+	return service.viewFor(actor, stored), nil
 }
 
 // sameRequest is whether a stored request is the one input asks for again:
@@ -387,7 +398,7 @@ func (service *Service) List(ctx context.Context, actor agents.InteractionActor,
 	if err != nil {
 		return nil, err
 	}
-	return service.views(filterRequests(requests, func(request agents.Interaction) bool {
+	return service.views(actor, filterRequests(requests, func(request agents.Interaction) bool {
 		return listed(actor, query, request)
 	})), nil
 }
@@ -403,7 +414,7 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 	if request.OrganizationID != actor.OrganizationID || !canRead(actor, request) {
 		return agents.Interaction{}, ErrNotFound
 	}
-	return service.view(request), nil
+	return service.viewFor(actor, request), nil
 }
 
 // Decide records a decision an agent makes, through its interactions tool:
@@ -506,7 +517,9 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 	if err := validateResponse(request, input); err != nil {
 		return agents.Interaction{}, err
 	}
-	return service.repository.Respond(ctx, request.ID, input, service.now().UTC())
+	// Another member reads what is recorded here, so the guard reads it
+	// first, outside the ledger's transaction.
+	return service.repository.Respond(ctx, request.ID, service.answer(ctx, request, input), service.now().UTC())
 }
 
 func (service *Service) view(request agents.Interaction) agents.Interaction {
@@ -516,12 +529,12 @@ func (service *Service) view(request agents.Interaction) agents.Interaction {
 	return request
 }
 
-func (service *Service) views(requests []agents.Interaction) []agents.Interaction {
+func (service *Service) views(actor agents.InteractionActor, requests []agents.Interaction) []agents.Interaction {
 	if requests == nil {
 		return []agents.Interaction{}
 	}
 	for index := range requests {
-		requests[index] = service.view(requests[index])
+		requests[index] = service.viewFor(actor, requests[index])
 	}
 	return requests
 }

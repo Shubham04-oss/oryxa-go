@@ -747,6 +747,7 @@ and a decision made here is the member's own:
 | `GET /v1/organizations/{org}/agent-requests/{request}` | Reads one request visible to the member |
 | `POST /v1/organizations/{org}/agent-requests/{request}/decision` | The member approves or rejects, in their own session, with narrowed tools and permissions; the only way a request held for its owner is decided. Approving one made in a teamspace reads it again first, with the member's own token |
 | `POST /v1/organizations/{org}/agent-requests/{request}/response` | Completes an approved request with the strict result envelope |
+| `POST /v1/organizations/{org}/agent-requests/{request}/review` | The member sends, sends masked, or withholds an answer the answer guard held for them, in their own session (see [Answer guard](#answer-guard)) |
 
 A request's JSON carries `teamspace_id` (absent outside a teamspace) and
 `approval` (`agent` or `owner`, see
@@ -784,6 +785,94 @@ caller is not a party to is `404 not_found`), one past its expiry
 `409 request_expired`, one already decided `409 invalid_state`, and one that
 no longer stands in its teamspace `409 request_closed`, with the reason:
 Oryxa has closed it.
+
+### Answer guard
+
+Every answer one member's agent gives another member is read, before that
+member reads it, by the answer guard (`internal/answerguard`): Amazon Bedrock
+Guardrails' standalone `ApplyGuardrail`, on the output side, with the
+guardrail `AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID` and
+`AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION` name (`deploy/production/answer_guard.tf`).
+Unset, no answer is checked, as before; one set without the other refuses to
+start. `AWS_ENDPOINT_URL_BEDROCK_RUNTIME`, which the SDK honours, points
+development at a stand-in.
+
+It reads every text of the result the member who asked would read, each in a
+call of its own and all within 5 seconds: `summary`, `content`, and the
+`artifacts` references. `tools_used` is not read: it can only name what the
+approval allowed, the requester's own vocabulary. Nor is the decision's
+`message`, which is written when a request is decided, not answered.
+
+What it found is read from each finding in the assessments, never from the
+response's top-level action: the held kinds are detect-only, so an answer
+with nothing else in it comes back with action `NONE` and no outputs, its
+findings listed all the same.
+
+| Found | What happens | `guard` |
+| --- | --- | --- |
+| Nothing | Delivered as given | `{"state":"clear"}` |
+| Only kinds that are always masked | Delivered as the guardrail masked it, each value as `{TYPE}` | `{"state":"masked","kinds":[...]}` |
+| An email address, phone number or address (`EMAIL`, `PHONE`, `ADDRESS`) | Held in `review` for the addressed member, not delivered | `{"state":"held","kinds":[...]}`, the held kinds |
+| A failure, a timeout, anything blocked, or a response that does not add up | Held the same way: it fails closed | `{"state":"held","kinds":["UNCHECKED"]}` |
+
+Always masked: `PASSWORD`, `AWS_ACCESS_KEY`, `AWS_SECRET_KEY`,
+`CREDIT_DEBIT_CARD_NUMBER`, `_CVV` and `_EXPIRY`, `PIN`,
+`INTERNATIONAL_BANK_ACCOUNT_NUMBER`, `SWIFT_CODE`, `US_BANK_ACCOUNT_NUMBER`,
+`US_BANK_ROUTING_NUMBER`, `US_SOCIAL_SECURITY_NUMBER`,
+`US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER`, `US_PASSPORT_NUMBER`, `DRIVER_ID`,
+`CA_HEALTH_NUMBER`, `CA_SOCIAL_INSURANCE_NUMBER`,
+`UK_NATIONAL_HEALTH_SERVICE_NUMBER`, `UK_NATIONAL_INSURANCE_NUMBER` and
+`UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER`. A kind that is always masked but came
+back found and not masked is held, since its value is still there. `NAME`,
+`AGE`, `USERNAME`, `URL`, `IP_ADDRESS`, `MAC_ADDRESS`, `LICENSE_PLATE` and
+`VEHICLE_IDENTIFICATION_NUMBER` are not set up at all: they are too common in
+work answers. A failed answer is read like a completed one: its summary is
+read by the member who asked too.
+
+A held answer is kept in two versions, as `held`: `held.result`, as the
+guardrail left it, with the kinds that are always masked masked; and
+`held.masked_result`, with every held value replaced by its kind as well,
+such as `{EMAIL}`. A held value is found whatever its case and however its
+spaces run; one that cannot be found makes that text its kinds alone, so no
+held value survives in the masked version. An answer that could not be
+checked has no `masked_result`.
+
+The addressed member reviews it with `POST .../agent-requests/{request}/review`
+and `{"action":"send"}`, `"send_masked"` or `"withhold"`
+(`interactions.Service.ReviewAsOwner`). Exactly as for a decision, only their
+own signed-in session may: the actor must be marked `"member"`, agent tokens
+are `403 forbidden`, the member who asked is `403 forbidden`, and anyone else
+`404 not_found`. Only a request in `review` is reviewed (`409 invalid_state`
+otherwise, and `409 request_expired` past its expiry). `send` delivers
+`held.result` and `send_masked` `held.masked_result` (`409 invalid_state` for
+an answer that could not be checked); either completes the request, or fails
+it for a held failure. `withhold` ends it `withheld`, and the member who asked
+reads no result. Either way the held versions are dropped, and the review is
+kept as `review`:
+`{"action":"send","decided_by":{"kind":"member","user_id":"..."},"decided_at":"..."}`.
+A request that expires in review is withheld by the waker's poll
+(`Store.WithholdExpired`), with
+`{"action":"withhold","decided_by":{"kind":"system"},"decided_at":"...","reason":"expired before review"}`.
+
+The addressed member's side reads all of it. The member who asked, and their
+agents, read a request in `review` as its status alone (no `result`, `guard`
+or `held`), a `withheld` one as its status and `review`, and a delivered one
+with its `result`, `guard` and `review`; never `held`.
+
+Each step is the ordinary `agents.interaction.completed.v1` event, carrying
+`review`, `withheld`, or `completed` or `failed` as its status, and nothing of
+the guard or of any text. `review` wakes nobody: the member reviews in
+person. `withheld` wakes the requester's agent, told the answer was withheld
+and that there is nothing to read. Nothing else touches a request in review:
+the approval's delivery is settled without a run, since the ledger left
+`approved`; giving up on approved work, and closing approvals that expired,
+touch only `approved` requests.
+
+Nothing the guard found is logged or traced as a value: Bedrock's `match`
+holds the raw value by design, and neither it nor any text is ever logged,
+published or traced. The guard logs reasons and kinds, and a failed call by
+its error code alone, since the error's message could quote what it was
+sent.
 
 ### A teamspace is a room
 
@@ -1056,7 +1145,7 @@ fills it (`internal/inbound`):
 | `batching.trigger-batch.ready.v1` | Keeps the batch's triggers, all at once, to wake Krude for its member (see [Wake-ups](#wake-ups)) |
 | `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent; one held for its owner completes without waking it |
 | `agents.interaction.decided.v1` | Wakes the target to finish approved work, or the requester to observe a rejection |
-| `agents.interaction.completed.v1` | Wakes the requester to observe a completed or failed result |
+| `agents.interaction.completed.v1` | Wakes the requester to observe a completed, failed or withheld result; an answer held for review (`review`) wakes nobody |
 | `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, and cross-user request content in that organization |
 | `auth.organization.deleted.v1` | The same for everyone in the organization |
 | `teams.member.removed.v1` | Withdraws the person's contributions to the team's teamspace, and records `agents.teamspace.member.removed.v1` when the team has one |
@@ -1509,7 +1598,7 @@ Contracts live in `/contracts/events/agents/v1`:
 | `agents.workflow.execution.failed.v1` | Execution ends without a result |
 | `agents.interaction.requested.v1` | A durable request is ready to route to its target agent |
 | `agents.interaction.decided.v1` | The target approved or rejected a request |
-| `agents.interaction.completed.v1` | The target completed or failed an approved request |
+| `agents.interaction.completed.v1` | The target completed or failed an approved request; its answer was held for review (`review`); or that review ended it: `completed` or `failed` once sent, `withheld` when withheld |
 | `agents.teamspace.room.message.posted.v1` | A teamspace's room stored a message, a person's or an agent's answer, without its body ([A teamspace is a room](#a-teamspace-is-a-room)) |
 | `agents.teamspace.member.removed.v1` | A person left a teamspace: Teams removed them from the team it is bound to, whether or not they had contributed agents to it |
 
@@ -1723,6 +1812,9 @@ curl -N -X POST -H 'Authorization: Bearer owner' -H 'Content-Type: application/j
 | `AGENTS_PRIMARY_GUARDRAIL_ID` | unset | Bedrock guardrail that screens the member's conversation; unset turns screening off |
 | `AGENTS_PRIMARY_GUARDRAIL_VERSION` | unset | The guardrail's numbered version, required with its ID; never `DRAFT` |
 | `AGENTS_PRIMARY_GUARDRAIL_FAIL_CLOSED` | `false` | Block, rather than pass, what a failed screen could not check |
+| `AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID` | unset | Bedrock guardrail the answer guard reads every answer another member will read with (see [Answer guard](#answer-guard)); unset, no answer is checked. Set with its version or not at all |
+| `AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION` | unset | That guardrail's version, set with its ID |
+| `AWS_ENDPOINT_URL_BEDROCK_RUNTIME` | unset | Bedrock runtime endpoint override, for a development stand-in of the answer guard's guardrail |
 | `AGENTS_PRIMARY_DATABASE_MAX_CONNS` | `8` | Size of the pool the service keeps for ADK's tables, apart from the shared one |
 | `AGENTS_EVENTS_QUEUE_URL` | unset | Queue carrying batching's app batches and interaction lifecycle events; without it neither app nor cross-agent events wake persistent agents (see [Wake-ups](#wake-ups)) |
 | `AWS_ENDPOINT_URL_SQS` | unset | SQS endpoint override for the LocalStack emulator |

@@ -487,8 +487,9 @@ type fakeInteractions struct {
 	// with - so an authorization test can assert each route always acted as
 	// the authenticated caller's own persistent agent identity.
 	actors []primaryagents.InteractionActor
-	// agentDecisions and ownerDecisions count Decide and DecideAsOwner.
-	agentDecisions, ownerDecisions int
+	// agentDecisions and ownerDecisions count Decide and DecideAsOwner, and
+	// reviews ReviewAsOwner.
+	agentDecisions, ownerDecisions, reviews int
 }
 
 func (service *fakeInteractions) Create(_ context.Context, actor primaryagents.InteractionActor, token, key string, input primaryagents.InteractionCreateInput) (primaryagents.Interaction, error) {
@@ -633,7 +634,7 @@ var bearer = map[string]string{"Authorization": "Bearer member-token"}
 func TestPatternsNameEveryRoute(t *testing.T) {
 	server := newTestServer(member(), &fakeThreads{})
 	patterns := server.Patterns()
-	if len(patterns) != 57 {
+	if len(patterns) != 58 {
 		t.Fatalf("patterns = %v", patterns)
 	}
 	wildcards := regexp.MustCompile(`\{[^}]+\}`)

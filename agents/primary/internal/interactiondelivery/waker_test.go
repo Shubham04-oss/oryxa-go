@@ -163,6 +163,28 @@ func (requests *fakeRequests) CloseExpired(ctx context.Context, reason string, s
 	return closed, nil
 }
 
+// WithholdExpired withholds every request in review whose expiry passed by
+// at, the longest expired first, as the ledger does.
+func (requests *fakeRequests) WithholdExpired(_ context.Context, reason string, at time.Time, limit int) ([]agents.Interaction, error) {
+	requests.mu.Lock()
+	defer requests.mu.Unlock()
+	var expired []agents.Interaction
+	for _, request := range requests.requests {
+		if request.Status == interactions.StatusReview && !request.ExpiresAt.After(at) {
+			expired = append(expired, request)
+		}
+	}
+	slices.SortFunc(expired, func(a, b agents.Interaction) int { return a.ExpiresAt.Compare(b.ExpiresAt) })
+	var withheld []agents.Interaction
+	for _, request := range expired[:min(len(expired), limit)] {
+		request.Status, request.Held, request.Revision = interactions.StatusWithheld, nil, request.Revision+1
+		request.Review = &agents.InteractionReview{Action: interactions.ReviewWithhold, DecidedBy: agents.InteractionDecider{Kind: interactions.DecidedBySystem}, DecidedAt: at, Reason: reason}
+		requests.requests[request.ID] = request
+		withheld = append(withheld, request)
+	}
+	return withheld, nil
+}
+
 func (requests *fakeRequests) get(id string) agents.Interaction {
 	requests.mu.Lock()
 	defer requests.mu.Unlock()

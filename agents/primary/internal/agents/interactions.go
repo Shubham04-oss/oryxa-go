@@ -120,6 +120,43 @@ type InteractionResult struct {
 	CompletedAt time.Time `json:"completed_at"`
 }
 
+// InteractionGuard is what the answer guard found in an answer the member
+// who asked will read: "clear", nothing; "masked", only kinds that are
+// always masked, which the answer is delivered with masked; "held", a kind
+// held for the addressed member's review, or an answer that could not be
+// checked, whose one kind is then "UNCHECKED". Kinds are Bedrock's entity
+// types, never a value.
+type InteractionGuard struct {
+	State string   `json:"state"`
+	Kinds []string `json:"kinds,omitempty"`
+}
+
+// InteractionHeld is an answer the guard held for the addressed member's
+// review, in the two versions they may send: Result, as the guardrail left
+// it, with the kinds that are always masked masked; and MaskedResult, with
+// every held value replaced by its kind as well, such as {EMAIL}, absent for
+// an answer that could not be checked. Only the addressed member's side ever
+// reads it, and only while the request is in review.
+type InteractionHeld struct {
+	Result       InteractionResult  `json:"result"`
+	MaskedResult *InteractionResult `json:"masked_result,omitempty"`
+}
+
+// InteractionReview is the addressed member's review of a held answer:
+// "send", "send_masked" or "withhold", who decided and when. A request that
+// expired in review is withheld by Oryxa ("system"), with Reason saying so.
+type InteractionReview struct {
+	Action    string             `json:"action"`
+	DecidedBy InteractionDecider `json:"decided_by"`
+	DecidedAt time.Time          `json:"decided_at"`
+	Reason    string             `json:"reason,omitempty"`
+}
+
+// InteractionReviewInput is the addressed member's review of a held answer.
+type InteractionReviewInput struct {
+	Action string `json:"action"`
+}
+
 // Interaction is the strict, durable JSON contract exchanged between agents.
 // Request text is stored once; every transition is a separate audited field.
 type Interaction struct {
@@ -149,11 +186,21 @@ type Interaction struct {
 	RequestedPermissions []string             `json:"requested_permissions"`
 	Status               string               `json:"status"`
 	Decision             *InteractionDecision `json:"decision,omitempty"`
-	Result               *InteractionResult   `json:"result,omitempty"`
-	Revision             int64                `json:"revision"`
-	ExpiresAt            time.Time            `json:"expires_at"`
-	CreatedAt            time.Time            `json:"created_at"`
-	UpdatedAt            time.Time            `json:"updated_at"`
+	// Result is the answer the member who asked reads, once there is one
+	// for them: never while it is held for review, nor once withheld.
+	Result *InteractionResult `json:"result,omitempty"`
+	// Guard is what the answer guard found in the answer, absent when no
+	// guard read it. The member who asked sees it only beside a result.
+	Guard *InteractionGuard `json:"guard,omitempty"`
+	// Held is the answer held for review, shown to the addressed member's
+	// side alone.
+	Held *InteractionHeld `json:"held,omitempty"`
+	// Review is the addressed member's review of a held answer.
+	Review    *InteractionReview `json:"review,omitempty"`
+	Revision  int64              `json:"revision"`
+	ExpiresAt time.Time          `json:"expires_at"`
+	CreatedAt time.Time          `json:"created_at"`
+	UpdatedAt time.Time          `json:"updated_at"`
 }
 
 type InteractionCreateInput struct {
@@ -250,7 +297,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		return Toolbox{}, err
 	}
 	respond, err := functiontool.New(functiontool.Config{
-		Name: "interactions_respond", Description: "Completes an approved request with the strict response envelope. Reported tools must be within the approved scope.",
+		Name: "interactions_respond", Description: "Completes an approved request with the strict response envelope. Reported tools must be within the approved scope. Oryxa checks the answer for personal data before the requester reads it: it may deliver it with some details masked, or hold it for your member to review first (status review).",
 	}, tools.respond)
 	if err != nil {
 		return Toolbox{}, err

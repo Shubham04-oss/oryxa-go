@@ -122,6 +122,9 @@ type AgentInteractions interface {
 	// made in a teamspace reads that teamspace with.
 	DecideAsOwner(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error)
 	Respond(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionResponseInput) (primaryagents.Interaction, error)
+	// ReviewAsOwner is the member's review, in their own session, of an
+	// answer the answer guard held for them: the only way one is reviewed.
+	ReviewAsOwner(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionReviewInput) (primaryagents.Interaction, error)
 }
 
 // Teamspaces is the shared multi-user agent-space catalogue. Authorization is
@@ -288,6 +291,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/{requestID}", server.getInteraction)
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/decision", server.decideInteraction)
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/response", server.respondInteraction)
+	server.handle("POST /v1/organizations/{organizationID}/agent-requests/{requestID}/review", server.reviewInteraction)
 	server.handle("GET /v1/organizations/{organizationID}/organization-agent", server.getOrganizationAgent)
 	server.handle("PATCH /v1/organizations/{organizationID}/organization-agent", server.updateOrganizationAgent)
 	server.handle("GET /v1/organizations/{organizationID}/organization-agent/context", server.getOrganizationAgentContext)
@@ -507,6 +511,30 @@ func (server *Server) respondInteraction(writer http.ResponseWriter, request *ht
 		return
 	}
 	updated, err := server.interactions.Respond(request.Context(), interactionActorOf(member), request.PathValue("requestID"), input)
+	if err != nil {
+		server.handleError(writer, request, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, updated)
+}
+
+// reviewInteraction is the member reviewing, in their own session, an
+// answer the answer guard held for them: sending it, sending it masked, or
+// withholding it.
+func (server *Server) reviewInteraction(writer http.ResponseWriter, request *http.Request) {
+	member, ok := server.memberWithAgent(writer, request)
+	if !ok {
+		return
+	}
+	if server.interactions == nil {
+		writeError(writer, http.StatusServiceUnavailable, "interactions_unavailable", "agent interactions are not configured")
+		return
+	}
+	var input primaryagents.InteractionReviewInput
+	if !server.decode(writer, request, &input) {
+		return
+	}
+	updated, err := server.interactions.ReviewAsOwner(request.Context(), interactionActorOf(member), request.PathValue("requestID"), input)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return

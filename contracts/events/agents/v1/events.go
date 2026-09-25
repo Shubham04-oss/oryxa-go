@@ -57,7 +57,9 @@ const (
 	InteractionRequestedDetailType = "agents.interaction.requested.v1"
 	// InteractionDecidedDetailType announces the target's approval or rejection.
 	InteractionDecidedDetailType = "agents.interaction.decided.v1"
-	// InteractionCompletedDetailType announces a completed or failed response.
+	// InteractionCompletedDetailType announces a response: completed or
+	// failed; held for the addressed member's review ("review"); and the
+	// end of that review: completed or failed once sent, or "withheld".
 	InteractionCompletedDetailType = "agents.interaction.completed.v1"
 	// TeamspaceCreatedDetailType announces a shared work space bound to a
 	// human team. Private prompts and contributed-agent instructions stay out
@@ -152,15 +154,20 @@ type AgentWorkflowExecutionChanged struct {
 // agent request. Purpose, task, context, decisions and results remain in the
 // agents database; EventBridge carries only identities and lifecycle state.
 type InteractionChanged struct {
-	RequestID        string    `json:"request_id"`
-	OrganizationID   string    `json:"organization_id"`
-	RequesterUserID  string    `json:"requester_user_id"`
-	RequesterAgentID string    `json:"requester_agent_id"`
-	TargetUserID     string    `json:"target_user_id"`
-	TargetAgentID    string    `json:"target_agent_id"`
-	Status           string    `json:"status"`
-	Revision         int64     `json:"revision"`
-	ChangedAt        time.Time `json:"changed_at"`
+	RequestID        string `json:"request_id"`
+	OrganizationID   string `json:"organization_id"`
+	RequesterUserID  string `json:"requester_user_id"`
+	RequesterAgentID string `json:"requester_agent_id"`
+	TargetUserID     string `json:"target_user_id"`
+	TargetAgentID    string `json:"target_agent_id"`
+	// Status is the request's: pending, approved, rejected, completed,
+	// failed, and, since the answer guard, review (an answer held for the
+	// addressed member's review) and withheld (one they, or its expiry,
+	// withheld). What the guard found, and every answer's text, stay in the
+	// agents database.
+	Status    string    `json:"status"`
+	Revision  int64     `json:"revision"`
+	ChangedAt time.Time `json:"changed_at"`
 	// TeamspaceID is the teamspace the request was made in, absent for one
 	// made outside a teamspace.
 	TeamspaceID string `json:"teamspace_id,omitempty"`

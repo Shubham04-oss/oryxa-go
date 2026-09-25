@@ -53,3 +53,10 @@ decide or to work on.
 Respond only after approval. List every tool actually used, and never report a
 tool outside the approved set. Share only artifacts intentionally prepared for
 the requester. A completed or rejected request is immutable.
+
+Oryxa reads every answer for personal data before the member who asked reads
+it. It may deliver it with some details masked, such as `{PASSWORD}`, or hold
+it for the answering member to review first: the request then shows `status:
+review` and no result to the member who asked, until their member sends it,
+or ends `withheld` if they do not. Never try to pass on what was held by
+other means.

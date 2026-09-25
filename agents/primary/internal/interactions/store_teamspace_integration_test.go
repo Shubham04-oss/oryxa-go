@@ -722,7 +722,7 @@ func TestARequestsEventsCarryItsTeamspaceApprovalAndDecider(t *testing.T) {
 		member, now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Respond(ctx, held.ID, agents.InteractionResponseInput{Status: StatusCompleted, Summary: "Done", Content: "Reviewed."},
+	if _, err := store.Respond(ctx, held.ID, Unguarded(agents.InteractionResponseInput{Status: StatusCompleted, Summary: "Done", Content: "Reviewed."}),
 		now.Add(2*time.Second)); err != nil {
 		t.Fatal(err)
 	}

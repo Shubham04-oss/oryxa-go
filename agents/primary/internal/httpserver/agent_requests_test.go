@@ -39,6 +39,19 @@ func (service *fakeInteractions) DecideAsOwner(_ context.Context, actor primarya
 	return service.request, nil
 }
 
+// ReviewAsOwner is the one way the server reviews an answer held for its
+// member: as the member themself, in their own session. It refuses any
+// other actor, as the ledger does.
+func (service *fakeInteractions) ReviewAsOwner(_ context.Context, actor primaryagents.InteractionActor, _ string, input primaryagents.InteractionReviewInput) (primaryagents.Interaction, error) {
+	service.actors = append(service.actors, actor)
+	if actor.Session != primaryagents.SessionMember {
+		return primaryagents.Interaction{}, interactions.ErrForbidden
+	}
+	service.reviews++
+	service.request.Review = &primaryagents.InteractionReview{Action: input.Action}
+	return service.request, nil
+}
+
 // teamspaceInteractions is fakeInteractions keeping the last request body it
 // was asked to create and the last listing it was asked for.
 type teamspaceInteractions struct {
@@ -406,6 +419,160 @@ func TestTheDecisionRouteIsTheMembersOwnSession(t *testing.T) {
 	for _, actor := range requests.actors {
 		if actor.Session != primaryagents.SessionMember || actor.UserID != "user_1" {
 			t.Fatalf("a route acted as %+v, want user_1 in their own session", actor)
+		}
+	}
+}
+
+// reviewLedger is a request ledger holding one request, which reading it
+// and reviewing it is all a review reaches; the embedded nil Repository
+// fails loudly on anything else.
+type reviewLedger struct {
+	interactions.Repository
+	request primaryagents.Interaction
+	reviews int
+}
+
+func (ledger *reviewLedger) Get(_ context.Context, id string) (primaryagents.Interaction, error) {
+	if id != ledger.request.ID {
+		return primaryagents.Interaction{}, interactions.ErrNotFound
+	}
+	return ledger.request, nil
+}
+
+// Review settles the review as the store does.
+func (ledger *reviewLedger) Review(_ context.Context, _ string, action string, reviewer primaryagents.InteractionDecider, at time.Time) (primaryagents.Interaction, error) {
+	ledger.reviews++
+	var delivered *primaryagents.InteractionResult
+	switch action {
+	case interactions.ReviewSend:
+		delivered = &ledger.request.Held.Result
+	case interactions.ReviewSendMasked:
+		delivered = ledger.request.Held.MaskedResult
+	}
+	ledger.request.Status, ledger.request.Result = interactions.StatusWithheld, delivered
+	if delivered != nil {
+		ledger.request.Status = delivered.Status
+	}
+	ledger.request.Held = nil
+	ledger.request.Review = &primaryagents.InteractionReview{Action: action, DecidedBy: reviewer, DecidedAt: at}
+	ledger.request.Revision++
+	return ledger.request, nil
+}
+
+// answerInReview is Grace's request of user_1's primary agent, answered with
+// an email address the guard held for user_1's review.
+func answerInReview() primaryagents.Interaction {
+	request := heldInTeamspace()
+	request.Status = interactions.StatusReview
+	request.Decision = &primaryagents.InteractionDecision{Decision: interactions.DecisionApproved, Message: "Go ahead.", AllowedTools: []string{"apps"}}
+	request.Guard = &primaryagents.InteractionGuard{State: "held", Kinds: []string{"EMAIL"}}
+	request.Held = &primaryagents.InteractionHeld{
+		Result:       primaryagents.InteractionResult{Status: interactions.StatusCompleted, Summary: "Priya is at priya@example.com.", ToolsUsed: []string{"apps"}, Artifacts: []string{}},
+		MaskedResult: &primaryagents.InteractionResult{Status: interactions.StatusCompleted, Summary: "Priya is at {EMAIL}.", ToolsUsed: []string{"apps"}, Artifacts: []string{}},
+	}
+	return request
+}
+
+func reviewServer(t *testing.T, ledger *reviewLedger) *Server {
+	t.Helper()
+	requests, err := interactions.New(interactions.Config{Repository: ledger, Directory: unusedDirectory{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agentRequestServer(requests)
+}
+
+// TestTheMemberReviewsAHeldAnswerInTheirOwnSession runs the real ledger
+// service behind the review route: user_1 sees what was held for them, and
+// sends it, sends it masked, or withholds it, each recorded as their own
+// review.
+func TestTheMemberReviewsAHeldAnswerInTheirOwnSession(t *testing.T) {
+	ledger := &reviewLedger{request: answerInReview()}
+	read := serve(reviewServer(t, ledger), http.MethodGet, "/v1/organizations/org_1/agent-requests/irq_held", "", bearer)
+	for _, want := range []string{`"status":"review"`, `"guard":{"state":"held","kinds":["EMAIL"]}`, `"held":{"result":{"status":"completed","summary":"Priya is at priya@example.com."`, `"masked_result":{"status":"completed","summary":"Priya is at {EMAIL}."`} {
+		if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), want) {
+			t.Fatalf("the member reads %d %s, want %s", read.Code, read.Body.String(), want)
+		}
+	}
+	for action, want := range map[string]string{
+		"send":        `"status":"completed","decision":`,
+		"send_masked": `"summary":"Priya is at {EMAIL}."`,
+		"withhold":    `"status":"withheld"`,
+	} {
+		ledger := &reviewLedger{request: answerInReview()}
+		reviewed := serve(reviewServer(t, ledger), http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_held/review", `{"action":"`+action+`"}`, bearer)
+		if reviewed.Code != http.StatusOK || ledger.reviews != 1 || !strings.Contains(reviewed.Body.String(), want) ||
+			!strings.Contains(reviewed.Body.String(), `"review":{"action":"`+action+`","decided_by":{"kind":"member","user_id":"user_1"},"decided_at":`) ||
+			strings.Contains(reviewed.Body.String(), `"held":{`) {
+			t.Fatalf("%s = %d %s after %d reviews, want 200 with %s and user_1's review", action, reviewed.Code, reviewed.Body.String(), ledger.reviews, want)
+		}
+	}
+}
+
+// TestTheReviewRouteRefusesWhatIsNotTheMembersToReview: the member who asked
+// cannot review the answer to their own request, a member who is no party
+// cannot read it, an agent's own token is refused before the ledger is
+// asked, and only an answer in review, before its request expires, with a
+// masked version to send masked, is reviewed.
+func TestTheReviewRouteRefusesWhatIsNotTheMembersToReview(t *testing.T) {
+	asked := answerInReview()
+	asked.Requester, asked.Target = asked.Target, asked.Requester
+	notAParty := answerInReview()
+	notAParty.Target.UserID = "user_3"
+	answered := answerInReview()
+	answered.Status, answered.Held = interactions.StatusCompleted, nil
+	expired := answerInReview()
+	expired.ExpiresAt = time.Now().Add(-time.Minute)
+	unchecked := answerInReview()
+	unchecked.Held.MaskedResult = nil
+	for name, testCase := range map[string]struct {
+		request primaryagents.Interaction
+		body    string
+		status  int
+		code    string
+	}{
+		"the member who asked":         {asked, `{"action":"send"}`, http.StatusForbidden, "forbidden"},
+		"a member who is no party":     {notAParty, `{"action":"send"}`, http.StatusNotFound, "not_found"},
+		"an answer already sent":       {answered, `{"action":"send"}`, http.StatusConflict, "invalid_state"},
+		"an expired request":           {expired, `{"action":"withhold"}`, http.StatusConflict, "request_expired"},
+		"an unchecked answer, masked":  {unchecked, `{"action":"send_masked"}`, http.StatusConflict, "invalid_state"},
+		"an action nobody knows":       {answerInReview(), `{"action":"forward"}`, http.StatusBadRequest, "invalid_request"},
+		"a body with another field in": {answerInReview(), `{"action":"send","message":"hi"}`, http.StatusBadRequest, "invalid_request"},
+	} {
+		ledger := &reviewLedger{request: testCase.request}
+		refused := serve(reviewServer(t, ledger), http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_held/review", testCase.body, bearer)
+		if refused.Code != testCase.status || errorCode(t, refused) != testCase.code || ledger.reviews != 0 {
+			t.Errorf("%s = %d %s after %d reviews, want %d %s and none", name, refused.Code, refused.Body.String(), ledger.reviews, testCase.status, testCase.code)
+		}
+	}
+
+	ledger := &reviewLedger{request: answerInReview()}
+	directory := member()
+	directory.membership.Agent = true
+	managed := &fakeManagedAgents{definitions: []managedagents.Definition{{ID: "agt_primary", Kind: managedagents.KindPrimary, Name: "Carl", Status: managedagents.StatusActive}}}
+	requests, err := interactions.New(interactions.Config{Repository: ledger, Directory: unusedDirectory{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := New(directory, &fakeThreads{}, Config{AllowedOrigins: []string{"https://app.oryxa.test"}, RunTimeout: time.Minute, Agents: managed, Interactions: requests}, nil)
+	byAgent := serve(server, http.MethodPost, "/v1/organizations/org_1/agent-requests/irq_held/review", `{"action":"send"}`, bearer)
+	if byAgent.Code != http.StatusForbidden || errorCode(t, byAgent) != "forbidden" || ledger.reviews != 0 {
+		t.Fatalf("an agent's own token = %d %s after %d reviews, want 403 and none", byAgent.Code, byAgent.Body.String(), ledger.reviews)
+	}
+}
+
+// TestTheMemberWhoAskedSeesNothingOfAHeldAnswer: over the API, the member
+// who asked reads a request in review as its status alone.
+func TestTheMemberWhoAskedSeesNothingOfAHeldAnswer(t *testing.T) {
+	asked := answerInReview()
+	asked.Requester, asked.Target = asked.Target, asked.Requester
+	read := serve(reviewServer(t, &reviewLedger{request: asked}), http.MethodGet, "/v1/organizations/org_1/agent-requests/irq_held", "", bearer)
+	if read.Code != http.StatusOK || !strings.Contains(read.Body.String(), `"status":"review"`) {
+		t.Fatalf("the member who asked reads %d %s", read.Code, read.Body.String())
+	}
+	for _, private := range []string{`"held":`, `"guard":`, `"result":`, "priya", "EMAIL"} {
+		if strings.Contains(read.Body.String(), private) {
+			t.Fatalf("the member who asked reads %s, holding %s", read.Body.String(), private)
 		}
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/eventbridge"
 	"github.com/aws/aws-sdk-go-v2/service/scheduler"
 	"github.com/aws/aws-sdk-go-v2/service/sfn"
@@ -24,6 +25,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteamrooms"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentteams"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agentworkflows"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/answerguard"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/assembly"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/authclient"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/directoryclient"
@@ -214,6 +216,23 @@ func Mount(ctx context.Context, platform host.Platform) (host.Service, error) {
 		}
 		if typeSafe != nil {
 			interactionConfig.Jev = typeSafe.Ask
+		}
+		// Every answer another member reads is checked first when a
+		// guardrail is named. The SDK honours AWS_ENDPOINT_URL_BEDROCK_RUNTIME,
+		// which points development at a stand-in.
+		if settings.AnswerGuardrailIdentifier != "" {
+			guard, err := answerguard.New(bedrockruntime.NewFromConfig(platform.AWS), answerguard.Config{
+				Identifier: settings.AnswerGuardrailIdentifier, Version: settings.AnswerGuardrailVersion, Logger: logger,
+			})
+			if err != nil {
+				sessionStore.Close()
+				return host.Service{}, err
+			}
+			interactionConfig.Guard = guard
+			logger.Info("the answer guard checks every answer another member reads before they read it",
+				"guardrail", settings.AnswerGuardrailIdentifier, "version", settings.AnswerGuardrailVersion)
+		} else {
+			logger.Warn("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID is not set: answers reach the member who asked unchecked")
 		}
 		interactionService, err = agentinteractions.New(interactionConfig)
 		if err != nil {

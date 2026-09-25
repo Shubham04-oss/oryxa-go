@@ -32,6 +32,7 @@ type fakeRepository struct {
 	keys     map[string]string
 	creates  int
 	holds    int
+	reviews  int
 }
 
 func newFakeRepository() *fakeRepository {
@@ -141,12 +142,53 @@ func (repo *fakeRepository) Close(_ context.Context, id, reason string, at time.
 	repo.requests[id] = request
 	return request, nil
 }
-func (repo *fakeRepository) Respond(_ context.Context, id string, input agents.InteractionResponseInput, at time.Time) (agents.Interaction, error) {
+
+// Respond and Review change the fake ledger as Store does.
+func (repo *fakeRepository) Respond(_ context.Context, id string, answer Answer, at time.Time) (agents.Interaction, error) {
+	status, err := answer.status()
+	if err != nil {
+		return agents.Interaction{}, err
+	}
 	request := repo.requests[id]
-	request.Status = input.Status
-	request.Result = &agents.InteractionResult{Status: input.Status, Summary: input.Summary, Content: input.Content, ToolsUsed: input.ToolsUsed, Artifacts: input.Artifacts, CompletedAt: at}
+	if request.Status != StatusApproved {
+		return agents.Interaction{}, ErrConflict
+	}
+	request.Status, request.Result, request.Held, request.Guard = status, answer.Result, answer.Held, answer.Guard
+	if request.Result != nil {
+		request.Result.CompletedAt = at
+	}
 	request.Revision++
+	request.UpdatedAt = at
 	repo.requests[id] = request
+	return request, nil
+}
+func (repo *fakeRepository) Review(_ context.Context, id, action string, reviewer agents.InteractionDecider, at time.Time) (agents.Interaction, error) {
+	request, ok := repo.requests[id]
+	switch {
+	case !ok:
+		return agents.Interaction{}, ErrNotFound
+	case request.Status != StatusReview || request.Held == nil:
+		return agents.Interaction{}, ErrConflict
+	case !request.ExpiresAt.After(at):
+		return agents.Interaction{}, ErrExpired
+	}
+	var delivered *agents.InteractionResult
+	switch action {
+	case ReviewSend:
+		delivered = &request.Held.Result
+	case ReviewSendMasked:
+		delivered = request.Held.MaskedResult
+	}
+	request.Status, request.Result = StatusWithheld, nil
+	if delivered != nil {
+		request.Status, request.Result = delivered.Status, delivered
+	}
+	request.Held = nil
+	request.Review = &agents.InteractionReview{Action: action, DecidedBy: reviewer, DecidedAt: at}
+	request.Revision++
+	request.UpdatedAt = at
+	repo.requests[id] = request
+	repo.reviews++
 	return request, nil
 }
 

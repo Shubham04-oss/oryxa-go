@@ -272,6 +272,46 @@ func TestInteractionLifecycleRoutesOnlyIdentityAndState(t *testing.T) {
 	}
 }
 
+// TestAnAnswerInReviewWakesNobodyAndItsOutcomeWakesTheRequester: an answer
+// held for its addressed member's review is acknowledged without a
+// delivery, since the member reviews it in person; a withheld one, and one
+// sent, are reported to the member who asked, as any outcome is.
+func TestAnAnswerInReviewWakesNobodyAndItsOutcomeWakesTheRequester(t *testing.T) {
+	recorder := &fakeInteractionRecorder{}
+	consumer, err := NewConsumer(&fakeRecorder{}, recorder, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nudges := 0
+	consumer.WithInteractionNudge(func() { nudges++ })
+	changed := agentsv1.InteractionChanged{
+		RequestID: "irq_1", OrganizationID: "org_1",
+		RequesterUserID: "user_a", RequesterAgentID: "agt_a",
+		TargetUserID: "user_b", TargetAgentID: "agt_b",
+		Status: "review", Revision: 3, ChangedAt: time.Unix(100, 0).UTC(),
+	}
+	if err := consumer.Handle(context.Background(), delivery(t, agentsv1.Source, agentsv1.InteractionCompletedDetailType, "evt_review", changed)); err != nil {
+		t.Fatalf("an answer in review: %v", err)
+	}
+	if len(recorder.deliveries) != 0 || nudges != 0 {
+		t.Fatalf("an answer in review recorded %+v and nudged %d times, want nothing", recorder.deliveries, nudges)
+	}
+	for revision, status := range map[int64]string{4: "withheld", 5: "completed"} {
+		changed.Status, changed.Revision = status, revision
+		if err := consumer.Handle(context.Background(), delivery(t, agentsv1.Source, agentsv1.InteractionCompletedDetailType, "evt_"+status, changed)); err != nil {
+			t.Fatalf("%s: %v", status, err)
+		}
+		got := recorder.deliveries[len(recorder.deliveries)-1]
+		if got.Kind != interactiondelivery.KindRequesterCompleted || got.RecipientUserID != "user_a" || got.RecipientAgentID != "agt_a" || got.Status != status {
+			t.Fatalf("%s delivered %+v, want the requester told", status, got)
+		}
+	}
+	changed.Status = "archived"
+	if err := consumer.Handle(context.Background(), delivery(t, agentsv1.Source, agentsv1.InteractionCompletedDetailType, "evt_archived", changed)); err == nil {
+		t.Fatal("a completed event with a status nobody knows was accepted")
+	}
+}
+
 // TestANewInteractionDeliveryNudgesTheWaker: the consumer tells the waker of
 // each delivery it records, as it records it, so the agent is woken at once;
 // a delivery the bus repeats is not news.
