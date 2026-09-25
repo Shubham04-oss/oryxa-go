@@ -67,6 +67,22 @@ func TestThePayloadsAreWrittenAsTheContractSays(t *testing.T) {
 			`{"organization_id":"org_1","scope":"organization","removed_at":"2026-09-24T10:05:00.123Z",` +
 				`"source_event_id":"evt_auth_2","completed_at":"2026-09-24T10:05:00.123Z"}`,
 		},
+		"a member's purge in a teamspace they left": {
+			PurgeCompleted{
+				OrganizationID: "org_1", Scope: PurgeScopeTeamspaceMember, UserID: "user-b", TeamspaceID: "tsp_1",
+				RemovedAt: at, SourceEventID: "evt_agents_1", CompletedAt: at.Add(time.Second),
+			},
+			`{"organization_id":"org_1","scope":"teamspace_member","user_id":"user-b","teamspace_id":"tsp_1",` +
+				`"removed_at":"2026-09-24T10:05:00.123Z","source_event_id":"evt_agents_1","completed_at":"2026-09-24T10:05:01.123Z"}`,
+		},
+		"a deleted teamspace's purge names no member": {
+			PurgeCompleted{
+				OrganizationID: "org_1", Scope: PurgeScopeTeamspace, TeamspaceID: "tsp_1",
+				RemovedAt: at, SourceEventID: "evt_agents_2", CompletedAt: at,
+			},
+			`{"organization_id":"org_1","scope":"teamspace","teamspace_id":"tsp_1","removed_at":"2026-09-24T10:05:00.123Z",` +
+				`"source_event_id":"evt_agents_2","completed_at":"2026-09-24T10:05:00.123Z"}`,
+		},
 	} {
 		if got := encode(t, test.value); got != test.want {
 			t.Errorf("%s:\n got %s\nwant %s", name, got, test.want)
@@ -81,6 +97,10 @@ func TestTheNamesAreTheContracts(t *testing.T) {
 		MessagePostedDetailType:    "realtime.message.posted.v1",
 		ConversationReadDetailType: "realtime.conversation.read.v1",
 		PurgeCompletedDetailType:   "realtime.purge.completed.v1",
+		PurgeScopeMember:           "member",
+		PurgeScopeOrganization:     "organization",
+		PurgeScopeTeamspaceMember:  "teamspace_member",
+		PurgeScopeTeamspace:        "teamspace",
 	} {
 		if got != want {
 			t.Errorf("%q, want %q", got, want)

@@ -324,6 +324,56 @@ func TestRecordPurgeCompletedRecordsEachPurgeOnce(t *testing.T) {
 	}
 }
 
+// A teamspace's purge is recorded with its teamspace, and a deleted
+// teamspace's names no member, as the contract has them.
+func TestRecordPurgeCompletedKeepsATeamspacesPurge(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	at := time.Date(2026, time.September, 24, 10, 0, 0, 123456789, time.UTC)
+	for _, completed := range []realtimev1.PurgeCompleted{
+		{
+			OrganizationID: "org_1", Scope: realtimev1.PurgeScopeTeamspaceMember, UserID: "user-b", TeamspaceID: "tsp_1",
+			RemovedAt: at, SourceEventID: "evt_agents_1", CompletedAt: at.Add(time.Second),
+		},
+		{
+			OrganizationID: "org_1", Scope: realtimev1.PurgeScopeTeamspace, TeamspaceID: "tsp_1",
+			RemovedAt: at, SourceEventID: "evt_agents_2", CompletedAt: at.Add(time.Second),
+		},
+	} {
+		if recorded, err := store.RecordPurgeCompleted(ctx, completed); err != nil || !recorded {
+			t.Fatalf("RecordPurgeCompleted(%+v) = %v, %v", completed, recorded, err)
+		}
+	}
+	details := map[string]map[string]any{}
+	for _, row := range outboxRows(t, store) {
+		var detail map[string]any
+		if err := json.Unmarshal([]byte(row.detail), &detail); err != nil {
+			t.Fatal(err)
+		}
+		details[row.id] = detail
+	}
+	for sourceEventID, want := range map[string]map[string]any{
+		"evt_agents_1": {
+			"organization_id": "org_1", "scope": "teamspace_member", "user_id": "user-b", "teamspace_id": "tsp_1",
+			"removed_at": "2026-09-24T10:00:00.123456789Z", "source_event_id": "evt_agents_1", "completed_at": "2026-09-24T10:00:01.123456789Z",
+		},
+		"evt_agents_2": {
+			"organization_id": "org_1", "scope": "teamspace", "teamspace_id": "tsp_1",
+			"removed_at": "2026-09-24T10:00:00.123456789Z", "source_event_id": "evt_agents_2", "completed_at": "2026-09-24T10:00:01.123456789Z",
+		},
+	} {
+		detail := details[PurgeCompletedEventID(sourceEventID)]
+		if len(detail) != len(want) {
+			t.Fatalf("detail = %v, want %v", detail, want)
+		}
+		for key, value := range want {
+			if detail[key] != value {
+				t.Errorf("%s: detail[%s] = %v, want %v", sourceEventID, key, detail[key], value)
+			}
+		}
+	}
+}
+
 // The shared dispatcher publishes from realtime's outbox as from any other:
 // the table has the columns it claims and marks.
 func TestTheSharedDispatcherPublishesFromTheOutbox(t *testing.T) {

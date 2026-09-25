@@ -99,3 +99,24 @@ func TestTeamspaceRoomMessagePostedIsWrittenAsTheContractSays(t *testing.T) {
 		t.Fatalf("detail type = %q", TeamspaceRoomMessagePostedDetailType)
 	}
 }
+
+// A person leaving a teamspace is written with its identities in this order,
+// and removed_at to the nanosecond, in UTC, as Teams' clock gave it.
+func TestTeamspaceMemberRemovedIsWrittenAsTheContractSays(t *testing.T) {
+	removed := TeamspaceMemberRemoved{
+		OrganizationID: "org_1", TeamspaceID: "tsp_1", TeamID: "team_1", UserID: "user_ada",
+		RemovedAt: time.Date(2026, time.September, 24, 10, 0, 0, 123456789, time.UTC),
+	}
+	encoded, err := json.Marshal(removed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"organization_id":"org_1","teamspace_id":"tsp_1","team_id":"team_1","user_id":"user_ada",` +
+		`"removed_at":"2026-09-24T10:00:00.123456789Z"}`
+	if string(encoded) != want {
+		t.Fatalf("\n got %s\nwant %s", encoded, want)
+	}
+	if TeamspaceMemberRemovedDetailType != "agents.teamspace.member.removed.v1" {
+		t.Fatalf("detail type = %q", TeamspaceMemberRemovedDetailType)
+	}
+}

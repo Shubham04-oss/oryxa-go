@@ -121,6 +121,13 @@ func testVerifier(t *testing.T) *eventauth.Verifier {
 
 func delivery(t *testing.T, source, detailType, eventID string, data any) string {
 	t.Helper()
+	return deliveryAt(t, source, detailType, eventID, "", data)
+}
+
+// deliveryAt is delivery for an envelope that says when the event happened,
+// as occurredAt, which delivery leaves out.
+func deliveryAt(t *testing.T, source, detailType, eventID, occurredAt string, data any) string {
+	t.Helper()
 	encoded, err := json.Marshal(data)
 	if err != nil {
 		t.Fatal(err)
@@ -131,8 +138,11 @@ func delivery(t *testing.T, source, detailType, eventID string, data any) string
 	// A source no harness signer exists for — one nothing publishes as —
 	// stays unsigned, which is one more thing the consumer must refuse.
 	detail := map[string]any{"event_id": eventID, "version": 1, "data": json.RawMessage(encoded)}
+	if occurredAt != "" {
+		detail["occurred_at"] = occurredAt
+	}
 	if signer, ok := harnessSigns[source]; ok {
-		signature, err := signer.Sign(source, detailType, eventID, 1, "", encoded)
+		signature, err := signer.Sign(source, detailType, eventID, 1, occurredAt, encoded)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -415,19 +425,49 @@ func TestADeletedHumanTeamRemovesItsTeamspace(t *testing.T) {
 
 func TestALeavingTeamMemberWithdrawsPrivateAgentContributions(t *testing.T) {
 	var organizationID, teamID, userID string
+	var removedAt time.Time
 	consumer, err := NewConsumer(&fakeRecorder{}, nil, nil, testVerifier(t), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	consumer = consumer.WithTeamMemberForgetter(func(_ context.Context, organization, team, user string) error {
-		organizationID, teamID, userID = organization, team, user
+	consumer = consumer.WithTeamMemberForgetter(func(_ context.Context, organization, team, user string, at time.Time) error {
+		organizationID, teamID, userID, removedAt = organization, team, user, at
 		return nil
 	})
-	if err := consumer.Handle(context.Background(), delivery(t, teamsv1.Source, teamsv1.MemberRemovedDetailType, "evt_team_member_removed",
-		teamsv1.MemberRemoved{OrganizationID: "org_1", TeamID: "team_1", UserID: "user_1"})); err != nil {
+	// Teams' clock gives nanoseconds, and the teamspace's purge keeps them.
+	left := time.Date(2026, time.September, 24, 10, 0, 0, 123456789, time.UTC)
+	if err := consumer.Handle(context.Background(), deliveryAt(t, teamsv1.Source, teamsv1.MemberRemovedDetailType, "evt_team_member_removed",
+		"2026-09-24T10:00:05Z", teamsv1.MemberRemoved{OrganizationID: "org_1", TeamID: "team_1", UserID: "user_1", RemovedAt: left})); err != nil {
 		t.Fatal(err)
 	}
-	if organizationID != "org_1" || teamID != "team_1" || userID != "user_1" {
-		t.Fatalf("cleanup organization=%q team=%q user=%q", organizationID, teamID, userID)
+	if organizationID != "org_1" || teamID != "team_1" || userID != "user_1" || !removedAt.Equal(left) {
+		t.Fatalf("cleanup organization=%q team=%q user=%q removed_at=%s", organizationID, teamID, userID, removedAt)
+	}
+}
+
+// A membership's end bounds what the person's side conversations in the
+// teamspace lose. A Teams event that does not say when ended when it
+// happened, and one that says neither is refused rather than guessed at.
+func TestALeavingTeamMembersRemovalTimeIsWhenTheEventHappenedWhenItHasNone(t *testing.T) {
+	var removedAt []time.Time
+	consumer, err := NewConsumer(&fakeRecorder{}, nil, nil, testVerifier(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer = consumer.WithTeamMemberForgetter(func(_ context.Context, _, _, _ string, at time.Time) error {
+		removedAt = append(removedAt, at)
+		return nil
+	})
+	removed := teamsv1.MemberRemoved{OrganizationID: "org_1", TeamID: "team_1", UserID: "user_1"}
+	if err := consumer.Handle(context.Background(), deliveryAt(t, teamsv1.Source, teamsv1.MemberRemovedDetailType, "evt_untimed",
+		"2026-09-24T10:00:05.5Z", removed)); err != nil {
+		t.Fatal(err)
+	}
+	if want := time.Date(2026, time.September, 24, 10, 0, 5, 500000000, time.UTC); len(removedAt) != 1 || !removedAt[0].Equal(want) {
+		t.Fatalf("removed_at = %v, want the event's own time, %s", removedAt, want)
+	}
+	err = consumer.Handle(context.Background(), delivery(t, teamsv1.Source, teamsv1.MemberRemovedDetailType, "evt_timeless", removed))
+	if err == nil || !strings.Contains(err.Error(), "when the membership ended") || len(removedAt) != 1 {
+		t.Fatalf("an event saying neither = %v, forgot %d times; want it refused, and nothing forgotten", err, len(removedAt))
 	}
 }

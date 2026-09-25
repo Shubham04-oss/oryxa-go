@@ -1,8 +1,10 @@
 // Package inbound handles events agents must act on: app batches that wake a
 // member's primary agent, interaction lifecycle changes that wake persistent
 // agents, shared publications that wake the organization synthesizer,
-// membership removal that takes private state with it, and human-team deletion
-// that removes the corresponding shared teamspace.
+// membership removal that takes private state with it, a person leaving a
+// human team, which takes their contributions to its teamspace and says they
+// left it, and human-team deletion that removes the corresponding shared
+// teamspace.
 //
 // Batching decides when app triggers make a batch, while interaction events
 // carry routing identity and state only; authoritative request content stays
@@ -83,8 +85,9 @@ type Forgetter func(ctx context.Context, organizationID, memberID string) error
 type TeamForgetter func(ctx context.Context, organizationID, teamID string) error
 
 // TeamMemberForgetter withdraws private agent contributions when a person's
-// place on a human team ends.
-type TeamMemberForgetter func(ctx context.Context, organizationID, teamID, userID string) error
+// place on a human team ends, and says they left the team's teamspace, when it
+// has one. removedAt is when the membership ended.
+type TeamMemberForgetter func(ctx context.Context, organizationID, teamID, userID string, removedAt time.Time) error
 
 // Consumer dispatches agents' queue.
 type Consumer struct {
@@ -276,7 +279,17 @@ func (consumer *Consumer) dispatch(ctx context.Context, event eventBridgeEvent, 
 		if consumer.forgetTeamMember == nil {
 			return fmt.Errorf("event %s: teamspace member cleanup is not configured", envelope.EventID)
 		}
-		return consumer.forgetTeamMember(ctx, removed.OrganizationID, removed.TeamID, removed.UserID)
+		// When the membership ended bounds what the person's side
+		// conversations in the teamspace lose. An event that does not say
+		// ended when it happened.
+		removedAt := removed.RemovedAt
+		if removedAt.IsZero() {
+			removedAt, _ = time.Parse(time.RFC3339Nano, envelope.OccurredAt)
+		}
+		if removedAt.IsZero() {
+			return fmt.Errorf("event %s: a removed team member needs when the membership ended", envelope.EventID)
+		}
+		return consumer.forgetTeamMember(ctx, removed.OrganizationID, removed.TeamID, removed.UserID, removedAt)
 	default:
 		return fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
 	}

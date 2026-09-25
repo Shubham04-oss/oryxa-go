@@ -803,8 +803,12 @@ identity, status, revision, and contributor user ids. Prompts, whisperer
 context, roles, connection data, and model output remain out of EventBridge. A
 `teams.team.deleted.v1` event removes the corresponding space through the
 agents queue, while a departing member's private contributions are removed
-before their agent registry is cleaned up. The whisperer roster needs no
-cleanup because it is derived from Teams on every read.
+before their agent registry is cleaned up. A `teams.member.removed.v1` event
+withdraws what the person contributed to the team's teamspace and, when the
+team has one, records `agents.teamspace.member.removed.v1`, whether or not
+they contributed anything, so their side conversations there are purged. The
+whisperer roster needs no cleanup because it is derived from Teams on every
+read.
 
 Shared work is an append-only publication ledger. A member can publish only
 as their own primary whisperer or one of their active specialists explicitly
@@ -948,6 +952,8 @@ fills it (`internal/inbound`):
 | `agents.interaction.completed.v1` | Wakes the requester to observe a completed or failed result |
 | `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, and cross-user request content in that organization |
 | `auth.organization.deleted.v1` | The same for everyone in the organization |
+| `teams.member.removed.v1` | Withdraws the person's contributions to the team's teamspace, and records `agents.teamspace.member.removed.v1` when the team has one |
+| `teams.team.deleted.v1` | Removes the team's teamspace, recording `agents.teamspace.deleted.v1` |
 
 A conversation, agent definition, or interaction payload should not outlive
 the place it belonged to, so both of auth's events remove them there. Runs'
@@ -1347,6 +1353,19 @@ Contracts live in `/contracts/events/agents/v1`:
 | `agents.interaction.decided.v1` | The target approved or rejected a request |
 | `agents.interaction.completed.v1` | The target completed or failed an approved request |
 | `agents.teamspace.room.message.posted.v1` | A teamspace's room stored a message, a person's or an agent's answer, without its body ([A teamspace is a room](#a-teamspace-is-a-room)) |
+| `agents.teamspace.member.removed.v1` | A person left a teamspace: Teams removed them from the team it is bound to, whether or not they had contributed agents to it |
+
+A person leaving a teamspace carries identities only: `organization_id`,
+`teamspace_id`, `team_id`, `user_id`, and `removed_at`, when the team
+membership ended, which is the Teams event's `removed_at`, or when that event
+happened if it has none. It is recorded in the transaction that withdraws the
+person's contributions, and only for a team that has a teamspace. A Teams
+event delivered again records it again, under a new `event_id` but with the
+same `removed_at`, and its consumers must take that as a repeat. Realtime
+consumes it, and
+`agents.teamspace.deleted.v1`, to have the web app purge the side
+conversations the person had in that teamspace, or all of the deleted
+teamspace's (`realtime/README.md`).
 
 A request's three events carry who it is between, its `status` and
 `revision`, and, since the owner-approval fields reached them, where it was

@@ -437,65 +437,100 @@ func (store *Store) Forget(ctx context.Context, organizationID, userID string) e
 			return err
 		})
 	}
-	return store.forgetMemberContributions(ctx, organizationID, "", userID)
-}
-
-// ForgetTeamMember withdraws every specialist a person contributed to one
-// teamspace when Teams reports that their human-team membership ended.
-func (store *Store) ForgetTeamMember(ctx context.Context, organizationID, teamID, userID string) error {
-	return store.forgetMemberContributions(ctx, organizationID, teamID, userID)
-}
-
-func (store *Store) forgetMemberContributions(ctx context.Context, organizationID, teamID, userID string) error {
 	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+spaceColumns+` FROM agents_primary.teamspaces space
-			WHERE space.organization_id=$1 AND ($2='' OR space.team_id=$2) AND EXISTS (
-				SELECT 1 FROM agents_primary.teamspace_agent_contributions contribution
-				WHERE contribution.teamspace_id=space.id AND contribution.owner_user_id=$3
-			) FOR UPDATE OF space`, organizationID, teamID, userID)
-		if err != nil {
-			return err
-		}
-		spaces := []Space{}
-		for rows.Next() {
-			var space Space
-			if err := scanSpace(rows, &space); err != nil {
-				rows.Close()
-				return err
-			}
-			spaces = append(spaces, space)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		for _, space := range spaces {
-			if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.teamspace_agent_contributions
-				WHERE teamspace_id=$1 AND owner_user_id=$2`, space.ID, userID); err != nil {
-				return err
-			}
-			space.Revision++
-			space.UpdatedAt = time.Now().UTC()
-			var updated Space
-			if err := scanSpace(tx.QueryRow(ctx, `UPDATE agents_primary.teamspaces SET revision=$2, updated_at=$3
-				WHERE id=$1 RETURNING `+spaceColumns, space.ID, space.Revision, space.UpdatedAt), &updated); err != nil {
-				return err
-			}
-			updated.Contributions, err = contributionsFrom(ctx, tx, updated.ID)
-			if err != nil {
-				return err
-			}
-			updated.OrganizationAgent, err = organizationAgentFrom(ctx, tx, updated.OrganizationID)
-			if err != nil {
-				return err
-			}
-			if err := recordLifecycle(ctx, tx, agentsv1.TeamspaceContributionChangedDetailType, updated); err != nil {
-				return err
-			}
-		}
-		return nil
+		return forgetMemberContributions(ctx, tx, organizationID, "", userID)
 	})
+}
+
+// ForgetTeamMember is what a person's place on a human team ending takes with
+// it, when Teams reports it. Every specialist they contributed to the team's
+// teamspace is withdrawn. And when the team has a teamspace, their leaving it
+// is recorded as agents.teamspace.member.removed.v1, whether or not they had
+// contributed any, so realtime has the web app purge their side conversations
+// there. Both happen in one transaction, through the outbox. removedAt is
+// when the membership ended. A Teams event delivered again records the event
+// again, with the same removedAt, which its consumers take as a repeat.
+func (store *Store) ForgetTeamMember(ctx context.Context, organizationID, teamID, userID string, removedAt time.Time) error {
+	// An empty team would widen the withdrawal to every teamspace in the
+	// organization.
+	if organizationID == "" || teamID == "" || userID == "" {
+		return errors.New("forget a team member: the organization, the team and the member are required")
+	}
+	if removedAt.IsZero() {
+		return errors.New("forget a team member: when their membership ended is required")
+	}
+	return pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		// A team has one teamspace at most.
+		var teamspaceID string
+		err := tx.QueryRow(ctx, `SELECT id FROM agents_primary.teamspaces
+			WHERE organization_id=$1 AND team_id=$2 FOR UPDATE`, organizationID, teamID).Scan(&teamspaceID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err := forgetMemberContributions(ctx, tx, organizationID, teamID, userID); err != nil {
+			return err
+		}
+		if teamspaceID == "" {
+			return nil
+		}
+		return recordTeamspaceMemberRemoved(ctx, tx, agentsv1.TeamspaceMemberRemoved{
+			OrganizationID: organizationID, TeamspaceID: teamspaceID, TeamID: teamID, UserID: userID,
+			RemovedAt: removedAt.UTC(),
+		})
+	})
+}
+
+// forgetMemberContributions withdraws, in tx, every specialist userID
+// contributed to the organization's teamspaces, or only to teamID's when it
+// is named, recording each teamspace's change.
+func forgetMemberContributions(ctx context.Context, tx pgx.Tx, organizationID, teamID, userID string) error {
+	rows, err := tx.Query(ctx, `SELECT `+spaceColumns+` FROM agents_primary.teamspaces space
+		WHERE space.organization_id=$1 AND ($2='' OR space.team_id=$2) AND EXISTS (
+			SELECT 1 FROM agents_primary.teamspace_agent_contributions contribution
+			WHERE contribution.teamspace_id=space.id AND contribution.owner_user_id=$3
+		) FOR UPDATE OF space`, organizationID, teamID, userID)
+	if err != nil {
+		return err
+	}
+	spaces := []Space{}
+	for rows.Next() {
+		var space Space
+		if err := scanSpace(rows, &space); err != nil {
+			rows.Close()
+			return err
+		}
+		spaces = append(spaces, space)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, space := range spaces {
+		if _, err := tx.Exec(ctx, `DELETE FROM agents_primary.teamspace_agent_contributions
+			WHERE teamspace_id=$1 AND owner_user_id=$2`, space.ID, userID); err != nil {
+			return err
+		}
+		space.Revision++
+		space.UpdatedAt = time.Now().UTC()
+		var updated Space
+		if err := scanSpace(tx.QueryRow(ctx, `UPDATE agents_primary.teamspaces SET revision=$2, updated_at=$3
+			WHERE id=$1 RETURNING `+spaceColumns, space.ID, space.Revision, space.UpdatedAt), &updated); err != nil {
+			return err
+		}
+		updated.Contributions, err = contributionsFrom(ctx, tx, updated.ID)
+		if err != nil {
+			return err
+		}
+		updated.OrganizationAgent, err = organizationAgentFrom(ctx, tx, updated.OrganizationID)
+		if err != nil {
+			return err
+		}
+		if err := recordLifecycle(ctx, tx, agentsv1.TeamspaceContributionChangedDetailType, updated); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ForgetTeam removes the shared space when Teams reports that its human team
@@ -658,6 +693,20 @@ func recordLifecycle(ctx context.Context, tx pgx.Tx, detailType string, space Sp
 		OrganizationAgentID: space.OrganizationAgent.ID, Name: space.Name, Status: string(space.Status),
 		Revision: space.Revision, ContributorUserIDs: contributors, ChangedAt: space.UpdatedAt,
 	}, space.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	trace := observability.CaptureTraceCarrier(ctx).Encode()
+	_, err = tx.Exec(ctx, `INSERT INTO agents_primary.agents_outbox
+		(id, detail_type, detail, occurred_at, trace_context) VALUES ($1,$2,$3,$4,NULLIF($5,''))`,
+		event.ID, event.DetailType, event.Data, event.OccurredAt, trace)
+	return err
+}
+
+// recordTeamspaceMemberRemoved records, in tx, that a person left a
+// teamspace. It happened when their membership ended.
+func recordTeamspaceMemberRemoved(ctx context.Context, tx pgx.Tx, removed agentsv1.TeamspaceMemberRemoved) error {
+	event, err := events.NewEvent(agentsv1.TeamspaceMemberRemovedDetailType, removed, removed.RemovedAt)
 	if err != nil {
 		return err
 	}
