@@ -154,3 +154,36 @@ func TestAnApprovalNobodyKnowsIsHeldForTheOwner(t *testing.T) {
 		t.Fatalf("its owner deciding it = %+v, %v", decided, err)
 	}
 }
+
+// TestATeamspaceRequestNamingNoApprovalIsHeld: a request made in a teamspace
+// that reaches the ledger naming no approval fails closed to its owner — no
+// agent may decide it — while one outside any teamspace naming none is still
+// its agent's, as every request before teamspaces was.
+func TestATeamspaceRequestNamingNoApprovalIsHeld(t *testing.T) {
+	if !HeldForOwner(agents.Interaction{TeamspaceID: "tsp_1"}) || HeldForOwner(agents.Interaction{}) {
+		t.Fatal("HeldForOwner: want a teamspace request naming no approval held, and one outside any teamspace not")
+	}
+	service, repo := teamspaceService(t, teamspaceSeats())
+	unnamed := between("irq_unnamed", "user_a", "agt_a", "user_b", "agt_b", "tsp_1")
+	unnamed.Approval = ""
+	repo.requests[unnamed.ID] = unnamed
+	if _, err := service.Decide(context.Background(), targetPrimary, unnamed.ID, approve); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("an agent deciding it: error=%v, want ErrForbidden", err)
+	}
+	if status := repo.requests[unnamed.ID].Status; status != StatusPending {
+		t.Fatalf("the request became %s", status)
+	}
+}
+
+// TestTheStoreRefusesATeamspaceRequestNamingNoApproval: the store fills in
+// "agent" only for a request made outside any teamspace; one made in a
+// teamspace must say who approves it, and is refused before anything is
+// written.
+func TestTheStoreRefusesATeamspaceRequestNamingNoApproval(t *testing.T) {
+	store := NewStore(nil)
+	unnamed := between("irq_unnamed", "user_a", "agt_a", "user_b", "agt_b", "tsp_1")
+	unnamed.Approval = ""
+	if _, err := store.Create(context.Background(), unnamed, "key"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Create = %v, want ErrInvalid before the database is reached", err)
+	}
+}

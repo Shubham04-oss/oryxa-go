@@ -186,13 +186,16 @@ func TestTheLedgerListsTheRequestsBetweenTwoMembersInATeamspace(t *testing.T) {
 	} {
 		request := storedRequest(organizationID, organizationID+"_"+seed.id, seed.requester, seed.target, start.Add(time.Duration(index)*time.Second))
 		request.TeamspaceID = seed.teamspaceID
+		if seed.teamspaceID != "" {
+			request.Approval = ApprovalOwner
+		}
 		if _, err := store.Create(ctx, request, seed.id); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Other organizations' requests between the same members never appear.
 	elsewhere := storedRequest(organizationID+"_elsewhere", organizationID+"_elsewhere", "user_a", "user_b", start)
-	elsewhere.TeamspaceID = "tsp_1"
+	elsewhere.TeamspaceID, elsewhere.Approval = "tsp_1", ApprovalOwner
 	if _, err := store.Create(ctx, elsewhere, "elsewhere"); err != nil {
 		t.Fatal(err)
 	}

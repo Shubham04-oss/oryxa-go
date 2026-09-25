@@ -254,11 +254,15 @@ func sameRequest(actor agents.InteractionActor, stored agents.Interaction, input
 
 // HeldForOwner is whether only the addressed agent's member may decide a
 // request, in their own session. It fails closed: any approval but the
-// agent's own holds the request, one this code does not know included,
-// while a request naming none predates teamspaces and is its agent's to
-// decide, as it always was.
+// agent's own holds the request, one this code does not know included, and
+// so does a request made in a teamspace that names none. Only a request made
+// outside any teamspace may name none: it predates teamspaces and is its
+// agent's to decide, as it always was.
 func HeldForOwner(request agents.Interaction) bool {
-	return request.Approval != ApprovalAgent && request.Approval != ""
+	if request.Approval == "" {
+		return request.TeamspaceID != ""
+	}
+	return request.Approval != ApprovalAgent
 }
 
 // approval is who decides a new request. Outside a teamspace the addressed
