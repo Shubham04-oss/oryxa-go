@@ -696,8 +696,9 @@ Then, by Go's answer:
   without it came from something between the Worker and Go, such as a
   proxy's page, and says nothing about the events: they go again, as
   below.
-- Anything else (401, 503 while Go's realtime is not configured, another
-  5xx, a redirect, or no answer within 10 s): they stay, and the whole
+- Anything else (401; 404 while Go's realtime is off or not fully
+  configured, since Go then mounts no such route; a 5xx; a redirect,
+  never followed; or no answer within 10 s): they stay, and the whole
   outbox waits, a second after the first such answer in a row, doubling
   each time, to five minutes. What is recorded meanwhile waits with it,
   behind what is ahead. Go's next 204 or refusal ends the wait.
