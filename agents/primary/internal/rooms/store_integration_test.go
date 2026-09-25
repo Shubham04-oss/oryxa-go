@@ -460,20 +460,21 @@ func (fixture *fixture) postedEvents(t *testing.T, roomID string) []roomEvent {
 
 // TestAppendAnnouncesEveryMessageItStores: a person's message and an agent's
 // answer each commit with their event, whose fields are the stored
-// message's, and none of what it said.
+// message's, and none of what it said. Handles are as a room makes them, with
+// no "@".
 func TestAppendAnnouncesEveryMessageItStores(t *testing.T) {
 	fixture := testStore(t)
 	roomID := fixture.newRoom(t)
 	ctx := context.Background()
 	asked, err := fixture.store.Append(ctx, Message{
-		RoomID: roomID, AuthorHandle: "@ada", AuthorKind: SeatPerson, AuthorUserID: "user_ada",
-		Body: "@crew can you draft the launch note?", AddressedTo: []string{"@crew"},
+		RoomID: roomID, AuthorHandle: "ada", AuthorKind: SeatPerson, AuthorUserID: "user_ada",
+		Body: "@crew can you draft the launch note?", AddressedTo: []string{"crew"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.store.Append(ctx, Message{
-		RoomID: roomID, AuthorHandle: "@crew", AuthorKind: SeatAgent, AuthorUserID: "user_ada", AuthorAgentID: "agt_crew",
+		RoomID: roomID, AuthorHandle: "crew", AuthorKind: SeatAgent, AuthorUserID: "user_ada", AuthorAgentID: "agt_crew",
 		Body: "Drafted: the launch is on Tuesday.", InReplyToSeq: asked.Seq,
 	}); err != nil {
 		t.Fatal(err)
@@ -492,7 +493,7 @@ func TestAppendAnnouncesEveryMessageItStores(t *testing.T) {
 			OrganizationID: fixture.organizationID, TeamspaceID: roomID,
 			Message:          agentsv1.TeamspaceRoomMessage{ID: stored[0].ID, Seq: 1},
 			Author:           agentsv1.TeamspaceRoomAuthor{Kind: agentsv1.TeamspaceRoomAuthorMember, UserID: "user_ada"},
-			AddressedHandles: []string{"@crew"}, PostedAt: stored[0].CreatedAt,
+			AddressedHandles: []string{"crew"}, PostedAt: stored[0].CreatedAt,
 		},
 		{
 			OrganizationID: fixture.organizationID, TeamspaceID: roomID,
@@ -520,6 +521,71 @@ func TestAppendAnnouncesEveryMessageItStores(t *testing.T) {
 	}
 }
 
+// TestARoomPublishesOnlyTheSeatsItsMessagesNamed posts through the relay onto
+// the real store, as a room does: a person's "@seat" is stored with the
+// message and published with it, and an email address in an agent's answer is
+// neither, so nothing of what either said reaches the bus.
+func TestARoomPublishesOnlyTheSeatsItsMessagesNamed(t *testing.T) {
+	fixture := testStore(t)
+	roomID := fixture.newRoom(t)
+	ctx := context.Background()
+	ada := Seat{Handle: "ada", Kind: SeatPerson, UserID: "user_ada", DisplayName: "Ada", Present: true}
+	crew := Seat{Handle: "crew", Kind: SeatAgent, UserID: "user_ada", AgentID: "agt_crew", AgentName: "Crew", DisplayName: "Crew"}
+	speaker := &relayFakeSpeaker{reply: func(seat Seat, _ Situation, _ []Message) (string, error) {
+		if seat.Handle == "crew" {
+			return "Drafted, and sent to ops@acme-merger-2027.com; @ada, it is in your inbox.", nil
+		}
+		return Pass, nil
+	}}
+	relay := &Relay{Store: fixture.store, Speaker: speaker}
+	said, err := relay.Post(ctx, Situation{RoomID: roomID, OrganizationID: fixture.organizationID, Seats: []Seat{ada, crew}}, Message{
+		RoomID: roomID, AuthorHandle: "ada", AuthorKind: SeatPerson, AuthorUserID: "user_ada",
+		Body: "@crew can you draft the launch note for billing@acme-merger-2027.com?",
+	}, Verdict{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(said) != 2 || said[1].AuthorHandle != "crew" {
+		t.Fatalf("the room said %+v, want Ada's message and Crew's answer", said)
+	}
+
+	rows, err := fixture.database.Pool.Query(ctx, `SELECT seq, addressed_to FROM agents_primary.room_messages
+		WHERE room_id=$1 ORDER BY seq`, roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := map[int64][]string{}
+	for rows.Next() {
+		var seq int64
+		var addressed []string
+		if err := rows.Scan(&seq, &addressed); err != nil {
+			t.Fatal(err)
+		}
+		stored[seq] = addressed
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	events := fixture.postedEvents(t, roomID)
+	if len(stored) != 2 || len(events) != 2 {
+		t.Fatalf("stored %v and events %+v, want two of each", stored, events)
+	}
+	for index, want := range [][]string{{"crew"}, {"ada"}} {
+		seq := int64(index + 1)
+		if !slices.Equal(stored[seq], want) {
+			t.Errorf("message %d is stored addressing %v, want %v", seq, stored[seq], want)
+		}
+		if got := events[index].posted; got.Message.Seq != seq || !slices.Equal(got.AddressedHandles, want) {
+			t.Errorf("message %d's event = %s, want it to name %v", seq, events[index].detail, want)
+		}
+		for _, word := range []string{"acme-merger", "ops@", "billing@", "inbox", "launch note"} {
+			if strings.Contains(events[index].detail, word) {
+				t.Errorf("message %d's event carries %q from what was said: %s", seq, word, events[index].detail)
+			}
+		}
+	}
+}
+
 // TestAppendAnnouncesNothingItDidNotStore: a message that is not stored has
 // no event, and an event that cannot be recorded takes its message with it,
 // the place in the room included.
@@ -528,10 +594,10 @@ func TestAppendAnnouncesNothingItDidNotStore(t *testing.T) {
 	roomID := fixture.newRoom(t)
 	ctx := context.Background()
 	message := func(id string) Message {
-		return Message{ID: id, RoomID: roomID, AuthorHandle: "@ada", AuthorKind: SeatPerson, AuthorUserID: "user_ada", Body: "Morning."}
+		return Message{ID: id, RoomID: roomID, AuthorHandle: "ada", AuthorKind: SeatPerson, AuthorUserID: "user_ada", Body: "Morning."}
 	}
 
-	if _, err := fixture.store.Append(ctx, Message{RoomID: "room_gone_" + fixture.organizationID, AuthorHandle: "@ada",
+	if _, err := fixture.store.Append(ctx, Message{RoomID: "room_gone_" + fixture.organizationID, AuthorHandle: "ada",
 		AuthorKind: SeatPerson, AuthorUserID: "user_ada", Body: "Anyone?"}); !errors.Is(err, ErrRoomNotFound) {
 		t.Fatalf("Append() to a room that does not exist = %v", err)
 	}
