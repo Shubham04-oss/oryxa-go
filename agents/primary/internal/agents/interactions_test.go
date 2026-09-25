@@ -68,6 +68,11 @@ func TestInteractionToolboxDerivesTheRequesterIdentity(t *testing.T) {
 		service.actor.AgentName != "Crew" || service.token != "member-token" || service.key == "" {
 		t.Fatalf("answer=%q actor=%+v token=%q key=%q", answer, service.actor, service.token, service.key)
 	}
+	// The member is watching with their own token, and it is still the agent
+	// acting: a run never presents itself as the member's own session.
+	if service.actor.Session != SessionAgent {
+		t.Fatalf("a tool call acted in session %q, want %q", service.actor.Session, SessionAgent)
+	}
 }
 
 func TestInteractionToolboxNeedsAService(t *testing.T) {

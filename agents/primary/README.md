@@ -313,7 +313,109 @@ the member's primary agent may mediate every request belonging to that member.
 Approval can only narrow the requested tools and permissions, and a response
 cannot report using a tool outside the approved set. These grants describe the
 interaction envelope; they never bypass a tool's existing authorization or
-human-confirmation requirements.
+human-confirmation requirements, and they are not enforced on the run that
+does the approved work either (see below).
+
+**Requests inside a teamspace, and who approves them.** A request may name the
+teamspace it belongs to (`teamspace_id`), which is how a teamspace side
+conversation asks a teammate's agent for something. The ledger then asks the
+teamspace, against the live Teams directory, where the target sits
+(`teamspaces.Service.RequestSeat`): the requester must be on the teamspace's
+team now, the space and the organization agent must be active, and the target
+must be a teammate's primary agent — their whisperer seat — or an active
+specialist a current teammate contributed there. Anything else is refused
+before anything is recorded (see [Agent request API](#agent-request-api)).
+
+Every request carries `approval`, set when it is made. The requester only
+chooses whether to ask inside a teamspace, and in which; who approves then
+follows the target's own standing there, and nothing the requester sends
+sets it:
+
+| The target | `approval` | Who decides |
+| --- | --- | --- |
+| Any agent, in a request made outside a teamspace | `agent` | The addressed agent, or its member's primary agent mediating, as before teamspaces |
+| A specialist contributed to the teamspace with `automatic` delegation | `agent` | The same |
+| A teammate's primary agent | `owner` | Only that member, in their own session |
+| A specialist contributed with `request` delegation | `owner` | Only that member, in their own session |
+
+The owner's approval therefore guards the requests made in a teamspace, and
+only those. A request made outside any teamspace follows the protocol from
+before teamspaces, so the addressed agent decides it even when its owner
+holds that agent's requests in a teamspace: a requester who leaves
+`teamspace_id` out, or asks in a teamspace where that specialist has
+`automatic` delegation, reaches the agent's own decision. Whether requests
+made outside a teamspace should be held for their owner too is a policy
+decision that is still open. A specialist contributed to two teamspaces with
+different modes is approved as the teamspace the request names has it, for a
+requester on that teamspace's team.
+
+A request held for its owner is decided only through
+`POST .../agent-requests/{request}/decision`, the member's own signed-in call
+(`interactions.Service.DecideAsOwner`). What proves it is the member is the
+actor's session: `agents.InteractionActor.Session` is `"member"` only on the
+API's member path, which refuses agent tokens, and `"agent"` on every actor
+the tools build from a run's session state, even in a chat turn the member is
+watching. `DecideAsOwner` requires the member's session and `Decide` refuses
+it. Agents' tools see `agents.InteractionService`, which has no owner path,
+so `interactions_decide` answers `ErrForbidden`, telling the agent its member
+decides. The member may also decide a request their agent could. The held
+request's `requested` delivery wakes nobody; the member's approval arrives as
+the ordinary `approved` delivery, which wakes the addressed agent with the
+read-only apps toolbox and a prompt saying its owner approved the request
+themself, so it does the approved work and answers with `interactions_respond`
+rather than deciding again. Rejection and expiry work as for any request. The
+check fails closed: any approval but `agent` holds a request (one this code
+does not know included), and so does a request made in a teamspace that names
+none, which the ledger also refuses to store.
+
+Every decision records who made it, as `decision.decided_by`:
+`{"kind": "member", "user_id": ...}` for the member in their own session,
+`{"kind": "agent", "user_id": ..., "agent_id": ...}` for an agent in a run,
+and `{"kind": "system"}` when Oryxa closes a request (below). A decision an
+older build recorded has no `decided_by`. The waker tells an agent its owner
+approved in person only when `decided_by` names that member, never inferred
+from `approval`.
+
+**A request is read again before anything acts on it.** Who approves is set
+when the request is made, but the teamspace can change after that. So
+whenever a request made in a teamspace is acted on, its standing there is read
+again, live and as the addressed member sees the organization
+(`teamspaces.Service.RequestStanding`): when an agent decides it, when its
+member approves it, and before the waker wakes an agent for its `requested` or
+`approved` delivery.
+
+- If its owner has since taken deciding back (switched the specialist from
+  `automatic` to `request`, say), the request is held for them. A pending
+  request is marked `approval: "owner"`. An agent's approval whose work has
+  not started is withdrawn, so the request is pending and held again, with a
+  new `requested` event. The agent is refused and not woken. Switching a mode
+  the other way does not release requests already held.
+- If it no longer stands (the teamspace is gone or disabled, the member who
+  asked left its team, or either agent lost its seat), Oryxa closes it with
+  that reason. A pending request is `rejected`, with `decided_by` `system` and
+  the reason as the decision's message. An approved one is `failed` before any
+  work, with the reason as the result's summary. Each is the ordinary event,
+  so the member who asked is told. Deciding it answers `409 request_closed`.
+- The member's own approval works whatever standing they gave their agent, as
+  long as the space and both seats remain. Rejecting needs nothing to remain.
+- Reading the teamspace needs a token of the addressed member's: their own,
+  in their session or a chat turn they watch, and otherwise an agent token
+  minted under their standing grant (they allowed agents to act for them
+  while they are away). When there is none (no grant, or no token exchange:
+  `AUTH_URL` and `AGENTS_PRIMARY_SERVICE_KEY_ID` both unset), the request
+  cannot be read again, so no agent may decide it. It is held for the member,
+  who decides it in their own session, where it is read with their own
+  token. An approval already made is still worked: it was read live when it
+  was made, and without a token the woken run cannot reach the member's apps
+  or knowledge either. When auth or the directory does not answer, nothing
+  changes and the delivery is retried.
+
+**Nobody is told a request is held for them yet.** Its `requested` delivery
+wakes nobody, nothing notifies the member, and the web app has no Requests
+screen: the member finds it only by listing their requests. A request that
+expires records no event, so nothing tells the member who asked that a held
+request ran out unanswered (reads show it `expired`). Both are follow-ups that
+need a Requests screen.
 
 **What a delivered request may reach.** The member whose agent is woken is not
 there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
@@ -322,9 +424,12 @@ what it may reach follows what their own agent has already allowed:
 - **Deciding** on a new request, and **reporting** a finished one back to its
   own member, run without the apps toolbox at all. Nothing another member
   wrote can read this member's connected apps before their agent has approved
-  it.
-- **Doing approved work** runs with the read-only apps toolbox — the same one
-  a wake-up gets — and never the writing one.
+  it. A request held for its owner is never delivered for deciding at all.
+- **Doing approved work** runs with the read-only apps toolbox (the same one
+  a wake-up gets) and never the writing one. The run is not narrowed to the
+  decision's `allowed_tools`: it has the whole read-only toolbox and is only
+  told to keep to what was allowed. The ledger checks only the response's own
+  account of it, that `tools_used` is within `allowed_tools`.
 - No unwatched run may start an interaction of its own: `interactions_create`
   is left out, so a request cannot fan out into requests on other members.
 
@@ -363,14 +468,26 @@ from inside a run.
 
 | Route | What it does |
 | --- | --- |
-| `GET /v1/organizations/{org}/threads` | The member's threads here, the most recently active first: `{"threads": [...]}` |
-| `POST /v1/organizations/{org}/threads` | Starts a thread; `201` with it. Its state is seeded from the member's auth record in this organization |
+| `GET /v1/organizations/{org}/threads` | The member's chat threads here, the most recently active first: `{"threads": [...]}`. `?origin=side_conversation` lists their side conversations' threads instead, and `?origin=all` every thread; `?origin=chat` is the default. A blank or unknown `origin` is a `400 invalid_request` |
+| `POST /v1/organizations/{org}/threads` | Starts a thread; `201` with it. The body is optional: `{"origin": "side_conversation"}` starts one for a side conversation, while no body, `{}`, or `"origin": "chat"` (or `""`) starts a chat. Any other origin is a `400 invalid_request`. Its state is seeded from the member's auth record in this organization |
 | `GET /v1/organizations/{org}/threads/{thread}` | The thread with its history as items, and `pending_confirmations` |
 | `DELETE /v1/organizations/{org}/threads/{thread}` | Removes the thread, and the artifacts its runs kept that are not the member's own `user:` ones |
 | `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run |
 | `GET /v1/organizations/{org}/threads/{thread}/artifacts/{name}` | A file the thread's runs kept, its latest version or `?version=` |
 | `GET /v1/organizations/{org}/preferences` | What the member chose about Krude here: `{"app_updates": true}` until they turn [wake-ups](#wake-ups) off |
 | `PUT /v1/organizations/{org}/preferences` | Records the member's own choice, `{"app_updates": false}`; an agent's token is refused like everywhere else |
+
+Every thread says where it came from, as `origin` in its JSON (in the
+listing, on creation, and in a thread's detail): `"chat"` is the member's own
+conversation with Krude, and `"side_conversation"` a thread the web app's
+side conversation opened to run the member's own agent on its internal
+prompt. The origin is written to the thread's session state when it is
+created, beside the organization it was started in, and nothing changes it
+afterwards. Threads Oryxa opens for the member itself, such as wake-up
+reports, are chats, and so is a thread with no origin in its state: every
+thread from before origins. Only the listing tells them apart: reading,
+running, deleting or downloading from a thread by its id works the same for
+either origin.
 
 ### Persistent agent API
 
@@ -510,16 +627,55 @@ is not durable across a process restart and is never selected by production.
 
 ### Agent request API
 
-The same ledger is available to the member through their primary identity:
+The same ledger is available to the member through their primary identity,
+and a decision made here is the member's own:
 
 | Route | What it does |
 | --- | --- |
-| `POST /v1/organizations/{org}/agent-requests` | Creates a request; accepts `Idempotency-Key` for caller retries |
+| `POST /v1/organizations/{org}/agent-requests` | Creates a request, in a teamspace when the body names `teamspace_id`; accepts `Idempotency-Key` for caller retries (below) |
+| `GET /v1/organizations/{org}/agent-requests` | Lists, newest first, the requests the member's agents sent and were sent |
 | `GET /v1/organizations/{org}/agent-requests/inbox` | Lists requests addressed to the member's agents |
 | `GET /v1/organizations/{org}/agent-requests/sent` | Lists requests sent by the member's agents |
 | `GET /v1/organizations/{org}/agent-requests/{request}` | Reads one request visible to the member |
-| `POST /v1/organizations/{org}/agent-requests/{request}/decision` | Approves or rejects with narrowed tools and permissions |
+| `POST /v1/organizations/{org}/agent-requests/{request}/decision` | The member approves or rejects, in their own session, with narrowed tools and permissions; the only way a request held for its owner is decided. Approving one made in a teamspace reads it again first, with the member's own token |
 | `POST /v1/organizations/{org}/agent-requests/{request}/response` | Completes an approved request with the strict result envelope |
+
+A request's JSON carries `teamspace_id` (absent outside a teamspace) and
+`approval` (`agent` or `owner`, see
+[Agent interactions toolbox](#agent-interactions-toolbox)) beside its parties,
+status, decision and result; a decision carries `decided_by`. All three
+listings take `?limit=` and two optional filters: `?teamspace_id=` keeps the
+requests made in that teamspace, and `?with_user=` those whose other party is
+that member. `GET .../agent-requests?teamspace_id=T&with_user=U` is how a side
+conversation reads what two teammates asked each other in teamspace T, in both
+directions: either of them gets the same list, polling as themself, and a
+listing only ever holds requests its caller is a party to. `with_user` naming
+the caller, or either filter sent blank, is `400 invalid_request`: a filter
+is left out to list everything, never sent empty. Each direction is read, in
+order, from an index of its own and merged to the limit
+(`agent_interactions_teamspace_pair_idx` serves the side conversation's
+poll).
+
+`Idempotency-Key` names one request of the caller's. Sent again, it is
+answered from the ledger before anything else is looked up, so a retry gets
+back the request it made, `201` as the first time, even after the seat it was
+made from has gone. The same key with another target, teamspace, purpose,
+task, context, or requested tools or permissions is
+`409 idempotency_key_reused`, and never another request.
+
+Creating a request in a teamspace answers with the teamspace's refusal when
+there is one, and records nothing: `404 not_found` for a teamspace the caller
+cannot see, `403 forbidden` for a caller who is not on its team,
+`409 teamspace_disabled` when the space or the organization agent is
+disabled, and `400 invalid_request` for a target with no seat there. A body
+naming `approval` is `400 invalid_request`, since nothing the requester sends
+chooses it. The asking agent must hold a seat there too (the member's own
+primary agent, or a specialist they contributed), or it is `403 forbidden`.
+Deciding a request addressed to someone else is `403 forbidden` (one the
+caller is not a party to is `404 not_found`), one past its expiry
+`409 request_expired`, one already decided `409 invalid_state`, and one that
+no longer stands in its teamspace `409 request_closed`, with the reason:
+Oryxa has closed it.
 
 ### A teamspace is a room
 
@@ -598,15 +754,25 @@ contribution is withdrawn; primary participation follows live Teams
 membership.
 
 Contributing a specialist never transfers its identity, instructions, app
-connections, or tool permissions. The specialist still runs as its owner. The
-owner chooses `request` delegation, which uses the audited cross-user request
-protocol, or explicitly opts into `automatic` bounded delegation by the
-organization agent. Existing per-tool authorization and human-confirmation
-requirements remain in force in both modes. Another member, including a team
-admin, cannot increase that standing authority; they can only remove the
-contribution. At this layer the organization agent records follow-ups as
-`proposed` only; it does not yet execute them, even when a contribution has
-automatic delegation authority. Execution is a separate authority boundary.
+connections, or tool permissions. The specialist still runs as its owner.
+`delegation_mode` is the owner's standing answer to whether teammates may ask
+it for work here without them, and the request ledger enforces it for every
+cross-user request made in the teamspace (`teamspace_id`): a `request`
+specialist's requests are held for its owner, who approves or rejects each in
+their own session before the specialist is woken, while an `automatic`
+specialist decides them itself, as any agent does outside a teamspace. A
+request made in the teamspace to a teammate's primary agent is always held for
+its owner. The mode is read again whenever a request is decided or its agent
+woken, so switching to `request` holds requests the specialist has not
+decided, or has approved but not started. A request made outside any
+teamspace is not governed by it at all (see
+[Agent interactions toolbox](#agent-interactions-toolbox)). Existing per-tool
+authorization and human-confirmation requirements remain in force in both
+modes. Another member, including a team admin, cannot increase that standing
+authority; they can only remove the contribution. The organization agent
+records follow-ups as `proposed` only; it does not yet execute them, even when
+a contribution has automatic delegation authority. Execution is a separate
+authority boundary.
 
 Organization-agent and teamspace lifecycle events contain only routing
 identity, status, revision, and contributor user ids. Prompts, whisperer
@@ -753,7 +919,7 @@ fills it (`internal/inbound`):
 | Detail type | What agents does |
 | --- | --- |
 | `batching.trigger-batch.ready.v1` | Keeps the batch's triggers, all at once, to wake Krude for its member (see [Wake-ups](#wake-ups)) |
-| `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent |
+| `agents.interaction.requested.v1` | Persists a delivery job for the addressed target agent; one held for its owner completes without waking it |
 | `agents.interaction.decided.v1` | Wakes the target to finish approved work, or the requester to observe a rejection |
 | `agents.interaction.completed.v1` | Wakes the requester to observe a completed or failed result |
 | `auth.member.removed.v1` | Removes the member's threads, waiting wake-ups, agent definitions, and cross-user request content in that organization |
@@ -842,8 +1008,11 @@ wakes Krude for each batch it hands over, as `batching.trigger-batch.ready.v1`
 Interaction wake-ups use a separate durable job table because they have a
 state machine rather than an app digest. The target's `requested` delivery is
 complete only after it records a decision; an `approved` delivery is complete
-only after it records a final result. Rejected and completed deliveries notify
-the requesting agent. Jobs lease across replicas, retry failed runs three
+only after it records a final result. A `requested` delivery for a request
+held for its owner is completed without a run, since no agent may decide it;
+the owner's approval arrives as the `approved` delivery, whose prompt says the
+owner approved it. Rejected and completed deliveries notify the requesting
+agent. Jobs lease across replicas, retry failed runs three
 times, settle recorded revisions in order per request and recipient, and keep handled IDs
 for a week. If an earlier run already advanced the interaction, a later or
 repeated delivery is settled without running the agent again.

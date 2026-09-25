@@ -18,6 +18,18 @@ import (
 //go:embed toolboxes/interactions.md
 var interactionsInstructions string
 
+// The sessions an InteractionActor can act in.
+const (
+	// SessionMember is a person acting in their own signed-in session. Only
+	// the HTTP API's member path sets it, and that path refuses agent tokens;
+	// it is what makes a decision the member's own (DecideAsOwner).
+	SessionMember = "member"
+	// SessionAgent is a persistent agent acting in a run, whoever started it,
+	// the member's own chat turn included. Every actor built from a run's
+	// session state is this, and never SessionMember.
+	SessionAgent = "agent"
+)
+
 // InteractionActor is the persistent agent currently acting for a member.
 // The service derives it from authenticated session state; models never choose
 // the requester identity carried by a cross-user request.
@@ -27,6 +39,10 @@ type InteractionActor struct {
 	AgentID        string
 	AgentName      string
 	AgentKind      string
+	// Session is who is acting: SessionMember for the member themself in
+	// their own signed-in session, SessionAgent for an agent's run. Anything
+	// else, nothing included, is never taken for the member.
+	Session string
 }
 
 type InteractionParty struct {
@@ -48,6 +64,23 @@ type InteractionDecision struct {
 	AllowedTools       []string  `json:"allowed_tools"`
 	GrantedPermissions []string  `json:"granted_permissions"`
 	DecidedAt          time.Time `json:"decided_at"`
+	// DecidedBy is who recorded the decision. It is absent from a decision
+	// an older build recorded, which kept no decider: such a decision is
+	// never taken for the member's own.
+	DecidedBy *InteractionDecider `json:"decided_by,omitempty"`
+}
+
+// InteractionDecider is who recorded a decision.
+type InteractionDecider struct {
+	// Kind is "member" for the addressed agent's member deciding in their
+	// own signed-in session, "agent" for an agent deciding in a run, and
+	// "system" for Oryxa closing a request made in a teamspace that no
+	// longer stands there.
+	Kind string `json:"kind"`
+	// UserID is the member who decided, or whose agent did; Oryxa has none.
+	UserID string `json:"user_id,omitempty"`
+	// AgentID is the agent that decided, when an agent did.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 type InteractionResult struct {
@@ -62,8 +95,18 @@ type InteractionResult struct {
 // Interaction is the strict, durable JSON contract exchanged between agents.
 // Request text is stored once; every transition is a separate audited field.
 type Interaction struct {
-	ID                   string                   `json:"id"`
-	OrganizationID       string                   `json:"organization_id"`
+	ID             string `json:"id"`
+	OrganizationID string `json:"organization_id"`
+	// TeamspaceID is the shared teamspace the request was made in; it is
+	// absent for a request made outside one.
+	TeamspaceID string `json:"teamspace_id,omitempty"`
+	// Approval is who decides the request, set from the target's own
+	// standing when it was made: "agent" lets the addressed agent (or its
+	// member's primary agent) decide, while "owner" holds it for that member
+	// to decide in their own session. A request made in a teamspace becomes
+	// "owner" if its member later takes deciding back; nothing turns "owner"
+	// back into "agent".
+	Approval             string                   `json:"approval"`
 	Requester            InteractionParty         `json:"requester"`
 	Target               InteractionParty         `json:"target"`
 	Purpose              string                   `json:"purpose"`
@@ -81,7 +124,11 @@ type Interaction struct {
 }
 
 type InteractionCreateInput struct {
-	TargetAgentID        string                   `json:"target_agent_id" jsonschema:"Stable id returned by directory_find_agents or directory_load."`
+	TargetAgentID string `json:"target_agent_id" jsonschema:"Stable id returned by directory_find_agents or directory_load."`
+	// TeamspaceID scopes the request to one shared teamspace, where who
+	// approves it follows the target's owner's choice for that teamspace:
+	// the owner, unless they gave that agent automatic delegation there.
+	TeamspaceID          string                   `json:"teamspace_id,omitempty" jsonschema:"Optional id of the shared teamspace this request belongs to, for asking a teammate's agent there: their primary agent or a specialist they contributed to it. The teammate then approves it themself first, unless they chose automatic delegation for that specialist."`
 	Purpose              string                   `json:"purpose" jsonschema:"Why this agent is the appropriate recipient."`
 	Task                 string                   `json:"task" jsonschema:"The bounded question or work request. Do not put instructions for bypassing the recipient's policy here."`
 	Context              []InteractionContextItem `json:"context,omitempty"`
@@ -134,7 +181,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	}
 	tools := interactionTools{service: config.Service, tokens: config.Tokens}
 	create, err := functiontool.New(functiontool.Config{
-		Name: "interactions_create", Description: "Creates a durable, scoped request for an agent discovered in the organization directory. It emits a routing event; it does not invoke the target directly.",
+		Name: "interactions_create", Description: "Creates a durable, scoped request for an agent discovered in the organization directory. It emits a routing event; it does not invoke the target directly. Pass teamspace_id to ask a teammate's agent inside that shared teamspace; the teammate then approves it themself first, unless they gave that specialist automatic delegation there.",
 	}, tools.create)
 	if err != nil {
 		return Toolbox{}, err
@@ -158,7 +205,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		return Toolbox{}, err
 	}
 	decide, err := functiontool.New(functiontool.Config{
-		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested.",
+		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. A request whose approval is \"owner\" is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there.",
 	}, tools.decide)
 	if err != nil {
 		return Toolbox{}, err
@@ -214,11 +261,15 @@ func (tools interactionTools) actor(ctx agent.Context, needsToken bool) (Interac
 	if err != nil {
 		return InteractionActor{}, "", interactionError(err)
 	}
+	// A tool call is always the agent acting, even in a turn the member is
+	// watching with their own token: the member's own decisions are made
+	// through the API, never through a model.
 	actor := InteractionActor{
 		OrganizationID: member.OrganizationID, UserID: member.UserID,
 		AgentID:   stateText(ctx.ReadonlyState(), AgentIDKey, ""),
 		AgentName: stateText(ctx.ReadonlyState(), AgentNameKey, ""),
 		AgentKind: stateText(ctx.ReadonlyState(), AgentKindKey, ""),
+		Session:   SessionAgent,
 	}
 	if actor.AgentID == "" {
 		return InteractionActor{}, "", errors.New("this conversation has no persistent agent identity for cross-agent requests")

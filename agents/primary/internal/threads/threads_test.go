@@ -25,6 +25,7 @@ import (
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adksession"
 	primaryagents "github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
@@ -495,6 +496,179 @@ func TestAThreadIsItsMembersOwnInItsOrganization(t *testing.T) {
 	}
 	if _, err := h.service.Get(context.Background(), asha, created.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Get after Delete = %v, want ErrNotFound", err)
+	}
+}
+
+func TestCreateAndCreateTitledMakeChatThreads(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("ok", genai.RoleModel), nil
+	})
+
+	created, err := h.service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Origin != OriginChat {
+		t.Fatalf("Create origin = %q, want %q", created.Origin, OriginChat)
+	}
+
+	titled, err := h.service.CreateTitled(context.Background(), asha, "Launch plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if titled.Origin != OriginChat {
+		t.Fatalf("CreateTitled origin = %q, want %q", titled.Origin, OriginChat)
+	}
+
+	// The origin is read back from state, not just handed back at creation.
+	got, err := h.service.Get(context.Background(), asha, titled.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Origin != OriginChat {
+		t.Fatalf("Get after CreateTitled origin = %q, want %q", got.Origin, OriginChat)
+	}
+}
+
+func TestCreateFromMakesASideConversationAndRefusesAnUnknownOrigin(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("ok", genai.RoleModel), nil
+	})
+
+	side, err := h.service.CreateFrom(context.Background(), asha, OriginSideConversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if side.Origin != OriginSideConversation {
+		t.Fatalf("origin = %q, want %q", side.Origin, OriginSideConversation)
+	}
+	got, err := h.service.Get(context.Background(), asha, side.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Origin != OriginSideConversation {
+		t.Fatalf("read back origin = %q, want %q", got.Origin, OriginSideConversation)
+	}
+
+	// Trimmed blank behaves like chat, the same as an omitted origin.
+	blank, err := h.service.CreateFrom(context.Background(), asha, "   ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blank.Origin != OriginChat {
+		t.Fatalf("CreateFrom(blank) origin = %q, want %q", blank.Origin, OriginChat)
+	}
+
+	if _, err := h.service.CreateFrom(context.Background(), asha, "bogus"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("CreateFrom(bogus) = %v, want ErrInvalid", err)
+	}
+}
+
+func TestListShowsOnlyChatThreadsAndListFromSelectsByOrigin(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("ok", genai.RoleModel), nil
+	})
+	chat, err := h.service.Create(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	side, err := h.service.CreateFrom(context.Background(), asha, OriginSideConversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if listed, err := h.service.List(context.Background(), asha); err != nil || len(listed) != 1 || listed[0].ID != chat.ID {
+		t.Fatalf("List() = %+v, %v, want only the chat thread", listed, err)
+	}
+	if listed, err := h.service.ListFrom(context.Background(), asha, OriginChat); err != nil || len(listed) != 1 || listed[0].ID != chat.ID {
+		t.Fatalf("ListFrom(chat) = %+v, %v, want only the chat thread", listed, err)
+	}
+	if listed, err := h.service.ListFrom(context.Background(), asha, OriginSideConversation); err != nil || len(listed) != 1 || listed[0].ID != side.ID {
+		t.Fatalf("ListFrom(side_conversation) = %+v, %v, want only the side thread", listed, err)
+	}
+	listed, err := h.service.ListFrom(context.Background(), asha, OriginAll)
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("ListFrom(all) = %+v, %v, want both threads", listed, err)
+	}
+	seen := map[string]bool{listed[0].ID: true, listed[1].ID: true}
+	if !seen[chat.ID] || !seen[side.ID] {
+		t.Fatalf("ListFrom(all) = %+v, want %s and %s", listed, chat.ID, side.ID)
+	}
+}
+
+func TestListFromRefusesAnythingButChatSideConversationOrAll(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("ok", genai.RoleModel), nil
+	})
+	for _, origin := range []string{"", "  ", "bogus", "Chat", "ALL"} {
+		if _, err := h.service.ListFrom(context.Background(), asha, origin); !errors.Is(err, ErrInvalid) {
+			t.Errorf("ListFrom(%q) = %v, want ErrInvalid", origin, err)
+		}
+	}
+}
+
+// TestAThreadWithNoOriginInStateReadsAsChat checks every thread the run API
+// created before origins existed, and any thread other code creates
+// straight through the session service: neither sets thread_origin, and
+// both must keep showing up in the member's ordinary chat list.
+func TestAThreadWithNoOriginInStateReadsAsChat(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("ok", genai.RoleModel), nil
+	})
+	created, err := h.sessions.Create(context.Background(), &session.CreateRequest{
+		AppName: "krude", UserID: asha.UserID,
+		State: map[string]any{adksession.StateOrganizationID: asha.OrganizationID},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	threadID := created.Session.ID()
+
+	got, err := h.service.Get(context.Background(), asha, threadID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Origin != OriginChat {
+		t.Fatalf("origin of a thread with none in state = %q, want %q", got.Origin, OriginChat)
+	}
+
+	listed, err := h.service.List(context.Background(), asha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != threadID || listed[0].Origin != OriginChat {
+		t.Fatalf("List() = %+v, want the originless thread listed as chat", listed)
+	}
+}
+
+// TestGetAndStartRunWorkByIDOnASideConversationThread checks that a side
+// conversation is a full thread in every way except where it is listed: its
+// id reads and runs exactly like a chat thread's.
+func TestGetAndStartRunWorkByIDOnASideConversationThread(t *testing.T) {
+	h := newHarness(t, func(*model.LLMRequest) (*genai.Content, error) {
+		return genai.NewContentFromText("Hello from the side.", genai.RoleModel), nil
+	})
+	side, err := h.service.CreateFrom(context.Background(), asha, OriginSideConversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := h.service.Get(context.Background(), asha, side.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Origin != OriginSideConversation {
+		t.Fatalf("origin = %q, want %q", detail.Origin, OriginSideConversation)
+	}
+
+	items, _ := h.run(asha, side.ID, RunInput{Message: "internal prompt"})
+	got := types(items)
+	if got[0] != ItemRunStarted || got[len(got)-1] != ItemRunCompleted {
+		t.Fatalf("items = %v, want the run to open and close the stream", got)
+	}
+	messages := find(items, ItemMessage)
+	if last := messages[len(messages)-1]; last.Text != "Hello from the side." {
+		t.Fatalf("answer = %+v", last)
 	}
 }
 

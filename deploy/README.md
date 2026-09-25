@@ -152,6 +152,54 @@ no longer has a default. So, for this release only:
      (source kind `file`) become admin-only. Re-add any that members should
      see.
 
+### Releasing owner-approved agent requests
+
+The release that holds agent requests made in a teamspace for their owner needs
+the same care. An older build knows nothing of the hold. Its waker wakes the
+addressed agent for a held request with the prompt to decide it, and its Decide
+lets that agent approve it, so while an old task runs, or after a rollback, an
+agent can approve what only its owner may. So, for this release only:
+
+1. Stop the old task before the new one starts, exactly as for #85 above:
+
+   ```sh
+   aws ecs update-service --region us-west-2 --cluster oryxa-production --service oryxa \
+     --deployment-configuration minimumHealthyPercent=0,maximumPercent=100
+   ```
+
+   Then release as usual, and put the overlap back afterwards
+   (`minimumHealthyPercent=100,maximumPercent=200`, or a `tofu apply`).
+2. Once a request is held for its owner (one made in a teamspace to a
+   teammate's primary agent, or to a specialist contributed with `request`
+   delegation), do not roll back to a build older than this one: its waker
+   and Decide would let the addressed agent decide it. If a later release has
+   to be rolled back, roll back to a build that includes this one. If the
+   circuit breaker rolls this release back, no request is held yet.
+3. What to expect afterwards:
+   - The interaction migrations run in order, each in its own transaction:
+     002 adds `teamspace_id` and `approval` with its check `NOT VALID`, 003
+     validates that check (a scan that no longer runs under an ACCESS
+     EXCLUSIVE lock), 004 builds the teamspace listing indexes, 005 adds the
+     decider columns with their check `NOT VALID`, and 006 validates it. A
+     database that already ran an earlier 002 (a development one) runs it
+     again, because its checksum changed; every statement is safe to repeat.
+   - A decision an older build recorded names no decider. The waker never
+     treats such an approval of a held request as its owner's: it holds the
+     request for the owner again instead of waking the agent.
+   - A request made in a teamspace is read again, as its addressed member,
+     before an agent decides it or is woken for it. Without a token of that
+     member's, which needs `AGENTS_PRIMARY_SERVICE_KEY_ID` and the member's
+     own "agents may act for me while I'm away" grant, a specialist with
+     `automatic` delegation cannot decide it, so it is held for its owner
+     instead. Expect that for members who have not granted it.
+   - The web app's side conversations need this build before theirs: they
+     send `teamspace_id`, list with `?teamspace_id=` and `?with_user=`, and
+     create their threads with `origin: "side_conversation"`, all of which an
+     older build refuses or ignores. They should also expect two new answers:
+     `409 idempotency_key_reused` for a key sent again with another request,
+     and `409 request_closed` for deciding a request that no longer stands in
+     its teamspace.
+
 ## Looking at it
 
 - **Dashboard** `oryxa-production` in CloudWatch: the tunnel, API latency by

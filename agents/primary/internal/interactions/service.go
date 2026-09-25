@@ -15,6 +15,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
+	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
 )
 
 var (
@@ -23,6 +25,9 @@ var (
 	ErrForbidden = errors.New("agent request is not available to this agent")
 	ErrConflict  = errors.New("agent request cannot make that transition")
 	ErrExpired   = errors.New("agent request has expired")
+	// ErrIdempotencyConflict reports an idempotency key sent again with a
+	// different request than the one it already names.
+	ErrIdempotencyConflict = errors.New("that idempotency key already names a different agent request; send a new key for a new request")
 )
 
 const (
@@ -36,6 +41,23 @@ const (
 	DecisionApproved = "approved"
 	DecisionRejected = "rejected"
 
+	// Who recorded a decision (agents.InteractionDecider.Kind).
+	DecidedByMember = "member"
+	DecidedByAgent  = "agent"
+	DecidedBySystem = "system"
+
+	// ApprovalAgent lets the addressed agent, or its member's primary agent,
+	// decide: every request made outside a teamspace, and one made in a
+	// teamspace to a specialist its owner contributed there with automatic
+	// delegation, for as long as they keep it so.
+	ApprovalAgent = "agent"
+	// ApprovalOwner holds the request for the addressed agent's member, who
+	// decides it in their own session and never through an agent: one made in
+	// a teamspace to a teammate's primary agent, or to a specialist
+	// contributed there with request delegation, and one its owner has since
+	// taken deciding back for, or that could not be read again.
+	ApprovalOwner = "owner"
+
 	defaultExpiry   = 24 * time.Hour
 	minimumExpiry   = 5 * time.Minute
 	maximumExpiry   = 7 * 24 * time.Hour
@@ -47,25 +69,89 @@ const (
 	maxListItems    = 32
 )
 
+const (
+	// BoxInbox lists the requests addressed to the member's agents.
+	BoxInbox = "inbox"
+	// BoxSent lists the requests the member's agents sent.
+	BoxSent = "sent"
+	// BoxAll lists both, which is how either party reads the requests
+	// between two members.
+	BoxAll = "all"
+)
+
+// Query narrows a listing of the requests a member's agent may read. Every
+// field but Box is optional.
+type Query struct {
+	Box string
+	// TeamspaceID keeps only the requests made in that teamspace.
+	TeamspaceID string
+	// WithUserID keeps only the requests whose other party is that member.
+	WithUserID string
+	Limit      int
+}
+
 // Repository is the transactional interaction ledger. Store implements it.
 type Repository interface {
+	// Create records a new request under an idempotency key. Under a key
+	// already used it stores nothing and returns the request stored there.
 	Create(context.Context, agents.Interaction, string) (agents.Interaction, error)
+	// FindByKey is the request one organization's requesting agent stored
+	// under an idempotency key, or ErrNotFound.
+	FindByKey(ctx context.Context, organizationID, requesterAgentID, key string) (agents.Interaction, error)
 	Get(context.Context, string) (agents.Interaction, error)
-	Inbox(context.Context, string, string, int) ([]agents.Interaction, error)
-	Sent(context.Context, string, string, int) ([]agents.Interaction, error)
-	Decide(context.Context, string, agents.InteractionDecisionInput, time.Time) (agents.Interaction, error)
+	// List selects, newest first, the requests of one organization that one
+	// member is a party to, as the query narrows them.
+	List(context.Context, string, string, Query) ([]agents.Interaction, error)
+	// Decide records a pending request's decision and who made it.
+	Decide(context.Context, string, agents.InteractionDecisionInput, agents.InteractionDecider, time.Time) (agents.Interaction, error)
 	Respond(context.Context, string, agents.InteractionResponseInput, time.Time) (agents.Interaction, error)
+	// Hold keeps a request for its owner's own decision: a pending one is
+	// marked held, and an approved one has its approval withdrawn and is
+	// pending, held, again.
+	Hold(ctx context.Context, id string, at time.Time) (agents.Interaction, error)
+	// Close ends, as Oryxa and with the reason, a request that no longer
+	// stands in its teamspace: a pending one is rejected, an approved one
+	// fails before its work begins.
+	Close(ctx context.Context, id, reason string, at time.Time) (agents.Interaction, error)
+}
+
+// Teamspaces places the addressed agent in the teamspace a request is made
+// in, against the live team directory: the requester must be on the team now,
+// the asking agent and the target must each hold a seat there now.
+// teamspaces.Service implements it; RequestSeat's errors
+// (teamspaces.ErrNotFound, ErrForbidden, ErrInvalid, ErrDisabled) reach the
+// caller as they are.
+type Teamspaces interface {
+	// RequestSeat reads the organization from directory, which Create has
+	// already loaded with the requester's own token, rather than loading it
+	// a second time.
+	RequestSeat(ctx context.Context, requester agents.TeamspaceActor, directory agents.OrganizationDirectory, teamspaceID, targetAgentID string) (agents.TeamspaceSeat, error)
+	// RequestStanding reads again where a request stands in the teamspace it
+	// was made in, from directory as its addressed member sees the
+	// organization; a request that no longer stands is reported as Lapsed.
+	RequestStanding(ctx context.Context, organizationID string, directory agents.OrganizationDirectory, teamspaceID string, requester, target agents.InteractionParty) (agents.TeamspaceStanding, error)
 }
 
 type Config struct {
 	Repository Repository
 	Directory  agents.Directory
-	Now        func() time.Time
+	// Teamspaces enables requests made inside a teamspace. Without it a
+	// request naming one is refused.
+	Teamspaces Teamspaces
+	// Tokens mints the addressed member's agent token, under their standing
+	// grant, to read a request's teamspace again when nobody's session
+	// carries a token of theirs: in the waker, or in a run they are not
+	// watching. Without it, or without their grant, such a request cannot
+	// be read again and is held for them rather than decided by an agent.
+	Tokens memberauth.TokenSource
+	Now    func() time.Time
 }
 
 type Service struct {
 	repository Repository
 	directory  agents.Directory
+	teamspaces Teamspaces
+	tokens     memberauth.TokenSource
 	now        func() time.Time
 }
 
@@ -80,7 +166,7 @@ func New(config Config) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{repository: config.Repository, directory: config.Directory, now: now}, nil
+	return &Service{repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens, now: now}, nil
 }
 
 func (service *Service) Create(ctx context.Context, actor agents.InteractionActor, token, idempotencyKey string, input agents.InteractionCreateInput) (agents.Interaction, error) {
@@ -97,6 +183,18 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	}
 	if strings.TrimSpace(token) == "" {
 		return agents.Interaction{}, fmt.Errorf("%w: member token is required to resolve the target", ErrInvalid)
+	}
+	// A retry is answered from the ledger before anything is looked up, so
+	// it gets back the request it made even when the directory or the seat
+	// that request was made from has since changed.
+	if idempotencyKey != "" {
+		stored, err := service.repository.FindByKey(ctx, actor.OrganizationID, actor.AgentID, idempotencyKey)
+		switch {
+		case err == nil:
+			return service.replay(actor, stored, input)
+		case !errors.Is(err, ErrNotFound):
+			return agents.Interaction{}, fmt.Errorf("find agent request by idempotency key: %w", err)
+		}
 	}
 	directory, err := service.directory.Load(ctx, actor.OrganizationID, token)
 	if err != nil {
@@ -121,6 +219,10 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	if target.OwnerUserID == actor.UserID {
 		return agents.Interaction{}, fmt.Errorf("%w: cross-user requests must target another member", ErrInvalid)
 	}
+	approval, err := service.approval(ctx, actor, directory, input.TeamspaceID, target)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
 	id, err := newID("irq_")
 	if err != nil {
 		return agents.Interaction{}, err
@@ -131,7 +233,7 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 		expires = defaultExpiry
 	}
 	request := agents.Interaction{
-		ID: id, OrganizationID: actor.OrganizationID,
+		ID: id, OrganizationID: actor.OrganizationID, TeamspaceID: input.TeamspaceID, Approval: approval,
 		Requester: agents.InteractionParty{UserID: actor.UserID, AgentID: actor.AgentID, AgentName: actor.AgentName},
 		Target: agents.InteractionParty{
 			UserID: target.OwnerUserID, AgentID: target.ID, AgentName: target.Name,
@@ -144,29 +246,112 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	if idempotencyKey == "" {
 		idempotencyKey = id
 	}
-	return service.repository.Create(ctx, request, idempotencyKey)
+	created, err := service.repository.Create(ctx, request, idempotencyKey)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	if created.ID != request.ID {
+		// Another create under this key landed first.
+		return service.replay(actor, created, input)
+	}
+	return created, nil
+}
+
+// replay answers a create whose idempotency key already names a stored
+// request: that request, when this is the same one sent again, and
+// ErrIdempotencyConflict when it is another — never a different request as
+// if it were the new one.
+func (service *Service) replay(actor agents.InteractionActor, stored agents.Interaction, input agents.InteractionCreateInput) (agents.Interaction, error) {
+	if !sameRequest(actor, stored, input) {
+		return agents.Interaction{}, ErrIdempotencyConflict
+	}
+	return service.view(stored), nil
+}
+
+// sameRequest is whether a stored request is the one input asks for again:
+// the same requester, target, teamspace, purpose, task, context and asks.
+// Both sides are compared as cleaned, which is how the request was stored.
+func sameRequest(actor agents.InteractionActor, stored agents.Interaction, input agents.InteractionCreateInput) bool {
+	return stored.OrganizationID == actor.OrganizationID &&
+		stored.Requester.UserID == actor.UserID && stored.Requester.AgentID == actor.AgentID &&
+		stored.Target.AgentID == input.TargetAgentID && stored.TeamspaceID == input.TeamspaceID &&
+		stored.Purpose == input.Purpose && stored.Task == input.Task &&
+		slices.Equal(stored.Context, input.Context) &&
+		slices.Equal(stored.RequestedTools, input.RequestedTools) &&
+		slices.Equal(stored.RequestedPermissions, input.RequestedPermissions)
+}
+
+// HeldForOwner is whether only the addressed agent's member may decide a
+// request, in their own session. It fails closed: any approval but the
+// agent's own holds the request, one this code does not know included, and
+// so does a request made in a teamspace that names none. Only a request made
+// outside any teamspace may name none: it predates teamspaces and is its
+// agent's to decide, as it always was.
+func HeldForOwner(request agents.Interaction) bool {
+	if request.Approval == "" {
+		return request.TeamspaceID != ""
+	}
+	return request.Approval != ApprovalAgent
+}
+
+// approval is who decides a new request. Outside a teamspace the addressed
+// agent does, as it always has. Inside one it follows the target's standing
+// there and nothing the requester sends: a specialist its owner contributed
+// with automatic delegation decides for itself, while a teammate's primary
+// agent, or a specialist contributed with request delegation, waits for its
+// owner.
+func (service *Service) approval(ctx context.Context, actor agents.InteractionActor, directory agents.OrganizationDirectory, teamspaceID string, target agents.DirectoryAgent) (string, error) {
+	if teamspaceID == "" {
+		return ApprovalAgent, nil
+	}
+	if service.teamspaces == nil {
+		return "", fmt.Errorf("%w: requests inside a teamspace are not available on this server", ErrInvalid)
+	}
+	seat, err := service.teamspaces.RequestSeat(ctx, agents.TeamspaceActor{
+		OrganizationID: actor.OrganizationID, UserID: actor.UserID,
+		AgentID: actor.AgentID, AgentName: actor.AgentName, AgentKind: actor.AgentKind,
+	}, directory, teamspaceID, target.ID)
+	if err != nil {
+		return "", err
+	}
+	if seat.AgentID != target.ID || seat.OwnerUserID != target.OwnerUserID {
+		return "", fmt.Errorf("%w: target_agent_id does not hold a seat of its owner's in that teamspace", ErrInvalid)
+	}
+	if ownersToDecide(seat) {
+		return ApprovalOwner, nil
+	}
+	return ApprovalAgent, nil
 }
 
 func (service *Service) Inbox(ctx context.Context, actor agents.InteractionActor, limit int) ([]agents.Interaction, error) {
-	if err := validateActor(actor); err != nil {
-		return nil, err
-	}
-	requests, err := service.repository.Inbox(ctx, actor.OrganizationID, actor.UserID, clamp(limit))
-	if err == nil && actor.AgentKind != "primary" {
-		requests = filterRequests(requests, func(request agents.Interaction) bool { return request.Target.AgentID == actor.AgentID })
-	}
-	return service.views(requests), err
+	return service.List(ctx, actor, Query{Box: BoxInbox, Limit: limit})
 }
 
 func (service *Service) Sent(ctx context.Context, actor agents.InteractionActor, limit int) ([]agents.Interaction, error) {
+	return service.List(ctx, actor, Query{Box: BoxSent, Limit: limit})
+}
+
+// List returns, newest first, the requests the actor may read that the query
+// selects. A request is only ever listed to its two parties: the member who
+// asked and the member asked, as canRead has it, and a specialist sees only
+// the requests it sent or was sent. Asked as either teammate with the other
+// as WithUserID, it is the requests between them in both directions.
+func (service *Service) List(ctx context.Context, actor agents.InteractionActor, query Query) ([]agents.Interaction, error) {
 	if err := validateActor(actor); err != nil {
 		return nil, err
 	}
-	requests, err := service.repository.Sent(ctx, actor.OrganizationID, actor.UserID, clamp(limit))
-	if err == nil && actor.AgentKind != "primary" {
-		requests = filterRequests(requests, func(request agents.Interaction) bool { return request.Requester.AgentID == actor.AgentID })
+	query = cleanQuery(query)
+	if err := validateQuery(actor, query); err != nil {
+		return nil, err
 	}
-	return service.views(requests), err
+	query.Limit = clamp(query.Limit)
+	requests, err := service.repository.List(ctx, actor.OrganizationID, actor.UserID, query)
+	if err != nil {
+		return nil, err
+	}
+	return service.views(filterRequests(requests, func(request agents.Interaction) bool {
+		return listed(actor, query, request)
+	})), nil
 }
 
 func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, id string) (agents.Interaction, error) {
@@ -183,13 +368,53 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 	return service.view(request), nil
 }
 
+// Decide records a decision an agent makes, through its interactions tool:
+// the addressed agent's own, or its member's primary agent mediating. A
+// request held for its owner (HeldForOwner) is never an agent's to decide,
+// whichever agent asks, and one made in a teamspace is read again first
+// (agentMayDecide): held for its owner if they have since taken deciding
+// back, closed if it no longer stands.
 func (service *Service) Decide(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
+	return service.decide(ctx, actor, "", id, input, false)
+}
+
+// DecideAsOwner records the decision of the member whose agent a request
+// addresses, made in their own signed-in session: the actor must be marked
+// agents.SessionMember, which only the HTTP API's member path does, so no
+// run's actor can reach it — and agents' tools see agents.InteractionService,
+// which has no such method. It is the one way a request held for its owner
+// is decided. The member may decide a request their agent could decide as
+// well, as their primary agent could. token is their own, from that
+// session: approving a request made in a teamspace reads it again with it
+// first (ownerMayApprove), and closes it instead when it no longer stands.
+func (service *Service) DecideAsOwner(ctx context.Context, actor agents.InteractionActor, token, id string, input agents.InteractionDecisionInput) (agents.Interaction, error) {
+	return service.decide(ctx, actor, token, id, input, true)
+}
+
+func (service *Service) decide(ctx context.Context, actor agents.InteractionActor, token, id string, input agents.InteractionDecisionInput, asOwner bool) (agents.Interaction, error) {
+	// Who decides is proved by the session, not by which method was called:
+	// only the member's own signed-in session decides as the owner, and it
+	// never decides as an agent.
+	if asOwner && actor.Session != agents.SessionMember {
+		return agents.Interaction{}, fmt.Errorf("%w: only the member, in their own signed-in session, decides as the owner", ErrForbidden)
+	}
+	if !asOwner && actor.Session == agents.SessionMember {
+		return agents.Interaction{}, fmt.Errorf("%w: a member decides in their own session as the owner, not as an agent", ErrForbidden)
+	}
 	request, err := service.Get(ctx, actor, id)
 	if err != nil {
 		return agents.Interaction{}, err
 	}
-	if request.Target.UserID != actor.UserID || actor.AgentID != request.Target.AgentID && actor.AgentKind != "primary" {
+	if request.Target.UserID != actor.UserID {
 		return agents.Interaction{}, ErrForbidden
+	}
+	if !asOwner {
+		if actor.AgentID != request.Target.AgentID && actor.AgentKind != "primary" {
+			return agents.Interaction{}, ErrForbidden
+		}
+		if HeldForOwner(request) {
+			return agents.Interaction{}, fmt.Errorf("%w: this request is held for your member's own decision in Oryxa, and no agent can approve or reject it; tell your member it is waiting for them", ErrForbidden)
+		}
 	}
 	if request.Status == StatusExpired {
 		return agents.Interaction{}, ErrExpired
@@ -198,7 +423,34 @@ func (service *Service) Decide(ctx context.Context, actor agents.InteractionActo
 	if err := validateDecision(request, input); err != nil {
 		return agents.Interaction{}, err
 	}
-	return service.repository.Decide(ctx, request.ID, input, service.now().UTC())
+	if request.TeamspaceID != "" {
+		switch {
+		case !asOwner:
+			if err := service.agentMayDecide(ctx, request); err != nil {
+				return agents.Interaction{}, err
+			}
+		case input.Decision == DecisionApproved:
+			if strings.TrimSpace(token) == "" {
+				return agents.Interaction{}, fmt.Errorf("%w: member token is required to approve a request made in a teamspace", ErrInvalid)
+			}
+			if err := service.ownerMayApprove(ctx, request, token); err != nil {
+				return agents.Interaction{}, err
+			}
+		}
+	}
+	decider := agents.InteractionDecider{Kind: DecidedByAgent, UserID: actor.UserID, AgentID: actor.AgentID}
+	if asOwner {
+		decider = agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}
+	}
+	return service.repository.Decide(ctx, request.ID, input, decider, service.now().UTC())
+}
+
+// DecidedByItsOwner is whether a request's decision is its addressed
+// member's own, made in their signed-in session. A decision that names no
+// decider — one an older build recorded — never is.
+func DecidedByItsOwner(request agents.Interaction) bool {
+	return request.Decision != nil && request.Decision.DecidedBy != nil &&
+		request.Decision.DecidedBy.Kind == DecidedByMember && request.Decision.DecidedBy.UserID == request.Target.UserID
 }
 
 func (service *Service) Respond(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionResponseInput) (agents.Interaction, error) {
@@ -248,6 +500,7 @@ func validateActor(actor agents.InteractionActor) error {
 
 func cleanCreate(input agents.InteractionCreateInput) agents.InteractionCreateInput {
 	input.TargetAgentID = strings.TrimSpace(input.TargetAgentID)
+	input.TeamspaceID = strings.TrimSpace(input.TeamspaceID)
 	input.Purpose = cleanText(input.Purpose)
 	input.Task = cleanText(input.Task)
 	input.RequestedTools = cleanList(input.RequestedTools)
@@ -265,6 +518,8 @@ func validateCreate(input agents.InteractionCreateInput) error {
 		return fmt.Errorf("%w: target_agent_id is required", ErrInvalid)
 	case utf8.RuneCountInString(input.TargetAgentID) > 128:
 		return fmt.Errorf("%w: target_agent_id holds at most 128 characters", ErrInvalid)
+	case !validID(input.TeamspaceID):
+		return fmt.Errorf("%w: teamspace_id must be an id of at most 128 characters", ErrInvalid)
 	case input.Purpose == "" || utf8.RuneCountInString(input.Purpose) > maxPurposeRunes:
 		return fmt.Errorf("%w: purpose is required and holds at most %d characters", ErrInvalid, maxPurposeRunes)
 	case input.Task == "" || utf8.RuneCountInString(input.Task) > maxTaskRunes:
@@ -351,6 +606,12 @@ func validateResponse(request agents.Interaction, input agents.InteractionRespon
 	return nil
 }
 
+// validID is an optional identifier a caller named: empty, or at most 128
+// characters of text PostgreSQL can hold.
+func validID(value string) bool {
+	return utf8.RuneCountInString(value) <= 128 && cleantext.Valid(value)
+}
+
 func validateList(values []string, name string) error {
 	for _, value := range values {
 		if value == "" || utf8.RuneCountInString(value) > 120 {
@@ -369,12 +630,60 @@ func isSubset(values, allowed []string) bool {
 	return true
 }
 
+// actsFor is whether the actor stands on this party's side of a request: a
+// member's primary agent for any of that member's agents, a specialist only
+// for itself.
+func actsFor(actor agents.InteractionActor, party agents.InteractionParty) bool {
+	return party.UserID == actor.UserID && (actor.AgentKind == "primary" || party.AgentID == actor.AgentID)
+}
+
 func canRead(actor agents.InteractionActor, request agents.Interaction) bool {
-	if actor.AgentKind == "primary" {
-		return request.Requester.UserID == actor.UserID || request.Target.UserID == actor.UserID
+	return actsFor(actor, request.Requester) || actsFor(actor, request.Target)
+}
+
+// listed is whether a request the repository selected belongs in the actor's
+// listing: on the side of it the query names, within its teamspace and with
+// its other member. Being on either side is what canRead asks, so a listed
+// request is always one the actor may read. It restates the query, so a
+// listing never rests on the repository alone.
+func listed(actor agents.InteractionActor, query Query, request agents.Interaction) bool {
+	if request.OrganizationID != actor.OrganizationID || query.TeamspaceID != "" && request.TeamspaceID != query.TeamspaceID {
+		return false
 	}
-	return request.Requester.UserID == actor.UserID && request.Requester.AgentID == actor.AgentID ||
-		request.Target.UserID == actor.UserID && request.Target.AgentID == actor.AgentID
+	with := func(other agents.InteractionParty) bool {
+		return query.WithUserID == "" || other.UserID == query.WithUserID
+	}
+	asTarget := actsFor(actor, request.Target) && with(request.Requester)
+	asRequester := actsFor(actor, request.Requester) && with(request.Target)
+	switch query.Box {
+	case BoxInbox:
+		return asTarget
+	case BoxSent:
+		return asRequester
+	default:
+		return asTarget || asRequester
+	}
+}
+
+func cleanQuery(query Query) Query {
+	query.Box = strings.ToLower(strings.TrimSpace(query.Box))
+	query.TeamspaceID = strings.TrimSpace(query.TeamspaceID)
+	query.WithUserID = strings.TrimSpace(query.WithUserID)
+	return query
+}
+
+func validateQuery(actor agents.InteractionActor, query Query) error {
+	switch {
+	case query.Box != BoxInbox && query.Box != BoxSent && query.Box != BoxAll:
+		return fmt.Errorf("%w: a listing is the inbox, the sent requests, or all of them", ErrInvalid)
+	case !validID(query.TeamspaceID):
+		return fmt.Errorf("%w: teamspace_id must be an id of at most 128 characters", ErrInvalid)
+	case !validID(query.WithUserID):
+		return fmt.Errorf("%w: with_user must be a member id of at most 128 characters", ErrInvalid)
+	case query.WithUserID != "" && query.WithUserID == actor.UserID:
+		return fmt.Errorf("%w: with_user must name another member, since a request is always between two", ErrInvalid)
+	}
+	return nil
 }
 
 func filterRequests(requests []agents.Interaction, keep func(agents.Interaction) bool) []agents.Interaction {

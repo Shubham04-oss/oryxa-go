@@ -74,22 +74,12 @@ func collaborationActor(actor primaryagents.TeamspaceActor, token string) Actor 
 	return Actor{OrganizationID: actor.OrganizationID, UserID: actor.UserID, AccessToken: token}
 }
 
+// collaborationParticipant is whether the acting agent holds a seat of its
+// own member's in the space, of its own kind: a primary agent in its
+// member's whisperer seat, a specialist as their active contribution.
 func collaborationParticipant(space Space, actor primaryagents.TeamspaceActor) bool {
-	switch actor.AgentKind {
-	case "primary":
-		for _, whisperer := range space.Whisperers {
-			if whisperer.UserID == actor.UserID && whisperer.AgentID == actor.AgentID {
-				return true
-			}
-		}
-	case "specialist":
-		for _, contribution := range space.Contributions {
-			if contribution.OwnerUserID == actor.UserID && contribution.AgentID == actor.AgentID && contribution.Status == "active" {
-				return true
-			}
-		}
-	}
-	return false
+	found, ok := seatOf(space, actor.AgentID)
+	return ok && found.OwnerUserID == actor.UserID && found.Kind == actor.AgentKind
 }
 
 // collaborationAvailable keeps disabled shared work out of the agent-facing

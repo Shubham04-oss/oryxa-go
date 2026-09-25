@@ -52,6 +52,34 @@ type TeamspaceContribution struct {
 	DelegationMode string `json:"delegation_mode"`
 }
 
+// TeamspaceSeat is where an agent sits in one teamspace, for a cross-user
+// request made there: a teammate's primary agent in their own whisperer seat,
+// or an active specialist a teammate contributed with a standing delegation
+// mode. teamspaces.Service reports it from the live team directory; the
+// request ledger turns it into who approves the request.
+type TeamspaceSeat struct {
+	AgentID     string
+	OwnerUserID string
+	// Kind is "primary" for a teammate's own seat and "specialist" for a
+	// contribution.
+	Kind string
+	// DelegationMode is the contribution owner's standing choice, "request"
+	// or "automatic"; a primary seat has none.
+	DelegationMode string
+}
+
+// TeamspaceStanding is where a request made in a teamspace stands there now,
+// read again after it was made: teamspaces.Service reports it from the live
+// team directory as the addressed member sees it.
+type TeamspaceStanding struct {
+	// Seat is the target's seat now, while the request still stands.
+	Seat TeamspaceSeat
+	// Lapsed, when set, is why the request no longer stands there, in words
+	// for both members: the teamspace is gone or disabled, the member who
+	// asked is off its team, or an agent lost its seat there.
+	Lapsed string
+}
+
 type Teamspace struct {
 	ID                string                     `json:"id"`
 	TeamID            string                     `json:"team_id"`
