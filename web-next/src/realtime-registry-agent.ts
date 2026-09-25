@@ -197,7 +197,7 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
         this.env.InboxAgent,
         inboxName(this.name, user)
       )
-      await inbox.purgeTeamspace(eventId, teamspaceId)
+      await inbox.purgeTeamspace(teamspaceId)
       this.sql`INSERT INTO registry_purge_progress (event_id, user_id, done_at)
         VALUES (${eventId}, ${user}, ${Date.now()})
         ON CONFLICT (event_id, user_id) DO NOTHING`

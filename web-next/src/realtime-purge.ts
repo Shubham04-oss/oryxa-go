@@ -366,12 +366,12 @@ export async function handlePurge(
   try {
     if (purge.scope === "teamspace_member") {
       // The member's own inbox finds their side conversations there, and
-      // remembers the event itself.
+      // remembers the removal itself, whatever the event that brings it.
       const inbox = await getAgentByName(
         env.InboxAgent,
         inboxName(purge.organization_id, purge.user_id)
       )
-      await inbox.purgeTeamspace(purge.event_id, purge.teamspace_id, removedAt)
+      await inbox.purgeTeamspace(purge.teamspace_id, removedAt)
     } else {
       const registry = await getAgentByName(
         env.RealtimeRegistryAgent,

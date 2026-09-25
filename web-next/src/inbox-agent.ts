@@ -18,11 +18,7 @@ import {
 } from "./lib/dms/protocol"
 import type { InboxServerMessage } from "./lib/dms/protocol"
 import type { Conversation, ConversationKind } from "./lib/dms/types"
-import {
-  isPurgeEventId,
-  isPurgeInstant,
-  purgeMemoryMs,
-} from "./realtime-registry-agent"
+import { isPurgeInstant, purgeMemoryMs } from "./realtime-registry-agent"
 import type { PurgeOutcome } from "./realtime-registry-agent"
 
 /**
@@ -440,7 +436,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
    * that arrive meanwhile are purged too.
    *
    * Then, if nothing stays, the inbox empties itself, forgetting the
-   * teamspace purges it carried out too. Its sockets (all of
+   * removals from teamspaces it carried out too. Its sockets (all of
    * them for an organization's purge, else those opened at or before the
    * member left) are told `inbox-gone` and closed, so each page asks the
    * Worker whether it may open the inbox again; the rest are sent it as it
@@ -467,7 +463,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
       this.sql`DELETE FROM inbox_known`
       this.sql`DELETE FROM inbox_unread`
       this.sql`DELETE FROM inbox_meta`
-      this.sql`DELETE FROM inbox_purges`
+      this.sql`DELETE FROM inbox_teamspace_removals`
       if (retry) await this.cancelSchedule(retry).catch(() => false)
     }
     for (const connection of this.getConnections()) {
@@ -511,31 +507,38 @@ export class InboxAgent extends Agent<ConversationEnv> {
    * The inbox itself stays, with its sockets and its registration: its
    * member is still in the organization.
    *
-   * The event is remembered for `purgeMemoryMs` once every such conversation
-   * is done, so the same event again does nothing. A purge that failed or
-   * was cut off part-way is not remembered: the same event again carries on
-   * with what is still listed. Nothing is written for a teamspace the inbox
-   * has no conversation in.
+   * A removal is carried out once, whatever the event that brings it: Go
+   * sends the same removal again under a new event id when the teams event
+   * behind it is delivered again. Once every such conversation is done, the
+   * latest `removedAt` done in the teamspace is remembered for
+   * `purgeMemoryMs`, and a removal not after it does nothing, so its
+   * conversations are not purged again (which would end the run pages
+   * opened since hold, and take the events not yet sent Go). A purge that
+   * failed or was cut off part-way remembers nothing: the same removal again
+   * carries on with what is still listed. A deletion needs no memory: sent
+   * again, it finds nothing left. Nothing is written for a teamspace the
+   * inbox has no conversation in.
    */
   async purgeTeamspace(
-    eventId: string,
     teamspaceId: string,
     removedAt?: string
   ): Promise<PurgeOutcome> {
     this.schema()
     if (
-      !isPurgeEventId(eventId) ||
       !isNameId(teamspaceId) ||
       (removedAt !== undefined && !isPurgeInstant(removedAt))
     ) {
       throw new TypeError("not a teamspace's purge of this inbox")
     }
-    this
-      .sql`DELETE FROM inbox_purges WHERE done_at < ${Date.now() - purgeMemoryMs}`
+    this.sql`DELETE FROM inbox_teamspace_removals
+      WHERE done_at < ${Date.now() - purgeMemoryMs}`
     const done = this.sql<{
-      event_id: string
-    }>`SELECT event_id FROM inbox_purges WHERE event_id = ${eventId}`.at(0)
-    if (done) return "repeated"
+      removed_at: string
+    }>`SELECT removed_at FROM inbox_teamspace_removals
+      WHERE teamspace_id = ${teamspaceId}`.at(0)
+    if (removedAt !== undefined && done && done.removed_at >= removedAt) {
+      return "repeated"
+    }
     const inTeamspace = (conversation: PurgedConversation) =>
       conversation.kind === "side" &&
       parseSideConversationName(conversation.name)?.teamspaceId === teamspaceId
@@ -553,9 +556,14 @@ export class InboxAgent extends Agent<ConversationEnv> {
         "side conversations kept arriving while the teamspace was purged"
       )
     }
-    this.sql`INSERT INTO inbox_purges (event_id, done_at)
-      VALUES (${eventId}, ${Date.now()})
-      ON CONFLICT (event_id) DO NOTHING`
+    if (removedAt !== undefined) {
+      this
+        .sql`INSERT INTO inbox_teamspace_removals (teamspace_id, removed_at, done_at)
+        VALUES (${teamspaceId}, ${removedAt}, ${Date.now()})
+        ON CONFLICT (teamspace_id) DO UPDATE SET
+          removed_at = MAX(removed_at, excluded.removed_at),
+          done_at = excluded.done_at`
+    }
     return "purged"
   }
 
@@ -604,9 +612,11 @@ export class InboxAgent extends Agent<ConversationEnv> {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`
-    // The teamspace purges carried out, by event id (`purgeTeamspace`).
-    this.sql`CREATE TABLE IF NOT EXISTS inbox_purges (
-      event_id TEXT PRIMARY KEY,
+    // The latest removal of the member from each teamspace's team whose
+    // purge is done (`purgeTeamspace`), and when it was.
+    this.sql`CREATE TABLE IF NOT EXISTS inbox_teamspace_removals (
+      teamspace_id TEXT PRIMARY KEY,
+      removed_at TEXT NOT NULL,
       done_at INTEGER NOT NULL
     )`
     this.schemaReady = true
