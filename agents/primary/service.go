@@ -596,6 +596,8 @@ func deliveryReach(profile managedagents.UnattendedProfile) assembly.DeliveryRea
 	switch profile {
 	case managedagents.DeliveryReads:
 		return assembly.DeliveryReads
+	case managedagents.DeliveryApps:
+		return assembly.DeliveryApps
 	case managedagents.DeliveryQuiet:
 		return assembly.DeliveryQuiet
 	default:

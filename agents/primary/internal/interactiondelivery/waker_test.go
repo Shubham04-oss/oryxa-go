@@ -367,6 +367,7 @@ func TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded(t *testing.T) {
 // one's own member reads the request alone; and every delivery runs as one,
 // offered nothing that lists the member's other requests.
 func TestOnlyApprovedWorkReadsTheMembersApps(t *testing.T) {
+	allowedBoth := allowing(testRequest(interactions.StatusApproved), agents.AppsToolboxName, agents.KnowledgeToolboxName)
 	cases := []struct {
 		kind  string
 		reach managedagents.UnattendedProfile
@@ -377,12 +378,63 @@ func TestOnlyApprovedWorkReadsTheMembersApps(t *testing.T) {
 		{KindRequesterCompleted, managedagents.DeliveryReport},
 	}
 	for _, testCase := range cases {
-		got := reach(testCase.kind)
+		got := reach(testCase.kind, allowedBoth)
 		if got != testCase.reach {
 			t.Errorf("reach(%s) = %q, want %q", testCase.kind, got, testCase.reach)
 		}
 		if reads := got.ReadsApps(); reads != (testCase.kind == KindTargetApproved) || !got.Delivers() {
 			t.Errorf("reach(%s) reads apps = %t, delivers = %t; want apps only for approved work, and a delivery always", testCase.kind, reads, got.Delivers())
+		}
+	}
+}
+
+// allowing is request approved with allowed_tools set to tools.
+func allowing(request agents.Interaction, tools ...string) agents.Interaction {
+	request.Status = interactions.StatusApproved
+	request.Decision = &agents.InteractionDecision{Decision: interactions.DecisionApproved, Message: "Go ahead.", AllowedTools: tools, DecidedAt: time.Now()}
+	return request
+}
+
+// TestApprovedWorkReachesOnlyWhatItsApprovalAllows: the run doing approved
+// work is started with exactly the toolboxes its decision's allowed_tools
+// name, beside its request: the member's apps, their knowledge, both or
+// neither. Whatever else the decision names, it grants nothing.
+func TestApprovedWorkReachesOnlyWhatItsApprovalAllows(t *testing.T) {
+	for _, testCase := range []struct {
+		allowed []string
+		reach   managedagents.UnattendedProfile
+	}{
+		{[]string{agents.AppsToolboxName, agents.KnowledgeToolboxName}, managedagents.DeliveryReads},
+		{[]string{agents.AppsToolboxName}, managedagents.DeliveryApps},
+		{[]string{agents.KnowledgeToolboxName}, managedagents.DeliveryQuiet},
+		{[]string{}, managedagents.DeliveryReport},
+		{nil, managedagents.DeliveryReport},
+		{[]string{"apps_write", "knowledge_search", "calendar"}, managedagents.DeliveryReport},
+		{[]string{"Apps", "calendar"}, managedagents.DeliveryApps},
+	} {
+		approved := testDelivery("evt_approved", KindTargetApproved, 2)
+		approved.Status = interactions.StatusApproved
+		store := &fakeDeliveries{pending: []Delivery{approved}}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": allowing(testRequest(interactions.StatusApproved), testCase.allowed...)}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
+		waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+		if err := waker.WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(runs.calls) != 1 || runs.calls[0].reach != testCase.reach {
+			t.Fatalf("approved work allowed %v started %+v, want one run reaching %s", testCase.allowed, runs.calls, testCase.reach)
+		}
+		if !strings.Contains(runs.calls[0].input.Message, "exactly the toolboxes the decision's allowed_tools name") {
+			t.Errorf("approved work allowed %v is not told it has only those: %s", testCase.allowed, runs.calls[0].input.Message)
+		}
+	}
+	// A request whose decision is missing, or is not an approval, reaches
+	// the request alone.
+	for _, decision := range []*agents.InteractionDecision{nil, {Decision: interactions.DecisionRejected, AllowedTools: []string{agents.AppsToolboxName}}} {
+		request := testRequest(interactions.StatusApproved)
+		request.Decision = decision
+		if got := reach(KindTargetApproved, request); got != managedagents.DeliveryReport {
+			t.Errorf("approved work with decision %+v reaches %s, want the request alone", decision, got)
 		}
 	}
 }

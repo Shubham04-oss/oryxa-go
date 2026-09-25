@@ -311,7 +311,10 @@ The toolbox exposes `interactions_create`, `interactions_inbox`,
 `interactions_respond`. A specialist sees only requests it sent or received;
 the member's primary agent may mediate every request belonging to that member.
 Approval can only narrow the requested tools and permissions, and a response
-cannot report using a tool outside the approved set.
+cannot report using a tool outside the approved set. These grants never
+bypass a tool's existing authorization or human-confirmation requirements,
+and the run that does the approved work has exactly the toolboxes they allow
+(see below).
 
 **What a request may ask to use.** `requested_tools` and `allowed_tools` name
 toolboxes of the member asked: `apps`, their connected apps, which approved
@@ -339,10 +342,7 @@ says who chose: `requester`, `jev` (which may have chosen none), or `none`,
 nobody (a request made outside a teamspace that names none, or Jev unsure,
 unset, silent or failing). A request made before this has nobody on record,
 and the field is absent. Sent again under its `Idempotency-Key`, a request
-whose tools Jev chose is compared as it was sent, naming none. These grants describe the
-interaction envelope; they never bypass a tool's existing authorization or
-human-confirmation requirements, and they are not enforced on the run that
-does the approved work either (see below).
+whose tools Jev chose is compared as it was sent, naming none.
 
 **Requests inside a teamspace, and who approves them.** A request may name the
 teamspace it belongs to (`teamspace_id`), which is how a teamspace side
@@ -460,12 +460,19 @@ what it may reach follows what their own agent has already allowed:
   at all.
 - **Reporting** a rejection or a result back to the member who asked reads
   the request alone: neither their apps nor their knowledge.
-- **Doing approved work** runs with the read-only apps toolbox (the same one
-  a wake-up gets) and never the writing one, beside the read-only knowledge.
-  The run is not narrowed to the decision's `allowed_tools`: it has the whole
-  read-only toolbox and is only told to keep to what was allowed. The ledger
-  checks only the response's own account of it, that `tools_used` is within
-  `allowed_tools`.
+- **Doing approved work** runs with exactly the toolboxes its decision's
+  `allowed_tools` name, beside the request (`interactiondelivery.approvedReach`):
+  `apps`, the read-only apps toolbox (the same one a wake-up gets, never the
+  writing one), and `knowledge`, the read-only knowledge, both, or neither
+  (`managedagents.DeliveryReads`, `DeliveryApps`, `DeliveryQuiet` or
+  `DeliveryReport`). An approval that allows none, or names only tools the
+  vocabulary does not know, reaches the request alone. The limit is the run's
+  own, not an instruction: what was not allowed is not loaded, and the prompt
+  says so. The ledger still checks the response's own account of it, that
+  `tools_used` is within `allowed_tools`. The run deciding a new request, when
+  its agent decides, still has the knowledge beside the request so an
+  approval needing no more can be finished at once; only work done after the
+  approval is narrowed to it.
 - No unwatched run may start an interaction of its own: `interactions_create`
   is left out, so a request cannot fan out into requests on other members.
 - A delivery is about its one request. Its run gets an interactions toolbox
@@ -502,10 +509,11 @@ A delivery run starts with all it may reach already loaded: every toolbox of
 its reach has its tools declared, and its skill in the instruction, from the
 first model call, and the run has no `list_tools` or `load_tools`, so no
 model call goes to finding what it could use (`assembly.Krude.Delivering` for
-Krude, `ManagedDelivering` for a specialist). Approved work starts with the
-read-only apps, the read-only knowledge and the request's interactions
-toolbox; deciding a new request with the knowledge and the interactions
-toolbox; a report with the interactions toolbox alone.
+Krude, `ManagedDelivering` for a specialist). Approved work starts with
+what its approval allows of the read-only apps and the read-only knowledge,
+and the request's interactions toolbox; deciding a new request with the
+knowledge and the interactions toolbox; a report with the interactions
+toolbox alone.
 
 That puts the whole reach on every call. For approved work it is 4.7 KB of
 tool declarations and 4.8 KB of skills that the interactions toolbox alone

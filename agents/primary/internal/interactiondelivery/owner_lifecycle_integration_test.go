@@ -165,6 +165,7 @@ func TestAnOwnerHeldRequestLivesItsWholeLifeAgainstTheDatabase(t *testing.T) {
 
 	created, err := requests.Create(ctx, a, "member-token", "lifecycle", agents.InteractionCreateInput{
 		TargetAgentID: "agt_b", TeamspaceID: "tsp_launch", Purpose: "Launch", Task: "Review the launch plan.",
+		RequestedTools: []string{agents.AppsToolboxName, agents.KnowledgeToolboxName},
 	})
 	if err != nil || created.Approval != interactions.ApprovalOwner || created.TeamspaceID != "tsp_launch" {
 		t.Fatalf("created=%+v err=%v", created, err)
@@ -180,7 +181,10 @@ func TestAnOwnerHeldRequestLivesItsWholeLifeAgainstTheDatabase(t *testing.T) {
 		t.Fatalf("the request's own delivery: runs=%+v handled=%v, want it completed without waking anyone", runs.calls, handled(requested.EventID))
 	}
 
-	approve := agents.InteractionDecisionInput{Decision: interactions.DecisionApproved, Message: "Go ahead."}
+	approve := agents.InteractionDecisionInput{
+		Decision: interactions.DecisionApproved, Message: "Go ahead.",
+		AllowedTools: []string{agents.AppsToolboxName, agents.KnowledgeToolboxName},
+	}
 	if _, err := requests.Decide(ctx, b, created.ID, approve); !errors.Is(err, interactions.ErrForbidden) {
 		t.Fatalf("B's agent deciding it: error=%v, want ErrForbidden", err)
 	}

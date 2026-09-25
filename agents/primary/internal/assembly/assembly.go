@@ -96,14 +96,20 @@ type DeliveryReach int
 
 const (
 	// DeliveryReport reads the request alone, for telling the member who
-	// asked that it was rejected or answered.
+	// asked that it was rejected or answered, and for approved work allowed
+	// neither the member's apps nor the knowledge.
 	DeliveryReport DeliveryReach = iota
 	// DeliveryQuiet adds the organization's knowledge, read-only, and never
 	// the member's apps, for deciding a new request and doing the approved
-	// work at once when that needs no more.
+	// work at once when that needs no more, and for approved work allowed
+	// the knowledge alone.
 	DeliveryQuiet
-	// DeliveryReads adds the member's apps, read-only, for approved work.
+	// DeliveryReads adds the member's apps, read-only, and the knowledge,
+	// for approved work allowed both.
 	DeliveryReads
+	// DeliveryApps is the member's apps, read-only, without the knowledge,
+	// for approved work allowed the apps alone.
+	DeliveryApps
 )
 
 // Krude is the assembled agent with what it runs with.
@@ -500,7 +506,7 @@ func (krude *Krude) buildAgents() error {
 		return fmt.Errorf("unattended root agent without apps: %w", err)
 	}
 	krude.delivering = map[DeliveryReach]agent.Agent{}
-	for _, reach := range []DeliveryReach{DeliveryReport, DeliveryQuiet, DeliveryReads} {
+	for _, reach := range []DeliveryReach{DeliveryReport, DeliveryQuiet, DeliveryReads, DeliveryApps} {
 		delivering, err := agents.DeliveringRoot(krude.router, krude.toolboxesFor(reach), krude.deliveryThinking)
 		if err != nil {
 			return fmt.Errorf("root agent delivering an interaction: %w", err)
@@ -537,17 +543,20 @@ func (krude *Krude) toolboxesFor(reach DeliveryReach) []agents.Toolbox {
 	return krude.deliveryToolboxes[DeliveryReport]
 }
 
-// deliveryToolboxes are the toolboxes of each reach: approved work has an
-// unwatched run's, and deciding a new request those without the apps, each
-// with the interactions toolbox swapped for the delivering one; a report has
-// the delivering interactions toolbox alone.
+// deliveryToolboxes are the toolboxes of each reach: approved work allowed
+// the apps and the knowledge has an unwatched run's, approved work allowed
+// the apps alone the same without the knowledge, and deciding a new request
+// those without the apps, each with the interactions toolbox swapped for the
+// delivering one; a report has the delivering interactions toolbox alone.
 func deliveryToolboxes(unattended, unattendedQuiet []agents.Toolbox, delivering *agents.Toolbox) map[DeliveryReach][]agents.Toolbox {
 	report := []agents.Toolbox{}
 	if delivering != nil {
 		report = append(report, *delivering)
 	}
+	apps := slices.DeleteFunc(slices.Clone(unattended), func(box agents.Toolbox) bool { return box.Name == agents.KnowledgeToolboxName })
 	return map[DeliveryReach][]agents.Toolbox{
 		DeliveryReads:  replaceToolbox(unattended, delivering),
+		DeliveryApps:   replaceToolbox(apps, delivering),
 		DeliveryQuiet:  replaceToolbox(unattendedQuiet, delivering),
 		DeliveryReport: report,
 	}

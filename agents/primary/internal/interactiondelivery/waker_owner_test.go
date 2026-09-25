@@ -44,10 +44,14 @@ func standsStill() Config {
 	return Config{Interval: time.Second, Lease: time.Minute, Standing: &fakeStanding{}}
 }
 
-// decidedBy is the request approved, as decider recorded it.
+// decidedBy is the request approved, as decider recorded it, allowing the
+// member's apps and knowledge.
 func decidedBy(request agents.Interaction, decider *agents.InteractionDecider) agents.Interaction {
 	request.Status = interactions.StatusApproved
-	request.Decision = &agents.InteractionDecision{Decision: interactions.DecisionApproved, Message: "Go ahead.", DecidedAt: time.Now(), DecidedBy: decider}
+	request.Decision = &agents.InteractionDecision{
+		Decision: interactions.DecisionApproved, Message: "Go ahead.", DecidedAt: time.Now(), DecidedBy: decider,
+		AllowedTools: []string{agents.AppsToolboxName, agents.KnowledgeToolboxName},
+	}
 	return request
 }
 

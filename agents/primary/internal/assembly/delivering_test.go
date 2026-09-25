@@ -176,9 +176,10 @@ func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 		offered []string
 		absent  []string
 	}{
-		"approved work": {DeliveryReads, append([]string{"apps_run_read_tool", "knowledge_search"}, request...), nil},
-		"a new request": {DeliveryQuiet, append([]string{"knowledge_search"}, request...), []string{"apps_run_read_tool"}},
-		"a report":      {DeliveryReport, request, []string{"apps_run_read_tool", "knowledge_search"}},
+		"approved work":                 {DeliveryReads, append([]string{"apps_run_read_tool", "knowledge_search"}, request...), nil},
+		"approved work, the apps alone": {DeliveryApps, append([]string{"apps_run_read_tool"}, request...), []string{"knowledge_search"}},
+		"a new request":                 {DeliveryQuiet, append([]string{"knowledge_search"}, request...), []string{"apps_run_read_tool"}},
+		"a report":                      {DeliveryReport, request, []string{"apps_run_read_tool", "knowledge_search"}},
 	} {
 		specialist, err := krude.ManagedDelivering(agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, reach.reach)
 		if err != nil {
@@ -241,6 +242,7 @@ func TestDeliveryToolboxesGiveEachReachItsOwn(t *testing.T) {
 	reaches := deliveryToolboxes(unattended, quiet, &delivering)
 	for reach, want := range map[DeliveryReach][]string{
 		DeliveryReads:  {"apps:reads", "knowledge:reads", "interactions:delivering"},
+		DeliveryApps:   {"apps:reads", "interactions:delivering"},
 		DeliveryQuiet:  {"knowledge:reads", "interactions:delivering"},
 		DeliveryReport: {"interactions:delivering"},
 	} {
@@ -290,7 +292,7 @@ func TestOnlyDeliveriesThinkAtTheLevelSet(t *testing.T) {
 				t.Errorf("with %q set, %s asked for %+v, want %s", thinking, name, config.ThinkingConfig, want)
 			}
 		}
-		for reach, name := range map[DeliveryReach]string{DeliveryReads: "approved work", DeliveryQuiet: "a new request", DeliveryReport: "a report"} {
+		for reach, name := range map[DeliveryReach]string{DeliveryReads: "approved work", DeliveryApps: "approved work on the apps alone", DeliveryQuiet: "a new request", DeliveryReport: "a report"} {
 			thinks("Krude delivering "+name, krude.Delivering(reach), thinking)
 			specialist, err := krude.ManagedDelivering(spec, reach)
 			if err != nil {

@@ -84,12 +84,14 @@ func TestMountRefusesADeliveryThinkingLevelItCannotUse(t *testing.T) {
 	}
 }
 
-// TestADeliveryReachesAsFarAsItsProfile: approved work reads the member's
-// apps, a new request only their knowledge, and a report, or a delivering
-// profile this does not know, the request alone.
+// TestADeliveryReachesAsFarAsItsProfile: approved work reads what it was
+// allowed of the member's apps and knowledge, a new request only their
+// knowledge, and a report, or a delivering profile this does not know, the
+// request alone.
 func TestADeliveryReachesAsFarAsItsProfile(t *testing.T) {
 	for profile, want := range map[managedagents.UnattendedProfile]assembly.DeliveryReach{
 		managedagents.DeliveryReads:  assembly.DeliveryReads,
+		managedagents.DeliveryApps:   assembly.DeliveryApps,
 		managedagents.DeliveryQuiet:  assembly.DeliveryQuiet,
 		managedagents.DeliveryReport: assembly.DeliveryReport,
 		"delivery_everything":        assembly.DeliveryReport,
