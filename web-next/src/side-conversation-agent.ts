@@ -60,6 +60,13 @@ import type {
 import { agentsOf, rosterOf } from "./lib/side/roster"
 import { sessionExpiredCode } from "./lib/threads/chat-messages"
 import type { Item, RunInput } from "./lib/threads/client"
+import {
+  EventOutbox,
+  agentAuthor,
+  memberAuthor,
+  realtimeEventsConfig,
+} from "./realtime-events"
+import type { SqlValue } from "./realtime-events"
 import { isPurgeInstant } from "./realtime-registry-agent"
 import type { ThreadChatEnv } from "./thread-chat-agent"
 
@@ -324,6 +331,10 @@ function isExpiry(error: unknown): boolean {
  * - **Inboxes.** Both people's inboxes list it (`kind: "side"`, with its
  *   teamspace); every visible item counts, an agent's message once its run
  *   ends.
+ * - **Events.** Each person's message, each agent's final answer and each
+ *   read that goes further is recorded for Go in the same transaction
+ *   (src/realtime-events.ts), and sent on the `drainEvents` schedule; never
+ *   an answer's deltas, a request card, a quiet line or what anybody wrote.
  *
  * Only its two people reach it: the Worker routes a socket only once Go has
  * said who the member is, that they are on the teamspace's team, and that
@@ -351,6 +362,29 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
   private syncAgain = false
   private reading: Promise<void> | undefined
   private lastRead = 0
+  /** What Go is told of the conversation: messages and reads, no content. */
+  private readonly events = new EventOutbox({
+    label: "side conversation",
+    name: () => this.name,
+    scope: () => {
+      const { organizationId, teamspaceId, userA, userB } = this.ids
+      return {
+        organizationId,
+        conversation: {
+          kind: "side",
+          id: this.name,
+          teamspace_id: teamspaceId,
+        },
+        participants: [userA, userB],
+      }
+    },
+    config: () => realtimeEventsConfig(this.env),
+    sql: <T>(strings: TemplateStringsArray, ...values: SqlValue[]) =>
+      this.sql<T>(strings, ...values),
+    transaction: (work) => this.transaction(work),
+    schedule: (at) => this.schedule(at, "drainEvents"),
+    cancelSchedule: (id) => this.cancelSchedule(id),
+  })
 
   // The socket carries this object's protocol only: no SDK identity, state
   // or MCP frames, and nothing at all before `onConnect` has checked it.
@@ -378,7 +412,8 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
   }
 
   // After a restart: a run the instance lost is never replayed (it may have
-  // called tools), an inbox never told is told, and open requests are read.
+  // called tools), an inbox never told is told, open requests are read, and
+  // the events still waiting go.
   override async onStart(): Promise<void> {
     this.schema()
     const interrupted = this.sql<ItemRow>`SELECT * FROM side_items
@@ -393,6 +428,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     }
     if (this.syncPending()) await this.armRetry()
     await this.planPoll()
+    await this.events.plan()
   }
 
   override async onConnect(connection: Connection, context: ConnectionContext) {
@@ -531,20 +567,29 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
    *
    * Resolves whether it was emptied, and the caller then takes it off both
    * inboxes; otherwise it stays in them, restated. Safe to call again.
+   *
+   * Either way, the events waiting for Go and those Go refused go with it
+   * (`EventOutbox.purge`): nothing recorded before the purge is sent, and a
+   * request already on its way is answered before the purge resolves.
    */
   async purge(scope?: SidePurgeScope): Promise<{ emptied: boolean }> {
+    // A scope that is not this conversation's is refused before anything
+    // goes.
+    const leaving = scope ? this.checkedScope(scope) : undefined
     this.epoch += 1
     this.schema()
+    const eventsGone = this.events.purge()
     for (const held of this.typing.values()) clearTimeout(held.timer)
     this.typing.clear()
     this.sendBuckets.clear()
     this.inFlight.clear()
-    if (!scope) {
+    if (!leaving) {
       await this.reset()
       this.endSockets(() => true)
+      await eventsGone
       return { emptied: true }
     }
-    const { userId, removedAt } = this.checkedScope(scope)
+    const { userId, removedAt } = leaving
     this.sql`DELETE FROM side_items WHERE created_at <= ${removedAt}
       OR (author_id = ${userId} AND session_at IS NOT NULL AND session_at <= ${removedAt})`
     this.sql`DELETE FROM side_threads WHERE user_id = ${userId}`
@@ -572,6 +617,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     if (this.latestSeq() === 0 && staying.length === 0) {
       await this.reset()
       this.endSockets(() => true)
+      await eventsGone
       return { emptied: true }
     }
     // What stays is a new run of the conversation.
@@ -590,6 +636,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     }
     await this.syncInboxes()
     await this.planPoll()
+    await eventsGone
     return { emptied: false }
   }
 
@@ -600,6 +647,14 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     const attempt = Number(this.meta("retry_attempt") ?? "0") + 1
     this.setMeta("retry_attempt", String(attempt))
     await this.syncInboxes()
+  }
+
+  /** The events' schedule: sends Go what waits (`EventOutbox.drain`). */
+  async drainEvents(
+    _payload?: unknown,
+    schedule?: Schedule<unknown>
+  ): Promise<void> {
+    await this.events.drain(schedule)
   }
 
   /**
@@ -823,14 +878,24 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     if (text === undefined) return
     let row: ItemRow
     try {
-      row = this.insert({
-        kind: "message",
-        authorId: author,
-        clientId,
-        body: text,
-        data: {} satisfies MessageData,
-        sessionAt: state.connectedAt,
-        settled: true,
+      // The message and its event for Go, as one: when either fails,
+      // neither is kept.
+      row = this.transaction(() => {
+        const message = this.insert({
+          kind: "message",
+          authorId: author,
+          clientId,
+          body: text,
+          data: {} satisfies MessageData,
+          sessionAt: state.connectedAt,
+          settled: true,
+        })
+        this.events.recordPosted(
+          message,
+          memberAuthor(author),
+          message.created_at
+        )
+        return message
       })
     } catch (error) {
       console.error("side conversation: could not store a message", error)
@@ -839,6 +904,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     }
     this.announce(row)
     this.readOwn(author, row.seq)
+    await this.events.plan()
     await this.syncInboxes()
   }
 
@@ -952,27 +1018,34 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     let question: ItemRow
     let answer: ItemRow
     try {
-      question = this.insert({
-        kind: "message",
-        authorId: owner,
-        clientId,
-        body: text,
-        data: { asksAgentId: agent.agentId } satisfies MessageData,
-        sessionAt: state.connectedAt,
-        settled: true,
-      })
-      answer = this.insert({
-        kind: "agent-message",
-        authorId: owner,
-        body: "",
-        state: "streaming",
-        data: {
-          agentId: agent.agentId,
-          agentName: agent.agentName,
-          replyTo: question.seq,
-        } satisfies AgentData,
-        sessionAt: state.connectedAt,
-        settled: false,
+      // The question (a person's message, with its event for Go) and the
+      // answer it waits for, as one. The answer is an event only once its
+      // run has ended with something said (`settleRun`).
+      ;[question, answer] = this.transaction<[ItemRow, ItemRow]>(() => {
+        const asked = this.insert({
+          kind: "message",
+          authorId: owner,
+          clientId,
+          body: text,
+          data: { asksAgentId: agent.agentId } satisfies MessageData,
+          sessionAt: state.connectedAt,
+          settled: true,
+        })
+        this.events.recordPosted(asked, memberAuthor(owner), asked.created_at)
+        const awaited = this.insert({
+          kind: "agent-message",
+          authorId: owner,
+          body: "",
+          state: "streaming",
+          data: {
+            agentId: agent.agentId,
+            agentName: agent.agentName,
+            replyTo: asked.seq,
+          } satisfies AgentData,
+          sessionAt: state.connectedAt,
+          settled: false,
+        })
+        return [asked, awaited]
       })
     } catch (error) {
       console.error("side conversation: could not store a question", error)
@@ -982,6 +1055,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     this.announce(question)
     this.announce(answer)
     this.readOwn(owner, question.seq)
+    await this.events.plan()
     await this.syncInboxes()
     await this.runOwnAgent(actor, answer.seq, { message: text })
   }
@@ -1131,6 +1205,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       return
     }
     this.settleRun(seq, draft, state)
+    await this.events.plan()
     await this.syncInboxes()
     // Its agent may have asked the teammate's agent for something.
     await this.readRequests()
@@ -1258,16 +1333,28 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       (body === "" && status === "done"
         ? (draft.stopped ?? "The agent had nothing to say.")
         : undefined)
-    const settled = this.rewrite(row, {
-      body,
-      state: status,
-      settled: 1,
-      data: {
-        ...data,
-        error,
-        code: draft.failure?.code,
-        confirmations: status === "waiting" ? draft.confirmations : [],
-      },
+    const settled = this.transaction(() => {
+      const ended = this.rewrite(row, {
+        body,
+        state: status,
+        settled: 1,
+        data: {
+          ...data,
+          error,
+          code: draft.failure?.code,
+          confirmations: status === "waiting" ? draft.confirmations : [],
+        },
+      })
+      // The agent's final answer is a message Go is told of, as it ends:
+      // never its deltas, a wait on its owner, a failure, or nothing said.
+      if (status === "done" && body !== "") {
+        this.events.recordPosted(
+          ended,
+          agentAuthor(ended.author_id, data.agentId),
+          ended.updated_at
+        )
+      }
+      return ended
     })
     this.announce(settled)
     if (draft.failure?.code === sessionExpiredCode) this.expire(state.cookie)
@@ -1428,6 +1515,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       this.announce(row)
       this.readOwn(asker, row.seq)
     }
+    await this.events.plan()
     await this.syncInboxes()
     await this.planPoll()
   }
@@ -1537,6 +1625,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       if (error instanceof ApiError && error.status === 409) {
         // Decided meanwhile, or past its time: the card shows how it stands.
         await this.readRequest(state, requestId)
+        await this.events.plan()
         this.refuseTarget(
           connection,
           requestId,
@@ -1570,6 +1659,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     this.inFlight.delete(key)
     if (this.epoch !== epoch) return
     this.applyRequest(answer, false)
+    await this.events.plan()
     await this.syncInboxes()
     await this.planPoll()
   }
@@ -1627,6 +1717,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         if (this.epoch !== epoch) return
       }
     }
+    await this.events.plan()
     await this.syncInboxes()
   }
 
@@ -1727,61 +1818,75 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     const status = card.state as SideRequestStatus
     if (data.outcomeSeq !== undefined || isOpen(status)) return
     const ownerName = personName(this.roster(), data.targetId, "Its owner")
-    let outcome: ItemRow | undefined
-    if (status === "completed") {
-      const text = resultText(request)
-      if (text === undefined) return
-      outcome = this.insert({
-        kind: "agent-message",
-        authorId: data.targetId,
-        requestId: card.request_id ?? undefined,
-        body: clip(text, SIDE_MAX_AGENT_TEXT),
-        state: "done",
-        data: {
-          agentId: data.targetAgentId,
-          agentName: data.targetAgentName,
-          via: {
-            requestId: card.request_id ?? "",
-            onBehalfOf: data.targetId,
-            ...(data.approval === "owner" ? { approvedBy: data.targetId } : {}),
-          },
-        } satisfies AgentData,
-        settled: true,
-      })
-    } else if (
-      status === "rejected" ||
-      status === "failed" ||
-      status === "expired"
-    ) {
-      const failure =
-        status === "failed"
-          ? (request as { result?: { summary?: unknown } }).result?.summary
-          : undefined
-      outcome = this.insert({
-        kind: "status",
-        authorId: data.targetId,
-        requestId: card.request_id ?? undefined,
-        body: statusLineText(
-          status,
-          {
-            approval: data.approval,
-            targetAgentName: data.targetAgentName,
-            decision: data.decision,
-          },
-          ownerName,
-          typeof failure === "string" ? failure : undefined
-        ),
-        state: status,
-        data: {
-          outcome: status,
-          agentId: data.targetAgentId,
-        } satisfies StatusData,
-        settled: true,
-      })
-    }
-    if (!outcome) return
-    this.rewrite(card, { data: { ...data, outcomeSeq: outcome.seq } })
-    this.announce(outcome)
+    // The item, its event for Go (a result is the asked agent's final
+    // answer; a quiet line is none) and the card's note of it, as one.
+    const outcome = this.transaction((): ItemRow | undefined => {
+      if (status === "completed") {
+        const text = resultText(request)
+        if (text === undefined) return undefined
+        const result = this.insert({
+          kind: "agent-message",
+          authorId: data.targetId,
+          requestId: card.request_id ?? undefined,
+          body: clip(text, SIDE_MAX_AGENT_TEXT),
+          state: "done",
+          data: {
+            agentId: data.targetAgentId,
+            agentName: data.targetAgentName,
+            via: {
+              requestId: card.request_id ?? "",
+              onBehalfOf: data.targetId,
+              ...(data.approval === "owner"
+                ? { approvedBy: data.targetId }
+                : {}),
+            },
+          } satisfies AgentData,
+          settled: true,
+        })
+        this.events.recordPosted(
+          result,
+          agentAuthor(data.targetId, data.targetAgentId),
+          result.created_at
+        )
+        this.rewrite(card, { data: { ...data, outcomeSeq: result.seq } })
+        return result
+      }
+      if (
+        status === "rejected" ||
+        status === "failed" ||
+        status === "expired"
+      ) {
+        const failure =
+          status === "failed"
+            ? (request as { result?: { summary?: unknown } }).result?.summary
+            : undefined
+        const line = this.insert({
+          kind: "status",
+          authorId: data.targetId,
+          requestId: card.request_id ?? undefined,
+          body: statusLineText(
+            status,
+            {
+              approval: data.approval,
+              targetAgentName: data.targetAgentName,
+              decision: data.decision,
+            },
+            ownerName,
+            typeof failure === "string" ? failure : undefined
+          ),
+          state: status,
+          data: {
+            outcome: status,
+            agentId: data.targetAgentId,
+          } satisfies StatusData,
+          settled: true,
+        })
+        this.rewrite(card, { data: { ...data, outcomeSeq: line.seq } })
+        return line
+      }
+      return undefined
+    })
+    if (outcome) this.announce(outcome)
   }
 
   /** Whether a request is between this conversation's two people, either way. */
@@ -2090,6 +2195,7 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     if (through <= this.readSeq(reader)) return
     this.setRead(reader, through)
     this.tell({ type: "side-read", userId: reader, seq: through })
+    await this.events.plan()
     await this.syncInboxes()
   }
 
@@ -2470,9 +2576,21 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     )
   }
 
+  /** Reads `user` through `seq`, only ever further, and records it for Go in the same transaction when it goes further. */
   private setRead(user: string, seq: number): void {
-    this.sql`INSERT INTO side_reads (user_id, seq) VALUES (${user}, ${seq})
-      ON CONFLICT (user_id) DO UPDATE SET seq = MAX(seq, excluded.seq)`
+    this.transaction(() => {
+      const before = this.readSeq(user)
+      this.sql`INSERT INTO side_reads (user_id, seq) VALUES (${user}, ${seq})
+        ON CONFLICT (user_id) DO UPDATE SET seq = MAX(seq, excluded.seq)`
+      if (seq > before) {
+        this.events.recordRead(user, seq, new Date().toISOString())
+      }
+    })
+  }
+
+  /** Runs `work` as one SQLite transaction: all it writes, or none of it when it throws. */
+  private transaction<T>(work: () => T): T {
+    return this.ctx.storage.transactionSync(work)
   }
 
   private reads(): SideRead[] {
