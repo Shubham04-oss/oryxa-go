@@ -64,6 +64,23 @@ type InteractionDecision struct {
 	AllowedTools       []string  `json:"allowed_tools"`
 	GrantedPermissions []string  `json:"granted_permissions"`
 	DecidedAt          time.Time `json:"decided_at"`
+	// DecidedBy is who recorded the decision. It is absent from a decision
+	// an older build recorded, which kept no decider: such a decision is
+	// never taken for the member's own.
+	DecidedBy *InteractionDecider `json:"decided_by,omitempty"`
+}
+
+// InteractionDecider is who recorded a decision.
+type InteractionDecider struct {
+	// Kind is "member" for the addressed agent's member deciding in their
+	// own signed-in session, "agent" for an agent deciding in a run, and
+	// "system" for Oryxa closing a request made in a teamspace that no
+	// longer stands there.
+	Kind string `json:"kind"`
+	// UserID is the member who decided, or whose agent did; Oryxa has none.
+	UserID string `json:"user_id,omitempty"`
+	// AgentID is the agent that decided, when an agent did.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 type InteractionResult struct {

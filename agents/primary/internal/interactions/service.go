@@ -40,6 +40,11 @@ const (
 	DecisionApproved = "approved"
 	DecisionRejected = "rejected"
 
+	// Who recorded a decision (agents.InteractionDecider.Kind).
+	DecidedByMember = "member"
+	DecidedByAgent  = "agent"
+	DecidedBySystem = "system"
+
 	// ApprovalAgent lets the addressed agent, or its member's primary agent,
 	// decide: every request made outside a teamspace, and one to a specialist
 	// its owner contributed to the teamspace with automatic delegation.
@@ -94,7 +99,8 @@ type Repository interface {
 	// List selects, newest first, the requests of one organization that one
 	// member is a party to, as the query narrows them.
 	List(context.Context, string, string, Query) ([]agents.Interaction, error)
-	Decide(context.Context, string, agents.InteractionDecisionInput, time.Time) (agents.Interaction, error)
+	// Decide records a pending request's decision and who made it.
+	Decide(context.Context, string, agents.InteractionDecisionInput, agents.InteractionDecider, time.Time) (agents.Interaction, error)
 	Respond(context.Context, string, agents.InteractionResponseInput, time.Time) (agents.Interaction, error)
 }
 
@@ -390,7 +396,19 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 	if err := validateDecision(request, input); err != nil {
 		return agents.Interaction{}, err
 	}
-	return service.repository.Decide(ctx, request.ID, input, service.now().UTC())
+	decider := agents.InteractionDecider{Kind: DecidedByAgent, UserID: actor.UserID, AgentID: actor.AgentID}
+	if asOwner {
+		decider = agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}
+	}
+	return service.repository.Decide(ctx, request.ID, input, decider, service.now().UTC())
+}
+
+// DecidedByItsOwner is whether a request's decision is its addressed
+// member's own, made in their signed-in session. A decision that names no
+// decider — one an older build recorded — never is.
+func DecidedByItsOwner(request agents.Interaction) bool {
+	return request.Decision != nil && request.Decision.DecidedBy != nil &&
+		request.Decision.DecidedBy.Kind == DecidedByMember && request.Decision.DecidedBy.UserID == request.Target.UserID
 }
 
 func (service *Service) Respond(ctx context.Context, actor agents.InteractionActor, id string, input agents.InteractionResponseInput) (agents.Interaction, error) {

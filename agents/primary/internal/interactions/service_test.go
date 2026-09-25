@@ -83,13 +83,13 @@ func (repo *fakeRepository) Sent(_ context.Context, organizationID, userID strin
 	}
 	return found, nil
 }
-func (repo *fakeRepository) Decide(_ context.Context, id string, input agents.InteractionDecisionInput, at time.Time) (agents.Interaction, error) {
+func (repo *fakeRepository) Decide(_ context.Context, id string, input agents.InteractionDecisionInput, decider agents.InteractionDecider, at time.Time) (agents.Interaction, error) {
 	request := repo.requests[id]
 	request.Status = StatusRejected
 	if input.Decision == DecisionApproved {
 		request.Status = StatusApproved
 	}
-	request.Decision = &agents.InteractionDecision{Decision: input.Decision, Message: input.Message, AllowedTools: input.AllowedTools, GrantedPermissions: input.GrantedPermissions, DecidedAt: at}
+	request.Decision = &agents.InteractionDecision{Decision: input.Decision, Message: input.Message, AllowedTools: input.AllowedTools, GrantedPermissions: input.GrantedPermissions, DecidedAt: at, DecidedBy: &decider}
 	request.Revision++
 	repo.requests[id] = request
 	return request, nil

@@ -205,7 +205,7 @@ func listStatement(organizationID, userID string, query Query) (string, []any, e
 	}
 }
 
-func (store *Store) Decide(ctx context.Context, id string, input agents.InteractionDecisionInput, at time.Time) (agents.Interaction, error) {
+func (store *Store) Decide(ctx context.Context, id string, input agents.InteractionDecisionInput, decider agents.InteractionDecider, at time.Time) (agents.Interaction, error) {
 	var result agents.Interaction
 	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		current, err := getForUpdate(ctx, tx, id)
@@ -231,8 +231,10 @@ func (store *Store) Decide(ctx context.Context, id string, input agents.Interact
 			status = StatusApproved
 		}
 		err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
-			SET status=$2, decision=$3, revision=revision+1, updated_at=$4 WHERE id=$1 RETURNING `+selectColumns,
-			id, status, decisionJSON, at), &result)
+			SET status=$2, decision=$3, revision=revision+1, updated_at=$4,
+				decided_by_kind=$5, decided_by_user_id=$6, decided_by_agent_id=$7
+			WHERE id=$1 RETURNING `+selectColumns,
+			id, status, decisionJSON, at, decider.Kind, decider.UserID, decider.AgentID), &result)
 		if err != nil {
 			return err
 		}
@@ -299,20 +301,21 @@ const selectColumns = `
 	target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
 	purpose, task, context, requested_tools, requested_permissions,
 	status, decision, result, revision, expires_at, created_at, updated_at,
-	teamspace_id, approval`
+	teamspace_id, approval, decided_by_kind, decided_by_user_id, decided_by_agent_id`
 
 type scanner interface{ Scan(...any) error }
 
 func scanInteraction(row scanner, target *agents.Interaction) error {
 	var contextJSON, toolsJSON, permissionsJSON []byte
 	var decisionJSON, resultJSON []byte
+	var decider agents.InteractionDecider
 	err := row.Scan(
 		&target.ID, &target.OrganizationID,
 		&target.Requester.UserID, &target.Requester.AgentID, &target.Requester.AgentName,
 		&target.Target.UserID, &target.Target.AgentID, &target.Target.AgentName, &target.Target.UserEmail, &target.Target.UserDisplayName,
 		&target.Purpose, &target.Task, &contextJSON, &toolsJSON, &permissionsJSON,
 		&target.Status, &decisionJSON, &resultJSON, &target.Revision, &target.ExpiresAt, &target.CreatedAt, &target.UpdatedAt,
-		&target.TeamspaceID, &target.Approval,
+		&target.TeamspaceID, &target.Approval, &decider.Kind, &decider.UserID, &decider.AgentID,
 	)
 	if err != nil {
 		return err
@@ -330,6 +333,12 @@ func scanInteraction(row scanner, target *agents.Interaction) error {
 		target.Decision = &agents.InteractionDecision{}
 		if err := json.Unmarshal(decisionJSON, target.Decision); err != nil {
 			return err
+		}
+		// Who decided is kept in columns of its own, which the database
+		// checks, never in the decision's JSON.
+		target.Decision.DecidedBy = nil
+		if decider.Kind != "" {
+			target.Decision.DecidedBy = &decider
 		}
 	}
 	if len(resultJSON) > 0 {

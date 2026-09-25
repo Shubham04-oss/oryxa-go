@@ -99,12 +99,12 @@ func (ledger *heldRequests) Get(_ context.Context, id string) (primaryagents.Int
 	return ledger.request, nil
 }
 
-func (ledger *heldRequests) Decide(_ context.Context, _ string, input primaryagents.InteractionDecisionInput, at time.Time) (primaryagents.Interaction, error) {
+func (ledger *heldRequests) Decide(_ context.Context, _ string, input primaryagents.InteractionDecisionInput, decider primaryagents.InteractionDecider, at time.Time) (primaryagents.Interaction, error) {
 	ledger.request.Status = interactions.StatusRejected
 	if input.Decision == interactions.DecisionApproved {
 		ledger.request.Status = interactions.StatusApproved
 	}
-	ledger.request.Decision = &primaryagents.InteractionDecision{Decision: input.Decision, Message: input.Message, DecidedAt: at}
+	ledger.request.Decision = &primaryagents.InteractionDecision{Decision: input.Decision, Message: input.Message, DecidedAt: at, DecidedBy: &decider}
 	ledger.request.Revision++
 	return ledger.request, nil
 }
@@ -204,6 +204,10 @@ func TestOnlyTheMembersOwnSessionDecidesARequestHeldForThem(t *testing.T) {
 	}
 	if decided.Code != http.StatusOK || body.Status != interactions.StatusApproved || body.Approval != interactions.ApprovalOwner || body.TeamspaceID != "tsp_1" {
 		t.Fatalf("the member's own decision = %d %s, want 200 and an approved request held for its owner in tsp_1", decided.Code, decided.Body.String())
+	}
+	// Who decided is in the JSON: the member, in their own session.
+	if !strings.Contains(decided.Body.String(), `"decided_by":{"kind":"member","user_id":"user_1"}`) {
+		t.Fatalf("the decision = %s, want decision.decided_by naming user_1 as the member", decided.Body.String())
 	}
 }
 

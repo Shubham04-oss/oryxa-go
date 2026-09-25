@@ -287,11 +287,12 @@ func Message(delivery Delivery) string {
 }
 
 // messageFor is Message for the request as it now stands: approved work the
-// agent's own member approved in person — the only way a request held for
-// its owner is approved — is told so, and that deciding is not the agent's
-// to do again.
+// agent's own member approved in person is told so, and that deciding is not
+// the agent's to do again. Who approved is read from the decision's recorded
+// decider, never inferred from the request's approval: a decision an agent,
+// or an older build, recorded is not the member's.
 func messageFor(delivery Delivery, request agents.Interaction) string {
-	return message(delivery, interactions.HeldForOwner(request))
+	return message(delivery, interactions.DecidedByItsOwner(request))
 }
 
 func message(delivery Delivery, ownerApproved bool) string {

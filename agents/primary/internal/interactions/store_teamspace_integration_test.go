@@ -98,7 +98,8 @@ func TestTheTeamspaceMigrationIsSafeToApplyAgain(t *testing.T) {
 
 	rows, err := database.Pool.Query(ctx, `SELECT column_name, column_default, is_nullable
 		FROM information_schema.columns
-		WHERE table_schema='agents_primary' AND table_name='agent_interactions' AND column_name IN ('teamspace_id', 'approval')
+		WHERE table_schema='agents_primary' AND table_name='agent_interactions'
+		  AND column_name IN ('teamspace_id', 'approval', 'decided_by_kind', 'decided_by_user_id', 'decided_by_agent_id')
 		ORDER BY column_name`)
 	if err != nil {
 		t.Fatal(err)
@@ -114,21 +115,23 @@ func TestTheTeamspaceMigrationIsSafeToApplyAgain(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	if columns["approval"] != "'agent'::text nullable=NO" || columns["teamspace_id"] != "''::text nullable=NO" {
+	if columns["approval"] != "'agent'::text nullable=NO" || columns["teamspace_id"] != "''::text nullable=NO" ||
+		columns["decided_by_kind"] != "''::text nullable=NO" || columns["decided_by_user_id"] != "''::text nullable=NO" ||
+		columns["decided_by_agent_id"] != "''::text nullable=NO" {
 		t.Fatalf("columns=%v", columns)
 	}
 	var constraints, indexes int
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint
-		WHERE conname='agent_interactions_approval_check' AND conrelid='agents_primary.agent_interactions'::regclass
-		  AND convalidated`).Scan(&constraints); err != nil {
+		WHERE conname IN ('agent_interactions_approval_check', 'agent_interactions_decided_by_check')
+		  AND conrelid='agents_primary.agent_interactions'::regclass AND convalidated`).Scan(&constraints); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes
 		WHERE schemaname='agents_primary' AND indexname='agent_interactions_teamspace_idx'`).Scan(&indexes); err != nil {
 		t.Fatal(err)
 	}
-	if constraints != 1 || indexes != 1 {
-		t.Fatalf("validated approval checks=%d teamspace indexes=%d, want one each", constraints, indexes)
+	if constraints != 2 || indexes != 1 {
+		t.Fatalf("validated approval and decider checks=%d teamspace indexes=%d, want two and one", constraints, indexes)
 	}
 }
 
@@ -437,6 +440,64 @@ func TestTheLedgerFindsARequestByItsKey(t *testing.T) {
 	} {
 		if found, err := store.FindByKey(ctx, lookup[0], lookup[1], lookup[2]); !errors.Is(err, ErrNotFound) {
 			t.Errorf("%s: FindByKey = %+v, %v; want ErrNotFound", name, found, err)
+		}
+	}
+}
+
+// TestTheLedgerKeepsWhoDecided: the decider is stored in columns of its own
+// and read back into the decision; a decision an older build recorded reads
+// with no decider; and the database refuses a decider that does not add up.
+func TestTheLedgerKeepsWhoDecided(t *testing.T) {
+	database, store := openInteractionStore(t)
+	ctx := context.Background()
+	organizationID := testOrganization(t, database)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	approve := agents.InteractionDecisionInput{Decision: DecisionApproved, Message: "Go ahead."}
+	for _, decider := range []agents.InteractionDecider{
+		{Kind: DecidedByMember, UserID: "user_b"},
+		{Kind: DecidedByAgent, UserID: "user_b", AgentID: "agt_b"},
+		{Kind: DecidedBySystem},
+	} {
+		request := storedRequest(organizationID, organizationID+"_"+decider.Kind, "user_a", "user_b", now)
+		if _, err := store.Create(ctx, request, decider.Kind); err != nil {
+			t.Fatal(err)
+		}
+		decided, err := store.Decide(ctx, request.ID, approve, decider, now.Add(time.Second))
+		if err != nil || decided.Decision == nil || decided.Decision.DecidedBy == nil || *decided.Decision.DecidedBy != decider {
+			t.Fatalf("decided by %+v = %+v, %v", decider, decided.Decision, err)
+		}
+		read, err := store.Get(ctx, request.ID)
+		if err != nil || read.Decision.DecidedBy == nil || *read.Decision.DecidedBy != decider {
+			t.Fatalf("read back = %+v, %v; want decided by %+v", read.Decision, err, decider)
+		}
+	}
+
+	older := storedRequest(organizationID, organizationID+"_older", "user_a", "user_b", now)
+	if _, err := store.Create(ctx, older, "older"); err != nil {
+		t.Fatal(err)
+	}
+	// An older build's Decide writes the decision and nothing else.
+	if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.agent_interactions SET status='approved',
+		decision='{"decision":"approved","message":"Approved.","allowed_tools":[],"granted_permissions":[],"decided_at":"2026-09-25T00:00:00Z","decided_by":{"kind":"member","user_id":"user_b"}}'
+		WHERE id=$1`, older.ID); err != nil {
+		t.Fatal(err)
+	}
+	if read, err := store.Get(ctx, older.ID); err != nil || read.Decision == nil || read.Decision.DecidedBy != nil {
+		t.Fatalf("an older build's decision reads %+v, %v; want no decider, whatever its JSON claims", read.Decision, err)
+	}
+
+	for name, columns := range map[string][3]string{
+		"a member with an agent":   {"member", "user_b", "agt_b"},
+		"an agent with no member":  {"agent", "", "agt_b"},
+		"an agent with no agent":   {"agent", "user_b", ""},
+		"the system with a member": {"system", "user_b", ""},
+		"a kind nobody knows":      {"team", "user_b", ""},
+		"no kind, with a member":   {"", "user_b", ""},
+	} {
+		if _, err := database.Pool.Exec(ctx, `UPDATE agents_primary.agent_interactions
+			SET decided_by_kind=$2, decided_by_user_id=$3, decided_by_agent_id=$4 WHERE id=$1`,
+			older.ID, columns[0], columns[1], columns[2]); err == nil {
+			t.Errorf("the ledger stored %s as its decider", name)
 		}
 	}
 }

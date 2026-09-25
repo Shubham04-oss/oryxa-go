@@ -14,7 +14,25 @@ import (
 func requestWithApproval(status, approval string) agents.Interaction {
 	request := testRequest(status)
 	request.TeamspaceID, request.Approval = "tsp_1", approval
+	request.Requester = agents.InteractionParty{UserID: "user_a", AgentID: "agt_a", AgentName: "Crew"}
+	request.Target = agents.InteractionParty{UserID: "user_b", AgentID: "agt_b", AgentName: "Carl"}
 	return request
+}
+
+// decidedBy is the request approved, as decider recorded it.
+func decidedBy(request agents.Interaction, decider *agents.InteractionDecider) agents.Interaction {
+	request.Status = interactions.StatusApproved
+	request.Decision = &agents.InteractionDecision{Decision: interactions.DecisionApproved, Message: "Go ahead.", DecidedAt: time.Now(), DecidedBy: decider}
+	return request
+}
+
+// byTheMember is user_b, the addressed agent's member, in their own session.
+var byTheMember = &agents.InteractionDecider{Kind: interactions.DecidedByMember, UserID: "user_b"}
+
+func (requests *fakeRequests) set(request agents.Interaction) {
+	requests.mu.Lock()
+	defer requests.mu.Unlock()
+	requests.requests[request.ID] = request
 }
 
 // TestARequestHeldForItsOwnerWakesTheAgentOnlyOnceTheOwnerApproves: the new
@@ -38,7 +56,7 @@ func TestARequestHeldForItsOwnerWakesTheAgentOnlyOnceTheOwnerApproves(t *testing
 	}
 
 	// The owner approves in their own session; the decision's event arrives.
-	requests.setStatus("irq_1", interactions.StatusApproved)
+	requests.set(decidedBy(requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner), byTheMember))
 	approved := testDelivery("evt_approved", KindTargetApproved, 2)
 	approved.Status = interactions.StatusApproved
 	store.pending = []Delivery{approved}
@@ -118,7 +136,7 @@ func TestADelegatedTeamspaceRequestWakesItsAgentAsBefore(t *testing.T) {
 // TestOnlyApprovedWorkIsToldItsOwnerApproved: the owner-approved wording is
 // for approved work alone, and the published Message keeps its old wording.
 func TestOnlyApprovedWorkIsToldItsOwnerApproved(t *testing.T) {
-	held := requestWithApproval(interactions.StatusApproved, interactions.ApprovalOwner)
+	held := decidedBy(requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner), byTheMember)
 	for _, kind := range []string{KindTargetRequested, KindRequesterRejected, KindRequesterCompleted} {
 		if message := messageFor(testDelivery("evt_1", kind, 1), held); message != Message(testDelivery("evt_1", kind, 1)) {
 			t.Errorf("%s was reworded for a request held for its owner: %s", kind, message)
@@ -158,5 +176,32 @@ func TestATeamspaceRequestNamingNoApprovalNeverWakesTheAgentToDecide(t *testing.
 	}
 	if len(runs.calls) != 0 || len(store.done) != 1 {
 		t.Fatalf("calls=%+v done=%v, want the delivery completed without a run", runs.calls, store.done)
+	}
+}
+
+// TestTheOwnerApprovedWordingFollowsWhoDecided: the agent is told its member
+// approved in person only when the decision records the member as its
+// decider. A held request an agent approved — which only an older build's
+// Decide could do — or whose decision names no decider is not the member's
+// approval, whatever its approval says; and a request its member approved in
+// person is, even one outside any teamspace.
+func TestTheOwnerApprovedWordingFollowsWhoDecided(t *testing.T) {
+	approved := testDelivery("evt_approved", KindTargetApproved, 2)
+	held := requestWithApproval(interactions.StatusPending, interactions.ApprovalOwner)
+	outside := held
+	outside.TeamspaceID, outside.Approval = "", interactions.ApprovalAgent
+	for name, testCase := range map[string]struct {
+		request agents.Interaction
+		owner   bool
+	}{
+		"held, approved by its member":            {decidedBy(held, byTheMember), true},
+		"held, approved by an agent":              {decidedBy(held, &agents.InteractionDecider{Kind: interactions.DecidedByAgent, UserID: "user_b", AgentID: "agt_b"}), false},
+		"held, approved by nobody recorded":       {decidedBy(held, nil), false},
+		"held, approved by another member":        {decidedBy(held, &agents.InteractionDecider{Kind: interactions.DecidedByMember, UserID: "user_a"}), false},
+		"outside a teamspace, approved by member": {decidedBy(outside, byTheMember), true},
+	} {
+		if told := strings.Contains(messageFor(approved, testCase.request), "approved this request themself"); told != testCase.owner {
+			t.Errorf("%s: told the member approved = %t, want %t", name, told, testCase.owner)
+		}
 	}
 }

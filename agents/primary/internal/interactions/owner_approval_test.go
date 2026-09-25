@@ -225,3 +225,22 @@ func TestOnlyTheMembersOwnSessionDecidesAsOwner(t *testing.T) {
 		t.Fatalf("the member's own session = %+v, %v", decided, err)
 	}
 }
+
+// TestADecisionRecordsWhoMadeIt: the member deciding in their own session is
+// recorded as the member, with no agent; an agent deciding in a run is
+// recorded as that agent, with the member it works for.
+func TestADecisionRecordsWhoMadeIt(t *testing.T) {
+	service, _ := teamspaceService(t, teamspaceSeats())
+	held := createInTeamspace(t, service, "agt_b")
+	byOwner, err := service.DecideAsOwner(context.Background(), inOwnSession(targetPrimary), held.ID, approve)
+	if err != nil || byOwner.Decision == nil || byOwner.Decision.DecidedBy == nil ||
+		*byOwner.Decision.DecidedBy != (agents.InteractionDecider{Kind: DecidedByMember, UserID: "user_b"}) || !DecidedByItsOwner(byOwner) {
+		t.Fatalf("the member's own decision = %+v, %v; want decided_by the member", byOwner.Decision, err)
+	}
+	delegated := createInTeamspace(t, service, "agt_auto")
+	byAgent, err := service.Decide(context.Background(), autoSpecialist, delegated.ID, approve)
+	if err != nil || byAgent.Decision == nil || byAgent.Decision.DecidedBy == nil ||
+		*byAgent.Decision.DecidedBy != (agents.InteractionDecider{Kind: DecidedByAgent, UserID: "user_b", AgentID: "agt_auto"}) || DecidedByItsOwner(byAgent) {
+		t.Fatalf("the specialist's decision = %+v, %v; want decided_by agt_auto", byAgent.Decision, err)
+	}
+}

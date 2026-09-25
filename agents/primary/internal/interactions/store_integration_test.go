@@ -66,7 +66,7 @@ func TestStoreLifecycle(t *testing.T) {
 
 	approved, err := store.Decide(ctx, request.ID, agents.InteractionDecisionInput{
 		Decision: DecisionApproved, Message: "Approved", AllowedTools: []string{"knowledge_search"}, GrantedPermissions: []string{"read:architecture"},
-	}, now.Add(time.Minute))
+	}, agents.InteractionDecider{Kind: DecidedByAgent, UserID: "user_b", AgentID: "agt_b"}, now.Add(time.Minute))
 	if err != nil || approved.Status != StatusApproved || approved.Revision != 2 {
 		t.Fatalf("approved=%+v err=%v", approved, err)
 	}
