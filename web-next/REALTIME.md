@@ -27,8 +27,8 @@ conversation) live only in the Durable Object's SQLite.
 | `TeamspaceRoomAgent` | `org~teamspace` | the teamspace's team | `…/teamspaces/{id}/messages` (read and post), `/catchup`, as each member | Go room canonical; DO keeps the recent window, fan-out, live presence |
 | `SideConversationAgent` | `org~teamspace~userA~userB` (ids sorted) | those two members, on the teamspace's team | each person's own agent: `POST …/threads/{id}/runs` on a thread of theirs; the teammate's agent: `…/agent-requests` (create, list, read, decide), as each person | DO SQLite for people's messages and the transcript; Go for agent work: threads, requests, results |
 | `DirectMessageAgent` (a DM) | `org~userA~userB` (ids sorted) | those two members | none | DO SQLite only |
-| `InboxAgent` | `org~user` | that member | none | DO SQLite: the member's conversation list |
-| `RealtimeRegistryAgent` | `org` | nobody: inboxes and the purge | none | DO SQLite: who has an inbox, purges carried out |
+| `InboxAgent` | `org~user` | that member | none | DO SQLite: the member's conversation list, its latest removal from each teamspace's team |
+| `RealtimeRegistryAgent` | `org` | nobody: inboxes and the purge | none | DO SQLite: who has an inbox, purges carried out, a teamspace purge's progress |
 
 Go runs only a member's own agents (`managedagents` scopes by user). A
 teammate's agent is reached through the agent-request flow, which honours
@@ -260,7 +260,8 @@ inbox and, through them, every conversation. An inbox counts as registered
 only once the registry has stored it, and never registers for a purge: a
 purge that reaches an inbox with nothing in it (a member's purge after
 their organization's) leaves it unregistered. The registry also remembers
-the purges it carried out (below). No page reaches it.
+the purges it carried out, and which members a teamspace's purge under way
+is done with (below). No page reaches it.
 
 ## Side conversations
 
@@ -482,12 +483,16 @@ are between people. The registry has no entry: no page reaches it.
   side conversations they were in, up to when they left: Go calls the
   Worker's purge, below. A side conversation's agent work stays in Go: the
   requests (Go's ledger), and each person's thread for it, which is theirs.
+- A member leaving a teamspace's team empties their side conversations in
+  that teamspace the same way, and a teamspace being deleted empties every
+  side conversation in it ([A teamspace's purges](#a-teamspaces-purges)).
 
-### Purging a member's conversations (contract v2)
+### Purging conversations (contract v3)
 
-Go's relay turns `auth.member.removed.v1` and `auth.organization.deleted.v1`
-into one call each (an organization's deletion is one call, not one per
-member):
+Go's relay turns `auth.member.removed.v1`, `auth.organization.deleted.v1`,
+`agents.teamspace.member.removed.v1` and `agents.teamspace.deleted.v1` into
+one call each (an organization's or a teamspace's deletion is one call, not
+one per member):
 
 `POST /internal/realtime/purge`, not under `/agents/`, with no cookie.
 
@@ -497,16 +502,31 @@ member):
   whitespace, which Go and the Worker both trim; never hex-decoded), of the
   timestamp as sent, a `.`, and the raw body's bytes.
 - The body, at most 4 KB of compact JSON, keys in this order:
-  `{"event_id":"…","organization_id":"…","scope":"member"|"organization","user_id":"…","removed_at":"…"}`.
+  `{"event_id":"…","organization_id":"…","scope":"…","user_id":"…","teamspace_id":"…","removed_at":"…"}`,
+  `teamspace_id` only for the two teamspace scopes (Go's field is
+  `omitempty`, so a member's and an organization's bodies are what contract
+  v2 sent, byte for byte).
   - `event_id`: 1 to 200 characters, unique per event.
   - `organization_id`: an id a name may hold (`A-Z a-z 0-9 _ -`, at most
     128).
-  - `scope`: required. `member` needs a `user_id` (the member who left, an id
-    as above); `organization` needs `user_id` to be `""`. Anything else is
-    refused: an empty `user_id` never means the organization by itself.
+  - `scope`: required, and `user_id` and `teamspace_id` must agree with it.
+    Anything else is refused: an empty `user_id` never means everybody by
+    itself.
+
+    | `scope` | `user_id` | `teamspace_id` | What goes |
+    |---|---|---|---|
+    | `member` | the member who left, an id as above | absent | their DMs and side conversations, up to `removed_at` |
+    | `organization` | `""` | absent | every conversation of every member, entirely |
+    | `teamspace_member` | the member who left the teamspace's team | the teamspace, an id as above | their side conversations in that teamspace, up to `removed_at` |
+    | `teamspace` | `""` | the deleted teamspace | every side conversation in it, entirely |
+
+    A `teamspace_id` on `member` or `organization` is refused, even an empty
+    or `null` one, and so is a teamspace scope without one that matches
+    `[\w-]{1,128}`.
   - `removed_at`: required, RFC 3339 (`T` and `Z` in either case, or an
     offset; 0 to 9 fractional digits), a real time: a 30th of February,
-    24:00, a leap second or a year before 1970 is refused.
+    24:00, a leap second or a year before 1970 is refused. For `teamspace`,
+    Go sends the deletion's `changed_at`; nothing reads it.
 
 The Worker checks, in order: POST (405); its secret, trimmed, is set and at
 least 32 characters (503 `unavailable` otherwise); both headers (401
@@ -515,17 +535,21 @@ least 32 characters (503 `unavailable` otherwise); both headers (401
 `invalid_signature`); the body at most 4 KB (413 `too_large`); the
 signature itself, compared in constant time (401 `invalid_signature`); the
 body (400 `invalid_request`, which Go does not retry). Then the
-organization's registry carries the purge out, and the Worker answers 204
-with no body once it is done, or was done already for this `event_id`: the
-registry remembers an event for 24 hours, so a replay, or Go sending an
-event again after missing the answer, does nothing. A purge that failed
-part-way answers 503, and sent again it carries on from where it stopped;
-so does one cut off part-way with no answer at all (a deploy, an eviction,
-the runtime ending it once Go gave up). Each step is forgotten only once it
-is done: a conversation leaves an inbox once its object is purged, a member
-leaves the registry once their inbox is emptied, and the event is
-remembered once every member is. Only 204 is done: Go retries 401, 408,
-429, 5xx and any other 2xx, and follows no redirect.
+organization's registry carries the purge out (the member's own inbox, for
+`teamspace_member`), and the Worker answers 204 with no body once it is
+done, or was done already for this `event_id`, or found nothing to purge:
+the registry remembers an event for 24 hours, so a replay, or Go sending an
+event again after missing the answer, does nothing (a `teamspace_member`
+purge is remembered by what it removes instead, below). A purge that failed
+part-way answers 503, and sent again it carries on from
+where it stopped; so does one cut off part-way with no answer at all (a
+deploy, an eviction, the runtime ending it once Go gave up). Each step is
+forgotten only once it is done: a conversation leaves an inbox once its
+object is purged, a member leaves the registry once their inbox is emptied,
+and the event is remembered once every member is (a teamspace's purge
+keeps its members and records its progress apart, below). Only 204 is
+done: Go retries 401, 408, 429, 5xx and any other 2xx, and follows no
+redirect.
 
 **`removed_at`, to the millisecond.** Messages record when they were
 written to the millisecond, so `removed_at` is compared at that precision:
@@ -595,12 +619,97 @@ A purge of a DM or a side conversation, whole or of one member, also takes
 the events it had not yet sent Go, and those Go refused, with it
 ([Conversation events](#conversation-events)).
 
+### A teamspace's purges
+
+A teamspace belongs to one human team, and its side conversations to their
+two people on it. When someone leaves the team, their side conversations in
+that teamspace go as a DM goes when someone leaves the organization; when
+the teamspace is deleted, all of its side conversations go.
+
+**`teamspace_member`** goes straight to the member's inbox
+(`InboxAgent.purgeTeamspace(teamspaceId, removedAt)`). Of what it
+lists or knows, only the side conversations whose name holds that
+teamspace are purged, each by its object with a member's rule
+(`SideConversationAgent.purge`, above): what was stored at or before
+`removed_at` goes, and so does what came through the member's sockets
+opened before it; one left empty leaves both inboxes, and one that kept
+something newer stays in both, restated. The member's other side
+conversations, their DMs and other people's conversations are not touched.
+Unlike a member's purge, the inbox stays as it is otherwise: open, its
+sockets told only what went (`inbox-removed`, `inbox-conversation`), and
+registered, as its member is still in the organization.
+
+A removal is carried out once, whatever the event that brings it: when a
+teams event is delivered again, agents publish the same removal again
+under a new `event_id`. Once every such conversation is done, the inbox
+remembers the latest `removed_at` it finished in that teamspace, for 24
+hours (`inbox_teamspace_removals`), and a removal not after it answers 204
+and touches nothing. Purging those conversations again would end the run
+the pages opened since hold, take the events not yet sent Go, and forget
+the member's agent thread, though it would delete nothing newer. A later
+removal (the member let back in, and removed again) is carried out, and
+remembered in its place. The inbox writes nothing when it has no side
+conversation in that teamspace, and an inbox a purge empties forgets its
+removals too.
+
+**`teamspace`** goes to the organization's registry
+(`RealtimeRegistryAgent.purgeTeamspace(eventId, teamspaceId)`), which asks
+every registered member's inbox, 8 at a time, to empty every side
+conversation it has in the teamspace, newer items too (the same
+`InboxAgent.purgeTeamspace`, without `removedAt`). A conversation emptied
+from one person's inbox leaves the other's at once, so the second visit
+finds nothing left of it. The registry remembers the event for 24 hours; a
+deletion sent again under another event finds nothing left, and answers
+204.
+
+**In any order.** Deleting a team brings a `teamspace_member` purge for each
+of its members and one `teamspace` purge, and a member leaving the
+organization brings a `teamspace_member` purge for each of their teams'
+teamspaces beside auth's `member` purge. They may arrive in any order, and
+each answers 204: whichever comes later purges what is left, or finds
+nothing. A member's purge that empties their inbox forgets their removals
+with it, so a `teamspace_member` purge after it writes nothing to the
+emptied inbox and registers nobody.
+
+**Crash safety.** Both are carried out step by step, and each step is
+recorded only once it is done, as for an organization:
+
+- A conversation leaves an inbox only once its object is purged, and one
+  that could not be purged stays listed, so the next attempt finds it. The
+  inbox goes through its conversations again while any of the teamspace
+  arrive (at most five passes); one still unfinished after them fails the
+  attempt, and the removal is not remembered.
+- The registry must not forget a member to mark progress, as an
+  organization's purge does: everybody is still in the organization. It
+  records each member done for the event in `registry_purge_progress` once
+  their inbox is done, skips them when the same event comes again, and,
+  once every member is done, remembers the event and drops its progress in
+  one transaction. Progress older than 24 hours is forgotten, and those
+  members are simply done again.
+
+A purge that failed part-way answers 503; one cut off with no answer at all
+(a deploy, an eviction) says nothing. Either way, Go sends the event again,
+and it carries on with what is not yet done. Nothing matched (a member with
+no inbox, an organization with no registry, a teamspace nobody talked in)
+answers 204, makes no conversation and registers nobody.
+
+**Afterwards.** A side conversation socket the purge ended (every one for
+`teamspace`, those opened at or before `removed_at` for `teamspace_member`)
+is told `side-gone`, and its page asks the Worker again, whose access check
+keeps the member out (the Worker's side conversation entry, above;
+`src/server.routes.test.ts` pins each refusal): Go derives a teamspace's
+`is_member` and its whisperer seats from the live team directory, and
+answers 404 for a teamspace to someone neither on its team nor managing it.
+So the member who left gets 404 (or 403 `forbidden`, as a manager off the
+team), and the other person, whose peer is no longer among the seats, 404
+`peer_not_found`, until the member is back on the team.
+
 `REALTIME_PURGE_SECRET` is a Worker secret (`wrangler secret put
 REALTIME_PURGE_SECRET`, the same value Go has; `.dev.vars` locally, see
 `.dev.vars.example`). It signs the other direction too: the conversation
 events the Worker sends Go. `src/realtime-purge.test.ts` pins Go's own
-signing vectors: a member's purge, an organization's, and a member's with a
-nanosecond `removed_at`.
+signing vectors: a member's purge, an organization's, a member's with a
+nanosecond `removed_at`, a member's in a teamspace and a teamspace's.
 
 ## Conversation events
 

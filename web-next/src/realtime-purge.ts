@@ -1,11 +1,14 @@
 // POST /internal/realtime/purge: how Go empties the conversations a member
-// leaves behind (auth.member.removed.v1) or a whole organization's
-// (auth.organization.deleted.v1). No cookie: Go signs each request with a
-// secret the two share. REALTIME.md holds the contract Go builds against.
+// leaves behind (auth.member.removed.v1), a whole organization's
+// (auth.organization.deleted.v1), and a teamspace's side conversations,
+// those of a member who left its team (agents.teamspace.member.removed.v1)
+// or all of them once it is deleted (agents.teamspace.deleted.v1). No
+// cookie: Go signs each request with a secret the two share. REALTIME.md
+// holds the contract Go builds against.
 import { getAgentByName } from "agents"
 import type { ConversationEnv } from "./conversation-env"
-import { isNameId, registryName } from "./lib/dms/names"
-import { maxPurgeEventId } from "./realtime-registry-agent"
+import { inboxName, isNameId, registryName } from "./lib/dms/names"
+import { isPurgeEventId } from "./realtime-registry-agent"
 import type { PurgeTarget } from "./realtime-registry-agent"
 
 /** Where the Worker takes a purge. Not under `/agents/`: no page reaches it. */
@@ -29,24 +32,36 @@ export const minPurgeSecretLength = 32
 export const maxPurgeBodyBytes = 4 * 1024
 
 /**
- * A purge, as Go sends it (contract v2).
+ * A purge, as Go sends it (contract v3).
  *
  * - `event_id` names the event behind it (1 to 200 characters, unique per
- *   event): the same event again does nothing.
- * - `scope` says what goes: `member` (the member `user_id`, never empty) or
- *   `organization` (every member; `user_id` is then `""`). An empty
- *   `user_id` never means the organization by itself.
- * - `removed_at` is when the member left, RFC 3339 with 0 to 9 fractional
- *   digits: in a member's conversations, only what is not newer than it
- *   goes. An organization's purge takes everything.
+ *   event): the same event again does nothing. A `teamspace_member` purge
+ *   is carried out once by what it removes instead, as Go may send the
+ *   same removal under a new event.
+ * - `scope` says what goes, and `user_id` and `teamspace_id` must agree
+ *   with it. An empty `user_id` never means everybody by itself.
+ *   - `member`: the conversations of the member `user_id` (never empty).
+ *   - `organization`: every member's; `user_id` is `""`.
+ *   - `teamspace_member`: the side conversations in the teamspace
+ *     `teamspace_id` of the member `user_id`, who left its team.
+ *   - `teamspace`: every side conversation in the teamspace `teamspace_id`,
+ *     which was deleted; `user_id` is `""`.
+ * - `teamspace_id` (an id a name may hold) comes with the two teamspace
+ *   scopes, and never with the others: Go leaves it out of their bodies.
+ * - `removed_at` is when the member left, or the organization or the
+ *   teamspace went, RFC 3339 with 0 to 9 fractional digits: in a member's
+ *   conversations, only what is not newer than it goes. An organization's
+ *   or a teamspace's purge takes everything.
  */
 export type PurgeRequest = {
   event_id: string
   organization_id: string
-  scope: PurgeTarget["scope"]
   user_id: string
   removed_at: string
-}
+} & (
+  | { scope: "member" | "organization"; teamspace_id?: never }
+  | { scope: "teamspace_member" | "teamspace"; teamspace_id: string }
+)
 
 // RFC 3339's date-time, strictly: the date, `T`, the time, 1 to 9
 // fractional digits, and `Z` or an offset. Its numbers are checked apart.
@@ -235,29 +250,48 @@ export function parsePurgeRequest(body: Uint8Array): PurgeRequest | undefined {
   const organizationId = fields.organization_id
   const scope = fields.scope
   const userId = fields.user_id
+  const teamspaceId = fields.teamspace_id
   const removedAt = fields.removed_at
   if (
-    typeof eventId !== "string" ||
-    eventId === "" ||
-    eventId.length > maxPurgeEventId ||
+    !isPurgeEventId(eventId) ||
     !isNameId(organizationId) ||
-    // The scope says what goes; `user_id` must agree with it. An empty
-    // `user_id` alone never means the organization.
-    !(
-      (scope === "member" && isNameId(userId)) ||
-      (scope === "organization" && userId === "")
-    ) ||
+    typeof userId !== "string" ||
     typeof removedAt !== "string" ||
     removalTime(removedAt) === undefined
   ) {
     return undefined
   }
-  return {
-    event_id: eventId,
-    organization_id: organizationId,
-    scope,
-    user_id: userId,
-    removed_at: removedAt,
+  // The scope says what goes; `user_id` and `teamspace_id` must agree with
+  // it. An empty `user_id` alone never means everybody.
+  const common = { event_id: eventId, organization_id: organizationId }
+  switch (scope) {
+    case "member":
+    case "organization":
+      if (
+        !(scope === "member" ? isNameId(userId) : userId === "") ||
+        // Even an empty or null one: Go leaves it out.
+        Object.prototype.hasOwnProperty.call(fields, "teamspace_id")
+      ) {
+        return undefined
+      }
+      return { ...common, scope, user_id: userId, removed_at: removedAt }
+    case "teamspace_member":
+    case "teamspace":
+      if (
+        !(scope === "teamspace_member" ? isNameId(userId) : userId === "") ||
+        !isNameId(teamspaceId)
+      ) {
+        return undefined
+      }
+      return {
+        ...common,
+        scope,
+        user_id: userId,
+        teamspace_id: teamspaceId,
+        removed_at: removedAt,
+      }
+    default:
+      return undefined
   }
 }
 
@@ -268,9 +302,13 @@ export function parsePurgeRequest(body: Uint8Array): PurgeRequest | undefined {
  * within `purgeWindowSeconds` of now (401), the signature's form (401), the
  * body at most `maxPurgeBodyBytes` (413), the signature itself, compared in
  * constant time (401), and the body (400).
- * Then the organization's registry carries the purge out
- * (`RealtimeRegistryAgent.purge`): 204 once it is done, or was done already
- * for this event; 503 when part of it failed, and Go sends it again.
+ * Then the purge is carried out: a member's or an organization's by the
+ * organization's registry (`RealtimeRegistryAgent.purge`), a teamspace's by
+ * the registry too, through every member's inbox
+ * (`RealtimeRegistryAgent.purgeTeamspace`), and a member's in one
+ * teamspace by that member's inbox (`InboxAgent.purgeTeamspace`). 204 once
+ * it is done, or was done already for this event, or found nothing to
+ * purge; 503 when part of it failed, and Go sends it again.
  */
 export async function handlePurge(
   request: Request,
@@ -323,23 +361,34 @@ export async function handlePurge(
     return refuse(
       400,
       "invalid_request",
-      "A purge needs event_id, organization_id, a scope that agrees with user_id, and removed_at."
+      "A purge needs event_id, organization_id, a scope that user_id and teamspace_id agree with, and removed_at."
     )
   }
-  const target: PurgeTarget =
-    purge.scope === "organization"
-      ? { scope: "organization" }
-      : {
-          scope: "member",
-          userId: purge.user_id,
-          removedAt: removalTime(purge.removed_at) ?? "",
-        }
+  const removedAt = removalTime(purge.removed_at) ?? ""
   try {
-    const registry = await getAgentByName(
-      env.RealtimeRegistryAgent,
-      registryName(purge.organization_id)
-    )
-    await registry.purge(purge.event_id, target)
+    if (purge.scope === "teamspace_member") {
+      // The member's own inbox finds their side conversations there, and
+      // remembers the removal itself, whatever the event that brings it.
+      const inbox = await getAgentByName(
+        env.InboxAgent,
+        inboxName(purge.organization_id, purge.user_id)
+      )
+      await inbox.purgeTeamspace(purge.teamspace_id, removedAt)
+    } else {
+      const registry = await getAgentByName(
+        env.RealtimeRegistryAgent,
+        registryName(purge.organization_id)
+      )
+      if (purge.scope === "teamspace") {
+        await registry.purgeTeamspace(purge.event_id, purge.teamspace_id)
+      } else {
+        const target: PurgeTarget =
+          purge.scope === "organization"
+            ? { scope: "organization" }
+            : { scope: "member", userId: purge.user_id, removedAt }
+        await registry.purge(purge.event_id, target)
+      }
+    }
   } catch (error) {
     console.error("realtime purge: a purge did not finish", error)
     return refuse(503, "unavailable", "The purge did not finish. Try again.")

@@ -18,7 +18,9 @@ import {
 } from "./lib/dms/protocol"
 import type { InboxServerMessage } from "./lib/dms/protocol"
 import type { Conversation, ConversationKind } from "./lib/dms/types"
-import { isPurgeInstant } from "./realtime-registry-agent"
+import { removalTime } from "./realtime-purge"
+import { isPurgeInstant, purgeMemoryMs } from "./realtime-registry-agent"
+import type { PurgeOutcome } from "./realtime-registry-agent"
 
 /**
  * What a conversation object tells an inbox about itself: its kind and name,
@@ -72,6 +74,24 @@ const purgeConcurrency = 4
 const purgePasses = 5
 
 const maxTeamspaceName = 200
+
+/**
+ * A removal time as the instant it names, in milliseconds, read with the
+ * purge's own parser (`removalTime`: any RFC 3339 time, floored to the
+ * millisecond), or nothing for one that is not a time. Removals are
+ * compared as instants, never as strings.
+ */
+function removalInstant(value: string): number | undefined {
+  const instant = removalTime(value)
+  return instant === undefined ? undefined : Date.parse(instant)
+}
+
+/** A conversation as a purge goes through them: listed or only known. */
+type PurgedConversation = {
+  name: string
+  kind: ConversationKind
+  peerId: string
+}
 
 type ConversationRow = {
   name: string
@@ -172,7 +192,8 @@ async function eachLimited<T>(
  * (`RealtimeRegistryAgent`), so an organization's purge finds it; a
  * registration that failed is tried again on a schedule, as its member opens
  * it, and after a restart, and a purge never registers it. `purge` empties
- * every conversation it lists, and then itself.
+ * every conversation it lists, and then itself; `purgeTeamspace` purges only
+ * the side conversations of one teamspace, and the inbox stays.
  */
 export class InboxAgent extends Agent<ConversationEnv> {
   private schemaReady = false
@@ -426,7 +447,8 @@ export class InboxAgent extends Agent<ConversationEnv> {
    * something newer stays in both, restated by its object. Conversations
    * that arrive meanwhile are purged too.
    *
-   * Then, if nothing stays, the inbox empties itself. Its sockets (all of
+   * Then, if nothing stays, the inbox empties itself, forgetting the
+   * removals from teamspaces it carried out too. Its sockets (all of
    * them for an organization's purge, else those opened at or before the
    * member left) are told `inbox-gone` and closed, so each page asks the
    * Worker whether it may open the inbox again; the rest are sent it as it
@@ -436,55 +458,11 @@ export class InboxAgent extends Agent<ConversationEnv> {
    */
   async purge(scope?: { removedAt: string }): Promise<{ emptied: boolean }> {
     this.schema()
-    const { organizationId, userId } = this.owner
     const removedAt = scope?.removedAt
     if (scope !== undefined && !isPurgeInstant(removedAt)) {
       throw new TypeError("not a purge of this inbox")
     }
-    const purged = new Set<string>()
-    for (let pass = 0; pass < purgePasses; pass += 1) {
-      const conversations = this.everyConversation().filter(
-        (conversation) => !purged.has(conversation.name)
-      )
-      if (conversations.length === 0) break
-      const failed = await eachLimited(
-        conversations,
-        purgeConcurrency,
-        async (conversation) => {
-          const leaving =
-            removedAt === undefined ? undefined : { userId, removedAt }
-          const { emptied } =
-            conversation.kind === "dm"
-              ? await (
-                  await getAgentByName(
-                    this.env.DirectMessageAgent,
-                    conversation.name
-                  )
-                ).purge(leaving)
-              : await (
-                  await getAgentByName(
-                    this.env.SideConversationAgent,
-                    conversation.name
-                  )
-                ).purge(leaving)
-          if (emptied) {
-            const peer = await getAgentByName(
-              this.env.InboxAgent,
-              inboxName(organizationId, conversation.peerId)
-            )
-            await peer.removeConversation(conversation.name)
-            this.sql`DELETE FROM inbox_known WHERE name = ${conversation.name}`
-            if (this.row(conversation.name)) {
-              this.forgetConversation(conversation.name)
-            }
-          }
-          purged.add(conversation.name)
-        }
-      )
-      if (failed > 0) {
-        throw new Error(`${failed} conversations could not be purged`)
-      }
-    }
+    await this.purgeConversations(() => true, removedAt)
     const staying = this.everyConversation()
     if (removedAt === undefined && staying.length > 0) {
       throw new Error("conversations kept arriving while the inbox was purged")
@@ -497,6 +475,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
       this.sql`DELETE FROM inbox_known`
       this.sql`DELETE FROM inbox_unread`
       this.sql`DELETE FROM inbox_meta`
+      this.sql`DELETE FROM inbox_teamspace_removals`
       if (retry) await this.cancelSchedule(retry).catch(() => false)
     }
     for (const connection of this.getConnections()) {
@@ -521,6 +500,99 @@ export class InboxAgent extends Agent<ConversationEnv> {
       }
     }
     return { emptied }
+  }
+
+  /**
+   * A teamspace's purge (src/realtime-purge.ts): the side conversations in
+   * `teamspaceId` this inbox lists or knows, and nothing else it holds.
+   *
+   * - With `removedAt` (Go's `teamspace_member`, straight to this inbox),
+   *   its member left the teamspace's team then: each is purged by its object
+   *   with a member's rule (`SideConversationAgent.purge`), all but what is
+   *   newer.
+   * - Without it (Go's `teamspace`, a teamspace deleted, through the
+   *   registry), each is emptied.
+   *
+   * As in `purge`, a conversation emptied is taken off the other person's
+   * inbox and this one, one that kept something newer stays in both,
+   * restated by its object, and those that arrive meanwhile are purged too.
+   * The inbox itself stays, with its sockets and its registration: its
+   * member is still in the organization.
+   *
+   * A removal is carried out once, whatever the event that brings it: Go
+   * sends the same removal again under a new event id when the teams event
+   * behind it is delivered again. Once every such conversation is done, the
+   * latest `removedAt` done in the teamspace is remembered for
+   * `purgeMemoryMs`, and a removal not after it does nothing, so its
+   * conversations are not purged again (which would end the run pages
+   * opened since hold, and take the events not yet sent Go). A purge that
+   * failed or was cut off part-way remembers nothing: the same removal again
+   * carries on with what is still listed. A deletion needs no memory: sent
+   * again, it finds nothing left. Nothing is written for a teamspace the
+   * inbox has no conversation in.
+   */
+  async purgeTeamspace(
+    teamspaceId: string,
+    removedAt?: string
+  ): Promise<PurgeOutcome> {
+    this.schema()
+    if (
+      !isNameId(teamspaceId) ||
+      (removedAt !== undefined && !isPurgeInstant(removedAt))
+    ) {
+      throw new TypeError("not a teamspace's purge of this inbox")
+    }
+    this.sql`DELETE FROM inbox_teamspace_removals
+      WHERE done_at < ${Date.now() - purgeMemoryMs}`
+    const removed =
+      removedAt === undefined ? undefined : removalInstant(removedAt)
+    const done = this.latestRemoval(teamspaceId)
+    if (removed !== undefined && done !== undefined && done >= removed) {
+      return "repeated"
+    }
+    const inTeamspace = (conversation: PurgedConversation) =>
+      conversation.kind === "side" &&
+      parseSideConversationName(conversation.name)?.teamspaceId === teamspaceId
+    if (!this.everyConversation().some(inTeamspace)) return "purged"
+    const purged = await this.purgeConversations(inTeamspace, removedAt)
+    // Every one of them is done: emptied and gone, or kept by a member's
+    // purge. One still here otherwise arrived after the last pass.
+    const unfinished = this.everyConversation().filter(
+      (conversation) =>
+        inTeamspace(conversation) &&
+        (removedAt === undefined || !purged.has(conversation.name))
+    )
+    if (unfinished.length > 0) {
+      throw new Error(
+        "side conversations kept arriving while the teamspace was purged"
+      )
+    }
+    if (removed !== undefined) {
+      // The later of the two: an earlier removal may finish after a later one.
+      const latest = Math.max(
+        this.latestRemoval(teamspaceId) ?? removed,
+        removed
+      )
+      this
+        .sql`INSERT INTO inbox_teamspace_removals (teamspace_id, removed_at, done_at)
+        VALUES (${teamspaceId}, ${new Date(latest).toISOString()}, ${Date.now()})
+        ON CONFLICT (teamspace_id) DO UPDATE SET
+          removed_at = excluded.removed_at,
+          done_at = excluded.done_at`
+    }
+    return "purged"
+  }
+
+  /**
+   * The latest removal from `teamspaceId`'s team this inbox carried out, as
+   * the instant it names (`removalInstant`), if it remembers one.
+   */
+  private latestRemoval(teamspaceId: string): number | undefined {
+    const row = this.sql<{
+      removed_at: string
+    }>`SELECT removed_at FROM inbox_teamspace_removals
+      WHERE teamspace_id = ${teamspaceId}`.at(0)
+    return row === undefined ? undefined : removalInstant(row.removed_at)
   }
 
   /** The registration retry's schedule: for an inbox with any conversation, listed or only known. */
@@ -568,7 +640,74 @@ export class InboxAgent extends Agent<ConversationEnv> {
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     )`
+    // The latest removal of the member from each teamspace's team whose
+    // purge is done (`purgeTeamspace`), and when it was.
+    this.sql`CREATE TABLE IF NOT EXISTS inbox_teamspace_removals (
+      teamspace_id TEXT PRIMARY KEY,
+      removed_at TEXT NOT NULL,
+      done_at INTEGER NOT NULL
+    )`
     this.schemaReady = true
+  }
+
+  /**
+   * Purges each conversation `picks` chooses, listed or only known, by its
+   * object: entirely without `removedAt`, else all but what is newer, for
+   * the member who left then. A conversation emptied is taken off the other
+   * person's inbox and this one; one that kept something newer stays in
+   * both, restated by its object. Those that arrive meanwhile are purged
+   * too, in up to `purgePasses` passes. One that could not be purged stays,
+   * and it throws, so trying again finds it. Resolves the names purged.
+   */
+  private async purgeConversations(
+    picks: (conversation: PurgedConversation) => boolean,
+    removedAt: string | undefined
+  ): Promise<Set<string>> {
+    const { organizationId, userId } = this.owner
+    const leaving = removedAt === undefined ? undefined : { userId, removedAt }
+    const purged = new Set<string>()
+    for (let pass = 0; pass < purgePasses; pass += 1) {
+      const conversations = this.everyConversation().filter(
+        (conversation) => picks(conversation) && !purged.has(conversation.name)
+      )
+      if (conversations.length === 0) break
+      const failed = await eachLimited(
+        conversations,
+        purgeConcurrency,
+        async (conversation) => {
+          const { emptied } =
+            conversation.kind === "dm"
+              ? await (
+                  await getAgentByName(
+                    this.env.DirectMessageAgent,
+                    conversation.name
+                  )
+                ).purge(leaving)
+              : await (
+                  await getAgentByName(
+                    this.env.SideConversationAgent,
+                    conversation.name
+                  )
+                ).purge(leaving)
+          if (emptied) {
+            const peer = await getAgentByName(
+              this.env.InboxAgent,
+              inboxName(organizationId, conversation.peerId)
+            )
+            await peer.removeConversation(conversation.name)
+            this.sql`DELETE FROM inbox_known WHERE name = ${conversation.name}`
+            if (this.row(conversation.name)) {
+              this.forgetConversation(conversation.name)
+            }
+          }
+          purged.add(conversation.name)
+        }
+      )
+      if (failed > 0) {
+        throw new Error(`${failed} conversations could not be purged`)
+      }
+    }
+    return purged
   }
 
   /**
@@ -788,11 +927,7 @@ export class InboxAgent extends Agent<ConversationEnv> {
   }
 
   /** Every conversation the member is in, listed or only known: what a purge empties. */
-  private everyConversation(): Array<{
-    name: string
-    kind: ConversationKind
-    peerId: string
-  }> {
+  private everyConversation(): PurgedConversation[] {
     return this.sql<{ name: string; kind: ConversationKind; peer_id: string }>`
       SELECT name, kind, peer_id FROM inbox_conversations
       UNION
