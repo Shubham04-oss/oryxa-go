@@ -58,6 +58,10 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		"EMAIL_QUEUE_URL":        "http://localhost:4566/000000000000/email-events",
 		"COMPOSIO_API_KEY":       "ak_test",
 		"APPS_PUBLIC_BASE_URL":   "http://localhost:8080",
+		// Realtime ships off; on, it serves the Worker's route.
+		"REALTIME_WORKER_URL":       "http://localhost:3001",
+		"REALTIME_PURGE_SECRET":     "5f2b8e1c9a7d4036b1e8c2f94a6d0e3b7c1f5a9d2e8b4c6f0a3d7e1b9c5f2a84",
+		"REALTIME_EVENTS_QUEUE_URL": "http://localhost:4566/000000000000/realtime-events",
 	}
 	// Mounting never queries the database; rag only asks it for pgvector.
 	database := postgreskit.Detached(map[string]string{"vector": "0.8.6", "ltree": "1.3", "pg_trgm": "1.6"})
@@ -95,6 +99,8 @@ func TestEveryServiceSharesOneListener(t *testing.T) {
 		// Without a Google Cloud project there is no model to run Krude on,
 		// and agents says so rather than keeping the process from starting.
 		{"agents", "/v1/organizations/org_1/threads", http.StatusServiceUnavailable, `"agents_unavailable"`},
+		// The Worker's route takes a POST alone.
+		{"realtime", "/v1/realtime/events", http.StatusMethodNotAllowed, ""},
 		{"nobody", "/v1/unknown", http.StatusNotFound, ""},
 	}
 	for _, probe := range probes {
