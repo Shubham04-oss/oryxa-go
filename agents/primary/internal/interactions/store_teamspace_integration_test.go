@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -316,20 +318,22 @@ func TestTheLedgerListsTheRequestsBetweenTwoMembersInATeamspace(t *testing.T) {
 	}
 }
 
-// TestASideConversationsListingUsesTheTeamspaceIndexOnceItsPlanIsGeneric: a
-// side conversation polls the same listing again and again, so the statement
-// pgx caches soon runs on a generic plan. That plan must still reach one
-// teamspace's requests through their index rather than read, and sort, every
-// request in the organization.
-func TestASideConversationsListingUsesTheTeamspaceIndexOnceItsPlanIsGeneric(t *testing.T) {
-	database, _ := openInteractionStore(t)
+// planNode is one node of an EXPLAIN (FORMAT JSON) plan.
+type planNode struct {
+	NodeType  string     `json:"Node Type"`
+	IndexName string     `json:"Index Name"`
+	Filter    string     `json:"Filter"`
+	Plans     []planNode `json:"Plans"`
+}
+
+// genericPlan is the plan PostgreSQL settles on for a statement once pgx has
+// cached it and runs it again and again, as a side conversation's polling
+// does: planned for its placeholders, not for any one set of values.
+func genericPlan(t *testing.T, database *postgreskit.Database, statement string) planNode {
+	t.Helper()
 	ctx := context.Background()
-	statement, _, err := listStatement("org_1", "user_a", Query{Box: BoxAll, TeamspaceID: "tsp_1", WithUserID: "user_b", Limit: 20})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var plan []string
-	err = pgx.BeginFunc(ctx, database.Pool, func(tx pgx.Tx) error {
+	var explained []byte
+	err := pgx.BeginFunc(ctx, database.Pool, func(tx pgx.Tx) error {
 		// With sequential scans off the plan shows what the indexes allow,
 		// not what a nearly empty test table makes cheapest.
 		if _, err := tx.Exec(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
@@ -337,22 +341,76 @@ func TestASideConversationsListingUsesTheTeamspaceIndexOnceItsPlanIsGeneric(t *t
 		}
 		// GENERIC_PLAN plans the $n placeholders without values; pgconn sends
 		// the text as it is, where pgx would want arguments for them.
-		results, err := tx.Conn().PgConn().Exec(ctx, `EXPLAIN (GENERIC_PLAN, COSTS OFF) `+statement).ReadAll()
+		results, err := tx.Conn().PgConn().Exec(ctx, `EXPLAIN (GENERIC_PLAN, COSTS OFF, FORMAT JSON) `+statement).ReadAll()
 		if err != nil {
 			return err
 		}
-		for _, result := range results {
-			for _, row := range result.Rows {
-				plan = append(plan, string(row[0]))
-			}
-		}
+		explained = results[0].Rows[0][0]
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if explained := strings.Join(plan, "\n"); !strings.Contains(explained, "agent_interactions_teamspace_idx") {
-		t.Fatalf("the generic plan does not use the teamspace index:\n%s", explained)
+	var plans []struct {
+		Plan planNode `json:"Plan"`
+	}
+	if err := json.Unmarshal(explained, &plans); err != nil || len(plans) != 1 {
+		t.Fatalf("decode the plan: %v\n%s", err, explained)
+	}
+	return plans[0].Plan
+}
+
+func (node planNode) walk(visit func(planNode)) {
+	visit(node)
+	for _, child := range node.Plans {
+		child.walk(visit)
+	}
+}
+
+// TestAListingReadsEachSideInOrderFromItsOwnIndex: a side conversation polls
+// the requests between two teammates in a teamspace, and a member's list
+// reads everything they are party to. On the generic plan each direction is
+// read, in order, from an index that leads with its own columns and stops at
+// the limit: no sort, no sequential scan, and no filter left over on who
+// asked whom — where an OR across both columns read every request in the
+// teamspace, or in the organization, and filtered or sorted them.
+func TestAListingReadsEachSideInOrderFromItsOwnIndex(t *testing.T) {
+	database, _ := openInteractionStore(t)
+	for _, testCase := range []struct {
+		name    string
+		query   Query
+		indexes []string
+	}{
+		{"a side conversation's poll", Query{Box: BoxAll, TeamspaceID: "tsp_1", WithUserID: "user_b", Limit: 20},
+			[]string{"agent_interactions_teamspace_pair_idx", "agent_interactions_teamspace_pair_idx"}},
+		{"everything a member is party to", Query{Box: BoxAll, Limit: 20},
+			[]string{"agent_interactions_inbox_idx", "agent_interactions_sent_idx"}},
+		{"a member's inbox", Query{Box: BoxInbox, Limit: 20}, []string{"agent_interactions_inbox_idx"}},
+		{"a member's sent requests", Query{Box: BoxSent, Limit: 20}, []string{"agent_interactions_sent_idx"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			statement, _, err := listStatement("org_1", "user_a", testCase.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := genericPlan(t, database, statement)
+			var scans []string
+			plan.walk(func(node planNode) {
+				switch {
+				case strings.Contains(node.NodeType, "Sort") || node.NodeType == "Seq Scan" || strings.HasPrefix(node.NodeType, "Bitmap"):
+					t.Errorf("the plan has a %s node", node.NodeType)
+				case strings.Contains(node.Filter, "target_user_id") || strings.Contains(node.Filter, "requester_user_id"):
+					t.Errorf("a %s filters on who asked whom: %s", node.NodeType, node.Filter)
+				}
+				if node.IndexName != "" {
+					scans = append(scans, node.IndexName)
+				}
+			})
+			slices.Sort(scans)
+			if !slices.Equal(scans, testCase.indexes) {
+				t.Errorf("the plan reads %v, want %v", scans, testCase.indexes)
+			}
+		})
 	}
 }
 
