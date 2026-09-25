@@ -1538,6 +1538,55 @@ describe("SideConversationAgent: the answer guard", () => {
     expect(otherAsBo()).toBe(2)
   })
 
+  it("leaves an answer its owner reviewed elsewhere as they open the conversation, and tells the inboxes", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Find Ada's contact details")
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    // Bo leaves; Nia's answer is held for him, and Ada's read finds it.
+    await closeSocket(side, boTab)
+    go.hold("irq_1", { stored, masked, kinds: ["EMAIL"] })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(lastItem(adaTab, "request-card")?.status).toBe("review")
+
+    // Bo sends it masked from elsewhere, and opens the conversation before
+    // the next read: reading his held answer finds it sent.
+    go.held.delete("irq_1")
+    go.change("irq_1", {
+      status: "completed",
+      review: {
+        action: "send_masked",
+        decided_by: { kind: "member", user_id: bo.userId },
+        decided_at: new Date().toISOString(),
+      },
+      result: {
+        status: "completed",
+        summary: masked,
+        content: "",
+        tools_used: [],
+        artifacts: [],
+        completed_at: new Date().toISOString(),
+      },
+    })
+    vi.advanceTimersByTime(1_000)
+    const again = await join(side, bo)
+    expect(lastItem(again, "agent-message")).toMatchObject({
+      body: masked,
+      via: { reviewedBy: bo.userId },
+    })
+    const [boInbox] = await inboxOf(world, bo)
+    expect(boInbox.lastMessage).toMatchObject({
+      authorId: bo.agentId,
+      body: `Nia: ${masked}`,
+    })
+  })
+
   it("forgets the answers it holds for an owner when it is purged", async () => {
     const { side } = await setup()
     const adaTab = await join(side, ada)

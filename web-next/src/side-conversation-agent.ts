@@ -515,8 +515,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     if (Date.now() - this.lastRead >= sideTiming.catchUpMs) {
       await this.readRequests()
     }
-    // An owner who opens it is shown the answers held for them.
-    await this.readHeldAnswers()
+    // An owner who opens it is shown the answers held for them; a read of
+    // one may find it reviewed or withheld meanwhile, and leave its end.
+    if (await this.readHeldAnswers()) {
+      await this.events.plan()
+      await this.syncInboxes()
+    }
     await this.planPoll()
   }
 
@@ -1874,10 +1878,11 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
    * does not hold, while that owner is here: Go shows a held answer to its
    * owner alone, and the object keeps it in memory only. A Go that shows
    * none is asked again once a socket's catch-up has passed, not on every
-   * poll.
+   * poll. Resolves whether it read any.
    */
-  private async readHeldAnswers(): Promise<void> {
+  private async readHeldAnswers(): Promise<boolean> {
     const epoch = this.epoch
+    let read = false
     const held = this.sql<ItemRow>`SELECT * FROM side_items
       WHERE kind = 'request-card' AND state = 'review'`
     for (const card of held) {
@@ -1891,8 +1896,10 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       if (!owner) continue
       this.heldReads.set(requestId, Date.now())
       await this.readRequest(owner.state, requestId)
-      if (this.epoch !== epoch) return
+      if (this.epoch !== epoch) return false
+      read = true
     }
+    return read
   }
 
   /** Reads one request as `state`'s person and brings its card up to date. */
