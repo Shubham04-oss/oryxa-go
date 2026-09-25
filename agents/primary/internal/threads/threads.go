@@ -49,9 +49,25 @@ var (
 const (
 	stateTitle     = "thread_title"
 	stateCreatedAt = "thread_created_at"
+	// stateOrigin says why a thread exists: OriginChat or
+	// OriginSideConversation. A thread created before this key existed, or
+	// by other code that does not set it, has none in state and reads as
+	// OriginChat.
+	stateOrigin = "thread_origin"
 	// stateWakeup is set, by the message itself, on a message that a batch
 	// of app events sent rather than the member.
 	stateWakeup = "wakeup_batch"
+)
+
+// The origins a thread can have. OriginChat is a member's own conversation
+// with Krude; OriginSideConversation is a thread the web app opened to run
+// the member's own agent on an internal prompt, kept out of their chat list.
+// OriginAll is not an origin a thread can have — it only selects every
+// origin, in ListFrom.
+const (
+	OriginChat             = "chat"
+	OriginSideConversation = "side_conversation"
+	OriginAll              = "all"
 )
 
 const (
@@ -87,6 +103,10 @@ type Thread struct {
 	// one from the development UI.
 	CreatedAt time.Time `json:"created_at,omitzero"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Origin is OriginChat or OriginSideConversation. A thread with none in
+	// its state — every thread created before origins existed, and any
+	// other code's threads — reads as OriginChat.
+	Origin string `json:"origin"`
 }
 
 // Detail is a thread with everything that happened in it.
@@ -224,17 +244,39 @@ func memberAgentState(member Member) map[string]any {
 	return state
 }
 
-// Create starts a thread for the member in their organization.
+// Create starts a chat thread for the member in their organization.
 func (service *Service) Create(ctx context.Context, member Member) (Thread, error) {
 	return service.CreateTitled(ctx, member, "")
 }
 
-// CreateTitled starts a thread with a title of its own, rather than one
+// CreateTitled starts a chat thread with a title of its own, rather than one
 // taken from its first message.
 func (service *Service) CreateTitled(ctx context.Context, member Member, title string) (Thread, error) {
+	return service.create(ctx, member, title, OriginChat)
+}
+
+// CreateFrom starts a thread with an explicit origin: OriginChat or
+// OriginSideConversation. origin is trimmed first; "" behaves like
+// OriginChat. Anything else is ErrInvalid.
+func (service *Service) CreateFrom(ctx context.Context, member Member, origin string) (Thread, error) {
+	origin = strings.TrimSpace(origin)
+	if origin == "" {
+		origin = OriginChat
+	}
+	if origin != OriginChat && origin != OriginSideConversation {
+		return Thread{}, fmt.Errorf("%w: origin must be chat or side_conversation", ErrInvalid)
+	}
+	return service.create(ctx, member, "", origin)
+}
+
+// create starts a thread carrying origin in its state, next to
+// adksession.StateOrganizationID — the same state map CreateTitled has
+// always seeded.
+func (service *Service) create(ctx context.Context, member Member, title, origin string) (Thread, error) {
 	state := map[string]any{
 		adksession.StateOrganizationID: member.OrganizationID,
 		stateCreatedAt:                 time.Now().UTC().Format(time.RFC3339Nano),
+		stateOrigin:                    origin,
 	}
 	for key, value := range service.initialState {
 		state[key] = value
@@ -256,9 +298,21 @@ func (service *Service) CreateTitled(ctx context.Context, member Member, title s
 	return threadOf(created.Session), nil
 }
 
-// List returns the member's threads in their organization, the most
-// recently active first.
+// List returns the member's chat threads in their organization, the most
+// recently active first. ListFrom also reaches their other origins.
 func (service *Service) List(ctx context.Context, member Member) ([]Thread, error) {
+	return service.ListFrom(ctx, member, OriginChat)
+}
+
+// ListFrom returns the member's threads of one origin — chat or
+// side_conversation — or, with OriginAll, every origin together, the most
+// recently active first. Anything else, including blank, is ErrInvalid.
+func (service *Service) ListFrom(ctx context.Context, member Member, origin string) ([]Thread, error) {
+	switch origin {
+	case OriginChat, OriginSideConversation, OriginAll:
+	default:
+		return nil, fmt.Errorf("%w: origin must be chat, side_conversation or all", ErrInvalid)
+	}
 	listed, err := service.sessions.List(ctx, &session.ListRequest{AppName: service.appName, UserID: member.UserID})
 	if err != nil {
 		return nil, fmt.Errorf("list threads: %w", err)
@@ -268,7 +322,11 @@ func (service *Service) List(ctx context.Context, member Member) ([]Thread, erro
 		if stored.UserID() != member.UserID || stateString(stored.State(), adksession.StateOrganizationID) != member.OrganizationID {
 			continue
 		}
-		threads = append(threads, threadOf(stored))
+		thread := threadOf(stored)
+		if origin != OriginAll && thread.Origin != origin {
+			continue
+		}
+		threads = append(threads, thread)
 	}
 	slices.SortStableFunc(threads, func(a, b Thread) int {
 		return cmp.Or(b.UpdatedAt.Compare(a.UpdatedAt), strings.Compare(a.ID, b.ID))
@@ -445,6 +503,7 @@ func threadOf(stored session.Session) Thread {
 		ID:        stored.ID(),
 		Title:     stateString(stored.State(), stateTitle),
 		UpdatedAt: stored.LastUpdateTime().UTC(),
+		Origin:    cmp.Or(stateString(stored.State(), stateOrigin), OriginChat),
 	}
 	if created, err := time.Parse(time.RFC3339Nano, stateString(stored.State(), stateCreatedAt)); err == nil {
 		thread.CreatedAt = created.UTC()

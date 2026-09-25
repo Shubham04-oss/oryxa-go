@@ -49,10 +49,11 @@ type Directory interface {
 	Membership(ctx context.Context, organizationID string, credentials authclient.Credentials) (authclient.Membership, error)
 }
 
-// Threads is the run API beneath HTTP. threads.Service implements it.
+// Threads is the run API beneath HTTP. threads.Service implements it, through
+// ForThreads, which maps Create and List to CreateFrom and ListFrom.
 type Threads interface {
-	Create(ctx context.Context, member threads.Member) (threads.Thread, error)
-	List(ctx context.Context, member threads.Member) ([]threads.Thread, error)
+	Create(ctx context.Context, member threads.Member, origin string) (threads.Thread, error)
+	List(ctx context.Context, member threads.Member, origin string) ([]threads.Thread, error)
 	Get(ctx context.Context, member threads.Member, threadID string) (threads.Detail, error)
 	Delete(ctx context.Context, member threads.Member, threadID string) error
 	StartRun(ctx context.Context, member threads.Member, threadID string, input threads.RunInput) (Run, error)
@@ -1275,12 +1276,27 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	server.mux.ServeHTTP(writer, request)
 }
 
+// listThreads defaults to the member's chat threads. ?origin=side_conversation
+// or ?origin=all reaches the threads the web app opened to run the member's
+// own agent on an internal prompt, kept out of the default listing so they
+// never show as the member's own chat history. ?origin= present but blank
+// (after trimming whitespace) is the caller's mistake, answered here rather
+// than sent on to the service; an unknown, non-blank value is answered by the
+// service's own ErrInvalid.
 func (server *Server) listThreads(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.member(writer, request)
 	if !ok {
 		return
 	}
-	listed, err := server.threads.List(request.Context(), member)
+	origin := threads.OriginChat
+	if values, present := request.URL.Query()["origin"]; present {
+		origin = strings.TrimSpace(values[0])
+		if origin == "" {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "origin must be chat, side_conversation or all")
+			return
+		}
+	}
+	listed, err := server.threads.List(request.Context(), member, origin)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -1293,14 +1309,16 @@ func (server *Server) createThread(writer http.ResponseWriter, request *http.Req
 	if !ok {
 		return
 	}
-	// The body is optional, and nothing in it is read yet: a thread starts
-	// empty. An object with fields this version does not know is refused
-	// rather than silently dropped.
-	var body struct{}
+	// The body is optional; when sent, it may carry the thread's origin.
+	// Omitted or "" means a plain chat thread. An object with fields this
+	// version does not know is refused rather than silently dropped.
+	var body struct {
+		Origin string `json:"origin"`
+	}
 	if request.ContentLength != 0 && !server.decode(writer, request, &body) {
 		return
 	}
-	created, err := server.threads.Create(request.Context(), member)
+	created, err := server.threads.Create(request.Context(), member, body.Origin)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return

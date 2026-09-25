@@ -407,14 +407,26 @@ from inside a run.
 
 | Route | What it does |
 | --- | --- |
-| `GET /v1/organizations/{org}/threads` | The member's threads here, the most recently active first: `{"threads": [...]}` |
-| `POST /v1/organizations/{org}/threads` | Starts a thread; `201` with it. Its state is seeded from the member's auth record in this organization |
+| `GET /v1/organizations/{org}/threads` | The member's chat threads here, the most recently active first: `{"threads": [...]}`. `?origin=side_conversation` lists their side conversations' threads instead, and `?origin=all` every thread; `?origin=chat` is the default. A blank or unknown `origin` is a `400 invalid_request` |
+| `POST /v1/organizations/{org}/threads` | Starts a thread; `201` with it. The body is optional: `{"origin": "side_conversation"}` starts one for a side conversation, while no body, `{}`, or `"origin": "chat"` (or `""`) starts a chat. Any other origin is a `400 invalid_request`. Its state is seeded from the member's auth record in this organization |
 | `GET /v1/organizations/{org}/threads/{thread}` | The thread with its history as items, and `pending_confirmations` |
 | `DELETE /v1/organizations/{org}/threads/{thread}` | Removes the thread, and the artifacts its runs kept that are not the member's own `user:` ones |
 | `POST /v1/organizations/{org}/threads/{thread}/runs` | Runs Krude on the thread and streams the run |
 | `GET /v1/organizations/{org}/threads/{thread}/artifacts/{name}` | A file the thread's runs kept, its latest version or `?version=` |
 | `GET /v1/organizations/{org}/preferences` | What the member chose about Krude here: `{"app_updates": true}` until they turn [wake-ups](#wake-ups) off |
 | `PUT /v1/organizations/{org}/preferences` | Records the member's own choice, `{"app_updates": false}`; an agent's token is refused like everywhere else |
+
+Every thread says where it came from, as `origin` in its JSON (in the
+listing, on creation, and in a thread's detail): `"chat"` is the member's own
+conversation with Krude, and `"side_conversation"` a thread the web app's
+side conversation opened to run the member's own agent on its internal
+prompt. The origin is written to the thread's session state when it is
+created, beside the organization it was started in, and nothing changes it
+afterwards. Threads Oryxa opens for the member itself, such as wake-up
+reports, are chats, and so is a thread with no origin in its state: every
+thread from before origins. Only the listing tells them apart: reading,
+running, deleting or downloading from a thread by its id works the same for
+either origin.
 
 ### Persistent agent API
 

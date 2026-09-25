@@ -42,22 +42,61 @@ func (directory *fakeDirectory) Membership(_ context.Context, organizationID str
 }
 
 type fakeThreads struct {
-	members  []threads.Member
-	inputs   []threads.RunInput
-	detail   threads.Detail
-	err      error
-	startErr error
-	run      *fakeRun
+	members       []threads.Member
+	inputs        []threads.RunInput
+	detail        threads.Detail
+	err           error
+	startErr      error
+	run           *fakeRun
+	createOrigins []string
+	listOrigins   []string
 }
 
-func (service *fakeThreads) Create(_ context.Context, member threads.Member) (threads.Thread, error) {
-	service.members = append(service.members, member)
-	return threads.Thread{ID: "thread_1", UpdatedAt: time.Unix(0, 0).UTC()}, service.err
+// resolvedFakeOrigin trims origin and defaults blank to chat, the way
+// threads.CreateFrom and threads.ListFrom do, so this fake rejects an unknown
+// origin the same way the real service would.
+func resolvedFakeOrigin(origin string) (resolved string, ok bool) {
+	resolved = strings.TrimSpace(origin)
+	if resolved == "" {
+		resolved = threads.OriginChat
+	}
+	switch resolved {
+	case threads.OriginChat, threads.OriginSideConversation:
+		return resolved, true
+	default:
+		return resolved, false
+	}
 }
 
-func (service *fakeThreads) List(_ context.Context, member threads.Member) ([]threads.Thread, error) {
+func (service *fakeThreads) Create(_ context.Context, member threads.Member, origin string) (threads.Thread, error) {
 	service.members = append(service.members, member)
-	return []threads.Thread{{ID: "thread_1", Title: "Hello"}}, service.err
+	service.createOrigins = append(service.createOrigins, origin)
+	resolved, ok := resolvedFakeOrigin(origin)
+	if !ok {
+		return threads.Thread{}, fmt.Errorf("%w: origin must be chat or side_conversation", threads.ErrInvalid)
+	}
+	if service.err != nil {
+		return threads.Thread{}, service.err
+	}
+	return threads.Thread{ID: "thread_1", UpdatedAt: time.Unix(0, 0).UTC(), Origin: resolved}, nil
+}
+
+func (service *fakeThreads) List(_ context.Context, member threads.Member, origin string) ([]threads.Thread, error) {
+	service.members = append(service.members, member)
+	service.listOrigins = append(service.listOrigins, origin)
+	switch origin {
+	case threads.OriginChat, threads.OriginSideConversation, threads.OriginAll:
+	default:
+		return nil, fmt.Errorf("%w: origin must be chat, side_conversation or all", threads.ErrInvalid)
+	}
+	if service.err != nil {
+		return nil, service.err
+	}
+	listed := origin
+	if listed == threads.OriginAll {
+		listed = threads.OriginChat
+	}
+	return []threads.Thread{{ID: "thread_1", Title: "Hello", Origin: listed}}, nil
 }
 
 func (service *fakeThreads) Get(_ context.Context, member threads.Member, threadID string) (threads.Detail, error) {
