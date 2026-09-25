@@ -3,12 +3,14 @@ package interactiondelivery
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
@@ -259,6 +261,36 @@ func TestDeliveryMessageNeverCarriesInteractionContent(t *testing.T) {
 			if !strings.Contains(message, want) {
 				t.Errorf("%s message lacks %q: %s", kind, want, message)
 			}
+		}
+	}
+}
+
+// TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded: whatever the
+// delivery, its run works through the interactions toolbox, so the run
+// starts with it loaded and its message never sends the model to load it.
+func TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded(t *testing.T) {
+	for _, kind := range []string{KindTargetRequested, KindTargetApproved, KindRequesterRejected, KindRequesterCompleted} {
+		delivery := testDelivery("evt_1", kind, 1)
+		store := &fakeDeliveries{pending: []Delivery{delivery}}
+		status := interactions.StatusPending
+		if kind == KindTargetApproved {
+			status = interactions.StatusApproved
+		}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(status)}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
+		waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+		if err := waker.WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(runs.calls) != 1 {
+			t.Fatalf("%s: calls=%+v, want one run", kind, runs.calls)
+		}
+		input := runs.calls[0].input
+		if !slices.Equal(input.Toolboxes, []string{agents.InteractionsToolboxName}) {
+			t.Errorf("%s: the run starts with %v loaded, want only the interactions toolbox", kind, input.Toolboxes)
+		}
+		if strings.Contains(input.Message, "load the interactions toolbox") || !strings.Contains(input.Message, "already loaded") {
+			t.Errorf("%s: the message still sends the model to load its toolbox: %s", kind, input.Message)
 		}
 	}
 }

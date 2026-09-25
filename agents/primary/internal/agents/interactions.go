@@ -18,6 +18,10 @@ import (
 //go:embed toolboxes/interactions.md
 var interactionsInstructions string
 
+// InteractionsToolboxName names the interactions toolbox, which a run that
+// delivers an interaction starts with loaded.
+const InteractionsToolboxName = "interactions"
+
 // The sessions an InteractionActor can act in.
 const (
 	// SessionMember is a person acting in their own signed-in session. Only
@@ -223,9 +227,9 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		description = "Durable agent-to-agent requests addressed to this member: inspect, approve or reject, and answer through an audited JSON contract."
 	}
 	return Toolbox{
-		Name: "interactions", Description: description,
+		Name: InteractionsToolboxName, Description: description,
 		Instructions: interactionsInstructions,
-		Toolset:      fixedTools{name: "interactions", tools: offered},
+		Toolset:      fixedTools{name: InteractionsToolboxName, tools: offered},
 	}, nil
 }
 

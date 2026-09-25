@@ -130,6 +130,22 @@ func (l loadedToolset) ProcessRequest(ctx agent.Context, req *model.LLMRequest) 
 	return nil
 }
 
+// LoadToolboxes is the state change that loads the named toolboxes in a
+// session whose state is state, keeping those already loaded: what
+// load_tools records, for a run whose work is known before it starts. Their
+// tools are there from the run's first model call, and their skills are in
+// its instruction. A name no toolbox has loads nothing, as with load_tools.
+func LoadToolboxes(state session.ReadonlyState, names ...string) map[string]any {
+	loaded := slices.Clone(loadedToolboxes(state))
+	for _, requested := range names {
+		name := strings.ToLower(strings.TrimSpace(requested))
+		if name != "" && !slices.Contains(loaded, name) {
+			loaded = append(loaded, name)
+		}
+	}
+	return map[string]any{loadedToolsKey: loaded}
+}
+
 // loadedToolboxes reads the loaded toolbox names from state. A value read back
 // from storage arrives as []any rather than []string.
 func loadedToolboxes(state session.ReadonlyState) []string {

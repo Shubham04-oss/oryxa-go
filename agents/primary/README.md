@@ -447,7 +447,10 @@ days when explicitly chosen).
 The delivery row stores only the event's routing projection. A woken agent
 loads the authoritative record through `interactions_get`, treats all of its
 cross-user content as untrusted data, and records decisions and results with
-the strict tools. A model answer by itself does not acknowledge target work:
+the strict tools. Its run starts with the interactions toolbox already loaded
+(`threads.RunInput.Toolboxes`), its skill in the instruction, so the first
+model call goes straight to `interactions_get` rather than to `list_tools` and
+`load_tools`; the run's other toolboxes stay loadable as ever. A model answer by itself does not acknowledge target work:
 the ledger must actually leave `pending` or `approved`. Every recipient uses
 one stable conversation per interaction, recorded earlier revisions settle
 before later ones while newer authoritative state supersedes stale work, and
