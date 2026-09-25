@@ -107,17 +107,14 @@ func TestMountRunsTheConsumerOnceConfigured(t *testing.T) {
 func TestMountIsOffUntilEverythingItNeedsIsSet(t *testing.T) {
 	tests := map[string]struct {
 		values map[string]string
-		says   string
+		unset  string
 	}{
-		"nothing set": {map[string]string{},
-			"REALTIME_WORKER_URL, REALTIME_PURGE_SECRET and REALTIME_EVENTS_QUEUE_URL are not set: realtime is off"},
-		"no Worker URL": {without(configured(), "REALTIME_WORKER_URL"), "REALTIME_WORKER_URL is not set: realtime is off"},
-		"no secret":     {without(configured(), "REALTIME_PURGE_SECRET"), "REALTIME_PURGE_SECRET is not set: realtime is off"},
-		"no queue":      {without(configured(), "REALTIME_EVENTS_QUEUE_URL"), "REALTIME_EVENTS_QUEUE_URL is not set: realtime is off"},
-		"neither Worker URL nor secret": {without(configured(), "REALTIME_WORKER_URL", "REALTIME_PURGE_SECRET"),
-			"REALTIME_WORKER_URL and REALTIME_PURGE_SECRET are not set: realtime is off"},
+		"nothing set":   {map[string]string{}, "REALTIME_WORKER_URL, REALTIME_PURGE_SECRET, REALTIME_EVENTS_QUEUE_URL"},
+		"no Worker URL": {without(configured(), "REALTIME_WORKER_URL"), "REALTIME_WORKER_URL"},
+		"no secret":     {without(configured(), "REALTIME_PURGE_SECRET"), "REALTIME_PURGE_SECRET"},
+		"no queue":      {without(configured(), "REALTIME_EVENTS_QUEUE_URL"), "REALTIME_EVENTS_QUEUE_URL"},
 		// Running every service, which is what ORYXA_SERVICES=all means.
-		"everything selected": {map[string]string{"ORYXA_SERVICES": "all"}, "are not set: realtime is off"},
+		"everything selected": {map[string]string{"ORYXA_SERVICES": "all"}, "REALTIME_WORKER_URL, REALTIME_PURGE_SECRET, REALTIME_EVENTS_QUEUE_URL"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -129,8 +126,10 @@ func TestMountIsOffUntilEverythingItNeedsIsSet(t *testing.T) {
 			if len(service.Workers) != 0 || service.Handler != nil {
 				t.Fatalf("service = %+v, want nothing running", service)
 			}
-			if got := strings.Count(logs.String(), "level=WARN"); got != 1 || !strings.Contains(logs.String(), test.says) {
-				t.Fatalf("logs = %s; want one warning saying %q", logs.String(), test.says)
+			says := "these are not set: " + test.unset
+			if got := strings.Count(logs.String(), "level=WARN"); got != 1 || !strings.Contains(logs.String(), "realtime is off") ||
+				!strings.Contains(logs.String(), says) {
+				t.Fatalf("logs = %s; want one warning that realtime is off, saying %q", logs.String(), says)
 			}
 			if strings.Contains(logs.String(), configured()["REALTIME_PURGE_SECRET"]) {
 				t.Fatal("the secret was logged")
@@ -145,7 +144,7 @@ func TestMountRefusesToStartWhenAskedForByNameWithoutWhatItNeeds(t *testing.T) {
 		values["ORYXA_SERVICES"] = services
 		var logs bytes.Buffer
 		_, err := Mount(context.Background(), platform(values, &logs))
-		if err == nil || !strings.Contains(err.Error(), "ORYXA_SERVICES names realtime, but REALTIME_PURGE_SECRET is not set") {
+		if err == nil || !strings.Contains(err.Error(), "ORYXA_SERVICES names realtime, but these are not set: REALTIME_PURGE_SECRET;") {
 			t.Fatalf("ORYXA_SERVICES=%q: Mount() = %v", services, err)
 		}
 	}

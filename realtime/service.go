@@ -48,12 +48,12 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}
 	logger := platform.Logger
 	if missing := config.Missing(); len(missing) > 0 {
-		unset := notSet(missing)
+		unset := strings.Join(missing, ", ")
 		if namedIn(platform.Getenv("ORYXA_SERVICES")) {
-			return host.Service{}, fmt.Errorf("ORYXA_SERVICES names realtime, but %s; set them, or leave realtime out of ORYXA_SERVICES to run without it", unset)
+			return host.Service{}, fmt.Errorf("ORYXA_SERVICES names realtime, but these are not set: %s; set them, or leave realtime out of ORYXA_SERVICES to run without it", unset)
 		}
-		logger.Warn(unset + ": realtime is off, so a member's direct messages and side conversations in the web app outlive " +
-			"their place in an organization, and a deleted organization's outlive it")
+		logger.Warn("realtime is off, so a member's direct messages and side conversations in the web app outlive " +
+			"their place in an organization, and a deleted organization's outlive it; these are not set: " + unset)
 		return host.Service{}, nil
 	}
 
@@ -88,12 +88,4 @@ func namedIn(services string) bool {
 		}
 	}
 	return false
-}
-
-// notSet says which settings are unset, as a clause.
-func notSet(names []string) string {
-	if len(names) == 1 {
-		return names[0] + " is not set"
-	}
-	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1] + " are not set"
 }
