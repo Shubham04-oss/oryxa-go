@@ -66,11 +66,12 @@ async function sideTalk(
   world: World,
   from: string,
   to: string,
-  body = "hello"
+  body = "hello",
+  teamspace = "tsp_launch"
 ) {
   const side = await world.object<Side>(
     "SideConversationAgent",
-    sideConversationName(org, "tsp_launch", from, to)
+    sideConversationName(org, teamspace, from, to)
   )
   const socket = await openSocket(
     side,
@@ -194,21 +195,28 @@ function later(ms: number) {
 }
 
 /**
- * The next purge of `userId`'s inbox never answers: the registry's work is
- * cut off there (a deploy, an eviction, or the runtime ending it once Go
- * gave up), and nothing is raised. Later purges of it run. Resolves once it
- * is cut off, after the Worker's own checks, which are not all promises.
+ * The next purge of `userId`'s inbox (`purge`, or `purgeTeamspace`) never
+ * answers: the registry's work is cut off there (a deploy, an eviction, or
+ * the runtime ending it once Go gave up), and nothing is raised. Later
+ * purges of it run. Resolves once it is cut off, after the Worker's own
+ * checks, which are not all promises.
  */
-function cutOffInboxPurge(userId: string): Promise<void> {
-  const purgeInbox = InboxAgent.prototype.purge
+function cutOffInboxPurge(
+  userId: string,
+  method: "purge" | "purgeTeamspace" = "purge"
+): Promise<void> {
+  const purgeInbox = InboxAgent.prototype[method] as (
+    this: InboxAgent,
+    ...args: unknown[]
+  ) => Promise<unknown>
   let cut = false
   return new Promise((resolve) => {
-    vi.spyOn(InboxAgent.prototype, "purge").mockImplementation(function (
+    vi.spyOn(InboxAgent.prototype, method).mockImplementation(function (
       this: InboxAgent,
-      ...args: Parameters<InboxAgent["purge"]>
+      ...args: unknown[]
     ) {
       if (cut || this.name !== inboxName(org, userId)) {
-        return purgeInbox.apply(this, args)
+        return purgeInbox.apply(this, args) as never
       }
       cut = true
       resolve()
@@ -230,6 +238,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe("the purge's signature", () => {
@@ -912,6 +921,243 @@ describe("purging", () => {
     world.failing.add(org)
     const response = await purge(world, await purgeRequest(memberLeft))
     expect(await codeOf(response)).toEqual([503, "unavailable"])
+  })
+})
+
+const launch = "tsp_launch"
+const design = "tsp_design"
+
+/** The bodies in two people's side conversation in a teamspace, oldest first; nothing for one never made. */
+function sideBodies(
+  world: World,
+  teamspace: string,
+  userA: string,
+  userB: string
+) {
+  const side = world.existing<Side>(
+    "SideConversationAgent",
+    sideConversationName(org, teamspace, userA, userB)
+  )
+  if (!side) return undefined
+  return side.sql<{
+    body: string
+  }>`SELECT body FROM side_items ORDER BY seq`.map((row) => row.body)
+}
+
+/** The events two people's side conversation in a teamspace still has to send Go. */
+function outboxOf(
+  world: World,
+  teamspace: string,
+  userA: string,
+  userB: string
+) {
+  const side = world.existing<Side>(
+    "SideConversationAgent",
+    sideConversationName(org, teamspace, userA, userB)
+  )
+  if (!side) return []
+  return side.sql<{ id: string }>`SELECT id FROM event_outbox`
+}
+
+/**
+ * The three members' side conversations in the launch teamspace (the one
+ * between the member and the owner written in after 12:00), the admin's
+ * with the member in the design teamspace, and their DM, with Go's events
+ * on. Go is a stand-in with no requests to read.
+ */
+async function teamspaceWorld() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ requests: [] }))
+  )
+  const world = makeWorld({
+    REALTIME_PURGE_SECRET: secret,
+    ORYXA_API_ORIGIN: "http://go.test",
+  })
+  const { socket: launchSocket } = await sideTalk(
+    world,
+    admin,
+    member,
+    "launch: admin to member"
+  )
+  await sideTalk(world, owner, admin, "launch: owner to admin")
+  await sideTalk(world, admin, member, "design: admin to member", design)
+  await talk(world, admin, member, "a DM")
+  later(60_000)
+  await sideTalk(world, member, owner, "launch: member to owner, later")
+  const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+  return { world, registry, launchSocket }
+}
+
+/** The inboxes `method` was called on, from its `from`th call on, sorted. */
+function inboxesCalled(world: World, method: string, from = 0) {
+  return world
+    .callsTo("InboxAgent", method)
+    .slice(from)
+    .map((call) => call.name)
+    .sort()
+}
+
+describe("a teamspace's purge, through the registry", () => {
+  it("empties every side conversation in the teamspace through every member's inbox, newer ones and their events too, and keeps every member registered", async () => {
+    const { world, registry, launchSocket } = await teamspaceWorld()
+    expect(await registry.members()).toEqual([admin, member, owner])
+    expect(outboxOf(world, launch, admin, member)).toHaveLength(1)
+
+    expect(await registry.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "purged"
+    )
+
+    for (const [userA, userB] of [
+      [admin, member],
+      [owner, admin],
+      [member, owner],
+    ]) {
+      expect(sideBodies(world, launch, userA, userB)).toEqual([])
+      expect(outboxOf(world, launch, userA, userB)).toEqual([])
+    }
+    expect(launchSocket.closed?.code).toBe(4404)
+    expect(sideBodies(world, design, admin, member)).toEqual([
+      "design: admin to member",
+    ])
+    expect(outboxOf(world, design, admin, member)).toHaveLength(1)
+    expect(bodiesIn(world, admin, member)).toEqual(["a DM"])
+    const kept = [
+      sideConversationName(org, design, admin, member),
+      directMessageName(org, admin, member),
+    ].sort()
+    expect((await listed(world, admin)).sort()).toEqual(kept)
+    expect((await listed(world, member)).sort()).toEqual(kept)
+    expect(await listed(world, owner)).toEqual([])
+    expect(inboxesCalled(world, "purgeTeamspace")).toEqual(
+      [admin, member, owner].map((user) => inboxName(org, user))
+    )
+    // Everybody is still in the organization: nobody leaves the registry,
+    // no inbox forgets it registered, and the event's progress goes.
+    expect(await registry.members()).toEqual([admin, member, owner])
+    const ownersInbox = await world.object<Inbox>(
+      "InboxAgent",
+      inboxName(org, owner)
+    )
+    expect(
+      ownersInbox.sql`SELECT value FROM inbox_meta WHERE key = 'registered'`
+    ).toEqual([{ value: "1" }])
+    expect(registry.sql`SELECT event_id FROM registry_purges`).toEqual([
+      { event_id: "evt_launch_deleted" },
+    ])
+    expect(registry.sql`SELECT * FROM registry_purge_progress`).toEqual([])
+  })
+
+  it("remembers the event only once every member is done: cut off part-way, the same event again, to the registry restarted, carries on with the members not yet done", async () => {
+    const { world, registry } = await teamspaceWorld()
+    const cutOff = cutOffInboxPurge(owner, "purgeTeamspace")
+    void registry.purgeTeamspace("evt_launch_deleted", launch)
+    await cutOff
+    await settle()
+    expect(registry.sql`SELECT event_id FROM registry_purges`).toEqual([])
+    expect(
+      registry.sql`SELECT user_id FROM registry_purge_progress ORDER BY user_id`
+    ).toEqual([{ user_id: admin }, { user_id: member }])
+    expect(await registry.members()).toEqual([admin, member, owner])
+
+    const restarted = await world.restart<Registry>(
+      "RealtimeRegistryAgent",
+      org
+    )
+    const before = world.callsTo("InboxAgent", "purgeTeamspace").length
+    expect(await restarted.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "purged"
+    )
+    expect(inboxesCalled(world, "purgeTeamspace", before)).toEqual([
+      inboxName(org, owner),
+    ])
+    expect(restarted.sql`SELECT event_id FROM registry_purges`).toEqual([
+      { event_id: "evt_launch_deleted" },
+    ])
+    expect(restarted.sql`SELECT * FROM registry_purge_progress`).toEqual([])
+    expect(await restarted.members()).toEqual([admin, member, owner])
+    expect(await listed(world, owner)).toEqual([])
+
+    // Done: the same event again does nothing.
+    const done = world.callsTo("InboxAgent", "purgeTeamspace").length
+    expect(await restarted.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "repeated"
+    )
+    expect(world.callsTo("InboxAgent", "purgeTeamspace")).toHaveLength(done)
+  })
+
+  it("throws when a member's side conversations could not all be purged, keeps the others' progress, and the same event again finishes the rest", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { world, registry } = await teamspaceWorld()
+    world.failing.add(sideConversationName(org, launch, member, owner))
+
+    await expect(
+      registry.purgeTeamspace("evt_launch_deleted", launch)
+    ).rejects.toThrow(
+      "2 of 3 members' side conversations in the teamspace were not purged"
+    )
+    expect(registry.sql`SELECT user_id FROM registry_purge_progress`).toEqual([
+      { user_id: admin },
+    ])
+    expect(registry.sql`SELECT * FROM registry_purges`).toEqual([])
+    expect(sideBodies(world, launch, member, owner)).toEqual([
+      "launch: member to owner, later",
+    ])
+
+    world.failing.clear()
+    const before = world.callsTo("InboxAgent", "purgeTeamspace").length
+    expect(await registry.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "purged"
+    )
+    expect(inboxesCalled(world, "purgeTeamspace", before)).toEqual([
+      inboxName(org, member),
+      inboxName(org, owner),
+    ])
+    expect(sideBodies(world, launch, member, owner)).toEqual([])
+    expect(await listed(world, owner)).toEqual([])
+    expect(registry.sql`SELECT * FROM registry_purge_progress`).toEqual([])
+    expect(await registry.members()).toEqual([admin, member, owner])
+  })
+
+  it("forgets what a purge under way had done after a day, and does those members again", async () => {
+    const { world, registry } = await teamspaceWorld()
+    const cutOff = cutOffInboxPurge(owner, "purgeTeamspace")
+    void registry.purgeTeamspace("evt_launch_deleted", launch)
+    await cutOff
+    await settle()
+    expect(registry.sql`SELECT * FROM registry_purge_progress`).toHaveLength(2)
+
+    later(purgeMemoryMs + 1_000)
+    const restarted = await world.restart<Registry>(
+      "RealtimeRegistryAgent",
+      org
+    )
+    const before = world.callsTo("InboxAgent", "purgeTeamspace").length
+    expect(await restarted.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "purged"
+    )
+    expect(inboxesCalled(world, "purgeTeamspace", before)).toEqual(
+      [admin, member, owner].map((user) => inboxName(org, user))
+    )
+    expect(restarted.sql`SELECT * FROM registry_purge_progress`).toEqual([])
+  })
+
+  it("refuses what is not a teamspace's purge", async () => {
+    const world = makeWorld()
+    await talk(world, admin, member)
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    for (const [eventId, teamspaceId] of [
+      ["", launch],
+      ["x".repeat(201), launch],
+      ["evt_1", ""],
+      ["evt_1", "tsp~launch"],
+      ["evt_1", "x".repeat(129)],
+    ]) {
+      await expect(
+        registry.purgeTeamspace(eventId, teamspaceId)
+      ).rejects.toThrow(TypeError)
+    }
+    expect(world.callsTo("InboxAgent", "purgeTeamspace")).toEqual([])
   })
 })
 

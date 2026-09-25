@@ -46,12 +46,41 @@ export function isPurgeInstant(value: unknown): value is string {
 }
 
 /**
+ * Runs `work` for each member, `purgeConcurrency` at a time; resolves how
+ * many failed, each logged.
+ */
+async function eachMember(
+  users: readonly string[],
+  work: (user: string) => Promise<void>
+): Promise<number> {
+  let next = 0
+  let failed = 0
+  const worker = async () => {
+    while (next < users.length) {
+      const user = users[next]
+      next += 1
+      try {
+        await work(user)
+      } catch (error) {
+        failed += 1
+        console.error("realtime registry: could not purge a member", error)
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(purgeConcurrency, users.length) }, worker)
+  )
+  return failed
+}
+
+/**
  * An organization's registry of the inboxes its members have, named after
  * the organization (`registryName`). An inbox registers itself here with its
- * first conversation, so that an organization's purge can find every
- * inbox, and through them every conversation. It also remembers the purges
- * it has carried out, by event id, so the same event again (Go retrying one
- * it did not hear the end of, or a replayed request) does nothing.
+ * first conversation, so that an organization's purge, or a teamspace's,
+ * can find every inbox, and through them every conversation. It also
+ * remembers the purges it has carried out, by event id, so the same event
+ * again (Go retrying one it did not hear the end of, or a replayed request)
+ * does nothing.
  *
  * No page reaches it: the Worker has no route to it, and it refuses sockets
  * and requests.
@@ -116,41 +145,97 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
     ) {
       throw new TypeError("not a purge")
     }
-    const now = Date.now()
-    this.sql`DELETE FROM registry_purges WHERE done_at < ${now - purgeMemoryMs}`
-    const done = this.sql<{
-      event_id: string
-    }>`SELECT event_id FROM registry_purges WHERE event_id = ${eventId}`.at(0)
-    if (done) return "repeated"
+    if (this.remembered(eventId)) return "repeated"
 
     const users =
       target.scope === "organization" ? this.memberIds() : [target.userId]
     const removedAt =
       target.scope === "organization" ? undefined : target.removedAt
-    let next = 0
-    let failed = 0
-    const worker = async () => {
-      while (next < users.length) {
-        const user = users[next]
-        next += 1
-        try {
-          await this.purgeMember(user, removedAt)
-        } catch (error) {
-          failed += 1
-          console.error("realtime registry: could not purge a member", error)
-        }
-      }
-    }
-    await Promise.all(
-      Array.from({ length: Math.min(purgeConcurrency, users.length) }, worker)
+    const failed = await eachMember(users, (user) =>
+      this.purgeMember(user, removedAt)
     )
     if (failed > 0) {
       throw new Error(`${failed} of ${users.length} members were not purged`)
     }
+    this.remember(eventId)
+    return "purged"
+  }
+
+  /**
+   * Carries out a teamspace's deletion for Go (src/realtime-purge.ts): every
+   * side conversation in `teamspaceId`, entirely, and what the inboxes list
+   * of them, through every registered member's inbox
+   * (`InboxAgent.purgeTeamspace`), 8 at a time.
+   *
+   * Nobody leaves the registry: everybody is still in the organization.
+   * Instead, a member is recorded done for the event
+   * (`registry_purge_progress`) once their inbox is, and the event is
+   * remembered, and its progress let go, only once every member is done. A
+   * purge that failed part-way throws, and one cut off part-way (a deploy,
+   * an eviction) says nothing; either way, the same event again carries on
+   * with the members not yet done. What a purge under way had done is
+   * forgotten after `purgeMemoryMs`, and the members then done again.
+   */
+  async purgeTeamspace(
+    eventId: string,
+    teamspaceId: string
+  ): Promise<PurgeOutcome> {
+    this.schema()
+    if (!isPurgeEventId(eventId) || !isNameId(teamspaceId)) {
+      throw new TypeError("not a teamspace's purge")
+    }
+    if (this.remembered(eventId)) return "repeated"
+
+    const users = this.sql<{ user_id: string }>`SELECT user_id
+      FROM registry_members
+      WHERE user_id NOT IN (
+        SELECT user_id FROM registry_purge_progress WHERE event_id = ${eventId}
+      )
+      ORDER BY user_id`.map((row) => row.user_id)
+    const failed = await eachMember(users, async (user) => {
+      const inbox = await getAgentByName(
+        this.env.InboxAgent,
+        inboxName(this.name, user)
+      )
+      await inbox.purgeTeamspace(eventId, teamspaceId)
+      this.sql`INSERT INTO registry_purge_progress (event_id, user_id, done_at)
+        VALUES (${eventId}, ${user}, ${Date.now()})
+        ON CONFLICT (event_id, user_id) DO NOTHING`
+    })
+    if (failed > 0) {
+      throw new Error(
+        `${failed} of ${users.length} members' side conversations in the teamspace were not purged`
+      )
+    }
+    this.ctx.storage.transactionSync(() => {
+      this.remember(eventId)
+      this.sql`DELETE FROM registry_purge_progress WHERE event_id = ${eventId}`
+    })
+    return "purged"
+  }
+
+  /**
+   * Whether the event was carried out in the last `purgeMemoryMs`. Older
+   * events are forgotten first, and so is what purges under way did as
+   * long ago.
+   */
+  private remembered(eventId: string): boolean {
+    const since = Date.now() - purgeMemoryMs
+    this.sql`DELETE FROM registry_purges WHERE done_at < ${since}`
+    this.sql`DELETE FROM registry_purge_progress WHERE done_at < ${since}`
+    return (
+      this.sql<{
+        event_id: string
+      }>`SELECT event_id FROM registry_purges WHERE event_id = ${eventId}`
+        .length > 0
+    )
+  }
+
+  /** Records the event as carried out. */
+  private remember(eventId: string): void {
     this.sql`INSERT INTO registry_purges (event_id, done_at)
       VALUES (${eventId}, ${Date.now()})
       ON CONFLICT (event_id) DO NOTHING`
-    return "purged"
   }
 
   /**
@@ -197,6 +282,13 @@ export class RealtimeRegistryAgent extends Agent<ConversationEnv> {
     this.sql`CREATE TABLE IF NOT EXISTS registry_purges (
       event_id TEXT PRIMARY KEY,
       done_at INTEGER NOT NULL
+    )`
+    // The members a teamspace's purge under way is done with, by event.
+    this.sql`CREATE TABLE IF NOT EXISTS registry_purge_progress (
+      event_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      done_at INTEGER NOT NULL,
+      PRIMARY KEY (event_id, user_id)
     )`
     this.schemaReady = true
   }
