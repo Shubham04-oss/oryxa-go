@@ -255,9 +255,9 @@ const deleteTimeout = 10 * time.Second
 
 // Poll consumes the queue until ctx is cancelled. A message is deleted once
 // it is done with, or once its purge is given up for good, which is logged as
-// dropped. Any other failure leaves the message to come back after
-// its visibility timeout, and the redrive policy moves one that keeps failing
-// to the dead-letter queue.
+// dropped. Any other failure leaves the message to come back after its
+// visibility timeout, and the redrive policy moves one that keeps failing to
+// the dead-letter queue.
 func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL string) {
 	// Poll runs as this consumer's only goroutine for its whole life, calling
 	// handle sequentially, so setting this once up front and never touching
@@ -298,7 +298,7 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 				// The purge whole, as the Worker was or would have been sent it,
 				// so it can be sent by hand once whatever stopped it is put
 				// right.
-				consumer.logger.ErrorContext(ctx, "realtime purge dropped for good: the error says why",
+				consumer.logger.ErrorContext(ctx, "realtime purge dropped: sending it again would not make it right",
 					"sqs_message_id", aws.ToString(message.MessageId), "event_id", request.EventID, "scope", string(request.Scope),
 					"organization_id", request.OrganizationID, "user_id", request.UserID,
 					"removed_at", request.RemovedAt.UTC().Format(time.RFC3339Nano), "error", err)
