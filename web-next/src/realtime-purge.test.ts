@@ -196,20 +196,24 @@ function later(ms: number) {
 /**
  * The next purge of `userId`'s inbox never answers: the registry's work is
  * cut off there (a deploy, an eviction, or the runtime ending it once Go
- * gave up), and nothing is raised. Later purges of it run.
+ * gave up), and nothing is raised. Later purges of it run. Resolves once it
+ * is cut off, after the Worker's own checks, which are not all promises.
  */
-function cutOffInboxPurge(userId: string) {
+function cutOffInboxPurge(userId: string): Promise<void> {
   const purgeInbox = InboxAgent.prototype.purge
   let cut = false
-  vi.spyOn(InboxAgent.prototype, "purge").mockImplementation(function (
-    this: InboxAgent,
-    ...args: Parameters<InboxAgent["purge"]>
-  ) {
-    if (cut || this.name !== inboxName(org, userId)) {
-      return purgeInbox.apply(this, args)
-    }
-    cut = true
-    return new Promise<never>(() => {})
+  return new Promise((resolve) => {
+    vi.spyOn(InboxAgent.prototype, "purge").mockImplementation(function (
+      this: InboxAgent,
+      ...args: Parameters<InboxAgent["purge"]>
+    ) {
+      if (cut || this.name !== inboxName(org, userId)) {
+        return purgeInbox.apply(this, args)
+      }
+      cut = true
+      resolve()
+      return new Promise<never>(() => {})
+    })
   })
 }
 
@@ -782,8 +786,9 @@ describe("purging", () => {
     world.failing.clear()
 
     // Sent again, it is cut off at the admin's inbox: no error, no answer.
-    cutOffInboxPurge(admin)
+    const cutOff = cutOffInboxPurge(admin)
     void purge(world, await purgeRequest(organizationDeleted))
+    await cutOff
     await settle()
     expect(await registry.members()).toEqual([admin])
     expect(bodiesIn(world, admin, member)).toEqual([
@@ -809,9 +814,10 @@ describe("purging", () => {
     await talk(world, admin, member)
     await talk(world, member, owner)
     await talk(world, owner, admin)
-    cutOffInboxPurge(owner)
+    const cutOff = cutOffInboxPurge(owner)
 
     void purge(world, await purgeRequest(organizationDeleted))
+    await cutOff
     await settle()
     const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
     expect(registry.sql`SELECT event_id FROM registry_purges`).toEqual([])
