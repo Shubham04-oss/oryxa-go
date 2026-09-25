@@ -737,7 +737,8 @@ and `in_reply_to_seq` for an agent woken by one message in particular; its
 its `agent_id` (the member it belongs to is the `user_id`); the
 `addressed_handles` it named, left out when it named nobody, for telling
 someone they were mentioned; and `posted_at`. Never the body, nor any summary
-of it.
+of it. The events can reach the bus in any order (see [Events](#events)), so
+a consumer puts a room's messages in order by `seq`.
 
 ### Multi-user, multi-agent teamspaces
 
@@ -1352,7 +1353,11 @@ task, context, decision's message or result.
 `internal/events` holds the outbox, publisher and dispatcher: events are
 recorded in `agents_primary.agents_outbox` with the state they describe and
 the dispatcher publishes them at least once, with exponential retry; consumers
-deduplicate by `event_id`. The session runtime records `session.created` and
+deduplicate by `event_id`. They are published in no particular order: the
+shared dispatcher publishes each batch in parallel, and a failed event later,
+and EventBridge keeps no order either. So a consumer orders what it hears by
+the order the events carry, a request's `revision` or a room message's `seq`,
+never by arrival. The session runtime records `session.created` and
 `session.deleted` as sessions come and go, best-effort after the session
 service has already succeeded. `cmd/devui` creates the outbox table at
 startup, and starts the dispatcher when `EVENTBRIDGE_ENDPOINT` is set — with

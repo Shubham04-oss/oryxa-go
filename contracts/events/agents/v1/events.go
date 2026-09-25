@@ -258,7 +258,10 @@ type TeamspaceRoomMessagePosted struct {
 // TeamspaceRoomMessage names one message in its room.
 type TeamspaceRoomMessage struct {
 	ID string `json:"id"`
-	// Seq is the message's place in its room, counting from 1.
+	// Seq is the message's place in its room, counting from 1: the order to
+	// put a room's messages in. The agents outbox publishes a batch in
+	// parallel, and EventBridge keeps no order, so their events can arrive in
+	// any order.
 	Seq int64 `json:"seq"`
 	// InReplyToSeq is the message an agent was woken to answer, when there
 	// was one.

@@ -8,6 +8,11 @@
 // here, so the rest of the platform can react. As in agents' request events,
 // EventBridge carries identities and lifecycle state, never what was said: no
 // bodies, no previews, no titles.
+//
+// Events arrive in no particular order. Realtime's outbox publishes a batch in
+// parallel, and a failed event later, and EventBridge keeps no order either,
+// so a conversation's seq 2 can reach a consumer before its seq 1. A consumer
+// orders a conversation's messages by Message.Seq, never by arrival.
 package v1
 
 import "time"
@@ -79,7 +84,9 @@ type Author struct {
 type Message struct {
 	// ID is the conversation's stable id for the message.
 	ID string `json:"id"`
-	// Seq is the message's place in its conversation, counting from 1.
+	// Seq is the message's place in its conversation, counting from 1: the
+	// order to put the conversation's messages in, whatever order their
+	// events arrive in.
 	Seq int64 `json:"seq"`
 }
 
@@ -102,7 +109,8 @@ type ConversationRead struct {
 	Conversation   Conversation `json:"conversation"`
 	// ReaderUserID is one of the conversation's two members.
 	ReaderUserID string `json:"reader_user_id"`
-	// ReadThroughSeq is the newest message the reader has read.
+	// ReadThroughSeq is the newest message the reader has read. Reads, too,
+	// can arrive out of order: the reader has read through the highest seen.
 	ReadThroughSeq int64     `json:"read_through_seq"`
 	ReadAt         time.Time `json:"read_at"`
 }

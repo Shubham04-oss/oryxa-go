@@ -164,6 +164,8 @@ Realtime publishes on source `oryxa.realtime`, in the envelope every Oryxa publi
 
 An event happened, as the envelope's `occurred_at` says, at its `posted_at`, `read_at` or `completed_at`. Its `event_id` is derived from what it is about, rather than drawn at random: from the Worker's id for the Worker's events, and from auth's event for a completed purge. So an event recorded twice is one row in the outbox and one `event_id` to a consumer.
 
+**Consumers must order by `seq`, not by arrival.** The shared dispatcher publishes each batch it takes from the outbox in parallel, up to eight events at once, and publishes a failed one again later. EventBridge keeps no order either. So a conversation's events reach the bus in any order: on 2026-09-25 a direct message's `seq` 2 reached it before its `seq` 1. A consumer puts a conversation's messages in order by `message.seq`, and takes a reader's position as the highest `read_through_seq` it has seen for them, not the last to arrive.
+
 ## Storage
 
 Realtime's schema is two tables, installed through postgreskit under `realtime` in `oryxa_migrations` (`internal/postgres/migrations`). Migrations run whether realtime is on or off, so turning it on needs none.
