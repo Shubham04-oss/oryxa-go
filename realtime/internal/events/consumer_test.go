@@ -298,10 +298,16 @@ func TestRecentForgetsTheOldestFirst(t *testing.T) {
 	}
 }
 
+// fakeQueue hands out its batches in turn, then cancels Poll's context. Like
+// SQS, it refuses a call whose context is done.
 type fakeQueue struct {
 	batches [][]sqstypes.Message
 	deleted []string
 	cancel  context.CancelFunc
+	// deleteErr fails every deletion; failDeleting names the receipts a
+	// deletion reports it could not delete.
+	deleteErr    error
+	failDeleting map[string]bool
 }
 
 func (fake *fakeQueue) ReceiveMessage(ctx context.Context, input *sqs.ReceiveMessageInput, _ ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error) {
@@ -317,11 +323,26 @@ func (fake *fakeQueue) ReceiveMessage(ctx context.Context, input *sqs.ReceiveMes
 	return &sqs.ReceiveMessageOutput{Messages: batch}, nil
 }
 
-func (fake *fakeQueue) DeleteMessageBatch(_ context.Context, input *sqs.DeleteMessageBatchInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
-	for _, entry := range input.Entries {
-		fake.deleted = append(fake.deleted, aws.ToString(entry.ReceiptHandle))
+func (fake *fakeQueue) DeleteMessageBatch(ctx context.Context, input *sqs.DeleteMessageBatchInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return &sqs.DeleteMessageBatchOutput{}, nil
+	if fake.deleteErr != nil {
+		return nil, fake.deleteErr
+	}
+	output := &sqs.DeleteMessageBatchOutput{}
+	for _, entry := range input.Entries {
+		receipt := aws.ToString(entry.ReceiptHandle)
+		if fake.failDeleting[receipt] {
+			output.Failed = append(output.Failed, sqstypes.BatchResultErrorEntry{
+				Id: entry.Id, Code: aws.String("ReceiptHandleIsInvalid"), Message: aws.String("the receipt handle has expired"), SenderFault: true,
+			})
+			continue
+		}
+		fake.deleted = append(fake.deleted, receipt)
+		output.Successful = append(output.Successful, sqstypes.DeleteMessageBatchResultEntry{Id: entry.Id})
+	}
+	return output, nil
 }
 
 func message(receipt, body string) sqstypes.Message {
@@ -417,6 +438,59 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "the queue will deliver it again") {
 		t.Fatalf("the failure worth retrying was not logged:\n%s", logs.String())
+	}
+}
+
+// purgerFunc is a Purger made of a function.
+type purgerFunc func(context.Context, purge.Request) error
+
+func (purgeWith purgerFunc) Purge(ctx context.Context, request purge.Request) error {
+	return purgeWith(ctx, request)
+}
+
+// A purge the Worker has done is deleted even when the process is told to
+// stop while it was being sent; left, it would come back to the next process
+// and be sent again. What was not yet handled goes back to the queue.
+func TestPollDeletesWhatItPurgedAsItStops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stopping := purgerFunc(func(context.Context, purge.Request) error {
+		cancel()
+		return nil
+	})
+	queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{{
+		message("purged", memberRemoved("evt_1", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft)),
+		message("not-yet", memberRemoved("evt_2", "org_1", "user-3", autheventsv1.MemberRemovedReasonLeft)),
+	}}}
+	newConsumer(t, stopping).Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
+	if !slices.Equal(queue.deleted, []string{"purged"}) {
+		t.Fatalf("deleted = %v, want the purged message alone", queue.deleted)
+	}
+}
+
+// A deletion that fails leaves the message to come back, which the dedupe
+// and the Worker's idempotence make harmless, and is said.
+func TestPollSaysWhenADeletionFails(t *testing.T) {
+	for name, queue := range map[string]*fakeQueue{
+		"the whole batch": {deleteErr: errors.New("the queue could not be reached")},
+		"one message":     {failDeleting: map[string]bool{"purged": true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			queue.cancel = cancel
+			queue.batches = [][]sqstypes.Message{{message("purged", memberRemoved("evt_1", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft))}}
+			var logs strings.Builder
+			_, verifier := authHarness()
+			consumer, err := NewConsumer(&fakePurger{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			consumer.Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
+			if len(queue.deleted) != 0 || !strings.Contains(logs.String(), `"msg":"delete handled message`) {
+				t.Fatalf("deleted = %v; want nothing deleted, and the failure logged:\n%s", queue.deleted, logs.String())
+			}
+		})
 	}
 }
 

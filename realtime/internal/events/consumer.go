@@ -245,6 +245,12 @@ const ReceiveBatch = 5
 // again. A var so tests can shorten it instead of waiting for real time.
 var receiveBackoff = 5 * time.Second
 
+// deleteTimeout bounds deleting what a batch is done with. The deletion goes
+// ahead once Poll's context is cancelled, well within the host's shutdown: a
+// purge the Worker has done would otherwise come back to the next process and
+// be sent again.
+const deleteTimeout = 10 * time.Second
+
 // Poll consumes the queue until ctx is cancelled. A message is deleted once
 // it is done with, or once its purge is given up for good, which is logged as
 // dropped. Any other failure leaves the message to come back after
@@ -309,11 +315,11 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 		if len(done) == 0 {
 			continue
 		}
-		deleted, err := client.DeleteMessageBatch(ctx, &sqs.DeleteMessageBatchInput{QueueUrl: aws.String(queueURL), Entries: done})
+		deleteContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), deleteTimeout)
+		deleted, err := client.DeleteMessageBatch(deleteContext, &sqs.DeleteMessageBatchInput{QueueUrl: aws.String(queueURL), Entries: done})
+		cancel()
 		if err != nil {
-			if !errors.Is(err, context.Canceled) {
-				consumer.logger.ErrorContext(ctx, "delete handled messages failed", "error", err)
-			}
+			consumer.logger.ErrorContext(ctx, "delete handled messages failed", "error", err)
 			continue
 		}
 		for _, failure := range deleted.Failed {
