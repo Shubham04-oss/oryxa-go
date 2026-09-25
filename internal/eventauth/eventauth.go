@@ -42,8 +42,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -591,6 +593,18 @@ func (registry *Registry) ReportOnly(report Report) {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	registry.report = report
+}
+
+// Minted names, in order, the services this registry has minted a local key
+// for: those that took a signer and have no KMS key. A service that only
+// consumes takes no signer, so it is never among them.
+func (registry *Registry) Minted() []string {
+	if registry == nil {
+		return nil
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return slices.Sorted(maps.Keys(registry.local))
 }
 
 // localKey returns the public half of the key this registry minted for

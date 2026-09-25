@@ -168,6 +168,39 @@ func TestMaxAgeLengthensHowOldASignatureMayBe(t *testing.T) {
 	}
 }
 
+// kmsResolver gives the services it names a KMS signer, which signs nothing
+// here: it only has to be chosen over a local key.
+type kmsResolver map[string]string
+
+func (keys kmsResolver) Signer(service string) (*Signer, bool, error) {
+	keyID, ok := keys[service]
+	if !ok {
+		return nil, false, nil
+	}
+	signer, err := NewKMSSigner(nil, keyID, nil)
+	return signer, err == nil, err
+}
+
+func (keys kmsResolver) Keys() *KMSKeys { return &KMSKeys{KeyIDs: keys} }
+
+func TestARegistryNamesTheKeysItMinted(t *testing.T) {
+	registry := NewRegistry(kmsResolver{"agents": "alias/agents-events"}, time.Now)
+	for _, service := range []string{"teams", "agents", "auth", "teams"} {
+		if _, err := registry.Signer(service); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A consumer takes only a verifier, and mints nothing.
+	registry.Verifier()
+	if got, want := registry.Minted(), []string{"auth", "teams"}; !slices.Equal(got, want) {
+		t.Fatalf("Minted() = %v, want %v", got, want)
+	}
+	var none *Registry
+	if got := none.Minted(); got != nil {
+		t.Fatalf("a nil registry's Minted() = %v", got)
+	}
+}
+
 func TestARegistryVerifierTakesMaxAge(t *testing.T) {
 	now := time.Now()
 	clock := now
