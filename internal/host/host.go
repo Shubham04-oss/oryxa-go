@@ -71,6 +71,12 @@ type Definition struct {
 	// service consumes its events from, such as RAG_EVENTS_QUEUE_URL. Empty
 	// when it consumes none. See Config.RequireEventQueues.
 	EventsQueueVariable string
+	// Enabled reports whether the configuration getenv reads switches the
+	// service on, for a service that ships off and runs only once it is
+	// configured. Nil is always on. A service that is off hears no events,
+	// so CheckEventQueues does not require its queue, and a release can carry
+	// it before its queue exists.
+	Enabled func(getenv func(string) string) bool
 	// Migrate installs the service's schema. It needs nothing but the
 	// database, so migrating never waits on the rest of a service's
 	// configuration. Nil when the service keeps nothing in PostgreSQL.
@@ -128,8 +134,9 @@ type Config struct {
 	AutoMigrate      bool
 	AWSRegion        string
 	EventBusName     string
-	// RequireEventQueues refuses to start while a selected service's events
-	// queue is unset. A service without its queue does not fail: it warns
+	// RequireEventQueues refuses to start while a selected service that is
+	// on (Definition.Enabled) has its events queue unset. A service without
+	// its queue does not fail: it warns
 	// once and then never hears the events that remove what people deleted,
 	// which in a deployment is a quiet data-retention gap. It is on where the
 	// deployment environment (DEPLOYMENT_ENVIRONMENT, else ENVIRONMENT) is
@@ -193,11 +200,14 @@ func ConfigFromEnv(getenv func(string) string) (Config, error) {
 
 // CheckEventQueues refuses selected services whose events queue is unset,
 // naming every one, so a deployment finds them all at once rather than one
-// start at a time.
+// start at a time. A service that is off (Definition.Enabled) is skipped.
 func CheckEventQueues(selected []Definition, getenv func(string) string) error {
 	var missing []string
 	for _, definition := range selected {
-		if definition.EventsQueueVariable != "" && strings.TrimSpace(getenv(definition.EventsQueueVariable)) == "" {
+		if definition.EventsQueueVariable == "" || (definition.Enabled != nil && !definition.Enabled(getenv)) {
+			continue
+		}
+		if strings.TrimSpace(getenv(definition.EventsQueueVariable)) == "" {
 			missing = append(missing, definition.EventsQueueVariable+" ("+definition.Name+")")
 		}
 	}

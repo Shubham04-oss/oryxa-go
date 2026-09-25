@@ -93,6 +93,29 @@ func TestCheckEventQueuesNamesEveryMissingQueue(t *testing.T) {
 	}
 }
 
+// A service that ships off hears nothing until it is configured, so a
+// production start does not wait for its queue; once it is on, it does, like
+// a service that is always on.
+func TestCheckEventQueuesSkipsAServiceThatIsOff(t *testing.T) {
+	selected := []Definition{
+		{Name: "realtime", EventsQueueVariable: "REALTIME_EVENTS_QUEUE_URL", Enabled: func(getenv func(string) string) bool {
+			return getenv("REALTIME_WORKER_URL") != ""
+		}},
+		{Name: "teams", EventsQueueVariable: "TEAMS_EVENTS_QUEUE_URL"},
+	}
+	if err := CheckEventQueues(selected, env(map[string]string{"TEAMS_EVENTS_QUEUE_URL": "q"})); err != nil {
+		t.Fatalf("CheckEventQueues() with realtime off = %v", err)
+	}
+	err := CheckEventQueues(selected, env(map[string]string{"TEAMS_EVENTS_QUEUE_URL": "q", "REALTIME_WORKER_URL": "https://app.oryxa.in"}))
+	if err == nil || !strings.Contains(err.Error(), "REALTIME_EVENTS_QUEUE_URL (realtime)") || strings.Contains(err.Error(), "TEAMS") {
+		t.Fatalf("CheckEventQueues() with realtime on = %v, want its queue named and nothing else", err)
+	}
+	err = CheckEventQueues(selected, env(map[string]string{}))
+	if err == nil || !strings.Contains(err.Error(), "TEAMS_EVENTS_QUEUE_URL (teams)") || strings.Contains(err.Error(), "REALTIME") {
+		t.Fatalf("CheckEventQueues() with realtime off and no queues = %v, want only teams' queue named", err)
+	}
+}
+
 func TestConfigFromEnvRefusesMalformedValues(t *testing.T) {
 	for name, value := range map[string]string{
 		"ORYXA_REQUIRE_EVENT_QUEUES": "maybe",
