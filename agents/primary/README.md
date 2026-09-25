@@ -311,7 +311,16 @@ The toolbox exposes `interactions_create`, `interactions_inbox`,
 `interactions_respond`. A specialist sees only requests it sent or received;
 the member's primary agent may mediate every request belonging to that member.
 Approval can only narrow the requested tools and permissions, and a response
-cannot report using a tool outside the approved set. These grants describe the
+cannot report using a tool outside the approved set.
+
+**What a request may ask to use.** `requested_tools` and `allowed_tools` name
+toolboxes of the member asked: `apps`, their connected apps, which approved
+work only reads, and `knowledge`, the organization's knowledge search. They
+are read in any case and kept spelled as here (`agents.RequestTool`). Any
+other value is accepted, as it always was, and grants nothing.
+`allowed_tools` must be a subset of `requested_tools`, or the decision is
+`400 invalid_request`, and an approval that leaves it out allows none:
+nothing grants a tool implicitly. These grants describe the
 interaction envelope; they never bypass a tool's existing authorization or
 human-confirmation requirements, and they are not enforced on the run that
 does the approved work either (see below).

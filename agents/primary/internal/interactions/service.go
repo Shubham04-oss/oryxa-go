@@ -277,7 +277,7 @@ func sameRequest(actor agents.InteractionActor, stored agents.Interaction, input
 		stored.Target.AgentID == input.TargetAgentID && stored.TeamspaceID == input.TeamspaceID &&
 		stored.Purpose == input.Purpose && stored.Task == input.Task &&
 		slices.Equal(stored.Context, input.Context) &&
-		slices.Equal(stored.RequestedTools, input.RequestedTools) &&
+		slices.EqualFunc(stored.RequestedTools, input.RequestedTools, strings.EqualFold) &&
 		slices.Equal(stored.RequestedPermissions, input.RequestedPermissions)
 }
 
@@ -503,7 +503,7 @@ func cleanCreate(input agents.InteractionCreateInput) agents.InteractionCreateIn
 	input.TeamspaceID = strings.TrimSpace(input.TeamspaceID)
 	input.Purpose = cleanText(input.Purpose)
 	input.Task = cleanText(input.Task)
-	input.RequestedTools = cleanList(input.RequestedTools)
+	input.RequestedTools = cleanTools(input.RequestedTools)
 	input.RequestedPermissions = cleanList(input.RequestedPermissions)
 	for index := range input.Context {
 		input.Context[index].Label = cleanLine(input.Context[index].Label)
@@ -545,7 +545,7 @@ func validateCreate(input agents.InteractionCreateInput) error {
 func cleanDecision(input agents.InteractionDecisionInput) agents.InteractionDecisionInput {
 	input.Decision = strings.ToLower(strings.TrimSpace(input.Decision))
 	input.Message = cleanText(input.Message)
-	input.AllowedTools = cleanList(input.AllowedTools)
+	input.AllowedTools = cleanTools(input.AllowedTools)
 	input.GrantedPermissions = cleanList(input.GrantedPermissions)
 	return input
 }
@@ -563,7 +563,9 @@ func validateDecision(request agents.Interaction, input agents.InteractionDecisi
 	if input.Decision == DecisionRejected && (len(input.AllowedTools) > 0 || len(input.GrantedPermissions) > 0) {
 		return fmt.Errorf("%w: a rejected request grants no tools or permissions", ErrInvalid)
 	}
-	if !isSubset(input.AllowedTools, request.RequestedTools) || !isSubset(input.GrantedPermissions, request.RequestedPermissions) {
+	// Nothing is granted that was not asked for: allowed_tools names only
+	// requested tools, and left out it names none.
+	if !isToolSubset(input.AllowedTools, request.RequestedTools) || !isSubset(input.GrantedPermissions, request.RequestedPermissions) {
 		return fmt.Errorf("%w: approved tools and permissions must be requested subsets", ErrInvalid)
 	}
 	return nil
@@ -573,7 +575,7 @@ func cleanResponse(input agents.InteractionResponseInput) agents.InteractionResp
 	input.Status = strings.ToLower(strings.TrimSpace(input.Status))
 	input.Summary = cleanText(input.Summary)
 	input.Content = cleanText(input.Content)
-	input.ToolsUsed = cleanList(input.ToolsUsed)
+	input.ToolsUsed = cleanTools(input.ToolsUsed)
 	input.Artifacts = cleanList(input.Artifacts)
 	return input
 }
@@ -600,7 +602,7 @@ func validateResponse(request agents.Interaction, input agents.InteractionRespon
 	if err := validateList(input.Artifacts, "artifacts"); err != nil {
 		return err
 	}
-	if !isSubset(input.ToolsUsed, request.Decision.AllowedTools) {
+	if !isToolSubset(input.ToolsUsed, request.Decision.AllowedTools) {
 		return fmt.Errorf("%w: tools_used must be within allowed_tools", ErrInvalid)
 	}
 	return nil
@@ -624,6 +626,18 @@ func validateList(values []string, name string) error {
 func isSubset(values, allowed []string) bool {
 	for _, value := range values {
 		if !slices.Contains(allowed, value) {
+			return false
+		}
+	}
+	return true
+}
+
+// isToolSubset is isSubset for tool names, which are one name in any case:
+// a list keeps one of each, whatever its case (cleanList), and a request
+// stored before the tool vocabulary was spelled one way may hold "Apps".
+func isToolSubset(values, allowed []string) bool {
+	for _, value := range values {
+		if !slices.ContainsFunc(allowed, func(candidate string) bool { return strings.EqualFold(candidate, value) }) {
 			return false
 		}
 	}
@@ -712,6 +726,17 @@ func cleanList(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+// cleanTools is cleanList for tool names, with the toolboxes a request may
+// ask for spelled as the vocabulary spells them (agents.RequestTool), so an
+// approval of "Apps" grants the apps toolbox as one of "apps" would.
+func cleanTools(values []string) []string {
+	cleaned := cleanList(values)
+	for index, value := range cleaned {
+		cleaned[index] = agents.RequestTool(value)
+	}
+	return cleaned
 }
 
 func cleanLine(value string) string { return strings.Join(strings.Fields(value), " ") }

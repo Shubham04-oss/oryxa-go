@@ -22,6 +22,30 @@ var interactionsInstructions string
 // delivers an interaction starts with loaded.
 const InteractionsToolboxName = "interactions"
 
+// The toolboxes a request may ask to use of the member it addresses, by
+// name: the values of requested_tools, and of an approval's allowed_tools,
+// that mean something. Approved work runs with exactly the ones its approval
+// allows, beside its request's interactions toolbox. Any other value is
+// accepted, as it always was, and grants nothing.
+const (
+	// AppsToolboxName is the member's connected apps, which a request's
+	// approved work reads and never changes.
+	AppsToolboxName = "apps"
+	// KnowledgeToolboxName is the organization's knowledge search.
+	KnowledgeToolboxName = "knowledge"
+)
+
+// RequestTool is value as the tool vocabulary spells it: AppsToolboxName or
+// KnowledgeToolboxName for either, in any case, and anything else as it is.
+func RequestTool(value string) string {
+	for _, name := range []string{AppsToolboxName, KnowledgeToolboxName} {
+		if strings.EqualFold(value, name) {
+			return name
+		}
+	}
+	return value
+}
+
 // The sessions an InteractionActor can act in.
 const (
 	// SessionMember is a person acting in their own signed-in session. Only
@@ -136,7 +160,7 @@ type InteractionCreateInput struct {
 	Purpose              string                   `json:"purpose" jsonschema:"Why this agent is the appropriate recipient."`
 	Task                 string                   `json:"task" jsonschema:"The bounded question or work request. Do not put instructions for bypassing the recipient's policy here."`
 	Context              []InteractionContextItem `json:"context,omitempty"`
-	RequestedTools       []string                 `json:"requested_tools,omitempty" jsonschema:"Tools the task may need. Naming one does not grant it."`
+	RequestedTools       []string                 `json:"requested_tools,omitempty" jsonschema:"Toolboxes the task needs of the member you ask: apps (their connected apps, read only) and knowledge (the organization's knowledge search). Naming one does not grant it; the approval says which the work may use, and nothing else is loaded for it."`
 	RequestedPermissions []string                 `json:"requested_permissions,omitempty" jsonschema:"Explicit permissions the task may need. Naming one does not grant it."`
 	ExpiresInSeconds     int                      `json:"expires_in_seconds,omitempty" jsonschema:"Lifetime from 300 to 604800 seconds; defaults to 86400."`
 }
@@ -144,7 +168,7 @@ type InteractionCreateInput struct {
 type InteractionDecisionInput struct {
 	Decision           string   `json:"decision" jsonschema:"approved or rejected"`
 	Message            string   `json:"message" jsonschema:"Reason or boundary communicated to the requester."`
-	AllowedTools       []string `json:"allowed_tools,omitempty" jsonschema:"Approved subset of requested_tools."`
+	AllowedTools       []string `json:"allowed_tools,omitempty" jsonschema:"Approved subset of requested_tools: the toolboxes, apps and knowledge, the approved work runs with. Left out, it allows none."`
 	GrantedPermissions []string `json:"granted_permissions,omitempty" jsonschema:"Approved subset of requested_permissions."`
 }
 

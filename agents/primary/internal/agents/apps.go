@@ -93,7 +93,7 @@ func AppsToolbox(config AppsConfig) (Toolbox, error) {
 		description = "Every app the member has connected through Composio — their real GitHub repos, files, email, calendars, CRMs and the rest — read through their own connection. Nothing can be changed from here."
 	}
 	return Toolbox{
-		Name:         "apps",
+		Name:         AppsToolboxName,
 		Description:  description,
 		Instructions: appsInstructions,
 		Toolset:      toolset,
