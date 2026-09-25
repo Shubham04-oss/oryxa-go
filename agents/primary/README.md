@@ -461,12 +461,14 @@ is told (see [Wake-ups](#wake-ups)).
 there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
 what it may reach follows what their own agent has already allowed:
 
-- **Deciding** on a new request runs without the apps toolbox at all, with
-  the organization's knowledge, read-only, beside the request, so an approval
-  whose work needs no more can be finished in the same run. Nothing another
-  member wrote can read this member's connected apps before their agent has
-  approved it. A request held for its owner is never delivered for deciding
-  at all.
+- **Deciding** on a new request reads the request alone, neither the
+  member's apps nor their knowledge, and only decides: its
+  `interactions_respond` refuses to answer (`agents.DeliveryDecides`), and
+  the run ends on its decision, approval or rejection. Nothing another member
+  wrote reaches anything of this member's before their agent has approved
+  it, and approved work always runs on its own, with exactly what the
+  approval allows. A request held for its owner is never delivered for
+  deciding at all.
 - **Reporting** a rejection or a result back to the member who asked reads
   the request alone: neither their apps nor their knowledge.
 - **Doing approved work** runs with exactly the toolboxes its decision's
@@ -478,15 +480,20 @@ what it may reach follows what their own agent has already allowed:
   vocabulary does not know, reaches the request alone. The limit is the run's
   own, not an instruction: what was not allowed is not loaded, and the prompt
   says so. The ledger still checks the response's own account of it, that
-  `tools_used` is within `allowed_tools`. The run deciding a new request, when
-  its agent decides, still has the knowledge beside the request so an
-  approval needing no more can be finished at once; only work done after the
-  approval is narrowed to it.
+  `tools_used` is within `allowed_tools`. Only this run answers
+  (`agents.DeliveryWorks`), and it does not decide.
+
+  An approval an agent makes itself therefore costs one more run than it did
+  when the deciding run could go on to answer: the approval's event through
+  the bus and the agents queue, which wakes the waker as it is recorded
+  (well under a second, #97), and that run's own model calls, the first of
+  them reading the request again (2 to 37 seconds each, as measured below).
+  An approval its member makes in person always took a run of its own.
 - No unwatched run may start an interaction of its own: `interactions_create`
   is left out, so a request cannot fan out into requests on other members.
 - A delivery is about its one request. Its run gets an interactions toolbox
-  of its own (`managedagents.DeliveryReads`, `DeliveryQuiet` and
-  `DeliveryReport`, the reach above) with `interactions_get`,
+  of its own (`managedagents.DeliveryReads`, `DeliveryApps`, `DeliveryQuiet`
+  and `DeliveryReport`, the reach above) with `interactions_get`,
   `interactions_decide` and `interactions_respond` only: `interactions_inbox`
   and `interactions_sent` are not there, so the model cannot browse the
   member's other requests whatever it makes of the request. The three it has
@@ -496,6 +503,9 @@ what it may reach follows what their own agent has already allowed:
   member's apps cannot read, decide or answer another of their requests. Nothing a
   delivery does needs them, since its message names the request. App
   wake-ups and a room's stand-in keep the toolbox they had.
+- A delivery run has no `load_artifacts`, which would list the member's own
+  files, the `user:` ones every thread of theirs shares, into a run another
+  member's words steer.
 
 Each create, decision, and response is committed with an EventBridge outbox
 event. The event contains routing identities and lifecycle state, not the task,
@@ -524,9 +534,8 @@ first model call, and the run has no `list_tools` or `load_tools`, so no
 model call goes to finding what it could use (`assembly.Krude.Delivering` for
 Krude, `ManagedDelivering` for a specialist). Approved work starts with
 what its approval allows of the read-only apps and the read-only knowledge,
-and the request's interactions toolbox; deciding a new request with the
-knowledge and the interactions toolbox; a report with the interactions
-toolbox alone.
+and the request's interactions toolbox; deciding a new request, and a
+report, with the interactions toolbox alone.
 
 That puts the whole reach on every call. For approved work it is 4.7 KB of
 tool declarations and 4.8 KB of skills that the interactions toolbox alone
@@ -564,7 +573,7 @@ described the member who asked. Two of three measured runs called it, at 7 to
 16 seconds each, and learned nothing their instruction did not say.
 
 The addressed agent's delivery run ends on the call that settles it:
-`interactions_respond`, or `interactions_decide` rejecting. That call sets
+`interactions_respond`, or `interactions_decide` either way. That call sets
 ADK's `SkipSummarization`, so no model call follows it. The member it works
 for is not there to be told, and nothing is lost: the request holds its
 decision, who made it and its result, which both members read (in a
@@ -572,8 +581,8 @@ teamspace's side conversation the answer shows as the agent's message, "on
 behalf of … approved by …", and a failure as a line), and the call, with
 what it recorded, stays in the delivery thread. A closing message was one
 more model call, 3 to 37 seconds, restating another member's request to
-nobody while the run held its thread and a delivery slot. An approval carries
-on to do the work, and a member's own run is unchanged.
+nobody while the run held its thread and a delivery slot. An approval's work
+runs on its own, and a member's own run is unchanged.
 
 ## Run API
 

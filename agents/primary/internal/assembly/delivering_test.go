@@ -161,12 +161,12 @@ func assembledKrude(t *testing.T, llm model.LLM, thinking genai.ThinkingLevel) *
 	return krude
 }
 
-// TestEachDeliveryStartsWithItsWholeReach: approved work starts with the
-// member's apps and knowledge, read-only, and its request; deciding a new
-// request with the knowledge and the request; a report with the request
-// alone. Krude and a specialist alike, and none of them can list or load a
-// toolbox, so none spends a model call finding one, or look up the member
-// its instruction already names.
+// TestEachDeliveryStartsWithItsWholeReach: approved work starts with what
+// it was allowed of the member's apps and knowledge, read-only, and its
+// request; a report, and deciding a new request, with the request alone.
+// Krude and a specialist alike, and none of them can list or load a
+// toolbox, so none spends a model call finding one, look up the member its
+// instruction already names, or list the member's own files.
 func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 	llm := &recordingModel{}
 	krude := assembledKrude(t, llm, "")
@@ -178,7 +178,7 @@ func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 	}{
 		"approved work":                 {DeliveryReads, append([]string{"apps_run_read_tool", "knowledge_search"}, request...), nil},
 		"approved work, the apps alone": {DeliveryApps, append([]string{"apps_run_read_tool"}, request...), []string{"knowledge_search"}},
-		"a new request":                 {DeliveryQuiet, append([]string{"knowledge_search"}, request...), []string{"apps_run_read_tool"}},
+		"approved work, the knowledge":  {DeliveryQuiet, append([]string{"knowledge_search"}, request...), []string{"apps_run_read_tool"}},
 		"a report":                      {DeliveryReport, request, []string{"apps_run_read_tool", "knowledge_search"}},
 	} {
 		specialist, err := krude.ManagedDelivering(agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, reach.reach)
@@ -192,7 +192,7 @@ func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 					t.Errorf("%s, for %s: the first call declared %v, want %s", name, runner, offered, want)
 				}
 			}
-			for _, unwanted := range append([]string{"list_tools", "load_tools", "get_user_details", "interactions_inbox", "interactions_create"}, reach.absent...) {
+			for _, unwanted := range append([]string{"list_tools", "load_tools", "get_user_details", "load_artifacts", "interactions_inbox", "interactions_create"}, reach.absent...) {
 				if slices.Contains(offered, unwanted) {
 					t.Errorf("%s, for %s: the first call declared %s: %v", name, runner, unwanted, offered)
 				}
@@ -292,7 +292,7 @@ func TestOnlyDeliveriesThinkAtTheLevelSet(t *testing.T) {
 				t.Errorf("with %q set, %s asked for %+v, want %s", thinking, name, config.ThinkingConfig, want)
 			}
 		}
-		for reach, name := range map[DeliveryReach]string{DeliveryReads: "approved work", DeliveryApps: "approved work on the apps alone", DeliveryQuiet: "a new request", DeliveryReport: "a report"} {
+		for reach, name := range map[DeliveryReach]string{DeliveryReads: "approved work", DeliveryApps: "approved work on the apps alone", DeliveryQuiet: "approved work on the knowledge alone", DeliveryReport: "a report or a new request"} {
 			thinks("Krude delivering "+name, krude.Delivering(reach), thinking)
 			specialist, err := krude.ManagedDelivering(spec, reach)
 			if err != nil {

@@ -371,8 +371,9 @@ func (waker *Waker) start(ctx context.Context, delivery Delivery, message string
 	input := threads.RunInput{
 		Message: message, StartedBy: agentsv1.StartedByTrigger, Wakeup: delivery.EventID,
 		Toolboxes: []string{agents.InteractionsToolboxName},
-		// Its interactions tools act on this request alone.
-		Delivery: agents.Delivery{RequestID: delivery.RequestID},
+		// Its interactions tools act on this request alone, and only as its
+		// purpose allows: a run deciding does not answer.
+		Delivery: agents.Delivery{RequestID: delivery.RequestID, Purpose: purpose(delivery.Kind)},
 	}
 	member := threads.Member{UserID: delivery.RecipientUserID, OrganizationID: delivery.OrganizationID}
 	started, err := waker.agents.StartUnattendedRun(ctx, member, delivery.RecipientAgentID, threadID, input, profile)
@@ -500,18 +501,28 @@ func deliverySatisfied(delivery Delivery, request agents.Interaction, now time.T
 // reach says how far the woken run may go, which is what the recipient's
 // agent, or its member, has actually allowed rather than what the request
 // asked for, and is everything the run starts with. Approved work reaches
-// exactly the toolboxes its decision allows (approvedReach); deciding on a
-// new request never reads the member's apps, and reporting an outcome back
-// to one's own member reads the request alone. Every delivery is about its
-// one request, so none is offered the member's other requests to browse.
+// exactly the toolboxes its decision allows (approvedReach). Deciding on a
+// new request reads the request alone, as reporting an outcome back to
+// one's own member does: nothing is allowed until it is approved, and the
+// approved work then runs on its own, with what was allowed. Every delivery
+// is about its one request, so none is offered the member's other requests
+// to browse.
 func reach(kind string, request agents.Interaction) managedagents.UnattendedProfile {
-	switch kind {
-	case KindTargetApproved:
+	if kind == KindTargetApproved {
 		return approvedReach(request.Decision)
+	}
+	return managedagents.DeliveryReport
+}
+
+// purpose is what a run delivering an interaction of kind is for.
+func purpose(kind string) string {
+	switch kind {
 	case KindTargetRequested:
-		return managedagents.DeliveryQuiet
+		return agents.DeliveryDecides
+	case KindTargetApproved:
+		return agents.DeliveryWorks
 	default:
-		return managedagents.DeliveryReport
+		return agents.DeliveryReports
 	}
 }
 
@@ -692,7 +703,7 @@ func message(delivery Delivery, ownerApproved bool, named between) string {
 	}
 	switch {
 	case delivery.Kind == KindTargetRequested:
-		message.WriteString("Evaluate whether the bounded request fits your role and the requested scope. Record an approved or rejected decision with interactions_decide. If approved and you can safely finish now, perform only the approved work and record the strict result with interactions_respond in this run.")
+		message.WriteString("Evaluate whether the bounded request fits your role and the requested scope, and record an approved or rejected decision with interactions_decide. Deciding is all this run does: once approved, the work is done in a run of its own, which has exactly the toolboxes your approval's allowed_tools name.")
 	case delivery.Kind == KindTargetApproved && ownerApproved:
 		message.WriteString("Your owner, the member you work for, approved this request themself in Oryxa, so it is already decided: do not call interactions_decide. Read its recorded decision, do the approved work using only the allowed tools and granted permissions, then record a completed or failed result with interactions_respond in this run. Never broaden the approved scope. " + onlyAllowed)
 	case delivery.Kind == KindTargetApproved:

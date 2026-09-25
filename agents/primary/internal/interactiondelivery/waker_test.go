@@ -401,6 +401,32 @@ func TestEveryDeliveryRunIsPinnedToItsRequest(t *testing.T) {
 		if len(runs.calls) != 1 || runs.calls[0].input.Delivery.RequestID != "irq_1" {
 			t.Fatalf("%s: calls=%+v, want one run pinned to irq_1", kind, runs.calls)
 		}
+		want := map[string]string{
+			KindTargetRequested: agents.DeliveryDecides, KindTargetApproved: agents.DeliveryWorks,
+			KindRequesterRejected: agents.DeliveryReports, KindRequesterCompleted: agents.DeliveryReports,
+		}[kind]
+		if got := runs.calls[0].input.Delivery.Purpose; got != want {
+			t.Fatalf("%s: the run is for %q, want %q", kind, got, want)
+		}
+	}
+}
+
+// TestDecidingANewRequestReadsTheRequestAlone: the run deciding a new
+// request has nothing of the member's loaded, and is told it only decides:
+// approved, the work runs on its own, with exactly what was allowed.
+func TestDecidingANewRequestReadsTheRequestAlone(t *testing.T) {
+	requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(interactions.StatusPending)}}
+	runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusApproved) }}
+	waker := NewWaker(&fakeDeliveries{pending: []Delivery{testDelivery("evt_1", KindTargetRequested, 1)}}, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	if err := waker.WakeDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(runs.calls) != 1 || runs.calls[0].reach != managedagents.DeliveryReport {
+		t.Fatalf("calls=%+v, want one run reading the request alone", runs.calls)
+	}
+	message := runs.calls[0].input.Message
+	if !strings.Contains(message, "Deciding is all this run does") || strings.Contains(message, "in this run") {
+		t.Fatalf("the deciding run is still told to do the work: %s", message)
 	}
 }
 
@@ -415,7 +441,7 @@ func TestOnlyApprovedWorkReadsTheMembersApps(t *testing.T) {
 		kind  string
 		reach managedagents.UnattendedProfile
 	}{
-		{KindTargetRequested, managedagents.DeliveryQuiet},
+		{KindTargetRequested, managedagents.DeliveryReport},
 		{KindTargetApproved, managedagents.DeliveryReads},
 		{KindRequesterRejected, managedagents.DeliveryReport},
 		{KindRequesterCompleted, managedagents.DeliveryReport},

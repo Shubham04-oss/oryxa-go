@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/adk/v2/agent"
@@ -166,34 +167,82 @@ func unattendedHarness(t *testing.T, llm model.LLM, toolboxes ...Toolbox) *harne
 
 // deliveryState is a delivery run's session: its agent's identity, with its
 // interactions toolbox loaded before the run and irq_1 the request it
-// delivers, as the waker starts it.
+// delivers, for doing its approved work, as the waker starts it.
 func deliveryState() map[string]any {
+	return deliveryStateFor(DeliveryWorks)
+}
+
+// deliveryStateFor is deliveryState for a run delivering irq_1 for purpose.
+func deliveryStateFor(purpose string) map[string]any {
 	state := map[string]any{OrganizationIDKey: "org_1", AgentIDKey: "agt_b", AgentNameKey: "Carl", AgentKindKey: "primary"}
 	maps.Copy(state, LoadToolboxes(mapState{}, InteractionsToolboxName))
-	maps.Copy(state, DeliveryState(Delivery{RequestID: "irq_1"}))
+	maps.Copy(state, DeliveryState(Delivery{RequestID: "irq_1", Purpose: purpose}))
 	return state
 }
 
 // pinnedInteractions records every request id each of its methods is asked
-// about.
+// about. A model's calls may run at once.
 type pinnedInteractions struct {
 	fakeInteractions
+	mu    sync.Mutex
 	asked []string
 }
 
+func (service *pinnedInteractions) record(call string) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	service.asked = append(service.asked, call)
+}
+
 func (service *pinnedInteractions) Get(_ context.Context, _ InteractionActor, id string) (Interaction, error) {
-	service.asked = append(service.asked, "get "+id)
+	service.record("get " + id)
 	return Interaction{ID: id, Status: "pending"}, nil
 }
 
 func (service *pinnedInteractions) Decide(_ context.Context, _ InteractionActor, id string, input InteractionDecisionInput) (Interaction, error) {
-	service.asked = append(service.asked, "decide "+id)
+	service.record("decide " + id)
 	return Interaction{ID: id, Status: input.Decision}, nil
 }
 
 func (service *pinnedInteractions) Respond(_ context.Context, _ InteractionActor, id string, input InteractionResponseInput) (Interaction, error) {
-	service.asked = append(service.asked, "respond "+id)
+	service.record("respond " + id)
 	return Interaction{ID: id, Status: input.Status}, nil
+}
+
+// TestADeliveryRunDoesOnlyWhatItIsFor: a run delivering a new request
+// decides it and never answers it, so approved work always runs on its own
+// with exactly what its approval allows; a run doing approved work answers
+// and never decides; a report does neither; and a run that does not say
+// what it is for does neither either. Each reads its request.
+func TestADeliveryRunDoesOnlyWhatItIsFor(t *testing.T) {
+	calls := []*genai.FunctionCall{
+		{ID: "read", Name: "interactions_get", Args: map[string]any{"request_id": "irq_1"}},
+		{ID: "decide", Name: "interactions_decide", Args: map[string]any{"request_id": "irq_1", "decision": "approved", "message": "Fine."}},
+		{ID: "answer", Name: "interactions_respond", Args: map[string]any{"request_id": "irq_1", "status": "completed", "summary": "Done.", "content": "From what I know."}},
+	}
+	for purpose, want := range map[string][]string{
+		DeliveryDecides: {"decide irq_1", "get irq_1"},
+		DeliveryWorks:   {"get irq_1", "respond irq_1"},
+		DeliveryReports: {"get irq_1"},
+		"":              {"get irq_1"},
+	} {
+		service := &pinnedInteractions{}
+		toolbox, err := InteractionToolbox(InteractionConfig{Service: service, Answering: true, Delivering: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
+			if hasFunctionResponse(request) {
+				return genai.NewContentFromText("Done.", genai.RoleModel)
+			}
+			return functionCalls(calls...)
+		})
+		deliveringHarness(t, llm, toolbox).turn("user_b", deliveryStateFor(purpose), "Deliver irq_1.")
+		slices.Sort(service.asked)
+		if !slices.Equal(service.asked, want) {
+			t.Errorf("a run delivering irq_1 for %q asked the ledger %v, want %v", purpose, service.asked, want)
+		}
+	}
 }
 
 // TestADeliveryRunActsOnItsOwnRequestAlone: a run woken to deliver irq_1
@@ -279,10 +328,10 @@ func (*recordingInteractions) Respond(_ context.Context, _ InteractionActor, id 
 }
 
 // TestADeliveryRunEndsOnceItsAnswerIsRecorded: recording the answer, or a
-// rejection, is the last thing a delivery run does. No model call follows to
-// tell a member who is not there what the ledger already holds. A member's
-// own run carries on to say what it did, and a delivery that approves work
-// carries on to do it.
+// decision, is the last thing a delivery run does. No model call follows to
+// tell a member who is not there what the ledger already holds, and a
+// delivery that approves work leaves it to a run of its own. A member's own
+// run carries on to say what it did.
 func TestADeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 	answer := &genai.FunctionCall{ID: "answer", Name: "interactions_respond", Args: map[string]any{
 		"request_id": "irq_1", "status": "completed", "summary": "Reviewed.", "content": "The plan is ready.",
@@ -294,13 +343,14 @@ func TestADeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 	}
 	for name, testCase := range map[string]struct {
 		delivering bool
+		purpose    string
 		call       *genai.FunctionCall
 		calls      int
 	}{
-		"a delivery answering":         {true, answer, 1},
-		"a delivery rejecting":         {true, decision("rejected"), 1},
-		"a delivery approving":         {true, decision("approved"), 2},
-		"the member's own run answers": {false, answer, 2},
+		"a delivery answering":         {true, DeliveryWorks, answer, 1},
+		"a delivery rejecting":         {true, DeliveryDecides, decision("rejected"), 1},
+		"a delivery approving":         {true, DeliveryDecides, decision("approved"), 1},
+		"the member's own run answers": {false, DeliveryWorks, answer, 2},
 	} {
 		t.Run(name, func(t *testing.T) {
 			toolbox, err := InteractionToolbox(InteractionConfig{Service: &recordingInteractions{}, Answering: true, Delivering: testCase.delivering})
@@ -317,7 +367,7 @@ func TestADeliveryRunEndsOnceItsAnswerIsRecorded(t *testing.T) {
 			if testCase.delivering {
 				running = deliveringHarness
 			}
-			said := running(t, llm, toolbox).turn("user_b", deliveryState(), "Deliver irq_1.")
+			said := running(t, llm, toolbox).turn("user_b", deliveryStateFor(testCase.purpose), "Deliver irq_1.")
 			if calls := len(llm.requestsFor(RootName)); calls != testCase.calls {
 				t.Fatalf("the model was called %d times, want %d", calls, testCase.calls)
 			}

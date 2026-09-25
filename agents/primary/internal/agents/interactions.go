@@ -35,23 +35,44 @@ const (
 	KnowledgeToolboxName = "knowledge"
 )
 
-// deliveredRequestKey is the state a run delivering one interaction starts
-// with, which the waker sets as it starts it (threads.RunInput.Delivery) and
-// the model never writes: the one request the run's interactions tools act
-// on.
-const deliveredRequestKey = "delivered_interaction"
+// deliveredRequestKey and deliveryPurposeKey are the state a run delivering
+// one interaction starts with, which the waker sets as it starts it
+// (threads.RunInput.Delivery) and the model never writes: the one request
+// the run's interactions tools act on, and what the run is for.
+const (
+	deliveredRequestKey = "delivered_interaction"
+	deliveryPurposeKey  = "delivery_purpose"
+)
 
-// Delivery is the one interaction a run delivers.
+// What a run delivering one interaction is for, which decides what its
+// interactions tools may do with it.
+const (
+	// DeliveryDecides is a new request, for its agent to decide, and no
+	// more: approved, its work is done in a run of its own, which has
+	// exactly what the approval allows.
+	DeliveryDecides = "decide"
+	// DeliveryWorks is an approved request, for its agent to do the work and
+	// answer.
+	DeliveryWorks = "work"
+	// DeliveryReports is how a request ended, for the agent that asked to
+	// tell its member.
+	DeliveryReports = "report"
+)
+
+// Delivery is the one interaction a run delivers, and what for.
 type Delivery struct {
 	// RequestID is the request the run's interactions tools read, decide and
 	// answer, and no other.
 	RequestID string
+	// Purpose is DeliveryDecides, DeliveryWorks or DeliveryReports: only a
+	// run deciding decides, and only one working answers.
+	Purpose string
 }
 
 // DeliveryState is what a run delivering one interaction adds to its
 // thread's state as it starts.
 func DeliveryState(delivery Delivery) map[string]any {
-	return map[string]any{deliveredRequestKey: delivery.RequestID}
+	return map[string]any{deliveredRequestKey: delivery.RequestID, deliveryPurposeKey: delivery.Purpose}
 }
 
 // RequestTool is value as the tool vocabulary spells it: AppsToolboxName or
@@ -347,7 +368,7 @@ type interactionTools struct {
 }
 
 // settled ends a delivery run on the tool call that recorded its answer, or
-// its rejection, with no model call after it. The ledger now holds all there
+// its decision, with no model call after it. The ledger now holds all there
 // is to say: the member who asked reads it there, and so does the member
 // this agent works for, who is not here to be told; and the call, with what
 // it recorded, stays in the thread. A closing message would be one more
@@ -467,6 +488,20 @@ func (tools interactionTools) delivered(ctx agent.Context, requestID string) err
 	return nil
 }
 
+// deliveredFor is delivered, for a step only a run delivering its request
+// for purpose takes: deciding, in a run that decides, and answering, in one
+// that does the approved work, which alone has what the approval allows. A
+// run that does not say what it is for takes neither.
+func (tools interactionTools) deliveredFor(ctx agent.Context, requestID, purpose, refusal string) error {
+	if err := tools.delivered(ctx, requestID); err != nil || !tools.delivering {
+		return err
+	}
+	if stateText(ctx.ReadonlyState(), deliveryPurposeKey, "") != purpose {
+		return errors.New(refusal)
+	}
+	return nil
+}
+
 func (tools interactionTools) get(ctx agent.Context, args interactionIDArgs) (Interaction, error) {
 	if err := tools.delivered(ctx, args.RequestID); err != nil {
 		return Interaction{}, err
@@ -483,7 +518,8 @@ func (tools interactionTools) get(ctx agent.Context, args interactionIDArgs) (In
 }
 
 func (tools interactionTools) decide(ctx agent.Context, args interactionDecisionArgs) (Interaction, error) {
-	if err := tools.delivered(ctx, args.RequestID); err != nil {
+	if err := tools.deliveredFor(ctx, args.RequestID, DeliveryDecides,
+		"this run does not decide the request: it was delivered to be answered or reported, and its decision is already recorded"); err != nil {
 		return Interaction{}, err
 	}
 	actor, _, err := tools.actor(ctx, false)
@@ -494,15 +530,19 @@ func (tools interactionTools) decide(ctx agent.Context, args interactionDecision
 	if err != nil {
 		return Interaction{}, interactionError(err)
 	}
-	// A rejection is the request's end; an approval leaves its work to do.
-	if request.Status == "rejected" {
+	// A rejection is the request's end, and a run delivering it to decide
+	// has nothing left once it is decided either way: approved, its work is
+	// done in a run of its own, with what the approval allows. A member's
+	// own run carries on.
+	if request.Status == "rejected" || request.Status == "approved" {
 		tools.settled(ctx)
 	}
 	return request, nil
 }
 
 func (tools interactionTools) respond(ctx agent.Context, args interactionResponseArgs) (Interaction, error) {
-	if err := tools.delivered(ctx, args.RequestID); err != nil {
+	if err := tools.deliveredFor(ctx, args.RequestID, DeliveryWorks,
+		"this run does not answer the request: it only decides it, and once approved the work is done in a run of its own, which has exactly what the approval allows"); err != nil {
 		return Interaction{}, err
 	}
 	actor, _, err := tools.actor(ctx, false)

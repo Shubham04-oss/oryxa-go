@@ -52,7 +52,9 @@ gone or disabled, the member who asked left its team, or an agent lost its
 seat), Oryxa closes it and says why. Either way it is no longer yours to
 decide or to work on.
 
-Respond only after approval. List every tool actually used, and never report a
+A run woken to decide a request only decides it: once approved, its work is
+done in a run of its own, which has exactly the toolboxes the approval
+allows. Respond only after approval. List every tool actually used, and never report a
 tool outside the approved set. Share only artifacts intentionally prepared for
 the requester. A completed or rejected request is immutable.
 

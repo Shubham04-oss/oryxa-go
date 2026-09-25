@@ -95,14 +95,12 @@ func MemberTokens(settings serviceconfig.Config, awsConfig aws.Config) memberaut
 type DeliveryReach int
 
 const (
-	// DeliveryReport reads the request alone, for telling the member who
-	// asked that it was rejected or answered, and for approved work allowed
-	// neither the member's apps nor the knowledge.
+	// DeliveryReport reads the request alone: for deciding a new request,
+	// for telling the member who asked that it was rejected or answered, and
+	// for approved work allowed neither the member's apps nor the knowledge.
 	DeliveryReport DeliveryReach = iota
 	// DeliveryQuiet adds the organization's knowledge, read-only, and never
-	// the member's apps, for deciding a new request and doing the approved
-	// work at once when that needs no more, and for approved work allowed
-	// the knowledge alone.
+	// the member's apps, for approved work allowed the knowledge alone.
 	DeliveryQuiet
 	// DeliveryReads adds the member's apps, read-only, and the knowledge,
 	// for approved work allowed both.
@@ -545,9 +543,10 @@ func (krude *Krude) toolboxesFor(reach DeliveryReach) []agents.Toolbox {
 
 // deliveryToolboxes are the toolboxes of each reach: approved work allowed
 // the apps and the knowledge has an unwatched run's, approved work allowed
-// the apps alone the same without the knowledge, and deciding a new request
-// those without the apps, each with the interactions toolbox swapped for the
-// delivering one; a report has the delivering interactions toolbox alone.
+// the apps alone the same without the knowledge, and approved work allowed
+// the knowledge alone those without the apps, each with the interactions
+// toolbox swapped for the delivering one; deciding a new request, and a
+// report, have the delivering interactions toolbox alone.
 func deliveryToolboxes(unattended, unattendedQuiet []agents.Toolbox, delivering *agents.Toolbox) map[DeliveryReach][]agents.Toolbox {
 	report := []agents.Toolbox{}
 	if delivering != nil {

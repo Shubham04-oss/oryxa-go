@@ -171,16 +171,13 @@ func TestARunDeliveringAnInteractionRecordsWhichOne(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var key string
-	for name := range primaryagents.DeliveryState(primaryagents.Delivery{RequestID: "irq_1"}) {
-		key = name
-	}
-	for delivered, want := range map[string]any{"irq_1": "irq_1", "": nil} {
+	delivery := primaryagents.Delivery{RequestID: "irq_1", Purpose: primaryagents.DeliveryDecides}
+	for _, delivered := range []primaryagents.Delivery{delivery, {}} {
 		thread, err := service.Create(ctx, asha)
 		if err != nil {
 			t.Fatal(err)
 		}
-		run, err := service.StartRun(ctx, asha, thread.ID, RunInput{Message: "Deliver it.", Delivery: primaryagents.Delivery{RequestID: delivered}})
+		run, err := service.StartRun(ctx, asha, thread.ID, RunInput{Message: "Deliver it.", Delivery: delivered})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -189,9 +186,14 @@ func TestARunDeliveringAnInteractionRecordsWhichOne(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, _ := after.Session.State().Get(key)
-		if got != want {
-			t.Fatalf("delivering %q, the thread records %v under %s, want %v", delivered, got, key, want)
+		for key, want := range primaryagents.DeliveryState(delivery) {
+			got, err := after.Session.State().Get(key)
+			if delivered.RequestID == "" && err == nil {
+				t.Fatalf("delivering nothing, the thread records %v under %s", got, key)
+			}
+			if delivered.RequestID != "" && got != want {
+				t.Fatalf("delivering %+v, the thread records %v under %s, want %v", delivered, got, key, want)
+			}
 		}
 	}
 }

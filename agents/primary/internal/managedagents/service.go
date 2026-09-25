@@ -58,16 +58,17 @@ const (
 	// deciding and answering it, and nothing that lists the member's other
 	// requests. Such a run starts with all it may reach loaded, and has
 	// nothing to list or load. DeliveryReads is approved work allowed both
-	// the member's apps and their knowledge; DeliveryQuiet is deciding a new
-	// request, and approved work allowed the knowledge alone.
+	// the member's apps and their knowledge; DeliveryQuiet is approved work
+	// allowed the knowledge alone.
 	DeliveryReads UnattendedProfile = "delivery_reads"
 	DeliveryQuiet UnattendedProfile = "delivery_quiet"
 	// DeliveryApps is approved work allowed the member's apps, read-only,
 	// and not their knowledge.
 	DeliveryApps UnattendedProfile = "delivery_apps"
-	// DeliveryReport reaches the one request alone: for telling the member
-	// who asked that it was rejected or answered, and for approved work
-	// allowed neither the member's apps nor their knowledge.
+	// DeliveryReport reaches the one request alone: for deciding a new
+	// request, for telling the member who asked that it was rejected or
+	// answered, and for approved work allowed neither the member's apps nor
+	// their knowledge.
 	DeliveryReport UnattendedProfile = "delivery_report"
 )
 
