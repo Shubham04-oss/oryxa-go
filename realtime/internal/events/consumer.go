@@ -1,6 +1,8 @@
-// Package events hears auth's word that a membership ended, on realtime's own
-// queue, and turns each into one purge by the Worker, recorded once done as
-// realtime.purge.completed.v1. It also puts realtime's own events on the bus.
+// Package events hears, on realtime's own queue, auth's word that a
+// membership or an organization ended, and agents' that a person left a
+// teamspace or it was deleted, and turns each into one purge by the Worker,
+// recorded once done as realtime.purge.completed.v1. It also puts realtime's
+// own events on the bus.
 package events
 
 import (
@@ -18,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
+	agentseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	realtimev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/realtime/v1"
 
@@ -30,17 +33,25 @@ import (
 // and fixed regardless of which queue or detail type it is handling.
 const component = "realtime"
 
-// AuthSubscriptions are the auth events realtime consumes. The rule that
-// delivers them to realtime's queue is built from this list.
-func AuthSubscriptions() []string {
-	return []string{
-		autheventsv1.OrganizationDeletedDetailType,
-		autheventsv1.MemberRemovedDetailType,
+// Subscriptions are the events realtime consumes, by source: auth's word that
+// a membership or an organization ended, and agents' that a person left a
+// teamspace or it was deleted. The rule that delivers them to realtime's
+// queue is built from this.
+func Subscriptions() map[string][]string {
+	return map[string][]string{
+		autheventsv1.Source: {
+			autheventsv1.OrganizationDeletedDetailType,
+			autheventsv1.MemberRemovedDetailType,
+		},
+		agentseventsv1.Source: {
+			agentseventsv1.TeamspaceDeletedDetailType,
+			agentseventsv1.TeamspaceMemberRemovedDetailType,
+		},
 	}
 }
 
-// SignatureMaxAge is how old a signature on an auth event realtime still
-// accepts, rather than the day other consumers do. A purge can wait on
+// SignatureMaxAge is how old a signature on an event realtime still accepts,
+// rather than the day other consumers do. A purge can wait on
 // realtime's queue, and its dead-letter queue, for the 14 days they keep it
 // (the provisioner's retention), and an event lost on the way can be replayed
 // from the bus's archive for 7 days after it was published
@@ -72,13 +83,15 @@ type Purger interface {
 
 // Recorder keeps the audit trail of purges: realtime.purge.completed.v1 in
 // realtime's outbox. *postgres.Store is one. Recording one again, for the
-// same auth event, records nothing new.
+// same event, records nothing new.
 type Recorder interface {
 	RecordPurgeCompleted(context.Context, realtimev1.PurgeCompleted) (bool, error)
 }
 
 // Consumer purges the realtime conversations of members who left an
-// organization, and of organizations that were deleted.
+// organization, and of organizations that were deleted, and the side
+// conversations of members who left a teamspace, and of teamspaces that were
+// deleted.
 type Consumer struct {
 	purger Purger
 	// recorder records each purge once the Worker has done it. NewConsumer
@@ -140,8 +153,8 @@ type receivedEnvelope struct {
 	observability.TraceCarrier
 }
 
-// Handle processes one SQS message body: an EventBridge event from auth. It
-// returns nil once the message is done with: purged and the purge recorded,
+// Handle processes one SQS message body: an EventBridge event from auth or
+// agents. It returns nil once the message is done with: purged and the purge recorded,
 // or purged already. An error wrapping purge.ErrPermanent means the Worker
 // refused the purge for good, and one for an event whose removed_at lies more
 // than maxClockSkew ahead means no purge should be sent; Poll drops the
@@ -159,7 +172,7 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 	if err := json.Unmarshal([]byte(body), &event); err != nil {
 		return purge.Request{}, fmt.Errorf("decode EventBridge event: %w", err)
 	}
-	if event.Source != autheventsv1.Source || !slices.Contains(AuthSubscriptions(), event.DetailType) {
+	if !slices.Contains(Subscriptions()[event.Source], event.DetailType) {
 		return purge.Request{}, fmt.Errorf("event %s: no handler for %s from %s", event.ID, event.DetailType, event.Source)
 	}
 	var detail receivedEnvelope
@@ -170,8 +183,8 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 		return purge.Request{}, fmt.Errorf("event %s: unsupported envelope (version %d, event_id %q)", event.ID, detail.Version, detail.EventID)
 	}
 	// The signature is checked before anything in the event is used, so a
-	// message that reached the queue without auth having sent it purges
-	// nothing, whatever it names.
+	// message that reached the queue without the service it names as its
+	// source having sent it purges nothing, whatever it names.
 	if err := consumer.verifier.Verify(event.Source, event.DetailType, detail.EventID, detail.Version, detail.OccurredAt, detail.Data, detail.Signature); err != nil {
 		return purge.Request{}, fmt.Errorf("event %s: %w", detail.EventID, err)
 	}
@@ -205,7 +218,7 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 		return request, fmt.Errorf("event %s: %s%s: %w", detail.EventID, event.DetailType, scope(request), err)
 	}
 	consumer.logger.InfoContext(ctx, outcome, "event_id", detail.EventID, "detail_type", event.DetailType,
-		"organization_id", request.OrganizationID, "scope", string(request.Scope))
+		"organization_id", request.OrganizationID, "scope", string(request.Scope), "teamspace_id", request.TeamspaceID)
 	return request, nil
 }
 
@@ -216,13 +229,14 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 const recordTimeout = 10 * time.Second
 
 // record keeps the audit trail of a purge the Worker has done: when it was
-// done, what it took, and auth's event that asked for it.
+// done, what it took, and the event that asked for it.
 func (consumer *Consumer) record(ctx context.Context, request purge.Request, completedAt time.Time) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 	defer cancel()
 	_, err := consumer.recorder.RecordPurgeCompleted(ctx, realtimev1.PurgeCompleted{
 		OrganizationID: request.OrganizationID, Scope: string(request.Scope), UserID: request.UserID,
-		RemovedAt: request.RemovedAt.UTC(), SourceEventID: request.EventID, CompletedAt: completedAt.UTC(),
+		TeamspaceID: request.TeamspaceID, RemovedAt: request.RemovedAt.UTC(), SourceEventID: request.EventID,
+		CompletedAt: completedAt.UTC(),
 	})
 	if err != nil {
 		return fmt.Errorf("%w: %w", errUnrecorded, err)
@@ -230,21 +244,26 @@ func (consumer *Consumer) record(ctx context.Context, request purge.Request, com
 	return nil
 }
 
-// scope names the organization a failed purge was for, when the event got as
-// far as saying.
+// scope names the organization a failed purge was for, and the teamspace,
+// when the event got as far as saying.
 func scope(request purge.Request) string {
 	if request.OrganizationID == "" {
 		return ""
 	}
+	if request.TeamspaceID != "" {
+		return " for organization " + request.OrganizationID + ", teamspace " + request.TeamspaceID
+	}
 	return " for organization " + request.OrganizationID
 }
 
-// requestFor is the purge an event asks for, bounded by when the membership
-// or the organization ended. A member removed because their organization was
-// deleted is purged like any other, although the organization's own purge
-// takes everything it kept: that purge reaches only the conversations the
-// Worker's registry knows of, which nothing guarantees is all of them, and a
-// member's purge that finds nothing left is still answered 204.
+// requestFor is the purge an event asks for, bounded by when the membership,
+// the organization or the teamspace ended. A member removed because their
+// organization was deleted is purged like any other, although the
+// organization's own purge takes everything it kept: that purge reaches only
+// the conversations the Worker's registry knows of, which nothing guarantees
+// is all of them, and a member's purge that finds nothing left is still
+// answered 204. So is a teamspace member's, when the teamspace's own purge,
+// for a team that was deleted, took their side conversations first.
 func requestFor(detailType, eventID string, data json.RawMessage) (purge.Request, error) {
 	switch detailType {
 	case autheventsv1.MemberRemovedDetailType:
@@ -275,6 +294,36 @@ func requestFor(detailType, eventID string, data json.RawMessage) (purge.Request
 		return purge.Request{
 			EventID: eventID, OrganizationID: deleted.OrganizationID,
 			Scope: purge.ScopeOrganization, RemovedAt: deleted.DeletedAt,
+		}, nil
+	case agentseventsv1.TeamspaceMemberRemovedDetailType:
+		var removed agentseventsv1.TeamspaceMemberRemoved
+		if err := json.Unmarshal(data, &removed); err != nil {
+			return purge.Request{}, fmt.Errorf("decode event data: %w", err)
+		}
+		if removed.OrganizationID == "" || removed.TeamspaceID == "" || removed.UserID == "" {
+			return purge.Request{}, errors.New("teamspace member event has no organization_id, teamspace_id or user_id")
+		}
+		// As for a member leaving the organization: without the time, the
+		// Worker could not tell what they wrote before from what they wrote
+		// after being added back.
+		if removed.RemovedAt.IsZero() {
+			return purge.Request{}, errors.New("teamspace member event has no removed_at")
+		}
+		return purge.Request{
+			EventID: eventID, OrganizationID: removed.OrganizationID, Scope: purge.ScopeTeamspaceMember,
+			UserID: removed.UserID, TeamspaceID: removed.TeamspaceID, RemovedAt: removed.RemovedAt,
+		}, nil
+	case agentseventsv1.TeamspaceDeletedDetailType:
+		var deleted agentseventsv1.TeamspaceChanged
+		if err := json.Unmarshal(data, &deleted); err != nil {
+			return purge.Request{}, fmt.Errorf("decode event data: %w", err)
+		}
+		if deleted.OrganizationID == "" || deleted.TeamspaceID == "" || deleted.ChangedAt.IsZero() {
+			return purge.Request{}, errors.New("teamspace event has no organization_id, teamspace_id or changed_at")
+		}
+		return purge.Request{
+			EventID: eventID, OrganizationID: deleted.OrganizationID, Scope: purge.ScopeTeamspace,
+			TeamspaceID: deleted.TeamspaceID, RemovedAt: deleted.ChangedAt,
 		}, nil
 	}
 	return purge.Request{}, fmt.Errorf("no purge for %s", detailType)
@@ -348,14 +397,14 @@ func (consumer *Consumer) Poll(ctx context.Context, client queueAPI, queueURL st
 				// right.
 				consumer.logger.ErrorContext(ctx, "realtime purge dropped: sending it again would not make it right",
 					"sqs_message_id", aws.ToString(message.MessageId), "event_id", request.EventID, "scope", string(request.Scope),
-					"organization_id", request.OrganizationID, "user_id", request.UserID,
+					"organization_id", request.OrganizationID, "user_id", request.UserID, "teamspace_id", request.TeamspaceID,
 					"removed_at", request.RemovedAt.UTC().Format(time.RFC3339Nano), "error", err)
 			case errors.Is(err, errUnrecorded):
 				// The purge is done. The redelivery purges again, which the
 				// Worker answers 204 as before, and records it then.
 				consumer.logger.ErrorContext(ctx, "realtime purge done but not recorded; the queue will deliver it again",
 					"sqs_message_id", aws.ToString(message.MessageId), "event_id", request.EventID, "scope", string(request.Scope),
-					"organization_id", request.OrganizationID, "error", err)
+					"organization_id", request.OrganizationID, "teamspace_id", request.TeamspaceID, "error", err)
 				continue
 			default:
 				if ctx.Err() == nil {

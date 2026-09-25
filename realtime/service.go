@@ -2,8 +2,10 @@
 // keeps direct messages and teamspace side conversations only in its Worker's
 // Durable Objects, and realtime is the platform's way to them in both
 // directions. When a member leaves an organization, or the organization is
-// deleted, it hears so from auth on its own queue and has the Worker purge
-// what they kept, recording each purge done as realtime.purge.completed.v1.
+// deleted, it hears so from auth on its own queue, and when a member leaves a
+// teamspace, or the teamspace is deleted, from agents, and has the Worker
+// purge what they kept, recording each purge done as
+// realtime.purge.completed.v1.
 // And the Worker tells it what happens in those conversations, on
 // POST /v1/realtime/events, which it publishes as oryxa.realtime, so the rest
 // of the platform can react.
@@ -76,8 +78,8 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 			return host.Service{}, fmt.Errorf("ORYXA_SERVICES names realtime, but these are not set: %s; set them, or leave realtime out of ORYXA_SERVICES to run without it", unset)
 		}
 		logger.Warn("realtime is off, so a member's direct messages and side conversations in the web app outlive " +
-			"their place in an organization, a deleted organization's outlive it, and nothing said in them reaches the bus; " +
-			"these are not set: " + unset)
+			"their place in an organization or a teamspace, a deleted organization's or teamspace's outlive it, " +
+			"and nothing said in them reaches the bus; these are not set: " + unset)
 		return host.Service{}, nil
 	}
 	if platform.Database == nil {
@@ -111,8 +113,8 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 		return host.Service{}, err
 	}
 	queue := sqs.NewFromConfig(platform.AWS)
-	logger.Info("realtime mounted: a member leaving or an organization deleted purges their conversations through the Worker, "+
-		"and the Worker's events are published", "worker_url", config.WorkerURL, "route", httpserver.Path)
+	logger.Info("realtime mounted: a member leaving an organization or a teamspace, or either deleted, purges their "+
+		"conversations through the Worker, and the Worker's events are published", "worker_url", config.WorkerURL, "route", httpserver.Path)
 	return host.Service{
 		Handler:  server,
 		Routes:   server.Patterns(),
@@ -125,8 +127,10 @@ func Mount(_ context.Context, platform host.Platform) (host.Service, error) {
 	}, nil
 }
 
-// verifier checks auth's signatures for as long as a purge can wait to be
-// handled (events.SignatureMaxAge), rather than a consumer's usual day.
+// verifier checks the signatures of the events realtime purges for, auth's
+// and agents', each against its own service's key, for as long as a purge can
+// wait to be handled (events.SignatureMaxAge), rather than a consumer's usual
+// day.
 func verifier(registry *eventauth.Registry) *eventauth.Verifier {
 	return registry.Verifier(eventauth.MaxAge(events.SignatureMaxAge))
 }

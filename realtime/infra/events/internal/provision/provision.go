@@ -1,7 +1,8 @@
-// Package provision creates what delivers auth's membership endings to
-// realtime: a queue with a dead-letter queue, and an EventBridge rule allowed
-// to send to the queue, and to the dead-letter queue what it cannot deliver
-// there.
+// Package provision creates what delivers the endings realtime purges for to
+// it, auth's of memberships and organizations and agents' of teamspace
+// memberships and teamspaces: a queue with a dead-letter queue, and an
+// EventBridge rule allowed to send to the queue, and to the dead-letter queue
+// what it cannot deliver there.
 package provision
 
 import (
@@ -21,12 +22,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
-	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
-
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/events"
 )
 
 const (
+	// ruleName keeps the name the rule had when it matched auth's events
+	// alone. The rule has matched agents' teamspace endings too since, and
+	// renamed, it would be a second rule: the provisioner deletes none, so
+	// the first would go on delivering beside it.
 	ruleName = "realtime-auth-memberships"
 	targetID = "realtime-queue"
 	// Receives before SQS moves a message realtime keeps failing on aside:
@@ -106,7 +109,7 @@ func Run(ctx context.Context, eventBridgeClient *eventbridge.Client, sqsClient *
 
 	rule, err := eventBridgeClient.PutRule(ctx, &eventbridge.PutRuleInput{
 		Name:         aws.String(ruleName),
-		Description:  aws.String("Auth membership endings whose conversations realtime has the web app purge"),
+		Description:  aws.String("Auth's membership and organization endings, and agents' teamspace ones, whose conversations realtime has the web app purge"),
 		EventBusName: aws.String(config.EventBusName),
 		EventPattern: aws.String(pattern),
 		State:        eventbridgetypes.RuleStateEnabled,
@@ -159,12 +162,26 @@ func Run(ctx context.Context, eventBridgeClient *eventbridge.Client, sqsClient *
 	}, nil
 }
 
-// EventPattern matches exactly the auth events realtime consumes.
+// EventPattern matches exactly the events realtime consumes, each source's
+// detail types in a branch of their own: auth's that a membership or an
+// organization ended, and agents' that a person left a teamspace or it was
+// deleted.
 func EventPattern() (string, error) {
-	pattern, err := json.Marshal(map[string][]string{
-		"source":      {autheventsv1.Source},
-		"detail-type": slices.Sorted(slices.Values(events.AuthSubscriptions())),
-	})
+	subscriptions := events.Subscriptions()
+	var sources []map[string][]string
+	for _, source := range slices.Sorted(maps.Keys(subscriptions)) {
+		sources = append(sources, map[string][]string{
+			"source":      {source},
+			"detail-type": slices.Sorted(slices.Values(subscriptions[source])),
+		})
+	}
+	// EventBridge refuses an $or of one branch, so a single source is the
+	// pattern itself.
+	var match any = map[string]any{"$or": sources}
+	if len(sources) == 1 {
+		match = sources[0]
+	}
+	pattern, err := json.Marshal(match)
 	if err != nil {
 		return "", fmt.Errorf("encode event pattern: %w", err)
 	}

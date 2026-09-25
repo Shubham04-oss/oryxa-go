@@ -20,6 +20,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
+	agentseventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	autheventsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/auth/v1"
 	realtimev1 "github.com/Shubham04-oss/oryxa-go/contracts/events/realtime/v1"
 
@@ -27,36 +28,65 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/purge"
 )
 
-// auth signs the events these tests deliver, as auth's publisher would, and
-// verifier is an enforcing consumer's: it trusts auth's key and nothing else.
+// auth and agents sign the events these tests deliver, as their publishers
+// would, and verifier is an enforcing consumer's: it trusts their keys and
+// nothing else, each for its own source.
 var (
-	authOnce     sync.Once
+	harnessOnce  sync.Once
 	authSigner   *eventauth.Signer
-	authVerifier *eventauth.Verifier
+	agentsSigner *eventauth.Signer
+	verifier     *eventauth.Verifier
 )
 
-func authHarness() (*eventauth.Signer, *eventauth.Verifier) {
-	authOnce.Do(func() {
-		signer, key, err := eventauth.NewLocalSigner("auth", time.Now)
+func harness() {
+	harnessOnce.Do(func() {
+		auth, authKey, err := eventauth.NewLocalSigner("auth", time.Now)
 		if err != nil {
 			panic(err)
 		}
-		authSigner = signer
-		authVerifier = eventauth.NewVerifier(map[string]*ecdsa.PublicKey{"auth": key}, nil, time.Now)
+		agents, agentsKey, err := eventauth.NewLocalSigner("agents", time.Now)
+		if err != nil {
+			panic(err)
+		}
+		authSigner, agentsSigner = auth, agents
+		verifier = eventauth.NewVerifier(map[string]*ecdsa.PublicKey{"auth": authKey, "agents": agentsKey}, nil, time.Now)
 	})
-	return authSigner, authVerifier
+}
+
+// authHarness is auth's signer, and the verifier.
+func authHarness() (*eventauth.Signer, *eventauth.Verifier) {
+	harness()
+	return authSigner, verifier
+}
+
+// agentsHarness is agents' signer, and the verifier.
+func agentsHarness() (*eventauth.Signer, *eventauth.Verifier) {
+	harness()
+	return agentsSigner, verifier
 }
 
 // authEvent is an SQS message body as EventBridge delivers an auth event:
 // the envelope, signed by signer over exactly what it holds.
 func authEvent(signer *eventauth.Signer, detailType, eventID string, version int, data string) string {
+	return sourcedEvent(signer, autheventsv1.Source, detailType, eventID, version, data)
+}
+
+// agentsEvent is authEvent for an event agents publishes.
+func agentsEvent(signer *eventauth.Signer, detailType, eventID string, version int, data string) string {
+	return sourcedEvent(signer, agentseventsv1.Source, detailType, eventID, version, data)
+}
+
+// sourcedEvent is an SQS message body as EventBridge delivers an event
+// source published: the envelope, signed by signer over exactly what it
+// holds.
+func sourcedEvent(signer *eventauth.Signer, source, detailType, eventID string, version int, data string) string {
 	occurredAt := "2026-09-24T12:00:00Z"
-	signature, err := signer.Sign(autheventsv1.Source, detailType, eventID, version, occurredAt, []byte(data))
+	signature, err := signer.Sign(source, detailType, eventID, version, occurredAt, []byte(data))
 	if err != nil {
 		panic(err)
 	}
-	return fmt.Sprintf(`{"version":"0","id":"eb-%s","detail-type":%q,"source":"oryxa.auth","detail":{"event_id":%q,"version":%d,"occurred_at":%q,"data":%s,"sig":%q}}`,
-		eventID, detailType, eventID, version, occurredAt, data, signature)
+	return fmt.Sprintf(`{"version":"0","id":"eb-%s","detail-type":%q,"source":%q,"detail":{"event_id":%q,"version":%d,"occurred_at":%q,"data":%s,"sig":%q}}`,
+		eventID, detailType, source, eventID, version, occurredAt, data, signature)
 }
 
 // When the events say the membership and the organization ended. Neither is
@@ -88,6 +118,29 @@ func organizationDeleted(eventID, organizationID string) string {
 		`{"organization_id":%q,"name":"Acme","slug":"acme","deleted_by":"user-1","deleted_at":%q}`, organizationID, deletedAt))
 }
 
+// When agents says a person left a teamspace, which is Teams' removed_at, to
+// the nanosecond, and when agents deleted one, its changed_at. Neither is the
+// envelope's occurred_at.
+const (
+	leftAt    = "2026-09-24T11:59:57.987654321Z"
+	changedAt = "2026-09-24T11:59:59.25Z"
+)
+
+func teamspaceMemberRemoved(eventID, organizationID, teamspaceID, userID string) string {
+	signer, _ := agentsHarness()
+	return agentsEvent(signer, agentseventsv1.TeamspaceMemberRemovedDetailType, eventID, 1, fmt.Sprintf(
+		`{"organization_id":%q,"teamspace_id":%q,"team_id":"team_1","user_id":%q,"removed_at":%q}`,
+		organizationID, teamspaceID, userID, leftAt))
+}
+
+func teamspaceDeleted(eventID, organizationID, teamspaceID string) string {
+	signer, _ := agentsHarness()
+	return agentsEvent(signer, agentseventsv1.TeamspaceDeletedDetailType, eventID, 1, fmt.Sprintf(
+		`{"teamspace_id":%q,"organization_id":%q,"team_id":"team_1","organization_agent_id":"oag_1","name":"Design",`+
+			`"status":"active","revision":4,"contributor_user_ids":["user-2"],"changed_at":%q}`,
+		teamspaceID, organizationID, changedAt))
+}
+
 // fakePurger records every purge it is asked for, and answers with what
 // fail holds for its event, or nil.
 type fakePurger struct {
@@ -113,7 +166,7 @@ func (fake *fakePurger) asked() []purge.Request {
 func samePurges(got, want []purge.Request) bool {
 	return slices.EqualFunc(got, want, func(a, b purge.Request) bool {
 		return a.EventID == b.EventID && a.OrganizationID == b.OrganizationID && a.Scope == b.Scope &&
-			a.UserID == b.UserID && a.RemovedAt.Equal(b.RemovedAt)
+			a.UserID == b.UserID && a.TeamspaceID == b.TeamspaceID && a.RemovedAt.Equal(b.RemovedAt)
 	})
 }
 
@@ -166,10 +219,19 @@ func newRecordingConsumer(t *testing.T, purger Purger, recorder Recorder) *Consu
 	return consumer
 }
 
-func TestAuthSubscriptionsAreTheEndsOfMemberships(t *testing.T) {
-	got := slices.Sorted(slices.Values(AuthSubscriptions()))
-	if want := []string{"auth.member.removed.v1", "auth.organization.deleted.v1"}; !slices.Equal(got, want) {
-		t.Fatalf("AuthSubscriptions() = %v, want %v", got, want)
+func TestSubscriptionsAreTheEndsOfMembershipsAndTeamspaces(t *testing.T) {
+	want := map[string][]string{
+		"oryxa.auth":   {"auth.member.removed.v1", "auth.organization.deleted.v1"},
+		"oryxa.agents": {"agents.teamspace.deleted.v1", "agents.teamspace.member.removed.v1"},
+	}
+	got := Subscriptions()
+	if len(got) != len(want) {
+		t.Fatalf("Subscriptions() = %v, want %v", got, want)
+	}
+	for source, detailTypes := range want {
+		if sorted := slices.Sorted(slices.Values(got[source])); !slices.Equal(sorted, detailTypes) {
+			t.Fatalf("Subscriptions()[%s] = %v, want %v", source, sorted, detailTypes)
+		}
 	}
 }
 
@@ -204,13 +266,46 @@ func TestConsumerPurgesADeletedOrganization(t *testing.T) {
 	}
 }
 
+// A person who left a teamspace's team loses their side conversations in it,
+// as a member who left the organization loses theirs: up to when Teams says
+// they left.
+func TestConsumerPurgesTheSideConversationsOfAMemberWhoLeftATeamspace(t *testing.T) {
+	purger := &fakePurger{}
+	if err := newConsumer(t, purger).Handle(context.Background(), teamspaceMemberRemoved("evt_3", "org_1", "tsp_1", "user-2")); err != nil {
+		t.Fatal(err)
+	}
+	want := []purge.Request{{
+		EventID: "evt_3", OrganizationID: "org_1", Scope: purge.ScopeTeamspaceMember, UserID: "user-2", TeamspaceID: "tsp_1",
+		RemovedAt: at(leftAt),
+	}}
+	if got := purger.asked(); !samePurges(got, want) {
+		t.Fatalf("purges = %+v, want %+v", got, want)
+	}
+}
+
+// A deleted teamspace loses every side conversation in it, as a deleted
+// organization loses everything it kept, removed when agents deleted it.
+func TestConsumerPurgesADeletedTeamspace(t *testing.T) {
+	purger := &fakePurger{}
+	if err := newConsumer(t, purger).Handle(context.Background(), teamspaceDeleted("evt_4", "org_1", "tsp_1")); err != nil {
+		t.Fatal(err)
+	}
+	want := []purge.Request{{EventID: "evt_4", OrganizationID: "org_1", Scope: purge.ScopeTeamspace, TeamspaceID: "tsp_1", RemovedAt: at(changedAt)}}
+	if got := purger.asked(); !samePurges(got, want) {
+		t.Fatalf("purges = %+v, want %+v", got, want)
+	}
+}
+
 func TestConsumerRefusesWhatItCannotHandle(t *testing.T) {
 	signer, _ := authHarness()
+	agents, _ := agentsHarness()
 	stranger, _, err := eventauth.NewLocalSigner("auth", time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	orgData := `{"organization_id":"org_1","name":"Acme","deleted_at":"2026-09-24T12:00:00Z"}`
+	spaceData := `{"teamspace_id":"tsp_1","organization_id":"org_1","changed_at":"2026-09-24T12:00:00Z"}`
+	leftData := `{"organization_id":"org_1","teamspace_id":"tsp_1","team_id":"team_1","user_id":"user-2","removed_at":"2026-09-24T12:00:00Z"}`
 	tests := map[string]string{
 		"not json":          "{",
 		"unsubscribed type": authEvent(signer, autheventsv1.MemberJoinedDetailType, "evt_1", 1, `{"organization_id":"org_1","user_id":"user-2"}`),
@@ -229,6 +324,28 @@ func TestConsumerRefusesWhatItCannotHandle(t *testing.T) {
 		"signed by someone else": authEvent(stranger, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, orgData),
 		"unsigned": `{"id":"eb-1","detail-type":"auth.organization.deleted.v1","source":"oryxa.auth",` +
 			`"detail":{"event_id":"evt_1","version":1,"occurred_at":"2026-09-24T12:00:00Z","data":{"organization_id":"org_1"}}}`,
+		"unsubscribed agents type": agentsEvent(agents, agentseventsv1.TeamspaceCreatedDetailType, "evt_1", 1, spaceData),
+		// Each source's own detail types only.
+		"agents' type from auth":  authEvent(signer, agentseventsv1.TeamspaceDeletedDetailType, "evt_1", 1, spaceData),
+		"auth's type from agents": agentsEvent(agents, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, orgData),
+		// Auth's key cannot speak for agents.
+		"agents' signed by auth": sourcedEvent(signer, agentseventsv1.Source, agentseventsv1.TeamspaceDeletedDetailType, "evt_1", 1, spaceData),
+		"bad teamspace data":     agentsEvent(agents, agentseventsv1.TeamspaceDeletedDetailType, "evt_1", 1, `{"teamspace_id":42}`),
+		"teamspace without id": agentsEvent(agents, agentseventsv1.TeamspaceDeletedDetailType, "evt_1", 1,
+			`{"organization_id":"org_1","changed_at":"2026-09-24T12:00:00Z"}`),
+		"teamspace without org": agentsEvent(agents, agentseventsv1.TeamspaceDeletedDetailType, "evt_1", 1,
+			`{"teamspace_id":"tsp_1","changed_at":"2026-09-24T12:00:00Z"}`),
+		"teamspace without time": agentsEvent(agents, agentseventsv1.TeamspaceDeletedDetailType, "evt_1", 1,
+			`{"teamspace_id":"tsp_1","organization_id":"org_1"}`),
+		"teamspace member without teamspace": agentsEvent(agents, agentseventsv1.TeamspaceMemberRemovedDetailType, "evt_1", 1,
+			`{"organization_id":"org_1","team_id":"team_1","user_id":"user-2","removed_at":"2026-09-24T12:00:00Z"}`),
+		"teamspace member without user": agentsEvent(agents, agentseventsv1.TeamspaceMemberRemovedDetailType, "evt_1", 1,
+			`{"organization_id":"org_1","teamspace_id":"tsp_1","team_id":"team_1","removed_at":"2026-09-24T12:00:00Z"}`),
+		"teamspace member without org": agentsEvent(agents, agentseventsv1.TeamspaceMemberRemovedDetailType, "evt_1", 1,
+			`{"teamspace_id":"tsp_1","team_id":"team_1","user_id":"user-2","removed_at":"2026-09-24T12:00:00Z"}`),
+		"teamspace member without time": agentsEvent(agents, agentseventsv1.TeamspaceMemberRemovedDetailType, "evt_1", 1,
+			`{"organization_id":"org_1","teamspace_id":"tsp_1","team_id":"team_1","user_id":"user-2"}`),
+		"a future version of a teamspace member": agentsEvent(agents, agentseventsv1.TeamspaceMemberRemovedDetailType, "evt_1", 2, leftData),
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -296,6 +413,11 @@ func TestConsumerSaysWhetherTheWorkerRefusedForGood(t *testing.T) {
 	down := consumer.Handle(context.Background(), organizationDeleted("evt_down", "org_1"))
 	if down == nil || errors.Is(down, purge.ErrPermanent) {
 		t.Fatalf("Worker down = %v, want an error worth retrying", down)
+	}
+	purger.fail["evt_space_refused"] = fmt.Errorf("%w: it answered 400 Bad Request", purge.ErrPermanent)
+	spaceRefused := consumer.Handle(context.Background(), teamspaceDeleted("evt_space_refused", "org_1", "tsp_1"))
+	if !errors.Is(spaceRefused, purge.ErrPermanent) || !strings.Contains(spaceRefused.Error(), "organization org_1, teamspace tsp_1") {
+		t.Fatalf("a teamspace's refused for good = %v, want ErrPermanent naming the organization and the teamspace", spaceRefused)
 	}
 }
 
@@ -481,6 +603,61 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 	}
 }
 
+// A teamspace's purges reach the Worker through the real client as the
+// contract has them: teamspace_id after user_id, which is empty for a deleted
+// teamspace, and removed_at as agents said it, to the nanosecond. Each is
+// recorded, with its teamspace, and deleted.
+func TestPollSendsTheWorkerATeamspacesPurges(t *testing.T) {
+	const secret = "a-secret-the-worker-holds-too-0123456789"
+	var (
+		mu     sync.Mutex
+		bodies []string
+	)
+	worker := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		var stamp int64
+		if _, err := fmt.Sscan(request.Header.Get(purge.TimestampHeader), &stamp); err != nil ||
+			request.Header.Get(purge.SignatureHeader) != purge.Sign(secret, stamp, body) {
+			writer.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	defer worker.Close()
+	client, err := purge.New(purge.Config{WorkerURL: worker.URL, Secret: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{{
+		message("left-space", teamspaceMemberRemoved("evt_left_space", "org_1", "tsp_1", "user-2")),
+		message("space-deleted", teamspaceDeleted("evt_space_deleted", "org_1", "tsp_1")),
+	}}}
+	recorder := &fakeRecorder{}
+	newRecordingConsumer(t, client, recorder).Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
+
+	if want := []string{"left-space", "space-deleted"}; !slices.Equal(queue.deleted, want) {
+		t.Fatalf("deleted = %v, want %v", queue.deleted, want)
+	}
+	wantBodies := []string{
+		`{"event_id":"evt_left_space","organization_id":"org_1","scope":"teamspace_member","user_id":"user-2","teamspace_id":"tsp_1","removed_at":"2026-09-24T11:59:57.987654321Z"}`,
+		`{"event_id":"evt_space_deleted","organization_id":"org_1","scope":"teamspace","user_id":"","teamspace_id":"tsp_1","removed_at":"2026-09-24T11:59:59.25Z"}`,
+	}
+	if !slices.Equal(bodies, wantBodies) {
+		t.Fatalf("the Worker was sent %v, want %v", bodies, wantBodies)
+	}
+	completed := recorder.recorded()
+	if len(completed) != 2 ||
+		completed[0].Scope != realtimev1.PurgeScopeTeamspaceMember || completed[0].UserID != "user-2" || completed[0].TeamspaceID != "tsp_1" ||
+		completed[1].Scope != realtimev1.PurgeScopeTeamspace || completed[1].UserID != "" || completed[1].TeamspaceID != "tsp_1" {
+		t.Fatalf("recorded %+v, want both purges with their teamspace", completed)
+	}
+}
+
 // purgerFunc is a Purger made of a function.
 type purgerFunc func(context.Context, purge.Request) error
 
@@ -542,31 +719,42 @@ func TestPollSaysWhenADeletionFails(t *testing.T) {
 // A purge dropped for good is logged whole, as the Worker was sent it, so it
 // can be sent again by hand once whatever refused it is put right.
 func TestPollLogsADroppedPurgeWhole(t *testing.T) {
-	purger := &fakePurger{fail: map[string]error{"evt_refused": fmt.Errorf("%w: it answered 400 Bad Request", purge.ErrPermanent)}}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{
-		{message("refused", memberRemoved("evt_refused", "org_1", "user-2", autheventsv1.MemberRemovedReasonRemoved))},
-	}}
-	var logs strings.Builder
-	_, verifier := authHarness()
-	consumer, err := NewConsumer(purger, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	consumer.Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
-
-	if !slices.Equal(queue.deleted, []string{"refused"}) {
-		t.Fatalf("deleted = %v, want the refused purge dropped", queue.deleted)
-	}
-	dropped := logged(t, logs.String(), "realtime purge dropped")
-	for key, want := range map[string]string{
-		"sqs_message_id": "refused", "event_id": "evt_refused", "scope": "member",
-		"organization_id": "org_1", "user_id": "user-2", "removed_at": removedAt,
+	for name, test := range map[string]struct {
+		body string
+		want map[string]string
+	}{
+		"a member's": {memberRemoved("evt_refused", "org_1", "user-2", autheventsv1.MemberRemovedReasonRemoved), map[string]string{
+			"sqs_message_id": "refused", "event_id": "evt_refused", "scope": "member",
+			"organization_id": "org_1", "user_id": "user-2", "teamspace_id": "", "removed_at": removedAt,
+		}},
+		"a teamspace member's": {teamspaceMemberRemoved("evt_refused", "org_1", "tsp_1", "user-2"), map[string]string{
+			"sqs_message_id": "refused", "event_id": "evt_refused", "scope": "teamspace_member",
+			"organization_id": "org_1", "user_id": "user-2", "teamspace_id": "tsp_1", "removed_at": leftAt,
+		}},
 	} {
-		if got := dropped[key]; got != want {
-			t.Errorf("the dropped purge's %s = %v, want %q", key, got, want)
-		}
+		t.Run(name, func(t *testing.T) {
+			purger := &fakePurger{fail: map[string]error{"evt_refused": fmt.Errorf("%w: it answered 400 Bad Request", purge.ErrPermanent)}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			queue := &fakeQueue{cancel: cancel, batches: [][]sqstypes.Message{{message("refused", test.body)}}}
+			var logs strings.Builder
+			_, verifier := authHarness()
+			consumer, err := NewConsumer(purger, &fakeRecorder{}, verifier, slog.New(slog.NewJSONHandler(&logs, nil)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			consumer.Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
+
+			if !slices.Equal(queue.deleted, []string{"refused"}) {
+				t.Fatalf("deleted = %v, want the refused purge dropped", queue.deleted)
+			}
+			dropped := logged(t, logs.String(), "realtime purge dropped")
+			for key, want := range test.want {
+				if got := dropped[key]; got != want {
+					t.Errorf("the dropped purge's %s = %v, want %q", key, got, want)
+				}
+			}
+		})
 	}
 }
 
@@ -578,8 +766,10 @@ func TestConsumerDropsARemovalStillToCome(t *testing.T) {
 		body string
 		at   time.Time
 	}{
-		"a member's":        {memberRemoved("evt_member", "org_1", "user-2", autheventsv1.MemberRemovedReasonRemoved), at(removedAt)},
-		"an organization's": {organizationDeleted("evt_organization", "org_1"), at(deletedAt)},
+		"a member's":           {memberRemoved("evt_member", "org_1", "user-2", autheventsv1.MemberRemovedReasonRemoved), at(removedAt)},
+		"an organization's":    {organizationDeleted("evt_organization", "org_1"), at(deletedAt)},
+		"a teamspace member's": {teamspaceMemberRemoved("evt_teamspace_member", "org_1", "tsp_1", "user-2"), at(leftAt)},
+		"a teamspace's":        {teamspaceDeleted("evt_teamspace", "org_1", "tsp_1"), at(changedAt)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			purger := &fakePurger{}
@@ -666,6 +856,8 @@ func TestConsumerRecordsEachPurgeTheWorkerHasDone(t *testing.T) {
 		organizationDeleted("evt_deleted", "org_1"),
 		// Delivered again: purged and recorded already.
 		memberRemoved("evt_left", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft),
+		teamspaceMemberRemoved("evt_left_space", "org_1", "tsp_1", "user-2"),
+		teamspaceDeleted("evt_space_deleted", "org_1", "tsp_1"),
 	} {
 		if err := consumer.Handle(ctx, body); err != nil {
 			t.Fatal(err)
@@ -677,16 +869,25 @@ func TestConsumerRecordsEachPurgeTheWorkerHasDone(t *testing.T) {
 	}
 
 	completed := recorder.recorded()
-	if len(completed) != 2 {
-		t.Fatalf("recorded %+v, want the two purges done, once each", completed)
+	if len(completed) != 4 {
+		t.Fatalf("recorded %+v, want the four purges done, once each", completed)
 	}
 	want := []realtimev1.PurgeCompleted{
 		{OrganizationID: "org_1", Scope: realtimev1.PurgeScopeMember, UserID: "user-2", RemovedAt: at(removedAt), SourceEventID: "evt_left"},
 		{OrganizationID: "org_1", Scope: realtimev1.PurgeScopeOrganization, RemovedAt: at(deletedAt), SourceEventID: "evt_deleted"},
+		{
+			OrganizationID: "org_1", Scope: realtimev1.PurgeScopeTeamspaceMember, UserID: "user-2", TeamspaceID: "tsp_1",
+			RemovedAt: at(leftAt), SourceEventID: "evt_left_space",
+		},
+		{
+			OrganizationID: "org_1", Scope: realtimev1.PurgeScopeTeamspace, TeamspaceID: "tsp_1",
+			RemovedAt: at(changedAt), SourceEventID: "evt_space_deleted",
+		},
 	}
 	for index, got := range completed {
 		expected := want[index]
 		if got.OrganizationID != expected.OrganizationID || got.Scope != expected.Scope || got.UserID != expected.UserID ||
+			got.TeamspaceID != expected.TeamspaceID ||
 			!got.RemovedAt.Equal(expected.RemovedAt) || got.SourceEventID != expected.SourceEventID ||
 			got.CompletedAt.Before(before) || got.CompletedAt.After(time.Now()) || got.CompletedAt.Location() != time.UTC {
 			t.Errorf("recorded %+v, want %+v, completed while it was handled, in UTC", got, expected)
