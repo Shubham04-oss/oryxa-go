@@ -709,12 +709,15 @@ objects record nothing, so nothing is sent.
 **Purges.** A purge of a conversation, whole or of one member, takes every
 event waiting and every dead letter with it before it does anything else,
 and lets its drain go: nothing recorded before a purge is ever sent. A
-request already on its way was sent before the purge came, and the purge
-resolves only once Go has answered it: whatever Go took about what went, it
-took before the Worker answered the purge, so before Go's own
-`realtime.purge.completed.v1`. An event about a message that stayed through
-a member's purge, not yet sent, goes with the rest; what is said after the
-purge is recorded as ever.
+request already on its way was sent before the purge came: the purge waits
+for Go's answer to it two seconds at most, then gives it up, so a member in
+many conversations stays well within the 30 s Go gives their purge (an
+inbox purges four conversations at a time). Go may still take a request
+given up on, after the Worker answered the purge: an event about what a
+purge took can reach the bus after Go's own `realtime.purge.completed.v1`,
+so a consumer orders by neither. An event about a message that stayed
+through a member's purge, not yet sent, goes with the rest; what is said
+after the purge is recorded as ever.
 
 `src/realtime-events.test.ts` pins the contract's golden vectors (a DM's
 message and a side conversation's read, their bodies byte for byte and

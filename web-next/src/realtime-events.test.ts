@@ -1112,6 +1112,42 @@ describe("EventOutbox: purges", () => {
     expect(outbox(dm)).toEqual([])
   })
 
+  it("waits two seconds at most for a request on its way, then gives it up, and keeps nothing it carried", async () => {
+    const { dm } = await setup()
+    const adaTab = await join(dm, ada)
+    await send(dm, adaTab, "on its way")
+    // Go never answers.
+    go.hold()
+    const draining = runDueJobs(dm)
+    await vi.waitFor(() => expect(go.requests).toHaveLength(1))
+
+    let purged = false
+    const purging = dm.purge().then(() => {
+      purged = true
+    })
+    await drain()
+    vi.advanceTimersByTime(eventsTiming.purgeWaitMs - 1)
+    await drain()
+    expect(purged).toBe(false)
+    expect(go.requests[0].aborted).toBeUndefined()
+
+    vi.advanceTimersByTime(1)
+    await purging
+    await draining
+    expect(go.requests[0].aborted).toEqual(
+      expect.objectContaining({ name: "AbortError" })
+    )
+    // Given up on, it is not sent again: nothing it carried stays.
+    expect(outbox(dm)).toEqual([])
+    expect(deadLetters(dm)).toEqual([])
+    expect(backoffOf(dm)).toEqual([])
+    expect(drainsSet(dm)).toEqual([])
+    expect(errors).not.toHaveBeenCalledWith(
+      expect.stringContaining("Go did not take"),
+      expect.anything()
+    )
+  })
+
   it("ends once Go has answered the request on its way, and keeps nothing it carried", async () => {
     const { dm } = await setup()
     const adaTab = await join(dm, ada)

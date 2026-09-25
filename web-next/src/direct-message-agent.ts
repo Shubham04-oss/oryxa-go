@@ -342,7 +342,7 @@ export class DirectMessageAgent extends Agent<ConversationEnv> {
    *
    * Either way, the events waiting for Go and those Go refused go with it
    * (`EventOutbox.purge`): nothing recorded before the purge is sent, and a
-   * request already on its way is answered before the purge resolves.
+   * request already on its way is waited for, two seconds at most.
    */
   async purge(scope?: DmPurgeScope): Promise<{ emptied: boolean }> {
     // A scope that is not this conversation's is refused before anything

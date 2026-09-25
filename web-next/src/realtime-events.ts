@@ -49,6 +49,12 @@ export const eventsTiming = {
   retentionMs: 7 * 24 * 60 * 60_000,
   /** The longest one request may take. */
   requestTimeoutMs: 10_000,
+  /**
+   * The longest a purge waits for a request already on its way before it
+   * gives it up: an inbox purges a few conversations at a time, and Go
+   * gives a member's purge 30 s in all.
+   */
+  purgeWaitMs: 2_000,
 }
 
 /** The most of Go's answer a dead letter keeps, in characters. */
@@ -216,6 +222,18 @@ type Backoff = { failures: number; until: number }
 /** How many rows a prune reads at a time, from the head. */
 const pruneChunk = 100
 
+/** Whether `work` settles, either way, within `ms`. */
+function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms)
+    const settled = () => {
+      clearTimeout(timer)
+      resolve(true)
+    }
+    work.then(settled, settled)
+  })
+}
+
 /** The rows at the head of `head` that `expired` holds for, up to the first it does not. */
 function expiredHead<TRow>(
   head: readonly TRow[],
@@ -282,6 +300,8 @@ export class EventOutbox {
   private epoch = 0
   /** The drain under way. */
   private draining: Promise<void> | undefined
+  /** Ends the request on its way to Go, if one is. */
+  private sending: AbortController | undefined
   /** Plans one at a time, so two never set two drains. */
   private planning: Promise<void> = Promise.resolve()
   /** When the last drain ran here: a restart forgets it, and the next may go at once. */
@@ -402,8 +422,9 @@ export class EventOutbox {
    * The conversation's purge: every event waiting and every dead letter
    * goes before this returns, and nothing recorded before it is ever sent.
    * A request already on its way was sent before the purge: the promise
-   * resolves once Go has answered it (or it failed), so the purge ends only
-   * after anything about what went has reached Go, never later.
+   * waits for Go's answer to it, `eventsTiming.purgeWaitMs` at most, then
+   * gives it up. Go may still take one given up on, after the purge is
+   * done: an event about what the purge took can reach Go after it.
    */
   purge(): Promise<void> {
     this.schema()
@@ -414,12 +435,24 @@ export class EventOutbox {
       this.host.sql`DELETE FROM event_meta`
     })
     const draining = this.draining
+    const sending = this.sending
     return (async () => {
       const set = await this.host.drains().catch(() => [])
       for (const drain of set) {
         await this.host.cancelSchedule(drain.id).catch(() => false)
       }
-      await draining?.catch(() => undefined)
+      if (
+        draining &&
+        !(await settlesWithin(draining, eventsTiming.purgeWaitMs))
+      ) {
+        sending?.abort(
+          new DOMException(
+            "The conversation was purged while its events were on their way.",
+            "AbortError"
+          )
+        )
+        await draining.catch(() => undefined)
+      }
       // What was recorded since (a member's purge keeps the conversation)
       // has a drain of its own.
       await this.plan()
@@ -609,6 +642,7 @@ export class EventOutbox {
       )
     }, eventsTiming.requestTimeoutMs)
     let answer: { status: number; text: string }
+    this.sending = controller
     try {
       const response = await fetch(config.url, {
         method: "POST",
@@ -633,6 +667,7 @@ export class EventOutbox {
       return
     } finally {
       clearTimeout(timeout)
+      if (this.sending === controller) this.sending = undefined
     }
     if (this.epoch !== epoch) return
     if (answer.status === 204) {
