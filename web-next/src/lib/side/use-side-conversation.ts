@@ -581,6 +581,19 @@ class SideConversationView {
         )
       )
     }
+    // An answer the guard could not check has no masked version.
+    if (
+      action === "send_masked" &&
+      card.heldAnswer &&
+      card.heldAnswer.masked === undefined
+    ) {
+      return Promise.reject(
+        new SideActionError(
+          "This answer has no masked version to send.",
+          "not_allowed"
+        )
+      )
+    }
     const errors = new Map(this.live.decisionErrors)
     errors.delete(requestId)
     this.change({ decisionErrors: errors })

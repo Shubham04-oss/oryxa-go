@@ -140,25 +140,32 @@ export type GoInteraction = {
     granted_permissions: string[]
     decided_at: string
   }
-  result?: {
-    status: string
-    summary: string
-    content: string
-    tools_used: string[]
-    artifacts: string[]
-    completed_at: string
-  }
+  result?: GoResult
   guard?: { state: string; kinds: string[] }
   review?: {
     action: string
-    decided_by?: { kind: string; user_id?: string } | string
+    decided_by: { kind: string; user_id?: string }
     decided_at: string
+    reason?: string
   }
   revision: number
   expires_at: string
   created_at: string
   updated_at: string
 }
+
+/** An answer, as Go keeps a result. */
+export type GoResult = {
+  status: string
+  summary: string
+  content: string
+  tools_used: string[]
+  artifacts: string[]
+  completed_at: string
+}
+
+/** An answer held for its owner's review, as Go shows it to them (`held`). */
+export type GoHeld = { result: GoResult; masked_result?: GoResult }
 
 /** One call Go was sent. */
 export type GoCall = {
@@ -230,7 +237,7 @@ export class FakeGo {
   /** What a new request asks to use when its requester names nothing, as Jev would judge it. */
   requestedTools: string[] = []
   /** The answers held for review, by request: Go shows them to the target's owner alone. */
-  readonly held = new Map<string, { stored: string; masked: string }>()
+  readonly held = new Map<string, GoHeld>()
   private threads = 0
   private ids = 0
   now = () => new Date().toISOString()
@@ -329,47 +336,75 @@ export class FakeGo {
   }
 
   /**
-   * The target's agent answers an approved request, and the answer guard
-   * holds it for the owner's review: its two texts are the owner's alone.
+   * The target's agent answers an approved request (a failure, when
+   * `status` says so), and the answer guard holds it for the owner's
+   * review, as it was and fully masked: a masked version only when it could
+   * check it, and the kinds it holds it for.
    */
   hold(
     id: string,
-    held: { stored: string; masked: string; kinds: string[] }
+    held: {
+      stored: string
+      masked?: string
+      kinds: string[]
+      status?: "completed" | "failed"
+    }
   ): GoInteraction {
-    this.held.set(id, { stored: held.stored, masked: held.masked })
+    const result = (summary: string): GoResult => ({
+      status: held.status ?? "completed",
+      summary,
+      content: "",
+      tools_used: [],
+      artifacts: [],
+      completed_at: this.now(),
+    })
+    this.held.set(id, {
+      result: result(held.stored),
+      ...(held.masked !== undefined
+        ? { masked_result: result(held.masked) }
+        : {}),
+    })
     return this.change(id, {
       status: "review",
       guard: { state: "held", kinds: held.kinds },
     })
   }
 
+  /** Oryxa withholds an answer whose request expired while it waited in review. */
+  withholdExpired(id: string): GoInteraction {
+    this.held.delete(id)
+    return this.change(id, {
+      status: "withheld",
+      review: {
+        action: "withhold",
+        decided_by: { kind: "system" },
+        decided_at: this.now(),
+        reason: "expired before review",
+      },
+    })
+  }
+
   /**
-   * A request as `caller` reads it: its owner reads an answer held for
-   * them (`result_review`, on a read of that one request alone), while the
-   * requester reads no result in review or once withheld, and nothing of
-   * the guard's.
+   * A request as `caller` reads it (Go's `viewFor`): its owner's side reads
+   * it all, an answer held for them included while it is in review; the
+   * requester never reads what is held, and reads what the guard found only
+   * beside a result, which they do not read in review or once withheld.
    */
-  view(
-    request: GoInteraction,
-    caller: Person,
-    one = true
-  ): Record<string, unknown> {
+  view(request: GoInteraction, caller: Person): Record<string, unknown> {
     if (request.target.user_id === caller.userId) {
       const held = this.held.get(request.id)
-      return one && request.status === "review" && held
-        ? {
-            ...request,
-            [HELD_ANSWER_FIELDS.object]: {
-              [HELD_ANSWER_FIELDS.stored]: held.stored,
-              [HELD_ANSWER_FIELDS.masked]: held.masked,
-            },
-          }
+      return request.status === "review" && held
+        ? { ...request, [HELD_ANSWER_FIELDS.object]: held }
         : request
     }
-    const { result, guard: _guard, ...shown } = request
+    const { result, guard, ...shown } = request
     return request.status === "review" || request.status === "withheld"
       ? shown
-      : { ...shown, ...(result ? { result } : {}) }
+      : {
+          ...shown,
+          ...(result ? { result } : {}),
+          ...(guard ? { guard } : {}),
+        }
   }
 
   /** The target's agent answers an approved request. */
@@ -431,7 +466,7 @@ export class FakeGo {
         })
         .reverse()
         .slice(0, limit)
-        .map((request) => this.view(request, caller, false))
+        .map((request) => this.view(request, caller))
       return json({ requests: listed })
     }
     const one = new RegExp(
@@ -496,22 +531,52 @@ export class FakeGo {
     return goError(404, "not_found", `nothing at ${method} ${path}`)
   }
 
-  /** The owner's review of an answer held for them: shared as it stands, fully masked, or not at all. */
+  /**
+   * The owner's review of an answer held for them (Go's `ReviewAsOwner`, in
+   * its order of checks): shared as it was held, fully masked, or not at
+   * all. Shared, the answer completes the request, or fails it when it was
+   * a failure.
+   */
   private review(
     request: GoInteraction,
     caller: Person,
     body: unknown
   ): Response {
     const action = (body as { action?: unknown }).action
+    if (
+      action !== "send" &&
+      action !== "send_masked" &&
+      action !== "withhold"
+    ) {
+      return goError(
+        400,
+        "invalid_request",
+        "invalid request: action must be send, send_masked or withhold"
+      )
+    }
     if (request.status !== "review") {
-      return goError(409, "invalid_state", "agent request is not in review")
+      return goError(
+        409,
+        "invalid_state",
+        "only an answer held for review is reviewed"
+      )
+    }
+    if (Date.parse(request.expires_at) <= Date.parse(this.now())) {
+      return goError(409, "request_expired", "agent request expired")
     }
     const held = this.held.get(request.id)
-    if (
-      !held ||
-      (action !== "send" && action !== "send_masked" && action !== "withhold")
-    ) {
-      return goError(400, "invalid_request", "unknown review action")
+    const delivered =
+      action === "send"
+        ? held?.result
+        : action === "send_masked"
+          ? held?.masked_result
+          : undefined
+    if (action !== "withhold" && !delivered) {
+      return goError(
+        409,
+        "invalid_state",
+        "this answer could not be checked, so it has no masked version to send"
+      )
     }
     this.held.delete(request.id)
     const review = {
@@ -519,22 +584,16 @@ export class FakeGo {
       decided_by: { kind: "member", user_id: caller.userId },
       decided_at: this.now(),
     }
-    const reviewed =
-      action === "withhold"
-        ? this.change(request.id, { status: "withheld", review })
-        : this.change(request.id, {
-            status: "completed",
-            review,
-            result: {
-              status: "completed",
-              summary: action === "send" ? held.stored : held.masked,
-              content: "",
-              tools_used: [],
-              artifacts: [],
-              completed_at: this.now(),
-            },
-          })
-    return json(this.view(reviewed, caller))
+    return json(
+      this.view(
+        this.change(request.id, {
+          status: delivered?.status ?? "withheld",
+          review,
+          ...(delivered ? { result: delivered } : {}),
+        }),
+        caller
+      )
+    )
   }
 
   private create(caller: Person, body: Record<string, unknown>): Response {

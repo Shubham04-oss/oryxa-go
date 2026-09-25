@@ -584,6 +584,12 @@ describe("useSideConversation: asking agents", () => {
       // Asked by the viewer: its owner reviews it, not them.
       card(3, { status: "review", requesterId: viewer, targetId: peer }),
       card(4),
+      // Not checked, so it has no masked version.
+      card(5, {
+        status: "review",
+        guard: { state: "held", kinds: ["UNCHECKED"] },
+        heldAnswer: { stored: "Mail Ada at ada@sim.oryxa." },
+      }),
     ])
     let reviewed = false
     act(() => {
@@ -630,6 +636,9 @@ describe("useSideConversation: asking agents", () => {
         SideActionError
       )
     }
+    await expect(result.current.review("irq_5", "send_masked")).rejects.toThrow(
+      "This answer has no masked version to send."
+    )
     expect(socket.said("side-review")).toHaveLength(2)
   })
 

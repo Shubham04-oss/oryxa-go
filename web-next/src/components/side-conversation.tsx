@@ -962,9 +962,11 @@ function RequestCard({
 
 /**
  * An answer the answer guard holds for its owner, on their card: the
- * answer as Send shares it, a preview of what Send masked shares, and the
- * three choices. Send and Send masked wait for the answer: nobody shares
- * what they have not seen. Don't send never does.
+ * answer as Send shares it (said to be its agent's failure when it was
+ * one), a preview of what Send masked shares, and the choices. Send and
+ * Send masked wait for the answer: nobody shares what they have not seen.
+ * Don't send never does. An answer the guard could not check has no masked
+ * version, so no Send masked.
  */
 function HeldAnswer({
   card,
@@ -994,22 +996,31 @@ function HeldAnswer({
     <div className="workspace-side-card-held">
       {held ? (
         <>
+          {held.failed && (
+            <p className="workspace-side-card-masked-label">
+              {capitalized(agent)} couldn't finish the request, and says:
+            </p>
+          )}
           <div
             className="workspace-side-card-answer"
             data-folded={folded ? "true" : undefined}
           >
             <AgentMarkdown text={held.stored} />
           </div>
-          <p className="workspace-side-card-masked-label">
-            Send masked shares:
-          </p>
-          <div
-            className="workspace-side-card-answer"
-            data-masked="true"
-            data-folded={folded ? "true" : undefined}
-          >
-            <AgentMarkdown text={held.masked} />
-          </div>
+          {held.masked !== undefined && (
+            <>
+              <p className="workspace-side-card-masked-label">
+                Send masked shares:
+              </p>
+              <div
+                className="workspace-side-card-answer"
+                data-masked="true"
+                data-folded={folded ? "true" : undefined}
+              >
+                <AgentMarkdown text={held.masked} />
+              </div>
+            </>
+          )}
           {long && (
             <button
               className="workspace-agent-text-button"
@@ -1048,16 +1059,20 @@ function HeldAnswer({
               >
                 {busy && pressed === "send" ? "Sending…" : "Send"}
               </button>
-              <button
-                className="workspace-agent-pill"
-                type="button"
-                data-primary="true"
-                aria-label={`Send ${to}, masked`}
-                disabled={busy}
-                onClick={() => onReview("send_masked")}
-              >
-                {busy && pressed === "send_masked" ? "Sending…" : "Send masked"}
-              </button>
+              {held.masked !== undefined && (
+                <button
+                  className="workspace-agent-pill"
+                  type="button"
+                  data-primary="true"
+                  aria-label={`Send ${to}, masked`}
+                  disabled={busy}
+                  onClick={() => onReview("send_masked")}
+                >
+                  {busy && pressed === "send_masked"
+                    ? "Sending…"
+                    : "Send masked"}
+                </button>
+              )}
             </>
           )}
         </div>

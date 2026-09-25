@@ -199,34 +199,15 @@ export function cardState(
 const uncheckedKind = "UNCHECKED"
 
 /**
- * The answer guard's kinds (Bedrock's entity types) in plain words, as an
- * owner reads why an answer waits for them. A kind not here reads as
- * "other personal details": its code is never shown.
+ * The kinds the answer guard holds an answer for (Bedrock's entity types:
+ * a held answer's kinds are these alone), in plain words, as its owner
+ * reads why it waits for them. Any other kind reads as "other personal
+ * details": its code is never shown.
  */
 const kindWords = new Map<string, string>([
   ["EMAIL", "an email address"],
   ["PHONE", "a phone number"],
   ["ADDRESS", "a street address"],
-  ["PASSWORD", "a password"],
-  ["AWS_ACCESS_KEY", "an AWS access key"],
-  ["AWS_SECRET_KEY", "an AWS secret key"],
-  ["CREDIT_DEBIT_CARD_NUMBER", "a card number"],
-  ["CREDIT_DEBIT_CARD_CVV", "a card security code"],
-  ["CREDIT_DEBIT_CARD_EXPIRY", "a card expiry date"],
-  ["PIN", "a PIN"],
-  ["INTERNATIONAL_BANK_ACCOUNT_NUMBER", "an IBAN"],
-  ["SWIFT_CODE", "a SWIFT code"],
-  ["US_BANK_ACCOUNT_NUMBER", "a bank account number"],
-  ["US_BANK_ROUTING_NUMBER", "a bank routing number"],
-  ["US_SOCIAL_SECURITY_NUMBER", "a Social Security number"],
-  ["US_INDIVIDUAL_TAX_IDENTIFICATION_NUMBER", "a taxpayer ID number"],
-  ["US_PASSPORT_NUMBER", "a passport number"],
-  ["DRIVER_ID", "a driver's license number"],
-  ["CA_HEALTH_NUMBER", "a health card number"],
-  ["CA_SOCIAL_INSURANCE_NUMBER", "a Social Insurance Number"],
-  ["UK_NATIONAL_HEALTH_SERVICE_NUMBER", "an NHS number"],
-  ["UK_NATIONAL_INSURANCE_NUMBER", "a National Insurance number"],
-  ["UK_UNIQUE_TAXPAYER_REFERENCE_NUMBER", "a taxpayer reference number"],
 ])
 
 /**

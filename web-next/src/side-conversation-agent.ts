@@ -257,6 +257,74 @@ const runWords: RelayWords = {
 
 const sessionEndedWords = "The session had ended before the agent could answer."
 
+/** Why Send masked is refused for an answer the guard could not check. */
+const noMaskedWords =
+  "This answer couldn't be checked, so it has no masked version. Send it as it is, or don't send it."
+
+type Refusal = { code: SideFailure; message: string }
+
+/** Go's refusal of an owner's decision, in words. */
+function decisionRefusal(error: ApiError): Refusal {
+  return error.status === 409
+    ? {
+        code: "already_decided",
+        message: "This request was decided already, or expired.",
+      }
+    : {
+        code: "not_allowed",
+        message: error.message || "The decision was refused.",
+      }
+}
+
+/**
+ * Go's refusal of an owner's review, in words: an answer reviewed already
+ * (or one without the masked version asked for, while still in review), a
+ * request past its time, a choice Go does not take, and a request that is
+ * not theirs to review or not there.
+ */
+function reviewRefusal(
+  error: ApiError,
+  action: unknown,
+  stillInReview: boolean
+): Refusal {
+  if (error.status === 409 && error.code === "request_expired") {
+    return {
+      code: "already_decided",
+      message: "This request expired before its answer was reviewed.",
+    }
+  }
+  if (error.status === 409) {
+    return action === "send_masked" && stillInReview
+      ? { code: "not_allowed", message: noMaskedWords }
+      : {
+          code: "already_decided",
+          message: "This answer was reviewed already, or expired.",
+        }
+  }
+  switch (error.status) {
+    case 400:
+      return {
+        code: "not_allowed",
+        message: "That review wasn't understood. Try again.",
+      }
+    case 403:
+      return {
+        code: "not_allowed",
+        message: "Only the person whose agent answered can review its answer.",
+      }
+    case 404:
+      return {
+        code: "not_allowed",
+        message: "This request can't be found any more.",
+      }
+    default:
+      return {
+        code: "not_allowed",
+        message: error.message || "The review was refused.",
+      }
+  }
+}
+
 /** A request's state as an agent reads it in the transcript, where Go's word would not say it. */
 const requestStateWords: Partial<Record<string, string>> = {
   review: "waiting for its owner to review the answer",
@@ -1728,6 +1796,12 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
       )
       return
     }
+    // An answer the guard could not check has no masked version to send.
+    const held = this.heldAnswers.get(requestId)
+    if (action === "send_masked" && held && held.masked === undefined) {
+      this.refuseTarget(connection, requestId, "not_allowed", noMaskedWords)
+      return
+    }
     await this.asOwner(actor, requestId, "review", { action })
   }
 
@@ -1744,18 +1818,6 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     body: Record<string, unknown>
   ): Promise<void> {
     const { connection, state } = actor
-    const words =
-      what === "decision"
-        ? {
-            done: "This request was decided already, or expired.",
-            refused: "The decision was refused.",
-            failed: "The decision couldn't be sent. Try again.",
-          }
-        : {
-            done: "This answer was reviewed already, or expired.",
-            refused: "The review was refused.",
-            failed: "The review couldn't be sent. Try again.",
-          }
     const key = `${what}:${requestId}`
     if (this.inFlight.has(key)) return
     this.inFlight.add(key)
@@ -1783,27 +1845,34 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
         return
       }
       if (error instanceof ApiError && error.status === 409) {
-        // Decided or reviewed meanwhile, or past its time: the card shows how it stands.
+        // Decided or reviewed meanwhile, or past its time: the card shows
+        // how it stands.
         await this.readRequest(state, requestId)
         await this.events.plan()
-        this.refuseTarget(connection, requestId, "already_decided", words.done)
-        return
       }
       if (
         error instanceof ApiError &&
         error.status >= 400 &&
         error.status < 500
       ) {
-        this.refuseTarget(
-          connection,
-          requestId,
-          "not_allowed",
-          error.message || words.refused
-        )
+        const refusal =
+          what === "decision"
+            ? decisionRefusal(error)
+            : reviewRefusal(
+                error,
+                body.action,
+                this.cardRow(requestId)?.state === "review"
+              )
+        this.refuseTarget(connection, requestId, refusal.code, refusal.message)
         return
       }
       console.error(`side conversation: could not send a ${what}`, error)
-      this.refuseTarget(connection, requestId, "unavailable", words.failed)
+      this.refuseTarget(
+        connection,
+        requestId,
+        "unavailable",
+        `The ${what} couldn't be sent. Try again.`
+      )
       return
     }
     this.inFlight.delete(key)
@@ -2000,7 +2069,11 @@ export class SideConversationAgent extends Agent<SideConversationEnv> {
     const held = heldAnswerOf(request)
     if (!held) return false
     const before = this.heldAnswers.get(fields.requestId)
-    if (before?.stored === held.stored && before.masked === held.masked) {
+    if (
+      before?.stored === held.stored &&
+      before.masked === held.masked &&
+      before.failed === held.failed
+    ) {
       return false
     }
     this.heldAnswers.set(fields.requestId, held)

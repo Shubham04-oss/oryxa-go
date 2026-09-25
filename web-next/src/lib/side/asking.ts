@@ -356,30 +356,41 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Where Go keeps the two texts of an answer held for review, on its target
- * owner's read of the request alone: the answer as it would be shared, and
- * fully masked. The Go half may yet rename them; this is the one place that
- * names them.
+ * Where Go keeps an answer held for review (`agents.InteractionHeld`), on
+ * its target owner's reads alone, and only while the request is in
+ * review: the answer as it would be shared, and fully masked, each a whole
+ * result (`completed` or `failed`, a summary and a content). This is the
+ * one place that names them.
  */
 export const HELD_ANSWER_FIELDS = {
   /** The object on the request that holds both. */
-  object: "result_review",
+  object: "held",
   /** The guardrail's output: the kinds it always masks already masked. */
-  stored: "stored",
-  /** Every kind it found masked, each as `{TYPE}`. */
-  masked: "masked",
+  stored: "result",
+  /** Every kind it found masked too, each as `{TYPE}`; absent for an answer it could not check. */
+  masked: "masked_result",
 } as const
 
-/** The answer Go holds for its owner's review, from their read of the request, or nothing when it has none. */
+/**
+ * The answer Go holds for its owner's review, from their read of the
+ * request, each version as its result reads (its summary, then its
+ * content), or nothing when the read has none. `masked` is absent when Go
+ * has no masked version (an answer that could not be checked), and
+ * `failed` marks an answer that was its agent's failure.
+ */
 export function heldAnswerOf(value: unknown): SideHeldAnswer | undefined {
   if (!isRecord(value)) return undefined
   const held = value[HELD_ANSWER_FIELDS.object]
   if (!isRecord(held)) return undefined
-  const stored = held[HELD_ANSWER_FIELDS.stored]
-  const masked = held[HELD_ANSWER_FIELDS.masked]
-  return typeof stored === "string" && typeof masked === "string"
-    ? { stored, masked }
-    : undefined
+  const result = held[HELD_ANSWER_FIELDS.stored]
+  const stored = resultText({ result })
+  if (stored === undefined) return undefined
+  const masked = resultText({ result: held[HELD_ANSWER_FIELDS.masked] })
+  return {
+    stored,
+    ...(masked !== undefined ? { masked } : {}),
+    ...(isRecord(result) && result.status === "failed" ? { failed: true } : {}),
+  }
 }
 
 /** A finished request's result as an agent's message: its summary, then its content when there is more. */

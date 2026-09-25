@@ -103,9 +103,12 @@ export type SideGuard = {
 /**
  * An answer held for review, as its owner alone is shown it: the answer as
  * it would be shared (`stored`: the kinds the guard always masks already
- * masked), and with every kind it found masked too (`masked`).
+ * masked), and with every kind it found masked too (`masked`, absent for an
+ * answer the guard could not check, which has no masked version). `failed`
+ * marks an answer that was its agent's failure: shared, it fails the
+ * request with it.
  */
-export type SideHeldAnswer = { stored: string; masked: string }
+export type SideHeldAnswer = { stored: string; masked?: string; failed?: true }
 
 /**
  * Who decides a request: its target's owner themself (`owner`: a teammate's
@@ -1003,10 +1006,19 @@ function guardOf(value: unknown): SideGuard | undefined {
 
 function heldAnswerOf(value: unknown): SideHeldAnswer | undefined {
   if (!isObject(value)) return undefined
-  const { stored, masked } = value
-  return typeof stored === "string" && typeof masked === "string"
-    ? { stored, masked }
-    : undefined
+  const { stored, masked, failed } = value
+  if (
+    typeof stored !== "string" ||
+    !optionalString(masked) ||
+    (failed !== undefined && failed !== true)
+  ) {
+    return undefined
+  }
+  return {
+    stored,
+    ...(typeof masked === "string" ? { masked } : {}),
+    ...(failed === true ? { failed } : {}),
+  }
 }
 
 function reviewOf(value: unknown): SideWireRequestCard["review"] {

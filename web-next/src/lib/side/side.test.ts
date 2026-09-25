@@ -638,6 +638,13 @@ describe("the answer guard", () => {
       },
     }
     expect(itemOf(held)).toEqual(held)
+    // Unchecked, it has no masked version; a failure says so.
+    const unchecked = {
+      ...held,
+      guard: { state: "held", kinds: ["UNCHECKED"] },
+      heldAnswer: { stored: "I couldn't reach the calendar.", failed: true },
+    }
+    expect(itemOf(unchecked)).toEqual(unchecked)
     const withheld = {
       ...card,
       status: "withheld",
@@ -651,7 +658,8 @@ describe("the answer guard", () => {
       { ...card, requestedTools: [3] },
       { ...card, guard: { state: "loud", kinds: [] } },
       { ...card, guard: { state: "held", kinds: "EMAIL" } },
-      { ...card, heldAnswer: { stored: "only one" } },
+      { ...card, heldAnswer: { masked: "only the masked one" } },
+      { ...card, heldAnswer: { stored: "x", failed: false } },
       { ...card, review: { action: "publish", decidedAt: "t" } },
     ]) {
       expect(itemOf(broken)).toBeUndefined()
@@ -735,6 +743,7 @@ describe("the answer guard", () => {
           action: "withhold",
           decided_by: { kind: "system" },
           decided_at: decidedAt,
+          reason: "expired before review",
         },
         false,
       ],
@@ -761,26 +770,49 @@ describe("the answer guard", () => {
     expect(isOpen("withheld")).toBe(false)
   })
 
-  it(`reads the held answer from \`${HELD_ANSWER_FIELDS.object}\` on the owner's read alone`, () => {
+  it("reads the answer Go holds for its owner, each version a whole result, on the owner's read alone", () => {
+    const result = (summary: string, status = "completed", content = "") => ({
+      status,
+      summary,
+      content,
+      tools_used: [],
+      artifacts: [],
+      completed_at: "2026-09-24T10:00:00Z",
+    })
+    // Go's exact JSON: `held.result` and `held.masked_result`.
     const held = {
       ...request,
       status: "review",
-      [HELD_ANSWER_FIELDS.object]: {
-        [HELD_ANSWER_FIELDS.stored]: "Call Ada on 555-0100.",
-        [HELD_ANSWER_FIELDS.masked]: "Call Ada on {PHONE}.",
+      held: {
+        result: result("Call Ada.", "completed", "Her number is 555-0100."),
+        masked_result: result(
+          "Call Ada.",
+          "completed",
+          "Her number is {PHONE}."
+        ),
       },
     }
-    expect(heldAnswerOf(held)).toEqual({
-      stored: "Call Ada on 555-0100.",
-      masked: "Call Ada on {PHONE}.",
+    expect(HELD_ANSWER_FIELDS).toEqual({
+      object: "held",
+      stored: "result",
+      masked: "masked_result",
     })
-    // The requester's read, and an older Go: none.
-    expect(heldAnswerOf(request)).toBeUndefined()
+    expect(heldAnswerOf(held)).toEqual({
+      stored: "Call Ada.\n\nHer number is 555-0100.",
+      masked: "Call Ada.\n\nHer number is {PHONE}.",
+    })
+    // Unchecked, Go has no masked version; a failure is said to be one.
     expect(
       heldAnswerOf({
         ...request,
-        [HELD_ANSWER_FIELDS.object]: { [HELD_ANSWER_FIELDS.stored]: "x" },
+        status: "review",
+        held: { result: result("I couldn't reach ada@sim.oryxa.", "failed") },
       })
+    ).toEqual({ stored: "I couldn't reach ada@sim.oryxa.", failed: true })
+    // The requester's read, and a held answer without its result: none.
+    expect(heldAnswerOf(request)).toBeUndefined()
+    expect(
+      heldAnswerOf({ ...request, held: { masked_result: result("x") } })
     ).toBeUndefined()
     // Never on the card both people are sent.
     expect(cardFields(held)).not.toHaveProperty("heldAnswer")

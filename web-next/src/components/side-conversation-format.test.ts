@@ -422,10 +422,8 @@ describe("an answer held for review", () => {
     expect(reviewHeadline("Nia", ["UNCHECKED"])).toBe(
       "Nia's answer couldn't be checked automatically. Review it before it's shared."
     )
-    expect(
-      reviewHeadline("Nia", ["ADDRESS", "EMAIL", "PASSWORD", "EMAIL"])
-    ).toBe(
-      "Nia's answer includes a street address, an email address and a password. Review it before it's shared."
+    expect(reviewHeadline("Nia", ["ADDRESS", "EMAIL", "PHONE", "EMAIL"])).toBe(
+      "Nia's answer includes a street address, an email address and a phone number. Review it before it's shared."
     )
     expect(reviewHeadline("Nia", ["PHONE", "UNCHECKED"])).toBe(
       "Nia's answer includes a phone number, and couldn't be checked automatically. Review it before it's shared."

@@ -1134,7 +1134,7 @@ describe("What a side conversation holds", () => {
         cardForMe(2, {
           status: "review",
           guard: { state: "held", kinds: ["UNCHECKED"] },
-          heldAnswer,
+          heldAnswer: { stored: heldAnswer.stored },
         }),
         // Not read as the member yet.
         cardForMe(3, {
@@ -1142,12 +1142,26 @@ describe("What a side conversation holds", () => {
           guard: { state: "held", kinds: ["ADDRESS"] },
         }),
         cardForMe(4, { status: "approved" }),
+        // Its agent's failure, held as any answer is.
+        cardForMe(5, {
+          status: "review",
+          guard: { state: "held", kinds: ["EMAIL"] },
+          heldAnswer: {
+            stored: "I couldn't reach ada@sim.oryxa's calendar.",
+            masked: "I couldn't reach {EMAIL}'s calendar.",
+            failed: true,
+          },
+        }),
       ])
     )
-    const [first, second, third, fourth] = within(view).getAllByRole(
+    const [first, second, third, fourth, fifth] = within(view).getAllByRole(
       "article",
       { name: "Priya Shah asked Leo, your agent" }
     )
+    expect(
+      within(fifth).getByText("Leo couldn't finish the request, and says:")
+    ).toBeTruthy()
+    expect(within(first).queryByText(/couldn't finish/)).toBeNull()
     expect(
       within(first).getByText(
         "Leo's answer includes an email address and a phone number. Review it before it's shared."
@@ -1177,6 +1191,13 @@ describe("What a side conversation holds", () => {
       )
     ).toBeTruthy()
     expect(view.textContent).not.toContain("UNCHECKED")
+    // Not checked, it has no masked version: no preview, no Send masked.
+    expect(within(second).queryByText("Send masked shares:")).toBeNull()
+    expect(
+      within(second)
+        .getAllByRole("button", { name: /answer to Priya Shah/ })
+        .map((button) => button.textContent)
+    ).toEqual(["Don't send", "Send"])
     // Nothing is sent before the member has seen it; not sending never waits.
     expect(within(third).getByText("Loading the answer…")).toBeTruthy()
     expect(
@@ -1193,7 +1214,7 @@ describe("What a side conversation holds", () => {
     expect(first.getAttribute("aria-busy")).toBe("true")
     expect(within(first).getByText("Sending…")).toBeTruthy()
     fireEvent.click(
-      within(second).getByRole("button", {
+      within(fifth).getByRole("button", {
         name: "Send Leo's answer to Priya Shah, masked",
       })
     )
@@ -1204,7 +1225,7 @@ describe("What a side conversation holds", () => {
     )
     expect(socket.said("side-review")).toEqual([
       { type: "side-review", requestId: "irq_1", action: "send" },
-      { type: "side-review", requestId: "irq_2", action: "send_masked" },
+      { type: "side-review", requestId: "irq_5", action: "send_masked" },
       { type: "side-review", requestId: "irq_3", action: "withhold" },
     ])
 

@@ -1448,9 +1448,15 @@ describe("SideConversationAgent: the answer guard", () => {
     const boTab = await join(side, bo)
     const expired = await heldForBo(side, adaTab, boTab, "One")
 
-    // Go's sweep withholds it, as nobody reviewed it in time.
-    go.held.delete(expired)
-    go.change(expired, { status: "withheld" })
+    // Go's sweep withholds it, as nobody reviewed it in time, and records
+    // that Oryxa did.
+    go.withholdExpired(expired)
+    expect(go.requests.get(expired)?.review).toEqual({
+      action: "withhold",
+      decided_by: { kind: "system" },
+      decided_at: expect.any(String),
+      reason: "expired before review",
+    })
     vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
     await runDueJobs(side)
     expect(lastItem(adaTab, "status")).toMatchObject({
@@ -1466,8 +1472,7 @@ describe("SideConversationAgent: the answer guard", () => {
     // Bo reviews one Go withheld before the object read it: Go refuses, and
     // the card shows how it stands.
     const three = await heldForBo(side, adaTab, boTab, "Three")
-    go.held.delete(three)
-    go.change(three, { status: "withheld" })
+    go.withholdExpired(three)
     await say(side, boTab, {
       type: "side-review",
       requestId: three,
@@ -1585,6 +1590,181 @@ describe("SideConversationAgent: the answer guard", () => {
       authorId: bo.agentId,
       body: `Nia: ${masked}`,
     })
+  })
+
+  it("has no masked version of an answer the guard could not check: Send masked is refused, by the object or by Go", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Find Ada's contact details")
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    go.hold("irq_1", { stored, kinds: ["UNCHECKED"] })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    const card = lastItem(boTab, "request-card")
+    expect(card).toMatchObject({
+      status: "review",
+      guard: { state: "held", kinds: ["UNCHECKED"] },
+      heldAnswer: { stored },
+    })
+    expect(card?.heldAnswer).not.toHaveProperty("masked")
+
+    const noMasked =
+      "This answer couldn't be checked, so it has no masked version. Send it as it is, or don't send it."
+    await say(side, boTab, {
+      type: "side-review",
+      requestId: "irq_1",
+      action: "send_masked",
+    })
+    expect(boTab.last("side-refused")).toEqual({
+      type: "side-refused",
+      target: "irq_1",
+      code: "not_allowed",
+      message: noMasked,
+    })
+    expect(sentTo("review")).toEqual([])
+
+    // An instance that has not read it as Bo lets Go refuse it.
+    const restarted = await world.restart<Side>("SideConversationAgent", name)
+    await say(restarted, boTab, {
+      type: "side-review",
+      requestId: "irq_1",
+      action: "send_masked",
+    })
+    expect(sentTo("review")).toHaveLength(1)
+    expect(boTab.last("side-refused")).toMatchObject({
+      code: "not_allowed",
+      message: noMasked,
+    })
+    // Sent as it is, it lands.
+    await say(restarted, boTab, {
+      type: "side-review",
+      requestId: "irq_1",
+      action: "send",
+    })
+    expect(lastItem(adaTab, "agent-message")).toMatchObject({
+      body: stored,
+      via: { reviewedBy: bo.userId },
+    })
+  })
+
+  it("shares a held failure as a failure: the one who asked reads its summary in a quiet line", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Find Ada's contact details")
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    go.hold("irq_1", {
+      status: "failed",
+      stored: "I couldn't reach ada@sim.oryxa's calendar.",
+      masked: "I couldn't reach {EMAIL}'s calendar.",
+      kinds: ["EMAIL"],
+    })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(lastItem(boTab, "request-card")?.heldAnswer).toEqual({
+      stored: "I couldn't reach ada@sim.oryxa's calendar.",
+      masked: "I couldn't reach {EMAIL}'s calendar.",
+      failed: true,
+    })
+
+    await say(side, boTab, {
+      type: "side-review",
+      requestId: "irq_1",
+      action: "send_masked",
+    })
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "request-card")).toMatchObject({
+        status: "failed",
+        review: { action: "send_masked" },
+      })
+      expect(lastItem(socket, "status")).toMatchObject({
+        outcome: "failed",
+        text: "Nia could not finish the request: I couldn't reach {EMAIL}'s calendar.",
+      })
+      expect(
+        itemsOf(socket).some((item) => item.kind === "agent-message")
+      ).toBe(false)
+    }
+  })
+
+  it("says each refusal of the review route in words on the owner's card", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const requestId = await heldForBo(side, adaTab, boTab)
+    const path = `POST ${base}/agent-requests/${requestId}/review`
+    const refusals: Array<[number, string, string, string, string]> = [
+      [
+        400,
+        "invalid_request",
+        "send",
+        "not_allowed",
+        "That review wasn't understood. Try again.",
+      ],
+      [
+        403,
+        "forbidden",
+        "send",
+        "not_allowed",
+        "Only the person whose agent answered can review its answer.",
+      ],
+      [
+        404,
+        "not_found",
+        "send",
+        "not_allowed",
+        "This request can't be found any more.",
+      ],
+      [
+        409,
+        "invalid_state",
+        "send",
+        "already_decided",
+        "This answer was reviewed already, or expired.",
+      ],
+      [
+        409,
+        "invalid_state",
+        "send_masked",
+        "not_allowed",
+        "This answer couldn't be checked, so it has no masked version. Send it as it is, or don't send it.",
+      ],
+      [
+        409,
+        "request_expired",
+        "withhold",
+        "already_decided",
+        "This request expired before its answer was reviewed.",
+      ],
+    ]
+    for (const [status, code, action, refused, words] of refusals) {
+      go.overrides.set(
+        path,
+        new Response(
+          JSON.stringify({ error: { code, message: `go says ${code}` } }),
+          { status, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      await say(side, boTab, { type: "side-review", requestId, action })
+      expect(boTab.last("side-refused")).toEqual({
+        type: "side-refused",
+        target: requestId,
+        code: refused,
+        message: words,
+      })
+    }
+    // Every one reached Go, and the answer still waits on Bo.
+    expect(sentTo("review")).toHaveLength(refusals.length)
+    expect(lastItem(boTab, "request-card")?.status).toBe("review")
   })
 
   it("forgets the answers it holds for an owner when it is purged", async () => {
