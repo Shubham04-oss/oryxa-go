@@ -39,6 +39,18 @@ organizations exist. A team the caller cannot see is `404`, as teams conceals
 it. A file the caller cannot GET or delete is also `404`. Creating an
 organization file without being an org admin is `403`.
 
+"Org admin" above means a person's own session, such as a chat they are
+watching. A token auth minted for an agent, which it answers with
+`agent: true`, gets a plain member's reach whatever its member's role,
+because the agent can be answering someone else entirely: a teammate's
+interaction request, a room it was mentioned in. It reaches its own member's
+files, a team's files only when its member is actually on that team, and an
+organization's `access: members` files — never an admin-only file, and never
+every member's files the way the member's own session would list. It deletes
+a team file only when its member is that team's own admin, not merely
+because teams would let an org admin manage any team, and it creates no
+organization file at all.
+
 Keys follow placement, then the UTC calendar day of `created_at`, so a wipe
 is still a prefix and a day's objects sit together:
 
