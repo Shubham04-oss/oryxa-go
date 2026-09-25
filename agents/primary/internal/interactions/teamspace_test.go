@@ -21,12 +21,13 @@ type fakeTeamspaces struct {
 }
 
 type seatCall struct {
-	requester                         agents.TeamspaceActor
-	token, teamspaceID, targetAgentID string
+	requester                  agents.TeamspaceActor
+	directory                  agents.OrganizationDirectory
+	teamspaceID, targetAgentID string
 }
 
-func (spaces *fakeTeamspaces) RequestSeat(_ context.Context, requester agents.TeamspaceActor, token, teamspaceID, targetAgentID string) (agents.TeamspaceSeat, error) {
-	spaces.calls = append(spaces.calls, seatCall{requester: requester, token: token, teamspaceID: teamspaceID, targetAgentID: targetAgentID})
+func (spaces *fakeTeamspaces) RequestSeat(_ context.Context, requester agents.TeamspaceActor, directory agents.OrganizationDirectory, teamspaceID, targetAgentID string) (agents.TeamspaceSeat, error) {
+	spaces.calls = append(spaces.calls, seatCall{requester: requester, directory: directory, teamspaceID: teamspaceID, targetAgentID: targetAgentID})
 	if spaces.err != nil {
 		return agents.TeamspaceSeat{}, spaces.err
 	}
@@ -100,8 +101,8 @@ func TestARequestToATeammatesPrimaryWaitsForItsOwner(t *testing.T) {
 	}
 	call := spaces.calls[0]
 	if call.requester.OrganizationID != "org_1" || call.requester.UserID != "user_a" || call.requester.AgentID != "agt_a" ||
-		call.token != "member-token" || call.teamspaceID != "tsp_1" || call.targetAgentID != "agt_b" {
-		t.Fatalf("seat lookup=%+v, want the requester's own identity and token for tsp_1 and agt_b", call)
+		len(call.directory.People) != len(teammateDirectory.People) || call.teamspaceID != "tsp_1" || call.targetAgentID != "agt_b" {
+		t.Fatalf("seat lookup=%+v, want the requester's own identity and directory for tsp_1 and agt_b", call)
 	}
 }
 

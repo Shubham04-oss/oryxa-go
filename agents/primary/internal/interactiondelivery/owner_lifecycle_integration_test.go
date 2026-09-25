@@ -22,7 +22,7 @@ import (
 // teamspace does a teammate's primary agent.
 type primarySeat struct{}
 
-func (primarySeat) RequestSeat(_ context.Context, _ agents.TeamspaceActor, _, _, targetAgentID string) (agents.TeamspaceSeat, error) {
+func (primarySeat) RequestSeat(_ context.Context, _ agents.TeamspaceActor, _ agents.OrganizationDirectory, _, targetAgentID string) (agents.TeamspaceSeat, error) {
 	return agents.TeamspaceSeat{AgentID: targetAgentID, OwnerUserID: "user_b", Kind: "primary"}, nil
 }
 

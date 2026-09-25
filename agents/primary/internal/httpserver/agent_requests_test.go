@@ -201,7 +201,7 @@ func TestABlankFilterIsABadRequest(t *testing.T) {
 // refusingSeats refuses every seat lookup the way the teamspace does.
 type refusingSeats struct{ err error }
 
-func (seats refusingSeats) RequestSeat(context.Context, primaryagents.TeamspaceActor, string, string, string) (primaryagents.TeamspaceSeat, error) {
+func (seats refusingSeats) RequestSeat(context.Context, primaryagents.TeamspaceActor, primaryagents.OrganizationDirectory, string, string) (primaryagents.TeamspaceSeat, error) {
 	return primaryagents.TeamspaceSeat{}, seats.err
 }
 

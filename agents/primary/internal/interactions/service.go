@@ -92,11 +92,14 @@ type Repository interface {
 
 // Teamspaces places the addressed agent in the teamspace a request is made
 // in, against the live team directory: the requester must be on the team now,
-// and the target must hold a seat there now. teamspaces.Service implements
-// it; its errors (teamspaces.ErrNotFound, ErrForbidden, ErrInvalid,
-// ErrDisabled) reach the caller as they are.
+// the asking agent and the target must each hold a seat there now.
+// teamspaces.Service implements it; its errors (teamspaces.ErrNotFound,
+// ErrForbidden, ErrInvalid, ErrDisabled) reach the caller as they are.
 type Teamspaces interface {
-	RequestSeat(ctx context.Context, requester agents.TeamspaceActor, token, teamspaceID, targetAgentID string) (agents.TeamspaceSeat, error)
+	// RequestSeat reads the organization from directory, which Create has
+	// already loaded with the requester's own token, rather than loading it
+	// a second time.
+	RequestSeat(ctx context.Context, requester agents.TeamspaceActor, directory agents.OrganizationDirectory, teamspaceID, targetAgentID string) (agents.TeamspaceSeat, error)
 }
 
 type Config struct {
@@ -167,7 +170,7 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	if target.OwnerUserID == actor.UserID {
 		return agents.Interaction{}, fmt.Errorf("%w: cross-user requests must target another member", ErrInvalid)
 	}
-	approval, err := service.approval(ctx, actor, token, input.TeamspaceID, target)
+	approval, err := service.approval(ctx, actor, directory, input.TeamspaceID, target)
 	if err != nil {
 		return agents.Interaction{}, err
 	}
@@ -212,7 +215,7 @@ func HeldForOwner(request agents.Interaction) bool {
 // with automatic delegation decides for itself, while a teammate's primary
 // agent, or a specialist contributed with request delegation, waits for its
 // owner.
-func (service *Service) approval(ctx context.Context, actor agents.InteractionActor, token, teamspaceID string, target agents.DirectoryAgent) (string, error) {
+func (service *Service) approval(ctx context.Context, actor agents.InteractionActor, directory agents.OrganizationDirectory, teamspaceID string, target agents.DirectoryAgent) (string, error) {
 	if teamspaceID == "" {
 		return ApprovalAgent, nil
 	}
@@ -222,7 +225,7 @@ func (service *Service) approval(ctx context.Context, actor agents.InteractionAc
 	seat, err := service.teamspaces.RequestSeat(ctx, agents.TeamspaceActor{
 		OrganizationID: actor.OrganizationID, UserID: actor.UserID,
 		AgentID: actor.AgentID, AgentName: actor.AgentName, AgentKind: actor.AgentKind,
-	}, token, teamspaceID, target.ID)
+	}, directory, teamspaceID, target.ID)
 	if err != nil {
 		return "", err
 	}

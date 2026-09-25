@@ -71,7 +71,7 @@ func TestRequestSeatPlacesATeammatesPrimaryAndTheirContributions(t *testing.T) {
 		{AgentID: "agt_auto", OwnerUserID: "user_2", Kind: "specialist", DelegationMode: "automatic"},
 		{AgentID: "agt_ask", OwnerUserID: "user_2", Kind: "specialist", DelegationMode: "request"},
 	} {
-		seat, err := service.RequestSeat(context.Background(), ada, "token", "tsp_1", " "+want.AgentID+" ")
+		seat, err := service.RequestSeat(context.Background(), ada, seatDirectory(true), "tsp_1", " "+want.AgentID+" ")
 		if err != nil || seat != want {
 			t.Fatalf("RequestSeat(%s) = %+v, %v; want %+v", want.AgentID, seat, err, want)
 		}
@@ -81,18 +81,16 @@ func TestRequestSeatPlacesATeammatesPrimaryAndTheirContributions(t *testing.T) {
 // TestRequestSeatRefusesARequesterOffTheTeam: managing a team does not put
 // Ada on it, and a space she cannot see at all stays hidden.
 func TestRequestSeatRefusesARequesterOffTheTeam(t *testing.T) {
-	service, _ := New(seatSpace(), fakeDirectory{directory: seatDirectory(false)})
-	if _, err := service.RequestSeat(context.Background(), ada, "token", "tsp_1", "agt_grace"); !errors.Is(err, ErrForbidden) {
+	service, _ := New(seatSpace(), fakeDirectory{directory: seatDirectory(true)})
+	if _, err := service.RequestSeat(context.Background(), ada, seatDirectory(false), "tsp_1", "agt_grace"); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("a manager off the team: error=%v, want ErrForbidden", err)
 	}
 	hidden := seatDirectory(false)
 	hidden.Teams[0].CanManage = false
-	service, _ = New(seatSpace(), fakeDirectory{directory: hidden})
-	if _, err := service.RequestSeat(context.Background(), ada, "token", "tsp_1", "agt_grace"); !errors.Is(err, ErrNotFound) {
+	if _, err := service.RequestSeat(context.Background(), ada, hidden, "tsp_1", "agt_grace"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a stranger to the team: error=%v, want ErrNotFound", err)
 	}
-	service, _ = New(seatSpace(), fakeDirectory{directory: seatDirectory(true)})
-	if _, err := service.RequestSeat(context.Background(), ada, "token", "tsp_missing", "agt_grace"); !errors.Is(err, ErrNotFound) {
+	if _, err := service.RequestSeat(context.Background(), ada, seatDirectory(true), "tsp_missing", "agt_grace"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a missing space: error=%v, want ErrNotFound", err)
 	}
 }
@@ -103,7 +101,7 @@ func TestRequestSeatRefusesARequesterOffTheTeam(t *testing.T) {
 func TestRequestSeatRefusesATargetWithoutASeat(t *testing.T) {
 	service, _ := New(seatSpace(), fakeDirectory{directory: seatDirectory(true)})
 	for _, target := range []string{"agt_hal", "agt_private", "agt_off", "agt_left", "agt_unknown", ""} {
-		if seat, err := service.RequestSeat(context.Background(), ada, "token", "tsp_1", target); !errors.Is(err, ErrInvalid) {
+		if seat, err := service.RequestSeat(context.Background(), ada, seatDirectory(true), "tsp_1", target); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("RequestSeat(%q) = %+v, %v; want ErrInvalid", target, seat, err)
 		}
 	}
@@ -118,7 +116,7 @@ func TestRequestSeatRefusesADisabledSpace(t *testing.T) {
 			repo := seatSpace()
 			disable(&repo.spaces[0])
 			service, _ := New(repo, fakeDirectory{directory: seatDirectory(true)})
-			if _, err := service.RequestSeat(context.Background(), ada, "token", "tsp_1", "agt_grace"); !errors.Is(err, ErrDisabled) {
+			if _, err := service.RequestSeat(context.Background(), ada, seatDirectory(true), "tsp_1", "agt_grace"); !errors.Is(err, ErrDisabled) {
 				t.Fatalf("error=%v, want ErrDisabled", err)
 			}
 		})
@@ -205,5 +203,70 @@ func TestATeamspaceRequestIsApprovedAsTheTargetsOwnerChose(t *testing.T) {
 	}
 	if len(ledger.created) != 4 || len(offTeamLedger.created) != 0 {
 		t.Fatalf("refused requests were recorded: %d and %d", len(ledger.created)-4, len(offTeamLedger.created))
+	}
+}
+
+// TestRequestSeatRefusesAnAskingAgentWithoutASeat: the requester being on the
+// team is not enough; the agent asking must hold a seat of theirs there, as
+// for reading or publishing shared work — a specialist they never
+// contributed, or another member's agent, cannot file a request "in" the
+// space, while one they did contribute can.
+func TestRequestSeatRefusesAnAskingAgentWithoutASeat(t *testing.T) {
+	repo := seatSpace()
+	repo.spaces[0].Contributions = append(repo.spaces[0].Contributions, Contribution{
+		AgentID: "agt_ada_research", OwnerUserID: "user_1", Name: "Scout", Status: managedagents.StatusActive, Role: "Research", DelegationMode: DelegationRequest,
+	})
+	service, err := New(repo, fakeDirectory{directory: seatDirectory(true)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, asking := range map[string]primaryagents.TeamspaceActor{
+		"a specialist Ada never contributed": {OrganizationID: "org_1", UserID: "user_1", AgentID: "agt_ada_private", AgentName: "Ledger", AgentKind: "specialist"},
+		"Grace's primary agent, as Ada":      {OrganizationID: "org_1", UserID: "user_1", AgentID: "agt_grace", AgentName: "Cleo", AgentKind: "primary"},
+		"Ada's contribution, as a primary":   {OrganizationID: "org_1", UserID: "user_1", AgentID: "agt_ada_research", AgentName: "Scout", AgentKind: "primary"},
+	} {
+		if seat, err := service.RequestSeat(context.Background(), asking, seatDirectory(true), "tsp_1", "agt_grace"); !errors.Is(err, ErrForbidden) {
+			t.Errorf("%s: RequestSeat = %+v, %v; want ErrForbidden", name, seat, err)
+		}
+	}
+	contributed := primaryagents.TeamspaceActor{OrganizationID: "org_1", UserID: "user_1", AgentID: "agt_ada_research", AgentName: "Scout", AgentKind: "specialist"}
+	if _, err := service.RequestSeat(context.Background(), contributed, seatDirectory(true), "tsp_1", "agt_grace"); err != nil {
+		t.Fatalf("Ada's contributed specialist asking: %v", err)
+	}
+}
+
+// countingDirectory is fakeDirectory counting how often the organization is
+// loaded.
+type countingDirectory struct {
+	organizationDirectory
+	loads int
+}
+
+func (directory *countingDirectory) Load(ctx context.Context, organizationID, token string) (primaryagents.OrganizationDirectory, error) {
+	directory.loads++
+	return directory.organizationDirectory.Load(ctx, organizationID, token)
+}
+
+// TestATeamspaceRequestLoadsTheDirectoryOnce: the ledger loads the
+// organization to find the target and hands the same directory to the seat
+// check, which used to load it a second time for every request.
+func TestATeamspaceRequestLoadsTheDirectoryOnce(t *testing.T) {
+	directory := &countingDirectory{organizationDirectory: organizationDirectory{fakeDirectory{directory: seatDirectory(true)}}}
+	spaces, err := New(seatSpace(), directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests, err := interactions.New(interactions.Config{Repository: &requestLedger{}, Directory: directory, Teamspaces: spaces})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := requests.Create(context.Background(), primaryagents.InteractionActor{
+		OrganizationID: "org_1", UserID: "user_1", AgentID: "agt_ada", AgentName: "Carl", AgentKind: "primary",
+	}, "token", "once", primaryagents.InteractionCreateInput{TargetAgentID: "agt_grace", TeamspaceID: "tsp_1", Purpose: "Launch", Task: "Review."})
+	if err != nil || created.Approval != interactions.ApprovalOwner {
+		t.Fatalf("created=%+v err=%v", created, err)
+	}
+	if directory.loads != 1 {
+		t.Fatalf("the organization was loaded %d times for one request, want once", directory.loads)
 	}
 }
