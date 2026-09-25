@@ -44,17 +44,45 @@ func without(values map[string]string, names ...string) map[string]string {
 
 func TestDefinitionRegistersAConsumerWithItsOwnQueue(t *testing.T) {
 	if Definition.Name != "realtime" || Definition.EventsQueueVariable != "REALTIME_EVENTS_QUEUE_URL" ||
-		Definition.URLVariable != "" || Definition.Migrate != nil || Definition.Mount == nil {
+		Definition.URLVariable != "" || Definition.Migrate != nil || Definition.Mount == nil || Definition.Enabled == nil {
 		t.Fatalf("Definition = %+v", Definition)
 	}
 	selected, err := host.Select([]host.Definition{Definition}, []string{"realtime"})
 	if err != nil || len(selected) != 1 {
 		t.Fatalf("Select(realtime) = %v, %v", host.Names(selected), err)
 	}
-	// A production start names realtime's queue among those it must have.
-	if err := host.CheckEventQueues(selected, func(string) string { return "" }); err == nil ||
-		!strings.Contains(err.Error(), "REALTIME_EVENTS_QUEUE_URL (realtime)") {
-		t.Fatalf("CheckEventQueues() = %v", err)
+	// Off, realtime keeps no production start from running, so a release can
+	// carry it before its queue exists.
+	if err := host.CheckEventQueues(selected, func(string) string { return "" }); err != nil {
+		t.Fatalf("CheckEventQueues() with realtime off = %v", err)
+	}
+	// Being switched on, a production start names its queue among those it
+	// must have.
+	for _, setting := range []string{"REALTIME_WORKER_URL", "REALTIME_PURGE_SECRET"} {
+		values := map[string]string{setting: configured()[setting]}
+		if err := host.CheckEventQueues(selected, func(name string) string { return values[name] }); err == nil ||
+			!strings.Contains(err.Error(), "REALTIME_EVENTS_QUEUE_URL (realtime)") {
+			t.Fatalf("%s set: CheckEventQueues() = %v", setting, err)
+		}
+	}
+}
+
+func TestRealtimeIsOnOnceEitherOfItsOwnSettingsIsSet(t *testing.T) {
+	for name, test := range map[string]struct {
+		values map[string]string
+		on     bool
+	}{
+		"nothing set": {map[string]string{}, false},
+		// What production's task holds while realtime_purge is off.
+		"only its queue":   {map[string]string{"REALTIME_EVENTS_QUEUE_URL": configured()["REALTIME_EVENTS_QUEUE_URL"]}, false},
+		"blank settings":   {map[string]string{"REALTIME_WORKER_URL": " ", "REALTIME_PURGE_SECRET": "\n"}, false},
+		"the Worker's URL": {map[string]string{"REALTIME_WORKER_URL": configured()["REALTIME_WORKER_URL"]}, true},
+		"the secret":       {map[string]string{"REALTIME_PURGE_SECRET": configured()["REALTIME_PURGE_SECRET"]}, true},
+		"everything":       {configured(), true},
+	} {
+		if got := Definition.Enabled(func(name string) string { return test.values[name] }); got != test.on {
+			t.Errorf("%s: Enabled() = %v, want %v", name, got, test.on)
+		}
 	}
 }
 

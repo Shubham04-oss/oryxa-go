@@ -25,7 +25,16 @@ const Name = "realtime"
 // Definition is how a host builds realtime. Nothing calls it over HTTP and it
 // keeps nothing in PostgreSQL, so it names no URL variable and has no
 // Migrate.
-var Definition = host.Definition{Name: Name, EventsQueueVariable: "REALTIME_EVENTS_QUEUE_URL", Mount: Mount}
+var Definition = host.Definition{Name: Name, EventsQueueVariable: "REALTIME_EVENTS_QUEUE_URL", Enabled: enabled, Mount: Mount}
+
+// enabled reports whether realtime is being switched on: whether the Worker's
+// URL or the secret it shares is set. Until one is, realtime ships off and
+// hears nothing, so a production start does not wait for its queue; once one
+// is, the queue is required like any consumer's, and Mount says what else is
+// missing.
+func enabled(getenv func(string) string) bool {
+	return strings.TrimSpace(getenv("REALTIME_WORKER_URL")) != "" || strings.TrimSpace(getenv("REALTIME_PURGE_SECRET")) != ""
+}
 
 // Mount assembles realtime on what the host shares. It is off until the
 // Worker's URL, the secret the Worker shares and the queue are all set: a

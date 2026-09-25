@@ -85,7 +85,7 @@ To consume another event: add it to `AuthSubscriptions` and `requestFor` in `int
 | `REALTIME_EVENTS_QUEUE_URL` | The queue the provisioner prints |
 | `REALTIME_EVENTS_QUEUE_NAME` | The provisioner's name for that queue: `realtime-events` unless set |
 
-Realtime runs only once the first three are set. A process running every service says once which are missing and runs without realtime (`realtime is off`). A process given `ORYXA_SERVICES=realtime`, alone or in a list, refuses to start instead. A value that is set but malformed, such as a relative URL or a short secret, always refuses. As for every consumer, a production start (`DEPLOYMENT_ENVIRONMENT=production`) refuses while `REALTIME_EVENTS_QUEUE_URL` is unset, even with realtime off.
+Realtime runs only once the first three are set. A process running every service says once which are missing and runs without realtime (`realtime is off`). A process given `ORYXA_SERVICES=realtime`, alone or in a list, refuses to start instead. A value that is set but malformed, such as a relative URL or a short secret, always refuses. A production start (`DEPLOYMENT_ENVIRONMENT=production`) refuses while `REALTIME_EVENTS_QUEUE_URL` is unset, as for every consumer, but only once `REALTIME_WORKER_URL` or `REALTIME_PURGE_SECRET` is set. With neither, realtime is off and hears nothing, so a release can carry it before its queue exists.
 
 ## Provision
 

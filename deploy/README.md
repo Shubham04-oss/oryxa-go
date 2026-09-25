@@ -161,19 +161,13 @@ organization or it is deleted. It calls
 `REALTIME_PURGE_SECRET`, a new secret that the Worker holds too. It ships off.
 `realtime_purge` turns it on.
 
-**Before approving the first release that carries it**, apply once:
-
-```sh
-(cd deploy/production && tofu apply)
-```
-
-This gives the task `REALTIME_EVENTS_QUEUE_URL`, lets it read that queue, and
-adds the queue's backlog and dead-letter alarms. A production start refuses
-while any consumer's queue variable is unset, realtime's included, even while
-realtime is off. A release approved before this apply never turns healthy, and
-the circuit breaker rolls it back. Nothing is lost, but nothing ships until the
-apply runs. After the release, the task logs `REALTIME_WORKER_URL and
-REALTIME_PURGE_SECRET are not set: realtime is off`.
+Releasing it needs nothing first. A production start requires realtime's
+queue only once `REALTIME_WORKER_URL` or `REALTIME_PURGE_SECRET` is set, and
+while `realtime_purge` is off neither is, so a release carrying realtime starts
+whether or not an apply has given the task `REALTIME_EVENTS_QUEUE_URL`. The
+task logs `realtime is off`, naming what is not set. The next `tofu apply`,
+whenever it runs, gives the task the queue's variable and lets it read that
+queue.
 
 **Turning it on.** The Worker's endpoint must be live, holding the secret,
 before realtime is on. Until then the Worker answers `404` to the purge, and

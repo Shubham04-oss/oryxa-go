@@ -46,7 +46,10 @@ Eleven services consume events, each from its own queue: `AGENTS_EVENTS_QUEUE_UR
 `REALTIME_EVENTS_QUEUE_URL` and `TEAMS_EVENTS_QUEUE_URL`, each made by its
 service's `infra/*/cmd/provision`. Without its queue a service only warns — and then
 never hears the events that remove what people deleted — so in production the
-process refuses to start instead, naming every queue that is missing.
+process refuses to start instead, naming every queue that is missing. Realtime
+is the exception while it is off (neither `REALTIME_WORKER_URL` nor
+`REALTIME_PURGE_SECRET` set): it hears nothing then, so its queue is not
+required.
 
 Services still reach one another over HTTP, exactly as when each ran alone.
 A URL variable naming a service the process runs — `AUTH_URL`, `TEAMS_URL`,
