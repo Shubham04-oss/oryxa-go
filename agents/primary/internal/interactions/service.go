@@ -47,13 +47,15 @@ const (
 	DecidedBySystem = "system"
 
 	// ApprovalAgent lets the addressed agent, or its member's primary agent,
-	// decide: every request made outside a teamspace, and one to a specialist
-	// its owner contributed to the teamspace with automatic delegation.
+	// decide: every request made outside a teamspace, and one made in a
+	// teamspace to a specialist its owner contributed there with automatic
+	// delegation, for as long as they keep it so.
 	ApprovalAgent = "agent"
 	// ApprovalOwner holds the request for the addressed agent's member, who
-	// decides it in their own session and never through an agent: one to a
-	// teammate's primary agent, and one to a specialist contributed with
-	// request delegation.
+	// decides it in their own session and never through an agent: one made in
+	// a teamspace to a teammate's primary agent, or to a specialist
+	// contributed there with request delegation, and one its owner has since
+	// taken deciding back for, or that could not be read again.
 	ApprovalOwner = "owner"
 
 	defaultExpiry   = 24 * time.Hour

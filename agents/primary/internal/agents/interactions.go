@@ -100,10 +100,12 @@ type Interaction struct {
 	// TeamspaceID is the shared teamspace the request was made in; it is
 	// absent for a request made outside one.
 	TeamspaceID string `json:"teamspace_id,omitempty"`
-	// Approval is who decides the request, fixed from the target's own
+	// Approval is who decides the request, set from the target's own
 	// standing when it was made: "agent" lets the addressed agent (or its
 	// member's primary agent) decide, while "owner" holds it for that member
-	// to decide in their own session.
+	// to decide in their own session. A request made in a teamspace becomes
+	// "owner" if its member later takes deciding back; nothing turns "owner"
+	// back into "agent".
 	Approval             string                   `json:"approval"`
 	Requester            InteractionParty         `json:"requester"`
 	Target               InteractionParty         `json:"target"`
@@ -203,7 +205,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 		return Toolbox{}, err
 	}
 	decide, err := functiontool.New(functiontool.Config{
-		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. A request whose approval is \"owner\" is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it.",
+		Name: "interactions_decide", Description: "Approves or rejects a request addressed to this agent. A primary agent may mediate requests for its member's specialists. Approved tools and permissions must be subsets of what was requested. A request whose approval is \"owner\" is held for the member to decide themself in Oryxa: no agent may decide it, and this tool refuses it. A request made in a teamspace is checked against it again first, and may turn out held for the member, or closed by Oryxa because it no longer stands there.",
 	}, tools.decide)
 	if err != nil {
 		return Toolbox{}, err
