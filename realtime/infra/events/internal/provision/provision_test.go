@@ -12,14 +12,25 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/realtime/internal/purge"
 )
 
-func TestEventPatternMatchesTheEndsOfMemberships(t *testing.T) {
+// The rule matches each source's own endings, and only from that source: an
+// agents detail type claimed by auth, or the other way round, matches
+// nothing.
+func TestEventPatternMatchesTheEndsOfMembershipsAndTeamspaces(t *testing.T) {
 	pattern, err := EventPattern()
 	if err != nil {
 		t.Fatalf("EventPattern() error = %v", err)
 	}
 	assertJSONEqual(t, pattern, `{
-		"source": ["oryxa.auth"],
-		"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
+		"$or": [
+			{
+				"source": ["oryxa.agents"],
+				"detail-type": ["agents.teamspace.deleted.v1", "agents.teamspace.member.removed.v1"]
+			},
+			{
+				"source": ["oryxa.auth"],
+				"detail-type": ["auth.member.removed.v1", "auth.organization.deleted.v1"]
+			}
+		]
 	}`)
 }
 

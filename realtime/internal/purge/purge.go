@@ -2,7 +2,9 @@
 // the direct messages and teamspace side conversations it keeps only in its
 // Durable Objects. One call purges what a member wrote in an organization, or
 // everything the organization kept, up to when the membership or the
-// organization ended.
+// organization ended. In one teamspace, it purges a member's side
+// conversations, when they left it, as a member's are purged, or all of a
+// deleted teamspace's, as an organization's are.
 //
 // Every call is signed with a secret the Worker holds too, so nothing but
 // this service can make the Worker delete anything:
@@ -13,8 +15,11 @@
 //	X-Oryxa-Signature: v1=<lowercase hex HMAC-SHA256(secret, timestamp + "." + body)>
 //
 //	{"event_id":"…","organization_id":"…","scope":"member"|"organization","user_id":"…","removed_at":"<RFC 3339, UTC>"}
+//	{"event_id":"…","organization_id":"…","scope":"teamspace_member"|"teamspace","user_id":"…","teamspace_id":"…","removed_at":"<RFC 3339, UTC>"}
 //
-// The Worker answers 204 once the purge is done. The purge is idempotent, so
+// teamspace_id is there exactly when the scope is a teamspace's, so a member's
+// or an organization's body is what it was before teamspaces had purges. The
+// Worker answers 204 once the purge is done. The purge is idempotent, so
 // sending one again is always safe.
 package purge
 
@@ -55,7 +60,9 @@ const (
 	MemberTimeout = 30 * time.Second
 	// OrganizationTimeout bounds the call for an organization's purge, which
 	// the Worker answers only once it has purged every member's
-	// conversations, so a large organization's takes far longer.
+	// conversations, so a large organization's takes far longer. A deleted
+	// teamspace's purge visits every member's conversations too, and has as
+	// long.
 	OrganizationTimeout = 120 * time.Second
 	// userAgent names the caller to the Worker and to Cloudflare in front of
 	// it, rather than Go's default.
@@ -63,8 +70,10 @@ const (
 )
 
 // Scope says what a purge takes: one member's conversations in the
-// organization, or all of the organization's. It is always sent, so an empty
-// user_id can never be read as the whole organization by accident.
+// organization, or all of the organization's, or, in one teamspace, one
+// member's side conversations or all of them. It is always sent, so an empty
+// user_id can never be read as the whole organization, or the whole
+// teamspace, by accident.
 type Scope string
 
 const (
@@ -73,30 +82,66 @@ const (
 	// ScopeOrganization purges everything the organization kept. UserID is
 	// empty.
 	ScopeOrganization Scope = "organization"
+	// ScopeTeamspaceMember purges UserID's side conversations in
+	// TeamspaceID, which they left, as ScopeMember purges theirs.
+	ScopeTeamspaceMember Scope = "teamspace_member"
+	// ScopeTeamspace purges every side conversation in TeamspaceID, which
+	// was deleted, as ScopeOrganization purges the organization's. UserID is
+	// empty.
+	ScopeTeamspace Scope = "teamspace"
 )
 
+// ofTeamspace reports whether scope is one of a teamspace's, which name it.
+func (scope Scope) ofTeamspace() bool {
+	return scope == ScopeTeamspaceMember || scope == ScopeTeamspace
+}
+
 // Request is one purge, sent as JSON with its keys in this order and every
-// one present, UserID included when it is empty. EventID is the auth event
-// that asked for the purge, by which the Worker can tell a repeat. RemovedAt
-// is when the membership or the organization ended: the Worker deletes only
-// what was written then or before, so a purge that runs late, after the
-// member was invited back, leaves what they wrote since. It is sent in UTC,
-// in RFC 3339 with as much of a fraction of a second as it has, and none when
-// it has none.
+// one present, UserID included when it is empty, except TeamspaceID, which is
+// sent only for a teamspace's purge. EventID is the event that asked for the
+// purge, auth's or, for a teamspace's, agents', by which the Worker can tell a
+// repeat. RemovedAt is when the membership, the organization or the teamspace
+// ended: in a member's purge the Worker deletes only what was written then or
+// before, so a purge that runs late, after the member was invited back,
+// leaves what they wrote since. It is sent in UTC, in RFC 3339 with as much
+// of a fraction of a second as it has, and none when it has none.
 type Request struct {
 	EventID        string    `json:"event_id"`
 	OrganizationID string    `json:"organization_id"`
 	Scope          Scope     `json:"scope"`
 	UserID         string    `json:"user_id"`
+	TeamspaceID    string    `json:"teamspace_id,omitempty"`
 	RemovedAt      time.Time `json:"removed_at"`
 }
 
 // timeout is how long the Worker has to answer request.
 func (request Request) timeout() time.Duration {
-	if request.Scope == ScopeOrganization {
+	if request.Scope == ScopeOrganization || request.Scope == ScopeTeamspace {
 		return OrganizationTimeout
 	}
 	return MemberTimeout
+}
+
+// check refuses a purge the Worker could read more widely than it was meant:
+// its scope, the member and the teamspace must agree.
+func (request Request) check() error {
+	switch {
+	case request.EventID == "" || request.OrganizationID == "":
+		return errors.New("a purge names the event that asked for it and its organization")
+	case request.Scope != ScopeMember && request.Scope != ScopeOrganization && !request.Scope.ofTeamspace():
+		return fmt.Errorf("a purge's scope is member, organization, teamspace_member or teamspace, not %q", request.Scope)
+	case (request.Scope == ScopeMember || request.Scope == ScopeTeamspaceMember) && request.UserID == "":
+		return errors.New("a member's purge names the member")
+	case (request.Scope == ScopeOrganization || request.Scope == ScopeTeamspace) && request.UserID != "":
+		return errors.New("an organization's or a teamspace's purge names no member")
+	case request.Scope.ofTeamspace() && request.TeamspaceID == "":
+		return errors.New("a teamspace's purge names the teamspace")
+	case !request.Scope.ofTeamspace() && request.TeamspaceID != "":
+		return errors.New("only a teamspace's purge names a teamspace")
+	case request.RemovedAt.IsZero():
+		return errors.New("a purge says when the membership ended")
+	}
+	return nil
 }
 
 // Sign is the X-Oryxa-Signature value for body sent at timestamp: v1= and the
@@ -181,17 +226,8 @@ func New(config Config) (*Client, error) {
 func (client *Client) Purge(ctx context.Context, request Request) error {
 	// Nothing here builds a purge the Worker could read more widely than it
 	// was meant, and nothing ever should: each is refused before it is sent.
-	switch {
-	case request.EventID == "" || request.OrganizationID == "":
-		return errors.New("a purge names the event that asked for it and its organization")
-	case request.Scope == ScopeMember && request.UserID == "":
-		return errors.New("a member's purge names the member")
-	case request.Scope == ScopeOrganization && request.UserID != "":
-		return errors.New("an organization's purge names no member")
-	case request.Scope != ScopeMember && request.Scope != ScopeOrganization:
-		return fmt.Errorf("a purge's scope is member or organization, not %q", request.Scope)
-	case request.RemovedAt.IsZero():
-		return errors.New("a purge says when the membership ended")
+	if err := request.check(); err != nil {
+		return err
 	}
 	request.RemovedAt = request.RemovedAt.UTC()
 	body, err := json.Marshal(request)

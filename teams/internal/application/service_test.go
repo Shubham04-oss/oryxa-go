@@ -101,6 +101,135 @@ func TestOrgAdminAndTeamAdminShareManageControl(t *testing.T) {
 	}
 }
 
+// TestAgentActingForAnOrgAdminSeesOnlyItsMembersTeams: an org admin's own
+// session sees and can manage every team. A token minted for an agent acting
+// for that same admin must not: it gets a plain member's reach, because what
+// it reads can end up in front of someone the admin never showed it to. It
+// sees a team only when its member actually belongs to it, and can_manage is
+// true only where its member is that team's own admin — never merely because
+// teams would let the admin's own session manage any team.
+func TestAgentActingForAnOrgAdminSeesOnlyItsMembersTeams(t *testing.T) {
+	service, _, _ := newService()
+	ctx := context.Background()
+	// Alpha: user-admin created it, so is its own team admin.
+	alpha, err := service.CreateTeam(ctx, creds("user-admin"), "org_1", CreateTeamInput{Name: "Alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Beta: user-owner's team; user-admin is added as a plain member.
+	beta, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddMember(ctx, creds("user-owner"), "org_1", beta.ID, AddMemberInput{UserID: "user-admin", Role: domain.RoleMember}); err != nil {
+		t.Fatal(err)
+	}
+	// Gamma: user-owner's team; user-admin is never placed on it.
+	gamma, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Gamma"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The admin's own session still sees and manages all three.
+	live, err := service.Teams(ctx, creds("user-admin"), "org_1")
+	if err != nil || len(live) != 3 {
+		t.Fatalf("admin's own session teams = %+v, err = %v", live, err)
+	}
+	if _, err := service.Team(ctx, creds("user-admin"), "org_1", gamma.ID); err != nil {
+		t.Fatalf("admin's own session should reach Gamma: %v", err)
+	}
+
+	// The agent acting for the same admin sees only Alpha and Beta.
+	asAgent, err := service.Teams(ctx, agentCreds("user-admin"), "org_1")
+	if err != nil || len(asAgent) != 2 {
+		t.Fatalf("admin's agent teams = %+v, err = %v", asAgent, err)
+	}
+	for _, team := range asAgent {
+		switch team.ID {
+		case alpha.ID:
+			if !team.CanManage || team.Role != domain.RoleAdmin {
+				t.Fatalf("agent on Alpha (its member's own team) = %+v, want can_manage and team admin", team)
+			}
+		case beta.ID:
+			if team.CanManage || team.Role != domain.RoleMember {
+				t.Fatalf("agent on Beta (its member is a plain team member) = %+v, want no can_manage", team)
+			}
+		default:
+			t.Fatalf("agent should not see team %+v", team)
+		}
+	}
+
+	// Reading Gamma directly, and reading Beta's can_manage, must agree with
+	// the list above: an admin's agent can't list OR read a team its member
+	// isn't on, and can_manage on one it can read is true only as team admin.
+	if _, err := service.Team(ctx, agentCreds("user-admin"), "org_1", gamma.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("admin's agent read of Gamma error = %v, want not found", err)
+	}
+	betaDetail, err := service.Team(ctx, agentCreds("user-admin"), "org_1", beta.ID)
+	if err != nil || betaDetail.CanManage {
+		t.Fatalf("admin's agent read of Beta = %+v, err = %v, want can_manage false", betaDetail, err)
+	}
+	alphaDetail, err := service.Team(ctx, agentCreds("user-admin"), "org_1", alpha.ID)
+	if err != nil || !alphaDetail.CanManage {
+		t.Fatalf("admin's agent read of Alpha = %+v, err = %v, want can_manage true", alphaDetail, err)
+	}
+}
+
+// TestAgentActingForAnOrgAdminCannotWriteBeyondItsTeamAdminReach: the writes
+// teams gates on CanManageTeam or CanCreateTeam must refuse an admin's agent
+// everywhere its member is not itself a team admin, even though the same
+// writes succeed both for the admin's own session and for the agent where
+// its member genuinely is that team's admin.
+func TestAgentActingForAnOrgAdminCannotWriteBeyondItsTeamAdminReach(t *testing.T) {
+	service, _, _ := newService()
+	ctx := context.Background()
+	alpha, err := service.CreateTeam(ctx, creds("user-admin"), "org_1", CreateTeamInput{Name: "Alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beta, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Beta"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AddMember(ctx, creds("user-owner"), "org_1", beta.ID, AddMemberInput{UserID: "user-admin", Role: domain.RoleMember}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Creating a top-level team is admin-only, and the agent is not one.
+	if _, err := service.CreateTeam(ctx, agentCreds("user-admin"), "org_1", CreateTeamInput{Name: "Delta"}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("admin's agent CreateTeam() error = %v, want forbidden", err)
+	}
+	if _, err := service.CreateTeam(ctx, creds("user-admin"), "org_1", CreateTeamInput{Name: "Delta"}); err != nil {
+		t.Fatalf("admin's own session CreateTeam() error = %v, want success", err)
+	}
+
+	// Beta: the admin's own session may rename, add members to, and delete
+	// it purely on org-wide reach; the agent may not, since its member is
+	// only a plain member there.
+	if _, err := service.UpdateTeam(ctx, agentCreds("user-admin"), "org_1", beta.ID, UpdateTeamInput{Name: "Nope"}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("admin's agent UpdateTeam(Beta) error = %v, want forbidden", err)
+	}
+	if _, err := service.AddMember(ctx, agentCreds("user-admin"), "org_1", beta.ID, AddMemberInput{UserID: "user-outsider", Role: domain.RoleMember}); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("admin's agent AddMember(Beta) error = %v, want forbidden", err)
+	}
+	if err := service.DeleteTeam(ctx, agentCreds("user-admin"), "org_1", beta.ID); !errors.Is(err, domain.ErrForbidden) {
+		t.Fatalf("admin's agent DeleteTeam(Beta) error = %v, want forbidden", err)
+	}
+	if _, err := service.UpdateTeam(ctx, creds("user-admin"), "org_1", beta.ID, UpdateTeamInput{Name: "Renamed"}); err != nil {
+		t.Fatalf("admin's own session UpdateTeam(Beta) error = %v, want success", err)
+	}
+
+	// Alpha: the agent's member is genuinely Alpha's own team admin, so the
+	// same writes succeed there — an agent still keeps its member's real
+	// team-admin standing, only not the org-wide reach.
+	if _, err := service.UpdateTeam(ctx, agentCreds("user-admin"), "org_1", alpha.ID, UpdateTeamInput{Name: "Alpha2"}); err != nil {
+		t.Fatalf("admin's agent UpdateTeam(Alpha) error = %v, want success", err)
+	}
+	if _, err := service.AddMember(ctx, agentCreds("user-admin"), "org_1", alpha.ID, AddMemberInput{UserID: "user-outsider", Role: domain.RoleMember}); err != nil {
+		t.Fatalf("admin's agent AddMember(Alpha) error = %v, want success", err)
+	}
+}
+
 func TestAddMemberMustBelongToOrganization(t *testing.T) {
 	service, _, _ := newService()
 	ctx := context.Background()
@@ -446,6 +575,12 @@ func newService() (*Service, *fakeStore, *fakeDirectory) {
 			"Bearer user-admin":    {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin},
 			"Bearer user-member":   {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-member", Email: "member@example.com", Role: domain.OrgRoleMember},
 			"Bearer user-outsider": {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-outsider", Email: "out@example.com", Role: domain.OrgRoleMember},
+			// Agent tokens: same identity and org role as the live session
+			// above, plus Agent — auth mints these for an agent acting for
+			// the member rather than the member themselves.
+			"Bearer agent-for-user-owner":  {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner, Agent: true},
+			"Bearer agent-for-user-admin":  {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-admin", Email: "admin@example.com", Role: domain.OrgRoleAdmin, Agent: true},
+			"Bearer agent-for-user-member": {OrganizationID: "org_1", OrganizationName: "Acme", UserID: "user-member", Email: "member@example.com", Role: domain.OrgRoleMember, Agent: true},
 		},
 		members: []domain.OrgMembership{
 			{OrganizationID: "org_1", UserID: "user-owner", Email: "owner@example.com", Role: domain.OrgRoleOwner},

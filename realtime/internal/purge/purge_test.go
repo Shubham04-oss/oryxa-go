@@ -22,7 +22,10 @@ import (
 //
 // The first two are the ones agreed with the Worker's side. The third is the
 // shape a real event takes: auth's clock reads nanoseconds, and removed_at
-// keeps them.
+// keeps them. The last two are a teamspace's, which the contract both sides
+// build against pins as they are: a member who left one, and one deleted.
+// Only they carry teamspace_id, so the first three bodies are what they were
+// before teamspaces had purges.
 const (
 	goldenSecret    = "5f2b8e1c9a7d4036b1e8c2f94a6d0e3b7c1f5a9d2e8b4c6f0a3d7e1b9c5f2a84"
 	goldenTimestamp = int64(1790208000) // 2026-09-24T00:00:00Z
@@ -62,6 +65,21 @@ var goldenVectors = []struct {
 			RemovedAt: time.Date(2026, time.September, 24, 15, 30, 0, 123456789, ist)},
 		body:      `{"event_id":"evt_Zx8rP0kQ3mB7tY2wN5cV1A","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","removed_at":"2026-09-24T10:00:00.123456789Z"}`,
 		signature: "v1=0828ea12f32328f23603c3f910c57474459a38a6fe79fce8afcfa12bf5780548",
+	},
+	{
+		name: "a member who left a teamspace",
+		request: Request{EventID: "evt_Tm5sPq2Lx8vB3nK7cR1dWa", OrganizationID: "org_2fQx9LmR7vTk4WcA",
+			Scope: ScopeTeamspaceMember, UserID: "6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f", TeamspaceID: "tsp_JixqQoilaC2tgma5jqRHtg",
+			RemovedAt: removedAt},
+		body:      `{"event_id":"evt_Tm5sPq2Lx8vB3nK7cR1dWa","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"teamspace_member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","teamspace_id":"tsp_JixqQoilaC2tgma5jqRHtg","removed_at":"2026-09-24T10:00:00Z"}`,
+		signature: "v1=3620d1cb2086b41144ba9ff1ca76fb29ddd528bbd377751c6501db56a0b6ef1a",
+	},
+	{
+		name: "a teamspace deleted",
+		request: Request{EventID: "evt_Ts9kW2mQ4xN7vB1cL5pR8e", OrganizationID: "org_2fQx9LmR7vTk4WcA",
+			Scope: ScopeTeamspace, TeamspaceID: "tsp_JixqQoilaC2tgma5jqRHtg", RemovedAt: removedAt},
+		body:      `{"event_id":"evt_Ts9kW2mQ4xN7vB1cL5pR8e","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"teamspace","user_id":"","teamspace_id":"tsp_JixqQoilaC2tgma5jqRHtg","removed_at":"2026-09-24T10:00:00Z"}`,
+		signature: "v1=78cbbeee18c9c16fd29dbc722a730faf37526bed853126b8d8d03817983334ec",
 	},
 }
 
@@ -300,7 +318,9 @@ func (answer roundTripper) RoundTrip(request *http.Request) (*http.Response, err
 }
 
 // The Worker answers an organization's purge only once it has purged every
-// member, so that call gets longer than a member's.
+// member, so that call gets longer than a member's. A deleted teamspace's
+// visits every member too, and gets as long; a member's in one teamspace is a
+// member's.
 func TestPurgeGivesAnOrganizationLongerThanAMember(t *testing.T) {
 	var given []time.Duration
 	client, err := New(Config{WorkerURL: "https://app.oryxa.in", Secret: goldenSecret, HTTP: &http.Client{
@@ -317,14 +337,17 @@ func TestPurgeGivesAnOrganizationLongerThanAMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	member, organization := goldenVectors[0].request, goldenVectors[1].request
-	for _, request := range []Request{member, organization} {
+	teamspaceMember, teamspace := goldenVectors[3].request, goldenVectors[4].request
+	for _, request := range []Request{member, organization, teamspaceMember, teamspace} {
 		if err := client.Purge(context.Background(), request); err != nil {
 			t.Fatal(err)
 		}
 	}
 	within := func(got, bound time.Duration) bool { return got <= bound && got > bound-time.Second }
-	if len(given) != 2 || !within(given[0], MemberTimeout) || !within(given[1], OrganizationTimeout) {
-		t.Fatalf("the calls were given %v, want %s for a member's and %s for an organization's", given, MemberTimeout, OrganizationTimeout)
+	if len(given) != 4 || !within(given[0], MemberTimeout) || !within(given[1], OrganizationTimeout) ||
+		!within(given[2], MemberTimeout) || !within(given[3], OrganizationTimeout) {
+		t.Fatalf("the calls were given %v, want %s for a member's, in the organization or a teamspace, and %s for an organization's or a teamspace's",
+			given, MemberTimeout, OrganizationTimeout)
 	}
 }
 
@@ -346,8 +369,9 @@ func TestPurgeDoesNotFollowARedirect(t *testing.T) {
 }
 
 // Nothing the Worker could read as more than was meant is ever sent: above
-// all, an empty user_id is never taken for the whole organization, because
-// the scope says which it is.
+// all, an empty user_id is never taken for the whole organization, or the
+// whole teamspace, because the scope says which it is, and a teamspace is
+// named exactly when the scope is one of a teamspace's.
 func TestPurgeRefusesAPurgeWithoutItsScope(t *testing.T) {
 	fake := newWorker(t, http.StatusNoContent, "")
 	client := goldenClient(t, fake.URL)
@@ -362,6 +386,18 @@ func TestPurgeRefusesAPurgeWithoutItsScope(t *testing.T) {
 		"an organization's with one": func(request *Request) { request.Scope = ScopeOrganization },
 		"no time":                    func(request *Request) { request.RemovedAt = time.Time{} },
 		"nothing":                    func(request *Request) { *request = Request{} },
+		"a member's in a teamspace":  func(request *Request) { request.TeamspaceID = "tsp_1" },
+		"an organization's in a teamspace": func(request *Request) {
+			request.Scope, request.UserID, request.TeamspaceID = ScopeOrganization, "", "tsp_1"
+		},
+		"a teamspace member's without the teamspace": func(request *Request) { request.Scope = ScopeTeamspaceMember },
+		"a teamspace member's without them": func(request *Request) {
+			request.Scope, request.UserID, request.TeamspaceID = ScopeTeamspaceMember, "", "tsp_1"
+		},
+		"a teamspace's without it": func(request *Request) { request.Scope, request.UserID = ScopeTeamspace, "" },
+		"a teamspace's with a member": func(request *Request) {
+			request.Scope, request.TeamspaceID = ScopeTeamspace, "tsp_1"
+		},
 	} {
 		request := member
 		edit(&request)

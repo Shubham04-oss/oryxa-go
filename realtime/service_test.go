@@ -241,6 +241,46 @@ func TestRealtimeVerifiesAPurgeForAsLongAsItCanWait(t *testing.T) {
 	}
 }
 
+// Agents' teamspace endings are verified as auth's are: against the key of
+// the service their source names, agents', which the host's registry holds
+// for every service in the process, and for as long as a purge can wait. An
+// event claiming agents' source that auth signed is refused.
+func TestRealtimeVerifiesAgentsTeamspaceEvents(t *testing.T) {
+	signedAt := time.Now()
+	clock := signedAt
+	registry := eventauth.NewRegistry(nil, func() time.Time { return clock })
+	agents, err := registry.Signer("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := registry.Signer("auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const source, occurredAt = "oryxa.agents", "2026-09-24T12:00:00Z"
+	for detailType, data := range map[string]string{
+		"agents.teamspace.member.removed.v1": `{"organization_id":"org_1","teamspace_id":"tsp_1","team_id":"team_1","user_id":"user-2","removed_at":"2026-09-24T12:00:00Z"}`,
+		"agents.teamspace.deleted.v1":        `{"teamspace_id":"tsp_1","organization_id":"org_1","changed_at":"2026-09-24T12:00:00Z"}`,
+	} {
+		clock = signedAt
+		sig, err := agents.Sign(source, detailType, "evt_1", 1, occurredAt, []byte(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		forged, err := auth.Sign(source, detailType, "evt_1", 1, occurredAt, []byte(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		clock = signedAt.Add(20 * 24 * time.Hour)
+		if err := verifier(registry).Verify(source, detailType, "evt_1", 1, occurredAt, []byte(data), sig); err != nil {
+			t.Fatalf("%s signed by agents 20 days ago was refused: %v", detailType, err)
+		}
+		if err := verifier(registry).Verify(source, detailType, "evt_1", 1, occurredAt, []byte(data), forged); !errors.Is(err, eventauth.ErrUnverified) {
+			t.Fatalf("%s from agents' source, signed by auth = %v, want it refused", detailType, err)
+		}
+	}
+}
+
 // The host serves realtime's route only while realtime is on; off, the path
 // is nobody's. Either way the host answers for it on /healthz.
 func TestTheHostAssemblesRealtime(t *testing.T) {

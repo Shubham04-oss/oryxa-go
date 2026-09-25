@@ -146,6 +146,38 @@ func TestSetNotificationIsTheMembersOwnSwitch(t *testing.T) {
 	}
 }
 
+// TestCallToolAsAnAdminsAgentReachesOnlyItsMembersTeams: list_teams and
+// call_team are the tools an AI actually calls, so an admin's agent must not
+// get the admin's org-wide reach through them either — it lists and calls
+// only the teams its member genuinely belongs to.
+func TestCallToolAsAnAdminsAgentReachesOnlyItsMembersTeams(t *testing.T) {
+	service, _, _ := newService()
+	ctx := context.Background()
+	alpha, err := service.CreateTeam(ctx, creds("user-admin"), "org_1", CreateTeamInput{Name: "Alpha"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateTeam(ctx, creds("user-owner"), "org_1", CreateTeamInput{Name: "Gamma"}); err != nil {
+		t.Fatal(err)
+	}
+
+	listed, err := service.CallTool(ctx, agentCreds("user-admin"), "org_1", domain.ToolListTeams, json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("list_teams error = %v", err)
+	}
+	if handles := listed.([]domain.TeamHandle); len(handles) != 1 || handles[0].ID != alpha.ID {
+		t.Fatalf("admin's agent list_teams = %+v, want only Alpha", handles)
+	}
+
+	if _, err := service.CallTool(ctx, agentCreds("user-admin"), "org_1", domain.ToolCallTeam, json.RawMessage(`{"query":"Gamma"}`)); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("admin's agent call_team(Gamma) error = %v, want not found", err)
+	}
+	called, err := service.CallTool(ctx, agentCreds("user-admin"), "org_1", domain.ToolCallTeam, json.RawMessage(`{"query":"Alpha"}`))
+	if err != nil || called.(domain.TeamHandle).ID != alpha.ID {
+		t.Fatalf("admin's agent call_team(Alpha) = %+v, err = %v", called, err)
+	}
+}
+
 func TestCallToolConcealsTeamsTheCallerCannotSee(t *testing.T) {
 	service, store, _ := newService()
 	ctx := context.Background()

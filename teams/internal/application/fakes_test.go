@@ -443,3 +443,11 @@ func (directory *fakeDirectory) Members(_ context.Context, organizationID string
 func creds(userID string) authclient.Credentials {
 	return authclient.Credentials{Authorization: "Bearer " + userID}
 }
+
+// agentCreds is a token auth minted for an agent acting for userID, rather
+// than that member's own session: same identity and org role, plus Agent.
+// newService keys fakeDirectory.callers on the raw credential, so this is a
+// distinct entry from creds(userID) even though both resolve to userID.
+func agentCreds(userID string) authclient.Credentials {
+	return authclient.Credentials{Authorization: "Bearer agent-for-" + userID}
+}

@@ -2,21 +2,27 @@ package teamspaces
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
+	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
-// TestStoreLifecycle needs the shared local PostgreSQL:
+// testStores opens the PostgreSQL the integration tests share, with the
+// teamspaces store's tables and those it relies on migrated, and returns the
+// store and the managed agents' store beside it. They need:
 //
 //	AGENTS_PRIMARY_TEST_DATABASE_URL='postgres://oryxa:oryxa-dev-password@localhost:5435/oryxa?sslmode=disable' go test ./agents/primary/internal/teamspaces
-func TestStoreLifecycle(t *testing.T) {
+func testStores(t *testing.T) (*postgreskit.Database, *Store, *managedagents.Store) {
+	t.Helper()
 	databaseURL := os.Getenv("AGENTS_PRIMARY_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("AGENTS_PRIMARY_TEST_DATABASE_URL is not set")
@@ -26,7 +32,7 @@ func TestStoreLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(database.Close)
 	if err := runstore.New(database).Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +44,12 @@ func TestStoreLifecycle(t *testing.T) {
 	if err := store.Migrate(ctx); err != nil {
 		t.Fatal(err)
 	}
+	return database, store, agentStore
+}
+
+func TestStoreLifecycle(t *testing.T) {
+	database, store, agentStore := testStores(t)
+	ctx := context.Background()
 
 	suffix := time.Now().UnixNano()
 	organizationID := fmt.Sprintf("org_teamspace_test_%d", suffix)
@@ -100,7 +112,7 @@ func TestStoreLifecycle(t *testing.T) {
 	if err != nil || updated.Contributions[0].DelegationMode != DelegationRequest || updated.Revision != 3 {
 		t.Fatalf("updated=%+v error=%v", updated, err)
 	}
-	if err := store.ForgetTeamMember(ctx, organizationID, space.TeamID, owner.UserID); err != nil {
+	if err := store.ForgetTeamMember(ctx, organizationID, space.TeamID, owner.UserID, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	remaining, err := store.Get(ctx, organizationID, space.ID)
@@ -121,8 +133,11 @@ func TestStoreLifecycle(t *testing.T) {
 		WHERE detail->>'organization_id'=$1 AND detail_type LIKE 'agents.teamspace.%'`, organizationID).Scan(&events); err != nil {
 		t.Fatal(err)
 	}
-	if events != 6 {
-		t.Fatalf("teamspace lifecycle events=%d, want 6", events)
+	// Created, the contribution added and changed, the entry, the owner
+	// leaving the team, which withdrew their contribution and said they left,
+	// and the teamspace deleted.
+	if events != 7 {
+		t.Fatalf("teamspace lifecycle events=%d, want 7", events)
 	}
 	var organizationAgentEvents int
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.agents_outbox
@@ -131,5 +146,200 @@ func TestStoreLifecycle(t *testing.T) {
 	}
 	if organizationAgentEvents != 1 {
 		t.Fatalf("organization agent lifecycle events=%d, want 1", organizationAgentEvents)
+	}
+}
+
+// recordedEvent is one event an organization's teamspaces recorded in the
+// outbox.
+type recordedEvent struct {
+	detail     []byte
+	occurredAt time.Time
+}
+
+// recordedEvents are the events of detailType organizationID's teamspaces
+// have recorded in the outbox, in no particular order.
+func recordedEvents(t *testing.T, database *postgreskit.Database, organizationID, detailType string) []recordedEvent {
+	t.Helper()
+	rows, err := database.Pool.Query(context.Background(), `SELECT detail::text, occurred_at
+		FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1 AND detail_type=$2`, organizationID, detailType)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var recorded []recordedEvent
+	for rows.Next() {
+		var event recordedEvent
+		var detail string
+		if err := rows.Scan(&detail, &event.occurredAt); err != nil {
+			t.Fatal(err)
+		}
+		event.detail = []byte(detail)
+		recorded = append(recorded, event)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return recorded
+}
+
+// membersRemoved are the people organizationID's teamspaces have said left
+// them, in no particular order.
+func membersRemoved(t *testing.T, database *postgreskit.Database, organizationID string) []agentsv1.TeamspaceMemberRemoved {
+	t.Helper()
+	var removed []agentsv1.TeamspaceMemberRemoved
+	for _, event := range recordedEvents(t, database, organizationID, agentsv1.TeamspaceMemberRemovedDetailType) {
+		var payload agentsv1.TeamspaceMemberRemoved
+		if err := json.Unmarshal(event.detail, &payload); err != nil {
+			t.Fatal(err)
+		}
+		// The event happened when the membership ended, which the outbox
+		// keeps to the microsecond.
+		if !event.occurredAt.Equal(payload.RemovedAt.Truncate(time.Microsecond)) {
+			t.Errorf("the event happened at %s, want when the membership ended, %s", event.occurredAt, payload.RemovedAt)
+		}
+		removed = append(removed, payload)
+	}
+	return removed
+}
+
+// When Teams says a person left a team, agents says they left its teamspace,
+// whether or not they had contributed agents to it, in the transaction that
+// withdraws what they had. A team without a teamspace says nothing, and a
+// Teams event delivered again is safe.
+func TestForgetTeamMemberSaysThePersonLeftTheTeamspace(t *testing.T) {
+	database, store, agentStore := testStores(t)
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	organizationID := fmt.Sprintf("org_teamspace_leave_%d", suffix)
+	t.Cleanup(func() {
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.teamspaces WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.organization_agents WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.member_agents WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organizationID)
+	})
+
+	organizationAgent, err := store.EnsureOrganizationAgent(ctx, organizationID, "Leaving Org", "user_admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err := store.Create(ctx, Space{
+		ID: fmt.Sprintf("tsp_leave_%d", suffix), OrganizationID: organizationID, TeamID: fmt.Sprintf("team_leave_%d", suffix),
+		Name: "Design Space", CreatedByUserID: "user_admin", OrganizationAgentID: organizationAgent.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contributor := managedagents.Scope{OrganizationID: organizationID, UserID: fmt.Sprintf("user_contributor_%d", suffix)}
+	specialist, err := agentStore.Create(ctx, contributor, managedagents.Definition{Name: "Critic", Description: "Critiques designs", Instructions: "Return bounded critiques."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	space, err = store.AddContribution(ctx, Actor{OrganizationID: organizationID, UserID: contributor.UserID}, space.ID, ContributionInput{
+		AgentID: specialist.ID, Role: "Critique designs", DelegationMode: DelegationAutomatic,
+	})
+	if err != nil || len(space.Contributions) != 1 {
+		t.Fatalf("contributed=%+v error=%v", space, err)
+	}
+	contributionChanges := func() int {
+		return len(recordedEvents(t, database, organizationID, agentsv1.TeamspaceContributionChangedDetailType))
+	}
+	changes := contributionChanges()
+	// Teams' clock gives nanoseconds, in whatever zone; the event says UTC.
+	ist := time.FixedZone("IST", 5*60*60+30*60)
+	removedAt := time.Date(2026, time.September, 24, 15, 30, 0, 123456789, ist)
+	leaving := func(userID string) agentsv1.TeamspaceMemberRemoved {
+		return agentsv1.TeamspaceMemberRemoved{
+			OrganizationID: organizationID, TeamspaceID: space.ID, TeamID: space.TeamID, UserID: userID,
+			RemovedAt: time.Date(2026, time.September, 24, 10, 0, 0, 123456789, time.UTC),
+		}
+	}
+	// same compares events field by field, their times as instants that
+	// were written in UTC.
+	same := func(got, want []agentsv1.TeamspaceMemberRemoved) bool {
+		return slices.EqualFunc(got, want, func(a, b agentsv1.TeamspaceMemberRemoved) bool {
+			return a.OrganizationID == b.OrganizationID && a.TeamspaceID == b.TeamspaceID && a.TeamID == b.TeamID &&
+				a.UserID == b.UserID && a.RemovedAt.Equal(b.RemovedAt) && a.RemovedAt.Location() == time.UTC
+		})
+	}
+
+	t.Run("a person who contributed nothing", func(t *testing.T) {
+		watcher := fmt.Sprintf("user_watcher_%d", suffix)
+		if err := store.ForgetTeamMember(ctx, organizationID, space.TeamID, watcher, removedAt); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := membersRemoved(t, database, organizationID), []agentsv1.TeamspaceMemberRemoved{leaving(watcher)}; !same(got, want) {
+			t.Fatalf("members removed = %+v, want %+v", got, want)
+		}
+		remaining, err := store.Get(ctx, organizationID, space.ID)
+		if err != nil || len(remaining.Contributions) != 1 || remaining.Revision != space.Revision || contributionChanges() != changes {
+			t.Fatalf("space=%+v error=%v contribution changes=%d; want the contributor's specialist left alone", remaining, err, contributionChanges())
+		}
+	})
+
+	t.Run("a person who contributed", func(t *testing.T) {
+		if err := store.ForgetTeamMember(ctx, organizationID, space.TeamID, contributor.UserID, removedAt); err != nil {
+			t.Fatal(err)
+		}
+		removed := membersRemoved(t, database, organizationID)
+		if len(removed) != 2 || !slices.ContainsFunc(removed, func(event agentsv1.TeamspaceMemberRemoved) bool {
+			return same([]agentsv1.TeamspaceMemberRemoved{event}, []agentsv1.TeamspaceMemberRemoved{leaving(contributor.UserID)})
+		}) {
+			t.Fatalf("members removed = %+v, want the contributor among them", removed)
+		}
+		remaining, err := store.Get(ctx, organizationID, space.ID)
+		if err != nil || len(remaining.Contributions) != 0 || remaining.Revision != space.Revision+1 || contributionChanges() != changes+1 {
+			t.Fatalf("space=%+v error=%v contribution changes=%d; want the specialist withdrawn, and said", remaining, err, contributionChanges())
+		}
+	})
+
+	t.Run("the same Teams event again", func(t *testing.T) {
+		if err := store.ForgetTeamMember(ctx, organizationID, space.TeamID, contributor.UserID, removedAt); err != nil {
+			t.Fatal(err)
+		}
+		removed := membersRemoved(t, database, organizationID)
+		var contributorLeft int
+		for _, event := range removed {
+			if same([]agentsv1.TeamspaceMemberRemoved{event}, []agentsv1.TeamspaceMemberRemoved{leaving(contributor.UserID)}) {
+				contributorLeft++
+			}
+		}
+		// Said again, as it was the first time, which its consumers take as
+		// a repeat; nothing is withdrawn twice.
+		remaining, err := store.Get(ctx, organizationID, space.ID)
+		if len(removed) != 3 || contributorLeft != 2 || err != nil || remaining.Revision != space.Revision+1 || contributionChanges() != changes+1 {
+			t.Fatalf("members removed = %+v, space=%+v error=%v contribution changes=%d", removed, remaining, err, contributionChanges())
+		}
+	})
+
+	t.Run("a team without a teamspace", func(t *testing.T) {
+		before := len(membersRemoved(t, database, organizationID))
+		if err := store.ForgetTeamMember(ctx, organizationID, fmt.Sprintf("team_spaceless_%d", suffix), contributor.UserID, removedAt); err != nil {
+			t.Fatal(err)
+		}
+		if after := len(membersRemoved(t, database, organizationID)); after != before {
+			t.Fatalf("members removed = %d, want %d: a team without a teamspace says nothing", after, before)
+		}
+	})
+}
+
+// Without its team, a person's leaving would withdraw their specialists from
+// every teamspace in the organization, and without its time, the purge it
+// asks for could not tell what they wrote before from what they wrote after.
+func TestForgetTeamMemberRefusesWhatItCannotBound(t *testing.T) {
+	// Refused before anything is asked of the database, which it has none of.
+	store := NewStore(nil)
+	now := time.Now()
+	for name, call := range map[string]struct {
+		organization, team, member string
+		removedAt                  time.Time
+	}{
+		"no organization": {"", "team_1", "user_1", now},
+		"no team":         {"org_1", "", "user_1", now},
+		"no member":       {"org_1", "team_1", "", now},
+		"no time":         {"org_1", "team_1", "user_1", time.Time{}},
+	} {
+		if err := store.ForgetTeamMember(context.Background(), call.organization, call.team, call.member, call.removedAt); err == nil {
+			t.Errorf("%s: ForgetTeamMember() = nil", name)
+		}
 	}
 }

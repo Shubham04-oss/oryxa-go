@@ -66,11 +66,12 @@ async function sideTalk(
   world: World,
   from: string,
   to: string,
-  body = "hello"
+  body = "hello",
+  teamspace = "tsp_launch"
 ) {
   const side = await world.object<Side>(
     "SideConversationAgent",
-    sideConversationName(org, "tsp_launch", from, to)
+    sideConversationName(org, teamspace, from, to)
   )
   const socket = await openSocket(
     side,
@@ -194,21 +195,28 @@ function later(ms: number) {
 }
 
 /**
- * The next purge of `userId`'s inbox never answers: the registry's work is
- * cut off there (a deploy, an eviction, or the runtime ending it once Go
- * gave up), and nothing is raised. Later purges of it run. Resolves once it
- * is cut off, after the Worker's own checks, which are not all promises.
+ * The next purge of `userId`'s inbox (`purge`, or `purgeTeamspace`) never
+ * answers: the registry's work is cut off there (a deploy, an eviction, or
+ * the runtime ending it once Go gave up), and nothing is raised. Later
+ * purges of it run. Resolves once it is cut off, after the Worker's own
+ * checks, which are not all promises.
  */
-function cutOffInboxPurge(userId: string): Promise<void> {
-  const purgeInbox = InboxAgent.prototype.purge
+function cutOffInboxPurge(
+  userId: string,
+  method: "purge" | "purgeTeamspace" = "purge"
+): Promise<void> {
+  const purgeInbox = InboxAgent.prototype[method] as (
+    this: InboxAgent,
+    ...args: unknown[]
+  ) => Promise<unknown>
   let cut = false
   return new Promise((resolve) => {
-    vi.spyOn(InboxAgent.prototype, "purge").mockImplementation(function (
+    vi.spyOn(InboxAgent.prototype, method).mockImplementation(function (
       this: InboxAgent,
-      ...args: Parameters<InboxAgent["purge"]>
+      ...args: unknown[]
     ) {
       if (cut || this.name !== inboxName(org, userId)) {
-        return purgeInbox.apply(this, args)
+        return purgeInbox.apply(this, args) as never
       }
       cut = true
       resolve()
@@ -230,6 +238,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe("the purge's signature", () => {
@@ -915,8 +924,738 @@ describe("purging", () => {
   })
 })
 
-// The Go side's own vectors (the relay that turns auth.member.removed.v1 and
-// auth.organization.deleted.v1 into purges), contract v2: the key is the
+const launch = "tsp_launch"
+const design = "tsp_design"
+
+/** The bodies in two people's side conversation in a teamspace, oldest first; nothing for one never made. */
+function sideBodies(
+  world: World,
+  teamspace: string,
+  userA: string,
+  userB: string
+) {
+  const side = world.existing<Side>(
+    "SideConversationAgent",
+    sideConversationName(org, teamspace, userA, userB)
+  )
+  if (!side) return undefined
+  return side.sql<{
+    body: string
+  }>`SELECT body FROM side_items ORDER BY seq`.map((row) => row.body)
+}
+
+/** The events two people's side conversation in a teamspace still has to send Go. */
+function outboxOf(
+  world: World,
+  teamspace: string,
+  userA: string,
+  userB: string
+) {
+  const side = world.existing<Side>(
+    "SideConversationAgent",
+    sideConversationName(org, teamspace, userA, userB)
+  )
+  if (!side) return []
+  return side.sql<{ id: string }>`SELECT id FROM event_outbox`
+}
+
+/**
+ * The three members' side conversations in the launch teamspace (the one
+ * between the member and the owner written in after 12:00), the admin's
+ * with the member in the design teamspace, and their DM, with Go's events
+ * on. Go is a stand-in with no requests to read.
+ */
+async function teamspaceWorld() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ requests: [] }))
+  )
+  const world = makeWorld({
+    REALTIME_PURGE_SECRET: secret,
+    ORYXA_API_ORIGIN: "http://go.test",
+  })
+  const { socket: launchSocket } = await sideTalk(
+    world,
+    admin,
+    member,
+    "launch: admin to member"
+  )
+  await sideTalk(world, owner, admin, "launch: owner to admin")
+  await sideTalk(world, admin, member, "design: admin to member", design)
+  await talk(world, admin, member, "a DM")
+  later(60_000)
+  await sideTalk(world, member, owner, "launch: member to owner, later")
+  const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+  return { world, registry, launchSocket }
+}
+
+/** The inboxes `method` was called on, from its `from`th call on, sorted. */
+function inboxesCalled(world: World, method: string, from = 0) {
+  return world
+    .callsTo("InboxAgent", method)
+    .slice(from)
+    .map((call) => call.name)
+    .sort()
+}
+
+describe("a teamspace's purge, through the registry", () => {
+  it("empties every side conversation in the teamspace through every member's inbox, newer ones and their events too, and keeps every member registered", async () => {
+    const { world, registry, launchSocket } = await teamspaceWorld()
+    expect(await registry.members()).toEqual([admin, member, owner])
+    expect(outboxOf(world, launch, admin, member)).toHaveLength(1)
+
+    expect(await registry.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "purged"
+    )
+
+    for (const [userA, userB] of [
+      [admin, member],
+      [owner, admin],
+      [member, owner],
+    ]) {
+      expect(sideBodies(world, launch, userA, userB)).toEqual([])
+      expect(outboxOf(world, launch, userA, userB)).toEqual([])
+    }
+    expect(launchSocket.closed?.code).toBe(4404)
+    expect(sideBodies(world, design, admin, member)).toEqual([
+      "design: admin to member",
+    ])
+    expect(outboxOf(world, design, admin, member)).toHaveLength(1)
+    expect(bodiesIn(world, admin, member)).toEqual(["a DM"])
+    const kept = [
+      sideConversationName(org, design, admin, member),
+      directMessageName(org, admin, member),
+    ].sort()
+    expect((await listed(world, admin)).sort()).toEqual(kept)
+    expect((await listed(world, member)).sort()).toEqual(kept)
+    expect(await listed(world, owner)).toEqual([])
+    expect(inboxesCalled(world, "purgeTeamspace")).toEqual(
+      [admin, member, owner].map((user) => inboxName(org, user))
+    )
+    // Everybody is still in the organization: nobody leaves the registry,
+    // no inbox forgets it registered, and the event's progress goes.
+    expect(await registry.members()).toEqual([admin, member, owner])
+    const ownersInbox = await world.object<Inbox>(
+      "InboxAgent",
+      inboxName(org, owner)
+    )
+    expect(
+      ownersInbox.sql`SELECT value FROM inbox_meta WHERE key = 'registered'`
+    ).toEqual([{ value: "1" }])
+    expect(registry.sql`SELECT event_id FROM registry_purges`).toEqual([
+      { event_id: "evt_launch_deleted" },
+    ])
+    expect(registry.sql`SELECT * FROM registry_purge_progress`).toEqual([])
+  })
+
+  it("remembers the event only once every member is done: cut off part-way, the same event again, to the registry restarted, carries on with the members not yet done", async () => {
+    const { world, registry } = await teamspaceWorld()
+    const cutOff = cutOffInboxPurge(owner, "purgeTeamspace")
+    void registry.purgeTeamspace("evt_launch_deleted", launch)
+    await cutOff
+    await settle()
+    expect(registry.sql`SELECT event_id FROM registry_purges`).toEqual([])
+    expect(
+      registry.sql`SELECT user_id FROM registry_purge_progress ORDER BY user_id`
+    ).toEqual([{ user_id: admin }, { user_id: member }])
+    expect(await registry.members()).toEqual([admin, member, owner])
+
+    const restarted = await world.restart<Registry>(
+      "RealtimeRegistryAgent",
+      org
+    )
+    const before = world.callsTo("InboxAgent", "purgeTeamspace").length
+    expect(await restarted.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "purged"
+    )
+    expect(inboxesCalled(world, "purgeTeamspace", before)).toEqual([
+      inboxName(org, owner),
+    ])
+    expect(restarted.sql`SELECT event_id FROM registry_purges`).toEqual([
+      { event_id: "evt_launch_deleted" },
+    ])
+    expect(restarted.sql`SELECT * FROM registry_purge_progress`).toEqual([])
+    expect(await restarted.members()).toEqual([admin, member, owner])
+    expect(await listed(world, owner)).toEqual([])
+
+    // Done: the same event again does nothing.
+    const done = world.callsTo("InboxAgent", "purgeTeamspace").length
+    expect(await restarted.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "repeated"
+    )
+    expect(world.callsTo("InboxAgent", "purgeTeamspace")).toHaveLength(done)
+  })
+
+  it("throws when a member's side conversations could not all be purged, keeps the others' progress, and the same event again finishes the rest", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { world, registry } = await teamspaceWorld()
+    world.failing.add(sideConversationName(org, launch, member, owner))
+
+    await expect(
+      registry.purgeTeamspace("evt_launch_deleted", launch)
+    ).rejects.toThrow(
+      "2 of 3 members' side conversations in the teamspace were not purged"
+    )
+    expect(registry.sql`SELECT user_id FROM registry_purge_progress`).toEqual([
+      { user_id: admin },
+    ])
+    expect(registry.sql`SELECT * FROM registry_purges`).toEqual([])
+    expect(sideBodies(world, launch, member, owner)).toEqual([
+      "launch: member to owner, later",
+    ])
+
+    world.failing.clear()
+    const before = world.callsTo("InboxAgent", "purgeTeamspace").length
+    expect(await registry.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "purged"
+    )
+    expect(inboxesCalled(world, "purgeTeamspace", before)).toEqual([
+      inboxName(org, member),
+      inboxName(org, owner),
+    ])
+    expect(sideBodies(world, launch, member, owner)).toEqual([])
+    expect(await listed(world, owner)).toEqual([])
+    expect(registry.sql`SELECT * FROM registry_purge_progress`).toEqual([])
+    expect(await registry.members()).toEqual([admin, member, owner])
+  })
+
+  it("forgets what a purge under way had done after a day, and does those members again", async () => {
+    const { world, registry } = await teamspaceWorld()
+    const cutOff = cutOffInboxPurge(owner, "purgeTeamspace")
+    void registry.purgeTeamspace("evt_launch_deleted", launch)
+    await cutOff
+    await settle()
+    expect(registry.sql`SELECT * FROM registry_purge_progress`).toHaveLength(2)
+
+    later(purgeMemoryMs + 1_000)
+    const restarted = await world.restart<Registry>(
+      "RealtimeRegistryAgent",
+      org
+    )
+    const before = world.callsTo("InboxAgent", "purgeTeamspace").length
+    expect(await restarted.purgeTeamspace("evt_launch_deleted", launch)).toBe(
+      "purged"
+    )
+    expect(inboxesCalled(world, "purgeTeamspace", before)).toEqual(
+      [admin, member, owner].map((user) => inboxName(org, user))
+    )
+    expect(restarted.sql`SELECT * FROM registry_purge_progress`).toEqual([])
+  })
+
+  it("refuses what is not a teamspace's purge", async () => {
+    const world = makeWorld()
+    await talk(world, admin, member)
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    for (const [eventId, teamspaceId] of [
+      ["", launch],
+      ["x".repeat(201), launch],
+      ["evt_1", ""],
+      ["evt_1", "tsp~launch"],
+      ["evt_1", "x".repeat(129)],
+    ]) {
+      await expect(
+        registry.purgeTeamspace(eventId, teamspaceId)
+      ).rejects.toThrow(TypeError)
+    }
+    expect(world.callsTo("InboxAgent", "purgeTeamspace")).toEqual([])
+  })
+})
+
+/** The admin left the launch teamspace's team at 12:00. */
+const teamspaceMemberLeft: PurgeRequest = {
+  event_id: "evt_teamspace_member_removed_1",
+  organization_id: org,
+  scope: "teamspace_member",
+  user_id: admin,
+  teamspace_id: launch,
+  removed_at: "2026-09-24T12:00:00Z",
+}
+
+/** The launch teamspace was deleted at 12:00. */
+const teamspaceDeleted: PurgeRequest = {
+  event_id: "evt_teamspace_deleted_1",
+  organization_id: org,
+  scope: "teamspace",
+  user_id: "",
+  teamspace_id: launch,
+  removed_at: "2026-09-24T12:00:00Z",
+}
+
+describe("a teamspace's purge, through the Worker", () => {
+  it("refuses a teamspace_id on a scope without one, and a teamspace scope without a good one or a user_id that agrees", async () => {
+    const world = makeWorld()
+    await talk(world, admin, member)
+    const { teamspace_id: _missing, ...withoutTeamspace } = teamspaceMemberLeft
+    const { user_id: _userId, ...withoutUserId } = teamspaceDeleted
+    for (const body of [
+      // The old scopes never carry one, not even an empty one.
+      { ...memberLeft, teamspace_id: launch },
+      { ...memberLeft, teamspace_id: "" },
+      { ...memberLeft, teamspace_id: null },
+      { ...organizationDeleted, teamspace_id: launch },
+      // The new ones need one a name may hold.
+      withoutTeamspace,
+      { ...teamspaceDeleted, teamspace_id: undefined },
+      { ...teamspaceMemberLeft, teamspace_id: "" },
+      { ...teamspaceMemberLeft, teamspace_id: null },
+      { ...teamspaceMemberLeft, teamspace_id: 7 },
+      { ...teamspaceMemberLeft, teamspace_id: ["tsp_launch"] },
+      { ...teamspaceMemberLeft, teamspace_id: "tsp~launch" },
+      { ...teamspaceMemberLeft, teamspace_id: "tsp launch" },
+      { ...teamspaceMemberLeft, teamspace_id: "tsp/launch" },
+      { ...teamspaceMemberLeft, teamspace_id: "tsp_\u00e9" },
+      { ...teamspaceDeleted, teamspace_id: "x".repeat(129) },
+      // A member's purge in a teamspace names the member; a teamspace's
+      // names nobody.
+      { ...teamspaceMemberLeft, user_id: "" },
+      { ...teamspaceMemberLeft, user_id: "user admin" },
+      { ...teamspaceDeleted, user_id: admin },
+      withoutUserId,
+      { ...teamspaceMemberLeft, scope: "Teamspace_member" },
+      { ...teamspaceDeleted, scope: "teamspaces" },
+      { ...teamspaceDeleted, removed_at: "" },
+    ]) {
+      expect(
+        await codeOf(
+          await purge(world, await purgeRequest(JSON.stringify(body)))
+        )
+      ).toEqual([400, "invalid_request"])
+    }
+    expect(
+      world
+        .callsTo("RealtimeRegistryAgent")
+        .filter((call) => call.method !== "register")
+    ).toEqual([])
+    expect(world.callsTo("InboxAgent", "purgeTeamspace")).toEqual([])
+    for (const request of [
+      teamspaceMemberLeft,
+      teamspaceDeleted,
+      { ...teamspaceDeleted, teamspace_id: "x".repeat(128) },
+    ]) {
+      expect(
+        parsePurgeRequest(new TextEncoder().encode(JSON.stringify(request)))
+      ).toEqual(request)
+    }
+  })
+
+  it("purges a member who left the teamspace's team from its side conversations, keeping what is newer, and nothing else", async () => {
+    const { world, launchSocket } = await teamspaceWorld()
+    // The member writes to the admin in the launch teamspace after 12:00.
+    await sideTalk(world, member, admin, "launch: member to admin, after")
+    const adminsInbox = await world.object<Inbox>(
+      "InboxAgent",
+      inboxName(org, admin)
+    )
+    const adminList = await openSocket(adminsInbox, {
+      organizationId: org,
+      userId: admin,
+    })
+    adminList.clear()
+
+    expect(
+      (await purge(world, await purgeRequest(teamspaceMemberLeft))).status
+    ).toBe(204)
+
+    // The admin's side conversations in the launch teamspace: what is newer
+    // than 12:00 stays, the rest goes, and so do their events.
+    const adminMember = sideConversationName(org, launch, admin, member)
+    expect(sideBodies(world, launch, admin, member)).toEqual([
+      "launch: member to admin, after",
+    ])
+    expect(sideBodies(world, launch, owner, admin)).toEqual([])
+    expect(outboxOf(world, launch, admin, member)).toEqual([])
+    expect(outboxOf(world, launch, owner, admin)).toEqual([])
+    expect(launchSocket.closed?.code).toBe(4404)
+    // Other people's, other teamspaces' and DMs stay as they were.
+    expect(sideBodies(world, launch, member, owner)).toEqual([
+      "launch: member to owner, later",
+    ])
+    expect(outboxOf(world, launch, member, owner)).toHaveLength(1)
+    expect(sideBodies(world, design, admin, member)).toEqual([
+      "design: admin to member",
+    ])
+    expect(outboxOf(world, design, admin, member)).toHaveLength(1)
+    expect(bodiesIn(world, admin, member)).toEqual(["a DM"])
+    const designDm = [
+      sideConversationName(org, design, admin, member),
+      directMessageName(org, admin, member),
+    ]
+    const memberOwner = sideConversationName(org, launch, member, owner)
+    expect((await listed(world, admin)).sort()).toEqual(
+      [adminMember, ...designDm].sort()
+    )
+    expect((await listed(world, member)).sort()).toEqual(
+      [adminMember, memberOwner, ...designDm].sort()
+    )
+    expect(await listed(world, owner)).toEqual([memberOwner])
+    // The admin's inbox stays open, told what went; nobody leaves the
+    // registry; only the admin's inbox was asked.
+    expect(adminList.closed).toBeUndefined()
+    expect(adminList.of("inbox-removed")).toEqual([
+      expect.objectContaining({
+        name: sideConversationName(org, launch, owner, admin),
+      }),
+    ])
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([admin, member, owner])
+    expect(world.callsTo("RealtimeRegistryAgent", "purge")).toEqual([])
+    expect(world.callsTo("RealtimeRegistryAgent", "purgeTeamspace")).toEqual([])
+    expect(inboxesCalled(world, "purgeTeamspace")).toEqual([
+      inboxName(org, admin),
+    ])
+  })
+
+  it("carries out a removal from a teamspace's team once, whatever the event: Go's retry, or a new event for the same removal, answers 204 and touches nothing", async () => {
+    const { world } = await teamspaceWorld()
+    expect(
+      (await purge(world, await purgeRequest(teamspaceMemberLeft))).status
+    ).toBe(204)
+    expect(sideBodies(world, launch, admin, member)).toEqual([])
+
+    // The admin is back on the team, and talks there again, on a page open
+    // since: an event Go has not been sent yet waits.
+    const { socket } = await sideTalk(
+      world,
+      admin,
+      member,
+      "launch: admin to member, back"
+    )
+    socket.clear()
+    const sidePurges = world.callsTo("SideConversationAgent", "purge").length
+    for (const body of [
+      teamspaceMemberLeft,
+      // A teams event delivered again: agents publish the removal again,
+      // under a new event id.
+      { ...teamspaceMemberLeft, event_id: "evt_teamspace_member_removed_2" },
+    ]) {
+      expect((await purge(world, await purgeRequest(body))).status).toBe(204)
+    }
+
+    expect(world.callsTo("SideConversationAgent", "purge")).toHaveLength(
+      sidePurges
+    )
+    expect(sideBodies(world, launch, admin, member)).toEqual([
+      "launch: admin to member, back",
+    ])
+    expect(outboxOf(world, launch, admin, member)).toHaveLength(1)
+    expect(socket.closed).toBeUndefined()
+    expect(socket.sent).toEqual([])
+  })
+
+  it("answers 204 to every purge of a deleted team, the members' removals and the teamspace's deletion in either order, and leaves nothing in the teamspace", async () => {
+    for (const deletionFirst of [true, false]) {
+      vi.setSystemTime(now)
+      const { world } = await teamspaceWorld()
+      const removals = [admin, member, owner].map((userId) => ({
+        ...teamspaceMemberLeft,
+        event_id: `evt_team_deleted_${userId}`,
+        user_id: userId,
+      }))
+      for (const body of deletionFirst
+        ? [teamspaceDeleted, ...removals]
+        : [...removals, teamspaceDeleted]) {
+        expect((await purge(world, await purgeRequest(body))).status).toBe(204)
+      }
+
+      for (const [userA, userB] of [
+        [admin, member],
+        [owner, admin],
+        [member, owner],
+      ]) {
+        expect(sideBodies(world, launch, userA, userB)).toEqual([])
+      }
+      for (const userId of [admin, member, owner]) {
+        expect(
+          (await listed(world, userId)).filter((name) =>
+            name.includes(`~${launch}~`)
+          )
+        ).toEqual([])
+      }
+      expect(sideBodies(world, design, admin, member)).toEqual([
+        "design: admin to member",
+      ])
+      expect(bodiesIn(world, admin, member)).toEqual(["a DM"])
+      const registry = await world.object<Registry>(
+        "RealtimeRegistryAgent",
+        org
+      )
+      expect(await registry.members()).toEqual([admin, member, owner])
+    }
+  })
+
+  it("answers 204 to every purge of a member leaving the organization, auth's and agents' removals from the teams' teamspaces in either order, and leaves nothing of theirs", async () => {
+    for (const memberFirst of [true, false]) {
+      vi.setSystemTime(now)
+      const { world, registry } = await teamspaceWorld()
+      const removals = [launch, design].map((teamspaceId) => ({
+        ...teamspaceMemberLeft,
+        event_id: `evt_left_${teamspaceId}`,
+        teamspace_id: teamspaceId,
+      }))
+      for (const body of memberFirst
+        ? [memberLeft, ...removals]
+        : [...removals, memberLeft]) {
+        expect((await purge(world, await purgeRequest(body))).status).toBe(204)
+      }
+
+      for (const [teamspace, userA, userB] of [
+        [launch, admin, member],
+        [launch, owner, admin],
+        [design, admin, member],
+      ]) {
+        expect(sideBodies(world, teamspace, userA, userB)).toEqual([])
+      }
+      expect(bodiesIn(world, admin, member)).toEqual([])
+      expect(sideBodies(world, launch, member, owner)).toEqual([
+        "launch: member to owner, later",
+      ])
+      expect(await listed(world, admin)).toEqual([])
+      const adminsInbox = await world.object<Inbox>(
+        "InboxAgent",
+        inboxName(org, admin)
+      )
+      expect(adminsInbox.sql`SELECT * FROM inbox_meta`).toEqual([])
+      expect(adminsInbox.sql`SELECT * FROM inbox_teamspace_removals`).toEqual(
+        []
+      )
+      expect(await registry.members()).toEqual([member, owner])
+    }
+  })
+
+  it("carries out a removal later in the same second, whatever the digits Go sends: done at .9, one at .95 runs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ requests: [] }))
+    )
+    const world = makeWorld({
+      REALTIME_PURGE_SECRET: secret,
+      ORYXA_API_ORIGIN: "http://go.test",
+    })
+    await sideTalk(world, admin, member, "before both")
+    vi.setSystemTime(new Date("2026-09-24T12:00:00.920Z"))
+    await sideTalk(world, member, admin, "between them")
+
+    expect(
+      (
+        await purge(
+          world,
+          await purgeRequest({
+            ...teamspaceMemberLeft,
+            removed_at: "2026-09-24T12:00:00.9Z",
+          })
+        )
+      ).status
+    ).toBe(204)
+    expect(sideBodies(world, launch, admin, member)).toEqual(["between them"])
+
+    expect(
+      (
+        await purge(
+          world,
+          await purgeRequest({
+            ...teamspaceMemberLeft,
+            event_id: "evt_teamspace_member_removed_later",
+            removed_at: "2026-09-24T12:00:00.95Z",
+          })
+        )
+      ).status
+    ).toBe(204)
+    expect(sideBodies(world, launch, admin, member)).toEqual([])
+  })
+
+  it("takes Go's own shapes on the teamspace scopes: a teamspace id of tsp_ and 22 base64url characters, and removed_at with nine fractional digits", async () => {
+    const teamspace = "tsp_Ji-q_oilaC2tgma5jq-H_g"
+    const { world } = await teamspaceWorld()
+    await sideTalk(world, admin, member, "in a base64url teamspace", teamspace)
+    later(1)
+    await sideTalk(world, owner, admin, "a millisecond later", teamspace)
+    for (const body of [
+      {
+        ...teamspaceMemberLeft,
+        teamspace_id: teamspace,
+        removed_at: "2026-09-24T12:01:00.000999999Z",
+      },
+      {
+        ...teamspaceDeleted,
+        teamspace_id: teamspace,
+        removed_at: "2026-09-24T12:01:00.123456789Z",
+      },
+    ]) {
+      expect(
+        parsePurgeRequest(new TextEncoder().encode(JSON.stringify(body)))
+      ).toEqual(body)
+    }
+
+    // The removal, to its millisecond, takes what was written in it.
+    expect(
+      (
+        await purge(
+          world,
+          await purgeRequest({
+            ...teamspaceMemberLeft,
+            teamspace_id: teamspace,
+            removed_at: "2026-09-24T12:01:00.000999999Z",
+          })
+        )
+      ).status
+    ).toBe(204)
+    expect(sideBodies(world, teamspace, admin, member)).toEqual([])
+    expect(sideBodies(world, teamspace, owner, admin)).toEqual([
+      "a millisecond later",
+    ])
+    expect(
+      (
+        await purge(
+          world,
+          await purgeRequest({
+            ...teamspaceDeleted,
+            teamspace_id: teamspace,
+            removed_at: "2026-09-24T12:01:00.123456789Z",
+          })
+        )
+      ).status
+    ).toBe(204)
+    expect(sideBodies(world, teamspace, owner, admin)).toEqual([])
+  })
+
+  it("purges every side conversation of a deleted teamspace through the registry, newer ones too, and nothing else", async () => {
+    const { world, launchSocket } = await teamspaceWorld()
+
+    expect(
+      (await purge(world, await purgeRequest(teamspaceDeleted))).status
+    ).toBe(204)
+
+    expect(world.callsTo("RealtimeRegistryAgent", "purgeTeamspace")).toEqual([
+      { binding: "RealtimeRegistryAgent", name: org, method: "purgeTeamspace" },
+    ])
+    for (const [userA, userB] of [
+      [admin, member],
+      [owner, admin],
+      [member, owner],
+    ]) {
+      expect(sideBodies(world, launch, userA, userB)).toEqual([])
+    }
+    expect(launchSocket.closed?.code).toBe(4404)
+    expect(sideBodies(world, design, admin, member)).toEqual([
+      "design: admin to member",
+    ])
+    expect(bodiesIn(world, admin, member)).toEqual(["a DM"])
+    expect(await listed(world, owner)).toEqual([])
+    const registry = await world.object<Registry>("RealtimeRegistryAgent", org)
+    expect(await registry.members()).toEqual([admin, member, owner])
+
+    // The same event again does nothing.
+    const inboxPurges = world.callsTo("InboxAgent", "purgeTeamspace").length
+    expect(
+      (await purge(world, await purgeRequest(teamspaceDeleted))).status
+    ).toBe(204)
+    expect(world.callsTo("InboxAgent", "purgeTeamspace")).toHaveLength(
+      inboxPurges
+    )
+    // Under another event, it finds nothing left to purge.
+    const sidePurges = world.callsTo("SideConversationAgent", "purge").length
+    expect(
+      (
+        await purge(
+          world,
+          await purgeRequest({
+            ...teamspaceDeleted,
+            event_id: "evt_teamspace_deleted_2",
+          })
+        )
+      ).status
+    ).toBe(204)
+    expect(world.callsTo("SideConversationAgent", "purge")).toHaveLength(
+      sidePurges
+    )
+    expect(sideBodies(world, design, admin, member)).toEqual([
+      "design: admin to member",
+    ])
+  })
+
+  it("answers 204 when nothing is in the teamspace, making no conversation and registering nobody", async () => {
+    const world = makeWorld()
+    await talk(world, admin, member, "a DM")
+    const registrations = world.callsTo("RealtimeRegistryAgent", "register")
+    const other = "org_empty"
+    for (const body of [
+      teamspaceMemberLeft,
+      teamspaceDeleted,
+      // A member with no inbox, and an organization with no registry yet.
+      {
+        ...teamspaceMemberLeft,
+        event_id: "evt_teamspace_member_removed_never",
+        user_id: "user-never",
+      },
+      {
+        ...teamspaceDeleted,
+        event_id: "evt_teamspace_deleted_elsewhere",
+        organization_id: other,
+      },
+    ]) {
+      expect((await purge(world, await purgeRequest(body))).status).toBe(204)
+    }
+
+    expect(made(world, "SideConversationAgent")).toBe(0)
+    expect(world.callsTo("SideConversationAgent")).toEqual([])
+    expect(world.callsTo("RealtimeRegistryAgent", "register")).toEqual(
+      registrations
+    )
+    expect(bodiesIn(world, admin, member)).toEqual(["a DM"])
+    for (const userId of [admin, member, "user-never"]) {
+      const inbox = await world.object<Inbox>(
+        "InboxAgent",
+        inboxName(org, userId)
+      )
+      expect(inbox.sql`SELECT * FROM inbox_teamspace_removals`).toEqual([])
+    }
+    const nobody = await world.object<Inbox>(
+      "InboxAgent",
+      inboxName(org, "user-never")
+    )
+    expect(nobody.sql`SELECT * FROM inbox_meta`).toEqual([])
+    expect(nobody.jobs).toEqual([])
+    const elsewhere = await world.object<Registry>(
+      "RealtimeRegistryAgent",
+      other
+    )
+    expect(await elsewhere.members()).toEqual([])
+  })
+
+  it("answers 503 when part of either purge failed, and finishes it when Go sends the event again", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {})
+    const { world } = await teamspaceWorld()
+    const ownerAdmin = sideConversationName(org, launch, owner, admin)
+    world.failing.add(ownerAdmin)
+
+    expect(
+      await codeOf(await purge(world, await purgeRequest(teamspaceMemberLeft)))
+    ).toEqual([503, "unavailable"])
+    expect(sideBodies(world, launch, admin, member)).toEqual([])
+    expect(sideBodies(world, launch, owner, admin)).toEqual([
+      "launch: owner to admin",
+    ])
+    expect(
+      await codeOf(await purge(world, await purgeRequest(teamspaceDeleted)))
+    ).toEqual([503, "unavailable"])
+    expect(sideBodies(world, launch, member, owner)).toEqual([])
+
+    world.failing.clear()
+    for (const body of [teamspaceMemberLeft, teamspaceDeleted]) {
+      expect((await purge(world, await purgeRequest(body))).status).toBe(204)
+    }
+    expect(sideBodies(world, launch, owner, admin)).toEqual([])
+    for (const userId of [admin, member, owner]) {
+      expect(
+        (await listed(world, userId)).filter((name) => name.includes(launch))
+      ).toEqual([])
+    }
+  })
+})
+
+// The Go side's own vectors (the relay that turns auth.member.removed.v1,
+// auth.organization.deleted.v1, agents.teamspace.member.removed.v1 and
+// agents.teamspace.deleted.v1 into purges), contract v3: the key is the
 // secret's characters as written, never hex-decoded, and the signature is
 // lowercase. Each was checked apart from this code, with openssl.
 describe("Go's purge vectors", () => {
@@ -943,7 +1682,18 @@ describe("Go's purge vectors", () => {
       signature:
         "v1=0828ea12f32328f23603c3f910c57474459a38a6fe79fce8afcfa12bf5780548",
     },
+    teamspaceMemberRemoved: {
+      body: '{"event_id":"evt_Tm5sPq2Lx8vB3nK7cR1dWa","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"teamspace_member","user_id":"6c1d5f0e-2b7a-4c8e-9f3d-1a2b3c4d5e6f","teamspace_id":"tsp_JixqQoilaC2tgma5jqRHtg","removed_at":"2026-09-24T10:00:00Z"}',
+      signature:
+        "v1=3620d1cb2086b41144ba9ff1ca76fb29ddd528bbd377751c6501db56a0b6ef1a",
+    },
+    teamspaceDeleted: {
+      body: '{"event_id":"evt_Ts9kW2mQ4xN7vB1cL5pR8e","organization_id":"org_2fQx9LmR7vTk4WcA","scope":"teamspace","user_id":"","teamspace_id":"tsp_JixqQoilaC2tgma5jqRHtg","removed_at":"2026-09-24T10:00:00Z"}',
+      signature:
+        "v1=78cbbeee18c9c16fd29dbc722a730faf37526bed853126b8d8d03817983334ec",
+    },
   }
+  const goTeamspace = "tsp_JixqQoilaC2tgma5jqRHtg"
 
   /** The request exactly as Go sends it. */
   function goRequest(
@@ -1064,6 +1814,152 @@ describe("Go's purge vectors", () => {
       goOrganization
     )
     expect(await registry.members()).toContain(removedUser)
+  })
+
+  /**
+   * The other member writes to the one who left in their side conversation
+   * in the vectors' teamspace at each of `times`, on a socket opened at the
+   * first of them; and then, too, in a side conversation in another
+   * teamspace, and in their DM.
+   */
+  async function goSideWorld(times: string[]) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ requests: [] }))
+    )
+    const world = makeWorld({
+      REALTIME_PURGE_SECRET: goSecret,
+      ORYXA_API_ORIGIN: "http://go.test",
+    })
+    vi.setSystemTime(new Date(times[0]))
+    const talkIn = async (
+      teamspace: string,
+      bodies: Array<[string, string]>
+    ): Promise<Side> => {
+      const side = await world.object<Side>(
+        "SideConversationAgent",
+        sideConversationName(goOrganization, teamspace, removedUser, otherUser)
+      )
+      const socket = await openSocket(
+        side,
+        { organizationId: goOrganization, userId: otherUser },
+        {
+          "X-Oryxa-Cookie": "oryxa_access=other",
+          "X-Oryxa-Side-Roster": encodeRoster({
+            teamspaceName: "Launch room",
+            paused: false,
+            people: [],
+            contributions: [],
+          }),
+        }
+      )
+      for (const [index, [time, body]] of bodies.entries()) {
+        vi.setSystemTime(new Date(time))
+        await say(side, socket, {
+          type: "side-send",
+          clientId: `client-go-${teamspace}-${index}`,
+          body,
+        })
+      }
+      return side
+    }
+    const side = await talkIn(
+      goTeamspace,
+      times.map((time) => [time, `at ${time}`])
+    )
+    const elsewhere = await talkIn("tsp_elsewhere", [[times[0], "elsewhere"]])
+    const dm = await world.object<Dm>(
+      "DirectMessageAgent",
+      directMessageName(goOrganization, removedUser, otherUser)
+    )
+    const dmSocket = await openSocket(dm, {
+      organizationId: goOrganization,
+      userId: otherUser,
+    })
+    await say(dm, dmSocket, {
+      type: "dm-send",
+      clientId: "client-go-dm",
+      body: "a DM",
+    })
+    const bodiesOf = (object: Side) =>
+      object.sql<{
+        body: string
+      }>`SELECT body FROM side_items ORDER BY seq`.map((row) => row.body)
+    const listedBy = async (userId: string) =>
+      (
+        await (
+          await world.object<Inbox>(
+            "InboxAgent",
+            inboxName(goOrganization, userId)
+          )
+        ).listConversations()
+      )
+        .map((conversation) => conversation.name)
+        .sort()
+    const send = (vector: { body: string; signature: string }) =>
+      handlePurge(
+        goRequest(vector),
+        world.env as unknown as ConversationEnv,
+        goNow
+      )
+    return { world, side, elsewhere, dm, bodiesOf, listedBy, send }
+  }
+
+  it("carries out a member's removal from a teamspace's team, keeping what is newer, 204 again for the same event", async () => {
+    const { world, side, elsewhere, dm, bodiesOf, listedBy, send } =
+      await goSideWorld([
+        "2026-09-24T09:00:00.000Z",
+        "2026-09-24T11:00:00.000Z",
+      ])
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await send(vectors.teamspaceMemberRemoved)
+      expect(response.status).toBe(204)
+      expect(await response.text()).toBe("")
+    }
+    expect(bodiesOf(side)).toEqual(["at 2026-09-24T11:00:00.000Z"])
+    expect(bodiesOf(elsewhere)).toEqual(["elsewhere"])
+    expect(dm.sql`SELECT body FROM dm_messages`).toEqual([{ body: "a DM" }])
+    // It stays in both inboxes, with what stayed.
+    for (const userId of [removedUser, otherUser]) {
+      expect(await listedBy(userId)).toEqual(
+        [dm.name, side.name, elsewhere.name].sort()
+      )
+    }
+    expect(
+      world.callsTo("InboxAgent", "purgeTeamspace").map((call) => call.name)
+    ).toEqual([
+      inboxName(goOrganization, removedUser),
+      inboxName(goOrganization, removedUser),
+    ])
+    expect(world.callsTo("SideConversationAgent", "purge")).toEqual([
+      { binding: "SideConversationAgent", name: side.name, method: "purge" },
+    ])
+  })
+
+  it("carries out a teamspace's deletion, newer items too, 204 again for the same event", async () => {
+    const { world, side, elsewhere, dm, bodiesOf, listedBy, send } =
+      await goSideWorld([
+        "2026-09-24T09:00:00.000Z",
+        "2026-09-24T11:00:00.000Z",
+      ])
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      expect((await send(vectors.teamspaceDeleted)).status).toBe(204)
+    }
+    expect(bodiesOf(side)).toEqual([])
+    expect(bodiesOf(elsewhere)).toEqual(["elsewhere"])
+    expect(dm.sql`SELECT body FROM dm_messages`).toEqual([{ body: "a DM" }])
+    for (const userId of [removedUser, otherUser]) {
+      expect(await listedBy(userId)).toEqual([dm.name, elsewhere.name].sort())
+    }
+    const registry = await world.object<Registry>(
+      "RealtimeRegistryAgent",
+      goOrganization
+    )
+    expect(await registry.members()).toEqual([otherUser, removedUser])
+    expect(
+      world.callsTo("RealtimeRegistryAgent", "purgeTeamspace")
+    ).toHaveLength(2)
+    expect(world.callsTo("InboxAgent", "purgeTeamspace")).toHaveLength(2)
   })
 
   it("answers 401 for a changed signature, or the right one outside the window", async () => {

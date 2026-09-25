@@ -128,14 +128,14 @@ func (store *Store) Accept(ctx context.Context, events []Received) (int, error) 
 	return recorded, nil
 }
 
-// RecordPurgeCompleted records that the Worker did the purge auth's event
-// completed.SourceEventID asked for. Its event's id is derived from that
-// event's, so recording it again, as a purge delivered twice is, records
-// nothing new while the outbox keeps the first. It reports whether it
-// recorded one.
+// RecordPurgeCompleted records that the Worker did the purge the event
+// completed.SourceEventID, auth's or agents', asked for. Its event's id is
+// derived from that event's, so recording it again, as a purge delivered
+// twice is, records nothing new while the outbox keeps the first. It reports
+// whether it recorded one.
 func (store *Store) RecordPurgeCompleted(ctx context.Context, completed realtimev1.PurgeCompleted) (bool, error) {
 	if completed.SourceEventID == "" || completed.OrganizationID == "" || completed.CompletedAt.IsZero() {
-		return false, errors.New("a completed purge names auth's event, the organization and when it was done")
+		return false, errors.New("a completed purge names the event that asked for it, the organization and when it was done")
 	}
 	completed.RemovedAt, completed.CompletedAt = completed.RemovedAt.UTC(), completed.CompletedAt.UTC()
 	data, err := json.Marshal(completed)
@@ -171,7 +171,8 @@ func (store *Store) ForgetAccepted(ctx context.Context, before time.Time, limit 
 func WorkerEventID(workerID string) string { return eventID("worker", workerID) }
 
 // PurgeCompletedEventID is the id realtime publishes the completion of the
-// purge auth's event sourceEventID asked for under.
+// purge the event sourceEventID asked for under. Auth and agents each draw
+// their events' ids at random, so neither's is ever the other's.
 func PurgeCompletedEventID(sourceEventID string) string { return eventID("purge", sourceEventID) }
 
 // eventID derives an event's id from what the event is about, rather than
@@ -179,7 +180,7 @@ func PurgeCompletedEventID(sourceEventID string) string { return eventID("purge"
 // twice is one row in the outbox and one event_id to a consumer that
 // deduplicates by it. It looks like any other: evt_ and 22 characters.
 // namespace keeps ids made from the Worker's ids apart from those made from
-// auth's.
+// the ids of the events that asked for purges.
 func eventID(namespace, key string) string {
 	sum := sha256.Sum256([]byte("oryxa.realtime\x00" + namespace + "\x00" + key))
 	return "evt_" + base64.RawURLEncoding.EncodeToString(sum[:16])

@@ -149,7 +149,7 @@ func (s *Service) CreateTeam(ctx context.Context, credentials authclient.Credent
 			return domain.Team{}, domain.ErrForbidden
 		}
 		parentPath = parent.team.Path
-	} else if !domain.CanCreateTeam(org.Role) {
+	} else if !domain.CanCreateTeam(org) {
 		return domain.Team{}, domain.ErrForbidden
 	}
 	teamID, err := randomID("team_", 12)
@@ -239,7 +239,7 @@ func (s *Service) TeamDescendants(ctx context.Context, credentials authclient.Cr
 		return nil, err
 	}
 	visible := make([]domain.Team, 0, len(subtree))
-	if actor.org.Role.IsOrgAdmin() {
+	if actor.org.ActsAsAdmin() {
 		visible = subtree
 	} else {
 		for _, team := range subtree {
@@ -248,7 +248,7 @@ func (s *Service) TeamDescendants(ctx context.Context, credentials authclient.Cr
 			if membershipErr != nil && !errors.Is(membershipErr, domain.ErrNotFound) {
 				return nil, membershipErr
 			}
-			if domain.CanSeeTeam(actor.org.Role, onTeam) {
+			if domain.CanSeeTeam(actor.org, onTeam) {
 				visible = append(visible, team)
 			}
 		}
@@ -386,7 +386,7 @@ func (s *Service) Team(ctx context.Context, credentials authclient.Credentials, 
 	if err != nil {
 		return TeamDetail{}, err
 	}
-	if !domain.CanSeeTeam(actor.org.Role, actor.onTeam()) {
+	if !domain.CanSeeTeam(actor.org, actor.onTeam()) {
 		return TeamDetail{}, domain.ErrNotFound
 	}
 	return TeamDetail{Team: actor.team, Membership: actor.membership, CanManage: actor.canManage()}, nil
@@ -485,7 +485,7 @@ func (s *Service) MemberDescendants(ctx context.Context, credentials authclient.
 	if err != nil {
 		return nil, err
 	}
-	if actor.org.Role.IsOrgAdmin() {
+	if actor.org.ActsAsAdmin() {
 		return members, nil
 	}
 	teams, err := s.store.TeamsForUser(ctx, organizationID, actor.org.UserID)
@@ -705,11 +705,11 @@ func (actor teamActor) teamRole() domain.Role {
 }
 
 func (actor teamActor) canSee() bool {
-	return domain.CanSeeTeam(actor.org.Role, actor.onTeam())
+	return domain.CanSeeTeam(actor.org, actor.onTeam())
 }
 
 func (actor teamActor) canManage() bool {
-	return domain.CanManageTeam(actor.org.Role, actor.teamRole())
+	return domain.CanManageTeam(actor.org, actor.teamRole())
 }
 
 func (s *Service) summarizeTeams(ctx context.Context, org domain.OrgMembership, teams []domain.Team) ([]TeamSummary, error) {
@@ -720,7 +720,7 @@ func (s *Service) summarizeTeams(ctx context.Context, org domain.OrgMembership, 
 		if membershipErr != nil && !errors.Is(membershipErr, domain.ErrNotFound) {
 			return nil, membershipErr
 		}
-		summary := TeamSummary{Team: team, CanManage: domain.CanManageTeam(org.Role, membership.Role)}
+		summary := TeamSummary{Team: team, CanManage: domain.CanManageTeam(org, membership.Role)}
 		if onTeam {
 			summary.Role = membership.Role
 		}
@@ -734,7 +734,7 @@ func (s *Service) searchScope(ctx context.Context, credentials authclient.Creden
 	if err != nil {
 		return domain.OrgMembership{}, nil, err
 	}
-	if org.Role.IsOrgAdmin() {
+	if org.ActsAsAdmin() {
 		return org, nil, nil
 	}
 	teams, err := s.store.TeamsForUser(ctx, organizationID, org.UserID)
