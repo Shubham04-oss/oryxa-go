@@ -501,27 +501,31 @@ func isSubset(values, allowed []string) bool {
 	return true
 }
 
+// actsFor is whether the actor stands on this party's side of a request: a
+// member's primary agent for any of that member's agents, a specialist only
+// for itself.
+func actsFor(actor agents.InteractionActor, party agents.InteractionParty) bool {
+	return party.UserID == actor.UserID && (actor.AgentKind == "primary" || party.AgentID == actor.AgentID)
+}
+
 func canRead(actor agents.InteractionActor, request agents.Interaction) bool {
-	if actor.AgentKind == "primary" {
-		return request.Requester.UserID == actor.UserID || request.Target.UserID == actor.UserID
-	}
-	return request.Requester.UserID == actor.UserID && request.Requester.AgentID == actor.AgentID ||
-		request.Target.UserID == actor.UserID && request.Target.AgentID == actor.AgentID
+	return actsFor(actor, request.Requester) || actsFor(actor, request.Target)
 }
 
 // listed is whether a request the repository selected belongs in the actor's
 // listing: on the side of it the query names, within its teamspace and with
-// its other member, and readable by the actor. It restates the query, so a
+// its other member. Being on either side is what canRead asks, so a listed
+// request is always one the actor may read. It restates the query, so a
 // listing never rests on the repository alone.
 func listed(actor agents.InteractionActor, query Query, request agents.Interaction) bool {
-	if request.OrganizationID != actor.OrganizationID || !canRead(actor, request) ||
-		query.TeamspaceID != "" && request.TeamspaceID != query.TeamspaceID {
+	if request.OrganizationID != actor.OrganizationID || query.TeamspaceID != "" && request.TeamspaceID != query.TeamspaceID {
 		return false
 	}
-	asTarget := request.Target.UserID == actor.UserID && (actor.AgentKind == "primary" || request.Target.AgentID == actor.AgentID) &&
-		(query.WithUserID == "" || request.Requester.UserID == query.WithUserID)
-	asRequester := request.Requester.UserID == actor.UserID && (actor.AgentKind == "primary" || request.Requester.AgentID == actor.AgentID) &&
-		(query.WithUserID == "" || request.Target.UserID == query.WithUserID)
+	with := func(other agents.InteractionParty) bool {
+		return query.WithUserID == "" || other.UserID == query.WithUserID
+	}
+	asTarget := actsFor(actor, request.Target) && with(request.Requester)
+	asRequester := actsFor(actor, request.Requester) && with(request.Target)
 	switch query.Box {
 	case BoxInbox:
 		return asTarget
