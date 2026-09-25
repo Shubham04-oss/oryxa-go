@@ -2,9 +2,13 @@ package interactions
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -113,7 +117,8 @@ func TestTheTeamspaceMigrationIsSafeToApplyAgain(t *testing.T) {
 	}
 	var constraints, indexes int
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint
-		WHERE conname='agent_interactions_approval_check' AND conrelid='agents_primary.agent_interactions'::regclass`).Scan(&constraints); err != nil {
+		WHERE conname='agent_interactions_approval_check' AND conrelid='agents_primary.agent_interactions'::regclass
+		  AND convalidated`).Scan(&constraints); err != nil {
 		t.Fatal(err)
 	}
 	if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes
@@ -121,7 +126,76 @@ func TestTheTeamspaceMigrationIsSafeToApplyAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 	if constraints != 1 || indexes != 1 {
-		t.Fatalf("approval checks=%d teamspace indexes=%d, want one each", constraints, indexes)
+		t.Fatalf("validated approval checks=%d teamspace indexes=%d, want one each", constraints, indexes)
+	}
+}
+
+// earlier002 is the checksum of 002 as it was before it added its check NOT
+// VALID and left the listing index to 004: what a database that ran it has
+// recorded.
+const earlier002 = "7704a7618a90f43719b8e05a9cdcc6493bc1991e1836d0acd8a014a31b8718e0"
+
+// TestAnEarlierTeamspaceMigrationEndsUpValidated: two databases this release
+// meets. One ran 002 before it said NOT VALID, so its check is already valid
+// and 002 is recorded under that file's checksum; another ran this 002 but
+// not yet 003, so its check is still NOT VALID. Migrating either ends with
+// every file recorded as it is now, the check validated, and the listing
+// index built.
+func TestAnEarlierTeamspaceMigrationEndsUpValidated(t *testing.T) {
+	database, store := openInteractionStore(t)
+	ctx := context.Background()
+	for _, testCase := range []struct {
+		name  string
+		setUp string
+	}{
+		{"an earlier 002, its check already valid", `UPDATE oryxa_migrations SET checksum='` + earlier002 + `'
+			WHERE service='agent-interactions' AND name='002_teamspace_approval.sql'`},
+		// Dropped and added again in one transaction, so no other session
+		// ever sees the table without it.
+		{"this 002 without 003, its check not yet valid", `ALTER TABLE agents_primary.agent_interactions
+			DROP CONSTRAINT agent_interactions_approval_check,
+			ADD CONSTRAINT agent_interactions_approval_check CHECK (approval IN ('agent', 'owner')) NOT VALID`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if err := pgx.BeginFunc(ctx, database.Pool, func(tx pgx.Tx) error {
+				if _, err := tx.Exec(ctx, testCase.setUp); err != nil {
+					return err
+				}
+				_, err := tx.Exec(ctx, `DELETE FROM oryxa_migrations WHERE service='agent-interactions' AND name > '002_teamspace_approval.sql'`)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Migrate(ctx); err != nil {
+				t.Fatalf("migrating: %v", err)
+			}
+			var validated bool
+			if err := database.Pool.QueryRow(ctx, `SELECT convalidated FROM pg_constraint
+				WHERE conname='agent_interactions_approval_check' AND conrelid='agents_primary.agent_interactions'::regclass`).Scan(&validated); err != nil || !validated {
+				t.Fatalf("the approval check is validated=%v (%v), want validated", validated, err)
+			}
+			names, err := fs.Glob(migrations, "migrations/*.sql")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range names {
+				contents, err := fs.ReadFile(migrations, name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sum := sha256.Sum256(contents)
+				var recorded string
+				if err := database.Pool.QueryRow(ctx, `SELECT checksum FROM oryxa_migrations WHERE service='agent-interactions' AND name=$1`,
+					path.Base(name)).Scan(&recorded); err != nil || recorded != hex.EncodeToString(sum[:]) {
+					t.Fatalf("%s is recorded as %q (%v), want this file's checksum", name, recorded, err)
+				}
+			}
+			var indexes int
+			if err := database.Pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes
+				WHERE schemaname='agents_primary' AND indexname='agent_interactions_teamspace_idx'`).Scan(&indexes); err != nil || indexes != 1 {
+				t.Fatalf("teamspace indexes=%d (%v), want one", indexes, err)
+			}
+		})
 	}
 }
 
