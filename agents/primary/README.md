@@ -457,7 +457,15 @@ days when explicitly chosen).
 The delivery row stores only the event's routing projection. A woken agent
 loads the authoritative record through `interactions_get`, treats all of its
 cross-user content as untrusted data, and records decisions and results with
-the strict tools. Its run starts with the interactions toolbox already loaded
+the strict tools. A model answer by itself does not acknowledge target work:
+the ledger must actually leave `pending` or `approved`. Every recipient uses
+one stable conversation per interaction, recorded earlier revisions settle
+before later ones while newer authoritative state supersedes stale work, and
+repeat events deduplicate by `event_id`. Runs carry no member access token, do
+not read or write long-term memory, and remain subject to the normal tool
+authorization and confirmation boundaries.
+
+A delivery run starts with the interactions toolbox already loaded
 (`threads.RunInput.Toolboxes`), its skill in the instruction, so the first
 model call goes straight to `interactions_get` rather than to `list_tools` and
 `load_tools`; the run's other toolboxes stay loadable as ever.
@@ -472,13 +480,7 @@ behalf of … approved by …", and a failure as a line), and the call, with
 what it recorded, stays in the delivery thread. A closing message was one
 more model call, 3 to 37 seconds, restating another member's request to
 nobody while the run held its thread and a delivery slot. An approval carries
-on to do the work, and a member's own run is unchanged. A model answer by itself does not acknowledge target work:
-the ledger must actually leave `pending` or `approved`. Every recipient uses
-one stable conversation per interaction, recorded earlier revisions settle
-before later ones while newer authoritative state supersedes stale work, and
-repeat events deduplicate by `event_id`. Runs carry no member access token, do
-not read or write long-term memory, and remain subject to the normal tool
-authorization and confirmation boundaries.
+on to do the work, and a member's own run is unchanged.
 
 ## Run API
 
@@ -1069,12 +1071,11 @@ repeated delivery is settled without running the agent again.
 Approved work is never left approved with nobody working on it. When the
 waker gives up on an `approved` delivery (its runs failed three times, not
 counting a run the waker's own stop cut short, or its agent no longer exists
-or has been disabled) it closes the request, failed,
-with why as the result's summary; and every poll closes, the same way, the
-approved requests whose expiry passed unanswered, since none can be answered
-any more, whatever became of their delivery
-(`interactions.Store.CloseApproved` and `CloseExpired`, which fail an
-approved request as `Close` does). Each is the ordinary completed event, so
+or has been disabled) it closes the request, failed, with why as the result's
+summary; and every poll closes, the same way, the approved requests whose
+expiry passed unanswered, since none can be answered any more, whatever
+became of their delivery (`interactions.Store.CloseApproved` and
+`CloseExpired`, which fail an approved request as `Close` does). Each is the ordinary completed event, so
 the member who asked hears of it as of any failed result, and a side
 conversation shows it as the agent's failure with the reason. Nothing else is
 closed: a new request whose deciding run was given up stays pending, for its
