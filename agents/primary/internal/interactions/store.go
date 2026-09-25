@@ -282,10 +282,11 @@ func (store *Store) Respond(ctx context.Context, id string, input agents.Interac
 }
 
 // Hold keeps a request for its owner's own decision. A pending request is
-// marked held, which nobody is waiting on, so no event is recorded. An
-// approved one has its approval, and who made it, withdrawn and is pending
-// again, held: that is recorded as the request's new requested event, which
-// the waker completes without waking anyone, as it does any held request.
+// marked held. An approved one has its approval, and who made it, withdrawn
+// and is pending again, held. Either change is recorded as the request's new
+// requested event, carrying its approval, now "owner", and its new revision,
+// which the waker completes without waking anyone, as it does any held
+// request. A request already held is left as it is, with no event.
 func (store *Store) Hold(ctx context.Context, id string, at time.Time) (agents.Interaction, error) {
 	var result agents.Interaction
 	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
@@ -302,9 +303,13 @@ func (store *Store) Hold(ctx context.Context, id string, at time.Time) (agents.I
 				result = current
 				return nil
 			}
-			return scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+			err := scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
 				SET approval='owner', revision=revision+1, updated_at=$2 WHERE id=$1 RETURNING `+selectColumns,
 				id, at), &result)
+			if err != nil {
+				return err
+			}
+			return recordEvent(ctx, tx, agentsv1.InteractionRequestedDetailType, result)
 		case StatusApproved:
 			err := scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
 				SET status='pending', approval='owner', decision=NULL,

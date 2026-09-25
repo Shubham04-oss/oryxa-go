@@ -530,9 +530,10 @@ func eventsOf(t *testing.T, database *postgreskit.Database, requestID string) []
 }
 
 // TestTheLedgerHoldsARequestForItsOwner: a pending request is marked held,
-// which nobody waits on, so no event; an approved one has its approval and
-// its decider withdrawn and is pending again, held, recorded as a new
-// requested event; anything else is not the ledger's to hold.
+// and an approved one has its approval and its decider withdrawn and is
+// pending again, held, each recorded as a new requested event that says so;
+// holding one again changes nothing; anything else is not the ledger's to
+// hold.
 func TestTheLedgerHoldsARequestForItsOwner(t *testing.T) {
 	database, store := openInteractionStore(t)
 	ctx := context.Background()
@@ -556,8 +557,12 @@ func TestTheLedgerHoldsARequestForItsOwner(t *testing.T) {
 	if again, err := store.Hold(ctx, pending.ID, now.Add(2*time.Second)); err != nil || again.Revision != 2 {
 		t.Fatalf("holding it again = %+v, %v; want it unchanged", again, err)
 	}
-	if events := eventsOf(t, database, pending.ID); fmt.Sprint(events) != fmt.Sprint([]string{requestedEvent}) {
-		t.Fatalf("events=%v, want only the request's own", events)
+	if events := eventsOf(t, database, pending.ID); fmt.Sprint(events) != fmt.Sprint([]string{requestedEvent, requestedEvent}) {
+		t.Fatalf("events=%v, want the request's own and a new requested event for the hold, and none for holding it again", events)
+	}
+	if _, changes := changesOf(t, database, pending.ID); len(changes) != 2 || changes[1].Approval != ApprovalOwner ||
+		changes[1].Revision != 2 || !changes[1].ChangedAt.Equal(now.Add(time.Second)) {
+		t.Fatalf("the hold's event = %+v, want it held for its owner at revision 2, when it was held", changes)
 	}
 
 	approved := create("approved")

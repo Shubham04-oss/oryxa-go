@@ -387,8 +387,9 @@ member approves it, and before the waker wakes an agent for its `requested` or
 - If its owner has since taken deciding back (switched the specialist from
   `automatic` to `request`, say), the request is held for them. A pending
   request is marked `approval: "owner"`. An agent's approval whose work has
-  not started is withdrawn, so the request is pending and held again, with a
-  new `requested` event. The agent is refused and not woken. Switching a mode
+  not started is withdrawn, so the request is pending and held again. Either
+  is recorded as a new `requested` event carrying `approval: "owner"`, whose
+  delivery wakes nobody. The agent is refused and not woken. Switching a mode
   the other way does not release requests already held.
 - If it no longer stands (the teamspace is gone or disabled, the member who
   asked left its team, or either agent lost its seat), Oryxa closes it with
