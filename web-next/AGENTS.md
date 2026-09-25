@@ -31,3 +31,10 @@ Before building a surface `../web` already has, read its row in
 [PARITY.md](PARITY.md): the old behaviour, the real endpoints (check them
 against the Go handler, not the old client), and the pitfalls. Update its status
 there in the same task.
+
+## Realtime
+
+Every conversation surface (an agent chat, a teamspace room, a side
+conversation, a DM) is a Durable Object. Read [REALTIME.md](REALTIME.md)
+before building or changing one: which object, where its truth lives, and
+what the Worker checks before a member may open it.

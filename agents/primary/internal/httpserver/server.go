@@ -49,10 +49,11 @@ type Directory interface {
 	Membership(ctx context.Context, organizationID string, credentials authclient.Credentials) (authclient.Membership, error)
 }
 
-// Threads is the run API beneath HTTP. threads.Service implements it.
+// Threads is the run API beneath HTTP. threads.Service implements it, through
+// ForThreads, which maps Create and List to CreateFrom and ListFrom.
 type Threads interface {
-	Create(ctx context.Context, member threads.Member) (threads.Thread, error)
-	List(ctx context.Context, member threads.Member) ([]threads.Thread, error)
+	Create(ctx context.Context, member threads.Member, origin string) (threads.Thread, error)
+	List(ctx context.Context, member threads.Member, origin string) ([]threads.Thread, error)
 	Get(ctx context.Context, member threads.Member, threadID string) (threads.Detail, error)
 	Delete(ctx context.Context, member threads.Member, threadID string) error
 	StartRun(ctx context.Context, member threads.Member, threadID string, input threads.RunInput) (Run, error)
@@ -109,13 +110,17 @@ type AgentWorkflows interface {
 }
 
 // AgentInteractions is the cross-user request ledger. interactions.Service
-// implements it; the HTTP actor is always the member's primary agent.
+// implements it; the HTTP actor is always the member's primary agent. A
+// decision made here is the member's own, made in their signed-in session
+// (agent tokens are refused), so it goes through DecideAsOwner: the only way
+// a request held for its owner is decided.
 type AgentInteractions interface {
 	Create(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionCreateInput) (primaryagents.Interaction, error)
-	Inbox(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error)
-	Sent(context.Context, primaryagents.InteractionActor, int) ([]primaryagents.Interaction, error)
+	List(context.Context, primaryagents.InteractionActor, interactions.Query) ([]primaryagents.Interaction, error)
 	Get(context.Context, primaryagents.InteractionActor, string) (primaryagents.Interaction, error)
-	Decide(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error)
+	// DecideAsOwner takes the member's own token, which approving a request
+	// made in a teamspace reads that teamspace with.
+	DecideAsOwner(context.Context, primaryagents.InteractionActor, string, string, primaryagents.InteractionDecisionInput) (primaryagents.Interaction, error)
 	Respond(context.Context, primaryagents.InteractionActor, string, primaryagents.InteractionResponseInput) (primaryagents.Interaction, error)
 }
 
@@ -277,6 +282,7 @@ func New(directory Directory, service Threads, config Config, logger *slog.Logge
 	server.handle("GET /v1/organizations/{organizationID}/agent-workflows/{workflowID}/executions", server.listAgentWorkflowExecutions)
 	server.handle("GET /v1/organizations/{organizationID}/agent-workflow-executions/{executionID}", server.getAgentWorkflowExecution)
 	server.handle("POST /v1/organizations/{organizationID}/agent-requests", server.createInteraction)
+	server.handle("GET /v1/organizations/{organizationID}/agent-requests", server.listAgentRequests)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/inbox", server.interactionInbox)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/sent", server.interactionSent)
 	server.handle("GET /v1/organizations/{organizationID}/agent-requests/{requestID}", server.getInteraction)
@@ -360,10 +366,14 @@ func scopeOf(member threads.Member) managedagents.Scope {
 	return managedagents.Scope{OrganizationID: member.OrganizationID, UserID: member.UserID}
 }
 
+// interactionActorOf is the member acting in their own signed-in session,
+// through their primary agent's identity. It is the only place an actor is
+// marked SessionMember: member refuses agent tokens before it is reached.
 func interactionActorOf(member threads.Member) primaryagents.InteractionActor {
 	return primaryagents.InteractionActor{
 		OrganizationID: member.OrganizationID, UserID: member.UserID,
 		AgentID: member.AgentID, AgentName: member.AgentName, AgentKind: member.AgentKind,
+		Session: primaryagents.SessionMember,
 	}
 }
 
@@ -392,15 +402,25 @@ func (server *Server) createInteraction(writer http.ResponseWriter, request *htt
 	writeJSON(writer, http.StatusCreated, created)
 }
 
+// listAgentRequests lists the requests the member's agents sent and were
+// sent, together.
+func (server *Server) listAgentRequests(writer http.ResponseWriter, request *http.Request) {
+	server.listInteractions(writer, request, interactions.BoxAll)
+}
+
 func (server *Server) interactionInbox(writer http.ResponseWriter, request *http.Request) {
-	server.listInteractions(writer, request, true)
+	server.listInteractions(writer, request, interactions.BoxInbox)
 }
 
 func (server *Server) interactionSent(writer http.ResponseWriter, request *http.Request) {
-	server.listInteractions(writer, request, false)
+	server.listInteractions(writer, request, interactions.BoxSent)
 }
 
-func (server *Server) listInteractions(writer http.ResponseWriter, request *http.Request, inbox bool) {
+// listInteractions lists one side of the member's requests, or both. Each
+// listing takes an optional ?teamspace_id= and ?with_user=, which together
+// are how a side conversation reads what two teammates asked each other in
+// one teamspace, as either of them.
+func (server *Server) listInteractions(writer http.ResponseWriter, request *http.Request, box string) {
 	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
 		return
@@ -413,13 +433,18 @@ func (server *Server) listInteractions(writer http.ResponseWriter, request *http
 	if !ok {
 		return
 	}
-	var listed []primaryagents.Interaction
-	var err error
-	if inbox {
-		listed, err = server.interactions.Inbox(request.Context(), interactionActorOf(member), limit)
-	} else {
-		listed, err = server.interactions.Sent(request.Context(), interactionActorOf(member), limit)
+	query := request.URL.Query()
+	// A filter left out lists everything, so one sent blank is a mistake to
+	// answer, never a quiet way of asking for everything.
+	for _, name := range []string{"teamspace_id", "with_user"} {
+		if query.Has(name) && strings.TrimSpace(query.Get(name)) == "" {
+			writeError(writer, http.StatusBadRequest, "invalid_request", name+" must not be blank; leave it out to list every request")
+			return
+		}
 	}
+	listed, err := server.interactions.List(request.Context(), interactionActorOf(member), interactions.Query{
+		Box: box, TeamspaceID: query.Get("teamspace_id"), WithUserID: query.Get("with_user"), Limit: limit,
+	})
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -444,6 +469,9 @@ func (server *Server) getInteraction(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, found)
 }
 
+// decideInteraction is the member deciding a request addressed to one of
+// their agents, themselves: the one way a request held for its owner is
+// decided.
 func (server *Server) decideInteraction(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.memberWithAgent(writer, request)
 	if !ok {
@@ -457,7 +485,7 @@ func (server *Server) decideInteraction(writer http.ResponseWriter, request *htt
 	if !server.decode(writer, request, &input) {
 		return
 	}
-	updated, err := server.interactions.Decide(request.Context(), interactionActorOf(member), request.PathValue("requestID"), input)
+	updated, err := server.interactions.DecideAsOwner(request.Context(), interactionActorOf(member), member.AccessToken, request.PathValue("requestID"), input)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -1248,12 +1276,27 @@ func (server *Server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	server.mux.ServeHTTP(writer, request)
 }
 
+// listThreads defaults to the member's chat threads. ?origin=side_conversation
+// or ?origin=all reaches the threads the web app opened to run the member's
+// own agent on an internal prompt, kept out of the default listing so they
+// never show as the member's own chat history. ?origin= present but blank
+// (after trimming whitespace) is the caller's mistake, answered here rather
+// than sent on to the service; an unknown, non-blank value is answered by the
+// service's own ErrInvalid.
 func (server *Server) listThreads(writer http.ResponseWriter, request *http.Request) {
 	member, ok := server.member(writer, request)
 	if !ok {
 		return
 	}
-	listed, err := server.threads.List(request.Context(), member)
+	origin := threads.OriginChat
+	if values, present := request.URL.Query()["origin"]; present {
+		origin = strings.TrimSpace(values[0])
+		if origin == "" {
+			writeError(writer, http.StatusBadRequest, "invalid_request", "origin must be chat, side_conversation or all")
+			return
+		}
+	}
+	listed, err := server.threads.List(request.Context(), member, origin)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -1266,14 +1309,16 @@ func (server *Server) createThread(writer http.ResponseWriter, request *http.Req
 	if !ok {
 		return
 	}
-	// The body is optional, and nothing in it is read yet: a thread starts
-	// empty. An object with fields this version does not know is refused
-	// rather than silently dropped.
-	var body struct{}
+	// The body is optional; when sent, it may carry the thread's origin.
+	// Omitted or "" means a plain chat thread. An object with fields this
+	// version does not know is refused rather than silently dropped.
+	var body struct {
+		Origin string `json:"origin"`
+	}
 	if request.ContentLength != 0 && !server.decode(writer, request, &body) {
 		return
 	}
-	created, err := server.threads.Create(request.Context(), member)
+	created, err := server.threads.Create(request.Context(), member, body.Origin)
 	if err != nil {
 		server.handleError(writer, request, err)
 		return
@@ -1691,6 +1736,10 @@ func ErrorCode(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, interactions.ErrExpired):
 		return http.StatusConflict, "request_expired"
+	case errors.Is(err, interactions.ErrIdempotencyConflict):
+		return http.StatusConflict, "idempotency_key_reused"
+	case errors.Is(err, interactions.ErrClosed):
+		return http.StatusConflict, "request_closed"
 	case errors.Is(err, interactions.ErrConflict):
 		return http.StatusConflict, "invalid_state"
 	case errors.Is(err, interactions.ErrNotFound):

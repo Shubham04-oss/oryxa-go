@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react"
+import { useId, useState } from "react"
 import type { FormEvent } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   ArrowUpRight,
   Check,
@@ -8,11 +9,37 @@ import {
   Plus,
   RotateCw,
 } from "lucide-react"
-import { readApi, writeApi } from "./workspace-tools-api"
+import {
+  appsErrorMessage,
+  catalogTriggerTypesQueryOptions,
+  connectionTargetsQueryOptions,
+  createTrigger,
+  removeTrigger,
+  triggersQueryOptions,
+} from "@/lib/apps/client"
+import type { Connection, Toolkit, TriggerType } from "@/lib/apps/client"
+import {
+  defaultSourceIntervalSeconds,
+  effectiveKinds,
+  kindsQueryOptions,
+  knowledgeQueryKey,
+  providersQueryOptions,
+  registerSource,
+  removeSource,
+  setSourceKinds,
+  sourceReasonText,
+  sourceRunsQueryKey,
+  sourceRunsQueryOptions,
+  sourcesQueryOptions,
+  syncSource,
+} from "@/lib/knowledge/client"
+import type { Source } from "@/lib/knowledge/client"
 import {
   buildTriggerConfig,
   intervalChoices,
   isSourceProvider,
+  prettyTime,
+  sentence,
   sourceFields,
   sourceName,
   sourceTarget,
@@ -20,114 +47,48 @@ import {
   triggerCapability,
 } from "./workspace-tool-helpers"
 import type { SourceProvider, TriggerField } from "./workspace-tool-helpers"
-import type { Connection, Toolkit } from "./workspace-tools-data"
 
 type Pane = "events" | "indexing" | "runs"
 
-type TriggerType = {
-  trigger: string
-  name: string
-  description: string
-  kind: string
-  config_schema?: unknown
-  instructions?: string
-  manual_setup?: boolean
-}
-
-type Trigger = {
-  id: string
-  trigger: string
-  status: "active" | "disabled" | "removed"
-  kind?: string
-  setup?: string
-  delivery_count: number
-  last_delivery_at?: string
-}
-
-type Source = {
-  id: string
-  provider: string
-  target: Record<string, string>
-  status: "active" | "paused" | "removed"
-  reason?: string
-  interval_seconds: number
-  last_synced_at?: string
-}
-
-type Run = {
-  id: string
-  status: "running" | "completed" | "failed"
-  started_at: string
-  documents_seen: number
-  documents_published: number
-  documents_removed: number
-  documents_excluded?: number
-  error?: string
-}
-
-type Target = {
-  id: string
-  name: string
-  description?: string
-  target: Record<string, string>
-}
-
-const previewEvents: TriggerType[] = [
+const previewEvents: Array<
+  Pick<TriggerType, "description" | "name" | "trigger">
+> = [
   {
     trigger: "EXAMPLE_NEW_ITEM",
     name: "New item",
     description: "Wake your agents when something new arrives.",
-    kind: "webhook",
   },
   {
     trigger: "EXAMPLE_ITEM_UPDATED",
     name: "Item updated",
     description: "Keep work current when an item changes.",
-    kind: "webhook",
   },
 ]
 
-function prettyTime(value?: string) {
-  if (!value) return "Never"
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return "Unknown"
-  return date.toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  })
+/** Go writes advice in lower case, as a clause; a row shows it as a sentence. */
+function advice(text: string): string {
+  const trimmed = text.trim()
+  return sentence(trimmed.charAt(0).toUpperCase() + trimmed.slice(1))
 }
 
-function errorText(error: unknown) {
-  return error instanceof Error
-    ? error.message
-    : "This request could not be completed."
+function intervalLabel(seconds: number): string {
+  return (
+    intervalChoices.find((choice) => choice.value === seconds)?.label ||
+    `Every ${seconds}s`
+  )
 }
 
-const TRIGGER_TYPES_PAGE_LIMIT = 50
-const TRIGGER_TYPES_MAX_PAGES = 10
-
-// The catalog clamps `limit` to 50 server-side, so an app with more trigger
-// types than fit on one page needs its `next_cursor` followed to be listed
-// in full.
-async function fetchTriggerTypes(toolkit: string): Promise<TriggerType[]> {
-  const types: TriggerType[] = []
-  let cursor: string | null = null
-  for (let page = 0; page < TRIGGER_TYPES_MAX_PAGES; page++) {
-    const params = new URLSearchParams({
-      limit: String(TRIGGER_TYPES_PAGE_LIMIT),
-    })
-    if (cursor) params.set("cursor", cursor)
-    const data = await readApi<{
-      triggers: TriggerType[]
-      next_cursor: string | null
-    }>(`/v1/apps/catalog/${encodeURIComponent(toolkit)}/triggers?${params}`)
-    types.push(...data.triggers)
-    if (!data.next_cursor) break
-    cursor = data.next_cursor
-  }
-  return types
+/** Everything cached about the sources of one organization, for invalidation. */
+function sourcesKey(organizationId: string) {
+  return [...knowledgeQueryKey(organizationId), "sources"] as const
 }
 
+/**
+ * What an active connection does for the member's agents: the events it
+ * wakes them for, what it indexes, and how those runs went. Only an active
+ * connection has these (apps and knowledge answer 409 otherwise), so the page
+ * mounts this for nothing else.
+ */
 export function ConnectionWorkspace({
   connection,
   toolkit,
@@ -140,77 +101,7 @@ export function ConnectionWorkspace({
   preview: boolean
 }) {
   const [pane, setPane] = useState<Pane>("events")
-  const [types, setTypes] = useState<TriggerType[]>([])
-  const [triggers, setTriggers] = useState<Trigger[]>([])
-  const [sources, setSources] = useState<Source[]>([])
-  const [providers, setProviders] = useState<string[]>([])
-  const [eventLoading, setEventLoading] = useState(false)
-  const [sourceLoading, setSourceLoading] = useState(false)
-  const [problem, setProblem] = useState("")
-  const [eventRefresh, setEventRefresh] = useState(0)
-  const [sourceRefresh, setSourceRefresh] = useState(0)
   const [runsSourceId, setRunsSourceId] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (preview || pane !== "events") return
-    let cancelled = false
-    setEventLoading(true)
-    setProblem("")
-    const root = `/v1/organizations/${encodeURIComponent(organizationId)}`
-    const search = new URLSearchParams({ connection_id: connection.id })
-    Promise.all([
-      fetchTriggerTypes(toolkit.toolkit),
-      readApi<{ triggers: Trigger[] }>(`${root}/apps/triggers?${search}`),
-    ])
-      .then(([catalogTypes, subscribed]) => {
-        if (cancelled) return
-        setTypes(catalogTypes)
-        setTriggers(subscribed.triggers)
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setProblem(errorText(error))
-      })
-      .finally(() => {
-        if (!cancelled) setEventLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [
-    connection.id,
-    eventRefresh,
-    organizationId,
-    pane,
-    preview,
-    toolkit.toolkit,
-  ])
-
-  useEffect(() => {
-    if (preview || (pane !== "indexing" && pane !== "runs")) return
-    let cancelled = false
-    setSourceLoading(true)
-    setProblem("")
-    const root = `/v1/organizations/${encodeURIComponent(organizationId)}`
-    const search = new URLSearchParams({ connection_id: connection.id })
-    Promise.all([
-      readApi<{ providers: string[] }>("/v1/sources/providers"),
-      readApi<{ sources: Source[] }>(`${root}/sources?${search}`),
-    ])
-      .then(([available, listed]) => {
-        if (cancelled) return
-        setProviders(available.providers)
-        setSources(listed.sources)
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setProblem(errorText(error))
-      })
-      .finally(() => {
-        if (!cancelled) setSourceLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [connection.id, organizationId, pane, preview, sourceRefresh])
 
   const tabs: Array<{ key: Pane; label: string }> = [
     { key: "events", label: "Events" },
@@ -244,20 +135,12 @@ export function ConnectionWorkspace({
           and runs.
         </p>
       )}
-      {problem && (
-        <p className="workspace-tool-inline-error" role="alert">
-          {problem}
-        </p>
-      )}
       {pane === "events" && (
         <EventsPane
           connection={connection}
+          toolkit={toolkit}
           organizationId={organizationId}
           preview={preview}
-          triggers={triggers}
-          types={preview ? previewEvents : types}
-          loading={eventLoading}
-          onChange={() => setEventRefresh((current) => current + 1)}
         />
       )}
       {pane === "indexing" && (
@@ -266,10 +149,6 @@ export function ConnectionWorkspace({
           organizationId={organizationId}
           preview={preview}
           toolkit={toolkit}
-          providers={providers}
-          sources={sources}
-          loading={sourceLoading}
-          onChange={() => setSourceRefresh((current) => current + 1)}
           onRuns={(sourceId) => {
             setRunsSourceId(sourceId)
             setPane("runs")
@@ -278,10 +157,9 @@ export function ConnectionWorkspace({
       )}
       {pane === "runs" && (
         <RunsPane
+          connection={connection}
           organizationId={organizationId}
           preview={preview}
-          sources={sources}
-          loading={sourceLoading}
           initialSourceId={runsSourceId}
         />
       )}
@@ -291,37 +169,66 @@ export function ConnectionWorkspace({
 
 function EventsPane({
   connection,
+  toolkit,
   organizationId,
   preview,
-  types,
-  triggers,
-  loading,
-  onChange,
 }: {
   connection: Connection
+  toolkit: Toolkit
   organizationId: string
   preview: boolean
-  types: TriggerType[]
-  triggers: Trigger[]
-  loading: boolean
-  onChange: () => void
 }) {
+  const queryClient = useQueryClient()
+  const types = useQuery({
+    ...catalogTriggerTypesQueryOptions(toolkit.toolkit),
+    enabled: !preview,
+  })
+  const triggers = useQuery({
+    ...triggersQueryOptions(organizationId, connection.id),
+    enabled: !preview,
+  })
   const [adding, setAdding] = useState(false)
   const [query, setQuery] = useState("")
   const [chosen, setChosen] = useState<TriggerType | null>(null)
   const [values, setValues] = useState<
     Record<string, boolean | number | string>
   >({})
-  const [busy, setBusy] = useState(false)
-  const [problem, setProblem] = useState("")
+  const [formProblem, setFormProblem] = useState("")
   const [stopId, setStopId] = useState<string | null>(null)
-  const typeBySlug = new Map(types.map((type) => [type.trigger, type]))
-  const subscribed = new Set(
-    triggers
-      .filter((item) => item.status !== "removed")
-      .map((item) => item.trigger)
+  const refresh = () =>
+    queryClient.invalidateQueries({
+      queryKey: triggersQueryOptions(organizationId, connection.id).queryKey,
+    })
+  const add = useMutation({
+    mutationFn: (input: { trigger: string; config: Record<string, unknown> }) =>
+      createTrigger(organizationId, {
+        connectionId: connection.id,
+        trigger: input.trigger,
+        config: input.config,
+      }),
+    onSuccess: () => {
+      setChosen(null)
+      setValues({})
+      setAdding(false)
+      return refresh()
+    },
+  })
+  const stop = useMutation({
+    mutationFn: (triggerId: string) => removeTrigger(organizationId, triggerId),
+    onSuccess: () => {
+      setStopId(null)
+      return refresh()
+    },
+  })
+
+  const loading = !preview && (types.isPending || triggers.isPending)
+  const typeList = types.data ?? []
+  const watched = (triggers.data ?? []).filter(
+    (item) => item.status !== "removed"
   )
-  const available = types.filter(
+  const typeBySlug = new Map(typeList.map((type) => [type.trigger, type]))
+  const subscribed = new Set(watched.map((item) => item.trigger))
+  const available = typeList.filter(
     (type) =>
       !subscribed.has(type.trigger) &&
       `${type.name} ${type.description}`
@@ -329,56 +236,34 @@ function EventsPane({
         .includes(query.toLowerCase())
   )
   const capability = chosen ? triggerCapability(chosen.config_schema) : null
+  const loadProblem = triggers.isError
+    ? appsErrorMessage(triggers.error, "Watched events could not be loaded.")
+    : types.isError
+      ? appsErrorMessage(
+          types.error,
+          `${toolkit.name}'s events could not be loaded.`
+        )
+      : ""
 
-  async function add(event: FormEvent<HTMLFormElement>) {
+  function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!chosen || preview || busy || capability?.kind === "unsupported") return
+    if (
+      !chosen ||
+      preview ||
+      add.isPending ||
+      capability?.kind === "unsupported"
+    )
+      return
     const outcome =
       capability?.kind === "form"
         ? buildTriggerConfig(capability.fields, values)
         : { config: {} }
     if (outcome.problem) {
-      setProblem(outcome.problem)
+      setFormProblem(outcome.problem)
       return
     }
-    setBusy(true)
-    setProblem("")
-    try {
-      await writeApi(
-        `/v1/organizations/${encodeURIComponent(organizationId)}/apps/triggers`,
-        "POST",
-        {
-          connection_id: connection.id,
-          trigger: chosen.trigger,
-          config: outcome.config,
-        }
-      )
-      setChosen(null)
-      setValues({})
-      setAdding(false)
-      onChange()
-    } catch (error) {
-      setProblem(errorText(error))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function stop(id: string) {
-    setBusy(true)
-    setProblem("")
-    try {
-      await writeApi(
-        `/v1/organizations/${encodeURIComponent(organizationId)}/apps/triggers/${encodeURIComponent(id)}`,
-        "DELETE"
-      )
-      setStopId(null)
-      onChange()
-    } catch (error) {
-      setProblem(errorText(error))
-    } finally {
-      setBusy(false)
-    }
+    setFormProblem("")
+    add.mutate({ trigger: chosen.trigger, config: outcome.config })
   }
 
   return (
@@ -394,67 +279,84 @@ function EventsPane({
         <button
           type="button"
           className="workspace-tool-action"
-          disabled={preview || loading}
+          disabled={preview || loading || types.isError}
           onClick={() => setAdding((value) => !value)}
         >
           <Plus size={14} /> Add event
         </button>
       </div>
       {loading && <p className="workspace-tool-muted">Loading events…</p>}
-      {problem && (
+      {loadProblem && (
         <p className="workspace-tool-inline-error" role="alert">
-          {problem}
+          {loadProblem}{" "}
+          <button
+            type="button"
+            className="workspace-tool-text-button"
+            onClick={() => {
+              if (triggers.isError) void triggers.refetch()
+              if (types.isError) void types.refetch()
+            }}
+          >
+            Retry
+          </button>
         </p>
       )}
-      {!loading &&
-        triggers.filter((item) => item.status !== "removed").length === 0 &&
-        !preview && (
-          <p className="workspace-tool-muted">
-            No events watched yet. Choose an event below to start.
-          </p>
-        )}
-      {triggers
-        .filter((item) => item.status !== "removed")
-        .map((trigger) => {
-          const type = typeBySlug.get(trigger.trigger)
-          return (
-            <div className="workspace-tool-row" key={trigger.id}>
-              <span
-                className={`workspace-tool-dot ${trigger.status === "active" ? "is-live" : ""}`}
-              />
-              <div className="workspace-tool-row-copy">
-                <strong>{type?.name || trigger.trigger}</strong>
-                <small>
-                  {trigger.status === "active"
-                    ? `${trigger.delivery_count} deliveries · Last ${prettyTime(trigger.last_delivery_at)}`
-                    : trigger.setup || "Disabled"}
-                </small>
-              </div>
-              {stopId === trigger.id ? (
-                <span className="workspace-tool-confirm">
-                  <button type="button" onClick={() => setStopId(null)}>
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => void stop(trigger.id)}
-                  >
-                    Confirm stop
-                  </button>
-                </span>
-              ) : (
+      {stop.isError && (
+        <p className="workspace-tool-inline-error" role="alert">
+          {appsErrorMessage(stop.error, "Could not stop watching this event.")}
+        </p>
+      )}
+      {!preview && triggers.isSuccess && watched.length === 0 && (
+        <p className="workspace-tool-muted">
+          No events watched yet. Choose an event below to start.
+        </p>
+      )}
+      {watched.map((trigger) => {
+        const type = typeBySlug.get(trigger.trigger)
+        return (
+          <div className="workspace-tool-row" key={trigger.id}>
+            <span
+              className={`workspace-tool-dot ${trigger.status === "active" ? "is-live" : ""}`}
+            />
+            <div className="workspace-tool-row-copy">
+              <strong>{type?.name || trigger.trigger}</strong>
+              <small>
+                {trigger.status === "active"
+                  ? `${trigger.delivery_count} deliveries · Last ${prettyTime(trigger.last_delivery_at)}`
+                  : trigger.status_reason
+                    ? advice(trigger.status_reason)
+                    : "Disabled"}
+              </small>
+              {trigger.setup && <small>{advice(trigger.setup)}</small>}
+            </div>
+            {stopId === trigger.id ? (
+              <span className="workspace-tool-confirm">
+                <button type="button" onClick={() => setStopId(null)}>
+                  Cancel
+                </button>
                 <button
                   type="button"
-                  className="workspace-tool-text-button"
-                  onClick={() => setStopId(trigger.id)}
+                  disabled={stop.isPending}
+                  onClick={() => stop.mutate(trigger.id)}
                 >
-                  Stop
+                  {stop.isPending ? "Stopping…" : "Confirm stop"}
                 </button>
-              )}
-            </div>
-          )
-        })}
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="workspace-tool-text-button"
+                onClick={() => {
+                  stop.reset()
+                  setStopId(trigger.id)
+                }}
+              >
+                Stop
+              </button>
+            )}
+          </div>
+        )
+      })}
       {preview &&
         previewEvents.map((type) => (
           <div className="workspace-tool-row" key={type.trigger}>
@@ -479,6 +381,7 @@ function EventsPane({
               onClick={() => {
                 setAdding(false)
                 setChosen(null)
+                add.reset()
               }}
             >
               Cancel
@@ -486,7 +389,7 @@ function EventsPane({
           </div>
           {!chosen ? (
             <>
-              {types.length > 5 && (
+              {typeList.length > 5 && (
                 <input
                   className="workspace-tool-input"
                   aria-label="Search events"
@@ -508,7 +411,8 @@ function EventsPane({
                     onClick={() => {
                       setChosen(type)
                       setValues({})
-                      setProblem("")
+                      setFormProblem("")
+                      add.reset()
                     }}
                   >
                     <span>
@@ -521,10 +425,7 @@ function EventsPane({
               </div>
             </>
           ) : (
-            <form
-              onSubmit={(event) => void add(event)}
-              className="workspace-tool-config-form"
-            >
+            <form onSubmit={submit} className="workspace-tool-config-form">
               <button
                 type="button"
                 className="workspace-tool-text-button"
@@ -537,7 +438,7 @@ function EventsPane({
               {chosen.manual_setup && (
                 <p className="workspace-tool-warning">
                   <CircleAlert size={14} /> This event also needs a webhook
-                  configured in {connection.toolkit}. {chosen.instructions}
+                  configured in {toolkit.name}. {chosen.instructions}
                 </p>
               )}
               {capability?.kind === "unsupported" ? (
@@ -562,12 +463,18 @@ function EventsPane({
               ) : (
                 <p className="workspace-tool-muted">No configuration needed.</p>
               )}
+              {(formProblem || add.isError) && (
+                <p className="workspace-tool-inline-error" role="alert">
+                  {formProblem ||
+                    appsErrorMessage(add.error, "Could not watch this event.")}
+                </p>
+              )}
               <button
                 type="submit"
                 className="workspace-tool-action"
-                disabled={busy || capability?.kind === "unsupported"}
+                disabled={add.isPending || capability?.kind === "unsupported"}
               >
-                {busy ? "Adding…" : "Watch event"}
+                {add.isPending ? "Adding…" : "Watch event"}
               </button>
             </form>
           )}
@@ -659,43 +566,60 @@ function IndexingPane({
   organizationId,
   preview,
   toolkit,
-  providers,
-  sources,
-  loading,
-  onChange,
   onRuns,
 }: {
   connection: Connection
   organizationId: string
   preview: boolean
   toolkit: Toolkit
-  providers: string[]
-  sources: Source[]
-  loading: boolean
-  onChange: () => void
   onRuns: (sourceId: string) => void
 }) {
+  const queryClient = useQueryClient()
+  const providers = useQuery({ ...providersQueryOptions(), enabled: !preview })
+  const listed = useQuery({
+    ...sourcesQueryOptions(organizationId, { connectionId: connection.id }),
+    enabled: !preview,
+  })
   const [adding, setAdding] = useState(false)
-  const [busyId, setBusyId] = useState<string | null>(null)
-  const [problem, setProblem] = useState("")
-  const canIndex =
-    isSourceProvider(toolkit.toolkit) && providers.includes(toolkit.toolkit)
+  const [kindsId, setKindsId] = useState<string | null>(null)
+  const [removeId, setRemoveId] = useState<string | null>(null)
+  const refresh = () =>
+    queryClient.invalidateQueries({ queryKey: sourcesKey(organizationId) })
+  const sync = useMutation({
+    mutationFn: (sourceId: string) => syncSource(organizationId, sourceId),
+    onSuccess: (_source, sourceId) =>
+      Promise.all([
+        refresh(),
+        queryClient.invalidateQueries({
+          queryKey: sourceRunsQueryKey(organizationId, sourceId),
+        }),
+      ]),
+  })
+  const remove = useMutation({
+    mutationFn: (sourceId: string) => removeSource(organizationId, sourceId),
+    onSuccess: () => {
+      setRemoveId(null)
+      return refresh()
+    },
+  })
 
-  async function sync(source: Source) {
-    setBusyId(source.id)
-    setProblem("")
-    try {
-      await writeApi(
-        `/v1/organizations/${encodeURIComponent(organizationId)}/sources/${encodeURIComponent(source.id)}/sync`,
-        "POST"
-      )
-      onChange()
-    } catch (error) {
-      setProblem(errorText(error))
-    } finally {
-      setBusyId(null)
-    }
-  }
+  const loading = !preview && (providers.isPending || listed.isPending)
+  const canIndex =
+    isSourceProvider(toolkit.toolkit) &&
+    (providers.data ?? []).includes(toolkit.toolkit)
+  const sources = (listed.data ?? []).filter(
+    (source) => source.status !== "removed"
+  )
+  const loadProblem = providers.isError
+    ? appsErrorMessage(providers.error, "Indexing could not be checked.")
+    : listed.isError
+      ? appsErrorMessage(listed.error, "Sources could not be loaded.")
+      : ""
+  const actionProblem = sync.isError
+    ? appsErrorMessage(sync.error, "Could not queue a run.")
+    : remove.isError
+      ? appsErrorMessage(remove.error, "Could not remove the source.")
+      : ""
 
   return (
     <div className="workspace-tool-pane" role="tabpanel">
@@ -716,18 +640,33 @@ function IndexingPane({
           <Plus size={14} /> Add source
         </button>
       </div>
-      {problem && (
+      {loadProblem && (
         <p className="workspace-tool-inline-error" role="alert">
-          {problem}
+          {loadProblem}{" "}
+          <button
+            type="button"
+            className="workspace-tool-text-button"
+            onClick={() => {
+              if (providers.isError) void providers.refetch()
+              if (listed.isError) void listed.refetch()
+            }}
+          >
+            Retry
+          </button>
+        </p>
+      )}
+      {actionProblem && (
+        <p className="workspace-tool-inline-error" role="alert">
+          {actionProblem}
         </p>
       )}
       {loading && <p className="workspace-tool-muted">Loading sources…</p>}
-      {!loading && !preview && !canIndex && (
+      {!preview && providers.isSuccess && !canIndex && (
         <p className="workspace-tool-muted">
           Indexing is not available for this app in this deployment.
         </p>
       )}
-      {!loading && !preview && canIndex && !sources.length && (
+      {!preview && canIndex && listed.isSuccess && !sources.length && (
         <p className="workspace-tool-muted">
           No sources registered yet. Add one to make its content searchable.
         </p>
@@ -742,55 +681,246 @@ function IndexingPane({
           <span className="workspace-tool-example">Example</span>
         </div>
       )}
-      {sources
-        .filter((source) => source.status !== "removed")
-        .map((source) => (
-          <div className="workspace-tool-row" key={source.id}>
-            <span
-              className={`workspace-tool-dot ${source.status === "active" ? "is-live" : ""}`}
-            />
-            <div className="workspace-tool-row-copy">
-              <strong>{sourceName(source.provider, source.target)}</strong>
-              <small>
-                {source.status === "paused"
-                  ? source.reason || "Needs reconnecting"
-                  : `${intervalChoices.find((choice) => choice.value === source.interval_seconds)?.label || `Every ${source.interval_seconds}s`} · Last run ${prettyTime(source.last_synced_at)}`}
-              </small>
+      {sources.map((source) => {
+        const name = sourceName(source.provider, source.target)
+        const confirming = removeId === source.id
+        return (
+          <div key={source.id}>
+            <div className="workspace-tool-row">
+              <span
+                className={`workspace-tool-dot ${source.status === "active" ? "is-live" : ""}`}
+              />
+              <div className="workspace-tool-row-copy">
+                <strong>{name}</strong>
+                <small>
+                  {confirming
+                    ? "Stops indexing it and removes what it indexed from search."
+                    : source.status === "paused"
+                      ? sourceReasonText(source.reason)
+                      : `${intervalLabel(source.interval_seconds)} · Last run ${prettyTime(source.last_synced_at)}${source.include_kinds ? " · Chosen kinds" : ""}`}
+                </small>
+              </div>
+              {confirming ? (
+                <span className="workspace-tool-confirm">
+                  <button
+                    type="button"
+                    disabled={remove.isPending}
+                    onClick={() => setRemoveId(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={remove.isPending}
+                    onClick={() => remove.mutate(source.id)}
+                    aria-label={`Stop indexing ${name}`}
+                  >
+                    {remove.isPending ? "Removing…" : "Confirm remove"}
+                  </button>
+                </span>
+              ) : (
+                <span className="workspace-tool-row-actions">
+                  <button
+                    type="button"
+                    className="workspace-tool-text-button"
+                    onClick={() => onRuns(source.id)}
+                  >
+                    Runs
+                  </button>
+                  <button
+                    type="button"
+                    className="workspace-tool-text-button"
+                    aria-expanded={kindsId === source.id}
+                    aria-label={`Kinds of document indexed from ${name}`}
+                    onClick={() =>
+                      setKindsId((current) =>
+                        current === source.id ? null : source.id
+                      )
+                    }
+                  >
+                    Kinds
+                  </button>
+                  <button
+                    type="button"
+                    className="workspace-tool-text-button"
+                    disabled={
+                      (sync.isPending && sync.variables === source.id) ||
+                      source.status !== "active"
+                    }
+                    onClick={() => sync.mutate(source.id)}
+                    aria-label={`Run ${name} now`}
+                  >
+                    <RotateCw size={13} />{" "}
+                    {sync.isPending && sync.variables === source.id
+                      ? "Queuing…"
+                      : "Run now"}
+                  </button>
+                  <button
+                    type="button"
+                    className="workspace-tool-text-button"
+                    aria-label={`Remove ${name}`}
+                    onClick={() => {
+                      remove.reset()
+                      setRemoveId(source.id)
+                    }}
+                  >
+                    Remove
+                  </button>
+                </span>
+              )}
             </div>
-            <span className="workspace-tool-row-actions">
-              <button
-                type="button"
-                className="workspace-tool-text-button"
-                onClick={() => onRuns(source.id)}
-              >
-                Runs
-              </button>
-              <button
-                type="button"
-                className="workspace-tool-text-button"
-                disabled={busyId === source.id || source.status !== "active"}
-                onClick={() => void sync(source)}
-                aria-label={`Run ${sourceName(source.provider, source.target)} now`}
-              >
-                <RotateCw size={13} />{" "}
-                {busyId === source.id ? "Queuing…" : "Run now"}
-              </button>
-            </span>
+            {kindsId === source.id && !confirming && (
+              <SourceKindsForm
+                source={source}
+                organizationId={organizationId}
+                onClose={() => setKindsId(null)}
+              />
+            )}
           </div>
-        ))}
+        )
+      })}
       {adding && !preview && canIndex && (
         <IndexSourceForm
           connection={connection}
           organizationId={organizationId}
           provider={toolkit.toolkit as SourceProvider}
           onCancel={() => setAdding(false)}
-          onAdded={() => {
-            setAdding(false)
-            onChange()
-          }}
+          onAdded={() => setAdding(false)}
         />
       )}
     </div>
+  )
+}
+
+/**
+ * Which kinds of document a source indexes. Everything read is sorted into a
+ * kind as it arrives; a new choice is applied to what is already indexed on
+ * the source's next run, which knowledge brings forward.
+ */
+function SourceKindsForm({
+  source,
+  organizationId,
+  onClose,
+}: {
+  source: Source
+  organizationId: string
+  onClose: () => void
+}) {
+  const queryClient = useQueryClient()
+  const kinds = useQuery(kindsQueryOptions())
+  const [chosen, setChosen] = useState<Set<string> | null>(null)
+  const selected =
+    chosen ??
+    new Set(kinds.data ? effectiveKinds(kinds.data, source.include_kinds) : [])
+  const save = useMutation({
+    mutationFn: (include: string[] | null) =>
+      setSourceKinds(organizationId, source.id, include),
+    onSuccess: () => {
+      onClose()
+      return queryClient.invalidateQueries({
+        queryKey: sourcesKey(organizationId),
+      })
+    },
+  })
+  const name = sourceName(source.provider, source.target)
+
+  function toggle(kind: string, checked: boolean) {
+    const next = new Set(selected)
+    if (checked) next.add(kind)
+    else next.delete(kind)
+    setChosen(next)
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!kinds.data || selected.size === 0 || save.isPending) return
+    // Sent in the order kinds are shown, as knowledge keeps them.
+    save.mutate(
+      kinds.data
+        .filter((kind) => selected.has(kind.name))
+        .map((kind) => kind.name)
+    )
+  }
+
+  return (
+    <form
+      className="workspace-tool-form-panel workspace-tool-config-form"
+      aria-label={`Kinds indexed from ${name}`}
+      onSubmit={submit}
+    >
+      <div className="workspace-tool-pane-head">
+        <div>
+          <h5>What to index from {name}</h5>
+          <p>
+            Everything read here is sorted into kinds. Choose which your agents
+            can search; what is already indexed follows on the next run.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="workspace-tool-text-button"
+          disabled={save.isPending}
+          onClick={onClose}
+        >
+          Cancel
+        </button>
+      </div>
+      {kinds.isPending && (
+        <p className="workspace-tool-muted">Loading kinds…</p>
+      )}
+      {kinds.isError && (
+        <p className="workspace-tool-inline-error" role="alert">
+          {appsErrorMessage(kinds.error, "The kinds could not be loaded.")}
+        </p>
+      )}
+      {kinds.data && (
+        <div className="workspace-tool-kinds">
+          {kinds.data.map((kind) => (
+            <label className="workspace-tool-check" key={kind.name}>
+              <input
+                type="checkbox"
+                checked={selected.has(kind.name)}
+                onChange={(event) => toggle(kind.name, event.target.checked)}
+              />
+              <span>
+                <strong>{kind.label}</strong>
+                <small>
+                  {kind.hint}
+                  {kind.default ? "" : " · off by default"}
+                </small>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      {kinds.data && selected.size === 0 && (
+        <p className="workspace-tool-warning">
+          Choose at least one kind. To index nothing, remove the source.
+        </p>
+      )}
+      {save.isError && (
+        <p className="workspace-tool-inline-error" role="alert">
+          {appsErrorMessage(save.error, "Could not save the choice.")}
+        </p>
+      )}
+      <span className="workspace-tool-row-actions">
+        <button
+          type="button"
+          className="workspace-tool-text-button"
+          disabled={save.isPending || !kinds.data}
+          onClick={() => save.mutate(null)}
+        >
+          Use defaults
+        </button>
+        <button
+          type="submit"
+          className="workspace-tool-action"
+          disabled={save.isPending || !kinds.data || selected.size === 0}
+        >
+          {save.isPending ? "Saving…" : "Save kinds"}
+        </button>
+      </span>
+    </form>
   )
 }
 
@@ -807,35 +937,53 @@ function IndexSourceForm({
   onCancel: () => void
   onAdded: () => void
 }) {
-  const [targets, setTargets] = useState<Target[]>([])
+  const queryClient = useQueryClient()
+  // The app is asked what it holds, so nobody has to know a channel's id.
+  // Typing one stays possible: listing can be refused a scope or find
+  // nothing, and neither should stop a member indexing what they can name.
+  const targets = useQuery(
+    connectionTargetsQueryOptions(organizationId, connection.id)
+  )
   const [targetId, setTargetId] = useState("")
   const [manual, setManual] = useState(false)
   const [rawTarget, setRawTarget] = useState("")
-  const [interval, setInterval] = useState(3600)
-  const [busy, setBusy] = useState(false)
+  const [intervalSeconds, setIntervalSeconds] = useState(
+    defaultSourceIntervalSeconds
+  )
   const [problem, setProblem] = useState("")
+  const register = useMutation({
+    mutationFn: (target: Record<string, string>) =>
+      registerSource(organizationId, {
+        connectionId: connection.id,
+        provider,
+        target,
+        intervalSeconds,
+      }),
+    onSuccess: () => {
+      onAdded()
+      return queryClient.invalidateQueries({
+        queryKey: sourcesKey(organizationId),
+      })
+    },
+  })
   const field = sourceFields[provider]
+  const discovered = targets.data ?? []
+  const picker = discovered.length > 0 && !manual
+  const hintId = useId()
+  const hint = targets.isPending
+    ? "Reading what this app holds…"
+    : targets.isError
+      ? "The app didn't list what it holds; enter one by hand."
+      : ""
 
-  useEffect(() => {
-    let cancelled = false
-    readApi<{ targets: Target[] }>(
-      `/v1/organizations/${encodeURIComponent(organizationId)}/apps/connections/${encodeURIComponent(connection.id)}/targets`
-    )
-      .then((data) => {
-        if (!cancelled) setTargets(data.targets)
-      })
-      .catch(() => {
-        /* Manual target entry remains available. */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [connection.id, organizationId])
-
-  async function submit(event: FormEvent<HTMLFormElement>) {
+  function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const picker = targets.length > 0 && !manual
-    const chosen = targets.find((target) => target.id === targetId)
+    if (register.isPending) return
+    // A choice from the list is registered with the target the app listed
+    // it with, not one rebuilt from its id.
+    const chosen = picker
+      ? discovered.find((target) => target.id === targetId)
+      : undefined
     if (picker && !chosen) {
       setProblem(`Choose a ${field.label.toLowerCase()} or enter one manually.`)
       return
@@ -847,31 +995,14 @@ function IndexSourceForm({
       setProblem(validation)
       return
     }
-    setBusy(true)
     setProblem("")
-    try {
-      await writeApi(
-        `/v1/organizations/${encodeURIComponent(organizationId)}/sources`,
-        "POST",
-        {
-          connection_id: connection.id,
-          provider,
-          target: chosen?.target || sourceTarget(provider, rawTarget),
-          interval_seconds: interval,
-        }
-      )
-      onAdded()
-    } catch (error) {
-      setProblem(errorText(error))
-    } finally {
-      setBusy(false)
-    }
+    register.mutate(chosen?.target ?? sourceTarget(provider, rawTarget))
   }
 
   return (
     <form
       className="workspace-tool-form-panel workspace-tool-config-form"
-      onSubmit={(event) => void submit(event)}
+      onSubmit={submit}
     >
       <div className="workspace-tool-pane-head">
         <div>
@@ -891,13 +1022,14 @@ function IndexSourceForm({
           {field.label}
           {field.required ? " *" : " (optional)"}
         </span>
-        {targets.length > 0 && !manual ? (
+        {picker ? (
           <select
             value={targetId}
+            aria-describedby={hint ? hintId : undefined}
             onChange={(event) => setTargetId(event.target.value)}
           >
             <option value="">Choose a {field.label.toLowerCase()}…</option>
-            {targets.map((target) => (
+            {discovered.map((target) => (
               <option key={target.id} value={target.id}>
                 {target.name}
               </option>
@@ -906,12 +1038,18 @@ function IndexSourceForm({
         ) : (
           <input
             value={rawTarget}
+            aria-describedby={hint ? hintId : undefined}
             onChange={(event) => setRawTarget(event.target.value)}
             placeholder={field.placeholder}
           />
         )}
       </label>
-      {targets.length > 0 && (
+      {hint && (
+        <small className="workspace-tool-field-hint" id={hintId}>
+          {hint}
+        </small>
+      )}
+      {discovered.length > 0 && (
         <button
           type="button"
           className="workspace-tool-text-button workspace-tool-manual-toggle"
@@ -927,8 +1065,8 @@ function IndexSourceForm({
       <label className="workspace-tool-field">
         <span>Refresh schedule</span>
         <select
-          value={interval}
-          onChange={(event) => setInterval(Number(event.target.value))}
+          value={intervalSeconds}
+          onChange={(event) => setIntervalSeconds(Number(event.target.value))}
         >
           {intervalChoices.map((choice) => (
             <option key={choice.value} value={choice.value}>
@@ -937,61 +1075,56 @@ function IndexSourceForm({
           ))}
         </select>
       </label>
-      {problem && (
+      {(problem || register.isError) && (
         <p className="workspace-tool-inline-error" role="alert">
-          {problem}
+          {problem ||
+            appsErrorMessage(register.error, "Could not register the source.")}
         </p>
       )}
-      <button className="workspace-tool-action" type="submit" disabled={busy}>
-        {busy ? "Adding…" : "Register source"}
+      <button
+        className="workspace-tool-action"
+        type="submit"
+        disabled={register.isPending}
+      >
+        {register.isPending ? "Adding…" : "Register source"}
       </button>
     </form>
   )
 }
 
 function RunsPane({
+  connection,
   organizationId,
   preview,
-  sources,
-  loading,
   initialSourceId,
 }: {
+  connection: Connection
   organizationId: string
   preview: boolean
-  sources: Source[]
-  loading: boolean
   initialSourceId: string | null
 }) {
+  const listed = useQuery({
+    ...sourcesQueryOptions(organizationId, { connectionId: connection.id }),
+    enabled: !preview,
+  })
+  const sources = (listed.data ?? []).filter(
+    (source) => source.status !== "removed"
+  )
   const [sourceId, setSourceId] = useState(initialSourceId || "")
-  const [runs, setRuns] = useState<Run[]>([])
-  const [busy, setBusy] = useState(false)
-  const [problem, setProblem] = useState("")
   const selectedId = sources.some((source) => source.id === sourceId)
     ? sourceId
     : sources[0]?.id || ""
-
-  useEffect(() => {
-    if (preview || !selectedId) return
-    let cancelled = false
-    setBusy(true)
-    setProblem("")
-    setRuns([])
-    readApi<{ runs: Run[] }>(
-      `/v1/organizations/${encodeURIComponent(organizationId)}/sources/${encodeURIComponent(selectedId)}/runs?limit=10`
-    )
-      .then((data) => {
-        if (!cancelled) setRuns(data.runs)
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setProblem(errorText(error))
-      })
-      .finally(() => {
-        if (!cancelled) setBusy(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [organizationId, preview, selectedId])
+  const runs = useQuery({
+    ...sourceRunsQueryOptions(organizationId, selectedId),
+    enabled: !preview && Boolean(selectedId),
+  })
+  const loading =
+    !preview && (listed.isPending || (Boolean(selectedId) && runs.isPending))
+  const problem = listed.isError
+    ? appsErrorMessage(listed.error, "Sources could not be loaded.")
+    : runs.isError
+      ? appsErrorMessage(runs.error, "Runs could not be loaded.")
+      : ""
 
   return (
     <div className="workspace-tool-pane" role="tabpanel">
@@ -1015,12 +1148,20 @@ function RunsPane({
           </select>
         )}
       </div>
-      {loading || busy ? (
-        <p className="workspace-tool-muted">Loading runs…</p>
-      ) : null}
+      {loading && <p className="workspace-tool-muted">Loading runs…</p>}
       {problem && (
         <p className="workspace-tool-inline-error" role="alert">
-          {problem}
+          {problem}{" "}
+          <button
+            type="button"
+            className="workspace-tool-text-button"
+            onClick={() => {
+              if (listed.isError) void listed.refetch()
+              else void runs.refetch()
+            }}
+          >
+            Retry
+          </button>
         </p>
       )}
       {preview ? (
@@ -1032,14 +1173,14 @@ function RunsPane({
           </div>
           <span className="workspace-tool-example">Example</span>
         </div>
-      ) : !loading && !selectedId ? (
+      ) : listed.isSuccess && !selectedId ? (
         <p className="workspace-tool-muted">
           Register a source in Indexing to see its runs here.
         </p>
-      ) : !busy && !runs.length ? (
+      ) : runs.isSuccess && !runs.data.length ? (
         <p className="workspace-tool-muted">No runs yet for this source.</p>
       ) : (
-        runs.map((run) => (
+        (runs.data ?? []).map((run) => (
           <div className="workspace-tool-row" key={run.id}>
             <span
               className={`workspace-tool-dot ${run.status === "completed" ? "is-live" : run.status === "failed" ? "is-error" : ""}`}
@@ -1056,6 +1197,9 @@ function RunsPane({
               <small>
                 {run.documents_published} published · {run.documents_removed}{" "}
                 removed · {run.documents_seen} seen
+                {run.documents_excluded > 0
+                  ? ` · ${run.documents_excluded} left out`
+                  : ""}
               </small>
               {run.error && (
                 <small className="workspace-tool-run-error">{run.error}</small>

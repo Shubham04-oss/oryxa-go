@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react"
-import type { ComponentType, FormEvent } from "react"
+import type { ComponentType } from "react"
 import {
   ArrowLeft,
   ArrowRight,
-  ArrowUpRight,
   BookOpenText,
   Bot,
   ChartNoAxesColumn,
@@ -14,38 +13,29 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
-  PanelRightClose,
-  PanelRightOpen,
-  Paperclip,
   Puzzle,
-  Send,
   Settings2,
   Sparkles,
   UsersRound,
   Workflow,
 } from "lucide-react"
-import { WorkspaceFocus, workItems } from "./workspace-focus"
-import type { WorkId, WorkItem } from "./workspace-focus"
-import { initialKnowledgeBases, KnowledgeBases } from "./knowledge-bases"
-import type { KnowledgeBase } from "./knowledge-bases"
-import {
-  initialTeamspaces,
-  TeamspacesManagement,
-} from "./teamspaces-management"
-import type {
-  Teamspace,
-  TeamspaceStatus,
-  WorkspaceRole,
-} from "./teamspaces-management"
-import {
-  agents,
-  IdentityAvatar,
-  people,
-  TeamspaceAvatar,
-} from "./workspace-avatar"
+import { AgentsCanvas, AgentsFocus, isAgentsSection } from "./agents-mode"
+import { KnowledgeBases } from "./knowledge-bases"
+import type { SelectedKnowledgeBase } from "./knowledge-bases"
+import { TeamspacesManagement } from "./teamspaces-management"
+import type { WorkspaceRole } from "./teamspaces-management"
+import { TeamspaceFocus } from "./teamspace-focus"
+import { statusLabel } from "./teamspace-format"
+import { previewSharedSpaces, sharedSpacesOf } from "./people-spaces"
+import { IdentityAvatar, people, TeamspaceAvatar } from "./workspace-avatar"
 import { WorkspaceTools } from "./workspace-tools"
+import { WorkspaceAgentPanel } from "./workspace-agent-panel"
+import type { AgentPanelChatRequest } from "./workspace-agent-panel"
 import { getSharedPeople, PeopleDirectory } from "./people-directory"
 import { WorkspaceSettings } from "./workspace-settings"
+import { useTeamspaces } from "@/hooks/use-teamspaces"
+import { useAgentsMode } from "@/hooks/use-agents-mode"
+import type { AgentsFocusTarget } from "@/hooks/use-agents-mode"
 import { signOut } from "@/lib/auth/client"
 import type { Organization, Role, Session } from "@/lib/auth/client"
 import type { AvatarIdentity } from "./workspace-avatar"
@@ -115,59 +105,6 @@ const headings: Record<Section, string> = {
 
 const savedViews = ["Launch plan", "At-risk accounts", "Q4 pipeline"]
 
-const workEntries: Partial<Record<Section, WorkId[]>> = {
-  agents: ["launch-crew", "research-specialist"],
-  "multi-agents": ["launch-crew"],
-  specialists: ["research-specialist"],
-}
-
-const activity = [
-  {
-    identity: people.avery,
-    name: "Avery",
-    action: "updated the launch timeline",
-    detail: "Website refresh · 12 min ago",
-  },
-  {
-    identity: people.jordan,
-    name: "Jordan",
-    action: "added three new tasks",
-    detail: "Acme onboarding · 34 min ago",
-  },
-  {
-    identity: people.sam,
-    name: "Sam",
-    action: "approved the campaign brief",
-    detail: "Q4 campaign · 1 hr ago",
-  },
-  {
-    identity: people.noah,
-    name: "Noah",
-    action: "shared a customer note",
-    detail: "Research hub · 2 hrs ago",
-  },
-]
-
-function teamspaceWorkItem(space: Teamspace): WorkItem {
-  if (space.id === "product-sync") {
-    return { ...workItems["product-sync"], status: "Active" }
-  }
-  return {
-    id: space.id,
-    title: space.title,
-    kind: "Teamspace",
-    description: space.description || "A space for your team to work together.",
-    status: "Active",
-    participants: space.members,
-    summary:
-      space.description || "Your team can share work and decisions here.",
-    tasks: [],
-    files: [],
-    activity: [],
-    messages: [],
-  }
-}
-
 export function WorkspaceShell({
   session,
   role = session ? "member" : "admin",
@@ -195,17 +132,9 @@ export function WorkspaceShell({
     ...defaultSections,
     [initialMode]: initialSection || defaultSections[initialMode],
   })
-  const [focusedWork, setFocusedWork] = useState<WorkItem | null>(null)
-  const [note, setNote] = useState("")
-  const [notes, setNotes] = useState<string[]>([])
-  const [knowledgeBases, setKnowledgeBases] = useState(initialKnowledgeBases)
-  const [teamspaces, setTeamspaces] = useState(initialTeamspaces)
-  const [selectedKnowledgeBaseId, setSelectedKnowledgeBaseId] = useState<
-    string | null
-  >(null)
-  const [selectedTeamspaceId, setSelectedTeamspaceId] = useState<string | null>(
-    null
-  )
+  const teamspaces = useTeamspaces(selectedOrganization?.id)
+  const [knowledgeBaseSelection, setKnowledgeBaseSelection] =
+    useState<SelectedKnowledgeBase | null>(null)
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState("")
   const [profileMenuOpen, setProfileMenuOpen] = useState(false)
@@ -218,6 +147,10 @@ export function WorkspaceShell({
     Partial<Record<string, string[]>>
   >({})
   const conversationListRef = useRef<HTMLDivElement>(null)
+  const agentsMode = useAgentsMode()
+  const [chatRequest, setChatRequest] = useState<AgentPanelChatRequest | null>(
+    null
+  )
 
   const currentIdentity: AvatarIdentity = session
     ? {
@@ -275,30 +208,36 @@ export function WorkspaceShell({
 
   const section = sectionsByMode[activeMode]
   const heading = headings[section]
-  const visibleWorkEntries = workEntries[section]
-  const sharedPeople = getSharedPeople(teamspaces, currentIdentity)
+  // People lists who shares a teamspace with the member; only the dev
+  // preview, which has no workspace to read, lists examples.
+  const peopleSpaces = preview
+    ? previewSharedSpaces
+    : sharedSpacesOf(teamspaces.spaces)
+  const sharedPeople = getSharedPeople(peopleSpaces, currentIdentity)
+  // Agents mode's focused work belongs to that mode and its workspace.
+  const agentWork =
+    activeMode === "agents" && selectedOrganization ? agentsMode.focus : null
+  const isFocused = Boolean(
+    agentWork || (teamspaces.openId && selectedOrganization)
+  )
   const selectedPerson =
     section === "people"
       ? sharedPeople.find((person) => person.id === activeConversationId)
       : undefined
   const selectedKnowledgeBase =
-    section === "knowledge"
-      ? knowledgeBases.find((base) => base.id === selectedKnowledgeBaseId)
-      : undefined
+    section === "knowledge" ? (knowledgeBaseSelection ?? undefined) : undefined
   const selectedTeamspace =
-    section === "teamspaces"
-      ? teamspaces.find((space) => space.id === selectedTeamspaceId)
-      : undefined
+    section === "teamspaces" ? teamspaces.selected : undefined
   const detailTitle =
     selectedPerson?.name ||
     selectedKnowledgeBase?.name ||
-    selectedTeamspace?.title
+    selectedTeamspace?.name
   const detailKind = selectedPerson
     ? "Direct message"
     : selectedKnowledgeBase
       ? "Knowledge base"
       : selectedTeamspace
-        ? `Teamspace · ${selectedTeamspace.status === "active" ? "Active" : "Paused"}`
+        ? `Teamspace · ${statusLabel(selectedTeamspace)}`
         : undefined
   const conversations = conversationIds
     .map((id) => sharedPeople.find((person) => person.id === id))
@@ -310,18 +249,17 @@ export function WorkspaceShell({
 
   function selectMode(nextMode: PrimaryMode) {
     setActiveMode(nextMode)
-    setFocusedWork(null)
+    teamspaces.close()
     if (nextMode !== activeMode) {
-      setSelectedKnowledgeBaseId(null)
-      setSelectedTeamspaceId(null)
+      setKnowledgeBaseSelection(null)
+      teamspaces.select(null)
     }
   }
 
   function selectSection(nextSection: Section) {
-    setFocusedWork(null)
     setActiveConversationId(null)
-    setSelectedKnowledgeBaseId(null)
-    setSelectedTeamspaceId(null)
+    setKnowledgeBaseSelection(null)
+    teamspaces.reset()
     setSectionsByMode((current) => ({
       ...current,
       [activeMode]: nextSection,
@@ -338,8 +276,7 @@ export function WorkspaceShell({
     setActiveConversationId(personId)
     setActiveMode("team")
     setSectionsByMode((current) => ({ ...current, team: "people" }))
-    setFocusedWork(null)
-    setSelectedTeamspaceId(null)
+    teamspaces.reset()
     if (isMobile) setLeftExpanded(false)
   }
 
@@ -356,41 +293,35 @@ export function WorkspaceShell({
     ])
   }
 
-  function addNote(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const message = note.trim()
-    if (!message) return
-    setNotes((current) => [message, ...current])
-    setNote("")
-  }
-
-  function openWork(workId: WorkId) {
-    setFocusedWork(workItems[workId])
+  function openWork(target: AgentsFocusTarget) {
+    teamspaces.close()
+    agentsMode.open(target)
     setRightExpanded(false)
     if (isMobile) setLeftExpanded(false)
   }
 
-  function openTeamspace(space: Teamspace) {
-    if (space.status !== "active") return
-    setSelectedTeamspaceId(null)
-    setFocusedWork(teamspaceWorkItem(space))
-    setRightExpanded(false)
-    if (isMobile) setLeftExpanded(false)
+  /** Opens the agent panel on the Agents tab, talking to this specialist. */
+  function chatWith(agentId: string) {
+    expandAgentPanel()
+    setChatRequest({ agentId })
   }
 
-  function changeTeamspaceStatus(id: string, status: TeamspaceStatus) {
-    if (role !== "admin") return
-    setTeamspaces((current) =>
-      current.map((space) =>
-        space.id === id ? { ...space, status, updated: "Just now" } : space
-      )
-    )
+  // Expanding the right panel collapses the left (DESIGN.md §2).
+  function expandAgentPanel() {
+    setLeftExpanded(false)
+    setRightExpanded(true)
+  }
+
+  function openTeamspace(id: string) {
+    teamspaces.open(id)
+    setRightExpanded(false)
+    if (isMobile) setLeftExpanded(false)
   }
 
   function closeDetail() {
     if (selectedPerson) setActiveConversationId(null)
-    if (selectedKnowledgeBase) setSelectedKnowledgeBaseId(null)
-    if (selectedTeamspace) setSelectedTeamspaceId(null)
+    if (selectedKnowledgeBase) setKnowledgeBaseSelection(null)
+    if (selectedTeamspace) teamspaces.select(null)
   }
 
   return (
@@ -398,9 +329,9 @@ export function WorkspaceShell({
       className="workspace-shell"
       data-left={leftExpanded ? "expanded" : "collapsed"}
       data-right={rightExpanded ? "expanded" : "collapsed"}
-      data-view={focusedWork ? "focused" : "browse"}
+      data-view={isFocused ? "focused" : "browse"}
     >
-      {!focusedWork && (
+      {!isFocused && (
         <aside
           id="workspace-navigation"
           className="workspace-left"
@@ -513,10 +444,12 @@ export function WorkspaceShell({
                     <span className="workspace-nav-label">{item.label}</span>
                   )}
                   {leftExpanded &&
-                    (item.count || item.key === "teamspaces") && (
+                    (item.count ||
+                      (item.key === "teamspaces" &&
+                        teamspaces.count !== undefined)) && (
                       <span className="workspace-nav-count">
                         {item.key === "teamspaces"
-                          ? teamspaces.length
+                          ? teamspaces.count
                           : item.count}
                       </span>
                     )}
@@ -660,10 +593,21 @@ export function WorkspaceShell({
       )}
 
       <div className="workspace-middle">
-        {focusedWork ? (
-          <WorkspaceFocus
-            work={focusedWork}
-            onBack={() => setFocusedWork(null)}
+        {agentWork && selectedOrganization ? (
+          <AgentsFocus
+            target={agentWork}
+            organizationId={selectedOrganization.id}
+            onBack={agentsMode.close}
+            onOpen={openWork}
+            onChat={chatWith}
+          />
+        ) : teamspaces.openId && selectedOrganization ? (
+          <TeamspaceFocus
+            key={teamspaces.openId}
+            organizationId={selectedOrganization.id}
+            teamspaceId={teamspaces.openId}
+            viewerId={session?.user.id}
+            onBack={teamspaces.close}
           />
         ) : (
           <>
@@ -694,7 +638,7 @@ export function WorkspaceShell({
                       </span>
                     )}
                     {selectedTeamspace && (
-                      <TeamspaceAvatar name={selectedTeamspace.title} />
+                      <TeamspaceAvatar name={selectedTeamspace.name} />
                     )}
                     <div>
                       <h1>{detailTitle}</h1>
@@ -733,12 +677,13 @@ export function WorkspaceShell({
             >
               {section === "knowledge" && (
                 <KnowledgeBases
-                  bases={knowledgeBases}
-                  selectedId={selectedKnowledgeBaseId}
-                  onSelect={setSelectedKnowledgeBaseId}
-                  onCreate={(base: KnowledgeBase) =>
-                    setKnowledgeBases((current) => [base, ...current])
-                  }
+                  organizationId={selectedOrganization?.id}
+                  organizationName={selectedOrganization?.name}
+                  organizationRole={organizationRole}
+                  userId={session?.user.id}
+                  selected={selectedKnowledgeBase ?? null}
+                  onSelect={setKnowledgeBaseSelection}
+                  onOpenTools={() => selectSection("tools")}
                 />
               )}
               {section === "tools" && (
@@ -746,7 +691,7 @@ export function WorkspaceShell({
               )}
               {section === "people" && (
                 <PeopleDirectory
-                  spaces={teamspaces}
+                  spaces={peopleSpaces}
                   currentIdentity={currentIdentity}
                   preview={preview}
                   selectedId={activeConversationId}
@@ -757,198 +702,36 @@ export function WorkspaceShell({
               )}
               {section === "teamspaces" && (
                 <TeamspacesManagement
-                  role={role}
-                  spaces={teamspaces}
-                  selectedId={selectedTeamspaceId}
-                  onSelect={setSelectedTeamspaceId}
-                  onCreate={(space) => {
-                    if (role !== "admin") return
-                    setTeamspaces((current) => [space, ...current])
-                  }}
-                  onStatusChange={changeTeamspaceStatus}
+                  organizationId={selectedOrganization?.id}
+                  viewerId={session?.user.id}
+                  selectedId={teamspaces.selectedId}
+                  onSelect={teamspaces.select}
                   onOpen={openTeamspace}
                 />
               )}
-              {visibleWorkEntries && (
-                <div className="workspace-entry-content">
-                  <p className="workspace-eyebrow">Agentic work</p>
-                  <div className="workspace-entry-grid">
-                    {visibleWorkEntries.map((workId) => {
-                      const work = workItems[workId]
-                      return (
-                        <button
-                          className="workspace-entry"
-                          type="button"
-                          key={work.id}
-                          aria-label={`Open ${work.title}`}
-                          onClick={() => openWork(workId)}
-                        >
-                          <span className="workspace-entry-kind">
-                            <IdentityAvatar
-                              identity={
-                                work.id === "research-specialist"
-                                  ? agents.specialist
-                                  : agents.planning
-                              }
-                            />
-                            {work.kind}
-                          </span>
-                          <span className="workspace-entry-title">
-                            <strong>{work.title}</strong>
-                            <ArrowUpRight size={17} strokeWidth={1.7} />
-                          </span>
-                          <span className="workspace-entry-description">
-                            {work.description}
-                          </span>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
+              {isAgentsSection(section) && (
+                <AgentsCanvas
+                  section={section}
+                  organizationId={
+                    session ? selectedOrganization?.id : undefined
+                  }
+                  viewerId={session?.user.id}
+                  onOpen={openWork}
+                  onNavigate={selectSection}
+                />
               )}
             </main>
           </>
         )}
       </div>
 
-      <aside
-        id="workspace-activity"
-        className="workspace-right"
-        aria-label="Activity panel"
-      >
-        <div className="workspace-right-top">
-          {rightExpanded && (
-            <div>
-              <h2>Activity</h2>
-              <p>Today, across your team</p>
-            </div>
-          )}
-          <button
-            className="workspace-icon-button"
-            type="button"
-            aria-label={
-              rightExpanded
-                ? "Collapse activity panel"
-                : "Expand activity panel"
-            }
-            aria-controls="workspace-activity"
-            aria-expanded={rightExpanded}
-            onClick={() => {
-              if (rightExpanded) {
-                setRightExpanded(false)
-              } else {
-                setLeftExpanded(false)
-                setRightExpanded(true)
-              }
-            }}
-          >
-            {rightExpanded ? (
-              <>
-                <PanelRightClose
-                  className="workspace-panel-toggle-desktop"
-                  size={18}
-                  strokeWidth={1.7}
-                />
-                <ArrowRight
-                  className="workspace-panel-toggle-mobile"
-                  size={17}
-                  strokeWidth={1.7}
-                />
-              </>
-            ) : (
-              <>
-                <PanelRightOpen
-                  className="workspace-panel-toggle-desktop"
-                  size={18}
-                  strokeWidth={1.7}
-                />
-                <ArrowLeft
-                  className="workspace-panel-toggle-mobile"
-                  size={17}
-                  strokeWidth={1.7}
-                />
-              </>
-            )}
-          </button>
-        </div>
-
-        {rightExpanded ? (
-          <div className="workspace-activity-body">
-            <div className="workspace-online">
-              <span>Team online</span>
-              <span>5 online</span>
-            </div>
-            <div
-              className="workspace-avatar-row"
-              aria-label="Online team members"
-            >
-              {Object.values(people).map((identity) => (
-                <IdentityAvatar identity={identity} key={identity.id} />
-              ))}
-              <span className="workspace-avatar workspace-avatar-more">+2</span>
-            </div>
-            <div className="workspace-activity-list">
-              {notes.map((message, index) => (
-                <div
-                  className="workspace-activity-item"
-                  key={`${message}-${index}`}
-                >
-                  <IdentityAvatar identity={people.avery} />
-                  <div>
-                    <p>
-                      <strong>You</strong> shared a quick note
-                    </p>
-                    <small>{message}</small>
-                  </div>
-                </div>
-              ))}
-              {activity.map((item) => (
-                <div className="workspace-activity-item" key={item.detail}>
-                  <IdentityAvatar identity={item.identity} />
-                  <div>
-                    <p>
-                      <strong>{item.name}</strong> {item.action}
-                    </p>
-                    <small>{item.detail}</small>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <form className="workspace-quick-note" onSubmit={addNote}>
-              <label htmlFor="quick-note">Quick note</label>
-              <textarea
-                id="quick-note"
-                value={note}
-                onChange={(event) => setNote(event.target.value)}
-                placeholder="Share an update with your team..."
-                rows={2}
-              />
-              <div className="workspace-note-actions">
-                <Paperclip size={16} strokeWidth={1.7} aria-hidden="true" />
-                <button
-                  type="submit"
-                  disabled={!note.trim()}
-                  aria-label="Send quick note"
-                >
-                  <Send size={14} strokeWidth={1.8} />
-                </button>
-              </div>
-            </form>
-          </div>
-        ) : (
-          <div className="workspace-right-rail">
-            <span className="workspace-rail-label">Activity</span>
-            <div
-              className="workspace-rail-avatars"
-              aria-label="Online team members"
-            >
-              {[people.avery, people.jordan, people.sam].map((identity) => (
-                <IdentityAvatar identity={identity} key={identity.id} />
-              ))}
-            </div>
-          </div>
-        )}
-      </aside>
+      <WorkspaceAgentPanel
+        organizationId={session ? selectedOrganization?.id : undefined}
+        expanded={rightExpanded}
+        onExpand={expandAgentPanel}
+        onCollapse={() => setRightExpanded(false)}
+        chatRequest={chatRequest}
+      />
       {settingsOpen && (
         <WorkspaceSettings
           onClose={() => setSettingsOpen(false)}
@@ -963,7 +746,6 @@ export function WorkspaceShell({
           onOpenTools={() => {
             setActiveMode("home")
             setSectionsByMode((current) => ({ ...current, home: "tools" }))
-            setFocusedWork(null)
             setSettingsOpen(false)
             if (isMobile) setLeftExpanded(false)
           }}

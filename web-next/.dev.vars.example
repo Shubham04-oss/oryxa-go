@@ -1,0 +1,5 @@
+# Copy to .dev.vars (gitignored) to override wrangler.jsonc's vars for
+# `vite dev`. ORYXA_API_ORIGIN is where the Worker and the chat's Durable
+# Object call the Go API; wrangler.jsonc defaults it to http://localhost:8080.
+# The local stand-in backend (auth stub and proxy) listens on 18096.
+ORYXA_API_ORIGIN=http://127.0.0.1:18096

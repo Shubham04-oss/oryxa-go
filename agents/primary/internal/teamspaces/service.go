@@ -367,7 +367,13 @@ func (service *Service) resolveAccess(ctx context.Context, actor Actor, teamID s
 	if err != nil {
 		return teamAccess{}, fmt.Errorf("load organization directory: %w", err)
 	}
-	access, ok := directoryAccess(directory, actor.UserID)[teamID]
+	return accessIn(directory, actor.UserID, teamID)
+}
+
+// accessIn is what userID may do with one team, read from a directory
+// already loaded: ErrNotFound when the team is not in it.
+func accessIn(directory primaryagents.OrganizationDirectory, userID, teamID string) (teamAccess, error) {
+	access, ok := directoryAccess(directory, userID)[teamID]
 	if !ok {
 		return teamAccess{}, ErrNotFound
 	}
@@ -639,18 +645,14 @@ func safeArtifactURI(raw string) bool {
 	return parsed.Host == "" && strings.HasPrefix(parsed.Path, "/") && !strings.HasPrefix(raw, "//")
 }
 
+// publicationAuthor is the name the space shows for an author agent that
+// holds a seat of userID's there.
 func publicationAuthor(space Space, userID, agentID string) (string, bool) {
-	for _, whisperer := range space.Whisperers {
-		if whisperer.UserID == userID && whisperer.AgentID == agentID {
-			return whisperer.AgentName, true
-		}
+	found, ok := seatOf(space, agentID)
+	if !ok || found.OwnerUserID != userID {
+		return "", false
 	}
-	for _, contribution := range space.Contributions {
-		if contribution.OwnerUserID == userID && contribution.AgentID == agentID && contribution.Status == "active" {
-			return contribution.Name, true
-		}
-	}
-	return "", false
+	return found.name, true
 }
 
 func emptyUpdate(input UpdateInput) bool {

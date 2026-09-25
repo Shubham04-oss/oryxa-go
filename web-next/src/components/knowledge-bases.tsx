@@ -1,98 +1,112 @@
 import { useState } from "react"
 import type { FormEvent } from "react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import type { UseQueryResult } from "@tanstack/react-query"
 import {
   ArrowUpRight,
   BookOpenText,
-  FileText,
-  Link2,
   Plus,
+  Puzzle,
+  RotateCw,
   Search,
-  StickyNote,
 } from "lucide-react"
 import { z } from "zod"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
+import { ApiError } from "@/lib/api/client"
+import type { Role } from "@/lib/auth/client"
+import {
+  afterCreateCorpus,
+  canCreateOrganizationCorpus,
+  capabilitiesQueryOptions,
+  corporaQueryOptions,
+  corpusDescription,
+  createCorpus,
+  isFromConnectedApps,
+  ragErrorMessage,
+} from "@/lib/rag/client"
+import type {
+  Corpus,
+  CorpusScope,
+  CreateCorpusInput,
+  RagViewer,
+} from "@/lib/rag/client"
+import { KnowledgeBaseDetail } from "./knowledge-base-detail"
+import {
+  corpusScopeLabel,
+  corpusTimeLabel,
+  countLabel,
+} from "./knowledge-format"
 
-type KnowledgeSource = {
-  title: string
-  kind: "Document" | "Link" | "Note"
-}
-
-export type KnowledgeBase = {
-  id: string
-  name: string
-  description: string
-  updated: string
-  sources: KnowledgeSource[]
-}
-
-export const initialKnowledgeBases: KnowledgeBase[] = [
-  {
-    id: "product-handbook",
-    name: "Product handbook",
-    description: "Product principles, specs, and decisions in one place.",
-    updated: "Today",
-    sources: [
-      { title: "Product overview", kind: "Document" },
-      { title: "Design principles", kind: "Document" },
-      { title: "Decision log", kind: "Note" },
-    ],
-  },
-  {
-    id: "customer-insights",
-    name: "Customer insights",
-    description: "Research notes and feedback that shape what we build.",
-    updated: "Yesterday",
-    sources: [
-      { title: "Interview highlights", kind: "Document" },
-      { title: "Feedback board", kind: "Link" },
-      { title: "Recurring themes", kind: "Note" },
-    ],
-  },
-  {
-    id: "launch-playbook",
-    name: "Launch playbook",
-    description: "The shared context behind our upcoming release.",
-    updated: "3 days ago",
-    sources: [
-      { title: "Launch brief", kind: "Document" },
-      { title: "Rollout checklist", kind: "Document" },
-      { title: "Release notes", kind: "Document" },
-    ],
-  },
-]
+/** The knowledge base open in the canvas; the shell titles its header with it. */
+export type SelectedKnowledgeBase = { id: string; name: string }
 
 const newBaseSchema = z.object({
-  name: z.string().trim().min(2, "Use at least 2 characters.").max(60),
-  description: z.string().trim().max(200),
+  name: z
+    .string()
+    .trim()
+    .min(2, "Use at least 2 characters.")
+    .max(60, "Use at most 60 characters."),
+  description: z.string().trim().max(200, "Use at most 200 characters."),
 })
 
-const sourceIcons = {
-  Document: FileText,
-  Link: Link2,
-  Note: StickyNote,
+function createError(error: unknown): string {
+  if (error instanceof ApiError && error.status === 409) {
+    return "A knowledge base with a very similar name already exists here. Try another name."
+  }
+  return ragErrorMessage(
+    error,
+    "Could not create this knowledge base. Try again."
+  )
 }
 
-export function KnowledgeBases({
-  bases,
-  onCreate,
-  selectedId,
+function KnowledgeBaseList({
+  organizationId,
+  organizationName,
+  viewer,
+  corpora,
+  unavailable,
   onSelect,
 }: {
-  bases: KnowledgeBase[]
-  onCreate: (base: KnowledgeBase) => void
-  selectedId: string | null
-  onSelect: (id: string | null) => void
+  organizationId?: string
+  organizationName?: string
+  viewer: RagViewer
+  corpora: UseQueryResult<Corpus[]>
+  unavailable: boolean
+  onSelect: (base: SelectedKnowledgeBase) => void
 }) {
+  const queryClient = useQueryClient()
   const [query, setQuery] = useState("")
   const [isCreating, setIsCreating] = useState(false)
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
+  const [scope, setScope] = useState<CorpusScope>("member")
   const [nameError, setNameError] = useState("")
+  const [formError, setFormError] = useState("")
+  const canShare = canCreateOrganizationCorpus(viewer)
 
-  const selectedBase = bases.find((base) => base.id === selectedId)
+  const create = useMutation({
+    mutationFn: (input: CreateCorpusInput) => {
+      if (!organizationId) throw new Error("No workspace is selected.")
+      return createCorpus(organizationId, input)
+    },
+    onSuccess: (created) => {
+      if (organizationId) {
+        void afterCreateCorpus(queryClient, organizationId, created)
+      }
+      setIsCreating(false)
+      setName("")
+      setDescription("")
+      setScope("member")
+      setQuery("")
+      onSelect({ id: created.id, name: created.name })
+    },
+    onError: (error) => setFormError(createError(error)),
+  })
+
+  const bases = corpora.data ?? []
   const filteredBases = bases.filter((base) =>
-    `${base.name} ${base.description}`
+    `${base.name} ${corpusDescription(base)}`
       .toLocaleLowerCase()
       .includes(query.trim().toLocaleLowerCase())
   )
@@ -101,126 +115,183 @@ export function KnowledgeBases({
     event.preventDefault()
     const result = newBaseSchema.safeParse({ name, description })
     if (!result.success) {
-      setNameError(
-        result.error.issues.find((issue) => issue.path[0] === "name")
-          ?.message ?? "Check this field."
-      )
+      const issue = (field: string) =>
+        result.error.issues.find((item) => item.path[0] === field)?.message
+      setNameError(issue("name") ?? "")
+      setFormError(issue("description") ?? "")
       return
     }
-
-    const base: KnowledgeBase = {
-      id: crypto.randomUUID(),
+    setFormError("")
+    create.mutate({
       name: result.data.name,
       description: result.data.description,
-      updated: "Just now",
-      sources: [],
-    }
-    onCreate(base)
-    onSelect(base.id)
+      scope: canShare ? scope : "member",
+    })
+  }
+
+  function cancelCreate() {
     setIsCreating(false)
-    setName("")
-    setDescription("")
     setNameError("")
-    setQuery("")
+    setFormError("")
+    create.reset()
   }
 
   return (
     <div className="workspace-knowledge-page">
-      {selectedBase ? (
-        <>
-          <div className="workspace-knowledge-section-heading">
-            <div>
-              <h3>Sources</h3>
-              <p>Documents, links, and notes kept in this base.</p>
-            </div>
-            <span>{selectedBase.sources.length}</span>
-          </div>
-          {selectedBase.sources.length ? (
-            <ul className="workspace-knowledge-source-list">
-              {selectedBase.sources.map((source) => {
-                const Icon = sourceIcons[source.kind]
-                return (
-                  <li key={`${source.kind}-${source.title}`}>
-                    <span className="workspace-knowledge-source-icon">
-                      <Icon size={17} strokeWidth={1.7} />
-                    </span>
-                    <span className="workspace-knowledge-source-name">
-                      <strong>{source.title}</strong>
-                      <small>{source.kind}</small>
-                    </span>
-                  </li>
-                )
-              })}
-            </ul>
-          ) : (
-            <div className="workspace-knowledge-empty">
-              <FileText size={23} strokeWidth={1.5} />
-              <strong>No sources yet</strong>
-              <p>This knowledge base is ready for its first source.</p>
-            </div>
-          )}
-        </>
+      {unavailable ? (
+        <div className="workspace-knowledge-notice" role="status">
+          {organizationId
+            ? "Layout preview · The knowledge service isn’t reachable here, so there are no knowledge bases to show."
+            : "Layout preview · Sign in to a workspace to see its knowledge bases."}
+        </div>
       ) : (
-        <>
-          <div className="workspace-knowledge-intro">
-            <button
-              className="workspace-knowledge-create-button"
-              type="button"
-              aria-expanded={isCreating}
-              onClick={() => setIsCreating((current) => !current)}
+        <div className="workspace-knowledge-intro">
+          <button
+            className="workspace-knowledge-create-button"
+            type="button"
+            aria-expanded={isCreating}
+            onClick={() => (isCreating ? cancelCreate() : setIsCreating(true))}
+          >
+            <Plus size={17} strokeWidth={1.8} />
+            New knowledge base
+          </button>
+        </div>
+      )}
+
+      {isCreating && !unavailable && (
+        <form
+          className="workspace-knowledge-form"
+          onSubmit={createBase}
+          noValidate
+        >
+          <div>
+            <h3>New knowledge base</h3>
+            <p>Give this collection a name. You can add content next.</p>
+          </div>
+          <label htmlFor="knowledge-base-name">Name</label>
+          <Input
+            id="knowledge-base-name"
+            value={name}
+            onChange={(event) => {
+              setName(event.target.value)
+              setNameError("")
+            }}
+            aria-invalid={Boolean(nameError)}
+            aria-describedby={
+              nameError ? "knowledge-base-name-error" : undefined
+            }
+            placeholder="e.g. Engineering handbook"
+            maxLength={60}
+            disabled={create.isPending}
+          />
+          {nameError && (
+            <p
+              className="workspace-knowledge-error"
+              id="knowledge-base-name-error"
             >
-              <Plus size={17} strokeWidth={1.8} />
-              New knowledge base
+              {nameError}
+            </p>
+          )}
+          <label htmlFor="knowledge-base-description">Description</label>
+          <Textarea
+            id="knowledge-base-description"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            placeholder="What belongs here?"
+            maxLength={200}
+            rows={2}
+            disabled={create.isPending}
+          />
+          {canShare ? (
+            <fieldset
+              className="workspace-knowledge-choice"
+              disabled={create.isPending}
+            >
+              <legend>Who can use it</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="knowledge-base-scope"
+                  value="member"
+                  checked={scope === "member"}
+                  onChange={() => setScope("member")}
+                />
+                Just you
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="knowledge-base-scope"
+                  value="organization"
+                  checked={scope === "organization"}
+                  onChange={() => setScope("organization")}
+                />
+                Everyone in {organizationName || "this workspace"}
+              </label>
+            </fieldset>
+          ) : null}
+          <p className="workspace-knowledge-hint">
+            {canShare && scope === "organization"
+              ? "Everyone in the workspace can search it. Only admins can change what’s in it."
+              : "Only you can see it, along with your workspace’s admins."}
+          </p>
+          {formError && (
+            <p className="workspace-knowledge-error" role="alert">
+              {formError}
+            </p>
+          )}
+          <div className="workspace-knowledge-form-actions">
+            <button type="button" onClick={cancelCreate}>
+              Cancel
+            </button>
+            <button type="submit" disabled={create.isPending}>
+              {create.isPending ? "Creating…" : "Create base"}
             </button>
           </div>
+        </form>
+      )}
 
-          {isCreating && (
-            <form className="workspace-knowledge-form" onSubmit={createBase}>
-              <div>
-                <h3>New knowledge base</h3>
-                <p>Give this collection a name. You can add sources later.</p>
-              </div>
-              <label htmlFor="knowledge-base-name">Name</label>
-              <Input
-                id="knowledge-base-name"
-                value={name}
-                onChange={(event) => {
-                  setName(event.target.value)
-                  setNameError("")
-                }}
-                aria-invalid={Boolean(nameError)}
-                aria-describedby={
-                  nameError ? "knowledge-base-name-error" : undefined
-                }
-                placeholder="e.g. Engineering handbook"
-                maxLength={60}
+      {unavailable ? null : corpora.isPending ? (
+        <>
+          <p className="sr-only" role="status">
+            Loading knowledge bases…
+          </p>
+          <div
+            className="workspace-knowledge-grid workspace-knowledge-toolbar-gap"
+            aria-hidden="true"
+          >
+            {[0, 1, 2].map((item) => (
+              <div
+                className="workspace-knowledge-card workspace-knowledge-card-skeleton"
+                key={item}
               />
-              {nameError && (
-                <p
-                  className="workspace-knowledge-error"
-                  id="knowledge-base-name-error"
-                >
-                  {nameError}
-                </p>
-              )}
-              <label htmlFor="knowledge-base-description">Description</label>
-              <Textarea
-                id="knowledge-base-description"
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder="What belongs here?"
-                maxLength={200}
-                rows={2}
-              />
-              <div className="workspace-knowledge-form-actions">
-                <button type="button" onClick={() => setIsCreating(false)}>
-                  Cancel
-                </button>
-                <button type="submit">Create base</button>
-              </div>
-            </form>
-          )}
-
+            ))}
+          </div>
+        </>
+      ) : corpora.isError ? (
+        <div className="workspace-knowledge-alert" role="alert">
+          <span>
+            {ragErrorMessage(
+              corpora.error,
+              "Couldn’t load your knowledge bases."
+            )}
+          </span>
+          <button type="button" onClick={() => void corpora.refetch()}>
+            <RotateCw size={14} strokeWidth={1.8} />
+            Try again
+          </button>
+        </div>
+      ) : bases.length === 0 ? (
+        <div className="workspace-knowledge-empty workspace-knowledge-toolbar-gap">
+          <BookOpenText size={23} strokeWidth={1.5} />
+          <strong>No knowledge bases yet</strong>
+          <p>
+            Create one, then add notes, links or text files for your agents to
+            search.
+          </p>
+        </div>
+      ) : (
+        <>
           <div className="workspace-knowledge-toolbar">
             <label className="workspace-knowledge-search">
               <Search size={17} strokeWidth={1.7} aria-hidden="true" />
@@ -232,40 +303,48 @@ export function KnowledgeBases({
                 placeholder="Search knowledge bases"
               />
             </label>
-            <span>
-              {filteredBases.length}{" "}
-              {filteredBases.length === 1 ? "base" : "bases"}
-            </span>
+            <span>{countLabel(filteredBases.length, "base")}</span>
           </div>
 
           {filteredBases.length ? (
             <div className="workspace-knowledge-grid">
-              {filteredBases.map((base) => (
-                <button
-                  className="workspace-knowledge-card"
-                  type="button"
-                  key={base.id}
-                  aria-label={`Open ${base.name}`}
-                  onClick={() => onSelect(base.id)}
-                >
-                  <span className="workspace-knowledge-card-top">
-                    <span className="workspace-knowledge-icon">
-                      <BookOpenText size={20} strokeWidth={1.6} />
+              {filteredBases.map((base) => {
+                const fromApps = isFromConnectedApps(base)
+                const baseDescription = corpusDescription(base)
+                return (
+                  <button
+                    className="workspace-knowledge-card"
+                    type="button"
+                    key={base.id}
+                    aria-label={`Open ${base.name}`}
+                    onClick={() => onSelect({ id: base.id, name: base.name })}
+                  >
+                    <span className="workspace-knowledge-card-top">
+                      <span className="workspace-knowledge-icon">
+                        {fromApps ? (
+                          <Puzzle size={20} strokeWidth={1.6} />
+                        ) : (
+                          <BookOpenText size={20} strokeWidth={1.6} />
+                        )}
+                      </span>
+                      <ArrowUpRight size={17} strokeWidth={1.7} />
                     </span>
-                    <ArrowUpRight size={17} strokeWidth={1.7} />
-                  </span>
-                  <strong>{base.name}</strong>
-                  <span className="workspace-knowledge-card-description">
-                    {base.description || "A space for shared context."}
-                  </span>
-                  <span className="workspace-knowledge-card-meta">
-                    {base.sources.length}{" "}
-                    {base.sources.length === 1 ? "source" : "sources"}
-                    <span aria-hidden="true">·</span>
-                    Updated {base.updated.toLocaleLowerCase()}
-                  </span>
-                </button>
-              ))}
+                    <strong>{base.name}</strong>
+                    {(baseDescription || fromApps) && (
+                      <span className="workspace-knowledge-card-description">
+                        {baseDescription || "Indexed from your connected apps."}
+                      </span>
+                    )}
+                    <span className="workspace-knowledge-card-meta">
+                      <span>{corpusScopeLabel(base, viewer)}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{countLabel(base.document_count, "document")}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{corpusTimeLabel(base)}</span>
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           ) : (
             <div className="workspace-knowledge-empty">
@@ -277,5 +356,66 @@ export function KnowledgeBases({
         </>
       )}
     </div>
+  )
+}
+
+export function KnowledgeBases({
+  organizationId,
+  organizationName,
+  organizationRole,
+  userId,
+  selected,
+  onSelect,
+  onOpenTools,
+}: {
+  /** From the shell; without one there is nothing to read. */
+  organizationId?: string
+  organizationName?: string
+  organizationRole?: Role
+  userId?: string
+  selected: SelectedKnowledgeBase | null
+  onSelect: (base: SelectedKnowledgeBase | null) => void
+  onOpenTools?: () => void
+}) {
+  const viewer: RagViewer = { userId, role: organizationRole }
+  const capabilities = useQuery({
+    ...capabilitiesQueryOptions(),
+    enabled: Boolean(organizationId),
+  })
+  const corpora = useQuery({
+    ...corporaQueryOptions(organizationId ?? ""),
+    enabled: Boolean(organizationId),
+  })
+  // Rag answers its capabilities without a session; when neither read gets
+  // through, the service itself is missing rather than the member's access.
+  const unavailable =
+    !organizationId || (corpora.isError && capabilities.isError)
+
+  if (organizationId && selected && !unavailable) {
+    return (
+      <div className="workspace-knowledge-page">
+        <KnowledgeBaseDetail
+          key={selected.id}
+          organizationId={organizationId}
+          corpusId={selected.id}
+          name={selected.name}
+          viewer={viewer}
+          answering={capabilities.data?.answering}
+          onClose={() => onSelect(null)}
+          onOpenTools={onOpenTools}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <KnowledgeBaseList
+      organizationId={organizationId}
+      organizationName={organizationName}
+      viewer={viewer}
+      corpora={corpora}
+      unavailable={unavailable}
+      onSelect={onSelect}
+    />
   )
 }

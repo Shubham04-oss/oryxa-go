@@ -1,7 +1,9 @@
 packages: []
 
 allowBuilds:
+  core-js-pure: false
   esbuild: true
   lightningcss: true
   unrs-resolver: true
   msw: false
+  workerd: true

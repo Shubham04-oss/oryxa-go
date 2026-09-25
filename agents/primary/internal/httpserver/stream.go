@@ -72,10 +72,20 @@ func (stream *eventStream) keepAlive(interval time.Duration) func() {
 }
 
 // ForThreads serves a threads.Service. StartRun returns the service's own
-// run type, so it cannot satisfy Threads by itself.
+// run type, so it cannot satisfy Threads by itself; Create and List take an
+// origin Threads carries but the service's own same-named methods do not, so
+// they are mapped onto CreateFrom and ListFrom instead.
 func ForThreads(service *threads.Service) Threads { return threadsService{service} }
 
 type threadsService struct{ *threads.Service }
+
+func (service threadsService) Create(ctx context.Context, member threads.Member, origin string) (threads.Thread, error) {
+	return service.Service.CreateFrom(ctx, member, origin)
+}
+
+func (service threadsService) List(ctx context.Context, member threads.Member, origin string) ([]threads.Thread, error) {
+	return service.Service.ListFrom(ctx, member, origin)
+}
 
 func (service threadsService) StartRun(ctx context.Context, member threads.Member, threadID string, input threads.RunInput) (Run, error) {
 	run, err := service.Service.StartRun(ctx, member, threadID, input)

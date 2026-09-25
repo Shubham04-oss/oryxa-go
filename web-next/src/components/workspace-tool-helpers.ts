@@ -228,7 +228,10 @@ export const intervalChoices = [
   { label: "Every week", value: 604800 },
 ]
 
-export function sourceTarget(provider: SourceProvider, raw: string) {
+export function sourceTarget(
+  provider: SourceProvider,
+  raw: string
+): Record<string, string> {
   const value = raw.trim()
   switch (provider) {
     case "github":
@@ -270,4 +273,90 @@ export function sourceName(provider: string, target: Record<string, string>) {
     default:
       return Object.values(target).join(", ") || "Source"
   }
+}
+
+// ---------------------------------------------------------------------------
+// Connecting and coming back
+// ---------------------------------------------------------------------------
+
+/** The two parameters apps' callback adds to `return_to` (`completeConnection`). */
+export const connectReturnParams = ["app_connection", "status"] as const
+
+/**
+ * Where Composio sends the member back once they finish connecting: this
+ * page, in the organization they connected in, with Tools open. A previous
+ * return's parameters are dropped so they can't be read twice.
+ */
+export function connectReturnTo(href: string, organizationId: string): string {
+  const url = new URL(href)
+  url.hash = ""
+  for (const name of connectReturnParams) url.searchParams.delete(name)
+  url.searchParams.set("org", organizationId)
+  url.searchParams.set("view", "tools")
+  return url.toString()
+}
+
+/** This page's address without Composio's return parameters, for `history.replaceState`. */
+export function withoutConnectReturn(href: string): string {
+  const url = new URL(href)
+  for (const name of connectReturnParams) url.searchParams.delete(name)
+  return `${url.pathname}${url.search}${url.hash}`
+}
+
+/**
+ * The link Composio answered, if it is safe to send the member to: https,
+ * or this app's own origin (a local stand-in).
+ */
+export function connectRedirect(redirectUrl: string, origin: string): string {
+  const target = new URL(redirectUrl)
+  if (target.protocol !== "https:" && target.origin !== origin) {
+    throw new Error("The connection link was not secure.")
+  }
+  return target.toString()
+}
+
+/**
+ * The connected row's count. Only an active connection is called
+ * connected; one still connecting or broken is counted as what it is, and an
+ * expired one a newer connection replaced (`replacedIds`) as replaced: it
+ * needs no reconnecting, only removing when the member is done with it.
+ */
+export function connectionCountLabel(
+  connections: ReadonlyArray<{ id: string; status: string }>,
+  replacedIds: ReadonlySet<string> = new Set()
+): string {
+  const count = (statuses: string[]) =>
+    connections.filter(
+      (connection) =>
+        statuses.includes(connection.status) && !replacedIds.has(connection.id)
+    ).length
+  const active = count(["active"])
+  const pending = count(["pending"])
+  const attention = count(["failed", "expired"])
+  const replaced = connections.filter((connection) =>
+    replacedIds.has(connection.id)
+  ).length
+  const parts = [`${active} connected`]
+  if (pending) parts.push(`${pending} connecting`)
+  if (attention)
+    parts.push(`${attention} ${attention === 1 ? "needs" : "need"} attention`)
+  if (replaced) parts.push(`${replaced} replaced`)
+  return parts.join(" · ")
+}
+
+/** Ends `text` with a full stop unless it already ends a sentence. */
+export function sentence(text: string): string {
+  const trimmed = text.trim()
+  return /[.!?…]$/.test(trimmed) ? trimmed : `${trimmed}.`
+}
+
+/** A timestamp as a member reads it, or "Never" when there is none. */
+export function prettyTime(value?: string): string {
+  if (!value) return "Never"
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "Unknown"
+  return date.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  })
 }

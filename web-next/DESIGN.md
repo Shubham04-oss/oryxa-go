@@ -33,6 +33,11 @@ not permission to copy every incidental value into a new component.
   cards and pill controls are welcome; avoid ornamental gradients, broad
   shadows, glass effects, or divider lines between shell regions. Borders may
   group content *inside* a surface. Shadows are for overlays, not page depth.
+- A chat composer (message to a person, room, or agent) is a pill-shaped
+  field — full pill at one line, softening to a large radius once its
+  content wraps past one line — with a circular icon send button inside,
+  never a rectangular field with a text "Send" button. Share one set of CSS
+  across composers instead of copying the pattern per screen.
 - Use Lucide for general UI icons. Use actual brand marks for integrations.
   Icons should express an action or entity, never fill empty space.
 - Every interactive state must be visible: hover, active/selected, keyboard
@@ -44,13 +49,22 @@ not permission to copy every incidental value into a new component.
 - The base `#111111` surface carries the two sidebars without separate cards.
   The `#1e1e1e` canvas sits between them. No shell separator/divider lines.
 - On desktop, the left sidebar is 20% when expanded and a 48px rail when
-  collapsed. The right activity panel has a 48px collapsed rail and a wider
+  collapsed. The right agent panel has a 48px collapsed rail and a wider
   expanded panel. The center takes all remaining width.
 - Expanding the right panel collapses the left. Collapsing the right expands
   the center; it must **not** automatically expand the left. A manually
   collapsed left sidebar stays collapsed until the user opens it.
 - Home, Team, and Agents are the three primary icon-first pill controls. The
   active one is slightly enlarged and more prominent, not a giant tab.
+- The right agent panel holds the member's agent and team conversations. Its
+  tabs, Agents (the default), DMs and Teams, use the same icon-first pills;
+  the Agents pill carries the primary agent's voxel avatar. When the member
+  has more than one agent, the Agents tab's top row is a quick switch between
+  them: the one in use is the oval pill with its name, like the pills
+  elsewhere, and the rest stay avatar-only. With a single agent the row is not
+  shown, and it never shows empty or example slots. Collapsed, the panel's rail shows one icon per tab, and each opens
+  the panel on that tab. A tab without a live service shows a one-line empty
+  state, never example people, rooms or messages.
 - Sidebar content follows the primary mode:
 
   | Mode | Left navigation |
@@ -76,6 +90,23 @@ not permission to copy every incidental value into a new component.
   and a separate work panel. Tabs such as Overview, Tasks, Files, and Activity
   sit **above** the work panel. The panel's top area belongs to the selected
   view's heading and state, not the tab strip.
+- Header-row controls — work tabs, panel tabs, panel toggles — sit on the
+  header's own centre row (y=28 in its 56px band), vertically level with the
+  back button and title, even when (like the work tabs) they are positioned
+  over a region below the header rather than inside the `<header>` itself.
+- An agent conversation reads as a quiet log on the base surface: the
+  member's messages in raised bubbles on the right; the agent's answers as
+  full-width Markdown, labelled only when a sub-agent wrote them; each run of
+  tool calls folded into one muted status row; confirmations as small cards
+  with Decline and Approve pills (several waiting are answered together);
+  files as a thumbnail or a file chip; a failed run as one muted error line,
+  and an answer cut short marked "Interrupted". A specialist's answer is its
+  work result's summary, with one muted line under it for the rest (needs
+  your input or blocked, the tools it used, the files it saved, the hand-offs
+  it suggests); while it works, one muted pulsing line says so. In the agent
+  panel one muted row above it names the conversation, with a quiet icon
+  button that starts a new one; a specialist's focused view carries the same
+  in its presence row. No history list until one is designed.
 - People is a DM area, not teammate administration or a combined “People &
   teams” directory. Recent/started conversations belong in Team's left
   sidebar, with at most three visible there. A DM uses the same dynamic header
@@ -116,13 +147,15 @@ not permission to copy every incidental value into a new component.
   teardrops, persistent rail, extra mobile control bar, or sidebar glyphs.
 - Keep the page/context title centered between those controls. Preserve
   adequate clearance for the title and touch targets at narrow widths.
-- The activity panel and left navigation may open over content, but the
+- The agent panel and left navigation may open over content, but the
   default view should prioritize the center. Do not let both open panels
   compete for the viewport.
 - In a focused mobile chat, when the message field is active and the virtual
   keyboard reduces the visual viewport, hide the work/onboarding panel and
   give the visible height to the conversation and composer. Restore the work
   panel after composition. Do not let a checklist push the composer off-screen.
+  The agent panel's composer follows the same rule: the panel fits the visible
+  height, so its tabs and composer stay on screen.
 - Check a representative desktop viewport near 1099×807 and a phone viewport
   near 423×927, including panel-open, panel-closed, and keyboard/composer
   states when relevant. These are regression targets, not fixed layout sizes.

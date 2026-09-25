@@ -13,3 +13,8 @@ todos.json
 
 # typescript
 *.tsbuildinfo
+
+# wrangler's local variables (see .dev.vars.example)
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
