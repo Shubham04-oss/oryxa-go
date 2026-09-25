@@ -131,7 +131,7 @@ func (s *Service) Create(ctx context.Context, credentials authclient.Credentials
 	if purpose == domain.PurposeBillingAttachment {
 		access = domain.AccessAdmins
 	}
-	if access == domain.AccessAdmins && (scope != domain.ScopeOrganization || !org.Role.IsOrgAdmin()) {
+	if access == domain.AccessAdmins && (scope != domain.ScopeOrganization || !org.ActsAsAdmin()) {
 		return domain.Object{}, domain.ErrForbidden
 	}
 	teamID, memberID, err := domain.Place(scope, input.TeamID, org.UserID)
@@ -215,8 +215,8 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 		return nil, err
 	}
 	if filter.Scope == domain.ScopeTeam {
-		if !org.Role.IsOrgAdmin() {
-			if _, err := s.teamAccess(ctx, credentials, organizationID, filter.TeamID); err != nil {
+		if !org.ActsAsAdmin() {
+			if _, err := s.teamAccess(ctx, credentials, org, organizationID, filter.TeamID); err != nil {
 				return nil, err
 			}
 		}
@@ -225,7 +225,7 @@ func (s *Service) List(ctx context.Context, credentials authclient.Credentials, 
 		Scope:       filter.Scope,
 		TeamID:      filter.TeamID,
 		MemberID:    org.UserID,
-		Admin:       org.Role.IsOrgAdmin(),
+		Admin:       org.ActsAsAdmin(),
 		Purpose:     filter.Purpose,
 		CreatedFrom: from,
 		CreatedTo:   to,
@@ -367,12 +367,12 @@ func (s *Service) mayCreate(ctx context.Context, credentials authclient.Credenti
 	case domain.ScopeMember:
 		return nil
 	case domain.ScopeOrganization:
-		if !org.Role.IsOrgAdmin() {
+		if !org.ActsAsAdmin() {
 			return domain.ErrForbidden
 		}
 		return nil
 	case domain.ScopeTeam:
-		_, err := s.teamAccess(ctx, credentials, org.OrganizationID, teamID)
+		_, err := s.teamAccess(ctx, credentials, org, org.OrganizationID, teamID)
 		return err
 	default:
 		return fmt.Errorf("scope is not allowed: %w", domain.ErrInvalid)
@@ -382,20 +382,20 @@ func (s *Service) mayCreate(ctx context.Context, credentials authclient.Credenti
 func (s *Service) canSee(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, object domain.Object) error {
 	switch object.Scope {
 	case domain.ScopeMember:
-		if object.MemberID == org.UserID || org.Role.IsOrgAdmin() {
+		if object.MemberID == org.UserID || org.ActsAsAdmin() {
 			return nil
 		}
 		return domain.ErrNotFound
 	case domain.ScopeOrganization:
-		if object.EffectiveAccess() != domain.AccessMembers && !org.Role.IsOrgAdmin() {
+		if object.EffectiveAccess() != domain.AccessMembers && !org.ActsAsAdmin() {
 			return domain.ErrNotFound
 		}
 		return nil
 	case domain.ScopeTeam:
-		if org.Role.IsOrgAdmin() {
+		if org.ActsAsAdmin() {
 			return nil
 		}
-		_, err := s.teamAccess(ctx, credentials, object.OrganizationID, object.TeamID)
+		_, err := s.teamAccess(ctx, credentials, org, object.OrganizationID, object.TeamID)
 		return err
 	default:
 		return domain.ErrNotFound
@@ -403,7 +403,7 @@ func (s *Service) canSee(ctx context.Context, credentials authclient.Credentials
 }
 
 func (s *Service) canDelete(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, object domain.Object) error {
-	if org.Role.IsOrgAdmin() {
+	if org.ActsAsAdmin() {
 		return nil
 	}
 	switch object.Scope {
@@ -415,7 +415,7 @@ func (s *Service) canDelete(ctx context.Context, credentials authclient.Credenti
 		if object.CreatedBy == org.UserID {
 			return nil
 		}
-		access, err := s.teamAccess(ctx, credentials, object.OrganizationID, object.TeamID)
+		access, err := s.teamAccess(ctx, credentials, org, object.OrganizationID, object.TeamID)
 		if err != nil {
 			return err
 		}
@@ -426,7 +426,15 @@ func (s *Service) canDelete(ctx context.Context, credentials authclient.Credenti
 	return domain.ErrNotFound
 }
 
-func (s *Service) teamAccess(ctx context.Context, credentials authclient.Credentials, organizationID, teamID string) (domain.TeamAccess, error) {
+// teamAccess asks teams. A team the caller cannot see reads as missing,
+// because teams conceals it and so does files.
+//
+// Teams answers an agent's token as its member, so for an agent acting for an
+// org admin it shows every team and says the agent can manage each one. An
+// agent gets a plain member's reach, so for one only its member's own place
+// on the team counts: it reaches a team its member is on, and manages one
+// its member is a team admin of.
+func (s *Service) teamAccess(ctx context.Context, credentials authclient.Credentials, org domain.OrgMembership, organizationID, teamID string) (domain.TeamAccess, error) {
 	if s.teams == nil {
 		return domain.TeamAccess{}, fmt.Errorf("teams URL is required for team files: %w", domain.ErrInvalid)
 	}
@@ -436,6 +444,12 @@ func (s *Service) teamAccess(ctx context.Context, credentials authclient.Credent
 	}
 	if !access.CanSee() {
 		return domain.TeamAccess{}, domain.ErrNotFound
+	}
+	if org.Agent {
+		if !access.Member {
+			return domain.TeamAccess{}, domain.ErrNotFound
+		}
+		access.CanManage = access.TeamAdmin
 	}
 	return access, nil
 }
