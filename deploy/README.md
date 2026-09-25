@@ -186,10 +186,19 @@ agent can approve what only its owner may. So, for this release only:
    - A decision an older build recorded names no decider. The waker never
      treats such an approval of a held request as its owner's: it holds the
      request for the owner again instead of waking the agent.
+   - A request made in a teamspace is read again, as its addressed member,
+     before an agent decides it or is woken for it. Without a token of that
+     member's, which needs `AGENTS_PRIMARY_SERVICE_KEY_ID` and the member's
+     own "agents may act for me while I'm away" grant, a specialist with
+     `automatic` delegation cannot decide it, so it is held for its owner
+     instead. Expect that for members who have not granted it.
    - The web app's side conversations need this build before theirs: they
      send `teamspace_id`, list with `?teamspace_id=` and `?with_user=`, and
      create their threads with `origin: "side_conversation"`, all of which an
-     older build refuses or ignores.
+     older build refuses or ignores. They should also expect two new answers:
+     `409 idempotency_key_reused` for a key sent again with another request,
+     and `409 request_closed` for deciding a request that no longer stands in
+     its teamspace.
 
 ## Looking at it
 
