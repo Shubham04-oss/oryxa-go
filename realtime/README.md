@@ -67,9 +67,10 @@ The Worker's side agreed on the first two vectors. The third is here so that the
 
 | Detail type | Purge |
 | --- | --- |
-| `auth.member.removed.v1`, `reason` `left` or `removed` | That member's conversations in that organization: `scope` `member`, their `user_id`, and `removed_at` from the event's `removed_at` |
-| `auth.member.removed.v1`, `reason` `organization_deleted` | None. Deleting an organization removes every member, each with an event of their own, and the organization's purge already takes everything, so these make no calls. |
+| `auth.member.removed.v1`, `reason` `left`, `removed` or `organization_deleted` | That member's conversations in that organization: `scope` `member`, their `user_id`, and `removed_at` from the event's `removed_at` |
 | `auth.organization.deleted.v1` | Everything the organization kept: `scope` `organization`, `user_id` `""`, and `removed_at` from the event's `deleted_at` |
+
+Deleting an organization removes every member, each with an event of their own, and each of those is purged too, although the organization's purge takes everything it kept. The organization's purge reaches only the conversations the Worker's registry knows of, and nothing guarantees that is all of them. A member's purge that finds nothing left is still answered `204`.
 
 The envelope's signature is checked before anything in an event is used, as in every consumer (`internal/eventauth`). By default a signature that does not check out is logged and the event handled anyway (`ORYXA_EVENT_SIGNATURES=report`). With `enforce` it is refused. An event realtime cannot read, meaning one that is not JSON, not a subscribed type from `oryxa.auth`, not envelope version 1, missing its organization, member or time, or refused for its signature, stays on the queue and ends in the dead-letter queue, as in every consumer.
 

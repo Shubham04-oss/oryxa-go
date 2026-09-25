@@ -97,8 +97,7 @@ type receivedEnvelope struct {
 }
 
 // Handle processes one SQS message body: an EventBridge event from auth. It
-// returns nil once the message is done with: purged, purged already, or
-// needing no purge. An error wrapping purge.ErrPermanent means the Worker
+// returns nil once the message is done with: purged, or purged already. An error wrapping purge.ErrPermanent means the Worker
 // refused the purge for good, and Poll drops the message; any other error
 // leaves it for the queue to deliver again.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
@@ -133,12 +132,10 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 
 	ctx, span := observability.StartConsumerSpan(ctx, detail.TraceCarrier, consumer.queueName, event.DetailType, detail.EventID)
 	started := time.Now()
-	request, needed, err := requestFor(event.DetailType, detail.EventID, detail.Data)
+	request, err := requestFor(event.DetailType, detail.EventID, detail.Data)
 	outcome := "realtime conversations purged"
 	switch {
 	case err != nil:
-	case !needed:
-		outcome = "no realtime purge needed: the organization's own deletion purges everything it kept"
 	case consumer.purged.has(detail.EventID):
 		outcome = "realtime purge already done"
 	default:
@@ -166,46 +163,44 @@ func scope(request purge.Request) string {
 }
 
 // requestFor is the purge an event asks for, bounded by when the membership
-// or the organization ended. needed is false for a member removed because
-// their organization was deleted: that organization's own event purges
-// everything it kept, so the member's purge would only repeat part of it.
-func requestFor(detailType, eventID string, data json.RawMessage) (request purge.Request, needed bool, err error) {
+// or the organization ended. A member removed because their organization was
+// deleted is purged like any other, although the organization's own purge
+// takes everything it kept: that purge reaches only the conversations the
+// Worker's registry knows of, which nothing guarantees is all of them, and a
+// member's purge that finds nothing left is still answered 204.
+func requestFor(detailType, eventID string, data json.RawMessage) (purge.Request, error) {
 	switch detailType {
 	case autheventsv1.MemberRemovedDetailType:
 		var removed autheventsv1.MemberRemoved
 		if err := json.Unmarshal(data, &removed); err != nil {
-			return purge.Request{}, false, fmt.Errorf("decode event data: %w", err)
+			return purge.Request{}, fmt.Errorf("decode event data: %w", err)
 		}
 		if removed.OrganizationID == "" || removed.UserID == "" {
-			return purge.Request{}, false, errors.New("member event has no organization_id or user_id")
-		}
-		request = purge.Request{
-			EventID: eventID, OrganizationID: removed.OrganizationID,
-			Scope: purge.ScopeMember, UserID: removed.UserID, RemovedAt: removed.RemovedAt,
-		}
-		if removed.Reason == autheventsv1.MemberRemovedReasonOrganizationDeleted {
-			return request, false, nil
+			return purge.Request{}, errors.New("member event has no organization_id or user_id")
 		}
 		// Without the time, the Worker could not tell what the member wrote
 		// before from what they wrote after being invited back.
 		if removed.RemovedAt.IsZero() {
-			return purge.Request{}, false, errors.New("member event has no removed_at")
+			return purge.Request{}, errors.New("member event has no removed_at")
 		}
-		return request, true, nil
+		return purge.Request{
+			EventID: eventID, OrganizationID: removed.OrganizationID,
+			Scope: purge.ScopeMember, UserID: removed.UserID, RemovedAt: removed.RemovedAt,
+		}, nil
 	case autheventsv1.OrganizationDeletedDetailType:
 		var deleted autheventsv1.OrganizationDeleted
 		if err := json.Unmarshal(data, &deleted); err != nil {
-			return purge.Request{}, false, fmt.Errorf("decode event data: %w", err)
+			return purge.Request{}, fmt.Errorf("decode event data: %w", err)
 		}
 		if deleted.OrganizationID == "" || deleted.DeletedAt.IsZero() {
-			return purge.Request{}, false, errors.New("organization event has no organization_id or deleted_at")
+			return purge.Request{}, errors.New("organization event has no organization_id or deleted_at")
 		}
 		return purge.Request{
 			EventID: eventID, OrganizationID: deleted.OrganizationID,
 			Scope: purge.ScopeOrganization, RemovedAt: deleted.DeletedAt,
-		}, true, nil
+		}, nil
 	}
-	return purge.Request{}, false, fmt.Errorf("no purge for %s", detailType)
+	return purge.Request{}, fmt.Errorf("no purge for %s", detailType)
 }
 
 type queueAPI interface {

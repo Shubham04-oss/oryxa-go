@@ -133,8 +133,13 @@ func TestAuthSubscriptionsAreTheEndsOfMemberships(t *testing.T) {
 	}
 }
 
+// A member of a deleted organization is purged too, although the
+// organization's own purge takes everything it kept: that purge reaches only
+// the conversations the Worker's registry knows of.
 func TestConsumerPurgesAMemberWhoseMembershipEnded(t *testing.T) {
-	for _, reason := range []string{autheventsv1.MemberRemovedReasonLeft, autheventsv1.MemberRemovedReasonRemoved} {
+	for _, reason := range []string{
+		autheventsv1.MemberRemovedReasonLeft, autheventsv1.MemberRemovedReasonRemoved, autheventsv1.MemberRemovedReasonOrganizationDeleted,
+	} {
 		t.Run(reason, func(t *testing.T) {
 			purger := &fakePurger{}
 			if err := newConsumer(t, purger).Handle(context.Background(), memberRemoved("evt_1", "org_1", "user-2", reason)); err != nil {
@@ -159,25 +164,6 @@ func TestConsumerPurgesADeletedOrganization(t *testing.T) {
 	}
 }
 
-// Deleting an organization removes every member too, each with its own
-// event; the organization's purge takes everything, so theirs are not sent.
-func TestConsumerLeavesAMemberOfADeletedOrganizationToTheOrganizationsPurge(t *testing.T) {
-	purger := &fakePurger{}
-	consumer := newConsumer(t, purger)
-	if err := consumer.Handle(context.Background(), memberRemoved("evt_3", "org_1", "user-2", autheventsv1.MemberRemovedReasonOrganizationDeleted)); err != nil {
-		t.Fatal(err)
-	}
-	// Needing no purge, it needs no time either.
-	signer, _ := authHarness()
-	untimed := authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_4", 1, `{"organization_id":"org_1","user_id":"user-3","reason":"organization_deleted"}`)
-	if err := consumer.Handle(context.Background(), untimed); err != nil {
-		t.Fatal(err)
-	}
-	if got := purger.asked(); len(got) != 0 {
-		t.Fatalf("purges = %+v, want none", got)
-	}
-}
-
 func TestConsumerRefusesWhatItCannotHandle(t *testing.T) {
 	signer, _ := authHarness()
 	stranger, _, err := eventauth.NewLocalSigner("auth", time.Now)
@@ -190,14 +176,16 @@ func TestConsumerRefusesWhatItCannotHandle(t *testing.T) {
 		"unsubscribed type": authEvent(signer, autheventsv1.MemberJoinedDetailType, "evt_1", 1, `{"organization_id":"org_1","user_id":"user-2"}`),
 		"another source": `{"id":"eb-1","detail-type":"auth.organization.deleted.v1","source":"oryxa.billing",` +
 			`"detail":{"event_id":"evt_1","version":1,"data":{"organization_id":"org_1"}}}`,
-		"future version":         authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 2, orgData),
-		"no event id":            authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "", 1, orgData),
-		"bad data":               authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"organization_id":42}`),
-		"no organization":        authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"name":"Acme","deleted_at":"2026-09-24T12:00:00Z"}`),
-		"no deleted_at":          authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"organization_id":"org_1","name":"Acme"}`),
-		"member without user":    authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"organization_id":"org_1","reason":"left","removed_at":"2026-09-24T12:00:00Z"}`),
-		"member without org":     authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"user_id":"user-2","reason":"left","removed_at":"2026-09-24T12:00:00Z"}`),
-		"member without time":    authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"organization_id":"org_1","user_id":"user-2","reason":"left"}`),
+		"future version":      authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 2, orgData),
+		"no event id":         authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "", 1, orgData),
+		"bad data":            authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"organization_id":42}`),
+		"no organization":     authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"name":"Acme","deleted_at":"2026-09-24T12:00:00Z"}`),
+		"no deleted_at":       authEvent(signer, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, `{"organization_id":"org_1","name":"Acme"}`),
+		"member without user": authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"organization_id":"org_1","reason":"left","removed_at":"2026-09-24T12:00:00Z"}`),
+		"member without org":  authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"user_id":"user-2","reason":"left","removed_at":"2026-09-24T12:00:00Z"}`),
+		"member without time": authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1, `{"organization_id":"org_1","user_id":"user-2","reason":"left"}`),
+		"deleted organization's member without time": authEvent(signer, autheventsv1.MemberRemovedDetailType, "evt_1", 1,
+			`{"organization_id":"org_1","user_id":"user-2","reason":"organization_deleted"}`),
 		"signed by someone else": authEvent(stranger, autheventsv1.OrganizationDeletedDetailType, "evt_1", 1, orgData),
 		"unsigned": `{"id":"eb-1","detail-type":"auth.organization.deleted.v1","source":"oryxa.auth",` +
 			`"detail":{"event_id":"evt_1","version":1,"occurred_at":"2026-09-24T12:00:00Z","data":{"organization_id":"org_1"}}}`,
@@ -416,6 +404,7 @@ func TestPollDeletesWhatIsDoneWithAndKeepsWhatMaySucceedLater(t *testing.T) {
 	wantBodies := []string{
 		`{"event_id":"evt_left","organization_id":"org_1","scope":"member","user_id":"user-2","removed_at":"2026-09-24T11:59:58.123456789Z"}`,
 		`{"event_id":"evt_deleted","organization_id":"org_1","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
+		`{"event_id":"evt_member_of_deleted","organization_id":"org_1","scope":"member","user_id":"user-3","removed_at":"2026-09-24T11:59:58.123456789Z"}`,
 		`{"event_id":"evt_refused","organization_id":"org_refused","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
 		`{"event_id":"evt_down","organization_id":"org_down","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
 		`{"event_id":"evt_misrouted","organization_id":"org_misrouted","scope":"organization","user_id":"","removed_at":"2026-09-24T11:59:59.5Z"}`,
