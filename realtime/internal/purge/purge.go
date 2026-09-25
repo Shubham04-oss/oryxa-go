@@ -111,7 +111,8 @@ var ErrPermanent = errors.New("the Worker refused the purge for good")
 // Config is how to reach the Worker.
 type Config struct {
 	// WorkerURL is the origin the Worker serves, such as
-	// https://app.oryxa.in; Path is appended to it.
+	// https://app.oryxa.in, with no path: Path is appended to it, and the
+	// Worker matches Path exactly.
 	WorkerURL string
 	// Secret signs every request. The Worker holds the same one.
 	Secret string
@@ -134,8 +135,9 @@ type Client struct {
 func New(config Config) (*Client, error) {
 	base := strings.TrimRight(strings.TrimSpace(config.WorkerURL), "/")
 	parsed, err := url.Parse(base)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-		return nil, errors.New("purge: the Worker's URL must be an absolute http or https URL")
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
+		parsed.Path != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return nil, errors.New("purge: the Worker's URL must be an origin, an absolute http or https URL with no path or query")
 	}
 	if config.Secret == "" {
 		return nil, errors.New("purge: a secret to sign with is required")

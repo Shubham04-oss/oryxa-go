@@ -17,7 +17,8 @@ const MinSecretLength = 32
 // are the host's.
 type Config struct {
 	// WorkerURL is the web app's origin, where its Worker takes
-	// POST /internal/realtime/purge.
+	// POST /internal/realtime/purge. It has no path: the Worker matches the
+	// route's path exactly, so one under another path would never reach it.
 	WorkerURL string
 	// PurgeSecret signs every purge. The Worker holds the same secret.
 	PurgeSecret string
@@ -34,8 +35,8 @@ func FromEnv(getenv func(string) string) (Config, error) {
 		PurgeSecret:    strings.TrimSpace(getenv("REALTIME_PURGE_SECRET")),
 		EventsQueueURL: strings.TrimSpace(getenv("REALTIME_EVENTS_QUEUE_URL")),
 	}
-	if config.WorkerURL != "" && !baseURL(config.WorkerURL) {
-		return Config{}, errors.New("REALTIME_WORKER_URL must be an absolute http or https URL with no query, such as https://app.oryxa.in")
+	if config.WorkerURL != "" && !origin(config.WorkerURL) {
+		return Config{}, errors.New("REALTIME_WORKER_URL must be the web app's origin, an absolute http or https URL with no path or query, such as https://app.oryxa.in")
 	}
 	if config.PurgeSecret != "" && len(config.PurgeSecret) < MinSecretLength {
 		return Config{}, fmt.Errorf("REALTIME_PURGE_SECRET must be at least %d characters; openssl rand -hex 32 makes one", MinSecretLength)
@@ -58,9 +59,10 @@ func (config Config) Missing() []string {
 	return missing
 }
 
-// baseURL reports whether value is somewhere a path can be appended to.
-func baseURL(value string) bool {
+// origin reports whether value is an origin, with nothing after its host for
+// the route to be appended to but the trailing slash FromEnv trims.
+func origin(value string) bool {
 	parsed, err := url.Parse(value)
 	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" &&
-		parsed.User == nil && parsed.RawQuery == "" && parsed.Fragment == "" && !parsed.ForceQuery
+		parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == "" && !parsed.ForceQuery
 }

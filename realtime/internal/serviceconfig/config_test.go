@@ -68,8 +68,12 @@ func TestFromEnvRefusesMalformedValues(t *testing.T) {
 		"a query":             {map[string]string{"REALTIME_WORKER_URL": "https://app.oryxa.in/?x=1"}, "REALTIME_WORKER_URL"},
 		"a fragment":          {map[string]string{"REALTIME_WORKER_URL": "https://app.oryxa.in/#x"}, "REALTIME_WORKER_URL"},
 		"credentials":         {map[string]string{"REALTIME_WORKER_URL": "https://user:pass@app.oryxa.in"}, "REALTIME_WORKER_URL"},
-		"a short secret":      {map[string]string{"REALTIME_PURGE_SECRET": "too-short"}, "REALTIME_PURGE_SECRET"},
-		"a padded short one":  {map[string]string{"REALTIME_PURGE_SECRET": "  " + secret[:31] + "  "}, "REALTIME_PURGE_SECRET"},
+		// The Worker matches /internal/realtime/purge exactly, so a path
+		// before it would be answered 404.
+		"a path":             {map[string]string{"REALTIME_WORKER_URL": "https://app.oryxa.in/web/"}, "REALTIME_WORKER_URL"},
+		"the route itself":   {map[string]string{"REALTIME_WORKER_URL": "https://app.oryxa.in/internal/realtime/purge"}, "REALTIME_WORKER_URL"},
+		"a short secret":     {map[string]string{"REALTIME_PURGE_SECRET": "too-short"}, "REALTIME_PURGE_SECRET"},
+		"a padded short one": {map[string]string{"REALTIME_PURGE_SECRET": "  " + secret[:31] + "  "}, "REALTIME_PURGE_SECRET"},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

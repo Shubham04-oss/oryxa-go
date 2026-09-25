@@ -186,16 +186,6 @@ func TestPurgeSignsEachAttemptWhenItIsSent(t *testing.T) {
 	}
 }
 
-func TestPurgeKeepsAPathTheWorkerURLCarries(t *testing.T) {
-	fake := newWorker(t, http.StatusNoContent, "")
-	if err := goldenClient(t, fake.URL+"/web/").Purge(context.Background(), goldenVectors[0].request); err != nil {
-		t.Fatal(err)
-	}
-	if request, _ := fake.received(); request.URL.Path != "/web/internal/realtime/purge" {
-		t.Fatalf("path = %q", request.URL.Path)
-	}
-}
-
 // How the Worker's purge route words a refusal of the body: 400 for one it
 // cannot read as a purge, 413 for one over 4 KB.
 const (
@@ -354,7 +344,11 @@ func TestNewRefusesWhatItCannotReachOrSignWith(t *testing.T) {
 		"a relative URL": {WorkerURL: "/internal", Secret: goldenSecret},
 		"another scheme": {WorkerURL: "ftp://app.oryxa.in", Secret: goldenSecret},
 		"no host":        {WorkerURL: "https://", Secret: goldenSecret},
-		"no secret":      {WorkerURL: "https://app.oryxa.in"},
+		// The Worker matches Path exactly, so a purge under another path
+		// would never reach it.
+		"a path":    {WorkerURL: "https://app.oryxa.in/web/", Secret: goldenSecret},
+		"a query":   {WorkerURL: "https://app.oryxa.in/?x=1", Secret: goldenSecret},
+		"no secret": {WorkerURL: "https://app.oryxa.in"},
 	} {
 		if _, err := New(config); err == nil {
 			t.Errorf("%s: New() = nil error", name)
