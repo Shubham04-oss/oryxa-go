@@ -160,8 +160,11 @@ type InteractionChanged struct {
 	// made outside a teamspace.
 	TeamspaceID string `json:"teamspace_id,omitempty"`
 	// Approval is who decides the request: InteractionApprovalAgent or
-	// InteractionApprovalOwner. It is absent only for a request an older
-	// build stored without one.
+	// InteractionApprovalOwner. Every request the ledger holds has one, since
+	// the column is NOT NULL with "agent" as its default, which is what a
+	// request stored before approvals were recorded has: so an event this
+	// build publishes always carries it. Only an event an older build
+	// published, before the field existed, lacks it.
 	Approval string `json:"approval,omitempty"`
 	// DecidedBy is who decided the request, as the API's
 	// decision.decided_by: absent until it is decided, and for a decision an

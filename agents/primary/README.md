@@ -735,10 +735,20 @@ message, and never without it. It carries the organization, the
 and `in_reply_to_seq` for an agent woken by one message in particular; its
 `author`, `member` or `agent`, with the member's `user_id` and, for an agent,
 its `agent_id` (the member it belongs to is the `user_id`); the
-`addressed_handles` it named, left out when it named nobody, for telling
-someone they were mentioned; and `posted_at`. Never the body, nor any summary
-of it. The events can reach the bus in any order (see [Events](#events)), so
-a consumer puts a room's messages in order by `seq`.
+`addressed_handles` it named, for telling someone they were mentioned, left
+out when it named none; and `posted_at`. Never the body, nor any summary of
+it.
+
+`addressed_handles` are the handles of the room's seats the message named
+with `@handle`, written as the room makes them, without the `@` (`["ada"]`),
+and never its author's own. Only seats that were in the room count, as when
+the room works out who answers: an `@` before anything else, such as an email
+address's domain, names nobody, so nothing of what was said reaches the bus
+as a handle. The message is stored addressing the same seats, as
+`addressed_to`, whoever wrote it.
+
+The events can reach the bus in any order (see [Events](#events)), so a
+consumer puts a room's messages in order by `seq`.
 
 ### Multi-user, multi-agent teamspaces
 
@@ -1341,8 +1351,9 @@ Contracts live in `/contracts/events/agents/v1`:
 A request's three events carry who it is between, its `status` and
 `revision`, and, since the owner-approval fields reached them, where it was
 made and who decides it: `teamspace_id`, left out for a request made outside
-a teamspace; `approval`, `agent` or `owner`, left out only for a request an
-older build stored without one; and `decided_by`, as the API's
+a teamspace; `approval`, `agent` or `owner`, always there, since every request
+has one (the column is `NOT NULL DEFAULT 'agent'`, so a request stored before
+approvals were recorded has `agent`); and `decided_by`, as the API's
 `decision.decided_by` shows it (`{"kind": "member" | "agent" | "system",
 "user_id"?, "agent_id"?}`), once the request is decided, left out before, and
 for a decision an older build recorded without its decider. An approval
