@@ -49,10 +49,14 @@ const (
 	// signatureVersion prefixes a signature, so the scheme can change without
 	// a flag day.
 	signatureVersion = "v1="
-	// Timeout bounds one call. An organization's purge walks every
-	// conversation the organization had, so it gets longer than a lookup
-	// would; a call that runs out is sent again, which is safe.
-	Timeout = 30 * time.Second
+	// MemberTimeout bounds the call for a member's purge, which walks that
+	// member's conversations. A call that runs out is sent again, which is
+	// safe.
+	MemberTimeout = 30 * time.Second
+	// OrganizationTimeout bounds the call for an organization's purge, which
+	// the Worker answers only once it has purged every member's
+	// conversations, so a large organization's takes far longer.
+	OrganizationTimeout = 120 * time.Second
 	// userAgent names the caller to the Worker and to Cloudflare in front of
 	// it, rather than Go's default.
 	userAgent = "oryxa-realtime/1"
@@ -87,6 +91,14 @@ type Request struct {
 	RemovedAt      time.Time `json:"removed_at"`
 }
 
+// timeout is how long the Worker has to answer request.
+func (request Request) timeout() time.Duration {
+	if request.Scope == ScopeOrganization {
+		return OrganizationTimeout
+	}
+	return MemberTimeout
+}
+
 // Sign is the X-Oryxa-Signature value for body sent at timestamp: v1= and the
 // lowercase hex HMAC-SHA256, keyed with the secret's bytes as written — not
 // decoded from hex or base64 — of the timestamp in decimal, a dot, and the
@@ -116,8 +128,9 @@ type Config struct {
 	WorkerURL string
 	// Secret signs every request. The Worker holds the same one.
 	Secret string
-	// HTTP makes the calls. Nil is a client bounded by Timeout, traced like
-	// every outbound call, that does not follow redirects.
+	// HTTP makes the calls. Nil is a client traced like every outbound call
+	// that does not follow redirects. Whichever makes it, each call is
+	// bounded by MemberTimeout or OrganizationTimeout, as its scope says.
 	HTTP *http.Client
 	// Now is the clock requests are signed by. Nil is time.Now.
 	Now func() time.Time
@@ -145,7 +158,6 @@ func New(config Config) (*Client, error) {
 	client := &Client{endpoint: base + Path, secret: config.Secret, http: config.HTTP, now: config.Now}
 	if client.http == nil {
 		client.http = &http.Client{
-			Timeout:   Timeout,
 			Transport: observability.Transport(nil),
 			// A redirect is not the Worker answering. Following one would
 			// send the purge somewhere the contract never named, or send it
@@ -187,6 +199,8 @@ func (client *Client) Purge(ctx context.Context, request Request) error {
 		return fmt.Errorf("encode the purge: %w", err)
 	}
 	timestamp := client.now().Unix()
+	ctx, cancel := context.WithTimeout(ctx, request.timeout())
+	defer cancel()
 	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, client.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build the purge request: %w", err)

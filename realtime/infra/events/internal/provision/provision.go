@@ -29,13 +29,15 @@ const (
 	ruleName = "realtime-auth-memberships"
 	targetID = "realtime-queue"
 	// Receives before SQS moves a message realtime keeps failing on aside:
-	// with the visibility timeout below, about 25 minutes of the Worker being
+	// with the visibility timeout below, about 75 minutes of the Worker being
 	// down, or refusing the signature, before a purge waits for a redrive.
 	maxReceiveCount = 5
-	// The consumer takes five messages at a time and may wait up to 30
-	// seconds on the Worker for each, one after another. Five minutes covers
-	// a batch the Worker never answers, and spaces the retries of one.
-	visibilityTimeoutSeconds = 300
+	// The consumer takes five messages at a time and waits on the Worker for
+	// each, one after another: up to 30 seconds for a member's purge, and 120
+	// for an organization's, which the Worker answers only once every member
+	// is purged. Fifteen minutes covers a batch of organizations the Worker
+	// never answers, and spaces the retries of one.
+	visibilityTimeoutSeconds = 900
 	// Fourteen days, the most SQS keeps anything, on both queues: a purge is
 	// owed however late it runs, including one waiting for realtime to be
 	// switched on, and a message moved to the dead-letter queue keeps the

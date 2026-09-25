@@ -62,11 +62,13 @@ func TestFromEnvNamesTheDeploymentsQueue(t *testing.T) {
 
 // The consumer's batch, each call waiting on the Worker in turn, must fit
 // inside the visibility timeout, or a Worker that never answers would be sent
-// a purge again while the first attempt still waits.
+// a purge again while the first attempt still waits. The longest call is an
+// organization's.
 func TestTheVisibilityTimeoutOutlastsABatchTheWorkerNeverAnswers(t *testing.T) {
 	visibility := time.Duration(visibilityTimeoutSeconds) * time.Second
-	if batch := time.Duration(events.ReceiveBatch) * purge.Timeout; visibility < batch {
-		t.Fatalf("visibility timeout %s < %d messages x %s", visibility, events.ReceiveBatch, purge.Timeout)
+	longest := max(purge.MemberTimeout, purge.OrganizationTimeout)
+	if batch := time.Duration(events.ReceiveBatch) * longest; visibility < batch {
+		t.Fatalf("visibility timeout %s < %d messages x %s", visibility, events.ReceiveBatch, longest)
 	}
 }
 

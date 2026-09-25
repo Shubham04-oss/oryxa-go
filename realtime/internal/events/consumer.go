@@ -235,9 +235,10 @@ type queueAPI interface {
 	DeleteMessageBatch(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
 }
 
-// ReceiveBatch is how many messages Poll takes at once. Each may wait up to
-// purge.Timeout on the Worker, one after another, so the queue's visibility
-// timeout, which its provisioner sets, must outlast that many.
+// ReceiveBatch is how many messages Poll takes at once. Each may wait on the
+// Worker, one after another, for up to purge.OrganizationTimeout, so the
+// queue's visibility timeout, which its provisioner sets, must outlast that
+// many.
 const ReceiveBatch = 5
 
 // receiveBackoff is how long Poll waits after a failed receive before trying

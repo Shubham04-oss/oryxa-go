@@ -292,6 +292,42 @@ func TestPurgeRetriesWhatNeverReachedTheWorker(t *testing.T) {
 	}
 }
 
+// roundTripper answers a call without a network.
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (answer roundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	return answer(request)
+}
+
+// The Worker answers an organization's purge only once it has purged every
+// member, so that call gets longer than a member's.
+func TestPurgeGivesAnOrganizationLongerThanAMember(t *testing.T) {
+	var given []time.Duration
+	client, err := New(Config{WorkerURL: "https://app.oryxa.in", Secret: goldenSecret, HTTP: &http.Client{
+		Transport: roundTripper(func(request *http.Request) (*http.Response, error) {
+			deadline, ok := request.Context().Deadline()
+			if !ok {
+				return nil, errors.New("the call has no deadline")
+			}
+			given = append(given, time.Until(deadline))
+			return &http.Response{StatusCode: http.StatusNoContent, Header: http.Header{}, Body: http.NoBody, Request: request}, nil
+		}),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, organization := goldenVectors[0].request, goldenVectors[1].request
+	for _, request := range []Request{member, organization} {
+		if err := client.Purge(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	within := func(got, bound time.Duration) bool { return got <= bound && got > bound-time.Second }
+	if len(given) != 2 || !within(given[0], MemberTimeout) || !within(given[1], OrganizationTimeout) {
+		t.Fatalf("the calls were given %v, want %s for a member's and %s for an organization's", given, MemberTimeout, OrganizationTimeout)
+	}
+}
+
 func TestPurgeDoesNotFollowARedirect(t *testing.T) {
 	var elsewhere atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
