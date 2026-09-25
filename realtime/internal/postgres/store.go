@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -85,10 +87,19 @@ const accept = `
 // Two calls carrying one id at once record it once: the second waits on the
 // first's id until the first commits, and then finds it taken, or, if the
 // first rolled back, takes it itself.
+//
+// Every call takes its ids in their own sorted order, whatever order the
+// Worker sent them in. Two calls carrying the same ids then only ever wait on
+// one another in turn. Taken in the Worker's order, a call holding b while it
+// waited for a, beside one holding a while it waited for b, would deadlock,
+// and PostgreSQL would fail one of them. The sort is stable, so of an id a
+// call carries twice, the first is still the one recorded.
 func (store *Store) Accept(ctx context.Context, events []Received) (int, error) {
 	if len(events) == 0 {
 		return 0, nil
 	}
+	events = slices.Clone(events)
+	slices.SortStableFunc(events, func(a, b Received) int { return strings.Compare(a.WorkerID, b.WorkerID) })
 	trace := observability.CaptureTraceCarrier(ctx).Encode()
 	batch := &pgx.Batch{}
 	for _, event := range events {

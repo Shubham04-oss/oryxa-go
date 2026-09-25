@@ -154,9 +154,10 @@ func TestAcceptRecordsAllOrNothing(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	at := time.Now().UTC()
-	// The last id is not one the Worker could give, which the table refuses
-	// after the first two have been written in the transaction.
-	if _, err := store.Accept(ctx, []Received{received("evt_a", at), received("evt_b", at), received("evt b", at)}); err == nil {
+	// The last id, last in the order Accept takes ids in too, is not one the
+	// Worker could give, which the table refuses after the first two have
+	// been written in the transaction.
+	if _, err := store.Accept(ctx, []Received{received("evt_a", at), received("evt_b", at), received("evt_c!", at)}); err == nil {
 		t.Fatal("Accept() with an id the table refuses = nil error")
 	}
 	if rows, ids := outboxRows(t, store), acceptedIDs(t, store); len(rows) != 0 || len(ids) != 0 {
@@ -190,6 +191,57 @@ func TestAcceptRecordsAnIdOnceWhenTwoCallsCarryItAtOnce(t *testing.T) {
 	}
 	if rows := outboxRows(t, store); sum != 1 || len(rows) != 1 {
 		t.Fatalf("recorded %d across the calls, outbox %+v; want one event", sum, rows)
+	}
+}
+
+// Two calls carrying the same ids in opposite orders take them one after the
+// other, rather than deadlock. The other call here is a transaction that has
+// taken evt_a and goes on to take evt_b, as a call takes them, while Accept
+// is sent evt_b before evt_a. Had Accept taken evt_b first, the other call
+// would wait for it while it waited for evt_a, and PostgreSQL would fail one
+// of them.
+func TestAcceptTakesIdsInOrderSoTwoCallsCannotDeadlock(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	at := time.Now().UTC()
+	other, err := store.Pool().Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Rollback(ctx) }()
+	if _, err := other.Exec(ctx, `INSERT INTO realtime_accepted_events (id) VALUES ('evt_a')`); err != nil {
+		t.Fatal(err)
+	}
+
+	type outcome struct {
+		recorded int
+		err      error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		recorded, err := store.Accept(ctx, []Received{received("evt_b", at), received("evt_a", at)})
+		done <- outcome{recorded, err}
+	}()
+	// Accept is waiting for the other call's evt_a before the other call goes
+	// on to evt_b.
+	for waiting, deadline := false, time.Now().Add(10*time.Second); !waiting; {
+		if err := store.Pool().QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock')`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if !waiting && time.Now().After(deadline) {
+			t.Fatal("Accept never waited for the other call's evt_a")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := other.Exec(ctx, `INSERT INTO realtime_accepted_events (id) VALUES ('evt_b')`); err != nil {
+		t.Fatalf("the other call taking evt_b: %v", err)
+	}
+	if err := other.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-done; got.err != nil || got.recorded != 0 {
+		t.Fatalf("Accept(b, a) = %d, %v; want it to wait its turn and find both taken", got.recorded, got.err)
 	}
 }
 
