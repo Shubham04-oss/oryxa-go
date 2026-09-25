@@ -31,6 +31,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/internal/observability"
 	"github.com/Shubham04-oss/oryxa-go/knowledge"
 	"github.com/Shubham04-oss/oryxa-go/rag"
+	"github.com/Shubham04-oss/oryxa-go/realtime"
 	"github.com/Shubham04-oss/oryxa-go/teams"
 )
 
@@ -45,6 +46,7 @@ var definitions = []host.Definition{
 	batching.Definition,
 	email.Definition,
 	primary.Definition,
+	realtime.Definition,
 }
 
 func main() {
