@@ -125,11 +125,15 @@ type fakeRecorder struct {
 	fail      error
 }
 
-func (fake *fakeRecorder) RecordPurgeCompleted(_ context.Context, completed realtimev1.PurgeCompleted) (bool, error) {
+func (fake *fakeRecorder) RecordPurgeCompleted(ctx context.Context, completed realtimev1.PurgeCompleted) (bool, error) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if fake.fail != nil {
 		return false, fake.fail
+	}
+	// As a database would, it refuses a context already done.
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
 	fake.completed = append(fake.completed, completed)
 	return true, nil
@@ -484,9 +488,10 @@ func (purgeWith purgerFunc) Purge(ctx context.Context, request purge.Request) er
 	return purgeWith(ctx, request)
 }
 
-// A purge the Worker has done is deleted even when the process is told to
-// stop while it was being sent; left, it would come back to the next process
-// and be sent again. What was not yet handled goes back to the queue.
+// A purge the Worker has done is recorded and deleted even when the process
+// is told to stop while it was being sent; left, it would come back to the
+// next process and be sent again. What was not yet handled goes back to the
+// queue.
 func TestPollDeletesWhatItPurgedAsItStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -498,9 +503,13 @@ func TestPollDeletesWhatItPurgedAsItStops(t *testing.T) {
 		message("purged", memberRemoved("evt_1", "org_1", "user-2", autheventsv1.MemberRemovedReasonLeft)),
 		message("not-yet", memberRemoved("evt_2", "org_1", "user-3", autheventsv1.MemberRemovedReasonLeft)),
 	}}}
-	newConsumer(t, stopping).Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
+	recorder := &fakeRecorder{}
+	newRecordingConsumer(t, stopping, recorder).Poll(ctx, queue, "http://localhost:4566/000000000000/realtime-events")
 	if !slices.Equal(queue.deleted, []string{"purged"}) {
 		t.Fatalf("deleted = %v, want the purged message alone", queue.deleted)
+	}
+	if completed := recorder.recorded(); len(completed) != 1 || completed[0].SourceEventID != "evt_1" {
+		t.Fatalf("recorded %+v, want the purge done as the process stopped", completed)
 	}
 }
 

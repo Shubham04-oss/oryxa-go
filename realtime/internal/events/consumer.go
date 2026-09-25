@@ -209,9 +209,17 @@ func (consumer *Consumer) handle(ctx context.Context, body string, receivedAt ti
 	return request, nil
 }
 
+// recordTimeout bounds recording a purge the Worker has done. The record goes
+// ahead once the context it was asked in is cancelled, as a deletion does,
+// well within the host's shutdown: a purge done while the process stops would
+// otherwise be unrecorded, and come back to the next process to be sent again.
+const recordTimeout = 10 * time.Second
+
 // record keeps the audit trail of a purge the Worker has done: when it was
 // done, what it took, and auth's event that asked for it.
 func (consumer *Consumer) record(ctx context.Context, request purge.Request, completedAt time.Time) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
 	_, err := consumer.recorder.RecordPurgeCompleted(ctx, realtimev1.PurgeCompleted{
 		OrganizationID: request.OrganizationID, Scope: string(request.Scope), UserID: request.UserID,
 		RemovedAt: request.RemovedAt.UTC(), SourceEventID: request.EventID, CompletedAt: completedAt.UTC(),
