@@ -122,15 +122,18 @@ async function hmacSha256(
   return new Uint8Array(await crypto.subtle.sign("HMAC", key, data))
 }
 
-/** What Go signs: the timestamp as sent, a dot, and the body's bytes as sent. */
+/**
+ * What is signed: `prefix`, a dot, and the body's bytes as sent. A purge's
+ * prefix is its timestamp as sent.
+ */
 function signedBytes(
-  timestamp: string,
+  prefix: string,
   body: Uint8Array
 ): Uint8Array<ArrayBuffer> {
-  const prefix = encoder.encode(`${timestamp}.`)
-  const bytes = new Uint8Array(prefix.length + body.length)
-  bytes.set(prefix)
-  bytes.set(body, prefix.length)
+  const head = encoder.encode(`${prefix}.`)
+  const bytes = new Uint8Array(head.length + body.length)
+  bytes.set(head)
+  bytes.set(body, head.length)
   return bytes
 }
 
@@ -159,17 +162,33 @@ function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
 }
 
 /**
+ * An `X-Oryxa-Signature` value between Go and the Worker: `v1=` and the
+ * lowercase hex HMAC-SHA256, keyed with `secret`, of `{prefix}.{body}`. A
+ * purge signs its timestamp as the prefix (`signPurge`); the conversation
+ * events the Worker sends Go sign `events.{timestamp}` (`signEvents`, in
+ * src/realtime-events.ts), so neither direction's signature ever verifies
+ * as the other's.
+ */
+export async function realtimeSignature(
+  secret: string,
+  prefix: string,
+  body: string | Uint8Array
+): Promise<string> {
+  const bytes = typeof body === "string" ? encoder.encode(body) : body
+  return `v1=${hex(await hmacSha256(secret, signedBytes(prefix, bytes)))}`
+}
+
+/**
  * The `X-Oryxa-Signature` value for a purge: `v1=` and the hex
  * HMAC-SHA256, keyed with `secret`, of `{timestamp}.{body}`. Go computes the
  * same; the tests and the local smoke test sign with it.
  */
-export async function signPurge(
+export function signPurge(
   secret: string,
   timestamp: string,
   body: string | Uint8Array
 ): Promise<string> {
-  const bytes = typeof body === "string" ? encoder.encode(body) : body
-  return `v1=${hex(await hmacSha256(secret, signedBytes(timestamp, bytes)))}`
+  return realtimeSignature(secret, timestamp, body)
 }
 
 /** The body, or nothing when it holds more than `limit` bytes. */
