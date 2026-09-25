@@ -59,3 +59,43 @@ func TestInteractionChangedCarriesItsTeamspaceApprovalAndDecider(t *testing.T) {
 		}
 	}
 }
+
+// A room message's event names the room, the message's place and whom it
+// named, and leaves out what it does not have.
+func TestTeamspaceRoomMessagePostedIsWrittenAsTheContractSays(t *testing.T) {
+	at := time.Date(2026, time.September, 25, 9, 30, 0, 123000000, time.UTC)
+	for name, test := range map[string]struct {
+		value TeamspaceRoomMessagePosted
+		want  string
+	}{
+		"a member naming an agent": {
+			TeamspaceRoomMessagePosted{
+				OrganizationID: "org_1", TeamspaceID: "tsp_1", Message: TeamspaceRoomMessage{ID: "rmm_1", Seq: 1},
+				Author:           TeamspaceRoomAuthor{Kind: TeamspaceRoomAuthorMember, UserID: "user_ada"},
+				AddressedHandles: []string{"@crew"}, PostedAt: at,
+			},
+			`{"organization_id":"org_1","teamspace_id":"tsp_1","message":{"id":"rmm_1","seq":1},` +
+				`"author":{"kind":"member","user_id":"user_ada"},"addressed_handles":["@crew"],"posted_at":"2026-09-25T09:30:00.123Z"}`,
+		},
+		"an agent's answer": {
+			TeamspaceRoomMessagePosted{
+				OrganizationID: "org_1", TeamspaceID: "tsp_1", Message: TeamspaceRoomMessage{ID: "rmm_2", Seq: 2, InReplyToSeq: 1},
+				Author:   TeamspaceRoomAuthor{Kind: TeamspaceRoomAuthorAgent, UserID: "user_ada", AgentID: "agt_crew"},
+				PostedAt: at,
+			},
+			`{"organization_id":"org_1","teamspace_id":"tsp_1","message":{"id":"rmm_2","seq":2,"in_reply_to_seq":1},` +
+				`"author":{"kind":"agent","user_id":"user_ada","agent_id":"agt_crew"},"posted_at":"2026-09-25T09:30:00.123Z"}`,
+		},
+	} {
+		encoded, err := json.Marshal(test.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(encoded) != test.want {
+			t.Errorf("%s:\n got %s\nwant %s", name, encoded, test.want)
+		}
+	}
+	if TeamspaceRoomMessagePostedDetailType != "agents.teamspace.room.message.posted.v1" {
+		t.Fatalf("detail type = %q", TeamspaceRoomMessagePostedDetailType)
+	}
+}

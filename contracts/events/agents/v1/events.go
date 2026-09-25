@@ -82,6 +82,10 @@ const (
 	// OrganizationAgentSynthesisUpdatedDetailType announces a durable shared
 	// context revision without copying synthesized content to EventBridge.
 	OrganizationAgentSynthesisUpdatedDetailType = "agents.organization-agent.synthesis.updated.v1"
+	// TeamspaceRoomMessagePostedDetailType announces a message stored in a
+	// teamspace's room: a person's, or an agent's answer. What it said stays
+	// in the agents database.
+	TeamspaceRoomMessagePostedDetailType = "agents.teamspace.room.message.posted.v1"
 )
 
 // AgentChanged is the shared lifecycle detail for a persistent member-owned
@@ -231,6 +235,47 @@ type TeamspaceEntryPublished struct {
 	AuthorAgentID  string    `json:"author_agent_id"`
 	Kind           string    `json:"kind"`
 	PublishedAt    time.Time `json:"published_at"`
+}
+
+// TeamspaceRoomMessagePosted announces a message stored in a teamspace's
+// room, a person's or an agent's answer, without its body or any summary of
+// it. A room's id is its teamspace's id.
+type TeamspaceRoomMessagePosted struct {
+	OrganizationID string               `json:"organization_id"`
+	TeamspaceID    string               `json:"teamspace_id"`
+	Message        TeamspaceRoomMessage `json:"message"`
+	Author         TeamspaceRoomAuthor  `json:"author"`
+	// AddressedHandles are the seat handles the message named, its author's
+	// own left out: whom it was for, as a mention. Absent when it named
+	// nobody.
+	AddressedHandles []string  `json:"addressed_handles,omitempty"`
+	PostedAt         time.Time `json:"posted_at"`
+}
+
+// TeamspaceRoomMessage names one message in its room.
+type TeamspaceRoomMessage struct {
+	ID string `json:"id"`
+	// Seq is the message's place in its room, counting from 1.
+	Seq int64 `json:"seq"`
+	// InReplyToSeq is the message an agent was woken to answer, when there
+	// was one.
+	InReplyToSeq int64 `json:"in_reply_to_seq,omitempty"`
+}
+
+// Who wrote a room message, as TeamspaceRoomAuthor.Kind.
+const (
+	TeamspaceRoomAuthorMember = "member"
+	TeamspaceRoomAuthorAgent  = "agent"
+)
+
+// TeamspaceRoomAuthor is who wrote a room message.
+type TeamspaceRoomAuthor struct {
+	Kind string `json:"kind"`
+	// UserID is the member who wrote it, or the member the agent that wrote
+	// it belongs to.
+	UserID string `json:"user_id"`
+	// AgentID is set exactly when an agent wrote it.
+	AgentID string `json:"agent_id,omitempty"`
 }
 
 type OrganizationAgentSynthesisUpdated struct {

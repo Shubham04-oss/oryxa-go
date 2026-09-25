@@ -726,6 +726,18 @@ context by concluding something, not by anybody remembering to publish.
 consecutive passes end the relay, and the whole thing is bounded in
 wall-clock time. An agent with nothing to add says so and is not recorded.
 
+**Every message a room stores is announced**, a person's or an agent's
+answer, as `agents.teamspace.room.message.posted.v1`, recorded in the agents
+outbox in the transaction that stores the message: the event commits with the
+message, and never without it. It carries the organization, the
+`teamspace_id` (a room's id is its teamspace's), the message's `id` and `seq`,
+and `in_reply_to_seq` for an agent woken by one message in particular; its
+`author`, `member` or `agent`, with the member's `user_id` and, for an agent,
+its `agent_id` (the member it belongs to is the `user_id`); the
+`addressed_handles` it named, left out when it named nobody, for telling
+someone they were mentioned; and `posted_at`. Never the body, nor any summary
+of it.
+
 ### Multi-user, multi-agent teamspaces
 
 A teamspace is the shared-work boundary for one human team from Teams. It is
@@ -1322,6 +1334,7 @@ Contracts live in `/contracts/events/agents/v1`:
 | `agents.interaction.requested.v1` | A durable request is ready to route to its target agent |
 | `agents.interaction.decided.v1` | The target approved or rejected a request |
 | `agents.interaction.completed.v1` | The target completed or failed an approved request |
+| `agents.teamspace.room.message.posted.v1` | A teamspace's room stored a message, a person's or an agent's answer, without its body ([A teamspace is a room](#a-teamspace-is-a-room)) |
 
 `internal/events` holds the outbox, publisher and dispatcher: events are
 recorded in `agents_primary.agents_outbox` with the state they describe and

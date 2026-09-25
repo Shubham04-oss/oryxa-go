@@ -4,17 +4,22 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/teamspaces"
+	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 	"github.com/Shubham04-oss/oryxa-go/internal/postgreskit"
 )
 
@@ -74,6 +79,7 @@ func testStore(t *testing.T) *fixture {
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.teamspaces WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.organization_agents WHERE organization_id=$1`, organizationID)
 		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.member_agents WHERE organization_id=$1`, organizationID)
+		_, _ = database.Pool.Exec(ctx, `DELETE FROM agents_primary.agents_outbox WHERE detail->>'organization_id'=$1`, organizationID)
 		database.Close()
 	})
 	return fixture
@@ -413,5 +419,159 @@ func TestForgetRemovesAMembersOrTheOrganizationsRoomData(t *testing.T) {
 	})
 	if err != nil || fresh.Seq != 1 {
 		t.Fatalf("Append() after organization forget = %+v, %v, want seq to restart at 1", fresh, err)
+	}
+}
+
+// roomEvent is one event the agents outbox holds about a room's messages.
+type roomEvent struct {
+	occurredAt time.Time
+	detail     string
+	posted     agentsv1.TeamspaceRoomMessagePosted
+}
+
+// postedEvents is what the agents outbox holds about roomID's messages, in
+// the order they were posted.
+func (fixture *fixture) postedEvents(t *testing.T, roomID string) []roomEvent {
+	t.Helper()
+	rows, err := fixture.database.Pool.Query(context.Background(), `SELECT occurred_at, detail::text
+		FROM agents_primary.agents_outbox
+		WHERE detail_type=$1 AND detail->>'teamspace_id'=$2
+		ORDER BY (detail->'message'->>'seq')::bigint`, agentsv1.TeamspaceRoomMessagePostedDetailType, roomID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var found []roomEvent
+	for rows.Next() {
+		var event roomEvent
+		if err := rows.Scan(&event.occurredAt, &event.detail); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(event.detail), &event.posted); err != nil {
+			t.Fatal(err)
+		}
+		found = append(found, event)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return found
+}
+
+// TestAppendAnnouncesEveryMessageItStores: a person's message and an agent's
+// answer each commit with their event, whose fields are the stored
+// message's, and none of what it said.
+func TestAppendAnnouncesEveryMessageItStores(t *testing.T) {
+	fixture := testStore(t)
+	roomID := fixture.newRoom(t)
+	ctx := context.Background()
+	asked, err := fixture.store.Append(ctx, Message{
+		RoomID: roomID, AuthorHandle: "@ada", AuthorKind: SeatPerson, AuthorUserID: "user_ada",
+		Body: "@crew can you draft the launch note?", AddressedTo: []string{"@crew"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.Append(ctx, Message{
+		RoomID: roomID, AuthorHandle: "@crew", AuthorKind: SeatAgent, AuthorUserID: "user_ada", AuthorAgentID: "agt_crew",
+		Body: "Drafted: the launch is on Tuesday.", InReplyToSeq: asked.Seq,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := fixture.store.Messages(ctx, roomID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := fixture.postedEvents(t, roomID)
+	if len(stored) != 2 || len(events) != 2 {
+		t.Fatalf("stored %d messages and %d events, want two of each", len(stored), len(events))
+	}
+	want := []agentsv1.TeamspaceRoomMessagePosted{
+		{
+			OrganizationID: fixture.organizationID, TeamspaceID: roomID,
+			Message:          agentsv1.TeamspaceRoomMessage{ID: stored[0].ID, Seq: 1},
+			Author:           agentsv1.TeamspaceRoomAuthor{Kind: agentsv1.TeamspaceRoomAuthorMember, UserID: "user_ada"},
+			AddressedHandles: []string{"@crew"}, PostedAt: stored[0].CreatedAt,
+		},
+		{
+			OrganizationID: fixture.organizationID, TeamspaceID: roomID,
+			Message:  agentsv1.TeamspaceRoomMessage{ID: stored[1].ID, Seq: 2, InReplyToSeq: 1},
+			Author:   agentsv1.TeamspaceRoomAuthor{Kind: agentsv1.TeamspaceRoomAuthorAgent, UserID: "user_ada", AgentID: "agt_crew"},
+			PostedAt: stored[1].CreatedAt,
+		},
+	}
+	for index, event := range events {
+		got, expected := event.posted, want[index]
+		if got.OrganizationID != expected.OrganizationID || got.TeamspaceID != expected.TeamspaceID || got.Message != expected.Message ||
+			got.Author != expected.Author || !slices.Equal(got.AddressedHandles, expected.AddressedHandles) ||
+			!got.PostedAt.Equal(expected.PostedAt) || !event.occurredAt.Equal(stored[index].CreatedAt) {
+			t.Errorf("event %d = %+v at %s, want %+v at the stored message's time", index, got, event.occurredAt, expected)
+		}
+		for _, said := range []string{"launch note", "Tuesday", "body"} {
+			if strings.Contains(event.detail, said) {
+				t.Errorf("event %d carries what was said: %s", index, event.detail)
+			}
+		}
+	}
+	// A message that named nobody says so by leaving the field out.
+	if strings.Contains(events[1].detail, "addressed_handles") {
+		t.Errorf("the answer's event names handles it did not: %s", events[1].detail)
+	}
+}
+
+// TestAppendAnnouncesNothingItDidNotStore: a message that is not stored has
+// no event, and an event that cannot be recorded takes its message with it,
+// the place in the room included.
+func TestAppendAnnouncesNothingItDidNotStore(t *testing.T) {
+	fixture := testStore(t)
+	roomID := fixture.newRoom(t)
+	ctx := context.Background()
+	message := func(id string) Message {
+		return Message{ID: id, RoomID: roomID, AuthorHandle: "@ada", AuthorKind: SeatPerson, AuthorUserID: "user_ada", Body: "Morning."}
+	}
+
+	if _, err := fixture.store.Append(ctx, Message{RoomID: "room_gone_" + fixture.organizationID, AuthorHandle: "@ada",
+		AuthorKind: SeatPerson, AuthorUserID: "user_ada", Body: "Anyone?"}); !errors.Is(err, ErrRoomNotFound) {
+		t.Fatalf("Append() to a room that does not exist = %v", err)
+	}
+	if events := fixture.postedEvents(t, "room_gone_"+fixture.organizationID); len(events) != 0 {
+		t.Fatalf("a message to no room has events %+v", events)
+	}
+
+	duplicate := "rmm_duplicate_" + fixture.organizationID
+	if _, err := fixture.store.Append(ctx, message(duplicate)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.store.Append(ctx, message(duplicate)); err == nil {
+		t.Fatal("Append() of a message id already stored = nil error")
+	}
+
+	fixture.store.recordPosted = func(ctx context.Context, tx pgx.Tx, organizationID string, message Message) error {
+		if err := recordPosted(ctx, tx, organizationID, message); err != nil {
+			return err
+		}
+		return errors.New("the outbox refused the event")
+	}
+	if _, err := fixture.store.Append(ctx, message("rmm_unannounced_"+fixture.organizationID)); err == nil ||
+		!strings.Contains(err.Error(), "the outbox refused the event") {
+		t.Fatalf("Append() whose event failed = %v", err)
+	}
+	fixture.store.recordPosted = recordPosted
+
+	stored, err := fixture.store.Messages(ctx, roomID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events := fixture.postedEvents(t, roomID); len(stored) != 1 || len(events) != 1 || events[0].posted.Message.ID != duplicate {
+		t.Fatalf("stored %+v with events %+v; want the first message alone, and its one event", stored, events)
+	}
+	// Neither failure kept the place it was given.
+	next, err := fixture.store.Append(ctx, message(""))
+	if err != nil || next.Seq != 2 {
+		t.Fatalf("the next message = %+v, %v; want it second in the room", next, err)
+	}
+	if events := fixture.postedEvents(t, roomID); len(events) != 2 || events[1].posted.Message.Seq != 2 {
+		t.Fatalf("events = %+v, want the next message's too", events)
 	}
 }
