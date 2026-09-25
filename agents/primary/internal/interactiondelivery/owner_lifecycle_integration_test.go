@@ -203,7 +203,7 @@ func TestAnOwnerHeldRequestLivesItsWholeLifeAgainstTheDatabase(t *testing.T) {
 		t.Fatalf("the approval's delivery: runs=%+v handled=%v, want one run that answered", runs.calls, handled(approvedDelivery.EventID))
 	}
 	woken := runs.calls[0]
-	if woken.agentID != "agt_b" || woken.member.UserID != "user_b" || woken.reach != managedagents.UnattendedReads ||
+	if woken.agentID != "agt_b" || woken.member.UserID != "user_b" || woken.reach != managedagents.DeliveryReads ||
 		!strings.Contains(woken.input.Message, "approved this request themself") {
 		t.Fatalf("woken=%+v, want B's agent reading B's apps, told B approved", woken)
 	}
@@ -317,5 +317,121 @@ func TestAPendingRequestHeldForItsOwnerWakesNobody(t *testing.T) {
 	waker.wake(ctx, hold)
 	if len(runs.calls) != 0 || !world.handled(t, hold.EventID) {
 		t.Fatalf("the hold's delivery: runs=%+v handled=%v, want it completed without waking anyone", runs.calls, world.handled(t, hold.EventID))
+	}
+}
+
+// dropped is whether a delivery was dropped rather than completed.
+func (world *ownerApprovalWorld) dropped(t *testing.T, eventID string) bool {
+	t.Helper()
+	var handled, dropped bool
+	if err := world.database.Pool.QueryRow(context.Background(), `SELECT handled_at IS NOT NULL, dropped FROM agents_primary.interaction_deliveries
+		WHERE event_id=$1`, eventID).Scan(&handled, &dropped); err != nil {
+		t.Fatal(err)
+	}
+	return handled && dropped
+}
+
+// TestApprovedWorkThatKeepsFailingIsClosedAndTheRequesterTold: B's agent
+// approves A's request, and every run woken to do the work fails. After the
+// last attempt the delivery is dropped and the request failed, saying why,
+// rather than left approved for good; its completed event reaches A as any
+// failed result does.
+func TestApprovedWorkThatKeepsFailingIsClosedAndTheRequesterTold(t *testing.T) {
+	world := newOwnerApprovalWorld(t)
+	ctx := context.Background()
+	requests, err := interactions.New(interactions.Config{Repository: world.ledger, Directory: teammateB{}, Teamspaces: primarySeat{}, Tokens: memberTokens{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := requests.Create(ctx, world.a, "member-token", "failing", agents.InteractionCreateInput{
+		TargetAgentID: "agt_b", Purpose: "Launch", Task: "Review the launch plan.",
+	})
+	if err != nil || created.Approval != interactions.ApprovalAgent {
+		t.Fatalf("created = %+v, %v", created, err)
+	}
+	if _, err := requests.Decide(ctx, world.b, created.ID, agents.InteractionDecisionInput{Decision: interactions.DecisionApproved, Message: "Go ahead."}); err != nil {
+		t.Fatal(err)
+	}
+
+	waker := NewWaker(world.deliveries, &fakeAgentRuns{fail: true}, world.ledger, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	approval := world.deliver(t, agentsv1.InteractionDecidedDetailType, KindTargetApproved, world.b, created.ID)
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		waker.wake(ctx, approval)
+		stored, err := world.ledger.Get(ctx, created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if attempt < maxAttempts && (stored.Status != interactions.StatusApproved || world.dropped(t, approval.EventID)) {
+			t.Fatalf("after attempt %d: %s, dropped %t; want it approved and retried", attempt, stored.Status, world.dropped(t, approval.EventID))
+		}
+	}
+	if !world.dropped(t, approval.EventID) {
+		t.Fatal("the approval's delivery was not dropped after its last attempt")
+	}
+	stored, err := world.ledger.Get(ctx, created.ID)
+	if err != nil || stored.Status != interactions.StatusFailed || stored.Result == nil || stored.Result.Summary != closedAfterAttempts {
+		t.Fatalf("stored = %+v, %v; want it failed saying why", stored, err)
+	}
+	if report := world.deliver(t, agentsv1.InteractionCompletedDetailType, KindRequesterCompleted, world.a, created.ID); report.Status != interactions.StatusFailed {
+		t.Fatalf("A's report = %+v, want the failed result", report)
+	}
+}
+
+// approvedRequestRunningOut is a request of A's that B's agent approved,
+// expiring at expires, made an hour before it.
+func (world *ownerApprovalWorld) approvedRequestRunningOut(t *testing.T, id string, expires time.Time) agents.Interaction {
+	t.Helper()
+	ctx := context.Background()
+	made := expires.Add(-time.Hour).UTC().Truncate(time.Microsecond)
+	request := agents.Interaction{
+		ID: world.organizationID + "_" + id, OrganizationID: world.organizationID, Approval: interactions.ApprovalAgent,
+		Requester: agents.InteractionParty{UserID: "user_a", AgentID: "agt_a", AgentName: "Crew"},
+		Target:    agents.InteractionParty{UserID: "user_b", AgentID: "agt_b", AgentName: "Carl"},
+		Purpose:   "Launch", Task: "Review the launch plan.",
+		Context: []agents.InteractionContextItem{}, RequestedTools: []string{}, RequestedPermissions: []string{},
+		Status: interactions.StatusPending, Revision: 1, ExpiresAt: made.Add(time.Hour), CreatedAt: made, UpdatedAt: made,
+	}
+	if _, err := world.ledger.Create(ctx, request, id); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := world.ledger.Decide(ctx, request.ID, agents.InteractionDecisionInput{Decision: interactions.DecisionApproved, Message: "Go ahead."},
+		agents.InteractionDecider{Kind: interactions.DecidedByAgent, UserID: "user_b", AgentID: "agt_b"}, made.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return approved
+}
+
+// TestAnApprovalThatRanOutIsClosedOnThePoll: B's agent approved A's request,
+// and nobody answered it before it expired, whatever became of its delivery.
+// The waker's poll fails it, saying so, and its completed event reaches A.
+// An approval that ran out before the poll's window, as every one that
+// expired before this build did, is left as it was, read as expired, with no
+// event. The poll closes every approval in the window in the table, so this
+// runs on a database no agents service is working from.
+func TestAnApprovalThatRanOutIsClosedOnThePoll(t *testing.T) {
+	world := newOwnerApprovalWorld(t)
+	ctx := context.Background()
+	ranOut := world.approvedRequestRunningOut(t, "ran_out", time.Now().Add(-30*time.Minute))
+	longAgo := world.approvedRequestRunningOut(t, "long_ago", time.Now().Add(-expiredWithin-30*time.Minute))
+
+	runs := &fakeAgentRuns{}
+	waker := NewWaker(world.deliveries, runs, world.ledger, Config{Interval: time.Second, Lease: time.Minute}, nil)
+	waker.tidy(ctx)
+	stored, err := world.ledger.Get(ctx, ranOut.ID)
+	if err != nil || stored.Status != interactions.StatusFailed || stored.Result == nil || stored.Result.Summary != closedExpired || len(runs.calls) != 0 {
+		t.Fatalf("stored = %+v, %v, runs %d; want it failed saying it ran out, and nothing run", stored, err, len(runs.calls))
+	}
+	if report := world.deliver(t, agentsv1.InteractionCompletedDetailType, KindRequesterCompleted, world.a, ranOut.ID); report.Status != interactions.StatusFailed {
+		t.Fatalf("A's report = %+v, want the failed result", report)
+	}
+	old, err := world.ledger.Get(ctx, longAgo.ID)
+	if err != nil || old.Status != interactions.StatusApproved || old.Revision != longAgo.Revision || !old.UpdatedAt.Equal(longAgo.UpdatedAt) {
+		t.Fatalf("the approval that ran out long ago = %+v, %v; want it left as it was", old, err)
+	}
+	var events int
+	if err := world.database.Pool.QueryRow(ctx, `SELECT count(*) FROM agents_primary.agents_outbox
+		WHERE detail_type=$1 AND detail->>'request_id'=$2`, agentsv1.InteractionCompletedDetailType, longAgo.ID).Scan(&events); err != nil || events != 0 {
+		t.Fatalf("the approval that ran out long ago has %d completed events (%v), want none", events, err)
 	}
 }

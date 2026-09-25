@@ -363,19 +363,8 @@ func (store *Store) Close(ctx context.Context, id, reason string, at time.Time) 
 			}
 			return recordEvent(ctx, tx, agentsv1.InteractionDecidedDetailType, result)
 		case StatusApproved:
-			resultJSON, err := json.Marshal(agents.InteractionResult{
-				Status: StatusFailed, Summary: reason, ToolsUsed: []string{}, Artifacts: []string{}, CompletedAt: at,
-			})
-			if err != nil {
-				return err
-			}
-			err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
-				SET status='failed', result=$2, revision=revision+1, updated_at=$3
-				WHERE id=$1 RETURNING `+selectColumns, id, resultJSON, at), &result)
-			if err != nil {
-				return err
-			}
-			return recordEvent(ctx, tx, agentsv1.InteractionCompletedDetailType, result)
+			result, err = failApproved(ctx, tx, id, reason, at)
+			return err
 		default:
 			return ErrConflict
 		}
@@ -384,6 +373,84 @@ func (store *Store) Close(ctx context.Context, id, reason string, at time.Time) 
 		return agents.Interaction{}, err
 	}
 	return result, nil
+}
+
+// CloseApproved ends, as Oryxa and saying why, an approved request whose work
+// will not be done: its agent could not be woken to do it, or kept failing.
+// It fails the request as Close fails an approved one, recorded as the same
+// completed event, so the member who asked hears of it as of any failed
+// result. Unlike Close it also fails a request past its expiry, since an
+// approval that ran out unanswered is news to them too. Any request not
+// approved now, pending again or answered meanwhile, is left as it is:
+// ErrConflict.
+func (store *Store) CloseApproved(ctx context.Context, id, reason string, at time.Time) (agents.Interaction, error) {
+	var result agents.Interaction
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		current, err := getForUpdate(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if current.Status != StatusApproved {
+			return ErrConflict
+		}
+		result, err = failApproved(ctx, tx, id, reason, at)
+		return err
+	})
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	return result, nil
+}
+
+// CloseExpired closes, as CloseApproved does, up to limit approved requests
+// whose expiry passed with their work unanswered after since and by at, the
+// longest expired first, and returns those it closed. Nothing else would
+// close such a request, and no answer can be recorded for it any more. One
+// that expired by since is left as it is, still read as expired, with no
+// event. One answered or closed meanwhile, by another replica say, is passed
+// over.
+func (store *Store) CloseExpired(ctx context.Context, reason string, since, at time.Time, limit int) ([]agents.Interaction, error) {
+	rows, err := store.database.Pool.Query(ctx, `SELECT id FROM agents_primary.agent_interactions
+		WHERE status='approved' AND expires_at > $1 AND expires_at <= $2
+		ORDER BY expires_at, id LIMIT $3`, since, at, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find expired approved agent requests: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("read expired approved agent requests: %w", err)
+	}
+	var closed []agents.Interaction
+	for _, id := range ids {
+		request, err := store.CloseApproved(ctx, id, reason, at)
+		switch {
+		case errors.Is(err, ErrConflict), errors.Is(err, ErrNotFound):
+			continue
+		case err != nil:
+			return closed, fmt.Errorf("close expired approved agent request: %w", err)
+		}
+		closed = append(closed, request)
+	}
+	return closed, nil
+}
+
+// failApproved fails a request, which the caller holds locked and approved,
+// with the reason as its result, and records the completed event.
+func failApproved(ctx context.Context, tx pgx.Tx, id, reason string, at time.Time) (agents.Interaction, error) {
+	resultJSON, err := json.Marshal(agents.InteractionResult{
+		Status: StatusFailed, Summary: reason, ToolsUsed: []string{}, Artifacts: []string{}, CompletedAt: at,
+	})
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	var result agents.Interaction
+	err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+		SET status='failed', result=$2, revision=revision+1, updated_at=$3
+		WHERE id=$1 RETURNING `+selectColumns, id, resultJSON, at), &result)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	return result, recordEvent(ctx, tx, agentsv1.InteractionCompletedDetailType, result)
 }
 
 // Forget removes request content when a member leaves or an organization is

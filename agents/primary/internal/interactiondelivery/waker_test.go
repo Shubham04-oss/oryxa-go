@@ -3,12 +3,14 @@ package interactiondelivery
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/interactions"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/managedagents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/threads"
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
@@ -21,6 +23,12 @@ type fakeDeliveries struct {
 	dropped  []string
 	released map[string]bool
 	threads  map[string]string
+	// failures counts each delivery's failed attempts, which drop it once
+	// they reach the waker's most, as the store's Release does.
+	failures map[string]int
+	// releaseErr is what Release answers with, beside what it did, as the
+	// store's does when its transaction fails to commit.
+	releaseErr error
 }
 
 func (store *fakeDeliveries) Claim(context.Context, time.Duration, int) ([]Delivery, error) {
@@ -48,14 +56,21 @@ func (store *fakeDeliveries) Drop(_ context.Context, eventID, _ string) error {
 	return nil
 }
 
-func (store *fakeDeliveries) Release(_ context.Context, eventID string, failed bool, _ int, _ time.Duration, _ string) (bool, error) {
+func (store *fakeDeliveries) Release(_ context.Context, eventID string, failed bool, most int, _ time.Duration, _ string) (bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if store.released == nil {
-		store.released = map[string]bool{}
+		store.released, store.failures = map[string]bool{}, map[string]int{}
 	}
 	store.released[eventID] = failed
-	return false, nil
+	if failed {
+		store.failures[eventID]++
+	}
+	if store.failures[eventID] >= most {
+		store.dropped = append(store.dropped, eventID)
+		return true, store.releaseErr
+	}
+	return false, store.releaseErr
 }
 
 func (*fakeDeliveries) Purge(context.Context, time.Duration) error { return nil }
@@ -89,6 +104,10 @@ func (store *fakeDeliveries) ClearThread(_ context.Context, requestID, agentID, 
 type fakeRequests struct {
 	mu       sync.Mutex
 	requests map[string]agents.Interaction
+	// closed are the requests CloseApproved failed, in order.
+	closed []string
+	// swept is the window the last CloseExpired closed in, since and at.
+	swept [2]time.Time
 }
 
 func (requests *fakeRequests) Get(_ context.Context, id string) (agents.Interaction, error) {
@@ -99,6 +118,55 @@ func (requests *fakeRequests) Get(_ context.Context, id string) (agents.Interact
 		return agents.Interaction{}, errors.New("agent request not found")
 	}
 	return request, nil
+}
+
+// CloseApproved fails an approved request with the reason, as the ledger
+// does, and leaves any other as it is.
+func (requests *fakeRequests) CloseApproved(_ context.Context, id, reason string, at time.Time) (agents.Interaction, error) {
+	requests.mu.Lock()
+	defer requests.mu.Unlock()
+	request, ok := requests.requests[id]
+	switch {
+	case !ok:
+		return agents.Interaction{}, interactions.ErrNotFound
+	case request.Status != interactions.StatusApproved:
+		return agents.Interaction{}, interactions.ErrConflict
+	}
+	request.Status, request.Revision = interactions.StatusFailed, request.Revision+1
+	request.Result = &agents.InteractionResult{Status: interactions.StatusFailed, Summary: reason, CompletedAt: at}
+	requests.requests[id] = request
+	requests.closed = append(requests.closed, id)
+	return request, nil
+}
+
+// CloseExpired closes every approved request whose expiry passed after
+// since and by at, the longest expired first, as the ledger does.
+func (requests *fakeRequests) CloseExpired(ctx context.Context, reason string, since, at time.Time, limit int) ([]agents.Interaction, error) {
+	requests.mu.Lock()
+	requests.swept = [2]time.Time{since, at}
+	var expired []agents.Interaction
+	for _, request := range requests.requests {
+		if request.Status == interactions.StatusApproved && !request.ExpiresAt.After(at) && request.ExpiresAt.After(since) {
+			expired = append(expired, request)
+		}
+	}
+	requests.mu.Unlock()
+	slices.SortFunc(expired, func(a, b agents.Interaction) int { return a.ExpiresAt.Compare(b.ExpiresAt) })
+	var closed []agents.Interaction
+	for _, request := range expired[:min(len(expired), limit)] {
+		failed, err := requests.CloseApproved(ctx, request.ID, reason, at)
+		if err != nil {
+			return closed, err
+		}
+		closed = append(closed, failed)
+	}
+	return closed, nil
+}
+
+func (requests *fakeRequests) get(id string) agents.Interaction {
+	requests.mu.Lock()
+	defer requests.mu.Unlock()
+	return requests.requests[id]
 }
 
 func (requests *fakeRequests) setStatus(id, status string) {
@@ -263,23 +331,58 @@ func TestDeliveryMessageNeverCarriesInteractionContent(t *testing.T) {
 	}
 }
 
+// TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded: whatever the
+// delivery, its run works through the interactions toolbox, so the run
+// starts with it loaded and its message never sends the model to load it.
+func TestEveryDeliveryRunStartsWithItsInteractionsToolboxLoaded(t *testing.T) {
+	for _, kind := range []string{KindTargetRequested, KindTargetApproved, KindRequesterRejected, KindRequesterCompleted} {
+		delivery := testDelivery("evt_1", kind, 1)
+		store := &fakeDeliveries{pending: []Delivery{delivery}}
+		status := interactions.StatusPending
+		if kind == KindTargetApproved {
+			status = interactions.StatusApproved
+		}
+		requests := &fakeRequests{requests: map[string]agents.Interaction{"irq_1": testRequest(status)}}
+		runs := &fakeAgentRuns{onExecute: func() { requests.setStatus("irq_1", interactions.StatusCompleted) }}
+		waker := NewWaker(store, runs, requests, Config{Interval: time.Second, Lease: time.Minute}, nil)
+		if err := waker.WakeDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(runs.calls) != 1 {
+			t.Fatalf("%s: calls=%+v, want one run", kind, runs.calls)
+		}
+		input := runs.calls[0].input
+		if !slices.Equal(input.Toolboxes, []string{agents.InteractionsToolboxName}) {
+			t.Errorf("%s: the run starts with %v loaded, want only the interactions toolbox", kind, input.Toolboxes)
+		}
+		if strings.Contains(input.Message, "load the interactions toolbox") || !strings.Contains(input.Message, "already loaded") {
+			t.Errorf("%s: the message still sends the model to load its toolbox: %s", kind, input.Message)
+		}
+	}
+}
+
 // TestOnlyApprovedWorkReadsTheMembersApps: the member is not here, so what
 // their agent may reach is what it has already approved. Deciding on a new
 // request, and reporting an outcome to one's own member, run without the
-// apps toolbox at all.
+// apps toolbox at all; and every delivery runs as one, offered nothing that
+// lists the member's other requests.
 func TestOnlyApprovedWorkReadsTheMembersApps(t *testing.T) {
 	cases := []struct {
 		kind  string
 		reach managedagents.UnattendedProfile
 	}{
-		{KindTargetRequested, managedagents.UnattendedQuiet},
-		{KindTargetApproved, managedagents.UnattendedReads},
-		{KindRequesterRejected, managedagents.UnattendedQuiet},
-		{KindRequesterCompleted, managedagents.UnattendedQuiet},
+		{KindTargetRequested, managedagents.DeliveryQuiet},
+		{KindTargetApproved, managedagents.DeliveryReads},
+		{KindRequesterRejected, managedagents.DeliveryQuiet},
+		{KindRequesterCompleted, managedagents.DeliveryQuiet},
 	}
 	for _, testCase := range cases {
-		if got := reach(testCase.kind); got != testCase.reach {
+		got := reach(testCase.kind)
+		if got != testCase.reach {
 			t.Errorf("reach(%s) = %q, want %q", testCase.kind, got, testCase.reach)
+		}
+		if reads := got.ReadsApps(); reads != (testCase.kind == KindTargetApproved) || !got.Delivers() {
+			t.Errorf("reach(%s) reads apps = %t, delivers = %t; want apps only for approved work, and a delivery always", testCase.kind, reads, got.Delivers())
 		}
 	}
 }

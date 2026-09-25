@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"cloud.google.com/go/auth"
@@ -100,6 +101,12 @@ type Krude struct {
 	// has not been allowed to read the member's apps: an interaction nobody
 	// has approved yet, and the reports that follow a finished one.
 	UnattendedQuiet agent.Agent
+	// Delivering and DeliveringQuiet are Unattended and UnattendedQuiet for
+	// a run that delivers one interaction: their interactions toolbox holds
+	// only what that request needs, and none of what lists the member's
+	// other requests.
+	Delivering      agent.Agent
+	DeliveringQuiet agent.Agent
 	// Artifacts keeps what conversations produce: S3 when Settings names a
 	// bucket, memory otherwise.
 	Artifacts artifact.Service
@@ -114,6 +121,8 @@ type Krude struct {
 	toolboxes       []agents.Toolbox
 	unattended      []agents.Toolbox
 	unattendedQuiet []agents.Toolbox
+	delivering      []agents.Toolbox
+	deliveringQuiet []agents.Toolbox
 
 	// closers stops everything Build opened, kept in the order Build opened
 	// them. Close runs them in reverse — the same order devui's own defers
@@ -266,6 +275,9 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	// apps at all — an interaction another member's agent asked for, before
 	// this member's agent has approved anything.
 	var unattendedQuiet []agents.Toolbox
+	// deliveringInteractions replaces the interactions toolbox in both lists
+	// for a run that delivers one interaction.
+	var deliveringInteractions *agents.Toolbox
 	if settings.AppsURL != "" {
 		httpClient := options.HTTP
 		if httpClient == nil {
@@ -350,6 +362,13 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		}
 		unattended = append(unattended, answeringToolbox)
 		unattendedQuiet = append(unattendedQuiet, answeringToolbox)
+		// A run delivering one interaction is about that request alone: it
+		// cannot list the member's other requests at all.
+		deliveringToolbox, err := agents.InteractionToolbox(agents.InteractionConfig{Service: options.Interactions, Tokens: tokens, Delivering: true})
+		if err != nil {
+			return fail("agent interactions toolbox for a delivery", err)
+		}
+		deliveringInteractions = &deliveringToolbox
 		logger.InfoContext(ctx, "agent interactions toolbox configured")
 	}
 	if options.Teamspaces != nil {
@@ -363,6 +382,8 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 	krude.toolboxes = toolboxes
 	krude.unattended = unattended
 	krude.unattendedQuiet = unattendedQuiet
+	krude.delivering = replaceToolbox(unattended, deliveringInteractions)
+	krude.deliveringQuiet = replaceToolbox(unattendedQuiet, deliveringInteractions)
 
 	// Memory is built before the agents, because whether Krude is given
 	// load_memory depends on there being a memory service to answer it.
@@ -408,6 +429,16 @@ func Build(ctx context.Context, options Options) (*Krude, error) {
 		return fail("unattended root agent without apps", err)
 	}
 	krude.UnattendedQuiet = quietRoot
+	deliveringRoot, err := agents.UnattendedRoot(router, krude.delivering)
+	if err != nil {
+		return fail("root agent delivering an interaction", err)
+	}
+	krude.Delivering = deliveringRoot
+	deliveringQuietRoot, err := agents.UnattendedRoot(router, krude.deliveringQuiet)
+	if err != nil {
+		return fail("root agent delivering an interaction without apps", err)
+	}
+	krude.DeliveringQuiet = deliveringQuietRoot
 
 	artifacts := artifact.InMemoryService()
 	if settings.ArtifactBucket != "" {
@@ -450,6 +481,31 @@ func (krude *Krude) ManagedUnattended(spec agents.ManagedSpec, withApps bool) (a
 		toolboxes = krude.unattended
 	}
 	return agents.Managed(krude.router, toolboxes, false, spec)
+}
+
+// ManagedDelivering is ManagedUnattended for a run that delivers one
+// interaction, as Delivering is Unattended.
+func (krude *Krude) ManagedDelivering(spec agents.ManagedSpec, withApps bool) (agent.Agent, error) {
+	toolboxes := krude.deliveringQuiet
+	if withApps {
+		toolboxes = krude.delivering
+	}
+	return agents.Managed(krude.router, toolboxes, false, spec)
+}
+
+// replaceToolbox is toolboxes with the one named like replacement swapped
+// for it, or toolboxes as they are when there is no replacement.
+func replaceToolbox(toolboxes []agents.Toolbox, replacement *agents.Toolbox) []agents.Toolbox {
+	replaced := slices.Clone(toolboxes)
+	if replacement == nil {
+		return replaced
+	}
+	for index, box := range replaced {
+		if box.Name == replacement.Name {
+			replaced[index] = *replacement
+		}
+	}
+	return replaced
 }
 
 // Compact answers one prompt on the lite model and returns the text, with no

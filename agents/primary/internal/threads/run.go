@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	agentsv1 "github.com/Shubham04-oss/oryxa-go/contracts/events/agents/v1"
 
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/adkmemory"
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/events"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/runstore"
@@ -54,6 +56,11 @@ type RunInput struct {
 	// that those events started rather than the member. The message then
 	// shows as from their apps, not from them.
 	Wakeup string
+	// Toolboxes are loaded in the thread as the run starts, as though the
+	// agent had loaded them itself, keeping those already loaded: a run
+	// whose work is known before it starts, such as delivering an
+	// interaction, spends no model calls finding and loading what it needs.
+	Toolboxes []string
 }
 
 // Answer is the member's decision on one confirmation.
@@ -155,6 +162,12 @@ func (run *Run) prepare(ctx context.Context, message string, input RunInput) err
 	stored, err := service.thread(ctx, run.member, run.threadID)
 	if err != nil {
 		return err
+	}
+	if len(input.Toolboxes) > 0 {
+		if run.stateDelta == nil {
+			run.stateDelta = map[string]any{}
+		}
+		maps.Copy(run.stateDelta, agents.LoadToolboxes(stored.State(), input.Toolboxes...))
 	}
 	pending := pendingConfirmations(sessionEvents(stored), service.agent.Name())
 	if message != "" {

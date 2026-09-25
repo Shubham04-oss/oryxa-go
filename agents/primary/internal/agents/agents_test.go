@@ -640,6 +640,25 @@ func TestLoadedToolboxSkillJoinsTheInstruction(t *testing.T) {
 	}
 }
 
+// TestLoadToolboxesKeepsWhatIsLoaded: loading toolboxes before a run adds
+// them to those the session already loaded, each once, as load_tools would,
+// whether the loaded list comes from this process or back from storage.
+func TestLoadToolboxesKeepsWhatIsLoaded(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		state mapState
+		want  []string
+	}{
+		"nothing loaded yet":  {mapState{}, []string{"interactions"}},
+		"loaded in-process":   {mapState{loadedToolsKey: []string{"knowledge"}}, []string{"knowledge", "interactions"}},
+		"loaded from storage": {mapState{loadedToolsKey: []any{"knowledge", "interactions"}}, []string{"knowledge", "interactions"}},
+	} {
+		got := LoadToolboxes(testCase.state, " Interactions ", "interactions", "")
+		if loaded, ok := got[loadedToolsKey].([]string); !ok || !slices.Equal(loaded, testCase.want) || len(got) != 1 {
+			t.Errorf("%s: LoadToolboxes = %v, want %s: %v", name, got, loadedToolsKey, testCase.want)
+		}
+	}
+}
+
 func TestGetUserDetailsReturnsSeededState(t *testing.T) {
 	llm := newTreeModel(func(_ string, request *model.LLMRequest) *genai.Content {
 		if hasFunctionResponse(request) {

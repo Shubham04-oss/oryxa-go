@@ -18,6 +18,10 @@ import (
 //go:embed toolboxes/interactions.md
 var interactionsInstructions string
 
+// InteractionsToolboxName names the interactions toolbox, which a run that
+// delivers an interaction starts with loaded.
+const InteractionsToolboxName = "interactions"
+
 // The sessions an InteractionActor can act in.
 const (
 	// SessionMember is a person acting in their own signed-in session. Only
@@ -171,6 +175,12 @@ type InteractionConfig struct {
 	// run may read, decide and respond; starting fresh requests on other
 	// members is the member's own business, in a conversation they are in.
 	Answering bool
+	// Delivering is for a run that delivers one interaction, to the agent
+	// that has to decide it, answer it or hear its outcome. It offers only
+	// what one request needs, reading it, deciding it and answering it: none
+	// of the member's other requests are the run's to browse, and it starts
+	// none.
+	Delivering bool
 }
 
 // InteractionToolbox lets agents exchange durable requests without giving
@@ -179,7 +189,7 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	if config.Service == nil {
 		return Toolbox{}, errors.New("agents: InteractionToolbox requires a service")
 	}
-	tools := interactionTools{service: config.Service, tokens: config.Tokens}
+	tools := interactionTools{service: config.Service, tokens: config.Tokens, delivering: config.Delivering}
 	create, err := functiontool.New(functiontool.Config{
 		Name: "interactions_create", Description: "Creates a durable, scoped request for an agent discovered in the organization directory. It emits a routing event; it does not invoke the target directly. Pass teamspace_id to ask a teammate's agent inside that shared teamspace; the teammate then approves it themself first, unless they gave that specialist automatic delegation there.",
 	}, tools.create)
@@ -218,20 +228,41 @@ func InteractionToolbox(config InteractionConfig) (Toolbox, error) {
 	}
 	offered := []tool.Tool{create, inbox, sent, get, decide, respond}
 	description := "Durable agent-to-agent requests: send, inspect, approve or reject, and answer through an audited JSON contract without direct invocation."
-	if config.Answering {
+	switch {
+	case config.Delivering:
+		offered = []tool.Tool{get, decide, respond}
+		description = "The one agent-to-agent request being delivered to this agent: read it, approve or reject it, and answer it through an audited JSON contract."
+	case config.Answering:
 		offered = []tool.Tool{inbox, sent, get, decide, respond}
 		description = "Durable agent-to-agent requests addressed to this member: inspect, approve or reject, and answer through an audited JSON contract."
 	}
 	return Toolbox{
-		Name: "interactions", Description: description,
+		Name: InteractionsToolboxName, Description: description,
 		Instructions: interactionsInstructions,
-		Toolset:      fixedTools{name: "interactions", tools: offered},
+		Toolset:      fixedTools{name: InteractionsToolboxName, tools: offered},
 	}, nil
 }
 
 type interactionTools struct {
 	service InteractionService
 	tokens  memberauth.TokenSource
+	// delivering ends the run as soon as the step that settles its delivery
+	// is recorded (see settled).
+	delivering bool
+}
+
+// settled ends a delivery run on the tool call that recorded its answer, or
+// its rejection, with no model call after it. The ledger now holds all there
+// is to say: the member who asked reads it there, and so does the member
+// this agent works for, who is not here to be told; and the call, with what
+// it recorded, stays in the thread. A closing message would be one more
+// model call restating another member's request to nobody, while the run
+// still held its thread and its place in the waker. A member's own run, and
+// a delivery that approved work it has still to do, carry on as ever.
+func (tools interactionTools) settled(ctx agent.Context) {
+	if tools.delivering {
+		ctx.Actions().SkipSummarization = true
+	}
 }
 
 type interactionListArgs struct {
@@ -342,6 +373,10 @@ func (tools interactionTools) decide(ctx agent.Context, args interactionDecision
 	if err != nil {
 		return Interaction{}, interactionError(err)
 	}
+	// A rejection is the request's end; an approval leaves its work to do.
+	if request.Status == "rejected" {
+		tools.settled(ctx)
+	}
 	return request, nil
 }
 
@@ -354,6 +389,7 @@ func (tools interactionTools) respond(ctx agent.Context, args interactionRespons
 	if err != nil {
 		return Interaction{}, interactionError(err)
 	}
+	tools.settled(ctx)
 	return request, nil
 }
 

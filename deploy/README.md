@@ -200,6 +200,27 @@ agent can approve what only its owner may. So, for this release only:
      and `409 request_closed` for deciding a request that no longer stands in
      its teamspace.
 
+### Releasing faster agent requests
+
+The release that wakes an agent as soon as a request reaches it, and closes
+approved requests that will not be worked, needs no special steps: an old and
+a new task can overlap, and a rollback is safe. What to expect afterwards:
+
+- Interaction migration 007 builds `agent_interactions_approved_expiry_idx`,
+  a small partial index of approved requests by expiry, under a SHARE lock
+  that lets reads go on.
+- Every poll of the waker closes approved requests whose expiry passed
+  unanswered within the last hour: failed, saying they expired, with the
+  completed event that tells the member who asked. The first poll after the
+  release closes only those that ran out in the hour before it. Every
+  approval that expired earlier is left as it was: it reads as `expired`, as
+  before, with no event, and its `updated_at` does not change, so old
+  requests keep their place in every listing and wake nobody.
+- Approved work the waker gives up on, after three failed runs or because
+  its agent was deleted, is closed the same way.
+- An agent answering a delivered request ends its run on the recorded
+  answer, so its delivery thread no longer ends with a closing message.
+
 ### Releasing realtime, and turning it on
 
 Realtime (`realtime/README.md`) has the web app's Worker purge a member's

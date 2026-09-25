@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 
+	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/serviceconfig"
 )
 
@@ -89,5 +90,31 @@ func TestKrudeCloseRunsAllAndJoinsErrors(t *testing.T) {
 	}
 	if want := ([]int{3, 2, 1}); !slices.Equal(ran, want) {
 		t.Fatalf("closers ran in order %v, want %v (reverse of registration, all run despite failures)", ran, want)
+	}
+}
+
+// TestReplaceToolboxSwapsOnlyTheOneNamed: a delivery's toolboxes are the
+// unattended run's, with the interactions toolbox swapped for the delivering
+// one and nothing else changed; without a replacement they are as they were,
+// and the unattended list itself never changes.
+func TestReplaceToolboxSwapsOnlyTheOneNamed(t *testing.T) {
+	t.Parallel()
+	unattended := []agents.Toolbox{{Name: "apps", Description: "reads"}, {Name: "interactions", Description: "answering"}}
+	delivering := agents.Toolbox{Name: "interactions", Description: "delivering"}
+	described := func(toolboxes []agents.Toolbox) []string {
+		var descriptions []string
+		for _, box := range toolboxes {
+			descriptions = append(descriptions, box.Name+":"+box.Description)
+		}
+		return descriptions
+	}
+	if got := described(replaceToolbox(unattended, &delivering)); !slices.Equal(got, []string{"apps:reads", "interactions:delivering"}) {
+		t.Fatalf("replaced = %v", got)
+	}
+	if got := described(replaceToolbox(unattended, nil)); !slices.Equal(got, []string{"apps:reads", "interactions:answering"}) {
+		t.Fatalf("with no replacement = %v", got)
+	}
+	if got := described(unattended); !slices.Equal(got, []string{"apps:reads", "interactions:answering"}) {
+		t.Fatalf("the unattended list changed: %v", got)
 	}
 }

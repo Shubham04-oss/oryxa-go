@@ -413,10 +413,12 @@ member approves it, and before the waker wakes an agent for its `requested` or
 
 **Nobody is told a request is held for them yet.** Its `requested` delivery
 wakes nobody, nothing notifies the member, and the web app has no Requests
-screen: the member finds it only by listing their requests. A request that
-expires records no event, so nothing tells the member who asked that a held
-request ran out unanswered (reads show it `expired`). Both are follow-ups that
-need a Requests screen.
+screen: the member finds it only by listing their requests. A pending request
+that expires records no event, so nothing tells the member who asked that a
+held request ran out unanswered (reads show it `expired`). Both are follow-ups
+that need a Requests screen. An approved request that expires unanswered is
+different: Oryxa closes it, failed, within seconds, and the member who asked
+is told (see [Wake-ups](#wake-ups)).
 
 **What a delivered request may reach.** The member whose agent is woken is not
 there, so the run answers on the reduced agent (see [Wake-ups](#wake-ups)) and
@@ -433,6 +435,14 @@ what it may reach follows what their own agent has already allowed:
   account of it, that `tools_used` is within `allowed_tools`.
 - No unwatched run may start an interaction of its own: `interactions_create`
   is left out, so a request cannot fan out into requests on other members.
+- A delivery is about its one request. Its run gets an interactions toolbox
+  of its own (`managedagents.DeliveryReads` and `DeliveryQuiet`, the reach
+  above) with `interactions_get`, `interactions_decide` and
+  `interactions_respond` only: `interactions_inbox` and `interactions_sent`
+  are not there, so the model cannot browse the member's other requests
+  whatever it makes of the request. Nothing a delivery does needs them, since
+  its message names the request. App wake-ups and a room's stand-in keep the
+  toolbox they had.
 
 Each create, decision, and response is committed with an EventBridge outbox
 event. The event contains routing identities and lifecycle state, not the task,
@@ -454,6 +464,23 @@ before later ones while newer authoritative state supersedes stale work, and
 repeat events deduplicate by `event_id`. Runs carry no member access token, do
 not read or write long-term memory, and remain subject to the normal tool
 authorization and confirmation boundaries.
+
+A delivery run starts with the interactions toolbox already loaded
+(`threads.RunInput.Toolboxes`), its skill in the instruction, so the first
+model call goes straight to `interactions_get` rather than to `list_tools` and
+`load_tools`; the run's other toolboxes stay loadable as ever.
+
+The addressed agent's delivery run ends on the call that settles it:
+`interactions_respond`, or `interactions_decide` rejecting. That call sets
+ADK's `SkipSummarization`, so no model call follows it. The member it works
+for is not there to be told, and nothing is lost: the request holds its
+decision, who made it and its result, which both members read (in a
+teamspace's side conversation the answer shows as the agent's message, "on
+behalf of … approved by …", and a failure as a line), and the call, with
+what it recorded, stays in the delivery thread. A closing message was one
+more model call, 3 to 37 seconds, restating another member's request to
+nobody while the run held its thread and a delivery slot. An approval carries
+on to do the work, and a member's own run is unchanged.
 
 ## Run API
 
@@ -1046,6 +1073,38 @@ agent. Jobs lease across replicas, retry failed runs three
 times, settle recorded revisions in order per request and recipient, and keep handled IDs
 for a week. If an earlier run already advanced the interaction, a later or
 repeated delivery is settled without running the agent again.
+
+Approved work is never left approved with nobody working on it. When the waker
+gives up on an `approved` delivery (its runs failed three times, not counting
+a run the waker's own stop cut short, or its agent no longer exists) it closes
+the request, failed, with why as the result's summary; and every poll closes,
+the same way, the approved requests whose expiry passed unanswered in the last
+hour, since none can be answered any more, whatever became of their delivery
+(`interactions.Store.CloseApproved` and `CloseExpired`, which fail an approved
+request as `Close` does). Each is the ordinary completed event, so the member
+who asked hears of it as of any failed result, and a side conversation shows
+it as the agent's failure with the reason. Nothing else is closed: a new
+request whose deciding run was given up stays pending, for its member to
+decide or to expire, and a failed report to the member who asked changes
+nothing about the request. An agent its member disabled may be turned on
+again, so a delivery asking it to decide or to work is not given up: it waits
+for the agent, tried again every minute without counting, until the request's
+expiry ends the wait. A report to a disabled requester's agent is dropped, as
+it always was.
+
+The poll closes an approval seconds after it runs out, so the hour is only for
+the time nothing polls: a deploy, a restart or an outage. An approval that ran
+out before that, every one that expired before this was released among them,
+is left as it was: it reads as `expired`, as it always has, with no event, and
+its `updated_at` does not move, so an old request keeps its place in every
+listing and wakes nobody.
+
+A delivery starts as soon as it is recorded. The consumer nudges the waker as
+it records one, and the waker claims what is due while it has room, four runs
+at once per replica, without waiting for the runs it started: a delivery never
+waits behind an unrelated run, only for a free slot, and a run that ends
+nudges the waker again. The five-second poll is the backstop, for a delivery
+released to be retried later and one another replica recorded.
 
 Not yet: nothing skips the wait for something urgent, such as a direct
 mention, since that means reading each app's payload; and Krude is only ever
