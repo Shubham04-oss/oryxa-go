@@ -51,10 +51,10 @@ func Subscriptions() map[string][]string {
 }
 
 // SignatureMaxAge is how old a signature on an event realtime still accepts,
-// rather than the day other consumers do. A purge can wait on
-// realtime's queue, and its dead-letter queue, for the 14 days they keep it
-// (the provisioner's retention), and an event lost on the way can be replayed
-// from the bus's archive for 7 days after it was published
+// rather than the day other consumers do. A purge can wait on realtime's
+// queue, and its dead-letter queue, for the 14 days they keep it (the
+// provisioner's retention), and an event lost on the way can be replayed from
+// the bus's archive for 7 days after it was published
 // (deploy/production/events.tf). Enforcing signatures, a purge that waited or
 // came back must still verify; acting on it late is harmless, since the
 // Worker's purge is idempotent and knows each event by its id.
@@ -154,11 +154,11 @@ type receivedEnvelope struct {
 }
 
 // Handle processes one SQS message body: an EventBridge event from auth or
-// agents. It returns nil once the message is done with: purged and the purge recorded,
-// or purged already. An error wrapping purge.ErrPermanent means the Worker
-// refused the purge for good, and one for an event whose removed_at lies more
-// than maxClockSkew ahead means no purge should be sent; Poll drops the
-// message for either. Any other error leaves it for the queue to deliver
+// agents. It returns nil once the message is done with: purged and the purge
+// recorded, or purged already. An error wrapping purge.ErrPermanent means the
+// Worker refused the purge for good, and one for an event whose removed_at
+// lies more than maxClockSkew ahead means no purge should be sent; Poll drops
+// the message for either. Any other error leaves it for the queue to deliver
 // again, including a purge done but not recorded.
 func (consumer *Consumer) Handle(ctx context.Context, body string) error {
 	_, err := consumer.handle(ctx, body, time.Now())
