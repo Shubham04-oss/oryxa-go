@@ -172,10 +172,30 @@ not permission to copy every incidental value into a new component.
     behalf of Priya · approved by Priya" (or "ran without asking").
   - A request is a small card: who asked which agent what, and one status
     line with an icon (sending; not filed, with Retry; waiting for Priya to
-    approve; approved and working; done; declined; failed; expired). Only the
-    agent's owner sees Decline and Approve, with an optional note, named for
-    who and what ("Approve Nia's request from Member"). A request that ends
-    without a result also leaves a quiet centered line in the log.
+    approve; approved and working; waiting for Priya to review the answer;
+    done; declined; failed; expired; not shared). Only the agent's owner
+    sees Decline and Approve, with an optional note, named for who and what
+    ("Approve Nia's request from Member"). When the request asks to read
+    their connected apps or the team's knowledge, their card says so in one
+    line ("Nia may read your connected apps and team knowledge.") and adds
+    Approve without tools between them; Approve allows what was asked for.
+    A request that ends without a result also leaves a quiet centered line
+    in the log, which says why when Oryxa closed it or withheld its answer
+    ("Withheld by Oryxa." on the card), and never repeats an agent's
+    decision, whose words are fixed ("Pricing declined the request.").
+  - An answer the answer guard holds for its owner's review shows them, on
+    the card, why in plain words ("Nia's answer includes an email address
+    and a phone number. Review it before it's shared.", or "couldn't be
+    checked automatically"), the answer, a preview of it masked ("Send
+    masked shares:"), and Don't send, Send and Send masked (the primary).
+    An answer that could not be checked has no masked version, so neither
+    the preview nor Send masked; one that was its agent's failure says so
+    above it ("Nia couldn't finish the request, and says:"). Send and Send
+    masked wait until the answer has loaded; Don't send never does. A
+    refused review says why on the card. The one who asked sees only that
+    it waits; a result shared after review says "reviewed by Priya" in its
+    quiet line, and one not shared leaves "Priya chose not to share Nia's
+    answer."
   - The composer is the shared pill with a smaller pill inside it, before the
     field, naming whom the message goes to: the teammate (the default), "Ask
     my agent", or one of the teammate's agents, picked from a small menu. The

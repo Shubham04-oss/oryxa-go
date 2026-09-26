@@ -84,12 +84,29 @@ func TestMountRefusesADeliveryThinkingLevelItCannotUse(t *testing.T) {
 	}
 }
 
-// TestADeliveryReachesAsFarAsItsProfile: approved work reads the member's
-// apps, a new request only their knowledge, and a report, or a delivering
-// profile this does not know, the request alone.
+// TestMountRefusesHalfAnAnswerGuard: a guardrail id without its version, or
+// a version without its id, would check no answer while looking set up, so
+// the service does not start, with a model or without one.
+func TestMountRefusesHalfAnAnswerGuard(t *testing.T) {
+	for _, values := range []map[string]string{
+		{"AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID": "gr-answers"},
+		{"AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION": "1"},
+		{"AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID": "gr-answers", "GOOGLE_CLOUD_PROJECT": "oryxa-test"},
+	} {
+		if _, err := Mount(context.Background(), platform(values, nil)); err == nil || !strings.Contains(err.Error(), "AGENTS_PRIMARY_ANSWER_GUARDRAIL") {
+			t.Errorf("Mount() with %v = %v, want it refused, naming the settings", values, err)
+		}
+	}
+}
+
+// TestADeliveryReachesAsFarAsItsProfile: approved work reads what it was
+// allowed of the member's apps and knowledge, a new request only their
+// knowledge, and a report, or a delivering profile this does not know, the
+// request alone.
 func TestADeliveryReachesAsFarAsItsProfile(t *testing.T) {
 	for profile, want := range map[managedagents.UnattendedProfile]assembly.DeliveryReach{
 		managedagents.DeliveryReads:  assembly.DeliveryReads,
+		managedagents.DeliveryApps:   assembly.DeliveryApps,
 		managedagents.DeliveryQuiet:  assembly.DeliveryQuiet,
 		managedagents.DeliveryReport: assembly.DeliveryReport,
 		"delivery_everything":        assembly.DeliveryReport,

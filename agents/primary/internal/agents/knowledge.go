@@ -128,10 +128,10 @@ func KnowledgeToolbox(config KnowledgeConfig) (Toolbox, error) {
 		}
 	}
 	return Toolbox{
-		Name:         "knowledge",
+		Name:         KnowledgeToolboxName,
 		Description:  "The organization's own documents — the member's and their organization's collections, including what their connected apps hold — searched for passages to answer from and cite.",
 		Instructions: knowledgeInstructions,
-		Toolset:      fixedTools{name: "knowledge", tools: tools},
+		Toolset:      fixedTools{name: KnowledgeToolboxName, tools: tools},
 	}, nil
 }
 

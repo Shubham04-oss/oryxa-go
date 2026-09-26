@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest"
 import {
+  HELD_ANSWER_FIELDS,
   PROMPT_TRANSCRIPT_LINES,
   REQUEST_CONTEXT_LINES,
   agentRequestBody,
   cardFields,
+  heldAnswerOf,
+  isOpen,
   oneParagraph,
   ownAgentPrompt,
   resultText,
@@ -472,6 +475,7 @@ describe("asking agents", () => {
     expect(statusLineText("rejected", owner, "Bo")).toBe(
       "Bo declined the request to Nia."
     )
+    // An agent's decision is fixed words: the line leaves them out.
     expect(
       statusLineText(
         "rejected",
@@ -480,13 +484,13 @@ describe("asking agents", () => {
           targetAgentName: "Pricing",
           decision: {
             decision: "rejected",
-            message: " Out of scope ",
+            message: "Declined by their agent.",
             decidedAt: "t",
           },
         },
         "Bo"
       )
-    ).toBe("Pricing declined the request to Pricing: Out of scope")
+    ).toBe("Pricing declined the request.")
     expect(statusLineText("failed", owner, "Bo", "No access.")).toBe(
       "Nia could not finish the request: No access."
     )
@@ -503,5 +507,479 @@ describe("asking agents", () => {
         "Bo"
       )
     ).toBe("The request to Nia expired before Nia finished it.")
+  })
+})
+
+describe("the answer guard", () => {
+  const request = {
+    id: "irq_1",
+    status: "pending",
+    task: "Find Ada's contact details",
+    created_at: "2026-09-24T09:00:00Z",
+    expires_at: "2026-09-25T09:00:00Z",
+    approval: "owner",
+    requester: { user_id: "user-a", agent_id: "agt_a", agent_name: "Leo" },
+    target: { user_id: "user-b", agent_id: "agt_b", agent_name: "Nia" },
+    requested_tools: [],
+  }
+
+  const card = {
+    kind: "request-card",
+    id: "sdi_1",
+    seq: 1,
+    requestId: "irq_1",
+    requesterId: "user-a",
+    requesterAgentId: "agt_a",
+    requesterAgentName: "Leo",
+    targetId: "user-b",
+    targetAgentId: "agt_b",
+    targetAgentName: "Nia",
+    approval: "owner",
+    status: "pending",
+    task: "Find Ada's contact details",
+    createdAt: "t",
+    updatedAt: "t",
+    expiresAt: "t",
+  }
+
+  function itemOf(item: Record<string, unknown>) {
+    const parsed = parseSideServerMessage(
+      JSON.stringify({ type: "side-item", item })
+    )
+    return parsed?.type === "side-item" ? parsed.item : undefined
+  }
+
+  it("lets an approval name the tools it allows, and the owner review a held answer", () => {
+    expect(
+      parseSideClientMessage(
+        JSON.stringify({
+          type: "side-decide",
+          requestId: "irq_1",
+          decision: "approved",
+          allowedTools: ["apps", "knowledge", "apps"],
+        })
+      )
+    ).toEqual({
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+      allowedTools: ["apps", "knowledge"],
+    })
+    // Without tools, as a page from before them sends it.
+    expect(
+      parseSideClientMessage(
+        JSON.stringify({
+          type: "side-decide",
+          requestId: "irq_1",
+          decision: "approved",
+          allowedTools: [],
+        })
+      )
+    ).toEqual({
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+      allowedTools: [],
+    })
+    for (const action of ["send", "send_masked", "withhold"]) {
+      expect(
+        parseSideClientMessage(
+          JSON.stringify({
+            type: "side-review",
+            requestId: "irq_1",
+            action,
+            extra: 1,
+          })
+        )
+      ).toEqual({ type: "side-review", requestId: "irq_1", action })
+    }
+    for (const refused of [
+      {
+        type: "side-decide",
+        requestId: "irq_1",
+        decision: "approved",
+        allowedTools: "apps",
+      },
+      {
+        type: "side-decide",
+        requestId: "irq_1",
+        decision: "approved",
+        allowedTools: [""],
+      },
+      {
+        type: "side-decide",
+        requestId: "irq_1",
+        decision: "approved",
+        allowedTools: ["x".repeat(121)],
+      },
+      {
+        type: "side-decide",
+        requestId: "irq_1",
+        decision: "approved",
+        allowedTools: Array.from({ length: 33 }, (_, index) => `t${index}`),
+      },
+      { type: "side-review", requestId: "irq_1", action: "publish" },
+      { type: "side-review", requestId: "a b", action: "send" },
+      { type: "side-review", action: "send" },
+    ]) {
+      expect(parseSideClientMessage(JSON.stringify(refused))).toBeUndefined()
+    }
+  })
+
+  it("reads cards in review or withheld, with what the guard found for the owner, and a card without any of it as before", () => {
+    expect(itemOf(card)).toEqual(card)
+    const held = {
+      ...card,
+      status: "review",
+      requestedTools: ["apps", "knowledge"],
+      guard: { state: "held", kinds: ["EMAIL", "PHONE"] },
+      heldAnswer: {
+        stored: "Reach Ada at ada@sim.oryxa.",
+        masked: "Reach Ada at {EMAIL}.",
+      },
+    }
+    expect(itemOf(held)).toEqual(held)
+    // Unchecked, it has no masked version; a failure says so.
+    const unchecked = {
+      ...held,
+      guard: { state: "held", kinds: ["UNCHECKED"] },
+      heldAnswer: { stored: "I couldn't reach the calendar.", failed: true },
+    }
+    expect(itemOf(unchecked)).toEqual(unchecked)
+    const withheld = {
+      ...card,
+      status: "withheld",
+      review: { action: "withhold", decidedAt: "t", by: "owner" },
+    }
+    expect(itemOf(withheld)).toEqual(withheld)
+    const byOryxa = {
+      ...card,
+      status: "withheld",
+      review: {
+        action: "withhold",
+        decidedAt: "t",
+        by: "system",
+        reason: "expired before review",
+      },
+      decision: {
+        decision: "approved",
+        message: "Approved by their agent.",
+        decidedAt: "t",
+        by: "agent",
+      },
+    }
+    expect(itemOf(byOryxa)).toEqual(byOryxa)
+    // An empty list of tools is none.
+    expect(itemOf({ ...card, requestedTools: [] })).toEqual(card)
+    for (const broken of [
+      { ...card, status: "reviewing" },
+      { ...card, requestedTools: [3] },
+      { ...card, guard: { state: "loud", kinds: [] } },
+      { ...card, guard: { state: "held", kinds: "EMAIL" } },
+      { ...card, heldAnswer: { masked: "only the masked one" } },
+      { ...card, heldAnswer: { stored: "x", failed: false } },
+      { ...card, review: { action: "publish", decidedAt: "t", by: "owner" } },
+      { ...card, review: { action: "withhold", decidedAt: "t" } },
+      { ...card, review: { action: "withhold", decidedAt: "t", by: "agent" } },
+      {
+        ...card,
+        decision: {
+          decision: "approved",
+          message: "",
+          decidedAt: "t",
+          by: "someone",
+        },
+      },
+    ]) {
+      expect(itemOf(broken)).toBeUndefined()
+    }
+    expect(
+      itemOf({
+        kind: "status",
+        id: "sdi_2",
+        seq: 2,
+        requestId: "irq_1",
+        outcome: "withheld",
+        authorId: "user-b",
+        text: "Bo chose not to share Nia's answer.",
+        createdAt: "t",
+      })
+    ).toMatchObject({ kind: "status", outcome: "withheld" })
+    expect(
+      itemOf({
+        kind: "agent-message",
+        id: "sdi_3",
+        seq: 3,
+        agentId: "agt_b",
+        agentName: "Nia",
+        ownerId: "user-b",
+        body: "Reach Ada at {EMAIL}.",
+        createdAt: "t",
+        updatedAt: "t",
+        status: "done",
+        via: {
+          requestId: "irq_1",
+          onBehalfOf: "user-b",
+          approvedBy: "user-b",
+          reviewedBy: "user-b",
+        },
+      })
+    ).toMatchObject({ via: { reviewedBy: "user-b" } })
+  })
+
+  it("reads Go's tools, guard and the owner's review, and a request without them as before", () => {
+    expect(cardFields(request)).not.toHaveProperty("requestedTools")
+    const older = { ...request } as Record<string, unknown>
+    delete older.requested_tools
+    expect(cardFields(older)).toEqual(cardFields(request))
+    expect(cardFields(older)).not.toHaveProperty("guard")
+    expect(cardFields(older)).not.toHaveProperty("review")
+
+    expect(
+      cardFields({
+        ...request,
+        requested_tools: ["apps", "knowledge", "apps", "", 3],
+      })?.requestedTools
+    ).toEqual(["apps", "knowledge"])
+    expect(
+      cardFields({
+        ...request,
+        status: "review",
+        guard: { state: "held", kinds: ["EMAIL", "PHONE", 3] },
+      })
+    ).toMatchObject({
+      status: "review",
+      guard: { state: "held", kinds: ["EMAIL", "PHONE"] },
+    })
+    expect(
+      cardFields({ ...request, guard: { state: "loud" } })
+    ).not.toHaveProperty("guard")
+
+    const decidedAt = "2026-09-24T10:00:00Z"
+    const owner = { kind: "member", user_id: "user-b" }
+    const lapsed =
+      "Oryxa withheld this answer because the member who asked is no longer on the teamspace's team."
+    const reviews: Array<[Record<string, unknown>, unknown]> = [
+      // The owner's own, as Go records it, or as their id.
+      [
+        { action: "send", decided_by: owner, decided_at: decidedAt },
+        { action: "send", decidedAt, by: "owner" },
+      ],
+      [
+        { action: "withhold", decided_by: owner, decided_at: decidedAt },
+        { action: "withhold", decidedAt, by: "owner" },
+      ],
+      [
+        { action: "withhold", decided_by: "user-b", decided_at: decidedAt },
+        { action: "withhold", decidedAt, by: "owner" },
+      ],
+      // Only the owner sends: a send is theirs whoever Go names.
+      [
+        { action: "send_masked", decided_at: decidedAt },
+        { action: "send_masked", decidedAt, by: "owner" },
+      ],
+      // Withheld by Oryxa, in Go's exact shapes: expired before review, and
+      // a request that no longer stood in its teamspace.
+      [
+        {
+          action: "withhold",
+          decided_by: { kind: "system" },
+          decided_at: "2026-09-25T09:00:00Z",
+          reason: "expired before review",
+        },
+        {
+          action: "withhold",
+          decidedAt: "2026-09-25T09:00:00Z",
+          by: "system",
+          reason: "expired before review",
+        },
+      ],
+      [
+        {
+          action: "withhold",
+          decided_by: { kind: "system" },
+          decided_at: decidedAt,
+          reason: lapsed,
+        },
+        { action: "withhold", decidedAt, by: "system", reason: lapsed },
+      ],
+      // Nobody Go names, anybody else, an agent, or no choice Go makes.
+      [{ action: "withhold", decided_at: decidedAt }, undefined],
+      [
+        {
+          action: "withhold",
+          decided_by: { kind: "member", user_id: "user-a" },
+          decided_at: decidedAt,
+        },
+        undefined,
+      ],
+      [
+        {
+          action: "withhold",
+          decided_by: { kind: "agent", user_id: "user-b" },
+          decided_at: decidedAt,
+        },
+        undefined,
+      ],
+      [{ action: "publish", decided_at: decidedAt }, undefined],
+    ]
+    for (const [review, read] of reviews) {
+      const fields = cardFields({ ...request, status: "withheld", review })
+      expect(fields?.status).toBe("withheld")
+      expect(fields?.review).toEqual(read)
+    }
+
+    // Who decided: the owner, their agent (in fixed words), or Oryxa.
+    const decided = (decidedBy?: unknown) =>
+      cardFields({
+        ...request,
+        status: "rejected",
+        decision: {
+          decision: "rejected",
+          message: "Declined by their agent.",
+          decided_at: decidedAt,
+          ...(decidedBy ? { decided_by: decidedBy } : {}),
+        },
+      })?.decision?.by
+    expect(decided(owner)).toBe("owner")
+    expect(
+      decided({ kind: "agent", user_id: "user-b", agent_id: "agt_b" })
+    ).toBe("agent")
+    expect(decided({ kind: "system" })).toBe("system")
+    expect(decided()).toBeUndefined()
+    expect(decided({ kind: "member", user_id: "user-a" })).toBeUndefined()
+    expect(isOpen("review")).toBe(true)
+    expect(isOpen("withheld")).toBe(false)
+  })
+
+  it("reads the answer Go holds for its owner, each version a whole result, on the owner's read alone", () => {
+    const result = (summary: string, status = "completed", content = "") => ({
+      status,
+      summary,
+      content,
+      tools_used: [],
+      artifacts: [],
+      completed_at: "2026-09-24T10:00:00Z",
+    })
+    // Go's exact JSON: `held.result` and `held.masked_result`.
+    const held = {
+      ...request,
+      status: "review",
+      held: {
+        result: result("Call Ada.", "completed", "Her number is 555-0100."),
+        masked_result: result(
+          "Call Ada.",
+          "completed",
+          "Her number is {PHONE}."
+        ),
+      },
+    }
+    expect(HELD_ANSWER_FIELDS).toEqual({
+      object: "held",
+      stored: "result",
+      masked: "masked_result",
+    })
+    expect(heldAnswerOf(held)).toEqual({
+      stored: "Call Ada.\n\nHer number is 555-0100.",
+      masked: "Call Ada.\n\nHer number is {PHONE}.",
+    })
+    // Unchecked, Go has no masked version; a failure is said to be one.
+    expect(
+      heldAnswerOf({
+        ...request,
+        status: "review",
+        held: { result: result("I couldn't reach ada@sim.oryxa.", "failed") },
+      })
+    ).toEqual({ stored: "I couldn't reach ada@sim.oryxa.", failed: true })
+    // The requester's read, and a held answer without its result: none.
+    expect(heldAnswerOf(request)).toBeUndefined()
+    expect(
+      heldAnswerOf({ ...request, held: { masked_result: result("x") } })
+    ).toBeUndefined()
+    // Never on the card both people are sent.
+    expect(cardFields(held)).not.toHaveProperty("heldAnswer")
+  })
+
+  it("says who kept an answer back: its owner, the time that ran out, or Oryxa and why", () => {
+    const owner = { approval: "owner" as const, targetAgentName: "Nia" }
+    const withheld = (review: Parameters<typeof statusLineText>[1]["review"]) =>
+      statusLineText("withheld", { ...owner, review }, "Bo")
+    expect(withheld({ action: "withhold", decidedAt: "t", by: "owner" })).toBe(
+      "Bo chose not to share Nia's answer."
+    )
+    expect(
+      withheld({
+        action: "withhold",
+        decidedAt: "t",
+        by: "system",
+        reason: "expired before review",
+      })
+    ).toBe("Nia's answer expired before Bo reviewed it.")
+    // Not every withholding of Oryxa's is an expiry: it says why.
+    expect(
+      withheld({
+        action: "withhold",
+        decidedAt: "t",
+        by: "system",
+        reason:
+          "Oryxa withheld this answer because the member who asked is no longer on the teamspace's team.",
+      })
+    ).toBe(
+      "Oryxa withheld Nia's answer because the member who asked is no longer on the teamspace's team."
+    )
+    expect(
+      withheld({
+        action: "withhold",
+        decidedAt: "t",
+        by: "system",
+        reason: "a policy changed",
+      })
+    ).toBe("Oryxa withheld Nia's answer: a policy changed.")
+    expect(withheld({ action: "withhold", decidedAt: "t", by: "system" })).toBe(
+      "Oryxa withheld Nia's answer."
+    )
+    expect(withheld(undefined)).toBe("Nia's answer wasn't shared.")
+  })
+
+  it("leaves out an agent's decision words, which are fixed, and says why Oryxa closed a request", () => {
+    const declined = (
+      approval: "owner" | "agent",
+      message: string,
+      by?: "owner" | "agent" | "system"
+    ) =>
+      statusLineText(
+        "rejected",
+        {
+          approval,
+          targetAgentName: approval === "agent" ? "Pricing" : "Nia",
+          decision: {
+            decision: "rejected",
+            message,
+            decidedAt: "t",
+            ...(by ? { by } : {}),
+          },
+        },
+        "Bo"
+      )
+    expect(declined("agent", "Declined by their agent.", "agent")).toBe(
+      "Pricing declined the request."
+    )
+    // Recorded without who decided, by an older build: an agent's, as its
+    // approval says.
+    expect(declined("agent", "Out of scope")).toBe(
+      "Pricing declined the request."
+    )
+    expect(declined("owner", " Not this week. ", "owner")).toBe(
+      "Bo declined the request to Nia: Not this week."
+    )
+    expect(
+      declined(
+        "owner",
+        "Oryxa closed this request because the agent it asks no longer holds a seat in the teamspace.",
+        "system"
+      )
+    ).toBe(
+      "Oryxa closed the request to Nia because the agent it asks no longer holds a seat in the teamspace."
+    )
   })
 })

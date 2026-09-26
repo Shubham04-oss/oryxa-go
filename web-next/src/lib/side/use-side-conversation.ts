@@ -26,6 +26,7 @@ import {
 import type {
   SideClientMessage,
   SideFailure,
+  SideReviewAction,
   SideRoster,
   SideServerMessage,
   SideWireItem,
@@ -49,7 +50,7 @@ export type SideConversationStatus =
   /** The session ended and could not be refreshed. Sign in again. */
   | "session_expired"
 
-/** Why the object refused a decision or a confirmation: its code, and its words as the message. */
+/** Why the object refused a decision, a review or a confirmation: its code, and its words as the message. */
 export class SideActionError extends Error {
   constructor(
     message: string,
@@ -77,9 +78,15 @@ export class SideActionError extends Error {
  * - `askTeammateAgent(agentId, body)`: asks one of `agents.theirs` for
  *   something: a request card, `sending` until Go has it; then its owner
  *   approves it (unless it decides for itself), and the result lands here.
- * - `decide(requestId, decision, message?)`: the viewer approves or
- *   declines a request held for them, as themself. Resolves once the card
- *   shows the decision; rejects with a `SideActionError` saying why not.
+ * - `decide(requestId, decision, message?, allowedTools?)`: the viewer
+ *   approves or declines a request held for them, as themself. An approval
+ *   allows `allowedTools`, among the card's `requestedTools`, or none.
+ *   Resolves once the card shows the decision; rejects with a
+ *   `SideActionError` saying why not.
+ * - `review(requestId, action)`: the viewer shares an answer held for their
+ *   review (`send`), shares it fully masked (`send_masked`), or does not
+ *   (`withhold`), as themself. Resolves once the card is past review;
+ *   rejects with a `SideActionError`.
  * - `confirm(seq, answers)`: the viewer answers every confirmation their own
  *   agent's message `seq` waits on. Resolves once it goes on; rejects with a
  *   `SideActionError`.
@@ -105,8 +112,10 @@ export type SideConversation = {
   decide: (
     requestId: string,
     decision: "approved" | "rejected",
-    message?: string
+    message?: string,
+    allowedTools?: readonly string[]
   ) => Promise<void>
+  review: (requestId: string, action: SideReviewAction) => Promise<void>
   confirm: (
     seq: number,
     answers: Array<{ id: string; confirmed: boolean }>
@@ -126,7 +135,7 @@ export const SIDE_SEND_TIMEOUT_MS = 15_000
 /** How long a request to a teammate's agent may take to be filed before it shows as not filed. */
 export const SIDE_FILE_TIMEOUT_MS = 45_000
 
-/** How long a decision or a confirmation may wait for the object. */
+/** How long a decision, a review or a confirmation may wait for the object. */
 export const SIDE_ACTION_TIMEOUT_MS = 30_000
 
 // How long a history page may take before `loadOlder` gives up on it.
@@ -148,9 +157,9 @@ type Outgoing = {
   renewed?: boolean
 }
 
-/** A decision or a confirmation on its way. */
+/** A decision, a review or a confirmation on its way. */
 type Action = {
-  kind: "decide" | "confirm"
+  kind: "decide" | "review" | "confirm"
   message: SideClientMessage
   resolve: () => void
   reject: (error: SideActionError) => void
@@ -170,7 +179,7 @@ type Live = {
   typing: ReadonlySet<string>
   roster: SideRoster
   outgoing: Outgoing[]
-  /** The last refusal of a decision, by request. */
+  /** The last refusal of a decision or a review, by request. */
   decisionErrors: ReadonlyMap<string, string>
   open: boolean
   dropped: boolean
@@ -327,7 +336,10 @@ class SideConversationView {
     )
     const deciding = new Set(
       [...this.actions.values()].flatMap((action) =>
-        action.message.type === "side-decide" ? [action.message.requestId] : []
+        action.message.type === "side-decide" ||
+        action.message.type === "side-review"
+          ? [action.message.requestId]
+          : []
       )
     )
     const shown: SideItem[] = items.map((item): SideItem => {
@@ -514,7 +526,8 @@ class SideConversationView {
   readonly decide = (
     requestId: string,
     decision: "approved" | "rejected",
-    message?: string
+    message?: string,
+    allowedTools?: readonly string[]
   ): Promise<void> => {
     const card = this.live.items.find(
       (item) => item.kind === "request-card" && item.requestId === requestId
@@ -541,6 +554,53 @@ class SideConversationView {
       requestId,
       decision,
       ...(message?.trim() ? { message: message.trim() } : {}),
+      // Only an approval allows tools, and only those the page names.
+      ...(decision === "approved" && allowedTools
+        ? { allowedTools: [...allowedTools] }
+        : {}),
+    })
+  }
+
+  readonly review = (
+    requestId: string,
+    action: SideReviewAction
+  ): Promise<void> => {
+    const card = this.live.items.find(
+      (item) => item.kind === "request-card" && item.requestId === requestId
+    )
+    if (
+      !card ||
+      card.kind !== "request-card" ||
+      card.targetId !== this.viewerId ||
+      card.status !== "review"
+    ) {
+      return Promise.reject(
+        new SideActionError(
+          "There is no answer of yours waiting for that review.",
+          "not_allowed"
+        )
+      )
+    }
+    // An answer the guard could not check has no masked version.
+    if (
+      action === "send_masked" &&
+      card.heldAnswer &&
+      card.heldAnswer.masked === undefined
+    ) {
+      return Promise.reject(
+        new SideActionError(
+          "This answer has no masked version to send.",
+          "not_allowed"
+        )
+      )
+    }
+    const errors = new Map(this.live.decisionErrors)
+    errors.delete(requestId)
+    this.change({ decisionErrors: errors })
+    return this.act(`review:${requestId}`, "review", {
+      type: "side-review",
+      requestId,
+      action,
     })
   }
 
@@ -755,6 +815,9 @@ class SideConversationView {
     if (item.kind === "request-card" && item.status !== "pending") {
       this.finishAction(`decide:${item.requestId}`)
     }
+    if (item.kind === "request-card" && item.status !== "review") {
+      this.finishAction(`review:${item.requestId}`)
+    }
     if (item.kind === "agent-message" && item.status !== "waiting") {
       this.finishAction(`confirm:${item.seq}`)
     }
@@ -907,9 +970,17 @@ class SideConversationView {
     })
   }
 
-  /** The object refused a decision or a confirmation. */
+  /**
+   * The object refused a decision, a review or a confirmation: a
+   * confirmation names its message's seq, the others their request, which
+   * is never waiting on a decision and a review at once.
+   */
   private refused(target: string, code: SideFailure, words: string): void {
-    const key = /^\d+$/.test(target) ? `confirm:${target}` : `decide:${target}`
+    const key = /^\d+$/.test(target)
+      ? `confirm:${target}`
+      : this.actions.has(`decide:${target}`)
+        ? `decide:${target}`
+        : `review:${target}`
     const action = this.actions.get(key)
     if (!action) return
     if (code === "session_expired" && !action.renewed) {
@@ -917,7 +988,7 @@ class SideConversationView {
       this.renew()
       return
     }
-    if (action.kind === "decide") {
+    if (action.kind === "decide" || action.kind === "review") {
       const errors = new Map(this.live.decisionErrors)
       errors.set(target, words)
       this.change({ decisionErrors: errors })
@@ -1221,6 +1292,7 @@ export function useSideConversation(
     askMyAgent: view.askMyAgent,
     askTeammateAgent: view.askTeammateAgent,
     decide: view.decide,
+    review: view.review,
     confirm: view.confirm,
     peer: view.peer(),
     agents: view.agents(),

@@ -16,6 +16,9 @@ import type {
   SideRequestCard,
   SideStatusLine,
 } from "@/lib/side"
+import { AGENT_REQUEST_TOOLBOXES } from "@/lib/agents/agent-requests"
+import { EXPIRED_BEFORE_REVIEW } from "@/lib/side/asking"
+import type { AgentRequestToolbox } from "@/lib/agents/agent-requests"
 import type { Teamspace } from "@/lib/teamspaces/client"
 
 /** Who reads the conversation, and the other person, in full and in a sentence. */
@@ -85,12 +88,15 @@ export function askedAgentName(
 
 /**
  * A request's result, in one quiet line: whom the agent worked for and who
- * approved it, or that it ran without asking (automatic delegation).
+ * approved it, or that it ran without asking (automatic delegation), and
+ * who reviewed it when the answer guard held it for them first.
  */
 export function viaLine(
   via: NonNullable<SideAgentMessage["via"]>,
   reader: SideReader
 ): string {
+  const who = (userId: string) =>
+    userId === reader.viewerId ? "you" : reader.peer.short
   const behalf =
     via.onBehalfOf === reader.viewerId
       ? "on your behalf"
@@ -98,8 +104,35 @@ export function viaLine(
   const approval =
     via.approvedBy === undefined
       ? "ran without asking"
-      : `approved by ${via.approvedBy === reader.viewerId ? "you" : reader.peer.short}`
-  return `${behalf} · ${approval}`
+      : `approved by ${who(via.approvedBy)}`
+  const review =
+    via.reviewedBy === undefined ? "" : ` · reviewed by ${who(via.reviewedBy)}`
+  return `${behalf} · ${approval}${review}`
+}
+
+/** Each toolbox a request may ask for, as its owner reads what it opens. */
+const toolboxWords: Record<AgentRequestToolbox, string> = {
+  apps: "your connected apps",
+  knowledge: "team knowledge",
+}
+
+/**
+ * What approving a request lets its agent read, as its owner is asked: the
+ * toolboxes among what it asked for ("Nia may read your connected apps and
+ * team knowledge."), or nothing when it asked for none. Other names grant
+ * nothing, so they are not said.
+ */
+export function toolsLine(
+  agentName: string,
+  requestedTools: readonly string[] | undefined
+): string | undefined {
+  const asked = new Set(requestedTools)
+  const read = AGENT_REQUEST_TOOLBOXES.filter((toolbox) =>
+    asked.has(toolbox)
+  ).map((toolbox) => toolboxWords[toolbox])
+  return read.length > 0
+    ? `${capitalized(agentName)} may read ${listWords(read)}.`
+    : undefined
 }
 
 /** How a card's status reads: its tone (for its icon), and its words. */
@@ -119,6 +152,24 @@ export function cardState(
     card.targetAgentName || (forMe ? "your agent" : `${owner}'s agent`)
   const decidedBy = card.approval === "owner" ? owner : agent
   switch (card.status) {
+    case "review":
+      // Its owner is told why it waits for them; the one who asked only
+      // that it does.
+      return forMe
+        ? { tone: "waiting", text: reviewHeadline(agent, card.guard?.kinds) }
+        : {
+            tone: "waiting",
+            text: `Waiting for ${owner} to review the answer.`,
+          }
+    case "withheld":
+      // Its quiet line says who kept it back, and why when Oryxa did.
+      return card.review?.by === "owner"
+        ? { tone: "ended", text: `Not shared by ${owner}.` }
+        : card.review?.reason === EXPIRED_BEFORE_REVIEW
+          ? { tone: "ended", text: "Expired." }
+          : card.review
+            ? { tone: "ended", text: "Withheld by Oryxa." }
+            : { tone: "ended", text: "Not shared." }
     case "sending":
       return { tone: "waiting", text: "Sending…" }
     case "not_filed":
@@ -141,12 +192,68 @@ export function cardState(
     case "completed":
       return { tone: "done", text: "Done." }
     case "rejected":
-      return { tone: "ended", text: `Declined by ${decidedBy}.` }
+      return card.decision?.by === "system"
+        ? { tone: "ended", text: "Closed by Oryxa." }
+        : { tone: "ended", text: `Declined by ${decidedBy}.` }
     case "failed":
       return { tone: "failed", text: "Failed." }
     case "expired":
       return { tone: "ended", text: "Expired." }
   }
+}
+
+/** The kind the answer guard reports when it could not check an answer at all. */
+const uncheckedKind = "UNCHECKED"
+
+/**
+ * The kinds the answer guard holds an answer for (Bedrock's entity types:
+ * a held answer's kinds are these alone), in plain words, as its owner
+ * reads why it waits for them. Any other kind reads as "other personal
+ * details": its code is never shown.
+ */
+const kindWords = new Map<string, string>([
+  ["EMAIL", "an email address"],
+  ["PHONE", "a phone number"],
+  ["ADDRESS", "a street address"],
+])
+
+/**
+ * Why an answer waits for its owner's review, in plain words: "Nia's answer
+ * includes an email address and a phone number. Review it before it's
+ * shared." An answer the guard could not check says so instead.
+ */
+export function reviewHeadline(
+  agentName: string,
+  kinds: readonly string[] = []
+): string {
+  const unchecked = kinds.includes(uncheckedKind)
+  const found = [
+    ...new Set(
+      kinds
+        .filter((kind) => kind !== uncheckedKind)
+        .map((kind) => kindWords.get(kind) ?? "other personal details")
+    ),
+  ]
+  const why =
+    found.length > 0
+      ? `includes ${listWords(found)}${unchecked ? ", and couldn't be checked automatically" : ""}`
+      : unchecked
+        ? "couldn't be checked automatically"
+        : undefined
+  return why
+    ? `${capitalized(agentName)}'s answer ${why}. Review it before it's shared.`
+    : `Review ${agentName}'s answer before it's shared.`
+}
+
+/** Words as a sentence lists them: "a", "a and b", "a, b and c". */
+function listWords(words: readonly string[]): string {
+  if (words.length < 2) return words.join("")
+  return `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`
+}
+
+/** A name that starts a sentence: "your agent" is "Your agent" there. */
+export function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 /** Who approves a request to an agent, as a card and a menu say it. */

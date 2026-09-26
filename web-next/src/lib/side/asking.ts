@@ -3,10 +3,16 @@
 // teammate's agent is sent, and what Go's request becomes on a card. Pure,
 // so the object's words are tested on their own.
 import type { AgentRequest } from "@/lib/agents/agent-requests"
-import { codePoints } from "./protocol"
+import { SIDE_MAX_TOOLS, SIDE_MAX_TOOL_NAME, codePoints } from "./protocol"
 import type {
   SideApproval,
+  SideDecision,
+  SideGuard,
+  SideHeldAnswer,
+  SideOutcome,
   SideRequestStatus,
+  SideReview,
+  SideReviewAction,
   SideRoster,
   SideWireRequestCard,
 } from "./protocol"
@@ -187,21 +193,26 @@ export function agentRequestBody(input: {
 /** Go's request as it has it now, read as data. */
 export type GoRequest = AgentRequest
 
-/** Whether a request can still change: waiting for a decision, or approved and waiting for its result. */
+/**
+ * Whether a request can still change: waiting for a decision, approved and
+ * waiting for its result, or its result held for its owner's review.
+ */
 export function isOpen(status: SideRequestStatus): boolean {
-  return status === "pending" || status === "approved"
+  return status === "pending" || status === "approved" || status === "review"
 }
+
+/** What a card holds of Go's request: all but what only its owner is shown of a held answer. */
+export type CardFields = Omit<
+  SideWireRequestCard,
+  "kind" | "id" | "seq" | "clientId" | "updatedAt" | "heldAnswer"
+>
 
 /**
  * What a card holds of Go's request, or nothing for an answer that is not a
  * request. Go's `approval` fails closed: anything but `agent` holds the
  * request for its owner, as `interactions.HeldForOwner` has it.
  */
-export function cardFields(
-  value: unknown
-):
-  | Omit<SideWireRequestCard, "kind" | "id" | "seq" | "clientId" | "updatedAt">
-  | undefined {
+export function cardFields(value: unknown): CardFields | undefined {
   if (typeof value !== "object" || value === null) return undefined
   // Read as whatever Go sent, not as the type says it is.
   const request = value as {
@@ -227,7 +238,17 @@ export function cardFields(
     return undefined
   }
   const decision = request.decision as
-    { decision?: unknown; message?: unknown; decided_at?: unknown } | undefined
+    | {
+        decision?: unknown
+        message?: unknown
+        decided_at?: unknown
+        decided_by?: unknown
+      }
+    | undefined
+  const decidedBy = deciderOf(decision?.decided_by, target.user_id)
+  const requestedTools = toolsOf(request.requested_tools)
+  const guard = guardOf(request.guard)
+  const review = reviewOf(request.review, target.user_id)
   return {
     requestId: request.id,
     requesterId: requester.user_id,
@@ -252,20 +273,157 @@ export function cardFields(
             decision: decision.decision,
             message: decision.message,
             decidedAt: decision.decided_at,
+            ...(decidedBy ? { by: decidedBy } : {}),
           },
         }
       : {}),
+    ...(requestedTools.length > 0 ? { requestedTools } : {}),
+    ...(guard ? { guard } : {}),
+    ...(review ? { review } : {}),
   }
 }
 
 const statuses = new Set<string>([
   "pending",
   "approved",
+  "review",
   "rejected",
   "completed",
   "failed",
   "expired",
+  "withheld",
 ])
+
+const reviewActions = new Set<string>(["send", "send_masked", "withhold"])
+
+const guardStates = new Set<string>(["clear", "masked", "held"])
+
+/** Go's `requested_tools` as a card keeps them: names a decision may allow, each once. */
+function toolsOf(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const names = (value as unknown[]).filter(
+    (tool): tool is string =>
+      typeof tool === "string" &&
+      tool !== "" &&
+      codePoints(tool) <= SIDE_MAX_TOOL_NAME
+  )
+  return [...new Set(names)].slice(0, SIDE_MAX_TOOLS)
+}
+
+/** Go's `guard`: its state and the kinds it found, or nothing for anything else. */
+function guardOf(value: unknown): SideGuard | undefined {
+  if (!isRecord(value)) return undefined
+  const { state, kinds } = value
+  if (typeof state !== "string" || !guardStates.has(state)) return undefined
+  return {
+    state: state as SideGuard["state"],
+    kinds: Array.isArray(kinds)
+      ? [
+          ...new Set(
+            (kinds as unknown[]).filter(
+              (kind): kind is string => typeof kind === "string" && kind !== ""
+            )
+          ),
+        ]
+      : [],
+  }
+}
+
+/**
+ * Go's `review`: its target's owner's own (only they send a held answer),
+ * or Oryxa's withholding (`system`), with the reason Go gives. A review
+ * anybody else is said to have made is none.
+ */
+function reviewOf(value: unknown, ownerId: string): SideReview | undefined {
+  if (!isRecord(value)) return undefined
+  const { action, decided_by: decidedBy, decided_at: decidedAt, reason } = value
+  if (
+    typeof action !== "string" ||
+    !reviewActions.has(action) ||
+    typeof decidedAt !== "string"
+  ) {
+    return undefined
+  }
+  const by =
+    action === "withhold" ? deciderOf(decidedBy, ownerId) : ("owner" as const)
+  if (by !== "owner" && by !== "system") return undefined
+  return {
+    action: action as SideReviewAction,
+    decidedAt,
+    by,
+    ...(by === "system" && typeof reason === "string" && reason.trim()
+      ? { reason: reason.trim() }
+      : {}),
+  }
+}
+
+/**
+ * Who Go says decided (`agents.InteractionDecider`): the target's owner
+ * (a member decider naming them, or their id), their agent, or Oryxa
+ * (`system`); nothing for anyone else, or for none recorded.
+ */
+function deciderOf(
+  decider: unknown,
+  ownerId: string
+): SideDecision["by"] | undefined {
+  if (typeof decider === "string") {
+    return decider === ownerId ? "owner" : undefined
+  }
+  if (!isRecord(decider)) return undefined
+  switch (decider.kind) {
+    case "system":
+      return "system"
+    case "agent":
+      return "agent"
+    case "member":
+    case undefined:
+      return decider.user_id === ownerId ? "owner" : undefined
+    default:
+      return undefined
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Where Go keeps an answer held for review (`agents.InteractionHeld`), on
+ * its target owner's reads alone, and only while the request is in
+ * review: the answer as it would be shared, and fully masked, each a whole
+ * result (`completed` or `failed`, a summary and a content). This is the
+ * one place that names them.
+ */
+export const HELD_ANSWER_FIELDS = {
+  /** The object on the request that holds both. */
+  object: "held",
+  /** The guardrail's output: the kinds it always masks already masked. */
+  stored: "result",
+  /** Every kind it found masked too, each as `{TYPE}`; absent for an answer it could not check. */
+  masked: "masked_result",
+} as const
+
+/**
+ * The answer Go holds for its owner's review, from their read of the
+ * request, each version as its result reads (its summary, then its
+ * content), or nothing when the read has none. `masked` is absent when Go
+ * has no masked version (an answer that could not be checked), and
+ * `failed` marks an answer that was its agent's failure.
+ */
+export function heldAnswerOf(value: unknown): SideHeldAnswer | undefined {
+  if (!isRecord(value)) return undefined
+  const held = value[HELD_ANSWER_FIELDS.object]
+  if (!isRecord(held)) return undefined
+  const result = held[HELD_ANSWER_FIELDS.stored]
+  const stored = resultText({ result })
+  if (stored === undefined) return undefined
+  const masked = resultText({ result: held[HELD_ANSWER_FIELDS.masked] })
+  return {
+    stored,
+    ...(masked !== undefined ? { masked } : {}),
+    ...(isRecord(result) && result.status === "failed" ? { failed: true } : {}),
+  }
+}
 
 /** A finished request's result as an agent's message: its summary, then its content when there is more. */
 export function resultText(value: unknown): string | undefined {
@@ -282,25 +440,76 @@ export function resultText(value: unknown): string | undefined {
 }
 
 /**
+ * What Oryxa says it did, naming the agent: Go's own sentence ("Oryxa
+ * withheld this answer because …") with `lead` put in its words, or its
+ * words after `named`, or `named` alone when it said nothing.
+ */
+function oryxaSays(
+  lead: string,
+  named: string,
+  said: string | undefined
+): string {
+  const words = oneParagraph(said ?? "", 300)
+  if (!words) return `${named}.`
+  const sentence = /[.!?…]$/.test(words) ? words : `${words}.`
+  return sentence.startsWith(lead)
+    ? `${named}${sentence.slice(lead.length)}`
+    : `${named}: ${sentence}`
+}
+
+/** Go's reason for an answer it withheld when its request expired in review. */
+export const EXPIRED_BEFORE_REVIEW = "expired before review"
+
+/**
  * The quiet line a request that ended without a result leaves, in words
- * that say who did what: the owner or the agent that declined it, the agent
- * that could not finish it, or the time that ran out (before it was
- * approved, or, once it was, before its agent finished).
+ * that say who did what: the owner or the agent that declined it (an
+ * agent's note is fixed words, so it is left out), or Oryxa closing it and
+ * why; the agent that could not finish it; the time that ran out (before
+ * it was approved, or, once it was, before its agent finished); or who kept
+ * its answer back: its owner, the time that ran out before they reviewed
+ * it, or Oryxa, saying why.
  */
 export function statusLineText(
-  outcome: "rejected" | "failed" | "expired",
-  card: Pick<SideWireRequestCard, "approval" | "targetAgentName" | "decision">,
+  outcome: SideOutcome,
+  card: Pick<
+    SideWireRequestCard,
+    "approval" | "targetAgentName" | "decision" | "review"
+  >,
   ownerName: string,
   failure?: string
 ): string {
   const agent = card.targetAgentName || `${ownerName}'s agent`
   switch (outcome) {
+    case "withheld": {
+      const review = card.review
+      if (!review) return `${agent}'s answer wasn't shared.`
+      if (review.by === "owner") {
+        return `${ownerName} chose not to share ${agent}'s answer.`
+      }
+      if (review.reason === EXPIRED_BEFORE_REVIEW) {
+        return `${agent}'s answer expired before ${ownerName} reviewed it.`
+      }
+      return oryxaSays(
+        "Oryxa withheld this answer",
+        `Oryxa withheld ${agent}'s answer`,
+        review.reason
+      )
+    }
     case "rejected": {
-      const who = card.approval === "owner" ? ownerName : agent
+      const by =
+        card.decision?.by ?? (card.approval === "owner" ? "owner" : "agent")
+      if (by === "system") {
+        return oryxaSays(
+          "Oryxa closed this request",
+          `Oryxa closed the request to ${agent}`,
+          card.decision?.message
+        )
+      }
+      if (by === "agent") return `${agent} declined the request.`
       const note = card.decision?.message.trim()
       return note
-        ? `${who} declined the request to ${agent}: ${oneParagraph(note, 300)}`
-        : `${who} declined the request to ${agent}.`
+        ? `${ownerName} declined the request to ${agent}: ${oneParagraph(note, 300)}`
+        : `${ownerName} declined the request to ${agent}.`
     }
     case "failed": {
       const why = failure?.trim()

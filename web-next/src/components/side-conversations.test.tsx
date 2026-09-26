@@ -966,12 +966,14 @@ describe("What a side conversation holds", () => {
         name: "Approve Leo's request from Priya Shah",
       })
     )
+    // It asked for no tools, so Approve allows none, and says so.
     expect(socket.said("side-decide")).toEqual([
       {
         type: "side-decide",
         requestId: "irq_1",
         decision: "approved",
         message: "Go ahead, use the new deck.",
+        allowedTools: [],
       },
     ])
     // On its way: the buttons wait.
@@ -1027,6 +1029,387 @@ describe("What a side conversation holds", () => {
         .getByRole("button", { name: "Decline Leo's request from Priya Shah" })
         .hasAttribute("disabled")
     ).toBe(false)
+  })
+
+  it("tells the owner what approving lets their agent read, and what each choice allows", async () => {
+    const view = await openWithPriya()
+    const both = ["apps", "knowledge"]
+    const socket = opened(
+      snapshot([
+        cardForMe(1, { requestedTools: both }),
+        cardForMe(2, { requestedTools: both }),
+        cardForMe(3, { requestedTools: ["knowledge"] }),
+        // Asked for no tools, or none that open anything.
+        cardForMe(4),
+        cardForMe(5, { requestedTools: ["github.search"] }),
+        // The member asked it: Priya is the one asked.
+        card(6, { requestedTools: both }),
+      ])
+    )
+    const [first, second, third, fourth, fifth] = within(view).getAllByRole(
+      "article",
+      { name: "Priya Shah asked Leo, your agent" }
+    )
+    expect(
+      within(first).getByText(
+        "Leo may read your connected apps and team knowledge."
+      )
+    ).toBeTruthy()
+    expect(
+      within(first)
+        .getAllByRole("button", { name: /request from Priya Shah/ })
+        .map((button) => button.textContent)
+    ).toEqual(["Decline", "Approve without tools", "Approve"])
+    expect(within(third).getByText("Leo may read team knowledge.")).toBeTruthy()
+    for (const plain of [fourth, fifth]) {
+      expect(within(plain).queryByText(/may read/)).toBeNull()
+      expect(
+        within(plain)
+          .getAllByRole("button", { name: /request from Priya Shah/ })
+          .map((button) => button.textContent)
+      ).toEqual(["Decline", "Approve"])
+    }
+    const mine = within(view).getByRole("article", {
+      name: "You asked Nia, Priya's agent",
+    })
+    expect(within(mine).queryByText(/may read/)).toBeNull()
+
+    fireEvent.click(
+      within(first).getByRole("button", {
+        name: "Approve Leo's request from Priya Shah",
+      })
+    )
+    fireEvent.click(
+      within(second).getByRole("button", {
+        name: "Approve Leo's request from Priya Shah without tools",
+      })
+    )
+    fireEvent.click(
+      within(fifth).getByRole("button", {
+        name: "Approve Leo's request from Priya Shah",
+      })
+    )
+    fireEvent.click(
+      within(fourth).getByRole("button", {
+        name: "Decline Leo's request from Priya Shah",
+      })
+    )
+    expect(socket.said("side-decide")).toEqual([
+      {
+        type: "side-decide",
+        requestId: "irq_1",
+        decision: "approved",
+        allowedTools: ["apps", "knowledge"],
+      },
+      {
+        type: "side-decide",
+        requestId: "irq_2",
+        decision: "approved",
+        allowedTools: [],
+      },
+      {
+        type: "side-decide",
+        requestId: "irq_5",
+        decision: "approved",
+        allowedTools: ["github.search"],
+      },
+      { type: "side-decide", requestId: "irq_4", decision: "rejected" },
+    ])
+    expect(within(second).getByText("Approving…")).toBeTruthy()
+  })
+
+  it("shows the owner an answer held for them, why in plain words, and sends their review", async () => {
+    const view = await openWithPriya()
+    const heldAnswer = {
+      stored: "Reach Ada on **555-0100**, or at ada@sim.oryxa.",
+      masked: "Reach Ada on {PHONE}, or at {EMAIL}.",
+    }
+    const socket = opened(
+      snapshot([
+        cardForMe(1, {
+          status: "review",
+          guard: { state: "held", kinds: ["EMAIL", "PHONE"] },
+          heldAnswer,
+        }),
+        cardForMe(2, {
+          status: "review",
+          guard: { state: "held", kinds: ["UNCHECKED"] },
+          heldAnswer: { stored: heldAnswer.stored },
+        }),
+        // Not read as the member yet.
+        cardForMe(3, {
+          status: "review",
+          guard: { state: "held", kinds: ["ADDRESS"] },
+        }),
+        cardForMe(4, { status: "approved" }),
+        // Its agent's failure, held as any answer is.
+        cardForMe(5, {
+          status: "review",
+          guard: { state: "held", kinds: ["EMAIL"] },
+          heldAnswer: {
+            stored: "I couldn't reach ada@sim.oryxa's calendar.",
+            masked: "I couldn't reach {EMAIL}'s calendar.",
+            failed: true,
+          },
+        }),
+      ])
+    )
+    const [first, second, third, fourth, fifth] = within(view).getAllByRole(
+      "article",
+      { name: "Priya Shah asked Leo, your agent" }
+    )
+    expect(
+      within(fifth).getByText("Leo couldn't finish the request, and says:")
+    ).toBeTruthy()
+    expect(within(first).queryByText(/couldn't finish/)).toBeNull()
+    expect(
+      within(first).getByText(
+        "Leo's answer includes an email address and a phone number. Review it before it's shared."
+      )
+    ).toBeTruthy()
+    // The answer as Send shares it, and a preview of what Send masked does.
+    expect(within(first).getByText("555-0100").tagName).toBe("STRONG")
+    expect(within(first).getByText("Send masked shares:")).toBeTruthy()
+    expect(
+      within(first).getByText("Reach Ada on {PHONE}, or at {EMAIL}.")
+    ).toBeTruthy()
+    expect(
+      within(first)
+        .getAllByRole("button", { name: /answer to Priya Shah/ })
+        .map((button) => [
+          button.getAttribute("aria-label"),
+          button.textContent,
+        ])
+    ).toEqual([
+      ["Don't send Leo's answer to Priya Shah", "Don't send"],
+      ["Send Leo's answer to Priya Shah", "Send"],
+      ["Send Leo's answer to Priya Shah, masked", "Send masked"],
+    ])
+    expect(
+      within(second).getByText(
+        "Leo's answer couldn't be checked automatically. Review it before it's shared."
+      )
+    ).toBeTruthy()
+    expect(view.textContent).not.toContain("UNCHECKED")
+    // Not checked, it has no masked version: no preview, no Send masked.
+    expect(within(second).queryByText("Send masked shares:")).toBeNull()
+    expect(
+      within(second)
+        .getAllByRole("button", { name: /answer to Priya Shah/ })
+        .map((button) => button.textContent)
+    ).toEqual(["Don't send", "Send"])
+    // Nothing is sent before the member has seen it; not sending never waits.
+    expect(within(third).getByText("Loading the answer…")).toBeTruthy()
+    expect(
+      within(third)
+        .getAllByRole("button", { name: /answer to Priya Shah/ })
+        .map((button) => button.textContent)
+    ).toEqual(["Don't send"])
+
+    fireEvent.click(
+      within(first).getByRole("button", {
+        name: "Send Leo's answer to Priya Shah",
+      })
+    )
+    expect(first.getAttribute("aria-busy")).toBe("true")
+    expect(within(first).getByText("Sending…")).toBeTruthy()
+    fireEvent.click(
+      within(fifth).getByRole("button", {
+        name: "Send Leo's answer to Priya Shah, masked",
+      })
+    )
+    fireEvent.click(
+      within(third).getByRole("button", {
+        name: "Don't send Leo's answer to Priya Shah",
+      })
+    )
+    expect(socket.said("side-review")).toEqual([
+      { type: "side-review", requestId: "irq_1", action: "send" },
+      { type: "side-review", requestId: "irq_5", action: "send_masked" },
+      { type: "side-review", requestId: "irq_3", action: "withhold" },
+    ])
+
+    // Sent: the answer and its choices go, and focus stays with the card.
+    socket.says({
+      type: "side-item",
+      item: cardForMe(1, {
+        status: "completed",
+        review: { action: "send", decidedAt: at(9), by: "owner" },
+      }),
+    })
+    expect(within(first).queryByText("Send masked shares:")).toBeNull()
+    expect(
+      within(first).queryByRole("button", { name: /answer to Priya Shah/ })
+    ).toBeNull()
+    await waitFor(() => expect(document.activeElement).toBe(first))
+
+    // One held while the member watches is said aloud.
+    socket.says({
+      type: "side-item",
+      item: cardForMe(4, {
+        status: "review",
+        guard: { state: "held", kinds: ["PHONE"] },
+      }),
+    })
+    expect(announced(view)).toBe(
+      "Leo's answer includes a phone number. Review it before it's shared."
+    )
+    expect(
+      within(fourth).getByText(
+        "Leo's answer includes a phone number. Review it before it's shared."
+      )
+    ).toBeTruthy()
+  })
+
+  it("tells the member who asked that the answer waits for review, then shows it reviewed, or not shared", async () => {
+    const view = await openWithPriya()
+    const socket = opened(
+      snapshot([
+        card(1, { status: "review" }),
+        card(2, { status: "approved" }),
+        // Go withheld it when nobody reviewed it in time.
+        card(3, {
+          status: "withheld",
+          review: {
+            action: "withhold",
+            decidedAt: "2099-01-01T00:00:00.000Z",
+            by: "system",
+            reason: "expired before review",
+          },
+        }),
+      ])
+    )
+    const [first, second, third] = within(view).getAllByRole("article", {
+      name: "You asked Nia, Priya's agent",
+    })
+    expect(
+      within(first).getByText("Waiting for Priya to review the answer.")
+    ).toBeTruthy()
+    expect(within(first).queryByRole("button")).toBeNull()
+    expect(within(first).queryByText(/Send masked/)).toBeNull()
+    expect(within(third).getByText("Expired.")).toBeTruthy()
+
+    socket.says({ type: "side-item", item: card(2, { status: "review" }) })
+    expect(announced(view)).toBe("Waiting for Priya to review the answer.")
+
+    // Priya sends it: the answer lands as today, saying she reviewed it.
+    socket.says({
+      type: "side-item",
+      item: card(1, {
+        status: "completed",
+        review: { action: "send", decidedAt: at(5), by: "owner" },
+      }),
+    })
+    socket.says({
+      type: "side-item",
+      item: agentMessage(4, {
+        agentId: "agt_nia",
+        agentName: "Nia",
+        ownerId: priya,
+        body: "Reach Ada on 555-0100.",
+        via: {
+          requestId: "irq_1",
+          onBehalfOf: priya,
+          approvedBy: priya,
+          reviewedBy: priya,
+        },
+      }),
+    })
+    expect(within(first).getByText("Done.")).toBeTruthy()
+    const nia = within(view).getByRole("article", {
+      name: "Nia, Priya's agent",
+    })
+    expect(within(nia).getByText("Reach Ada on 555-0100.")).toBeTruthy()
+    expect(
+      within(nia).getByText(
+        "on behalf of Priya · approved by Priya · reviewed by Priya"
+      )
+    ).toBeTruthy()
+
+    // Priya keeps the other to herself.
+    socket.says({
+      type: "side-item",
+      item: card(2, {
+        status: "withheld",
+        review: { action: "withhold", decidedAt: at(6), by: "owner" },
+      }),
+    })
+    socket.says({
+      type: "side-item",
+      item: statusLine(5, "Priya chose not to share Nia's answer.", {
+        requestId: "irq_2",
+        outcome: "withheld",
+      }),
+    })
+    expect(within(second).getByText("Not shared by Priya.")).toBeTruthy()
+    const log = within(view).getByRole("log", {
+      name: "Side conversation with Priya Shah",
+    })
+    expect(
+      within(log).getByText(/^Priya chose not to share Nia's answer\./)
+        .className
+    ).toBe("workspace-side-status")
+    expect(announced(view)).toBe("Priya chose not to share Nia's answer.")
+  })
+
+  it("says why Oryxa withheld an answer, and reads an agent's decline in its fixed words", async () => {
+    const view = await openWithPriya()
+    opened(
+      snapshot([
+        // Oryxa withheld it: Priya could no longer send it here.
+        card(1, {
+          status: "withheld",
+          review: {
+            action: "withhold",
+            decidedAt: at(1),
+            by: "system",
+            reason:
+              "Oryxa withheld this answer because the agent that asked no longer holds a seat in the teamspace.",
+          },
+        }),
+        statusLine(
+          2,
+          "Oryxa withheld Nia's answer because the agent that asked no longer holds a seat in the teamspace.",
+          { requestId: "irq_1", outcome: "withheld" }
+        ),
+        // Priya's automatic specialist declined, in Go's fixed words.
+        card(3, {
+          targetAgentId: "agt_pricing",
+          targetAgentName: "Pricing",
+          approval: "agent",
+          status: "rejected",
+          decision: {
+            decision: "rejected",
+            message: "Declined by their agent.",
+            decidedAt: at(3),
+            by: "agent",
+          },
+        }),
+        statusLine(4, "Pricing declined the request.", {
+          requestId: "irq_3",
+        }),
+      ])
+    )
+    const withheld = within(view).getByRole("article", {
+      name: "You asked Nia, Priya's agent",
+    })
+    expect(within(withheld).getByText("Withheld by Oryxa.")).toBeTruthy()
+    const log = within(view).getByRole("log", {
+      name: "Side conversation with Priya Shah",
+    })
+    expect(
+      within(log).getByText(
+        /^Oryxa withheld Nia's answer because the agent that asked no longer holds a seat in the teamspace\./
+      )
+    ).toBeTruthy()
+    const pricing = within(view).getByRole("article", {
+      name: "You asked Pricing, Priya's specialist",
+    })
+    expect(within(pricing).getByText("Declined by Pricing.")).toBeTruthy()
+    expect(
+      within(log).getByText(/^Pricing declined the request\./)
+    ).toBeTruthy()
+    expect(view.textContent).not.toContain("Declined by their agent.")
   })
 
   it("shows the member's own agent's confirmations to them alone", async () => {

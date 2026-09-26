@@ -60,14 +60,14 @@ func (store *Store) Create(ctx context.Context, request agents.Interaction, idem
 				(id, organization_id, requester_user_id, requester_agent_id, requester_agent_name,
 				 target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
 				 purpose, task, context, requested_tools, requested_permissions, status, idempotency_key,
-				 revision, expires_at, created_at, updated_at, teamspace_id, approval)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22)
+				 revision, expires_at, created_at, updated_at, teamspace_id, approval, tools_judged_by)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$20,$21,$22,$23)
 			ON CONFLICT (organization_id, requester_agent_id, idempotency_key) DO NOTHING
 			RETURNING `+selectColumns,
 			request.ID, request.OrganizationID, request.Requester.UserID, request.Requester.AgentID, request.Requester.AgentName,
 			request.Target.UserID, request.Target.AgentID, request.Target.AgentName, request.Target.UserEmail, request.Target.UserDisplayName,
 			request.Purpose, request.Task, contextJSON, toolsJSON, permissionsJSON, request.Status, idempotencyKey,
-			request.Revision, request.ExpiresAt, request.CreatedAt, request.TeamspaceID, request.Approval)
+			request.Revision, request.ExpiresAt, request.CreatedAt, request.TeamspaceID, request.Approval, request.ToolsJudgedBy)
 		if err := scanInteraction(row, &request); errors.Is(err, pgx.ErrNoRows) {
 			// The key is taken: return what it names, which the service
 			// compares with what it was asked to create.
@@ -246,9 +246,46 @@ func (store *Store) Decide(ctx context.Context, id string, input agents.Interact
 	return result, nil
 }
 
-func (store *Store) Respond(ctx context.Context, id string, input agents.InteractionResponseInput, at time.Time) (agents.Interaction, error) {
+// Respond records an approved request's answer as the guard left it: a
+// result the member who asked reads, completing or failing the request; or
+// an answer held for its addressed member's review, which leaves it in
+// review with no result. Either is recorded as the completed event, which
+// carries the new status and nothing of the answer or of what the guard
+// found.
+func (store *Store) Respond(ctx context.Context, id string, answer Answer, at time.Time) (agents.Interaction, error) {
+	status, err := answer.status()
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	if answer.Result != nil {
+		delivered := *answer.Result
+		delivered.CompletedAt = at
+		answer.Result = &delivered
+	}
+	if answer.Held != nil {
+		held := *answer.Held
+		held.Result.CompletedAt = at
+		if held.MaskedResult != nil {
+			masked := *held.MaskedResult
+			masked.CompletedAt = at
+			held.MaskedResult = &masked
+		}
+		answer.Held = &held
+	}
+	resultJSON, err := nullableJSON(answer.Result)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	heldJSON, err := nullableJSON(answer.Held)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	guardJSON, err := nullableJSON(answer.Guard)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
 	var result agents.Interaction
-	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
 		current, err := getForUpdate(ctx, tx, id)
 		if err != nil {
 			return err
@@ -259,17 +296,10 @@ func (store *Store) Respond(ctx context.Context, id string, input agents.Interac
 		if !current.ExpiresAt.After(at) {
 			return ErrExpired
 		}
-		response := agents.InteractionResult{
-			Status: input.Status, Summary: input.Summary, Content: input.Content,
-			ToolsUsed: nonNilStrings(input.ToolsUsed), Artifacts: nonNilStrings(input.Artifacts), CompletedAt: at,
-		}
-		responseJSON, err := json.Marshal(response)
-		if err != nil {
-			return err
-		}
 		err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
-			SET status=$2, result=$3, revision=revision+1, updated_at=$4 WHERE id=$1 RETURNING `+selectColumns,
-			id, input.Status, responseJSON, at), &result)
+			SET status=$2, result=$3, held_result=$4, guard=$5, revision=revision+1, updated_at=$6
+			WHERE id=$1 RETURNING `+selectColumns,
+			id, status, resultJSON, heldJSON, guardJSON, at), &result)
 		if err != nil {
 			return err
 		}
@@ -279,6 +309,127 @@ func (store *Store) Respond(ctx context.Context, id string, input agents.Interac
 		return agents.Interaction{}, err
 	}
 	return result, nil
+}
+
+// Review records a review of an answer held for its addressed member,
+// before the request expires: ReviewSend delivers the answer as it was held,
+// ReviewSendMasked its fully masked version, each completing the request or
+// failing it as the answer did; ReviewWithhold ends it withheld, with no
+// result. The held answer is dropped either way, and the review recorded
+// with who made it, the member or Oryxa, and any reason. It is the completed event, carrying the new status and
+// nothing else, that tells the member who asked. A request not in review is
+// ErrConflict, and so is sending masked an answer that has no masked version.
+func (store *Store) Review(ctx context.Context, id string, review agents.InteractionReview, at time.Time) (agents.Interaction, error) {
+	var result agents.Interaction
+	err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+		current, err := getForUpdate(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if current.Status != StatusReview || current.Held == nil {
+			return ErrConflict
+		}
+		if !current.ExpiresAt.After(at) {
+			return ErrExpired
+		}
+		var delivered *agents.InteractionResult
+		switch review.Action {
+		case ReviewSend:
+			delivered = &current.Held.Result
+		case ReviewSendMasked:
+			if current.Held.MaskedResult == nil {
+				return fmt.Errorf("%w: this answer has no masked version to send", ErrConflict)
+			}
+			delivered = current.Held.MaskedResult
+		case ReviewWithhold:
+		default:
+			return fmt.Errorf("%w: action must be send, send_masked or withhold", ErrInvalid)
+		}
+		review.DecidedAt = at
+		result, err = settleReview(ctx, tx, id, delivered, review, at)
+		return err
+	})
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	return result, nil
+}
+
+// WithholdExpired withholds, as Oryxa and with the reason, up to limit
+// answers whose request expired while they waited in review by at, the
+// longest expired first, and returns those it withheld. Nothing else would
+// end such a request: its member can no longer review it. One reviewed
+// meanwhile, by another replica say, is passed over.
+func (store *Store) WithholdExpired(ctx context.Context, reason string, at time.Time, limit int) ([]agents.Interaction, error) {
+	rows, err := store.database.Pool.Query(ctx, `SELECT id FROM agents_primary.agent_interactions
+		WHERE status='review' AND expires_at <= $1 ORDER BY expires_at, id LIMIT $2`, at, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find expired agent requests in review: %w", err)
+	}
+	ids, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		return nil, fmt.Errorf("read expired agent requests in review: %w", err)
+	}
+	var withheld []agents.Interaction
+	for _, id := range ids {
+		var request agents.Interaction
+		err := pgx.BeginFunc(ctx, store.database.Pool, func(tx pgx.Tx) error {
+			current, err := getForUpdate(ctx, tx, id)
+			if err != nil {
+				return err
+			}
+			if current.Status != StatusReview {
+				return ErrConflict
+			}
+			request, err = settleReview(ctx, tx, id, nil, agents.InteractionReview{
+				Action: ReviewWithhold, DecidedBy: agents.InteractionDecider{Kind: DecidedBySystem}, DecidedAt: at, Reason: reason,
+			}, at)
+			return err
+		})
+		switch {
+		case errors.Is(err, ErrConflict), errors.Is(err, ErrNotFound):
+			continue
+		case err != nil:
+			return withheld, fmt.Errorf("withhold an expired agent request in review: %w", err)
+		}
+		withheld = append(withheld, request)
+	}
+	return withheld, nil
+}
+
+// settleReview ends a review the caller holds locked: delivered becomes the
+// result, completing or failing the request as it says, or, with nothing
+// delivered, the request is withheld. The held answer is dropped, the
+// review kept, and the completed event recorded.
+func settleReview(ctx context.Context, tx pgx.Tx, id string, delivered *agents.InteractionResult, review agents.InteractionReview, at time.Time) (agents.Interaction, error) {
+	status := StatusWithheld
+	if delivered != nil {
+		status = delivered.Status
+	}
+	resultJSON, err := nullableJSON(delivered)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	reviewJSON, err := json.Marshal(review)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	var result agents.Interaction
+	err = scanInteraction(tx.QueryRow(ctx, `UPDATE agents_primary.agent_interactions
+		SET status=$2, result=$3, held_result=NULL, review=$4, revision=revision+1, updated_at=$5
+		WHERE id=$1 RETURNING `+selectColumns, id, status, resultJSON, reviewJSON, at), &result)
+	if err != nil {
+		return agents.Interaction{}, err
+	}
+	return result, recordEvent(ctx, tx, agentsv1.InteractionCompletedDetailType, result)
+}
+
+// nullableJSON is value as JSON, or SQL NULL for a nil one.
+func nullableJSON[T any](value *T) ([]byte, error) {
+	if value == nil {
+		return nil, nil
+	}
+	return json.Marshal(value)
 }
 
 // Hold keeps a request for its owner's own decision. A pending request is
@@ -473,13 +624,14 @@ const selectColumns = `
 	target_user_id, target_agent_id, target_agent_name, target_user_email, target_user_display_name,
 	purpose, task, context, requested_tools, requested_permissions,
 	status, decision, result, revision, expires_at, created_at, updated_at,
-	teamspace_id, approval, decided_by_kind, decided_by_user_id, decided_by_agent_id`
+	teamspace_id, approval, decided_by_kind, decided_by_user_id, decided_by_agent_id,
+	tools_judged_by, guard, held_result, review`
 
 type scanner interface{ Scan(...any) error }
 
 func scanInteraction(row scanner, target *agents.Interaction) error {
 	var contextJSON, toolsJSON, permissionsJSON []byte
-	var decisionJSON, resultJSON []byte
+	var decisionJSON, resultJSON, guardJSON, heldJSON, reviewJSON []byte
 	var decider agents.InteractionDecider
 	err := row.Scan(
 		&target.ID, &target.OrganizationID,
@@ -488,8 +640,18 @@ func scanInteraction(row scanner, target *agents.Interaction) error {
 		&target.Purpose, &target.Task, &contextJSON, &toolsJSON, &permissionsJSON,
 		&target.Status, &decisionJSON, &resultJSON, &target.Revision, &target.ExpiresAt, &target.CreatedAt, &target.UpdatedAt,
 		&target.TeamspaceID, &target.Approval, &decider.Kind, &decider.UserID, &decider.AgentID,
+		&target.ToolsJudgedBy, &guardJSON, &heldJSON, &reviewJSON,
 	)
 	if err != nil {
+		return err
+	}
+	if target.Guard, err = decodeOptional[agents.InteractionGuard](guardJSON); err != nil {
+		return err
+	}
+	if target.Held, err = decodeOptional[agents.InteractionHeld](heldJSON); err != nil {
+		return err
+	}
+	if target.Review, err = decodeOptional[agents.InteractionReview](reviewJSON); err != nil {
 		return err
 	}
 	if err := json.Unmarshal(contextJSON, &target.Context); err != nil {
@@ -520,6 +682,18 @@ func scanInteraction(row scanner, target *agents.Interaction) error {
 		}
 	}
 	return nil
+}
+
+// decodeOptional reads a JSON column that may be NULL.
+func decodeOptional[T any](data []byte) (*T, error) {
+	if len(data) == 0 {
+		return nil, nil
+	}
+	value := new(T)
+	if err := json.Unmarshal(data, value); err != nil {
+		return nil, err
+	}
+	return value, nil
 }
 
 func getForUpdate(ctx context.Context, tx pgx.Tx, id string) (agents.Interaction, error) {

@@ -3,6 +3,7 @@ package assembly
 import (
 	"context"
 	"iter"
+	"maps"
 	"slices"
 	"sync"
 	"testing"
@@ -44,6 +45,12 @@ func (m *recordingModel) GenerateContent(_ context.Context, request *model.LLMRe
 // request it sent the model.
 func (m *recordingModel) firstCall(t *testing.T, built agent.Agent) *model.LLMRequest {
 	t.Helper()
+	return m.firstCallWith(t, built, nil)
+}
+
+// firstCallWith is firstCall in a session that also holds extra.
+func (m *recordingModel) firstCallWith(t *testing.T, built agent.Agent, extra map[string]any) *model.LLMRequest {
+	t.Helper()
 	m.mu.Lock()
 	sent := len(m.requests)
 	m.mu.Unlock()
@@ -52,9 +59,11 @@ func (m *recordingModel) firstCall(t *testing.T, built agent.Agent) *model.LLMRe
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err := sessions.Create(context.Background(), &session.CreateRequest{AppName: "app", UserID: "user_b", State: map[string]any{
+	state := map[string]any{
 		agents.OrganizationIDKey: "org_1", agents.AgentIDKey: "agt_b", agents.AgentNameKey: "Carl", agents.AgentKindKey: "primary",
-	}})
+	}
+	maps.Copy(state, extra)
+	created, err := sessions.Create(context.Background(), &session.CreateRequest{AppName: "app", UserID: "user_b", State: state})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,40 +170,46 @@ func assembledKrude(t *testing.T, llm model.LLM, thinking genai.ThinkingLevel) *
 	return krude
 }
 
-// TestEachDeliveryStartsWithItsWholeReach: approved work starts with the
-// member's apps and knowledge, read-only, and its request; deciding a new
-// request with the knowledge and the request; a report with the request
-// alone. Krude and a specialist alike, and none of them can list or load a
-// toolbox, so none spends a model call finding one, or look up the member
-// its instruction already names.
+// TestEachDeliveryStartsWithItsWholeReach: every kind of delivery run is
+// offered, from its first model call, exactly the tools it may use, and no
+// other: approved work what it was allowed of the member's apps and
+// knowledge, read-only, with reading and answering its request; deciding a
+// new request reading and deciding it alone; a report reading it alone.
+// Krude and a specialist alike (a specialist also saves artifacts), and none
+// of them can list or load a toolbox, look up the member its instruction
+// already names, or list the member's own files.
 func TestEachDeliveryStartsWithItsWholeReach(t *testing.T) {
 	llm := &recordingModel{}
 	krude := assembledKrude(t, llm, "")
-	request := []string{"interactions_get", "interactions_decide", "interactions_respond"}
-	for name, reach := range map[string]struct {
+	apps, knowledge := "apps_run_read_tool", "knowledge_search"
+	for name, run := range map[string]struct {
 		reach   DeliveryReach
-		offered []string
-		absent  []string
+		purpose string
+		tools   []string
 	}{
-		"approved work": {DeliveryReads, append([]string{"apps_run_read_tool", "knowledge_search"}, request...), nil},
-		"a new request": {DeliveryQuiet, append([]string{"knowledge_search"}, request...), []string{"apps_run_read_tool"}},
-		"a report":      {DeliveryReport, request, []string{"apps_run_read_tool", "knowledge_search"}},
+		"approved work, apps and knowledge": {DeliveryReads, agents.DeliveryWorks, []string{apps, knowledge}},
+		"approved work, apps alone":         {DeliveryApps, agents.DeliveryWorks, []string{apps}},
+		"approved work, knowledge alone":    {DeliveryQuiet, agents.DeliveryWorks, []string{knowledge}},
+		"approved work, nothing allowed":    {DeliveryReport, agents.DeliveryWorks, nil},
+		"a new request":                     {DeliveryReport, agents.DeliveryDecides, nil},
+		"a report":                          {DeliveryReport, agents.DeliveryReports, nil},
 	} {
-		specialist, err := krude.ManagedDelivering(agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, reach.reach)
+		state := agents.DeliveryState(agents.Delivery{RequestID: "irq_1", Purpose: run.purpose})
+		want := append(slices.Clone(run.tools), agents.DeliveryTools(run.purpose)...)
+		specialist, err := krude.ManagedDelivering(agents.ManagedSpec{ID: "agt_sales", Name: "Sales", Instructions: "Answer requests."}, run.reach)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for runner, built := range map[string]agent.Agent{"Krude": krude.Delivering(reach.reach), "a specialist": specialist} {
-			offered := declared(llm.firstCall(t, built))
-			for _, want := range reach.offered {
-				if !slices.Contains(offered, want) {
-					t.Errorf("%s, for %s: the first call declared %v, want %s", name, runner, offered, want)
-				}
+		for runner, built := range map[string]agent.Agent{"Krude": krude.Delivering(run.reach), "a specialist": specialist} {
+			expected := slices.Clone(want)
+			if runner == "a specialist" {
+				expected = append(expected, "save_artifact")
 			}
-			for _, unwanted := range append([]string{"list_tools", "load_tools", "get_user_details", "interactions_inbox", "interactions_create"}, reach.absent...) {
-				if slices.Contains(offered, unwanted) {
-					t.Errorf("%s, for %s: the first call declared %s: %v", name, runner, unwanted, offered)
-				}
+			offered := declared(llm.firstCallWith(t, built, state))
+			slices.Sort(offered)
+			slices.Sort(expected)
+			if !slices.Equal(offered, expected) {
+				t.Errorf("%s, for %s: the first call declared %v, want exactly %v", name, runner, offered, expected)
 			}
 		}
 	}
@@ -241,6 +256,7 @@ func TestDeliveryToolboxesGiveEachReachItsOwn(t *testing.T) {
 	reaches := deliveryToolboxes(unattended, quiet, &delivering)
 	for reach, want := range map[DeliveryReach][]string{
 		DeliveryReads:  {"apps:reads", "knowledge:reads", "interactions:delivering"},
+		DeliveryApps:   {"apps:reads", "interactions:delivering"},
 		DeliveryQuiet:  {"knowledge:reads", "interactions:delivering"},
 		DeliveryReport: {"interactions:delivering"},
 	} {
@@ -290,7 +306,7 @@ func TestOnlyDeliveriesThinkAtTheLevelSet(t *testing.T) {
 				t.Errorf("with %q set, %s asked for %+v, want %s", thinking, name, config.ThinkingConfig, want)
 			}
 		}
-		for reach, name := range map[DeliveryReach]string{DeliveryReads: "approved work", DeliveryQuiet: "a new request", DeliveryReport: "a report"} {
+		for reach, name := range map[DeliveryReach]string{DeliveryReads: "approved work", DeliveryApps: "approved work on the apps alone", DeliveryQuiet: "approved work on the knowledge alone", DeliveryReport: "a report or a new request"} {
 			thinks("Krude delivering "+name, krude.Delivering(reach), thinking)
 			specialist, err := krude.ManagedDelivering(spec, reach)
 			if err != nil {
@@ -321,6 +337,22 @@ func TestOnlyDeliveriesThinkAtTheLevelSet(t *testing.T) {
 			"the organization agent": organization,
 		} {
 			thinks(name, built, "")
+		}
+	}
+}
+
+// TestADeliveryRunsToolboxesAreNamedForItsLog: the names the waker logs for
+// a run are those of the toolboxes its reach gives it.
+func TestADeliveryRunsToolboxesAreNamedForItsLog(t *testing.T) {
+	krude := assembledKrude(t, &recordingModel{}, "")
+	for reach, want := range map[DeliveryReach][]string{
+		DeliveryReads:  {"apps", "knowledge", "interactions"},
+		DeliveryApps:   {"apps", "interactions"},
+		DeliveryQuiet:  {"knowledge", "interactions"},
+		DeliveryReport: {"interactions"},
+	} {
+		if got := krude.DeliveryToolboxNames(reach); !slices.Equal(got, want) {
+			t.Errorf("reach %d is named %v, want %v", reach, got, want)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/agents"
 	"github.com/Shubham04-oss/oryxa-go/agents/primary/internal/memberauth"
 	"github.com/Shubham04-oss/oryxa-go/internal/cleantext"
+	"github.com/Shubham04-oss/oryxa-go/internal/jev"
 )
 
 var (
@@ -40,6 +42,17 @@ const (
 
 	DecisionApproved = "approved"
 	DecisionRejected = "rejected"
+
+	// AgentApproved and AgentDeclined are a decision an agent made as the
+	// member who asked reads it: fixed words, never the agent's own message.
+	// What an agent writes could carry what it read of its member's (a run
+	// deciding holds whatever it may reach), and no guard reads a decision:
+	// only an answer is held for its member's review. The agent's message
+	// stays in its own thread, with the call that carried it. A member
+	// deciding in their own session writes to the member who asked in their
+	// own words.
+	AgentApproved = "Approved by their agent."
+	AgentDeclined = "Declined by their agent."
 
 	// Who recorded a decision (agents.InteractionDecider.Kind).
 	DecidedByMember = "member"
@@ -104,7 +117,13 @@ type Repository interface {
 	List(context.Context, string, string, Query) ([]agents.Interaction, error)
 	// Decide records a pending request's decision and who made it.
 	Decide(context.Context, string, agents.InteractionDecisionInput, agents.InteractionDecider, time.Time) (agents.Interaction, error)
-	Respond(context.Context, string, agents.InteractionResponseInput, time.Time) (agents.Interaction, error)
+	// Respond records an approved request's answer as the guard left it:
+	// delivered, or held in review.
+	Respond(ctx context.Context, id string, answer Answer, at time.Time) (agents.Interaction, error)
+	// Review records a review of an answer held for its addressed member:
+	// sent as held, sent masked, or withheld, by them, or withheld by Oryxa
+	// with the reason.
+	Review(ctx context.Context, id string, review agents.InteractionReview, at time.Time) (agents.Interaction, error)
 	// Hold keeps a request for its owner's own decision: a pending one is
 	// marked held, and an approved one has its approval withdrawn and is
 	// pending, held, again.
@@ -144,6 +163,19 @@ type Config struct {
 	// watching. Without it, or without their grant, such a request cannot
 	// be read again and is held for them rather than decided by an agent.
 	Tokens memberauth.TokenSource
+	// Jev judges which of its target's toolboxes a request made in a
+	// teamspace that names none needs (judgeTools); (*jev.Client).Ask is it.
+	// Without it, no TYPESAFE_API_KEY, such a request asks for none.
+	Jev func(context.Context, jev.Request) (jev.Result, error)
+	// JevTimeout bounds asking Jev; DefaultJevTimeout when zero.
+	JevTimeout time.Duration
+	// Guard reads every answer another member will read before they read
+	// it: *answerguard.Guard, when AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID names
+	// one. Without it answers are delivered as given.
+	Guard Guard
+	// Logger records what Jev judged and what the guard found, by kind;
+	// discarded when nil.
+	Logger *slog.Logger
 	Now    func() time.Time
 }
 
@@ -152,6 +184,10 @@ type Service struct {
 	directory  agents.Directory
 	teamspaces Teamspaces
 	tokens     memberauth.TokenSource
+	jev        func(context.Context, jev.Request) (jev.Result, error)
+	jevTimeout time.Duration
+	guard      Guard
+	logger     *slog.Logger
 	now        func() time.Time
 }
 
@@ -166,7 +202,18 @@ func New(config Config) (*Service, error) {
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens, now: now}, nil
+	jevTimeout := config.JevTimeout
+	if jevTimeout <= 0 {
+		jevTimeout = DefaultJevTimeout
+	}
+	logger := config.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &Service{
+		repository: config.Repository, directory: config.Directory, teamspaces: config.Teamspaces, tokens: config.Tokens,
+		jev: config.Jev, jevTimeout: jevTimeout, guard: config.Guard, logger: logger, now: now,
+	}, nil
 }
 
 func (service *Service) Create(ctx context.Context, actor agents.InteractionActor, token, idempotencyKey string, input agents.InteractionCreateInput) (agents.Interaction, error) {
@@ -223,6 +270,9 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 	if err != nil {
 		return agents.Interaction{}, err
 	}
+	// Only once the request is known to be one that may be made is Jev
+	// asked what it needs; whatever Jev says, or fails to, it is made.
+	tools, toolsJudgedBy := service.requestedTools(ctx, input)
 	id, err := newID("irq_")
 	if err != nil {
 		return agents.Interaction{}, err
@@ -240,7 +290,7 @@ func (service *Service) Create(ctx context.Context, actor agents.InteractionActo
 			UserEmail: target.OwnerEmail, UserDisplayName: target.OwnerDisplayName,
 		},
 		Purpose: input.Purpose, Task: input.Task, Context: nonNilContext(input.Context),
-		RequestedTools: nonNilStrings(input.RequestedTools), RequestedPermissions: nonNilStrings(input.RequestedPermissions),
+		RequestedTools: nonNilStrings(tools), ToolsJudgedBy: toolsJudgedBy, RequestedPermissions: nonNilStrings(input.RequestedPermissions),
 		Status: StatusPending, Revision: 1, ExpiresAt: now.Add(expires), CreatedAt: now, UpdatedAt: now,
 	}
 	if idempotencyKey == "" {
@@ -265,20 +315,31 @@ func (service *Service) replay(actor agents.InteractionActor, stored agents.Inte
 	if !sameRequest(actor, stored, input) {
 		return agents.Interaction{}, ErrIdempotencyConflict
 	}
-	return service.view(stored), nil
+	return service.viewFor(actor, stored), nil
 }
 
 // sameRequest is whether a stored request is the one input asks for again:
 // the same requester, target, teamspace, purpose, task, context and asks.
 // Both sides are compared as cleaned, which is how the request was stored.
+// The tools compared are the ones its requester named: what Jev judged a
+// request that named none needs is not something the requester sent.
 func sameRequest(actor agents.InteractionActor, stored agents.Interaction, input agents.InteractionCreateInput) bool {
 	return stored.OrganizationID == actor.OrganizationID &&
 		stored.Requester.UserID == actor.UserID && stored.Requester.AgentID == actor.AgentID &&
 		stored.Target.AgentID == input.TargetAgentID && stored.TeamspaceID == input.TeamspaceID &&
 		stored.Purpose == input.Purpose && stored.Task == input.Task &&
 		slices.Equal(stored.Context, input.Context) &&
-		slices.Equal(stored.RequestedTools, input.RequestedTools) &&
+		slices.EqualFunc(namedByRequester(stored), input.RequestedTools, strings.EqualFold) &&
 		slices.Equal(stored.RequestedPermissions, input.RequestedPermissions)
+}
+
+// namedByRequester is the tools a stored request's requester named: none
+// when Jev, or nobody, chose what it asks for.
+func namedByRequester(stored agents.Interaction) []string {
+	if stored.ToolsJudgedBy == ToolsJudgedByJev || stored.ToolsJudgedBy == ToolsJudgedByNone {
+		return nil
+	}
+	return stored.RequestedTools
 }
 
 // HeldForOwner is whether only the addressed agent's member may decide a
@@ -349,7 +410,7 @@ func (service *Service) List(ctx context.Context, actor agents.InteractionActor,
 	if err != nil {
 		return nil, err
 	}
-	return service.views(filterRequests(requests, func(request agents.Interaction) bool {
+	return service.views(actor, filterRequests(requests, func(request agents.Interaction) bool {
 		return listed(actor, query, request)
 	})), nil
 }
@@ -365,7 +426,7 @@ func (service *Service) Get(ctx context.Context, actor agents.InteractionActor, 
 	if request.OrganizationID != actor.OrganizationID || !canRead(actor, request) {
 		return agents.Interaction{}, ErrNotFound
 	}
-	return service.view(request), nil
+	return service.viewFor(actor, request), nil
 }
 
 // Decide records a decision an agent makes, through its interactions tool:
@@ -438,11 +499,15 @@ func (service *Service) decide(ctx context.Context, actor agents.InteractionActo
 			}
 		}
 	}
-	decider := agents.InteractionDecider{Kind: DecidedByAgent, UserID: actor.UserID, AgentID: actor.AgentID}
-	if asOwner {
-		decider = agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}
+	decider := agents.InteractionDecider{Kind: DecidedByMember, UserID: actor.UserID}
+	if !asOwner {
+		decider = agents.InteractionDecider{Kind: DecidedByAgent, UserID: actor.UserID, AgentID: actor.AgentID}
+		input.Message = AgentApproved
+		if input.Decision == DecisionRejected {
+			input.Message = AgentDeclined
+		}
 	}
-	return service.repository.Decide(ctx, request.ID, input, decider, service.now().UTC())
+	return service.viewed(actor)(service.repository.Decide(ctx, request.ID, input, decider, service.now().UTC()))
 }
 
 // DecidedByItsOwner is whether a request's decision is its addressed
@@ -468,22 +533,35 @@ func (service *Service) Respond(ctx context.Context, actor agents.InteractionAct
 	if err := validateResponse(request, input); err != nil {
 		return agents.Interaction{}, err
 	}
-	return service.repository.Respond(ctx, request.ID, input, service.now().UTC())
+	// Another member reads what is recorded here, so the guard reads it
+	// first, outside the ledger's transaction.
+	return service.viewed(actor)(service.repository.Respond(ctx, request.ID, service.answer(ctx, request, input), service.now().UTC()))
 }
 
 func (service *Service) view(request agents.Interaction) agents.Interaction {
-	if (request.Status == StatusPending || request.Status == StatusApproved) && !request.ExpiresAt.After(service.now()) {
+	expired := !request.ExpiresAt.After(service.now())
+	switch {
+	case (request.Status == StatusPending || request.Status == StatusApproved) && expired:
 		request.Status = StatusExpired
+	case request.Status == StatusReview && expired:
+		// An answer can no longer be reviewed once its request has expired,
+		// so it reads as the withholding the next sweep records
+		// (Store.WithholdExpired), whether or not a sweep runs here.
+		request.Status, request.Result, request.Held = StatusWithheld, nil, nil
+		request.Review = &agents.InteractionReview{
+			Action: ReviewWithhold, DecidedBy: agents.InteractionDecider{Kind: DecidedBySystem},
+			DecidedAt: request.ExpiresAt, Reason: ExpiredBeforeReview,
+		}
 	}
 	return request
 }
 
-func (service *Service) views(requests []agents.Interaction) []agents.Interaction {
+func (service *Service) views(actor agents.InteractionActor, requests []agents.Interaction) []agents.Interaction {
 	if requests == nil {
 		return []agents.Interaction{}
 	}
 	for index := range requests {
-		requests[index] = service.view(requests[index])
+		requests[index] = service.viewFor(actor, requests[index])
 	}
 	return requests
 }
@@ -503,7 +581,7 @@ func cleanCreate(input agents.InteractionCreateInput) agents.InteractionCreateIn
 	input.TeamspaceID = strings.TrimSpace(input.TeamspaceID)
 	input.Purpose = cleanText(input.Purpose)
 	input.Task = cleanText(input.Task)
-	input.RequestedTools = cleanList(input.RequestedTools)
+	input.RequestedTools = cleanTools(input.RequestedTools)
 	input.RequestedPermissions = cleanList(input.RequestedPermissions)
 	for index := range input.Context {
 		input.Context[index].Label = cleanLine(input.Context[index].Label)
@@ -545,7 +623,7 @@ func validateCreate(input agents.InteractionCreateInput) error {
 func cleanDecision(input agents.InteractionDecisionInput) agents.InteractionDecisionInput {
 	input.Decision = strings.ToLower(strings.TrimSpace(input.Decision))
 	input.Message = cleanText(input.Message)
-	input.AllowedTools = cleanList(input.AllowedTools)
+	input.AllowedTools = cleanTools(input.AllowedTools)
 	input.GrantedPermissions = cleanList(input.GrantedPermissions)
 	return input
 }
@@ -563,7 +641,9 @@ func validateDecision(request agents.Interaction, input agents.InteractionDecisi
 	if input.Decision == DecisionRejected && (len(input.AllowedTools) > 0 || len(input.GrantedPermissions) > 0) {
 		return fmt.Errorf("%w: a rejected request grants no tools or permissions", ErrInvalid)
 	}
-	if !isSubset(input.AllowedTools, request.RequestedTools) || !isSubset(input.GrantedPermissions, request.RequestedPermissions) {
+	// Nothing is granted that was not asked for: allowed_tools names only
+	// requested tools, and left out it names none.
+	if !isToolSubset(input.AllowedTools, request.RequestedTools) || !isSubset(input.GrantedPermissions, request.RequestedPermissions) {
 		return fmt.Errorf("%w: approved tools and permissions must be requested subsets", ErrInvalid)
 	}
 	return nil
@@ -573,7 +653,7 @@ func cleanResponse(input agents.InteractionResponseInput) agents.InteractionResp
 	input.Status = strings.ToLower(strings.TrimSpace(input.Status))
 	input.Summary = cleanText(input.Summary)
 	input.Content = cleanText(input.Content)
-	input.ToolsUsed = cleanList(input.ToolsUsed)
+	input.ToolsUsed = cleanTools(input.ToolsUsed)
 	input.Artifacts = cleanList(input.Artifacts)
 	return input
 }
@@ -600,7 +680,7 @@ func validateResponse(request agents.Interaction, input agents.InteractionRespon
 	if err := validateList(input.Artifacts, "artifacts"); err != nil {
 		return err
 	}
-	if !isSubset(input.ToolsUsed, request.Decision.AllowedTools) {
+	if !isToolSubset(input.ToolsUsed, request.Decision.AllowedTools) {
 		return fmt.Errorf("%w: tools_used must be within allowed_tools", ErrInvalid)
 	}
 	return nil
@@ -624,6 +704,18 @@ func validateList(values []string, name string) error {
 func isSubset(values, allowed []string) bool {
 	for _, value := range values {
 		if !slices.Contains(allowed, value) {
+			return false
+		}
+	}
+	return true
+}
+
+// isToolSubset is isSubset for tool names, which are one name in any case:
+// a list keeps one of each, whatever its case (cleanList), and a request
+// stored before the tool vocabulary was spelled one way may hold "Apps".
+func isToolSubset(values, allowed []string) bool {
+	for _, value := range values {
+		if !slices.ContainsFunc(allowed, func(candidate string) bool { return strings.EqualFold(candidate, value) }) {
 			return false
 		}
 	}
@@ -712,6 +804,17 @@ func cleanList(values []string) []string {
 		result = append(result, value)
 	}
 	return result
+}
+
+// cleanTools is cleanList for tool names, with the toolboxes a request may
+// ask for spelled as the vocabulary spells them (agents.RequestTool), so an
+// approval of "Apps" grants the apps toolbox as one of "apps" would.
+func cleanTools(values []string) []string {
+	cleaned := cleanList(values)
+	for index, value := range cleaned {
+		cleaned[index] = agents.RequestTool(value)
+	}
+	return cleaned
 }
 
 func cleanLine(value string) string { return strings.Join(strings.Fields(value), " ") }

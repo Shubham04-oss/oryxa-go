@@ -1,10 +1,13 @@
 // A stand-in for the Go API a side conversation works with
 // (src/side-conversation-agent.ts): a member's threads and their runs, agent
-// requests in a teamspace and their decisions, and the teamspace itself. It
-// answers as the member whose cookie a request carries, keeps what it is
-// asked, and records every call. Use its `fetch` as the global one.
+// requests in a teamspace, their decisions and their owners' reviews of
+// answers the answer guard held, and the teamspace itself. It answers as the
+// member whose cookie a request carries, showing each what Go shows them,
+// keeps what it is asked, and records every call. Use its `fetch` as the
+// global one.
 import { vi } from "vitest"
 import type { Item } from "@/lib/threads/client"
+import { HELD_ANSWER_FIELDS } from "@/lib/side/asking"
 import type { SideRoster } from "@/lib/side/protocol"
 
 export const goOrigin = "http://go.test"
@@ -125,7 +128,9 @@ export type GoInteraction = {
   purpose: string
   task: string
   context: Array<{ label: string; value: string }>
-  requested_tools: string[]
+  /** Absent in a test of a Go that knows nothing of tools. */
+  requested_tools?: string[]
+  tools_judged_by?: string
   requested_permissions: string[]
   status: string
   decision?: {
@@ -134,20 +139,34 @@ export type GoInteraction = {
     allowed_tools: string[]
     granted_permissions: string[]
     decided_at: string
+    decided_by?: { kind: string; user_id?: string; agent_id?: string }
   }
-  result?: {
-    status: string
-    summary: string
-    content: string
-    tools_used: string[]
-    artifacts: string[]
-    completed_at: string
+  result?: GoResult
+  guard?: { state: string; kinds: string[] }
+  review?: {
+    action: string
+    decided_by: { kind: string; user_id?: string }
+    decided_at: string
+    reason?: string
   }
   revision: number
   expires_at: string
   created_at: string
   updated_at: string
 }
+
+/** An answer, as Go keeps a result. */
+export type GoResult = {
+  status: string
+  summary: string
+  content: string
+  tools_used: string[]
+  artifacts: string[]
+  completed_at: string
+}
+
+/** An answer held for its owner's review, as Go shows it to them (`held`). */
+export type GoHeld = { result: GoResult; masked_result?: GoResult }
 
 /** One call Go was sent. */
 export type GoCall = {
@@ -216,6 +235,12 @@ export class FakeGo {
   /** Answers the next call to this `METHOD path` instead, once. */
   readonly overrides = new Map<string, Response>()
   teamspace: Record<string, unknown> = teamspaceAnswer()
+  /** What a new request asks to use when its requester names nothing, as Jev would judge it. */
+  requestedTools: string[] = []
+  /** The answers held for review, by request: Go shows them to the target's owner alone. */
+  readonly held = new Map<string, GoHeld>()
+  /** Requests that no longer stand in their teamspace, by id, and why (Go's lapsed words). */
+  readonly lapsed = new Map<string, string>()
   private threads = 0
   private ids = 0
   now = () => new Date().toISOString()
@@ -313,6 +338,97 @@ export class FakeGo {
     return next
   }
 
+  /**
+   * The target's agent answers an approved request (a failure, when
+   * `status` says so), and the answer guard holds it for the owner's
+   * review, as it was and fully masked: a masked version only when it could
+   * check it, and the kinds it holds it for.
+   */
+  hold(
+    id: string,
+    held: {
+      stored: string
+      masked?: string
+      kinds: string[]
+      status?: "completed" | "failed"
+    }
+  ): GoInteraction {
+    const result = (summary: string): GoResult => ({
+      status: held.status ?? "completed",
+      summary,
+      content: "",
+      tools_used: [],
+      artifacts: [],
+      completed_at: this.now(),
+    })
+    this.held.set(id, {
+      result: result(held.stored),
+      ...(held.masked !== undefined
+        ? { masked_result: result(held.masked) }
+        : {}),
+    })
+    return this.change(id, {
+      status: "review",
+      guard: { state: "held", kinds: held.kinds },
+    })
+  }
+
+  private pastExpiry(request: GoInteraction): boolean {
+    return Date.parse(request.expires_at) <= Date.parse(this.now())
+  }
+
+  /** Oryxa withholds an answer whose request expired while it waited in review (its sweep, at the time it runs). */
+  withholdExpired(id: string): GoInteraction {
+    this.held.delete(id)
+    return this.change(id, {
+      status: "withheld",
+      review: {
+        action: "withhold",
+        decided_by: { kind: "system" },
+        decided_at: this.now(),
+        reason: "expired before review",
+      },
+    })
+  }
+
+  /**
+   * A request as `caller` reads it (Go's `viewFor`): its owner's side reads
+   * it all, an answer held for them included while it is in review; the
+   * requester never reads what is held, and reads what the guard found only
+   * beside a result, which they do not read in review or once withheld. An
+   * answer still in review past its request's expiry reads as Oryxa's
+   * withholding, at the expiry, as the next sweep records it (Go's `view`).
+   */
+  view(stored: GoInteraction, caller: Person): Record<string, unknown> {
+    const request: GoInteraction =
+      stored.status === "review" && this.pastExpiry(stored)
+        ? {
+            ...stored,
+            status: "withheld",
+            review: {
+              action: "withhold",
+              decided_by: { kind: "system" },
+              decided_at: stored.expires_at,
+              reason: "expired before review",
+            },
+          }
+        : stored
+    if (request.target.user_id === caller.userId) {
+      const held = this.held.get(request.id)
+      return request.status === "review" && held
+        ? { ...request, [HELD_ANSWER_FIELDS.object]: held }
+        : request
+    }
+    const { result, guard, ...shown } = request
+    return request.status === "review" || request.status === "withheld"
+      ? shown
+      : {
+          ...shown,
+          ...(result ? { result } : {}),
+          ...(guard ? { guard } : {}),
+        }
+  }
+
   /** The target's agent answers an approved request. */
   complete(id: string, summary: string, content = ""): GoInteraction {
     return this.change(id, {
@@ -372,11 +488,12 @@ export class FakeGo {
         })
         .reverse()
         .slice(0, limit)
+        .map((request) => this.view(request, caller))
       return json({ requests: listed })
     }
-    const one = new RegExp(`^${base}/agent-requests/([^/]+)(/decision)?$`).exec(
-      path
-    )
+    const one = new RegExp(
+      `^${base}/agent-requests/([^/]+)(/decision|/review)?$`
+    ).exec(path)
     if (one) {
       const request = this.requests.get(one[1])
       const parties = request
@@ -385,11 +502,12 @@ export class FakeGo {
       if (!request || !parties.includes(caller.userId)) {
         return goError(404, "not_found", "agent request not found")
       }
-      if (method === "GET" && !one[2]) return json(request)
+      if (method === "GET" && !one[2]) return json(this.view(request, caller))
       if (method === "POST" && one[2]) {
         if (request.target.user_id !== caller.userId) {
           return goError(403, "forbidden", "agent request is not available")
         }
+        if (one[2] === "/review") return this.review(request, caller, body)
         if (request.status !== "pending") {
           return goError(
             409,
@@ -397,22 +515,129 @@ export class FakeGo {
             "agent request cannot make that transition"
           )
         }
-        const decision = body as { decision: string; message: string }
+        const decision = body as {
+          decision: string
+          message: string
+          allowed_tools?: string[]
+        }
+        const allowed = decision.allowed_tools ?? []
+        if (
+          (decision.decision === "rejected" && allowed.length > 0) ||
+          allowed.some(
+            (tool) => !(request.requested_tools ?? []).includes(tool)
+          )
+        ) {
+          return goError(
+            400,
+            "invalid_request",
+            "approved tools and permissions must be requested subsets"
+          )
+        }
         return json(
-          this.change(request.id, {
-            status: decision.decision,
-            decision: {
-              decision: decision.decision,
-              message: decision.message,
-              allowed_tools: [],
-              granted_permissions: [],
-              decided_at: this.now(),
-            },
-          })
+          this.view(
+            this.change(request.id, {
+              status: decision.decision,
+              decision: {
+                decision: decision.decision,
+                message: decision.message,
+                allowed_tools: allowed,
+                granted_permissions: [],
+                decided_at: this.now(),
+                decided_by: { kind: "member", user_id: caller.userId },
+              },
+            }),
+            caller
+          )
         )
       }
     }
     return goError(404, "not_found", `nothing at ${method} ${path}`)
+  }
+
+  /**
+   * The owner's review of an answer held for them (Go's `ReviewAsOwner`, in
+   * its order of checks): shared as it was held, fully masked, or not at
+   * all. Shared, the answer completes the request, or fails it when it was
+   * a failure.
+   */
+  private review(
+    request: GoInteraction,
+    caller: Person,
+    body: unknown
+  ): Response {
+    const action = (body as { action?: unknown }).action
+    if (
+      action !== "send" &&
+      action !== "send_masked" &&
+      action !== "withhold"
+    ) {
+      return goError(
+        400,
+        "invalid_request",
+        "invalid request: action must be send, send_masked or withhold"
+      )
+    }
+    // Past its expiry first: it reads as withheld already.
+    if (this.pastExpiry(request)) {
+      return goError(409, "request_expired", "agent request expired")
+    }
+    if (request.status !== "review") {
+      return goError(
+        409,
+        "invalid_state",
+        "only an answer held for review is reviewed"
+      )
+    }
+    const held = this.held.get(request.id)
+    const delivered =
+      action === "send"
+        ? held?.result
+        : action === "send_masked"
+          ? held?.masked_result
+          : undefined
+    if (action !== "withhold" && !delivered) {
+      return goError(
+        409,
+        "invalid_state",
+        "this answer could not be checked, so it has no masked version to send"
+      )
+    }
+    // Sent, the request must still stand in its teamspace: one that no
+    // longer does has its answer withheld by Oryxa, saying why.
+    const lapsed = this.lapsed.get(request.id)
+    if (action !== "withhold" && lapsed) {
+      this.held.delete(request.id)
+      this.change(request.id, {
+        status: "withheld",
+        review: {
+          action: "withhold",
+          decided_by: { kind: "system" },
+          decided_at: this.now(),
+          reason: `Oryxa withheld this answer because ${lapsed}.`,
+        },
+      })
+      return goError(
+        409,
+        "request_closed",
+        `${lapsed}, so Oryxa withheld the answer`
+      )
+    }
+    this.held.delete(request.id)
+    const review = {
+      action,
+      decided_by: { kind: "member", user_id: caller.userId },
+      decided_at: this.now(),
+    }
+    return json(
+      this.view(
+        this.change(request.id, {
+          status: delivered?.status ?? "withheld",
+          review,
+          ...(delivered ? { result: delivered } : {}),
+        }),
+        caller
+      )
+    )
   }
 
   private create(caller: Person, body: Record<string, unknown>): Response {
@@ -439,11 +664,14 @@ export class FakeGo {
         }
     const approval =
       specialist?.delegationMode === "automatic" ? "agent" : "owner"
+    const named = body.requested_tools as string[] | undefined
     const request = this.file(caller, to, {
       approval,
       purpose: String(body.purpose),
       task: String(body.task),
       context: (body.context as GoInteraction["context"] | undefined) ?? [],
+      requested_tools: named ?? [...this.requestedTools],
+      tools_judged_by: named ? "requester" : "jev",
     })
     return json(request, 201)
   }

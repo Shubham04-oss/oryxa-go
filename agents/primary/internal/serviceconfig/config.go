@@ -67,6 +67,13 @@ type Config struct {
 	GuardrailIdentifier string
 	GuardrailVersion    string
 	GuardrailFailClosed bool
+	// AnswerGuardrailIdentifier and AnswerGuardrailVersion name the Bedrock
+	// guardrail the answer guard checks every answer another member will
+	// read with (internal/answerguard), before they read it. Both or
+	// neither: without them no answer is checked, and one without the other
+	// refuses to start.
+	AnswerGuardrailIdentifier string
+	AnswerGuardrailVersion    string
 	// ModelPrices overrides the price table used for run costs, as JSON of
 	// per-million USD rates by model.
 	ModelPrices string
@@ -196,6 +203,13 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			return Config{}, errors.New("AGENTS_PRIMARY_GUARDRAIL_VERSION must be a numbered snapshot, not DRAFT")
 		}
 	}
+	// Half an answer guard would look like one while checking nothing, so
+	// it is both or neither.
+	answerGuardrailIdentifier := strings.TrimSpace(getenv("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID"))
+	answerGuardrailVersion := strings.TrimSpace(getenv("AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION"))
+	if (answerGuardrailIdentifier == "") != (answerGuardrailVersion == "") {
+		return Config{}, errors.New("AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID and AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION are set together or not at all: one without the other would check no answer")
+	}
 	runTimeout, err := secondsValue(getenv, "AGENTS_PRIMARY_RUN_TIMEOUT_SECONDS", 10*time.Minute, time.Minute, time.Hour)
 	if err != nil {
 		return Config{}, err
@@ -265,42 +279,44 @@ func FromEnv(getenv func(string) string) (Config, error) {
 			getenv, "AGENTS_PRIMARY_BROWSER_ID",
 			"aws.browser.v1",
 		),
-		BrowserSessionTimeout:    browserTimeout,
-		EventBusName:             valueOrDefault(getenv, "EVENT_BUS_NAME", "default"),
-		EventBridgeEndpoint:      strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")),
-		GuardrailIdentifier:      guardrailIdentifier,
-		GuardrailVersion:         guardrailVersion,
-		GuardrailFailClosed:      guardrailFailClosed,
-		ModelPrices:              modelPrices,
-		AppsURL:                  strings.TrimSpace(getenv("APPS_URL")),
-		RagURL:                   strings.TrimSpace(getenv("RAG_URL")),
-		KnowledgeURL:             strings.TrimRight(strings.TrimSpace(getenv("KNOWLEDGE_URL")), "/"),
-		TeamsURL:                 strings.TrimRight(strings.TrimSpace(getenv("TEAMS_URL")), "/"),
-		KnowledgeMinRelevance:    knowledgeMinRelevance,
-		MemoryAgentEngine:        strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
-		MemoryRecalled:           memoryRecalled,
-		MemoryLocation:           valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
-		ArtifactBucket:           strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
-		S3Endpoint:               artifactEndpoint(getenv),
-		TypeSafeAPIKey:           strings.TrimSpace(getenv("TYPESAFE_API_KEY")),
-		TypeSafeBaseURL:          strings.TrimSpace(getenv("TYPESAFE_BASE_URL")),
-		AuthURL:                  strings.TrimSpace(getenv("AUTH_URL")),
-		ServiceKeyID:             strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
-		AllowedOrigins:           allowedOrigins,
-		RunTimeout:               runTimeout,
-		DatabaseMaxConns:         databaseMaxConns,
-		EventsQueueURL:           strings.TrimSpace(getenv("AGENTS_EVENTS_QUEUE_URL")),
-		SQSEndpoint:              sqsEndpoint(getenv),
-		WorkflowQueueURL:         strings.TrimSpace(getenv("AGENTS_WORKFLOW_QUEUE_URL")),
-		WorkflowStateMachineARN:  strings.TrimSpace(getenv("AGENTS_WORKFLOW_STATE_MACHINE_ARN")),
-		WorkflowSchedulerRoleARN: strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULER_ROLE_ARN")),
-		WorkflowScheduleDLQARN:   strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULE_DLQ_ARN")),
-		WorkflowSchedulerGroup:   valueOrDefault(getenv, "AGENTS_WORKFLOW_SCHEDULER_GROUP", "default"),
-		StepFunctionsEndpoint:    serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SFN"),
-		SchedulerEndpoint:        serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SCHEDULER"),
-		WorkflowLocal:            workflowLocal,
-		WakeupBatchSize:          wakeupBatchSize,
-		WakeupMaxWait:            wakeupMaxWait,
+		BrowserSessionTimeout:     browserTimeout,
+		EventBusName:              valueOrDefault(getenv, "EVENT_BUS_NAME", "default"),
+		EventBridgeEndpoint:       strings.TrimSpace(getenv("EVENTBRIDGE_ENDPOINT")),
+		GuardrailIdentifier:       guardrailIdentifier,
+		GuardrailVersion:          guardrailVersion,
+		GuardrailFailClosed:       guardrailFailClosed,
+		AnswerGuardrailIdentifier: answerGuardrailIdentifier,
+		AnswerGuardrailVersion:    answerGuardrailVersion,
+		ModelPrices:               modelPrices,
+		AppsURL:                   strings.TrimSpace(getenv("APPS_URL")),
+		RagURL:                    strings.TrimSpace(getenv("RAG_URL")),
+		KnowledgeURL:              strings.TrimRight(strings.TrimSpace(getenv("KNOWLEDGE_URL")), "/"),
+		TeamsURL:                  strings.TrimRight(strings.TrimSpace(getenv("TEAMS_URL")), "/"),
+		KnowledgeMinRelevance:     knowledgeMinRelevance,
+		MemoryAgentEngine:         strings.TrimSpace(getenv("AGENTS_PRIMARY_MEMORY_AGENT_ENGINE")),
+		MemoryRecalled:            memoryRecalled,
+		MemoryLocation:            valueOrDefault(getenv, "AGENTS_PRIMARY_MEMORY_LOCATION", googleCloudLocation),
+		ArtifactBucket:            strings.TrimSpace(getenv("AGENTS_PRIMARY_ARTIFACT_BUCKET")),
+		S3Endpoint:                artifactEndpoint(getenv),
+		TypeSafeAPIKey:            strings.TrimSpace(getenv("TYPESAFE_API_KEY")),
+		TypeSafeBaseURL:           strings.TrimSpace(getenv("TYPESAFE_BASE_URL")),
+		AuthURL:                   strings.TrimSpace(getenv("AUTH_URL")),
+		ServiceKeyID:              strings.TrimSpace(getenv("AGENTS_PRIMARY_SERVICE_KEY_ID")),
+		AllowedOrigins:            allowedOrigins,
+		RunTimeout:                runTimeout,
+		DatabaseMaxConns:          databaseMaxConns,
+		EventsQueueURL:            strings.TrimSpace(getenv("AGENTS_EVENTS_QUEUE_URL")),
+		SQSEndpoint:               sqsEndpoint(getenv),
+		WorkflowQueueURL:          strings.TrimSpace(getenv("AGENTS_WORKFLOW_QUEUE_URL")),
+		WorkflowStateMachineARN:   strings.TrimSpace(getenv("AGENTS_WORKFLOW_STATE_MACHINE_ARN")),
+		WorkflowSchedulerRoleARN:  strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULER_ROLE_ARN")),
+		WorkflowScheduleDLQARN:    strings.TrimSpace(getenv("AGENTS_WORKFLOW_SCHEDULE_DLQ_ARN")),
+		WorkflowSchedulerGroup:    valueOrDefault(getenv, "AGENTS_WORKFLOW_SCHEDULER_GROUP", "default"),
+		StepFunctionsEndpoint:     serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SFN"),
+		SchedulerEndpoint:         serviceEndpoint(getenv, "AWS_ENDPOINT_URL_SCHEDULER"),
+		WorkflowLocal:             workflowLocal,
+		WakeupBatchSize:           wakeupBatchSize,
+		WakeupMaxWait:             wakeupMaxWait,
 	}, nil
 }
 

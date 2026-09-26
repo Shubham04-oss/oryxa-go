@@ -130,6 +130,10 @@ locals {
       AGENTS_PRIMARY_ARTIFACT_BUCKET     = local.artifacts_bucket
       AGENTS_PRIMARY_MEMORY_AGENT_ENGINE = var.memory_agent_engine
       AGENTS_PRIMARY_MEMORY_LOCATION     = var.gcp_region
+      # Every answer one member's agent gives another is read by this
+      # guardrail before they read it (answer_guard.tf).
+      AGENTS_PRIMARY_ANSWER_GUARDRAIL_ID      = aws_bedrock_guardrail.agent_answers.guardrail_id
+      AGENTS_PRIMARY_ANSWER_GUARDRAIL_VERSION = aws_bedrock_guardrail_version.agent_answers.version
 
       AGENTS_WORKFLOW_QUEUE_URL          = aws_sqs_queue.agent_workflows.url
       AGENTS_WORKFLOW_STATE_MACHINE_ARN  = aws_sfn_state_machine.agent_workflows.arn
@@ -284,6 +288,13 @@ resource "aws_iam_role_policy" "task" {
         Effect   = "Allow"
         Action   = ["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"]
         Resource = ["arn:aws:bedrock:${var.aws_region}::foundation-model/*"]
+      },
+      {
+        # The answer guard reads answers with its own guardrail, and no other.
+        Sid      = "AnswerGuard"
+        Effect   = "Allow"
+        Action   = "bedrock:ApplyGuardrail"
+        Resource = aws_bedrock_guardrail.agent_answers.guardrail_arn
       },
       {
         # Krude's sandbox and browser are AWS's built-in AgentCore tools.

@@ -36,7 +36,7 @@ import {
   roster,
   teamspaceId,
 } from "./test/fake-go-side"
-import type { Person } from "./test/fake-go-side"
+import type { GoInteraction, Person } from "./test/fake-go-side"
 
 vi.mock(
   "agents",
@@ -1135,6 +1135,860 @@ describe("SideConversationAgent: asking the teammate's agent", () => {
     await runDueJobs(side)
     expect(reads()).toBe(before + 1)
     expect(polls()).toEqual([])
+  })
+})
+
+describe("SideConversationAgent: the answer guard", () => {
+  const stored = "Reach Ada at ada@sim.oryxa or 555-0100."
+  const masked = "Reach Ada at {EMAIL} or {PHONE}."
+
+  /** The requests Go was sent a decision or a review for, by id, with what each carried. */
+  function sentTo(what: "decision" | "review") {
+    return go.calls
+      .filter((call) => call.method === "POST" && call.path.endsWith(what))
+      .map((call) => ({
+        requestId: call.path.split("/").at(-2),
+        cookie: call.cookie,
+        origin: call.origin,
+        body: call.body,
+      }))
+  }
+
+  /** Ada asks Nia, Bo approves, and the answer guard holds Nia's answer for Bo: its id, once a read found it. */
+  async function heldForBo(
+    side: Side,
+    adaTab: FakeSocket,
+    boTab: FakeSocket,
+    task = "Find Ada's contact details"
+  ): Promise<string> {
+    await askTeammate(side, adaTab, bo.agentId, task)
+    const requestId = String(lastItem(adaTab, "request-card")?.requestId)
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId,
+      decision: "approved",
+    })
+    go.hold(requestId, { stored, masked, kinds: ["EMAIL", "PHONE"] })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    return requestId
+  }
+
+  function polls(side: Side) {
+    return side.jobs.filter((job) => job.callback === "pollRequests")
+  }
+
+  it("approves with the tools a request asked for, or none, and declines with none", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    // Go (Jev) judged the requests need Bo's apps and the team's knowledge.
+    go.requestedTools = ["apps", "knowledge"]
+    for (const task of ["One", "Two", "Three", "Four"]) {
+      await askTeammate(side, adaTab, bo.agentId, task)
+    }
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "request-card")?.requestedTools).toEqual([
+        "apps",
+        "knowledge",
+      ])
+    }
+
+    // A tool the request did not ask for is refused before Go is asked.
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+      allowedTools: ["apps", "files"],
+    })
+    expect(boTab.last("side-refused")).toEqual({
+      type: "side-refused",
+      target: "irq_1",
+      code: "not_allowed",
+      message: "Only the tools the request asked for can be allowed.",
+    })
+    expect(sentTo("decision")).toEqual([])
+
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+      allowedTools: ["apps", "knowledge"],
+    })
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_2",
+      decision: "approved",
+      allowedTools: [],
+    })
+    // A page that names no tools grants none.
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_3",
+      decision: "approved",
+    })
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_4",
+      decision: "rejected",
+      allowedTools: ["apps"],
+    })
+    const approved = "Approved in the side conversation."
+    expect(sentTo("decision")).toEqual([
+      {
+        requestId: "irq_1",
+        cookie: bo.cookie,
+        origin: pageOrigin,
+        body: {
+          decision: "approved",
+          message: approved,
+          allowed_tools: ["apps", "knowledge"],
+        },
+      },
+      {
+        requestId: "irq_2",
+        cookie: bo.cookie,
+        origin: pageOrigin,
+        body: { decision: "approved", message: approved, allowed_tools: [] },
+      },
+      {
+        requestId: "irq_3",
+        cookie: bo.cookie,
+        origin: pageOrigin,
+        body: { decision: "approved", message: approved, allowed_tools: [] },
+      },
+      {
+        requestId: "irq_4",
+        cookie: bo.cookie,
+        origin: pageOrigin,
+        body: {
+          decision: "rejected",
+          message: "Declined in the side conversation.",
+        },
+      },
+    ])
+    expect(go.requests.get("irq_1")?.decision?.allowed_tools).toEqual([
+      "apps",
+      "knowledge",
+    ])
+  })
+
+  it("holds an answer for its owner: read as them, shown to them alone, never stored, and read until it is reviewed", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const requestId = await heldForBo(side, adaTab, boTab)
+
+    // Ada's socket reads Go, which shows her no answer: the object reads
+    // the request again as Bo, whose it is.
+    const asBo = () =>
+      go
+        .callsTo(`${base}/agent-requests/${requestId}`, "GET")
+        .filter((call) => call.cookie === bo.cookie)
+    expect(asBo()).toHaveLength(1)
+    expect(lastItem(boTab, "request-card")).toMatchObject({
+      status: "review",
+      guard: { state: "held", kinds: ["EMAIL", "PHONE"] },
+      heldAnswer: { stored, masked },
+    })
+    expect(lastItem(adaTab, "request-card")?.status).toBe("review")
+    // Ada is sent nothing of it: neither text, nor what the guard found.
+    const toAda = JSON.stringify(adaTab.sent)
+    for (const secret of [stored, masked, "heldAnswer", "guard", "EMAIL"]) {
+      expect(toAda).not.toContain(secret)
+    }
+    // Nothing of it is stored, or told to an inbox.
+    expect(JSON.stringify(side.sql`SELECT * FROM side_items`)).not.toContain(
+      "555-0100"
+    )
+    expect(JSON.stringify(await inboxOf(world, ada))).not.toContain("555-0100")
+    expect(itemsOf(adaTab).some((item) => item.kind === "agent-message")).toBe(
+      false
+    )
+
+    // It waits on Bo: still read every few seconds, but not again as Bo,
+    // and a read as Ada, which shows no guard, leaves Bo's card as it was.
+    expect(polls(side)).toHaveLength(1)
+    go.change(requestId, {})
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(polls(side)).toHaveLength(1)
+    expect(asBo()).toHaveLength(1)
+    expect(lastItem(boTab, "request-card")).toMatchObject({
+      guard: { state: "held", kinds: ["EMAIL", "PHONE"] },
+      heldAnswer: { stored, masked },
+    })
+
+    // An agent asked here reads that it waits, and nothing of the answer.
+    go.runAnswers.push(answer("Leo", "Bo is reviewing it."))
+    await askMine(side, adaTab, "Where is Nia's answer?")
+    const [run] = go.calls.filter((call) => call.path.endsWith("/runs"))
+    const prompt = (run.body as { message: string }).message
+    expect(prompt).toContain(
+      "asked Nia (Bo's agent), which is waiting for its owner to review the answer: Find Ada's contact details"
+    )
+    expect(prompt).not.toContain("555-0100")
+  })
+
+  it("sends the owner's review to Go as them, and the answer lands as it stands, masked, or not at all", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const one = await heldForBo(side, adaTab, boTab, "One")
+    const two = await heldForBo(side, adaTab, boTab, "Two")
+    const three = await heldForBo(side, adaTab, boTab, "Three")
+
+    // Only its owner reviews it.
+    await say(side, adaTab, {
+      type: "side-review",
+      requestId: one,
+      action: "send",
+    })
+    expect(adaTab.last("side-refused")).toEqual({
+      type: "side-refused",
+      target: one,
+      code: "not_allowed",
+      message: "Only the person whose agent answered can review its answer.",
+    })
+    expect(sentTo("review")).toEqual([])
+
+    for (const [requestId, action] of [
+      [one, "send"],
+      [two, "send_masked"],
+      [three, "withhold"],
+    ]) {
+      await say(side, boTab, { type: "side-review", requestId, action })
+    }
+    expect(sentTo("review")).toEqual([
+      {
+        requestId: one,
+        cookie: bo.cookie,
+        origin: pageOrigin,
+        body: { action: "send" },
+      },
+      {
+        requestId: two,
+        cookie: bo.cookie,
+        origin: pageOrigin,
+        body: { action: "send_masked" },
+      },
+      {
+        requestId: three,
+        cookie: bo.cookie,
+        origin: pageOrigin,
+        body: { action: "withhold" },
+      },
+    ])
+    const reviewedBy = {
+      onBehalfOf: bo.userId,
+      approvedBy: bo.userId,
+      reviewedBy: bo.userId,
+    }
+    for (const socket of [adaTab, boTab]) {
+      const items = itemsOf(socket)
+      expect(
+        items
+          .filter((item) => item.kind === "request-card")
+          .map((item) => [item.requestId, item.status, item.review])
+      ).toEqual([
+        [
+          one,
+          "completed",
+          { action: "send", decidedAt: expect.any(String), by: "owner" },
+        ],
+        [
+          two,
+          "completed",
+          { action: "send_masked", decidedAt: expect.any(String), by: "owner" },
+        ],
+        [
+          three,
+          "withheld",
+          { action: "withhold", decidedAt: expect.any(String), by: "owner" },
+        ],
+      ])
+      expect(
+        items
+          .filter((item) => item.kind === "agent-message")
+          .map((item) => [item.body, item.via])
+      ).toEqual([
+        [stored, { requestId: one, ...reviewedBy }],
+        [masked, { requestId: two, ...reviewedBy }],
+      ])
+      expect(
+        items
+          .filter((item) => item.kind === "status")
+          .map((item) => [item.outcome, item.text])
+      ).toEqual([["withheld", "Bo chose not to share Nia's answer."]])
+    }
+    // Reviewed: Bo's cards hold no answer any more, and the read already
+    // set is the last.
+    expect(
+      itemsOf(boTab).filter(
+        (item) => item.kind === "request-card" && "heldAnswer" in item
+      )
+    ).toEqual([])
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(polls(side)).toEqual([])
+
+    // A review of an answer reviewed already is refused, and shows it.
+    await say(side, boTab, {
+      type: "side-review",
+      requestId: one,
+      action: "withhold",
+    })
+    expect(boTab.last("side-refused")).toMatchObject({
+      target: one,
+      code: "already_decided",
+      message: "This answer was reviewed already, or expired.",
+    })
+    expect(sentTo("review")).toHaveLength(3)
+  })
+
+  it("says an answer that expired before its review was not shared, and stops reading Go", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const expired = await heldForBo(side, adaTab, boTab, "One")
+
+    // Go's sweep withholds it, as nobody reviewed it in time, and records
+    // that Oryxa did.
+    go.withholdExpired(expired)
+    expect(go.requests.get(expired)?.review).toEqual({
+      action: "withhold",
+      decided_by: { kind: "system" },
+      decided_at: expect.any(String),
+      reason: "expired before review",
+    })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(lastItem(adaTab, "status")).toMatchObject({
+      requestId: expired,
+      outcome: "withheld",
+      text: "Nia's answer expired before Bo reviewed it.",
+    })
+    expect(
+      itemsOf(adaTab).find(
+        (item) => item.kind === "request-card" && item.requestId === expired
+      )?.review
+    ).toEqual({
+      action: "withhold",
+      decidedAt: expect.any(String),
+      by: "system",
+      reason: "expired before review",
+    })
+    expect(polls(side)).toEqual([])
+
+    // Bo reviews one Go withheld before the object read it: Go refuses, and
+    // the card shows how it stands.
+    const three = await heldForBo(side, adaTab, boTab, "Three")
+    go.withholdExpired(three)
+    await say(side, boTab, {
+      type: "side-review",
+      requestId: three,
+      action: "send",
+    })
+    expect(boTab.last("side-refused")).toMatchObject({
+      target: three,
+      code: "already_decided",
+    })
+    expect(
+      itemsOf(boTab).find(
+        (item) => item.kind === "request-card" && item.requestId === three
+      )?.status
+    ).toBe("withheld")
+  })
+
+  it("reads a held answer again as its owner after a restart, and not on every poll while Go shows none", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const requestId = await heldForBo(side, adaTab, boTab)
+    const asBo = () =>
+      go
+        .callsTo(`${base}/agent-requests/${requestId}`, "GET")
+        .filter((call) => call.cookie === bo.cookie).length
+
+    // A restart forgets it: the next read reads it again as Bo, for Bo alone.
+    const restarted = await world.restart<Side>("SideConversationAgent", name)
+    adaTab.clear()
+    boTab.clear()
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(restarted)
+    expect(asBo()).toBe(2)
+    expect(lastItem(boTab, "request-card")).toMatchObject({
+      heldAnswer: { stored, masked },
+    })
+    expect(adaTab.of("side-item")).toEqual([])
+
+    // A Go that shows Bo no answer is asked again once a catch-up has
+    // passed, not on every read.
+    await askTeammate(restarted, adaTab, bo.agentId, "Two")
+    const other = String(lastItem(adaTab, "request-card")?.requestId)
+    await say(restarted, boTab, {
+      type: "side-decide",
+      requestId: other,
+      decision: "approved",
+    })
+    go.change(other, {
+      status: "review",
+      guard: { state: "held", kinds: ["ADDRESS"] },
+    })
+    const otherAsBo = () =>
+      go
+        .callsTo(`${base}/agent-requests/${other}`, "GET")
+        .filter((call) => call.cookie === bo.cookie).length
+    for (let poll = 0; poll < 4; poll += 1) {
+      vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+      await runDueJobs(restarted)
+    }
+    expect(otherAsBo()).toBe(1)
+    expect(lastItem(boTab, "request-card")).toMatchObject({
+      requestId: other,
+      status: "review",
+    })
+    expect(lastItem(boTab, "request-card")).not.toHaveProperty("heldAnswer")
+    vi.advanceTimersByTime(sideTiming.catchUpMs)
+    await runDueJobs(restarted)
+    expect(otherAsBo()).toBe(2)
+  })
+
+  it("leaves an answer its owner reviewed elsewhere as they open the conversation, and tells the inboxes", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Find Ada's contact details")
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    // Bo leaves; Nia's answer is held for him, and Ada's read finds it.
+    await closeSocket(side, boTab)
+    go.hold("irq_1", { stored, masked, kinds: ["EMAIL"] })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(lastItem(adaTab, "request-card")?.status).toBe("review")
+
+    // Bo sends it masked from elsewhere, and opens the conversation before
+    // the next read: reading his held answer finds it sent.
+    go.held.delete("irq_1")
+    go.change("irq_1", {
+      status: "completed",
+      review: {
+        action: "send_masked",
+        decided_by: { kind: "member", user_id: bo.userId },
+        decided_at: new Date().toISOString(),
+      },
+      result: {
+        status: "completed",
+        summary: masked,
+        content: "",
+        tools_used: [],
+        artifacts: [],
+        completed_at: new Date().toISOString(),
+      },
+    })
+    vi.advanceTimersByTime(1_000)
+    const again = await join(side, bo)
+    expect(lastItem(again, "agent-message")).toMatchObject({
+      body: masked,
+      via: { reviewedBy: bo.userId },
+    })
+    const [boInbox] = await inboxOf(world, bo)
+    expect(boInbox.lastMessage).toMatchObject({
+      authorId: bo.agentId,
+      body: `Nia: ${masked}`,
+    })
+  })
+
+  it("has no masked version of an answer the guard could not check: Send masked is refused, by the object or by Go", async () => {
+    const { world, side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Find Ada's contact details")
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    go.hold("irq_1", { stored, kinds: ["UNCHECKED"] })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    const card = lastItem(boTab, "request-card")
+    expect(card).toMatchObject({
+      status: "review",
+      guard: { state: "held", kinds: ["UNCHECKED"] },
+      heldAnswer: { stored },
+    })
+    expect(card?.heldAnswer).not.toHaveProperty("masked")
+
+    const noMasked =
+      "This answer couldn't be checked, so it has no masked version. Send it as it is, or don't send it."
+    await say(side, boTab, {
+      type: "side-review",
+      requestId: "irq_1",
+      action: "send_masked",
+    })
+    expect(boTab.last("side-refused")).toEqual({
+      type: "side-refused",
+      target: "irq_1",
+      code: "not_allowed",
+      message: noMasked,
+    })
+    expect(sentTo("review")).toEqual([])
+
+    // An instance that has not read it as Bo lets Go refuse it.
+    const restarted = await world.restart<Side>("SideConversationAgent", name)
+    await say(restarted, boTab, {
+      type: "side-review",
+      requestId: "irq_1",
+      action: "send_masked",
+    })
+    expect(sentTo("review")).toHaveLength(1)
+    expect(boTab.last("side-refused")).toMatchObject({
+      code: "not_allowed",
+      message: noMasked,
+    })
+    // Sent as it is, it lands.
+    await say(restarted, boTab, {
+      type: "side-review",
+      requestId: "irq_1",
+      action: "send",
+    })
+    expect(lastItem(adaTab, "agent-message")).toMatchObject({
+      body: stored,
+      via: { reviewedBy: bo.userId },
+    })
+  })
+
+  it("shares a held failure as a failure: the one who asked reads its summary in a quiet line", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Find Ada's contact details")
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    go.hold("irq_1", {
+      status: "failed",
+      stored: "I couldn't reach ada@sim.oryxa's calendar.",
+      masked: "I couldn't reach {EMAIL}'s calendar.",
+      kinds: ["EMAIL"],
+    })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(lastItem(boTab, "request-card")?.heldAnswer).toEqual({
+      stored: "I couldn't reach ada@sim.oryxa's calendar.",
+      masked: "I couldn't reach {EMAIL}'s calendar.",
+      failed: true,
+    })
+
+    await say(side, boTab, {
+      type: "side-review",
+      requestId: "irq_1",
+      action: "send_masked",
+    })
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "request-card")).toMatchObject({
+        status: "failed",
+        review: { action: "send_masked" },
+      })
+      expect(lastItem(socket, "status")).toMatchObject({
+        outcome: "failed",
+        text: "Nia could not finish the request: I couldn't reach {EMAIL}'s calendar.",
+      })
+      expect(
+        itemsOf(socket).some((item) => item.kind === "agent-message")
+      ).toBe(false)
+    }
+  })
+
+  it("says each refusal of the review route in words on the owner's card", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const requestId = await heldForBo(side, adaTab, boTab)
+    const path = `POST ${base}/agent-requests/${requestId}/review`
+    const refusals: Array<[number, string, string, string, string]> = [
+      [
+        400,
+        "invalid_request",
+        "send",
+        "not_allowed",
+        "That review wasn't understood. Try again.",
+      ],
+      [
+        403,
+        "forbidden",
+        "send",
+        "not_allowed",
+        "Only the person whose agent answered can review its answer.",
+      ],
+      [
+        404,
+        "not_found",
+        "send",
+        "not_allowed",
+        "This request can't be found any more.",
+      ],
+      [
+        409,
+        "invalid_state",
+        "send",
+        "already_decided",
+        "This answer was reviewed already, or expired.",
+      ],
+      [
+        409,
+        "invalid_state",
+        "send_masked",
+        "not_allowed",
+        "This answer couldn't be checked, so it has no masked version. Send it as it is, or don't send it.",
+      ],
+      [
+        409,
+        "request_expired",
+        "withhold",
+        "already_decided",
+        "This request expired before its answer was reviewed.",
+      ],
+      [
+        409,
+        "request_closed",
+        "send",
+        "already_decided",
+        "Oryxa withheld this answer, as its request no longer stands in this teamspace.",
+      ],
+    ]
+    for (const [status, code, action, refused, words] of refusals) {
+      go.overrides.set(
+        path,
+        new Response(
+          JSON.stringify({ error: { code, message: `go says ${code}` } }),
+          { status, headers: { "Content-Type": "application/json" } }
+        )
+      )
+      await say(side, boTab, { type: "side-review", requestId, action })
+      expect(boTab.last("side-refused")).toEqual({
+        type: "side-refused",
+        target: requestId,
+        code: refused,
+        message: words,
+      })
+    }
+    // Every one reached Go, and the answer still waits on Bo.
+    expect(sentTo("review")).toHaveLength(refusals.length)
+    expect(lastItem(boTab, "request-card")?.status).toBe("review")
+  })
+
+  it("withholds an answer whose request no longer stands as its owner sends it, saying why on the card and in the log", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const requestId = await heldForBo(side, adaTab, boTab)
+    go.lapsed.set(
+      requestId,
+      "the member who asked is no longer on the teamspace's team"
+    )
+    await say(side, boTab, { type: "side-review", requestId, action: "send" })
+    expect(boTab.last("side-refused")).toEqual({
+      type: "side-refused",
+      target: requestId,
+      code: "already_decided",
+      message:
+        "Oryxa withheld this answer, as its request no longer stands in this teamspace.",
+    })
+    const reason =
+      "Oryxa withheld this answer because the member who asked is no longer on the teamspace's team."
+    for (const socket of [adaTab, boTab]) {
+      expect(lastItem(socket, "request-card")).toMatchObject({
+        status: "withheld",
+        review: { action: "withhold", by: "system", reason },
+      })
+      expect(lastItem(socket, "status")).toMatchObject({
+        outcome: "withheld",
+        text: "Oryxa withheld Nia's answer because the member who asked is no longer on the teamspace's team.",
+      })
+      expect(
+        itemsOf(socket).some((item) => item.kind === "agent-message")
+      ).toBe(false)
+    }
+  })
+
+  it("reads an answer still in review past its request's expiry as Go shows it: withheld at the expiry, not reviewable", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    const requestId = await heldForBo(side, adaTab, boTab)
+    const expiresAt = String(go.requests.get(requestId)?.expires_at)
+    // Nothing has swept it yet: Go reads it as withheld, at its expiry.
+    vi.setSystemTime(new Date(Date.parse(expiresAt) + 60_000))
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(go.requests.get(requestId)?.status).toBe("review")
+    expect(lastItem(boTab, "request-card")).toMatchObject({
+      status: "withheld",
+      review: {
+        action: "withhold",
+        decidedAt: expiresAt,
+        by: "system",
+        reason: "expired before review",
+      },
+    })
+    expect(lastItem(boTab, "request-card")).not.toHaveProperty("heldAnswer")
+    expect(lastItem(adaTab, "status")).toMatchObject({
+      text: "Nia's answer expired before Bo reviewed it.",
+    })
+    await say(side, boTab, { type: "side-review", requestId, action: "send" })
+    expect(boTab.last("side-refused")).toMatchObject({
+      code: "already_decided",
+      message: "This answer was reviewed already, or expired.",
+    })
+    expect(sentTo("review")).toEqual([])
+  })
+
+  it("says a request Oryxa closed as its owner decides it", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Pull the pricing sheet")
+    go.overrides.set(
+      `POST ${base}/agent-requests/irq_1/decision`,
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "request_closed",
+            message:
+              "the member who asked is no longer on the teamspace's team",
+          },
+        }),
+        { status: 409, headers: { "Content-Type": "application/json" } }
+      )
+    )
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    expect(boTab.last("side-refused")).toEqual({
+      type: "side-refused",
+      target: "irq_1",
+      code: "already_decided",
+      message:
+        "Oryxa closed this request, as it no longer stands in this teamspace.",
+    })
+  })
+
+  it("reads an agent's decision in its fixed words, and says why Oryxa closed a request", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    await askTeammate(side, adaTab, pricing.agentId, "Price the add-on")
+    await askTeammate(side, adaTab, bo.agentId, "Pull the pricing sheet")
+    go.change("irq_1", {
+      status: "rejected",
+      decision: {
+        decision: "rejected",
+        message: "Declined by their agent.",
+        allowed_tools: [],
+        granted_permissions: [],
+        decided_at: new Date().toISOString(),
+        decided_by: {
+          kind: "agent",
+          user_id: bo.userId,
+          agent_id: pricing.agentId,
+        },
+      },
+    })
+    go.change("irq_2", {
+      status: "rejected",
+      decision: {
+        decision: "rejected",
+        message:
+          "Oryxa closed this request because the agent it asks no longer holds a seat in the teamspace.",
+        allowed_tools: [],
+        granted_permissions: [],
+        decided_at: new Date().toISOString(),
+        decided_by: { kind: "system" },
+      },
+    })
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(
+      itemsOf(adaTab)
+        .filter((item) => item.kind === "status")
+        .map((item) => item.text)
+    ).toEqual([
+      "Pricing declined the request.",
+      "Oryxa closed the request to Nia because the agent it asks no longer holds a seat in the teamspace.",
+    ])
+    expect(
+      itemsOf(adaTab)
+        .filter((item) => item.kind === "request-card")
+        .map((item) => (item.decision as { by?: string }).by)
+    ).toEqual(["agent", "system"])
+  })
+
+  it("forgets the answers it holds for an owner when it is purged", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await heldForBo(side, adaTab, boTab)
+    const held = (side as unknown as { heldAnswers: Map<string, unknown> })
+      .heldAnswers
+    expect(held.size).toBe(1)
+    await side.purge({
+      userId: ada.userId,
+      removedAt: new Date().toISOString(),
+    })
+    expect(held.size).toBe(0)
+  })
+
+  it("works as before with a Go that knows nothing of tools or the guard", async () => {
+    const { side } = await setup()
+    const adaTab = await join(side, ada)
+    const boTab = await join(side, bo)
+    await askTeammate(side, adaTab, bo.agentId, "Pull the pricing sheet")
+    const held = go.requests.get("irq_1") as GoInteraction
+    delete held.requested_tools
+    delete held.tools_judged_by
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    for (const socket of [adaTab, boTab]) {
+      const card = lastItem(socket, "request-card")
+      expect(card).toMatchObject({ status: "pending" })
+      for (const field of ["requestedTools", "guard", "heldAnswer", "review"]) {
+        expect(card).not.toHaveProperty(field)
+      }
+    }
+    await say(side, boTab, {
+      type: "side-decide",
+      requestId: "irq_1",
+      decision: "approved",
+    })
+    expect(sentTo("decision")[0]?.body).toEqual({
+      decision: "approved",
+      message: "Approved in the side conversation.",
+      allowed_tools: [],
+    })
+    go.complete("irq_1", "The sheet is attached.")
+    vi.advanceTimersByTime(sideTiming.pollSeconds * 1_000)
+    await runDueJobs(side)
+    expect(lastItem(adaTab, "agent-message")).toMatchObject({
+      body: "The sheet is attached.",
+      via: {
+        requestId: "irq_1",
+        onBehalfOf: bo.userId,
+        approvedBy: bo.userId,
+      },
+    })
+    expect(
+      (lastItem(adaTab, "agent-message")?.via as Record<string, unknown>)
+        .reviewedBy
+    ).toBeUndefined()
   })
 })
 
