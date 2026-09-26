@@ -10,11 +10,17 @@ Nothing here is a promise about behaviour. Where something was confirmed — by
 a command, by reading the code, or against a provider's documentation — it
 says so; where it was only noticed in passing, it says that instead.
 
-Brought up to date on 2026-09-18, with the run API.
+Brought up to date on 2026-09-26: every item below was checked again against
+`main` at `7f03a5a`. What that check closed moved to
+[Done since the last update](#10-done-since-the-last-update), with its
+evidence, rather than being deleted; a few items learned a corrected count or
+date in place. Anything this pass could not confirm one way or the other is
+unchanged from the 2026-09-18 pass.
 
 **Direction.** Third-party apps reach first users through Composio rather than
-Oryxa's own connection layer. The `apps` service is that: built and tested, and
-not yet run against a real Composio project. The `connections` and `integrations` services,
+Oryxa's own connection layer. The `apps` service is that: built, tested, and
+run against a real Composio project since 2026-09-18, including a real
+GitHub account end to end (§10). The `connections` and `integrations` services,
 their event contracts, the generated provider clients in
 `internal/providerapi`, knowledge's GitHub, Notion and Slack sources, and
 Krude's integrations toolboxes were archived on 2026-09-17; everything is at
@@ -32,6 +38,7 @@ reference.
 7. [Before production](#7-before-production)
 8. [Housekeeping](#8-housekeeping)
 9. [Recently closed](#9-recently-closed)
+10. [Done since the last update](#10-done-since-the-last-update)
 
 ## 1. The product loop is not closed
 
@@ -39,13 +46,13 @@ Each service works on its own. The paths between them — the ones that let an
 agent act in an organization's apps, answer from its own documents, or react
 to something that happened — do not exist yet. This is the largest gap.
 
-### Apps has never run against Composio
+### Apps has run against Composio, for GitHub only
 
 The `apps` service is built: connecting an app through Composio's hosted flow,
 tools behind Oryxa's member identity and write approvals, verified webhooks,
 four MCP tools for agents, and Krude's `apps` toolbox over them
-([apps/README.md](../apps/README.md)). Every test runs against fakes, so
-nothing has touched Composio, and no member has connected anything.
+([apps/README.md](../apps/README.md)). Ordinary tests run against fakes; a
+live pass and a real connected account, both below, cover the rest.
 
 A first live pass ran on 2026-09-18 against a throwaway Composio project
 through a cloudflared tunnel: the catalog, tool search and its read-only marks,
@@ -57,9 +64,11 @@ two defects, both fixed: a sentinel's own words leaking into the wording a
 model reads, and the read route answering `not_connected` where the honest
 answer was `not_read_only`.
 
-What is still unrun: **connecting an account end to end**. The hosted flow
-needs a member at a browser, so nothing past activation — a tool against a real
-app, a subscribed trigger, a real delivery — has happened. Treat those as
+**Connecting an account end to end** ran on 2026-09-19, for a real GitHub
+account: the hosted flow, a tool against the account, a subscribed trigger,
+and a webhook delivery that reached apps and was recorded once — see
+[Done since the last update](#10-done-since-the-last-update). Still unrun the
+same way: **Slack, Notion, Google Drive and Gmail accounts**. Treat those as
 proven against a stand-in only.
 
 Then, in order:
@@ -120,13 +129,8 @@ for the mapping table against a real PostgreSQL, including its cascade when a
 corpus or a document goes away some other way. Not run end to end against a
 live knowledge pass publishing onto a real queue rag consumes from.
 
-What it does not close:
-
-- **Team scope is produced by nothing.** A connection-based source
-  (`github`, `notion`, `slack`) is always member-scoped, and `files`, now
-  mounted, is organization-scoped. So the bridge's team branch is proven by
-  unit tests against a synthetic event rather than by anything knowledge has
-  ever emitted, and no source produces one at all.
+Team scope, once produced by nothing, now is — see
+[Done since the last update](#10-done-since-the-last-update).
 
 ### Krude searches corpora, but not a team's by default
 
@@ -195,14 +199,16 @@ files and app updates in conversations, and the collections Krude searches
 (PR #31); and connections on the apps service, with triggers that wake Krude
 and knowledge sources that feed its search (PR #32). The screens that called
 the archived connections service are gone. `pnpm check`, `typecheck`, `test`
-and `build` pass on the three together. What is left:
+and `build` pass on the three together. Krude's answers rendering as
+Markdown, and this web app running against the real binary, are both done —
+see [Done since the last update](#10-done-since-the-last-update). What is
+left:
 
-- **Nothing has run against the real binary.** Every screen was clicked
-  through against a stand-in for it; signing in to the real one needs Cognito.
-- **Krude's answers are plain text.** Markdown in an answer shows as written.
 - **Collections are read-only.** A member cannot make a rag corpus, add a
   document or upload a file for Krude to search from the web app, and the
-  files source waits on §3.2.
+  files source waits on §3.2. (web-next, the redesigned frontend, already
+  builds this on its own side — see
+  [web-next/PARITY.md](../web-next/PARITY.md).)
 - **Trigger settings are simple.** A trigger whose configuration needs more
   than plain text, number or yes/no fields shows as needing setup.
 - The web app still deploys by hand (§5).
@@ -243,10 +249,9 @@ revisited — see
 
 ### 3.4 Knowledge's content
 
-- **HTML extraction.** Knowledge reads plain text, Markdown, CSV and JSON.
-  Reading HTML means promoting `golang.org/x/net` from an indirect dependency
-  to a direct one, which was left as a choice rather than made unilaterally
-  ([knowledge/TODO.md §8](../knowledge/TODO.md#8-decisions-that-are-not-mine-to-make)).
+HTML extraction is decided and built — see
+[Done since the last update](#10-done-since-the-last-update). Still open:
+
 - **Where document bodies live.** Postgres today, up to 4 MiB each and with no
   cap per source. Object storage may be the better home
   ([knowledge/TODO.md §4](../knowledge/TODO.md#4-worth-a-second-look)).
@@ -304,41 +309,32 @@ build.
 
 ## 5. Platform
 
-### No CI
+### CI exists now
 
-There is no `.github/workflows`, and no other CI configuration. Pull requests
-merge with nothing building, vetting or testing them. A first pipeline would
-build and vet every package and run the race tests, which need nothing; run
-the database suites against a `pgvector/pgvector:0.8.6-pg17` service
-container with each `*_TEST_DATABASE_URL` set; and run the web checks.
+Done — see [Done since the last update](#10-done-since-the-last-update).
 
-### No production deployment
+### Production deployment exists now
 
-The repository builds the image (`Dockerfile`, `compose.oryxa.yaml`), and each
-service has a provisioner for the AWS resources it owns — event rules and
-queues, the files bucket, the Cognito pools, SES delivery, vector indexes —
-under `*/infra/*/cmd/provision`. Nothing provisions where the binary runs, its
-PostgreSQL, the network or the public edge, and nothing builds and ships the
-image. The web app deploys by hand with `pnpm deploy`. Where to host is
-deliberately undecided for now.
+Done — see [Done since the last update](#10-done-since-the-last-update). The
+web app (`web/`) still deploys by hand with `pnpm deploy`; the automated
+`deploy.yml` release cannot finish either, for its own reason (same section).
+Where to host was undecided when this line was first written; it no longer
+is.
 
 ### Services call one another over loopback HTTP, uncached
 
 Files, knowledge, rag and teams check a caller's membership by calling auth's
 `GET /v1/organizations/{id}` over HTTP, with no cache. In one binary
 `AUTH_URL` defaults to the process itself, so each check is a request the
-process makes to itself. There are nine client packages like this: five for
-auth, two for teams and two for files. Calling in process when the target
-runs alongside, and over HTTP only when a `*_URL` points elsewhere, would
-remove the hop and most of the copies.
+process makes to itself. There are at least eleven client packages like this:
+seven for auth (billing, teams, files, apps, rag, knowledge, agents/primary),
+two for teams and two for files. Calling in process when the target runs
+alongside, and over HTTP only when a `*_URL` points elsewhere, would remove
+the hop and most of the copies.
 
-### Traces stop at every internal call
+### Traces now carry across internal calls
 
-`internal/observability` wraps incoming handlers, but the service clients use a
-plain `http.Client`, so no trace context leaves the process and each hop starts
-a new trace. The root README's "W3C trace propagation" holds for incoming
-requests only. An `otelhttp` transport in one shared client constructor would
-carry it.
+Done — see [Done since the last update](#10-done-since-the-last-update).
 
 ### Rag relies on teams to install `vector`
 
@@ -357,7 +353,8 @@ not check out ("event signature did not check out") and handles the event
 anyway. No service has an event signing key, so each signs with one minted at
 boot, which dies with the process — enforcing now would refuse whatever was
 still queued across every restart and every rolling deploy. To enforce: give
-each of the ten services a KMS key (`ECC_NIST_P256`, `SIGN_VERIFY`) in
+each of the eleven services — `realtime`, added since this count was last
+checked, included — a KMS key (`ECC_NIST_P256`, `SIGN_VERIFY`) in
 `deploy/production`, set `<SERVICE>_EVENT_SIGNING_KEY_ID` for each and grant
 the task `kms:Sign` and `kms:GetPublicKey` on them; release; and once a
 release's logs show no failures, set `ORYXA_EVENT_SIGNATURES=enforce`. What
@@ -373,9 +370,9 @@ reads. They prove nothing about whether the provider agrees.
 
 | Area | What has never run | What it needs |
 | --- | --- | --- |
-| Rag | Bedrock embedding; Bedrock and Vertex answering; Bedrock reranking, the least exercised code in the service; S3 Vectors; the provisioner, which has never created anything. Vertex embedding ran on 2026-09-18 | An AWS account — S3 Vectors has no local emulation — and `RAG_ANSWER_MODEL` to answer ([rag/README.md](../rag/README.md#what-has-and-has-not-been-run)) |
-| Apps | Connecting an account end to end, and therefore every path past it: a tool against a real app, a subscribed trigger, a real delivery, and the outbox reaching the bus. The catalog, tool marks, link creation, the webhook provisioner, webhook verification, MCP and the refusals all ran for real on 2026-09-18 ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)) | A member at a browser to finish Composio's hosted page, and LocalStack up for the bus |
-| Auth | The agent grant against a provisioned Cognito agent client | The agent client provisioned |
+| Rag | Bedrock reranking beyond construction — the least exercised code in the service; Cohere embedding; the S3 Vectors provisioner, which has never created anything (a temporary index was hand-created for two eval runs instead, then deleted). Vertex embedding and answering, and Bedrock answering (`Converse`), have all since run for real too — see [Done since the last update](#10-done-since-the-last-update) | An AWS account — S3 Vectors has no local emulation — and `RAG_ANSWER_MODEL` to answer ([rag/README.md](../rag/README.md#what-has-and-has-not-been-run)) |
+| Apps | The outbox reaching the bus: EventBridge was still pointed at a dead local endpoint in the 2026-09-19 run below, so an event was written and held, never published for real. Slack, Notion, Google Drive and Gmail accounts, in every respect. Connecting a GitHub account end to end ran for real on 2026-09-19; the catalog, tool marks, link creation, the webhook provisioner, webhook verification, MCP and the refusals all ran for real on 2026-09-18 ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run); see also [Done since the last update](#10-done-since-the-last-update)) | LocalStack (or a real bus) up to prove the outbox for real, and a member at a browser for Slack, Notion, Drive and Gmail |
+| Auth | Whether a member has finished the agent grant against the agent client | A member to run the flow — the client itself is now provisioned, see [Done since the last update](#10-done-since-the-last-update) |
 | Agents | A tool that asks for confirmation, against a real model; the sandbox and browser; a wake-up. Runs Gemini answers, knowledge search through rag, and the web app's conversations ran on 2026-09-18 | AgentCore credentials or a connected app, and the `agents-events` queue |
 | Journey | `test/run.sh` has not run since PR #17 rewrote it for the one binary, and it covers teams, files and email only | Docker |
 | Realtime | A purge against the real Worker. On 2026-09-24 the binary ran against LocalStack and a stand-in Worker that checks the signature from the contract alone: it purged, skipped a deleted organization's members, dropped a `400`, and retried a `503` into the dead-letter queue. That run used the body before `scope` and `removed_at`, which only unit tests have sent. On 2026-09-25 the binary served the Worker's `POST /v1/realtime/events` against PostgreSQL and LocalStack's bus, with the golden vectors signed by hand: it took both, acknowledged one sent again without a second event, refused a purge's signature and an invalid event, and published both events. It has never had a call from the real Worker, and nothing consumes the events ([realtime/README.md](../realtime/README.md)) | web-next serving `app.oryxa.in`, with its `POST /internal/realtime/purge` live, its `ORYXA_API_ORIGIN` set, and holding the same `REALTIME_PURGE_SECRET`; until then `realtime_purge` stays off |
@@ -391,13 +388,15 @@ service that fails without them.
   set `DODO_PAYMENTS_ENVIRONMENT=live_mode` with a live API key and webhook
   secret, and decide on Dodo's subscription grace period
   ([billing/README.md, Deploy](../billing/README.md#deploy)).
-- **Database extensions.** Install `vector`, `ltree`, `pg_trgm`, `btree_gist`
-  and `btree_gin` in the managed database, or let the migrating role create
-  them, and set `POSTGRES_REQUIRED_EXTENSIONS` so a missing one fails startup
-  rather than a query (§5).
-- **Composio.** A project, a scoped API key and IP allowlisting, the webhook
-  subscription (`go run ./apps/infra/composio/cmd/provision`, whose secret is
-  shown once), and — for security-conscious customers — a decision on the
+- **Database extensions.** Not directly confirmed, only inferred: production
+  has run since 2026-09-19 (§5), which needs `vector`, `ltree`, `pg_trgm`,
+  `btree_gist` and `btree_gin` already present. Still worth setting
+  `POSTGRES_REQUIRED_EXTENSIONS` explicitly so a missing one fails startup
+  rather than a query.
+- **Composio.** Done — a project, a scoped API key and a webhook subscription
+  already exist and have carried real traffic; see
+  [Done since the last update](#10-done-since-the-last-update). Still open:
+  IP allowlisting, and — for security-conscious customers — a decision on the
   self-hosted or customer-managed-key tier (§1).
 
 ## 8. Housekeeping
@@ -440,3 +439,70 @@ Kept short; the pull requests hold the detail.
   backlog they carried — provider surveys and research questions, live
   provider tests, a polled delivery kind, managed OAuth apps, and envelope
   encryption kept in two copies — all recoverable from the archive tag.
+
+## 10. Done since the last update
+
+Checked against `main` at `7f03a5a` on 2026-09-26. Each of these was still
+described above as open, unrun, or missing as recently as 2026-09-18; kept
+here with its evidence rather than simply deleted, so the backlog does not
+quietly lose its own history.
+
+- **Composio, end to end for a real GitHub account.** Connecting it, a tool
+  against it, a subscribed trigger, and a webhook delivery (recorded once
+  despite Composio sending it three times) all ran on 2026-09-19
+  ([apps/README.md](../apps/README.md#what-has-and-has-not-been-run)). Slack,
+  Notion, Google Drive and Gmail accounts are unchanged (§1): proven only
+  against stand-ins.
+- **Team-scoped knowledge documents.** A team-scoped `files` upload now
+  registers a team-scoped source (`knowledge/internal/application/connected.go`,
+  `filePlacement`); commit `d203701`, 2026-09-19. See
+  [knowledge/README.md](../knowledge/README.md), "Shared, team and private
+  files index themselves" (§1 used to say no source produced one).
+- **HTML extraction.** Decided and built: `knowledge/internal/transform/html.go`,
+  and `golang.org/x/net` is now a direct dependency (`go.mod`); commit
+  `6c19ded`, 2026-09-18. See
+  [knowledge/TODO.md §8.1 and §9](../knowledge/TODO.md#8-decisions-that-are-not-mine-to-make)
+  (§3.4 used to list this as an open choice).
+- **Krude's answers render as Markdown** in the web app, not plain text:
+  `web/src/components/threads/message-markdown.tsx` (react-markdown +
+  remark-gfm). PR #34, merged 2026-09-18 (§2 used to say otherwise).
+- **The web app has run against the real binary.** Production has served
+  real members since 2026-09-19 (below) (§2 used to say every screen was only
+  ever clicked against a stand-in).
+- **Rag's Vertex embedding and answering, and Bedrock answering (`Converse`),
+  have all run for real** — Vertex embedding on 2026-09-18 and 2026-09-23,
+  Vertex answering and Bedrock answering (Nova Micro) both on 2026-09-23.
+  Bedrock embedding is partly done: Titan v2 ran live on 2026-09-23; Cohere is
+  still unrun. See
+  [rag/README.md, What has and has not been run](../rag/README.md#what-has-and-has-not-been-run)
+  (§6 used to list all four as never run).
+- **CI exists.** `.github/workflows/ci.yml` builds and vets every package,
+  runs the race tests, runs the database suites against a real PostgreSQL,
+  and runs the web checks. Added by PR #82, merged 2026-09-23. It does not run
+  `test/run.sh` (§6, Journey, is unchanged).
+- **Production deployment exists and is live.** `deploy/production`
+  (OpenTofu) and `deploy/scripts/*` (`release.sh`, `provision-app.sh`, and the
+  rest) provision the AWS resources and ship the image; `app.oryxa.in` and
+  `api.oryxa.in` are live behind Cloudflare today
+  ([deploy/README.md](../deploy/README.md)).
+  `deploy/production/release.auto.tfvars.json` records the image actually
+  running. `deploy.yml` (also PR #82) automates a release on paper but is
+  inert: the GitHub `production` environment is still missing the
+  `CLOUDFLARE_API_TOKEN` secret and the `HYPERDRIVE_ID` variable
+  ([deploy/README.md, "Releasing"](../deploy/README.md#releasing)), so
+  `deploy/scripts/release.sh` by hand is still what ships the binary, and the
+  web app (`web/`) still deploys by hand too, with `pnpm deploy`.
+- **Traces carry across every internal call.**
+  `internal/observability.Transport()` wraps `otelhttp.NewTransport` and is
+  already used by every internal client package's `http.Client` (§5 used to
+  say a plain `http.Client` dropped the trace at each hop).
+- **The Cognito agent client is provisioned.**
+  `deploy/production/app.auto.tfvars.json` has held `agent_client_id` since
+  commit `6f4395e`, 2026-09-19. Whether a member has finished the grant flow
+  against it is still unverified (§6, Auth).
+- **Both frontends have a screen for the agent grant.** `web/`'s Settings →
+  Profile ("Background agent access") and web-next's Settings → Account both
+  call it — see `auth/README.md`, Agent grants.
+- **Composio itself is provisioned**: a real project, a scoped API key and a
+  webhook subscription, exercised live since 2026-09-18/19 (§1, §7; see
+  [apps/README.md](../apps/README.md#what-has-and-has-not-been-run)).
