@@ -167,7 +167,7 @@ An agent token is an access token whose `client_id` is the agent client's; auth 
 
 `POST /v1/internal/agent-tokens` is called service to service: a service proves its identity with a signed `X-Oryxa-Service-Token` (`internal/serviceauth`, audience `auth`, purpose `agent`), then sends `{user_id}` and gets back `{access_token, expires_in}`. It answers `404` if the member has no grant, `409` if Cognito refuses the stored refresh token as `invalid_grant` (the now-useless grant is deleted so the next attempt fails fast instead of retrying a dead token — unless another mint rotated the stored token meanwhile, in which case the exchange is retried with that one and the grant kept), `503` if Cognito fails or does not answer, `500` if Cognito refuses the agent client itself, such as for a wrong secret, which never costs a member their grant, and `401`/`403` for a missing, invalid or wrongly-purposed service token. A refresh token Cognito rotates during the exchange is sealed and saved before the access token is returned.
 
-The web app has no screen for granting or withdrawing yet, and the flow has not run against a provisioned agent client.
+Both frontends have a screen for granting or withdrawing it — `web/`'s Settings → Profile ("Background agent access") and `web-next`'s Settings → Account. The agent client itself is provisioned in production (`deploy/production/app.auto.tfvars.json`'s `agent_client_id`); whether a member has run the flow against it end to end is still unverified.
 
 ### Configuration
 
